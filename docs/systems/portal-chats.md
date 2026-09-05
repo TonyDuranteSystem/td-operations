@@ -1,6 +1,71 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-04c — Claude (**"Addressed to" now shows on the message itself, not just at compose time — staff-side only** — same-day follow-up to dev job 08a8be62's 2026-09-04 entry below. Antonio's own words after seeing the first ship: he pointed out that once a message was sent, nothing on it showed who it had been addressed to — staff scrolling back through a conversation later had no way to tell, same gap as the client-visible one already tracked as a fast-follow, except this half was never explicitly called out before. Fixed for the STAFF side only (the client-facing fast-follow is unchanged, still not built): `GET /api/portal/chat` now also joins `contacts` on `addressed_to_contact_id` and returns `addressed_to_name`; the message-bubble render in `app/(dashboard)/portal-chats/page.tsx` shows a small teal "For {name}" badge on any admin message in a multi-member account thread that has one, positioned next to (not reusing) the existing purple "who wrote this" badge so the two are never visually confused. Verified live on sandbox against the same real test message from the first ship (Uxio Test LLC, addressed to Marco Rossi) — the badge renders correctly on the historical message. One real testing trap hit and resolved during this verification: a stale service worker on the test browser tab served an old JS bundle after the redeploy, making the fix look broken when the API was already returning the right data — unregistering the worker + clearing caches + a fresh reload resolved it; not a code bug, but worth remembering for the next person testing this page after a deploy.)_
+_Last verified against code: 2026-09-04d — Claude (**pre-send confirmation pop-up —
+supersedes the 2026-09-04 "no pop-up" call below, at Antonio's explicit direction after
+testing the ambient version live** — dev job 08a8be62. The 2026-09-04 entry recorded
+every reviewer independently rejecting a hard per-send confirmation as a safety
+regression (habituation risk against the 2026-08-07 leak fix) — the right call given
+only a written description of the alternative. Once the ambient picker actually
+shipped and Antonio tried it on a real single-member LLC conversation (Trade Charls
+LLC), he rejected the ambient/inline pattern outright: "I want, in Portal chats, when
+we send a message to anybody, to have a pop-up where we can choose whether we are
+sending as the company or as personal. Even in a single-member LLC, there is a
+personal and a company." This is a deliberate, explicit decision by the system's
+owner, made with the alternative already live in front of him — not the earlier
+review being wrong, and not something a future session should re-litigate by re-running
+the same council argument against a pop-up in general. **What changed:** `handleSend`
+(`app/(dashboard)/portal-chats/page.tsx`) now only runs its existing guards (empty
+message, no target selected, already sending, closed-account) and then opens a modal
+(`sendConfirmOpen`) instead of sending directly; the original send body moved
+unchanged into a new `performSend`, fired only by the modal's "Confirm & Send" button,
+with the closed-account guard re-checked at confirm time (the company selection can
+change while the modal sits open) and a guard against a fast double-click firing twice.
+The modal opens on EVERY send, every conversation shape — not just multi-member
+accounts — and reuses the exact same live selection state the ambient chips already
+wrote to (`selectedCompanyId`, `selectedAddressedToContactId`, `adminActiveTopic`), so
+there is no second, parallel copy of the choice to keep in sync; the ambient
+chips/picker/topic-tabs above the composer are UNCHANGED and still fully functional —
+the modal is an additional gate on top of them, not a replacement. The modal's topic
+section deliberately reuses the simple existing-topics-as-chips + free-text mechanism
+(`adminTopics`, `adminCreatingTopic`/`adminNewTopicInput`) rather than rebuilding the
+catalog-driven topic-template dropdown that lives in the tab bar above the message
+list — that dropdown remains the only place for template-based topic creation; the
+modal only offers "pick an existing topic from this thread, or type a new one", which
+is what was actually asked for. No new pure logic (UI-only reorganization of an
+existing send path) — full suite still green, 10,386 tests. **Sandbox browser QA
+(real clicks and keyboard events, not just visual inspection) found and fixed three
+real interaction bugs before this ever reached production**, all stemming from the
+same root cause — the modal's free-text "New topic" input originally shared its
+ephemeral open/closed toggle with the ambient tab bar's own copy of the identical
+widget, and the two stayed mounted at once (the modal is an overlay, not a
+replacement — the ambient tab bar never unmounts behind it): (1) both inputs
+mounting together, each with `autoFocus`, meant the second one stealing focus fired
+the first one's `onBlur`, which reset the shared toggle back to closed before a
+single keystroke landed — typing a new topic was completely unusable. Fixed by
+giving the modal its own private `modalCreatingTopic`/`modalNewTopicInput`, which
+still commits to the correctly-shared `adminActiveTopic` on Enter/blur. (2) Once
+that worked, a topic that existed only via `adminActiveTopic` (the normal state
+right after creating one, before any message under it has been sent) had no
+matching chip in the modal's own list — which only ever mapped over `adminTopics`,
+topics with at least one already-sent message — so confirming a new topic looked
+like nothing had happened. Fixed by appending the active topic to the rendered list
+when it isn't already present. (3) Clicking "Confirm & Send" directly after typing a
+new topic (without pressing Enter first) relied on the input's `onBlur` committing
+before the button's `onClick` fired; the newly-appearing topic chip shifts the row's
+layout the instant blur commits it, so the already-in-flight click could land just
+off the button — reproduced directly: the topic committed correctly, but the send
+never fired. Fixed by having `performSend` read a pending, uncommitted topic
+directly from the modal's own local state rather than depend on blur having already
+run. All three fixed and re-verified end to end (sent real test messages covering a
+contact with multiple companies, a multi-member account with both a member
+selection AND a brand-new topic, and a pure-personal contact with no company at
+all) before this entry was written. General lesson kept in Gotchas below: never
+share an ephemeral "which mode is this ONE widget in" toggle between two surfaces
+that can both be mounted at the same time, even when they correctly share the
+RESULT of the interaction. STILL OPEN: the
+client-visible "Addressed to" badge fast-follow noted in the 2026-09-04 entry below is
+still not built; this pass did not touch it.)_
+_Prior: 2026-09-04c — Claude (**"Addressed to" now shows on the message itself, not just at compose time — staff-side only** — same-day follow-up to dev job 08a8be62's 2026-09-04 entry below. Antonio's own words after seeing the first ship: he pointed out that once a message was sent, nothing on it showed who it had been addressed to — staff scrolling back through a conversation later had no way to tell, same gap as the client-visible one already tracked as a fast-follow, except this half was never explicitly called out before. Fixed for the STAFF side only (the client-facing fast-follow is unchanged, still not built): `GET /api/portal/chat` now also joins `contacts` on `addressed_to_contact_id` and returns `addressed_to_name`; the message-bubble render in `app/(dashboard)/portal-chats/page.tsx` shows a small teal "For {name}" badge on any admin message in a multi-member account thread that has one, positioned next to (not reusing) the existing purple "who wrote this" badge so the two are never visually confused. Verified live on sandbox against the same real test message from the first ship (Uxio Test LLC, addressed to Marco Rossi) — the badge renders correctly on the historical message. One real testing trap hit and resolved during this verification: a stale service worker on the test browser tab served an old JS bundle after the redeploy, making the fix look broken when the API was already returning the right data — unregistering the worker + clearing caches + a fresh reload resolved it; not a code bug, but worth remembering for the next person testing this page after a deploy.)_
 _Prior: 2026-09-04 — Claude (**"Addressed to" member label for multi-member account threads** — dev job 08a8be62, Antonio's request, taken through a full council pass (7 reviewers) then a dedicated 3-reviewer re-check against the final narrowed plan before any code was written. Antonio's original ask (a pop-up before every send covering personal-vs-company, which member, which company, which topic) turned out to already be THREE-QUARTERS built and live: the personal/company chip row, the which-company chip row, and the topic tabs/banner all already existed as sticky, always-visible controls — none were rebuilt. The one genuine gap was addressing one specific member of a multi-member company, which the composer had NO way to do at all (the entire chip row is structurally hidden — `!selectedAccountId` — whenever a multi-member account thread is open). Antonio's two decisions, in order: (1) label only — the message stays visible to the whole company thread, matching the system's own existing documented design (KB `439e1d3f`: "Chat is ONE thread per account — all members share the same conversation") rather than a genuinely private 1:1 (which would have been a considered departure from that design, and doesn't work out of the box for the ~31% of real members with no portal access — system-counselor, live production data); (2) staff-only for now — the matching client-visible badge (so a co-member can actually SEE who a message is addressed to, not just staff internally) is a deliberate, tracked fast-follow, NOT built in this pass. **Read that as a real limitation, not a footnote:** today this feature only helps staff internally; it does not yet solve the original "co-member misreads who a message is for" scenario, because nothing renders the label on the client's own side of the chat (`components/portal/portal-chat.tsx` — every admin message still renders as "TD Team" to every client, unchanged). New column `portal_messages.addressed_to_contact_id` (migration `20260904-1900-portal-messages-addressed-to.sql`) is DELIBERATELY isolated from `sender_context`/`decideAdminSendScope` — two independent reviewers (senior-engineer, bug-hunter) found that routing it through the existing company-link check would wrongly reject real members (company-type members never get an `account_contacts` row; some individual members' `account_contacts` upsert can silently fail — a separate, unrelated, NOT-fixed-here bug in `lib/operations/formation-materialize.ts`). The picker is sourced from the real `members` table (`lib/portal/addressed-to.ts::resolveAccountMembersForChat`, new endpoint `GET /api/portal/chat/members`), never from `account_contacts`/`selectedThreadMembers` — those undercount real rosters (Master Rules MM1: `members` is canonical, `account_contacts` is contact-linking only). A member with no resolvable contact (no `contact_id`, no email, or an ambiguous email match) renders disabled with a tooltip — never silently tappable-but-inert. Pre-filled from a guess (`pickAddressedToGuess`, same reply-to-author → last-client-sender → primary → first cascade as the existing `resolveAdminReplyContact`, but against the FULL members-resolved list instead of only `account_contacts`-linked contacts). Placed as a second, separate sentence inside the EXISTING amber audience-warning band, not a new strip (Erika Hall: the member-count sentence and this picker's options come from two different tables that are documented elsewhere as routinely disagreeing — never merge them into one sentence). That band's own trigger was widened (`audienceTotal > 1 || selectedThreadMembers.length > 1`) so the picker stays reachable for a real multi-member account whose `account_contacts` mirror is thin — the same undercount gap, applied to the band's own visibility. No pop-up was built: every reviewer, independently, came back against a hard confirmation on every send (it would reverse the deliberately-sticky design that already fixed the 2026-08-07 leak, and risks training staff to stop reading it — a safety regression, not an improvement). Also fixed in the same pass, both pre-existing and directly relevant to this feature's safety: `sendMutation` had no `onError` at all — a rejected send failed completely silently, no toast, nothing; and the "New Chat" search-result click and the New-Chat-dialog result click did not reset the previous conversation's company/member selection before switching accounts, the same stale-state shape as the 2026-08-07 incident. Unit-tested (`tests/unit/portal-addressed-to.test.ts`, 14 tests) — full suite 10,386 tests green, no regressions. STILL OPEN, tracked, not silently dropped: the client-visible badge (fast-follow); the `formation-materialize.ts` swallowed-upsert-error bug (separate, unrelated, flagged not fixed); a `HelpDot` popover key (`chat.addressedTo`) is wired into the UI but has no catalog content yet — the dot stays invisible until someone adds it via the help-content catalog admin tool.)_
 _Prior: 2026-09-02b — Claude (**message deep links (`?message=<id>`) now reliably land on the target** — four compounding bugs fixed, found by live reproduction, not by reading the code alone: (1) a separate "jump to newest message on thread open" effect could fire after the deep-link's own scroll and silently overwrite it on ANY later `messages` update, not just a genuinely new message — a background refetch lands within the same second on a fresh load. Fixed by making a pending deep link own the scroll position for the WHOLE page view, not just "until resolved" — also the right product call: someone who followed a link to one historical message is reading history, not asking to be snapped to "latest". (2) the effect marked itself resolved the instant its fixed-delay timer fired, before confirming the element existed, so a transient miss gave up forever with no retry. (3) the element genuinely isn't in the DOM at a single fixed delay on a fresh load (fetch + hydration + the topic-switch re-render compete for that window) — swapped for a bounded poll. (4) even once found, a raw `scrollIntoView` could land on a transient/duplicate DOM node mid-reconciliation right after the topic switch, discarded a moment later with nothing visibly scrolled — the poll now verifies the target is actually on screen one frame later before declaring success. Reported by Antonio, dev job acb315af, after the sibling staff-notes fix made the link itself clickable and surfaced this deeper bug.)_
 _Prior: 2026-09-02 — Claude (removed the Issues tab)_
@@ -41,6 +106,12 @@ only the read/unread badge logic, not the composer.
   an explicit chip click every time.
 - Staff cannot send to a closed/cancelled/delinquent account — the client can't see it
   there anyway (closed-account send guard, same file).
+- **Every send goes through a confirmation pop-up first (2026-09-04d, dev job
+  08a8be62).** Hitting Send (or Enter) never transmits directly — it opens a modal
+  showing personal-vs-company (+ which company), which-member (if applicable), and
+  topic, gated behind an explicit "Confirm & Send". This is Antonio's own explicit
+  design choice, made after testing and rejecting the ambient-only alternative — see
+  the changelog entry at the top of this file before proposing to remove or soften it.
 - No canonical KB article exists yet for this page's day-to-day usage rules; ask Antonio
   before assuming one.
 - **"Addressed to" member label (2026-09-04, dev job 08a8be62) is a LABEL, not a privacy
@@ -74,9 +145,28 @@ only the read/unread badge logic, not the composer.
   `pickAddressedToGuess` is the pure decision function (same shape as
   `decideAdminSendScope`) — unit-tested in `tests/unit/portal-addressed-to.test.ts`.
   Deliberately does NOT touch `lib/portal/admin-send-scope.ts` — see Gotchas below.
+- **Send confirmation modal (2026-09-04d)** — `handleSend` only guards + opens
+  `sendConfirmOpen`; `performSend` (same file) holds the actual send body and is fired
+  by the modal's Confirm button. No new file — reuses the composer's own live
+  selection state, see the changelog entry at the top of this file.
 
 ## Gotchas, invariants & past bugs
 
+- **Never share an ephemeral "am I in create-mode" toggle between two simultaneously-
+  mounted widgets, even if they read the same underlying value on commit (2026-09-04d,
+  dev job 08a8be62).** The send-confirmation modal's "New topic" free-text input
+  originally reused the ambient tab bar's `adminCreatingTopic`/`adminNewTopicInput`
+  pair. The modal is an OVERLAY, not a replacement — the ambient tab bar stays fully
+  mounted behind its backdrop. Toggling the shared boolean therefore mounted BOTH
+  inputs at once, each with `autoFocus`; the second one stealing focus fired the
+  first one's `onBlur`, which reset the shared flag back to `false` before a single
+  keystroke landed — the input never stayed open long enough to type into. Fixed by
+  giving the modal its own private `modalCreatingTopic`/`modalNewTopicInput`, which
+  still commits to the same shared `adminActiveTopic` on Enter/blur (that value is
+  correctly meant to be shared — it's what a message actually posts under). The
+  general rule: sharing the RESULT of a UI interaction across two surfaces is fine;
+  sharing the transient "which mode is this ONE widget in right now" state that
+  drives that interaction is not, once both surfaces can be on screen together.
 - **Per-conversation draft memory (added 2026-08-29, dev job c3bb4abc; extended
   2026-08-30).** The reply text, quoted-reply pointer, and staged attachments used to
   be one shared piece of page-wide state — switching the selected client left a draft

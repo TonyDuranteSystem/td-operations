@@ -296,6 +296,49 @@ export default function PortalChatsPage() {
   // account's roster must never silently carry into this one.
   const [selectedAddressedToContactId, setSelectedAddressedToContactId] = useState<string | null>(null)
   const [addressedToJustChanged, setAddressedToJustChanged] = useState(false)
+  // Pre-send confirmation pop-up (Antonio, 2026-09-04 — explicit, deliberate
+  // override of the council's ambient-indicator recommendation, made AFTER
+  // seeing the ambient version live and rejecting it: "I want a pop-up...
+  // Even in a single-member LLC, there is a personal and a company"). Opens
+  // on EVERY send, every conversation shape, no exceptions — the modal reads
+  // and edits the SAME live selection state the ambient chips already used
+  // (selectedCompanyId / selectedAddressedToContactId / adminActiveTopic), so
+  // there is no separate copy of the choice to keep in sync; it is captured
+  // at "Confirm & Send" time, mirroring the existing capture-before-await
+  // discipline (dev job c3bb4abc) one step later than before.
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
+  // Modal's OWN "create a new topic" toggle — deliberately NOT the ambient
+  // tab bar's adminCreatingTopic/adminNewTopicInput, even though the modal
+  // reuses that shared pair's OUTPUT (adminActiveTopic) on commit. Found by
+  // testing: the ambient tab bar stays mounted behind the modal's backdrop,
+  // so sharing the toggle meant BOTH inputs rendered at once, both with
+  // autoFocus — the second one stealing focus fired the first one's onBlur,
+  // which reset the (shared) flag back to false before a single character
+  // could be typed. This pair is ephemeral UI state private to one widget at
+  // a time, unlike adminActiveTopic itself, which correctly stays shared.
+  const [modalCreatingTopic, setModalCreatingTopic] = useState(false)
+  const [modalNewTopicInput, setModalNewTopicInput] = useState('')
+  // Which conversation the modal was opened FOR (bug-hunter review,
+  // 2026-09-04, before ship). The modal can sit open indefinitely by design
+  // (staff take their time deciding) — but this page also supports switching
+  // conversations via the browser Back button while it's open
+  // (use-selection-history's popstate listener is window-level and isn't
+  // blocked by the modal's backdrop the way a mouse click would be). Without
+  // pinning, the modal keeps re-rendering to reflect whatever conversation is
+  // NOW selected, while still LOOKING like the confirmation staff already
+  // read for the ORIGINAL one — "Confirm & Send" would target a conversation
+  // never actually confirmed. Pinned at open time; the effect below force-
+  // closes the modal the instant the selection drifts away from it, treating
+  // a conversation switch as an implicit cancel — never a silent redirect.
+  const [sendConfirmTargetKey, setSendConfirmTargetKey] = useState<string | null>(null)
+  // Single close path so a leftover "typing a new topic" draft never survives
+  // into the next time the modal opens.
+  const closeSendConfirm = () => {
+    setSendConfirmOpen(false)
+    setModalCreatingTopic(false)
+    setModalNewTopicInput('')
+    setSendConfirmTargetKey(null)
+  }
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -361,6 +404,12 @@ export default function PortalChatsPage() {
   useSelectionHistory(
     { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView },
     (v) => {
+      // Bug-hunter review, 2026-09-05 (round 3, before ship): whether this
+      // restore is landing on the SAME client conversation must be captured
+      // BEFORE the setters below overwrite selectedAccountId/selectedContactId
+      // — it's the one fact that decides whether the send-scope reset further
+      // down is safe or a real bug.
+      const isSameConversation = v.account === selectedAccountId && v.contact === selectedContactId
       setSelectedAccountId(v.account)
       setSelectedContactId(v.contact)
       setSelectedThreadId(v.thread)
@@ -372,8 +421,8 @@ export default function PortalChatsPage() {
       const t = threads?.find(x => (v.account ? x.account_id === v.account : v.contact ? x.contact_id === v.contact : false))
       if (!t) {
         setSelectedName(null); setSelectedThreadContactId(null)
-        setSelectedThreadMembers([]); setSelectedThreadCompanies([]); setSelectedCompanyId(null)
-        setSelectedAddressedToContactId(null)
+        setSelectedThreadMembers([]); setSelectedThreadCompanies([])
+        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null) }
         return
       }
       const members = t.members ?? []
@@ -390,10 +439,41 @@ export default function PortalChatsPage() {
       // The old first-open-company default is how the 2026-08-07 cross-company
       // leak happened (dev job 4bad3094). Company sends now require an explicit
       // chip click; panels derive their own context via panelCompanyId.
-      setSelectedCompanyId(null)
-      setSelectedAddressedToContactId(null)
+      //
+      // BUT that reset must only fire when this restore is actually landing on
+      // a DIFFERENT client conversation — not on every popstate. Before this
+      // guard, clicking the Internal tab to glance at a team thread and clicking
+      // back to Chats (or any Back/Forward step that doesn't change which
+      // client is selected) pushed a history entry that, on restore, silently
+      // reset an already-confirmed "send as Company X" choice back to
+      // Personal — including while the pre-send confirmation pop-up was open
+      // and still showing "Company X" on screen, so staff confirming what they
+      // saw would have actually sent it person-scoped instead. Bug-hunter
+      // review, 2026-09-05 (round 3, before ship). Restoring onto a genuinely
+      // different client still resets both, exactly as the 2026-08-07 fix
+      // requires — this narrows WHEN the reset fires, it doesn't remove it.
+      if (!isSameConversation) {
+        setSelectedCompanyId(null)
+        setSelectedAddressedToContactId(null)
+      }
     },
   )
+  // Force-closes the pre-send confirmation pop-up the instant its pinned
+  // conversation (see sendConfirmTargetKey above) drifts away, OR the client-
+  // chat panel it belongs to gets hidden behind an internal staff thread —
+  // selectedThreadId being set hides this same panel outright (see its
+  // `hidden` toggle a few hundred lines down). Watching only account/contact
+  // missed that second case: switching to an internal thread while staying
+  // on the same client's account/contact left the pop-up floating on top of
+  // the now-hidden client panel instead of closing with it. Bug-hunter
+  // review, 2026-09-05 (round 3, before ship). Placed after selectedThreadId
+  // is declared above — TypeScript block-scoping requires it.
+  useEffect(() => {
+    if (!sendConfirmOpen) return
+    const currentKey = selectedAccountId || selectedContactId || null
+    if (currentKey !== sendConfirmTargetKey || selectedThreadId) closeSendConfirm()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId, selectedThreadId])
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
@@ -2009,16 +2089,62 @@ export default function PortalChatsPage() {
     ? (currentThreadForGuard?.company_name ?? 'This company')
     : (selectedClosedCompany?.name ?? 'This company')
 
-  const handleSend = async () => {
+  // Opens the pre-send confirmation pop-up (Antonio, 2026-09-04) instead of
+  // sending directly. Every guard that used to gate the send itself still
+  // gates opening the pop-up — an empty message, a closed account, or an
+  // in-flight send never gets as far as the modal. The actual send only
+  // happens from performSend(), fired by the modal's own "Confirm & Send"
+  // button, never from here.
+  const handleSend = () => {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (sendingToClosedAccount) {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
     if (isRecording) stopRecording()
-    if (inputRef.current) inputRef.current.style.height = 'auto'
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+      // Blur so further typing while the modal is open can't silently
+      // change what's about to be sent (bug-hunter review, 2026-09-04) —
+      // the modal shows no message preview, so drift here would be invisible.
+      inputRef.current.blur()
+    }
+    setSendConfirmTargetKey(selectedAccountId || selectedContactId || null)
+    setSendConfirmOpen(true)
+  }
 
-    // Captured now, at click time, before any upload/network await — this is
+  // Fires the actual send, exactly as handleSend used to do inline — the only
+  // change is WHEN this runs: after "Confirm & Send" inside the pop-up,
+  // instead of immediately on the composer's Send button. The capture-before-
+  // await discipline is unchanged and just as necessary here: the modal can
+  // sit open for as long as staff takes to decide, which is a longer window
+  // than the old attachment-upload await this pattern was originally built
+  // for (dev job c3bb4abc).
+  const performSend = async () => {
+    // Guard against a fast double-click on "Confirm & Send" firing twice
+    // before the modal's own re-render closes it — mirrors handleSend's
+    // original isPending guard, now needed here since the modal can sit
+    // open indefinitely and the click is a second, later event.
+    if (sendMutation.isPending || uploadingAdminFile) return
+    // Re-check the closed-account guard: staff could switch the company chip
+    // to a closed one WHILE the modal was open, after handleSend's own check
+    // already passed.
+    if (sendingToClosedAccount) {
+      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
+      return
+    }
+    // A pending free-text topic (staff typed a new one but clicked Confirm &
+    // Send instead of pressing Enter) does NOT reliably commit via the
+    // input's onBlur before this click fires — the newly-appearing topic
+    // chip shifts the layout, so the blur-then-click sequence can land the
+    // click just off the button. Commit it here directly rather than trust
+    // that ordering: this is the one value read from modal-local state
+    // instead of the shared adminActiveTopic, precisely because relying on
+    // the shared value would be relying on the same unreliable blur.
+    const pendingTopic = modalCreatingTopic && modalNewTopicInput.trim() ? modalNewTopicInput.trim() : null
+    if (pendingTopic) setAdminActiveTopic(pendingTopic)
+    closeSendConfirm()
+    // Captured now, at confirm-click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
     // is looking by the time it completes. Dev job c3bb4abc.
     //
@@ -2034,7 +2160,7 @@ export default function PortalChatsPage() {
     const targetAccountId = selectedAccountId
     const targetContactId = selectedContactId
     const targetCompanyId = selectedCompanyId
-    const targetTopic = adminActiveTopic
+    const targetTopic = pendingTopic ?? adminActiveTopic
     // "Addressed to" label (dev job 08a8be62) — same capture-before-await
     // discipline as the four values above (dev job c3bb4abc): must be
     // frozen here, at click time, never re-read from live state inside
@@ -4750,6 +4876,255 @@ export default function PortalChatsPage() {
                 className="flex items-center gap-1 text-sm font-medium bg-violet-600 text-white rounded px-3 py-1.5 disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" /> {addTodoMutation.isPending ? 'Adding…' : 'Add to board'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-send confirmation pop-up (dev job 08a8be62; Antonio, 2026-09-04 —
+          explicit override of the earlier ambient-only design, made AFTER
+          seeing that version live on a real single-member LLC and rejecting
+          it: "I want a pop-up... Even in a single-member LLC, there is a
+          personal and a company"). Opens on EVERY send, every conversation
+          shape, no exceptions — reads and writes the SAME live selection
+          state the ambient chips above the composer already use, so there is
+          no second copy of the choice to keep in sync. Deliberately does NOT
+          rebuild the catalog-driven topic-template picker (the tab bar above
+          the message list) — it reuses the same underlying adminActiveTopic
+          state via the simpler existing-topics-as-chips + free-text
+          mechanism, which fully covers "an existing topic, or a new one"
+          without a second topic-selection implementation to keep in sync. */}
+      {sendConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeSendConfirm}>
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
+              <Send className="h-4 w-4 text-blue-500" />
+              <h3 className="text-sm font-semibold text-zinc-800">Before you send</h3>
+              <button onClick={closeSendConfirm} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto">
+              {/* Personal vs company (+ which company, if the contact has more
+                  than one) — only when this dimension exists at all for this
+                  thread. An account-level thread (selectedAccountId set) is
+                  always company-scoped by construction; there is no ambient
+                  "personal" path out of it today, so this section correctly
+                  does not appear there. */}
+              {selectedThreadCompanies.length > 0 && !selectedAccountId && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Send as</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {selectedThreadCompanies.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedCompanyId(c.id)}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[220px] truncate',
+                          c.closed
+                            ? (selectedCompanyId === c.id ? 'bg-red-600 text-white border-red-600' : 'border-red-200 text-red-600 hover:bg-red-50')
+                            : (selectedCompanyId === c.id ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50')
+                        )}
+                      >
+                        {c.name}{c.closed ? ' (closed)' : ''}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCompanyId(null)}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                        !selectedCompanyId ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      Personal
+                    </button>
+                  </div>
+                  {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
+                    <p className="text-[11px] text-amber-700 mt-1.5">
+                      Visible to everyone in {audienceTargetName}: {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                      {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Closed-account warning — deliberately its OWN block, not nested
+                  inside "Send as" above: sendingToClosedAccount can be true for
+                  an ACCOUNT-scoped thread too (selectedAccountId set), which has
+                  no "Send as" section at all, so a warning nested in there never
+                  rendered for that shape — Confirm & Send was silently disabled
+                  with no explanation anywhere in the pop-up. Bug-hunter review,
+                  2026-09-05 (round 3, before ship). Covers both shapes with one
+                  block instead of duplicating it into each branch. */}
+              {sendingToClosedAccount && (
+                <p className="text-[11px] text-red-600">
+                  {closedTargetName} is closed — the client can&apos;t see messages here.{' '}
+                  {selectedAccountId ? 'This conversation is archived.' : 'Pick an active company or "Personal".'}
+                </p>
+              )}
+
+              {/* Which member — only for multi-member account threads. Label
+                  only (lib/portal/admin-send-scope.ts unchanged): the message
+                  stays visible to the whole company thread regardless. */}
+              {selectedAccountId && selectedThreadMembers.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Addressed to</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {addressedToOptions.length === 0 && (
+                      <p className="text-xs text-zinc-400">No members on file for this company yet.</p>
+                    )}
+                    {addressedToOptions.map(opt => (
+                      opt.resolvable ? (
+                        <button
+                          key={opt.memberId}
+                          type="button"
+                          onClick={() => setSelectedAddressedToContactId(opt.contactId)}
+                          className={cn(
+                            'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                            effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                          )}
+                        >
+                          {opt.name}
+                        </button>
+                      ) : (
+                        <FastTooltip key={opt.memberId} label="No linked contact on file for this member yet — can't be addressed individually.">
+                          <span className="px-3 py-1.5 text-sm rounded-full border border-zinc-200 text-zinc-300 cursor-not-allowed">{opt.name}</span>
+                        </FastTooltip>
+                      )
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5">Label only — the whole company still sees this message.</p>
+                </div>
+              )}
+
+              {/* Topic — existing topics from this thread as chips, or free-text a new one.
+                  FIXED height (not just a max — min AND max pinned to the same value) +
+                  its own scroll: a growing thread accumulates topics over time, and —
+                  the actual bug this was built to fix — committing a brand-new topic
+                  adds a chip that can wrap the row onto a second line for the FIRST
+                  time (e.g. a thread with few topics so far, all still fitting on one
+                  line). A plain max-height does NOT stop that specific transition: the
+                  row is still shorter than the cap right up until the new chip lands,
+                  so it grows anyway. Any growth here pushes the Confirm & Send button
+                  down by exactly the height of that new line at the instant it
+                  appears — a click already aimed at the button's pre-wrap position
+                  (mousedown fires, blur commits the topic and the wrap happens,
+                  mouseup/click then resolve against the NEW layout) lands just below
+                  it and hits nothing. Reproduced directly, twice, including after an
+                  earlier fix that made send-time state reading more robust but didn't
+                  touch this: the click was missing the button ENTIRELY, so no code
+                  inside the button's own handler could ever have run. Pinning this
+                  row's height so it NEVER changes, from the very first render,
+                  regardless of topic count, removes the shift at its source —
+                  independent of click/touch timing, blur ordering, or how many
+                  topics a given thread happens to have today. */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1.5">Topic</label>
+                <div className="flex gap-1.5 flex-wrap items-start content-start h-20 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdminActiveTopic(null)
+                      // Picking an EXISTING topic is an explicit, unambiguous choice —
+                      // it must win over a still-open, uncommitted free-text draft
+                      // sitting in the "New topic" box below, not silently lose to it
+                      // at send time (performSend prefers a pending free-text draft
+                      // over adminActiveTopic; onBlur intentionally leaves that draft
+                      // untouched when focus moves elsewhere, see the input's own
+                      // comment). Clearing it HERE, in the same click that sets the
+                      // real selection, is safe and unambiguous, unlike onBlur.
+                      setModalCreatingTopic(false)
+                      setModalNewTopicInput('')
+                    }}
+                    className={cn(
+                      'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                      !adminActiveTopic ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                    )}
+                  >
+                    General
+                  </button>
+                  {(adminActiveTopic && !adminTopics.includes(adminActiveTopic) ? [...adminTopics, adminActiveTopic] : adminTopics).map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setAdminActiveTopic(t)
+                        setModalCreatingTopic(false)
+                        setModalNewTopicInput('')
+                      }}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[160px] truncate',
+                        adminActiveTopic === t ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  {modalCreatingTopic ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={modalNewTopicInput}
+                      onChange={e => setModalNewTopicInput(e.target.value.slice(0, 100))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && modalNewTopicInput.trim()) {
+                          setAdminActiveTopic(modalNewTopicInput.trim())
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
+                        } else if (e.key === 'Escape') {
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
+                        }
+                      }}
+                      // Deliberately no onBlur handler (bug-hunter review, 2026-09-04
+                      // — two bugs found here, in sequence). Losing focus is NOT the
+                      // same as the user deciding anything: clicking a company chip,
+                      // a member chip, or Confirm & Send all blur this input first,
+                      // as an ordinary side effect of moving focus elsewhere — before
+                      // that click's own handler ever runs. An earlier version
+                      // committed the typed text to the shared adminActiveTopic on
+                      // every blur, which meant typing a topic then clicking Cancel,
+                      // the X, the backdrop, or any chip silently changed the
+                      // conversation's active topic even when the user meant to
+                      // cancel or pick something else. The fix-of-that-fix (clearing
+                      // instead of committing) turned out just as wrong: blur fires
+                      // BEFORE Confirm & Send's own click handler, so clearing here
+                      // wiped the exact pending-topic state performSend depends on
+                      // reading, breaking single-click confirm entirely. Leaving the
+                      // draft untouched on blur is the only option that serves every
+                      // path correctly: Enter explicitly commits it (below), Escape
+                      // explicitly discards it (below), closeSendConfirm() discards
+                      // it on Cancel/X/backdrop/a completed send, and it simply
+                      // survives — still open, still showing what was typed — if the
+                      // user clicks some other control first and comes back to it.
+                      placeholder="Topic name…"
+                      className="px-3 py-1.5 text-sm rounded-full border border-blue-300 outline-none w-32"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setModalCreatingTopic(true)}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> New topic
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3 border-t shrink-0">
+              <button onClick={closeSendConfirm} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button
+                disabled={sendingToClosedAccount || sendMutation.isPending || uploadingAdminFile}
+                onClick={performSend}
+                className="flex items-center gap-1.5 text-sm font-medium bg-blue-600 text-white rounded px-4 py-1.5 disabled:opacity-40"
+              >
+                <Send className="h-3.5 w-3.5" /> {(sendMutation.isPending || uploadingAdminFile) ? 'Sending…' : 'Confirm & Send'}
               </button>
             </div>
           </div>
