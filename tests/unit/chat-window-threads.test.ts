@@ -147,10 +147,10 @@ describe('otherPartyId', () => {
 
 describe('openConversations — the client chats the window can open', () => {
   const rows: ChatThreadRow[] = [
-    { id: 'c1', thread_type: 'discussion', label: 'Rossi LLC · EIN', unread_count: 2, last_activity_at: '2026-07-22T10:00:00Z' },
-    { id: 'c2', thread_type: 'discussion', label: 'Bianchi LLC', unread_count: 0, last_activity_at: '2026-07-21T10:00:00Z' },
-    { id: 'c3', thread_type: 'discussion', label: 'Done one', unread_count: 5, last_activity_at: '2026-07-22T12:00:00Z', resolved_at: '2026-07-22T12:30:00Z' },
-    { id: 'c4', thread_type: 'discussion', label: 'Archived one', unread_count: 3, last_activity_at: '2026-07-22T13:00:00Z', archived_at: '2026-07-22T13:30:00Z' },
+    { id: 'c1', thread_type: 'discussion', label: 'Rossi LLC · EIN', unread_count: 2, last_activity_at: '2026-07-22T10:00:00Z', is_participant: true },
+    { id: 'c2', thread_type: 'discussion', label: 'Bianchi LLC', unread_count: 0, last_activity_at: '2026-07-21T10:00:00Z', is_participant: true },
+    { id: 'c3', thread_type: 'discussion', label: 'Done one', unread_count: 5, last_activity_at: '2026-07-22T12:00:00Z', resolved_at: '2026-07-22T12:30:00Z', is_participant: true },
+    { id: 'c4', thread_type: 'discussion', label: 'Archived one', unread_count: 3, last_activity_at: '2026-07-22T13:00:00Z', archived_at: '2026-07-22T13:30:00Z', is_participant: true },
     { id: 'ch', thread_type: 'channel', unread_count: 40, last_activity_at: '2026-07-22T14:00:00Z' },
     { id: 'd1', thread_type: 'dm', dm_key: 'antonio:luca', unread_count: 1, last_activity_at: '2026-07-22T09:00:00Z' },
   ]
@@ -179,6 +179,40 @@ describe('openConversations — the client chats the window can open', () => {
     expect(openConversations(null)).toEqual([])
     expect(openConversations([])).toEqual([])
   })
+
+  // Antonio, 2026-09-04: "I don't want to have all that conversations in the
+  // floating. it's noise" — a colleague's own routine exchange with a client
+  // you have never opened or posted in must not clutter your own quick list,
+  // even though it is a perfectly real, live conversation.
+  describe('is_participant scoping (2026-09-04)', () => {
+    it('drops a live, unresolved conversation the viewer has never opened or posted in', () => {
+      const notMine: ChatThreadRow = {
+        id: 'c-not-mine', thread_type: 'discussion', label: 'Someone Else LLC',
+        unread_count: 3, last_activity_at: '2026-09-04T10:00:00Z', is_participant: false,
+      }
+      expect(openConversations([notMine])).toEqual([])
+    })
+
+    it('also drops one where is_participant was never set at all (server omission fails closed, not open)', () => {
+      const unset: ChatThreadRow = {
+        id: 'c-unset', thread_type: 'discussion', label: 'Unset LLC',
+        unread_count: 3, last_activity_at: '2026-09-04T10:00:00Z',
+      }
+      expect(openConversations([unset])).toEqual([])
+    })
+
+    it('keeps a conversation the viewer actually participates in, alongside a filtered-out one', () => {
+      const mine: ChatThreadRow = {
+        id: 'c-mine', thread_type: 'discussion', label: 'Mine LLC',
+        unread_count: 1, last_activity_at: '2026-09-04T09:00:00Z', is_participant: true,
+      }
+      const notMine: ChatThreadRow = {
+        id: 'c-not-mine', thread_type: 'discussion', label: 'Someone Else LLC',
+        unread_count: 3, last_activity_at: '2026-09-04T10:00:00Z', is_participant: false,
+      }
+      expect(openConversations([mine, notMine]).map((t) => t.id)).toEqual(['c-mine'])
+    })
+  })
 })
 
 describe('conversationLabel', () => {
@@ -200,8 +234,8 @@ describe('conversationLabel', () => {
 describe('windowUnreadCount — the badge counts what the window can open', () => {
   const rows: ChatThreadRow[] = [
     { id: 'd1', thread_type: 'dm', dm_key: 'antonio:luca', unread_count: 2 },
-    { id: 'c1', thread_type: 'discussion', unread_count: 3 },
-    { id: 'c-done', thread_type: 'discussion', unread_count: 9, resolved_at: 'x' },
+    { id: 'c1', thread_type: 'discussion', unread_count: 3, is_participant: true },
+    { id: 'c-done', thread_type: 'discussion', unread_count: 9, resolved_at: 'x', is_participant: true },
     { id: 'ch', thread_type: 'channel', unread_count: 40 },
   ]
 
@@ -219,5 +253,10 @@ describe('windowUnreadCount — the badge counts what the window can open', () =
   it('is zero, not NaN, on missing data', () => {
     expect(windowUnreadCount(null, ME)).toBe(0)
     expect(windowUnreadCount(rows, null)).toBe(3) // conversations still count; DMs need identity
+  })
+
+  it('does not count a conversation the viewer is not a participant in (2026-09-04)', () => {
+    const notMine: ChatThreadRow = { id: 'c-not-mine', thread_type: 'discussion', unread_count: 99, is_participant: false }
+    expect(windowUnreadCount([...rows, notMine], ME)).toBe(5) // unchanged — the 99 never counts
   })
 })

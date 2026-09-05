@@ -66,8 +66,9 @@ function clientNameOf(note: NoteAlertSourceNote): string | null {
 }
 
 /** Numeric compare — NEVER string-compare ISO timestamps (this codebase has been bitten by
- *  exactly that: 'Z' vs '+00:00' suffixes sort differently than they resolve chronologically). */
-function parsedMs(iso: string | null | undefined): number {
+ *  exactly that: 'Z' vs '+00:00' suffixes sort differently than they resolve chronologically).
+ *  Exported: lib/team/chat-alerts.ts reuses this rather than a second copy of the same lesson. */
+export function parsedMs(iso: string | null | undefined): number {
   if (!iso) return 0
   const t = Date.parse(iso)
   return Number.isFinite(t) ? t : 0
