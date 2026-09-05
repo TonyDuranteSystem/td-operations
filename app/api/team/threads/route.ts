@@ -77,6 +77,44 @@ export async function GET() {
     }
   }
 
+  // Genuine engagement on a client conversation, distinct from is_participant.
+  //
+  // is_participant is TRUE the moment a row exists in internal_thread_reads —
+  // but TWO existing paths (findOrCreateConversation, on every new client
+  // conversation; the share route's admin-notify fallback) deliberately seed
+  // EVERY other staff member with a row whose last_read_at is the epoch
+  // (1970-01-01), specifically so a ring/dot fires the first time. That is the
+  // right behaviour for those notification surfaces (see lib/team/workspace.ts,
+  // realtime-notifications.tsx) — it is NOT "I have ever actually opened or
+  // posted in this." Found live in production, 2026-09-05: is_participant was
+  // true for 120 of 122 of Antonio's discussion threads, but only 47 carried a
+  // real (non-epoch) last_read_at — the other 73 were auto-seeded noise he had
+  // never touched, which is exactly the clutter he was pointing at. This
+  // engagement flag is for surfaces (the floating chat's own quick list) that
+  // want "mine" to mean the second thing.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const discussionIds = enriched.filter((t: any) => t.thread_type === 'discussion').map((t: any) => t.id)
+  const everOpenedSet = new Set<string>()
+  if (discussionIds.length > 0) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: readRows } = await (supabaseAdmin as any)
+        .from('internal_thread_reads')
+        .select('thread_id, last_read_at')
+        .eq('user_id', user.id)
+        .in('thread_id', discussionIds)
+        .gt('last_read_at', '1970-01-01T00:00:00Z')
+      for (const r of readRows ?? []) if (r?.thread_id) everOpenedSet.add(r.thread_id)
+    } catch {
+      // Best-effort, like Later and the turn receipts above: a lookup failure
+      // here must not empty the whole sidebar. Worst case, ever_opened stays
+      // false everywhere and the floating chat's list is emptier than it
+      // should be for one request — never wrong in the unsafe direction.
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const t of enriched as any[]) t.ever_opened = t.thread_type === 'discussion' ? everOpenedSet.has(t.id) : null
+
   const members = await listTeamMembers()
 
   return NextResponse.json({
