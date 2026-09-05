@@ -32,7 +32,37 @@ catalog-driven topic-template dropdown that lives in the tab bar above the messa
 list — that dropdown remains the only place for template-based topic creation; the
 modal only offers "pick an existing topic from this thread, or type a new one", which
 is what was actually asked for. No new pure logic (UI-only reorganization of an
-existing send path) — full suite still green, 10,386 tests. STILL OPEN: the
+existing send path) — full suite still green, 10,386 tests. **Sandbox browser QA
+(real clicks and keyboard events, not just visual inspection) found and fixed three
+real interaction bugs before this ever reached production**, all stemming from the
+same root cause — the modal's free-text "New topic" input originally shared its
+ephemeral open/closed toggle with the ambient tab bar's own copy of the identical
+widget, and the two stayed mounted at once (the modal is an overlay, not a
+replacement — the ambient tab bar never unmounts behind it): (1) both inputs
+mounting together, each with `autoFocus`, meant the second one stealing focus fired
+the first one's `onBlur`, which reset the shared toggle back to closed before a
+single keystroke landed — typing a new topic was completely unusable. Fixed by
+giving the modal its own private `modalCreatingTopic`/`modalNewTopicInput`, which
+still commits to the correctly-shared `adminActiveTopic` on Enter/blur. (2) Once
+that worked, a topic that existed only via `adminActiveTopic` (the normal state
+right after creating one, before any message under it has been sent) had no
+matching chip in the modal's own list — which only ever mapped over `adminTopics`,
+topics with at least one already-sent message — so confirming a new topic looked
+like nothing had happened. Fixed by appending the active topic to the rendered list
+when it isn't already present. (3) Clicking "Confirm & Send" directly after typing a
+new topic (without pressing Enter first) relied on the input's `onBlur` committing
+before the button's `onClick` fired; the newly-appearing topic chip shifts the row's
+layout the instant blur commits it, so the already-in-flight click could land just
+off the button — reproduced directly: the topic committed correctly, but the send
+never fired. Fixed by having `performSend` read a pending, uncommitted topic
+directly from the modal's own local state rather than depend on blur having already
+run. All three fixed and re-verified end to end (sent real test messages covering a
+contact with multiple companies, a multi-member account with both a member
+selection AND a brand-new topic, and a pure-personal contact with no company at
+all) before this entry was written. General lesson kept in Gotchas below: never
+share an ephemeral "which mode is this ONE widget in" toggle between two surfaces
+that can both be mounted at the same time, even when they correctly share the
+RESULT of the interaction. STILL OPEN: the
 client-visible "Addressed to" badge fast-follow noted in the 2026-09-04 entry below is
 still not built; this pass did not touch it.)_
 _Prior: 2026-09-04c — Claude (**"Addressed to" now shows on the message itself, not just at compose time — staff-side only** — same-day follow-up to dev job 08a8be62's 2026-09-04 entry below. Antonio's own words after seeing the first ship: he pointed out that once a message was sent, nothing on it showed who it had been addressed to — staff scrolling back through a conversation later had no way to tell, same gap as the client-visible one already tracked as a fast-follow, except this half was never explicitly called out before. Fixed for the STAFF side only (the client-facing fast-follow is unchanged, still not built): `GET /api/portal/chat` now also joins `contacts` on `addressed_to_contact_id` and returns `addressed_to_name`; the message-bubble render in `app/(dashboard)/portal-chats/page.tsx` shows a small teal "For {name}" badge on any admin message in a multi-member account thread that has one, positioned next to (not reusing) the existing purple "who wrote this" badge so the two are never visually confused. Verified live on sandbox against the same real test message from the first ship (Uxio Test LLC, addressed to Marco Rossi) — the badge renders correctly on the historical message. One real testing trap hit and resolved during this verification: a stale service worker on the test browser tab served an old JS bundle after the redeploy, making the fix look broken when the API was already returning the right data — unregistering the worker + clearing caches + a fresh reload resolved it; not a code bug, but worth remembering for the next person testing this page after a deploy.)_
