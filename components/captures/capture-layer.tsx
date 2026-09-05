@@ -51,7 +51,7 @@ type DestinationChoice = 'sticky_note' | 'team_chat' | 'portal_chat' | null
 type PortalChatPrefill = { contactId: string; accountId: string | null; label: string }
 
 export default function CaptureLayer() {
-  const { isOpen, close } = useCapture()
+  const { isOpen, close, pendingExternalFile, clearPendingExternalFile } = useCapture()
   const [stage, setStage] = useState<Stage>('mode')
   const [firstPoint, setFirstPoint] = useState<Point | null>(null)
   const [livePoint, setLivePoint] = useState<Point | null>(null)
@@ -117,6 +117,19 @@ export default function CaptureLayer() {
     setCapturedFile(file)
     setStage('markup')
   }, [])
+
+  // A file dropped on the "My captures" browse popup (Antonio, 2026-09-04) —
+  // that popup has no stage machine of its own, so CaptureProvider hands the
+  // file off here via `pendingExternalFile` instead of duplicating this
+  // validate-and-load step a second time. Runs AFTER the reset-on-open effect
+  // above (React commits effects in declaration order), so this correctly
+  // overrides that effect's plain 'mode' stage with 'markup' + the file.
+  useEffect(() => {
+    if (isOpen && pendingExternalFile) {
+      loadExternalFile(pendingExternalFile)
+      clearPendingExternalFile()
+    }
+  }, [isOpen, pendingExternalFile, loadExternalFile, clearPendingExternalFile])
 
   // Paste support (Antonio, 2026-09-04): while the tool is open, pasting an
   // already-copied picture loads it straight into the same mark-up editor —

@@ -15,10 +15,19 @@
  * shared "mode" with the capture flow, since a browse-open state does not
  * need any of the capture flow's stage machine.
  *
- * Deliberately minimal: this context only knows whether each tool is open.
- * Everything about WHERE the capture flow currently is (choosing a mode,
- * selecting an area, previewing the result) lives as CaptureLayer's own
- * local state — the same separation HelpProvider/HelpDot use.
+ * `pendingExternalFile` + `openWithFile` are the hand-off for "drag a picture
+ * onto the browse popup and it starts a new capture with it" (Antonio,
+ * 2026-09-04) — the browse popup has no stage machine of its own to load a
+ * file into, so it hands the file to CaptureLayer via this one slot instead
+ * of duplicating CaptureLayer's own `loadExternalFile` validation/markup
+ * entry a second time. `openWithFile` closes the browse popup and opens the
+ * capture flow in the same update, so the two never show at once.
+ *
+ * Deliberately minimal otherwise: this context only knows whether each tool
+ * is open (+ the one pending-file hand-off). Everything about WHERE the
+ * capture flow currently is (choosing a mode, selecting an area, previewing
+ * the result) lives as CaptureLayer's own local state — the same separation
+ * HelpProvider/HelpDot use.
  */
 import { createContext, useCallback, useContext, useState } from 'react'
 
@@ -29,6 +38,9 @@ interface CaptureContextValue {
   isBrowseOpen: boolean
   openBrowse: () => void
   closeBrowse: () => void
+  pendingExternalFile: File | null
+  openWithFile: (file: File) => void
+  clearPendingExternalFile: () => void
 }
 
 const CaptureContext = createContext<CaptureContextValue>({
@@ -38,6 +50,9 @@ const CaptureContext = createContext<CaptureContextValue>({
   isBrowseOpen: false,
   openBrowse: () => {},
   closeBrowse: () => {},
+  pendingExternalFile: null,
+  openWithFile: () => {},
+  clearPendingExternalFile: () => {},
 })
 
 export function useCapture() {
@@ -53,8 +68,28 @@ export function CaptureProvider({ children }: { children: React.ReactNode }) {
   const openBrowse = useCallback(() => setIsBrowseOpen(true), [])
   const closeBrowse = useCallback(() => setIsBrowseOpen(false), [])
 
+  const [pendingExternalFile, setPendingExternalFile] = useState<File | null>(null)
+  const openWithFile = useCallback((file: File) => {
+    setPendingExternalFile(file)
+    setIsBrowseOpen(false)
+    setIsOpen(true)
+  }, [])
+  const clearPendingExternalFile = useCallback(() => setPendingExternalFile(null), [])
+
   return (
-    <CaptureContext.Provider value={{ isOpen, open, close, isBrowseOpen, openBrowse, closeBrowse }}>
+    <CaptureContext.Provider
+      value={{
+        isOpen,
+        open,
+        close,
+        isBrowseOpen,
+        openBrowse,
+        closeBrowse,
+        pendingExternalFile,
+        openWithFile,
+        clearPendingExternalFile,
+      }}
+    >
       {children}
     </CaptureContext.Provider>
   )
