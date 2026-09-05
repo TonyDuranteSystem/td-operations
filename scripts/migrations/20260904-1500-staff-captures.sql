@@ -53,16 +53,26 @@ CREATE TABLE IF NOT EXISTS public.staff_captures (
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
--- Shape guards.
+-- Shape guards. DROP IF EXISTS before each ADD so this file is safely
+-- re-runnable (bug-hunter finding, 2026-09-04 — this block originally had no
+-- guard and would error, not silently no-op, on a second apply; the sibling
+-- migration 20260904-1900-...sql already got this right for its own single
+-- constraint). Purely defensive: these constraints already exist in sandbox
+-- with these exact definitions, so this changes nothing about current state.
 ALTER TABLE public.staff_captures
+  DROP CONSTRAINT IF EXISTS staff_captures_title_nonempty,
   ADD CONSTRAINT staff_captures_title_nonempty CHECK (char_length(btrim(title)) > 0),
+  DROP CONSTRAINT IF EXISTS staff_captures_image_url_nonempty,
   ADD CONSTRAINT staff_captures_image_url_nonempty CHECK (char_length(btrim(image_url)) > 0),
+  DROP CONSTRAINT IF EXISTS staff_captures_note_len,
   ADD CONSTRAINT staff_captures_note_len CHECK (note IS NULL OR char_length(note) <= 4000),
   -- once set, a destination must at least name its type and the record it points at
+  DROP CONSTRAINT IF EXISTS staff_captures_destination_shape,
   ADD CONSTRAINT staff_captures_destination_shape CHECK (
     destination IS NULL OR (destination ? 'type' AND destination ? 'id')
   ),
   -- Phase 1 destinations only; Phase 2 extends this list in its own migration.
+  DROP CONSTRAINT IF EXISTS staff_captures_destination_type,
   ADD CONSTRAINT staff_captures_destination_type CHECK (
     destination IS NULL OR destination->>'type' IN ('sticky_note', 'team_chat')
   );

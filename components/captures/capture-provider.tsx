@@ -15,6 +15,20 @@
  * shared "mode" with the capture flow, since a browse-open state does not
  * need any of the capture flow's stage machine.
  *
+ * `isOpen` and `isBrowseOpen` are mutually exclusive, ENFORCED here, not just
+ * by convention — bug-hunter finding, 2026-09-04: the capture button's menu
+ * has no idea the OTHER tool is already open, so with no guard here a staff
+ * member could have the capture flow open with an unsaved, marked-up
+ * screenshot, separately open "My captures" from the same always-reachable
+ * top-bar menu, and drop a picture onto it — silently wiping the in-progress
+ * one, and, if its upload was still in flight, letting the confirm screen
+ * show the NEW picture while the OLD one's id is what actually gets sent
+ * (traced end-to-end in portal-chat-destination-picker.tsx, which shows a
+ * local `imageFile` prop but sends a separate `captureId` prop — the two
+ * were never guaranteed to agree). `open`/`openBrowse` each force the other
+ * closed instead of independently flipping their own flag, so the two states
+ * can never coexist regardless of which one is opened first.
+ *
  * `pendingExternalFile` + `openWithFile` are the hand-off for "drag a picture
  * onto the browse popup and it starts a new capture with it" (Antonio,
  * 2026-09-04) — the browse popup has no stage machine of its own to load a
@@ -61,11 +75,17 @@ export function useCapture() {
 
 export function CaptureProvider({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false)
-  const open = useCallback(() => setIsOpen(true), [])
+  const open = useCallback(() => {
+    setIsBrowseOpen(false)
+    setIsOpen(true)
+  }, [])
   const close = useCallback(() => setIsOpen(false), [])
 
   const [isBrowseOpen, setIsBrowseOpen] = useState(false)
-  const openBrowse = useCallback(() => setIsBrowseOpen(true), [])
+  const openBrowse = useCallback(() => {
+    setIsOpen(false)
+    setIsBrowseOpen(true)
+  }, [])
   const closeBrowse = useCallback(() => setIsBrowseOpen(false), [])
 
   const [pendingExternalFile, setPendingExternalFile] = useState<File | null>(null)

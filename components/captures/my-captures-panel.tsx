@@ -30,23 +30,36 @@ const DESTINATION_LABEL: Record<string, string> = {
 
 export function MyCapturesPanel() {
   const [captures, setCaptures] = useState<CaptureRow[] | null>(null)
+  const [loadError, setLoadError] = useState(false)
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState<string | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
 
+  // A failed load used to collapse into the SAME "You haven't captured
+  // anything yet." empty state as genuinely having nothing (R099 violation,
+  // bug-hunter finding 2026-09-04) — indistinguishable from the truth, with
+  // no way to tell the difference or retry.
   useEffect(() => {
     let cancelled = false
+    setLoadError(false)
     fetch('/api/captures')
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error('load failed')
+        return r.json()
+      })
       .then((d) => {
         if (!cancelled) setCaptures(Array.isArray(d.captures) ? d.captures : [])
       })
       .catch(() => {
-        if (!cancelled) setCaptures([])
+        if (!cancelled) {
+          setCaptures(null)
+          setLoadError(true)
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadToken])
 
   const filtered = useMemo(() => {
     if (!captures) return []
@@ -71,7 +84,17 @@ export function MyCapturesPanel() {
         />
       </div>
 
-      {captures === null ? (
+      {loadError ? (
+        <div className="mt-8 flex flex-col items-center gap-2 text-center text-sm">
+          <p className="text-red-600">Could not load your captures.</p>
+          <button
+            onClick={() => setReloadToken((n) => n + 1)}
+            className="rounded-md border border-zinc-200 px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-50"
+          >
+            Try again
+          </button>
+        </div>
+      ) : captures === null ? (
         <p className="mt-8 text-center text-sm text-zinc-400">Loading...</p>
       ) : filtered.length === 0 ? (
         <p className="mt-8 text-center text-sm text-zinc-400">

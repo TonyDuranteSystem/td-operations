@@ -58,16 +58,28 @@ export function MarkupEditor({
   const strokePointRef = useRef<Point | null>(null)
   const dragStartRef = useRef<Point | null>(null)
   const [ready, setReady] = useState(false)
+  const [loadError, setLoadError] = useState(false)
 
   // Load the captured image onto the base canvas, at its real pixel size —
   // drawing/exporting always happens at full resolution, never the shrunk
   // on-screen display size.
+  //
+  // onerror is a backstop, not the primary guard (bug-hunter finding,
+  // 2026-09-04) — the real fix is upstream, rejecting non-image files before
+  // they ever reach this component. This still matters for a file that DOES
+  // claim to be an image but isn't a valid one (corrupt bytes, a renamed
+  // file): without it, onload simply never fires, `ready` stays false
+  // forever with no error shown, and Continue/Retake stayed clickable
+  // regardless — Continue would then export whatever was already on the
+  // untouched, default-sized canvas as a blank, real, SENDABLE picture.
   useEffect(() => {
     const canvas = baseCanvasRef.current
     const preview = previewCanvasRef.current
     if (!canvas || !preview) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    setReady(false)
+    setLoadError(false)
     const url = URL.createObjectURL(imageFile)
     const img = new Image()
     img.onload = () => {
@@ -78,6 +90,7 @@ export function MarkupEditor({
       ctx.drawImage(img, 0, 0)
       setReady(true)
     }
+    img.onerror = () => setLoadError(true)
     img.src = url
     return () => URL.revokeObjectURL(url)
   }, [imageFile])
@@ -250,12 +263,12 @@ export function MarkupEditor({
 
   const handleDone = useCallback(() => {
     const canvas = baseCanvasRef.current
-    if (!canvas) return
+    if (!canvas || !ready || loadError) return
     canvas.toBlob((blob) => {
       if (!blob) return
       onDone(new File([blob], imageFile.name, { type: 'image/png' }))
     }, 'image/png')
-  }, [imageFile.name, onDone])
+  }, [imageFile.name, onDone, ready, loadError])
 
   return (
     <div className="flex flex-col gap-3">
@@ -271,7 +284,10 @@ export function MarkupEditor({
             style={{ cursor: tool === 'text' ? 'text' : 'crosshair' }}
           />
         </div>
-        {!ready && <div className="p-8 text-center text-sm text-zinc-400">Loading...</div>}
+        {!ready && !loadError && <div className="p-8 text-center text-sm text-zinc-400">Loading...</div>}
+        {loadError && (
+          <div className="p-8 text-center text-sm text-red-600">Could not load that picture. Please retake.</div>
+        )}
       </div>
 
       <div className="flex items-center gap-1 overflow-x-auto">
@@ -313,7 +329,11 @@ export function MarkupEditor({
         <button onClick={onCancel} className="flex-1 rounded-md border border-zinc-200 px-4 py-2 text-sm hover:bg-zinc-50">
           Retake
         </button>
-        <button onClick={handleDone} className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800">
+        <button
+          onClick={handleDone}
+          disabled={!ready || loadError}
+          className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 disabled:opacity-40"
+        >
           Continue
         </button>
       </div>

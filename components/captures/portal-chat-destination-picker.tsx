@@ -77,6 +77,7 @@ export function PortalChatDestinationPicker({
   const [query, setQuery] = useState('')
   const [candidates, setCandidates] = useState<PortalDestinationCandidate[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState(false)
   const [target, setTarget] = useState<ConfirmTarget | null>(prefilled ? { ...prefilled, displayLabel: prefilled.label, contactEmail: null } : null)
   const [sending, setSending] = useState(false)
 
@@ -101,6 +102,7 @@ export function PortalChatDestinationPicker({
   useEffect(() => {
     if (target) return // already on the confirm step (prefilled from a recent)
     const q = query.trim()
+    setSearchError(false)
     if (q.length < 2) {
       setCandidates([])
       return
@@ -109,12 +111,25 @@ export function PortalChatDestinationPicker({
     setSearching(true)
     const t = setTimeout(() => {
       fetch(`/api/captures/portal-destinations?q=${encodeURIComponent(q)}`)
-        .then((r) => r.json())
+        .then((r) => {
+          if (!r.ok) throw new Error('search failed')
+          return r.json()
+        })
         .then((d) => {
           if (!cancelled) setCandidates(Array.isArray(d.candidates) ? d.candidates : [])
         })
         .catch(() => {
-          if (!cancelled) setCandidates([])
+          // Kept local rather than escalated to the full onError screen
+          // (unlike the other pickers' one-time loads) — this fires on
+          // every keystroke, so kicking the user out of searching on one
+          // transient blip would be worse than the R099 violation it fixes.
+          // Still surfaced, not silently swallowed into "no matches" (that
+          // was indistinguishable from a real client not existing —
+          // bug-hunter finding, 2026-09-04).
+          if (!cancelled) {
+            setCandidates([])
+            setSearchError(true)
+          }
         })
         .finally(() => {
           if (!cancelled) setSearching(false)
@@ -193,7 +208,10 @@ export function PortalChatDestinationPicker({
           <Loader2 className="h-4 w-4 animate-spin" />
         </div>
       )}
-      {!searching && query.trim().length >= 2 && candidates.length === 0 && (
+      {!searching && searchError && (
+        <p className="py-4 text-center text-xs text-red-600">Couldn&apos;t search — check your connection and try again.</p>
+      )}
+      {!searching && !searchError && query.trim().length >= 2 && candidates.length === 0 && (
         <p className="py-4 text-center text-xs text-zinc-400">No matches.</p>
       )}
       <div className="flex max-h-64 flex-col gap-1 overflow-y-auto">

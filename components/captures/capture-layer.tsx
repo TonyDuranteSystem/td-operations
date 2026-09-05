@@ -64,6 +64,14 @@ export default function CaptureLayer() {
   const [quickSending, setQuickSending] = useState(false)
   const [doneMessage, setDoneMessage] = useState<string | null>(null)
   const [portalChatPrefill, setPortalChatPrefill] = useState<PortalChatPrefill | null>(null)
+  const [extraFilesNotice, setExtraFilesNotice] = useState(false)
+  // Bumped every time a NEW file starts its journey through this stage
+  // machine (a fresh capture, a paste, or a drop) — handleMarkupDone reads it
+  // back after its await to make sure the upload it's about to act on is
+  // still the current one, not a superseded one resolving late. A ref, not
+  // state, because it must be readable synchronously inside an async closure
+  // without becoming a dependency the callback has to be rebuilt around.
+  const uploadTokenRef = useRef(0)
 
   const reset = useCallback(() => {
     setStage('mode')
@@ -77,6 +85,7 @@ export default function CaptureLayer() {
     setQuickSending(false)
     setDoneMessage(null)
     setPortalChatPrefill(null)
+    setExtraFilesNotice(false)
   }, [])
 
   const handleClose = useCallback(() => {
@@ -96,6 +105,7 @@ export default function CaptureLayer() {
     try {
       const canvas = await fn()
       const file = await canvasToPngFile(canvas, `capture-${Date.now()}.png`)
+      uploadTokenRef.current += 1
       setCapturedFile(file)
       setStage('markup')
     } catch (err) {
@@ -106,7 +116,20 @@ export default function CaptureLayer() {
 
   /** Entry point for a picture that did NOT come from a fresh capture —
    *  pasted from the clipboard, or dropped onto the mode panel. Skips
-   *  straight to markup, reusing the exact same editor and upload engine. */
+   *  straight to markup, reusing the exact same editor and upload engine.
+   *
+   *  Requires an actual image (bug-hunter finding, 2026-09-04): the shared
+   *  chat-attachment validator this reused deliberately ALLOWS PDFs, Office
+   *  docs, and other normal files too (it's built for chat, where any of
+   *  those are fine) — but this pipeline only knows how to load an image
+   *  into a <canvas>. A dropped PDF passed that validator, sat forever on a
+   *  silent "Loading..." screen (the <img> can't decode it, so its onload
+   *  never fires), while Continue stayed clickable and happily exported the
+   *  UNTOUCHED, blank canvas as a real, sendable picture. Checking the MIME
+   *  type here — the one thing every one of this tool's own entry points
+   *  (capture, paste, drop) always has, since real screenshots and clipboard
+   *  images always carry a real image/* type — closes that off before the
+   *  file ever reaches the editor. */
   const loadExternalFile = useCallback((file: File) => {
     const validationError = validateChatAttachment(file.name, file.size, file.type)
     if (validationError) {
@@ -114,6 +137,12 @@ export default function CaptureLayer() {
       setStage('error')
       return
     }
+    if (!file.type.startsWith('image/')) {
+      setErrorMessage("That doesn't look like a picture — the Capture tool only works with images.")
+      setStage('error')
+      return
+    }
+    uploadTokenRef.current += 1
     setCapturedFile(file)
     setStage('markup')
   }, [])
@@ -194,10 +223,20 @@ export default function CaptureLayer() {
 
   const handleMarkupDone = useCallback(
     async (finalFile: File) => {
+      // Snapshot which "generation" of file this upload belongs to — if a
+      // NEWER capture starts (fresh shot, paste, or drop) before this
+      // promise settles, uploadTokenRef.current will have moved on by the
+      // time we get here, and this stale result must be dropped rather than
+      // clobbering whatever the user is looking at now (bug-hunter finding,
+      // 2026-09-04 — this is the one direct fix for the "wrong picture gets
+      // sent" race; the mutual-exclusion guard in CaptureProvider is the
+      // other, closing off the specific path that made it reachable).
+      const token = uploadTokenRef.current
       setStage('uploading')
       setErrorMessage(null)
       try {
         const capture = await uploadCapture({ file: finalFile, title: generateCaptureTitle(), note })
+        if (uploadTokenRef.current !== token) return
         setUploadedCaptureId(capture.id)
         // Loaded fresh on arrival at the destination step, not once at open —
         // a share completed earlier in this SAME session (recent-then-retake)
@@ -205,6 +244,7 @@ export default function CaptureLayer() {
         setRecents(getRecentDestinations())
         setStage('destination')
       } catch (err) {
+        if (uploadTokenRef.current !== token) return
         setErrorMessage(err instanceof Error ? err.message : 'Could not save the capture. Please try again.')
         setStage('error')
       }
@@ -270,8 +310,18 @@ export default function CaptureLayer() {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
-      const file = Array.from(e.dataTransfer.files ?? [])[0]
-      if (file) loadExternalFile(file)
+      const files = Array.from(e.dataTransfer.files ?? [])
+      const file = files[0]
+      if (!file) return
+      if (files.length > 1) {
+        // Same gap as the My Captures popup's own drop zone (bug-hunter
+        // finding, 2026-09-04): only the first file was ever used, with no
+        // indication the rest were dropped on the floor.
+        setExtraFilesNotice(true)
+        setTimeout(() => loadExternalFile(file), 700)
+      } else {
+        loadExternalFile(file)
+      }
     },
     [loadExternalFile],
   )
@@ -317,6 +367,11 @@ export default function CaptureLayer() {
 
             {stage === 'mode' && (
               <div className="flex flex-col gap-2">
+                {extraFilesNotice && (
+                  <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    Only the first picture was used — drop one at a time.
+                  </p>
+                )}
                 <button
                   onClick={handleSelectArea}
                   className="flex items-center gap-2 rounded-md border border-zinc-200 px-4 py-3 text-left text-sm hover:bg-zinc-50"
@@ -343,7 +398,15 @@ export default function CaptureLayer() {
             )}
 
             {stage === 'markup' && capturedFile && (
+              // key forces a fresh editor instance (fresh canvas ref, fresh
+              // undo stack) whenever the underlying file actually changes,
+              // instead of React reusing the same instance across two
+              // different pictures (bug-hunter finding, 2026-09-04 — belt
+              // and suspenders alongside the mutual-exclusion guard above;
+              // without either, a second file loading over a first left
+              // stale undo snapshots at the wrong canvas size).
               <MarkupEditor
+                key={`${capturedFile.name}-${capturedFile.lastModified}-${capturedFile.size}`}
                 imageFile={capturedFile}
                 note={note}
                 onNoteChange={setNote}
@@ -516,6 +579,7 @@ function SelectionOverlay({
           e.stopPropagation()
           onCancel()
         }}
+        onTouchStart={(e) => e.stopPropagation()}
         className="fixed right-4 top-4 rounded-full bg-zinc-900/80 p-2 text-white"
         aria-label="Cancel"
       >

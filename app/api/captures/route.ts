@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser, getUserDisplayName } from "@/lib/auth"
 import { isValidCapturePath } from "@/lib/captures/storage"
 import { capturesTable } from "@/lib/captures/db"
+import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 import { NextRequest, NextResponse } from "next/server"
 
 /**
@@ -67,6 +68,21 @@ export async function POST(request: NextRequest) {
   }
   if (!title) {
     return NextResponse.json({ error: "A title is required." }, { status: 400 })
+  }
+  // The normal UI always sends image_name/mime_type that match the file it
+  // already uploaded to `path` above (validated by /api/captures/upload-url).
+  // Re-validating them here too closes a bug-hunter-flagged gap (2026-09-04):
+  // this endpoint only ever type-checked them, so a caller hitting this API
+  // directly (bypassing the real screen) could set a mismatched name/type
+  // that later gets trusted verbatim when a share route copies the bytes
+  // into the public bucket — including as the stored Content-Type served
+  // back to a client. Running the SAME check the upload step already passed
+  // means the two can never disagree.
+  if (imageName || mimeType || sizeBytes != null) {
+    const validationError = validateChatAttachment(imageName || "", sizeBytes ?? 0, mimeType || "")
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 })
+    }
   }
 
   const { data, error } = await capturesTable()

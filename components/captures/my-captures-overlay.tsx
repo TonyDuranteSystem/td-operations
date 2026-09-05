@@ -31,6 +31,7 @@ import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 export default function MyCapturesOverlay() {
   const { isBrowseOpen, closeBrowse, openWithFile } = useCapture()
   const [dragOver, setDragOver] = useState(false)
+  const [extraFilesNotice, setExtraFilesNotice] = useState(false)
   /**
    * `fab.dragging` MUST be read as a property access at click time, never
    * destructured into a local — it's a getter over a ref specifically so a
@@ -43,15 +44,36 @@ export default function MyCapturesOverlay() {
    * comment; sticky-notes-layer.tsx and floating-chat.tsx already do this
    * correctly via dot-access (`deskFab.dragging`, `launcher.dragging`).
    */
-  const fab = useDraggableFab<HTMLDivElement>('td-fab-pos-my-captures-v1')
+  // `remeasureOn: isBrowseOpen` re-runs the hook's position-restore-and-clamp
+  // effect once this popup actually mounts real, measurable content — unlike
+  // its two always-on-screen sibling callers, this one returns null (renders
+  // nothing) while closed, so the FIRST time that effect ever ran (page
+  // load, popup closed by default) it had no element to measure and
+  // silently skipped clamping the restored position altogether (bug-hunter
+  // finding, 2026-09-04 — see useDraggableFab's own doc comment on the
+  // option).
+  const fab = useDraggableFab<HTMLDivElement>('td-fab-pos-my-captures-v1', { remeasureOn: isBrowseOpen })
   const { ref, dragProps, style, hasMoved } = fab
   if (!isBrowseOpen) return null
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(false)
-    const file = Array.from(e.dataTransfer.files ?? [])[0]
-    if (file) openWithFile(file)
+    const files = Array.from(e.dataTransfer.files ?? [])
+    const file = files[0]
+    if (!file) return
+    if (files.length > 1) {
+      // Only the first ever got used, with zero indication the rest were
+      // dropped on the floor (bug-hunter finding, 2026-09-04) — a real,
+      // reachable case (a multi-select drag from Finder), not a
+      // hypothetical one. This popup is about to close (openWithFile hands
+      // off to the capture flow), so the notice gets a brief beat on screen
+      // first rather than being set on a component that's already gone.
+      setExtraFilesNotice(true)
+      setTimeout(() => openWithFile(file), 700)
+    } else {
+      openWithFile(file)
+    }
   }
 
   return (
@@ -91,6 +113,11 @@ export default function MyCapturesOverlay() {
             <X className="h-5 w-5" />
           </button>
         </div>
+        {extraFilesNotice && (
+          <p className="border-b border-amber-100 bg-amber-50 px-5 py-2 text-xs text-amber-700">
+            Only the first picture was used — drop one at a time.
+          </p>
+        )}
         <div className={`overflow-y-auto p-5 ${dragOver ? 'bg-amber-50' : ''}`}>
           <MyCapturesPanel />
         </div>

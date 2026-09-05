@@ -30,16 +30,24 @@ export function TeamChatDestinationPicker({
   useEffect(() => {
     let cancelled = false
     fetch('/api/team/threads')
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error('load failed')
+        return r.json()
+      })
       .then((d) => {
         if (!cancelled) setThreads(Array.isArray(d.threads) ? d.threads : [])
       })
       .catch(() => {
-        if (!cancelled) setThreads([])
+        // A failed load used to look identical to "no conversations exist"
+        // (R099 violation, bug-hunter finding 2026-09-04) — surfaced through
+        // the same onError this component already uses for send failures,
+        // rather than a second, new error mechanism.
+        if (!cancelled) onError('Could not load team chat conversations. Please try again.')
       })
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const filtered = useMemo(() => {

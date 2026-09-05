@@ -1,5 +1,6 @@
 # Capture / Share (screenshot tool)
-_Last verified against code: 2026-09-04 — Claude (**Built end to end, Phase 1 (internal destinations) + Phase 2 (client-facing portal chat), council-reviewed before Phase 2, sandbox-verified live for every destination.** Antonio's ask: select part of the CRM page or the whole page, mark it up, attach a note, and send it to exactly ONE destination at a time — never a broadcast. One top-bar button ("Capture", next to the notification bell) offers "New capture" or "My captures".)_
+_Last verified against code: 2026-09-04e — Claude (**Full bug-hunt pass on the whole feature** — two independent adversarial reviews (server/security + client/React), 11 real findings, all fixed same-day: a mutual-exclusion guard + an upload generation-token + a `key` on the markup editor close off a real "wrong picture gets sent" race between an in-progress capture and a dropped file; both share routes gained an idempotency guard (no more double-send on a slow click) and the client-facing one also re-checks the account's status right before sending and forwards the caller's IP so its rate limit isn't shared across every staff member; the capture endpoint now validates the declared file name/type instead of trusting it blindly; the phone/tablet Cancel button during area-selection actually cancels now instead of registering a stray tap; a non-image drop no longer hangs silently or lets a blank picture through; four "no results" screens now tell the difference between "nothing here" and "the request failed"; the My Captures popup's saved position gets re-clamped against the real screen size instead of only once, before it ever had anything to measure. See Gotchas below for the exact mechanism of each.)_
+_Prior: 2026-09-04 — Claude (**Built end to end, Phase 1 (internal destinations) + Phase 2 (client-facing portal chat), council-reviewed before Phase 2, sandbox-verified live for every destination.** Antonio's ask: select part of the CRM page or the whole page, mark it up, attach a note, and send it to exactly ONE destination at a time — never a broadcast. One top-bar button ("Capture", next to the notification bell) offers "New capture" or "My captures".)_
 
 ## What it is
 A screenshot tool built into the CRM dashboard: select a region or capture the whole page, draw
@@ -97,6 +98,70 @@ while deciding where to send it.
   two real clients can share a name.
 
 ## Gotchas, invariants & past bugs
+- **`isOpen` (the capture flow) and `isBrowseOpen` (the My Captures popup) are mutually
+  exclusive, enforced in `CaptureProvider` itself** — `open()`/`openBrowse()` each force the OTHER
+  closed, not just flip their own flag. Found via a full bug-hunt pass, 2026-09-04: the capture
+  button's menu had no idea the other tool was open, so a staff member could have an
+  unsaved, marked-up screenshot open, separately open My Captures from the same
+  always-reachable top-bar menu, and drop a picture onto it — silently wiping the in-progress one,
+  and (if its upload was still in flight) letting the confirm screen show the NEW picture while the
+  OLD one's id is what actually gets sent (`portal-chat-destination-picker.tsx` shows a local
+  `imageFile` prop but sends a separate `captureId` prop — nothing previously guaranteed those
+  agreed). `capture-button.tsx` also disables "My captures" in the menu while a capture is open
+  (with a tooltip), so the provider's force-close is never reachable with real unsaved work on the
+  line. Belt-and-suspenders on top: `capture-layer.tsx` stamps every new file with a generation
+  token (`uploadTokenRef`) that `handleMarkupDone` checks after its `await`, dropping a stale
+  upload's result instead of applying it; `MarkupEditor` also gets a `key` tied to file identity so
+  React can't reuse a stale canvas/undo-stack across two different pictures.
+- **A hook's `dragging`-style getter-over-a-ref must be read as a live property access, never
+  destructured into a local** — covered in the 2026-09-04d entry below; the bug-hunt pass
+  specifically re-audited every ref in this feature for the same pattern and found no other
+  instance.
+- **`useDraggableFab`'s one-time position-restore effect needs the real element to measure** — a
+  caller that's sometimes absent from the DOM (My Captures returns `null` while closed, unlike its
+  two always-on-screen sibling callers) can have that effect's very first run land while
+  `ref.current` is still `null`, which disables the clamp for that read (the "no measured box"
+  fallback is deliberately the loosest possible bound). Since the effect's deps never change again
+  afterward, a position restored that way is never re-clamped for the rest of the session — found
+  live, 2026-09-04: a position saved on a wide desktop reopened mostly off-screen at a narrow
+  phone-PWA width. Fixed with an optional `remeasureOn` hook parameter (My Captures passes
+  `isBrowseOpen`) that re-runs the same restore-and-clamp logic once the popup is actually open and
+  measurable; the two original callers don't pass it and are unaffected.
+- **Both share routes now check `destination` before doing any work, and write it back
+  conditionally (`.is('destination', null)`)** — there was no idempotency guard at all before
+  2026-09-04's bug-hunt pass, so a slow request plus an impatient second click re-downloaded,
+  re-uploaded, and re-sent the same screenshot, leaving two independent permanent copies in the
+  public bucket. The client-facing route also re-checks the account's status immediately before
+  the actual send (narrowing, not eliminating, the TOCTOU window against the one check that used to
+  run only at the top of the request) and forwards the caller's own `x-forwarded-for`/`x-real-ip`
+  to the internal `/api/portal/chat` call so that route's rate limit is scoped per staff member
+  instead of shared across everyone using this feature.
+- **`/api/captures` (the finalize step) now validates the caller-declared `image_name`/`mime_type`
+  the same way `/api/captures/upload-url` already does**, instead of only type-checking them.
+  Before 2026-09-04, a caller hitting this endpoint directly (not through the real screen, which
+  always sends matching values) could set an arbitrary name/type that a share route later trusted
+  verbatim as the Content-Type of a file copied into the public bucket.
+- **The phone/tablet Cancel button during area-selection needs its own `onTouchStart` stopping
+  propagation**, the same fix already applied to the My Captures popup's close button (see the
+  2026-09-04d entry) — without it, a touch that starts on the button also reaches the parent
+  overlay's own `onTouchStart`, which calls `preventDefault()` and registers a selection point at
+  the button's location instead, suppressing the button's own synthetic click entirely.
+- **A dropped/pasted file must be checked for an actual image MIME type before it reaches
+  `MarkupEditor`** — the shared `validateChatAttachment` this pipeline reuses deliberately ALLOWS
+  PDFs, Office docs, and other normal chat attachments too (it's built for chat). A non-image file
+  used to sit forever on a silent "Loading..." screen (the `<img>` can never decode it, so its
+  `onload` never fires) while Continue stayed clickable and exported the untouched, blank canvas as
+  a real, sendable picture. `MarkupEditor` also gained an `img.onerror` backstop + a `ready`/
+  `loadError` gate on Continue, for a file that claims to be an image but isn't a valid one.
+- **A failed background load must never look identical to "there's genuinely nothing here."**
+  Found across all four "search/browse a list" screens (My Captures' own grid, and all three
+  destination pickers) during the 2026-09-04 bug-hunt pass — none checked `res.ok` before treating
+  the response as data, an R099 violation. The two one-time-load pickers (team chat, notes) now
+  escalate a load failure through the same `onError` they already use for send failures; My
+  Captures' own grid gets a local error state with a retry button; the portal-chat search (which
+  fires on every keystroke) gets a gentler inline message instead of the disruptive full error
+  screen, so a transient blip while typing doesn't look like "No matches" — the case that matters
+  most here, since that's the one that could make a real client look like they don't exist.
 - **The tool's own panel is deliberately NOT a full-screen backdrop** past the initial selection
   step. A full backdrop sits above the sidebar and silently swallows a click meant to navigate —
   found live, 2026-09-04: a tap meant to go to a different page just closed the tool instead,

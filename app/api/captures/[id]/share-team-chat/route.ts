@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isDashboardUser } from "@/lib/auth"
+import { isStaffUser } from "@/lib/auth"
 import { capturesTable } from "@/lib/captures/db"
 import { WORKER_UPLOAD_BUCKET } from "@/lib/captures/storage"
 import { NextRequest, NextResponse } from "next/server"
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user || !isDashboardUser(user)) {
+  if (!user || !isStaffUser(user)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
   }
 
@@ -62,12 +62,20 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!threadId) return NextResponse.json({ error: "Which conversation?" }, { status: 400 })
 
   const { data: capture, error: captureErr } = await capturesTable()
-    .select("id, image_url, image_name, mime_type, size_bytes, note, title, captured_by_user_id")
+    .select("id, image_url, image_name, mime_type, size_bytes, note, title, captured_by_user_id, destination")
     .eq("id", captureId)
     .single()
   if (captureErr || !capture) return NextResponse.json({ error: "That capture is gone. Please try again." }, { status: 404 })
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
+  }
+  // Idempotency — same bug-hunter finding as share-portal-chat/route.ts: a
+  // slow request plus an impatient second click previously re-copied and
+  // re-sent the same screenshot. Team chat is internal-only, so the stakes
+  // are lower than the client-facing route, but the fix is identical and
+  // free to apply here too.
+  if (capture.destination) {
+    return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
 
   // Thread must exist (same cheap guard the existing team upload-url route uses).
@@ -125,10 +133,13 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const sendData = await sendRes.json().catch(() => ({}))
 
   // Best-effort — the message above is what actually matters; a failure here
-  // only leaves the capture folder's "where it went" label stale.
+  // only leaves the capture folder's "where it went" label stale. Guarded on
+  // "still NULL" for the same genuinely-simultaneous-double-click reason as
+  // share-portal-chat/route.ts.
   await capturesTable()
     .update({ destination: { type: "team_chat", id: threadId, label: message.slice(0, 60) } })
     .eq("id", captureId)
+    .is("destination", null)
 
   return NextResponse.json({ ok: true, message_id: sendData.message?.id ?? null })
 }

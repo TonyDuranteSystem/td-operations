@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffUser } from "@/lib/auth"
 import { capturesTable } from "@/lib/captures/db"
 import { WORKER_UPLOAD_BUCKET } from "@/lib/captures/storage"
+import { ACTIVE_ACCOUNT_STATUSES } from "@/lib/captures/portal-destinations"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
@@ -55,12 +56,22 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!contactId) return NextResponse.json({ error: "Who is this going to?" }, { status: 400 })
 
   const { data: capture, error: captureErr } = await capturesTable()
-    .select("id, image_url, image_name, mime_type, size_bytes, note, title, captured_by_user_id")
+    .select("id, image_url, image_name, mime_type, size_bytes, note, title, captured_by_user_id, destination")
     .eq("id", captureId)
     .single()
   if (captureErr || !capture) return NextResponse.json({ error: "That capture is gone. Please try again." }, { status: 404 })
   if (capture.captured_by_user_id !== user.id) {
     return NextResponse.json({ error: "That isn't your capture." }, { status: 403 })
+  }
+  // Idempotency — a bug-hunter-flagged gap (2026-09-04): nothing previously
+  // stopped a slow request + an impatient second click (or a reload-and-retry)
+  // from downloading, re-uploading, and re-sending the SAME screenshot twice,
+  // leaving two independent, permanent copies of it sitting in the public
+  // bucket. This is the common, everyday case; a genuinely simultaneous
+  // double-request is closed off below by making the final label-write
+  // conditional, not by this check alone.
+  if (capture.destination) {
+    return NextResponse.json({ error: "This was already shared." }, { status: 409 })
   }
 
   // Validate the send BEFORE touching Storage — see header comment.
@@ -83,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: "That company doesn't belong to this person anymore. Please search again." }, { status: 400 })
     }
     const { data: account } = await supabaseAdmin.from("accounts").select("status, company_name").eq("id", accountId).maybeSingle()
-    if (!account || (account.status !== "Active" && account.status !== "Suspended")) {
+    if (!account || !ACTIVE_ACCOUNT_STATUSES.has(account.status)) {
       return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
     }
   }
@@ -108,15 +119,38 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   }
   const attachmentUrl = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=${encodeURIComponent(objectPath)}`
 
+  // Re-check the account's status right before sending, not just at the top
+  // of this request (bug-hunter finding, 2026-09-04) — the download+upload
+  // above is the only real gap between the two checks, so re-running this
+  // cheap query narrows that window to as little as it can be without
+  // restructuring the shared /api/portal/chat send route itself.
+  if (accountId) {
+    const { data: freshAccount } = await supabaseAdmin.from("accounts").select("status").eq("id", accountId).maybeSingle()
+    if (!freshAccount || !ACTIVE_ACCOUNT_STATUSES.has(freshAccount.status)) {
+      return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+    }
+  }
+
   // Deliver through the real staff send route — same identity, same
   // send-scope invariant, same client notifications, same audit log every
-  // other staff portal-chat reply already gets.
+  // other staff portal-chat reply already gets. Forwards the caller's own
+  // IP so the send route's rate limit is scoped per staff member, not
+  // shared across everyone using this feature (bug-hunter finding,
+  // 2026-09-04 — without this every hairpin call here looked like the same
+  // caller to that check).
   const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
+  const forwardedFor = request.headers.get("x-forwarded-for")
+  const realIp = request.headers.get("x-real-ip")
   let sendRes: Response
   try {
     sendRes = await fetch(`${request.nextUrl.origin}/api/portal/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: request.headers.get("cookie") || "" },
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: request.headers.get("cookie") || "",
+        ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
+        ...(realIp ? { "x-real-ip": realIp } : {}),
+      },
       body: JSON.stringify({
         contact_id: contactId,
         account_id: accountId || undefined,
@@ -137,10 +171,16 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const sendData = await sendRes.json().catch(() => ({}))
 
   // Best-effort — the message above is what actually matters; a failure here
-  // only leaves the capture folder's "where it went" label stale.
+  // only leaves the capture folder's "where it went" label stale. Guarded on
+  // "still NULL" so two requests that both slipped past the early check
+  // above (a genuinely simultaneous double-click, not just an impatient
+  // second one) don't have the second one's write silently clobber the
+  // first's — same shape as this codebase's other reviewed_at IS NULL
+  // guards elsewhere.
   await capturesTable()
     .update({ destination: { type: "portal_chat", id: contactId, account_id: accountId, label: message.slice(0, 60) } })
     .eq("id", captureId)
+    .is("destination", null)
 
   // Instant alert: every send through this new, client-facing path pings
   // staff immediately (project-director review, 2026-09-04) — even a caught

@@ -54,7 +54,11 @@ export interface ContactRow {
   account_contacts: { account_id: string; accounts: { id: string; company_name: string; status: string } | null }[] | null
 }
 
-const ACTIVE_STATUSES = new Set(["Active", "Suspended"])
+// Exported so the actual send gate (share-portal-chat/route.ts) checks the
+// SAME list this picker uses to decide what's even offered — two
+// independently-maintained copies of this rule is how they'd quietly drift
+// apart the next time a status is added (bug-hunter finding, 2026-09-04).
+export const ACTIVE_ACCOUNT_STATUSES = new Set(["Active", "Suspended"])
 
 /**
  * Pure transform: one contact row -> zero or more send candidates. Exported
@@ -71,7 +75,7 @@ export function toCandidates(c: ContactRow): PortalDestinationCandidate[] {
   const seenAccountIds = new Set<string>()
   for (const link of c.account_contacts ?? []) {
     const acct = link.accounts
-    if (!acct || seenAccountIds.has(acct.id) || !ACTIVE_STATUSES.has(acct.status)) continue
+    if (!acct || seenAccountIds.has(acct.id) || !ACTIVE_ACCOUNT_STATUSES.has(acct.status)) continue
     seenAccountIds.add(acct.id)
     out.push({
       contactId: c.id,
