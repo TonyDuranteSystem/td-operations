@@ -4408,7 +4408,20 @@ export default function PortalChatsPage() {
                             addressedToJustChanged && 'ring-2 ring-teal-400 ring-offset-1',
                           )}
                         >
-                          {addressedToSelectedOption?.name ?? 'Whole company'}
+                          {/* selectedAddressedToCompany must be checked FIRST, not
+                              folded into addressedToSelectedOption's own fallback —
+                              found live testing the fix that introduced it: choosing
+                              "Whole company" sets selectedAddressedToContactId to null,
+                              which is exactly the condition effectiveAddressedToContactId
+                              falls through to the GUESSED member for, so
+                              addressedToSelectedOption resolves to that guessed
+                              member's option (non-null) and this label would show their
+                              name instead of "Whole company" — even though the send
+                              itself was already fixed to ignore the guess in this exact
+                              case (performSend). Same bug, different call site; this one
+                              only affects what staff SEE, not what gets sent, but it's
+                              directly misleading right after making the choice. */}
+                          {selectedAddressedToCompany ? 'Whole company' : (addressedToSelectedOption?.name ?? 'Whole company')}
                           <ChevronDown className="h-3 w-3 shrink-0" />
                         </button>
                       </DropdownMenu.Trigger>
