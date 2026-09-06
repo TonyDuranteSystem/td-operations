@@ -23,6 +23,14 @@
  *   people linked to the company are NOT proactively notified, only able to
  *   see it if they open their own portal chat. Overclaiming "N people will
  *   be notified" here would be confidently wrong; this says what's true.
+ * - A multi-member company ALSO offers itself as its own candidate — kind
+ *   "company_wide", no contact attached — mirroring the "Whole company"
+ *   choice the main Portal Chats composer already has (2026-09-06, Antonio:
+ *   a real search only showed the two people at a two-person company, never
+ *   the company itself). Genuinely different from picking a person, not
+ *   just a label: notifyClientOfAdminMessage's ACCOUNT-only branch notifies
+ *   EVERY eligible linked contact, not one, so the confirm screen's copy
+ *   changes accordingly for this case (see below).
  * - The Send button disables itself the instant it's tapped (no existing
  *   confirm-then-send component in this feature to inherit a busy-guard
  *   from — this is the first one, so double-tap-under-latency, a real
@@ -46,18 +54,20 @@ interface PrefilledTarget {
 }
 
 interface ConfirmTarget {
-  contactId: string
+  contactId: string | null
   accountId: string | null
   displayLabel: string
   contactEmail: string | null
+  wholeCompany: boolean
 }
 
 function toConfirmTarget(c: PortalDestinationCandidate): ConfirmTarget {
   return {
     contactId: c.contactId,
     accountId: c.accountId,
-    displayLabel: c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName,
+    displayLabel: c.kind === 'company_wide' ? `${c.companyName} — Whole company` : c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName,
     contactEmail: c.contactEmail,
+    wholeCompany: c.kind === 'company_wide',
   }
 }
 
@@ -85,7 +95,7 @@ export function PortalChatDestinationPicker({
   const [candidates, setCandidates] = useState<PortalDestinationCandidate[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState(false)
-  const [target, setTarget] = useState<ConfirmTarget | null>(prefilled ? { ...prefilled, displayLabel: prefilled.label, contactEmail: null } : null)
+  const [target, setTarget] = useState<ConfirmTarget | null>(prefilled ? { ...prefilled, displayLabel: prefilled.label, contactEmail: null, wholeCompany: false } : null)
   const [sending, setSending] = useState(false)
 
   // Create AND revoke inside the SAME effect (not a memo + a separate
@@ -162,7 +172,14 @@ export function PortalChatDestinationPicker({
     setSending(true)
     try {
       await sendCaptureToPortalChat(captureId, { contact_id: target.contactId, account_id: target.accountId }, resend)
-      addRecentDestination({ type: 'portal_chat', contactId: target.contactId, accountId: target.accountId, label: target.displayLabel })
+      // Not saved as a "recent" for a whole-company send — RecentDestination's
+      // portal_chat shape keys on a real contactId, and portal_chat already
+      // never skips the confirm screen (REQUIRES_CONFIRMATION), so the only
+      // thing a saved recent would buy here is pre-filling a search that's
+      // just as fast to redo.
+      if (target.contactId) {
+        addRecentDestination({ type: 'portal_chat', contactId: target.contactId, accountId: target.accountId, label: target.displayLabel })
+      }
       onSent(`Sent to ${target.displayLabel}.`)
     } catch (err) {
       setSending(false)
@@ -182,9 +199,11 @@ export function PortalChatDestinationPicker({
           <p className="font-medium text-zinc-900">{target.displayLabel}</p>
           {target.contactEmail && <p className="text-xs text-zinc-400">{target.contactEmail}</p>}
           <p className="mt-2 text-xs text-zinc-500">
-            {target.accountId
-              ? 'They’ll get an email and a phone notification. Anyone else linked to this company could also see it if they check their portal chat.'
-              : 'They’ll get an email and a phone notification.'}
+            {target.wholeCompany
+              ? 'Everyone at this company with portal access will get an email and a phone notification.'
+              : target.accountId
+                ? 'They’ll get an email and a phone notification. Anyone else linked to this company could also see it if they check their portal chat.'
+                : 'They’ll get an email and a phone notification.'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -233,14 +252,14 @@ export function PortalChatDestinationPicker({
       <div className="flex max-h-64 flex-col gap-1 overflow-y-auto">
         {candidates.map((c) => (
           <button
-            key={`${c.contactId}-${c.accountId ?? 'personal'}`}
+            key={`${c.kind}-${c.contactId ?? 'none'}-${c.accountId ?? 'personal'}`}
             onClick={() => setTarget(toConfirmTarget(c))}
             className="flex flex-col items-start rounded-md border border-zinc-200 px-3 py-2 text-left text-sm hover:bg-zinc-50"
           >
             <span className="font-medium text-zinc-900">
-              {c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName}
+              {c.kind === 'company_wide' ? `${c.companyName} — Whole company` : c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName}
             </span>
-            <span className="text-xs text-zinc-400">{c.contactEmail}</span>
+            {c.contactEmail && <span className="text-xs text-zinc-400">{c.contactEmail}</span>}
           </button>
         ))}
       </div>

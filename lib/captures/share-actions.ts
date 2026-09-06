@@ -45,7 +45,9 @@ export async function sendCaptureToTeamChat(captureId: string, threadId: string,
 
 export async function sendCaptureToPortalChat(
   captureId: string,
-  target: { contact_id: string; account_id: string | null },
+  // contact_id is null only for a "whole company" send (2026-09-06) — no
+  // one specific person, always paired with a real account_id.
+  target: { contact_id: string | null; account_id: string | null },
   resend?: boolean,
 ): Promise<void> {
   const res = await fetch(`/api/captures/${captureId}/share-portal-chat`, {
