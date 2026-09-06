@@ -29,10 +29,12 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export interface PortalDestinationCandidate {
-  contactId: string
+  // null only for kind "company_wide" — that candidate is the account
+  // itself, addressed to nobody specific.
+  contactId: string | null
   contactName: string
-  contactEmail: string
-  kind: "personal" | "company"
+  contactEmail: string | null
+  kind: "personal" | "company" | "company_wide"
   accountId: string | null
   companyName: string | null
 }
@@ -89,6 +91,42 @@ export function toCandidates(c: ContactRow): PortalDestinationCandidate[] {
   return out
 }
 
+export interface MemberEligibilityRow {
+  account_id: string
+  company_name: string
+  contact_email: string | null
+  portal_email_sent_at: string | null
+}
+
+/**
+ * Pure: given every (account, linked contact) row for a set of candidate
+ * accounts, decide which accounts qualify for a "whole company" candidate —
+ * more than one ELIGIBLE (invited) person linked. Mirrors the gate the main
+ * Portal Chats composer already uses for its own "Whole company" choice
+ * (audienceTotal > 1) rather than inventing a second rule: Antonio, after
+ * searching a real two-person company and only seeing the two people, not
+ * the company itself — "I want to have all options. the single member as in
+ * the screenshot and the company" (2026-09-06). For a single-member company
+ * the two are identical, so no separate candidate is added — same as the
+ * composer's own behavior.
+ */
+export function computeWholeCompanyCandidates(rows: MemberEligibilityRow[]): PortalDestinationCandidate[] {
+  const eligibleCountByAccount = new Map<string, number>()
+  const nameByAccount = new Map<string, string>()
+  for (const row of rows) {
+    nameByAccount.set(row.account_id, row.company_name)
+    if (!row.contact_email || !row.portal_email_sent_at) continue
+    eligibleCountByAccount.set(row.account_id, (eligibleCountByAccount.get(row.account_id) ?? 0) + 1)
+  }
+  const out: PortalDestinationCandidate[] = []
+  eligibleCountByAccount.forEach((count, accountId) => {
+    if (count <= 1) return
+    const companyName = nameByAccount.get(accountId) ?? ""
+    out.push({ contactId: null, contactName: companyName, contactEmail: null, kind: "company_wide", accountId, companyName })
+  })
+  return out
+}
+
 export async function searchPortalDestinations(query: string): Promise<PortalDestinationCandidate[]> {
   const term = escapeIlikeTerm(query)
   if (term.length < 2) return []
@@ -132,5 +170,36 @@ export async function searchPortalDestinations(query: string): Promise<PortalDes
   }
 
   const candidates = Array.from(byId.values()).flatMap(toCandidates)
-  return candidates.slice(0, MAX_CANDIDATES)
+
+  // Whole-company candidates, one lookup for every distinct account this
+  // search already surfaced — deliberately scoped to account_contacts (the
+  // same source this whole file already relies on), not the separate
+  // members table the main Portal Chats composer additionally consults as a
+  // patch for known account_contacts gaps; that dual-source reconciliation
+  // is real but out of scope for this narrower picker.
+  const companyAccountIds = Array.from(
+    new Set(candidates.filter((c) => c.kind === "company" && c.accountId).map((c) => c.accountId as string)),
+  )
+  let wholeCompanyCandidates: PortalDestinationCandidate[] = []
+  if (companyAccountIds.length > 0) {
+    const { data: memberRows } = await supabaseAdmin
+      .from("account_contacts")
+      .select("account_id, accounts!inner(company_name), contacts!inner(email, portal_email_sent_at)")
+      .in("account_id", companyAccountIds)
+    const rows = (memberRows ?? []) as unknown as {
+      account_id: string
+      accounts: { company_name: string } | null
+      contacts: { email: string | null; portal_email_sent_at: string | null } | null
+    }[]
+    wholeCompanyCandidates = computeWholeCompanyCandidates(
+      rows.map((r) => ({
+        account_id: r.account_id,
+        company_name: r.accounts?.company_name ?? "",
+        contact_email: r.contacts?.email ?? null,
+        portal_email_sent_at: r.contacts?.portal_email_sent_at ?? null,
+      })),
+    )
+  }
+
+  return [...candidates, ...wholeCompanyCandidates].slice(0, MAX_CANDIDATES)
 }

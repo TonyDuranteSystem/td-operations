@@ -51,7 +51,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
   const captureId = params.id
   const body = await request.json().catch(() => ({}))
-  const contactId = typeof body.contact_id === "string" ? body.contact_id : ""
+  const contactId = typeof body.contact_id === "string" && body.contact_id ? body.contact_id : null
   const accountId = typeof body.account_id === "string" && body.account_id ? body.account_id : null
   // True only for a deliberate re-share of a picture already sent once, from
   // the My Captures gallery's own "Share" button (2026-09-05) — see
@@ -59,7 +59,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // The ORIGINAL post-capture flow never sends this, so its idempotency stays
   // exactly as strict as before.
   const resend = body.resend === true
-  if (!contactId) return NextResponse.json({ error: "Who is this going to?" }, { status: 400 })
+  // Whole-company send (2026-09-06) — no specific contactId, always a real
+  // account_id. Mirrors the main Portal Chats composer's own "Whole company"
+  // send shape exactly (see below): account_id only, no contact_id, no
+  // sender_context.
+  if (!contactId && !accountId) return NextResponse.json({ error: "Who is this going to?" }, { status: 400 })
 
   const { data: capture, error: captureErr } = await capturesTable()
     .select("id, image_url, image_name, mime_type, size_bytes, note, title, captured_by_user_id, destination")
@@ -75,27 +79,43 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   const priorDestination = capture.destination ?? null
 
   // Validate the send BEFORE touching Storage — see header comment.
-  const { data: contact } = await supabaseAdmin
-    .from("contacts")
-    .select("email, portal_email_sent_at")
-    .eq("id", contactId)
-    .maybeSingle()
-  if (!contact?.email || !contact.portal_email_sent_at) {
-    return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+  if (contactId) {
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("email, portal_email_sent_at")
+      .eq("id", contactId)
+      .maybeSingle()
+    if (!contact?.email || !contact.portal_email_sent_at) {
+      return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+    }
   }
   if (accountId) {
-    const { data: link } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contact_id")
-      .eq("account_id", accountId)
-      .eq("contact_id", contactId)
-      .maybeSingle()
-    if (!link) {
-      return NextResponse.json({ error: "That company doesn't belong to this person anymore. Please search again." }, { status: 400 })
+    if (contactId) {
+      const { data: link } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contact_id")
+        .eq("account_id", accountId)
+        .eq("contact_id", contactId)
+        .maybeSingle()
+      if (!link) {
+        return NextResponse.json({ error: "That company doesn't belong to this person anymore. Please search again." }, { status: 400 })
+      }
     }
     const { data: account } = await supabaseAdmin.from("accounts").select("status, company_name").eq("id", accountId).maybeSingle()
     if (!account || !ACTIVE_ACCOUNT_STATUSES.has(account.status)) {
       return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+    }
+    if (!contactId) {
+      // Whole-company send: at least one eligible (invited) contact must
+      // actually be linked, or this would succeed while reaching nobody.
+      const { count } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contacts!inner(id)", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .not("contacts.portal_email_sent_at", "is", null)
+      if (!count) {
+        return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
+      }
     }
   }
 
@@ -126,7 +146,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // destination on a resend (there's a real previous send to preserve), not
   // NULL (which would erase it).
   const message = (capture.note?.trim() || capture.title || "Shared a screenshot").slice(0, 5000)
-  const destinationValue = { type: "portal_chat", id: contactId, account_id: accountId, label: message.slice(0, 60) }
+  // `id` must be present (DB CHECK on staff_captures.destination) — a
+  // whole-company send has no contactId, so the account stands in; `account_id`
+  // alongside it is what actually disambiguates the two shapes.
+  const destinationValue = { type: "portal_chat", id: contactId ?? accountId, account_id: accountId, label: message.slice(0, 60) }
   const claimQuery = capturesTable().update({ destination: destinationValue }).eq("id", captureId)
   const { data: claimed, error: claimErr } = await (resend ? claimQuery : claimQuery.is("destination", null)).select("id")
   if (claimErr) {
@@ -170,16 +193,29 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   // re-running these cheap queries narrows that window to as little as it
   // can be without restructuring the shared /api/portal/chat send route
   // itself.
-  const { data: freshContact } = await supabaseAdmin.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
-  if (!freshContact?.email || !freshContact.portal_email_sent_at) {
-    await rollbackClaim()
-    return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+  if (contactId) {
+    const { data: freshContact } = await supabaseAdmin.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
+    if (!freshContact?.email || !freshContact.portal_email_sent_at) {
+      await rollbackClaim()
+      return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+    }
   }
   if (accountId) {
     const { data: freshAccount } = await supabaseAdmin.from("accounts").select("status").eq("id", accountId).maybeSingle()
     if (!freshAccount || !ACTIVE_ACCOUNT_STATUSES.has(freshAccount.status)) {
       await rollbackClaim()
       return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+    }
+    if (!contactId) {
+      const { count } = await supabaseAdmin
+        .from("account_contacts")
+        .select("contacts!inner(id)", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .not("contacts.portal_email_sent_at", "is", null)
+      if (!count) {
+        await rollbackClaim()
+        return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
+      }
     }
   }
 
@@ -203,9 +239,15 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         ...(realIp ? { "x-real-ip": realIp } : {}),
       },
       body: JSON.stringify({
-        contact_id: contactId,
-        account_id: accountId || undefined,
-        sender_context: accountId ? "company" : "person",
+        // Whole-company (no contactId): mirrors the main Portal Chats
+        // composer's OWN proven shape for this exact case exactly — account_id
+        // alone, no contact_id, no sender_context, addressed_to_company:true.
+        // Adding sender_context here would be wrong: 'company' requires (and
+        // implies attributing the send to) a specific person via contactId;
+        // there isn't one.
+        ...(contactId
+          ? { contact_id: contactId, account_id: accountId || undefined, sender_context: accountId ? "company" : "person" }
+          : { account_id: accountId, addressed_to_company: true }),
         message,
         attachment_url: attachmentUrl,
         attachment_name: capture.image_name || "screenshot.png",

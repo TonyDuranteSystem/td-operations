@@ -23,6 +23,24 @@
  *   people linked to the company are NOT proactively notified, only able to
  *   see it if they open their own portal chat. Overclaiming "N people will
  *   be notified" here would be confidently wrong; this says what's true.
+ * - A multi-member company ALSO offers itself as its own candidate — kind
+ *   "company_wide", no contact attached — mirroring the "Whole company"
+ *   choice the main Portal Chats composer already has (2026-09-06, Antonio:
+ *   a real search only showed the two people at a two-person company, never
+ *   the company itself).
+ * - CORRECTED after live-testing the first version of this feature (it
+ *   claimed the wrong thing here): omitting contactId does NOT make
+ *   notifyClientOfAdminMessage notify everyone. The shared send route
+ *   (app/api/portal/chat) ALWAYS resolves some specific contact for an
+ *   account-scoped admin send with no explicit one (resolveAdminReplyContact
+ *   — returns null only when the account has ZERO linked contacts, which a
+ *   whole-company candidate never is, by construction) and notifies exactly
+ *   that one person, addressed_to_company or not. Confirmed live: a real
+ *   send to a 2-member test company still landed with a real, non-null
+ *   contact_id. addressed_to_company is exactly what its own original
+ *   comment already said — display/routing metadata, "never a privacy
+ *   gate" — not a different notification fan-out. The confirm screen's copy
+ *   below reflects this honestly.
  * - The Send button disables itself the instant it's tapped (no existing
  *   confirm-then-send component in this feature to inherit a busy-guard
  *   from — this is the first one, so double-tap-under-latency, a real
@@ -46,18 +64,20 @@ interface PrefilledTarget {
 }
 
 interface ConfirmTarget {
-  contactId: string
+  contactId: string | null
   accountId: string | null
   displayLabel: string
   contactEmail: string | null
+  wholeCompany: boolean
 }
 
 function toConfirmTarget(c: PortalDestinationCandidate): ConfirmTarget {
   return {
     contactId: c.contactId,
     accountId: c.accountId,
-    displayLabel: c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName,
+    displayLabel: c.kind === 'company_wide' ? `${c.companyName} — Whole company` : c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName,
     contactEmail: c.contactEmail,
+    wholeCompany: c.kind === 'company_wide',
   }
 }
 
@@ -85,7 +105,7 @@ export function PortalChatDestinationPicker({
   const [candidates, setCandidates] = useState<PortalDestinationCandidate[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState(false)
-  const [target, setTarget] = useState<ConfirmTarget | null>(prefilled ? { ...prefilled, displayLabel: prefilled.label, contactEmail: null } : null)
+  const [target, setTarget] = useState<ConfirmTarget | null>(prefilled ? { ...prefilled, displayLabel: prefilled.label, contactEmail: null, wholeCompany: false } : null)
   const [sending, setSending] = useState(false)
 
   // Create AND revoke inside the SAME effect (not a memo + a separate
@@ -162,7 +182,14 @@ export function PortalChatDestinationPicker({
     setSending(true)
     try {
       await sendCaptureToPortalChat(captureId, { contact_id: target.contactId, account_id: target.accountId }, resend)
-      addRecentDestination({ type: 'portal_chat', contactId: target.contactId, accountId: target.accountId, label: target.displayLabel })
+      // Not saved as a "recent" for a whole-company send — RecentDestination's
+      // portal_chat shape keys on a real contactId, and portal_chat already
+      // never skips the confirm screen (REQUIRES_CONFIRMATION), so the only
+      // thing a saved recent would buy here is pre-filling a search that's
+      // just as fast to redo.
+      if (target.contactId) {
+        addRecentDestination({ type: 'portal_chat', contactId: target.contactId, accountId: target.accountId, label: target.displayLabel })
+      }
       onSent(`Sent to ${target.displayLabel}.`)
     } catch (err) {
       setSending(false)
@@ -182,9 +209,11 @@ export function PortalChatDestinationPicker({
           <p className="font-medium text-zinc-900">{target.displayLabel}</p>
           {target.contactEmail && <p className="text-xs text-zinc-400">{target.contactEmail}</p>}
           <p className="mt-2 text-xs text-zinc-500">
-            {target.accountId
-              ? 'They’ll get an email and a phone notification. Anyone else linked to this company could also see it if they check their portal chat.'
-              : 'They’ll get an email and a phone notification.'}
+            {target.wholeCompany
+              ? 'Not addressed to one person. Someone at the company will still get the email and phone notification — anyone linked could also see it if they check their portal chat.'
+              : target.accountId
+                ? 'They’ll get an email and a phone notification. Anyone else linked to this company could also see it if they check their portal chat.'
+                : 'They’ll get an email and a phone notification.'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -233,14 +262,14 @@ export function PortalChatDestinationPicker({
       <div className="flex max-h-64 flex-col gap-1 overflow-y-auto">
         {candidates.map((c) => (
           <button
-            key={`${c.contactId}-${c.accountId ?? 'personal'}`}
+            key={`${c.kind}-${c.contactId ?? 'none'}-${c.accountId ?? 'personal'}`}
             onClick={() => setTarget(toConfirmTarget(c))}
             className="flex flex-col items-start rounded-md border border-zinc-200 px-3 py-2 text-left text-sm hover:bg-zinc-50"
           >
             <span className="font-medium text-zinc-900">
-              {c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName}
+              {c.kind === 'company_wide' ? `${c.companyName} — Whole company` : c.kind === 'company' ? `${c.contactName} — ${c.companyName}` : c.contactName}
             </span>
-            <span className="text-xs text-zinc-400">{c.contactEmail}</span>
+            {c.contactEmail && <span className="text-xs text-zinc-400">{c.contactEmail}</span>}
           </button>
         ))}
       </div>

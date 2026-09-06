@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { toCandidates, type ContactRow } from '@/lib/captures/portal-destinations'
+import { toCandidates, computeWholeCompanyCandidates, type ContactRow } from '@/lib/captures/portal-destinations'
 
 // Captures exactly what each pass's .select() was called with, so the
 // regression this bug hunt found -- the company-name pass's select string
@@ -26,29 +26,43 @@ const companyRow: ContactRow = {
 }
 
 const selectCalls = vi.hoisted(() => [] as string[])
+// Controllable per test: what the whole-company enrichment's own
+// account_contacts lookup returns. Defaults to "no extra members" so
+// existing tests (which don't care about this) see zero whole-company
+// candidates, matching their original expectations unchanged.
+const memberRows = vi.hoisted(() => ({ value: [] as unknown[] }))
 
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
-    from: () => ({
-      select: (cols: string) => {
-        selectCalls.push(cols)
-        // one shared thenable so both .or(...) and .ilike(...) chain off it
-        const builder = {
-          or: () => builder,
-          ilike: (col: string) => {
-            // only the company-name pass filters this way -- return the row
-            // that's only findable through a real, working nested-embed filter
-            return col === 'account_contacts.accounts.company_name'
-              ? { limit: async () => ({ data: [companyRow], error: null }) }
-              : builder
-          },
-          limit: async () =>
-            // the contact-name pass (.or() then .limit()) returns the contact match
-            ({ data: cols.includes('!inner') ? [] : [contactRow], error: null }),
+    from: (table: string) => {
+      if (table === 'account_contacts') {
+        return {
+          select: () => ({
+            in: async () => ({ data: memberRows.value, error: null }),
+          }),
         }
-        return builder
-      },
-    }),
+      }
+      return {
+        select: (cols: string) => {
+          selectCalls.push(cols)
+          // one shared thenable so both .or(...) and .ilike(...) chain off it
+          const builder = {
+            or: () => builder,
+            ilike: (col: string) => {
+              // only the company-name pass filters this way -- return the row
+              // that's only findable through a real, working nested-embed filter
+              return col === 'account_contacts.accounts.company_name'
+                ? { limit: async () => ({ data: [companyRow], error: null }) }
+                : builder
+            },
+            limit: async () =>
+              // the contact-name pass (.or() then .limit()) returns the contact match
+              ({ data: cols.includes('!inner') ? [] : [contactRow], error: null }),
+          }
+          return builder
+        },
+      }
+    },
   },
 }))
 
@@ -176,5 +190,57 @@ describe('searchPortalDestinations — the two query passes', () => {
     const candidates = await searchPortalDestinations('a')
     expect(candidates).toEqual([])
     expect(selectCalls).toHaveLength(0)
+  })
+
+  it('a multi-member company also gets a whole-company candidate', async () => {
+    memberRows.value = [
+      { account_id: 'acct-1', accounts: { company_name: 'Acme Widgets LLC' }, contacts: { email: 'a@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' } },
+      { account_id: 'acct-1', accounts: { company_name: 'Acme Widgets LLC' }, contacts: { email: 'b@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' } },
+    ]
+    try {
+      const candidates = await searchPortalDestinations('widgets')
+      const wholeCompany = candidates.find((c) => c.kind === 'company_wide')
+      expect(wholeCompany).toEqual({ contactId: null, contactName: 'Acme Widgets LLC', contactEmail: null, kind: 'company_wide', accountId: 'acct-1', companyName: 'Acme Widgets LLC' })
+    } finally {
+      memberRows.value = []
+    }
+  })
+})
+
+describe('computeWholeCompanyCandidates', () => {
+  it('a company with two eligible members gets exactly one whole-company candidate', () => {
+    const out = computeWholeCompanyCandidates([
+      { account_id: 'acct-1', company_name: 'Acme LLC', contact_email: 'a@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+      { account_id: 'acct-1', company_name: 'Acme LLC', contact_email: 'b@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+    ])
+    expect(out).toEqual([{ contactId: null, contactName: 'Acme LLC', contactEmail: null, kind: 'company_wide', accountId: 'acct-1', companyName: 'Acme LLC' }])
+  })
+
+  it('a company with exactly one eligible member gets no whole-company candidate — identical to picking that one person', () => {
+    const out = computeWholeCompanyCandidates([
+      { account_id: 'acct-1', company_name: 'Acme LLC', contact_email: 'a@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+    ])
+    expect(out).toEqual([])
+  })
+
+  it('a never-invited member does not count toward the multi-member threshold', () => {
+    const out = computeWholeCompanyCandidates([
+      { account_id: 'acct-1', company_name: 'Acme LLC', contact_email: 'a@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+      { account_id: 'acct-1', company_name: 'Acme LLC', contact_email: 'b@x.com', portal_email_sent_at: null },
+    ])
+    expect(out).toEqual([])
+  })
+
+  it('two different companies are evaluated independently', () => {
+    const out = computeWholeCompanyCandidates([
+      { account_id: 'acct-multi', company_name: 'Multi LLC', contact_email: 'a@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+      { account_id: 'acct-multi', company_name: 'Multi LLC', contact_email: 'b@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+      { account_id: 'acct-solo', company_name: 'Solo LLC', contact_email: 'c@x.com', portal_email_sent_at: '2026-01-01T00:00:00Z' },
+    ])
+    expect(out.map((c) => c.accountId)).toEqual(['acct-multi'])
+  })
+
+  it('no rows produces no candidates', () => {
+    expect(computeWholeCompanyCandidates([])).toEqual([])
   })
 })
