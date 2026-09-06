@@ -187,8 +187,23 @@ export async function GET(request: NextRequest) {
     const contact = msg.contacts as unknown as { full_name: string } | null
     const addressedToContact = msg.addressed_to_contact as unknown as { full_name: string } | null
     const { contacts: _contacts, addressed_to_contact: _addressedToContact, ...rest } = msg
+    // addressed_to_contact_id / addressed_to_company aren't in the generated
+    // Supabase types yet (known drift — see reference_ci_schema_drift_unfixable
+    // in memory; the columns are real and confirmed live), so they ride along
+    // inside `rest` untyped, same as `sender_name` above. Named here via a cast
+    // (not destructured by name — that fails typecheck) only so they can be
+    // omitted from the client-facing projection below.
+    const restTyped = rest as typeof rest & { addressed_to_contact_id?: string | null; addressed_to_company?: boolean }
+    const { addressed_to_contact_id: _omit1, addressed_to_company: _omit2, ...restWithoutAddressedTo } = restTyped
     return {
-      ...rest,
+      // Staff-only projection (dev job e01fe70f) — every design comment on this
+      // feature already says "staff-side only" / "not sent to the client", but
+      // addressed_to_contact_id / addressed_to_company were reaching every
+      // client caller anyway via this wildcard select (nothing downstream
+      // renders them — grep of app/portal/** confirms zero references — so
+      // this was over-exposure in the payload, not an on-screen leak, but
+      // real all the same).
+      ...(isClientUser ? restWithoutAddressedTo : rest),
       // Contact name for client/owner messages; stored sender_name (the teammate's
       // display name) when there's no contact; null → UI shows its generic label.
       sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
@@ -196,8 +211,9 @@ export async function GET(request: NextRequest) {
       // company-scoped message was addressed to. Resolved here (not client-side)
       // so it survives even if the addressed member later drops out of
       // selectedThreadMembers (e.g. removed from the roster) — the historical
-      // record still shows who it was FOR at send time.
-      addressed_to_name: addressedToContact?.full_name ?? null,
+      // record still shows who it was FOR at send time. Staff-only, same reason
+      // as above.
+      ...(isClientUser ? {} : { addressed_to_name: addressedToContact?.full_name ?? null }),
     }
   }).reverse()
 

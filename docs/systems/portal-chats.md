@@ -1,6 +1,51 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-05 — Claude (**"Addressed to" can now explicitly mean
+_Last verified against code: 2026-09-06 — Claude (**"Addressed to" (and its sibling "who wrote
+this" sender badge) stopped silently disappearing on three ordinary navigation paths** — dev
+job e01fe70f, found during a full end-to-end QA pass Antonio requested in PRODUCTION right
+after the whole-company fix shipped (2026-09-05, below), with a Bug Hunter pass building the
+scenario matrix and two of the findings confirmed live against real production accounts before
+any fix was written. **Root cause:** the query that fetches the real member roster from the
+`members` table (already the authoritative source for the picker's own options) was gated —
+`enabled: !!selectedAccountId && selectedThreadMembers.length > 0` — on `selectedThreadMembers`
+ever becoming non-empty first, and that state is populated ONLY by the sidebar's own
+thread-click handler. Reaching the identical multi-member account via "New Chat" search, a
+direct/hard `?account=<id>` link (the shape used by nearly every "jump to this client's chat"
+link elsewhere in the CRM — dashboard cards, push notifications, search results, task cards),
+or the Actions tab left `selectedThreadMembers` at its initial `[]`, so the query never even
+ran and every gate keyed on it silently closed — reintroducing, through a side door, the exact
+ambiguity ("addressed to nobody" indistinguishable from "nobody engaged with the control") the
+whole-company fix had just closed through the front door. **What changed:** the `enabled` gate
+dropped its `selectedThreadMembers` half (fetch fires whenever an account is selected, from
+any path); every render gate that used to check `selectedThreadMembers.length > 0` for this
+feature — the ambient bar's own picker AND its outer "audience" wrapper (a second, missed
+occurrence of the same broken signal, caught only in a second bug-hunter pass against the
+actual diff), the confirmation modal's picker, the two "addressed to" badges on already-sent
+messages, and the sibling "who wrote this" sender-attribution badge — now keys on that query's
+own result (`addressedToOptions`) instead, which is correct regardless of navigation path.
+Historical per-message badges dropped the live-state dependency entirely (a saved message's
+own `addressed_to_name`/`addressed_to_company` field was already validated as meaningful at
+send time; gating a historical badge on CURRENT picker state meant the same saved message
+could show or hide its own badge depending only on which path staff used to reopen the
+thread). Also fixed in the same pass, found by the second bug-hunter round: the Actions tab
+left a previously-picked addressed-to selection stale across an account switch (caught
+server-side before insert via the roster re-validation in `route.ts`, so nothing wrong was
+ever saved — reset at the entry point too now, matching the sidebar/New-Chat-search/popstate
+handlers). Separately: the GET endpoint's wildcard select + flatten was including
+`addressed_to_contact_id`/`addressed_to_company`/`addressed_to_name` in the response to EVERY
+caller including the client, with no `isClientUser` gate — contradicting this feature's own
+"staff-side only" design (nothing renders it client-side today; over-exposure in the payload,
+not an on-screen leak, but real). Now omitted for client callers. **Verified live in
+sandbox** (not yet in production, awaiting Antonio's ship approval): regression check on the
+normal sidebar-click path (unaffected), both previously-broken paths now show the picker
+correctly, and one full send-and-verify cycle via the New Chat search path confirmed the
+server-saved record was correct (`addressed_to_contact_id` set to the picked member, not
+null and not a guess). One accepted, minor tradeoff: the two live pickers now depend on an
+async fetch instead of synchronous click-time state, so even the previously-working
+sidebar-click path can show a brief (sub-second, cached after) pop-in on a cold visit —
+correct end state, not a functional regression, but a real, deliberate timing cost of tying
+the feature to the authoritative data source instead of the convenient-but-unreliable one.)_
+_Prior: 2026-09-05 — Claude (**"Addressed to" can now explicitly mean
 the whole company, not just a specific member** — dev job 08a8be62, found by Antonio live,
 minutes after the send-confirmation pop-up shipped, testing a real multi-member LLC (PTBT
 Holding LLC): the picker (both the ambient one and the pop-up's own copy) only ever offered
