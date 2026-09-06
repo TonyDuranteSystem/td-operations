@@ -427,6 +427,12 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
 
   if (!expanded) {
     const preview = note.body.replace(/\s+/g, ' ').trim().slice(0, 80)
+    // A short, always-visible snippet next to the icon (Antonio, 2026-09-05: "a short
+    // description at the button what it is about") — shorter than the tooltip's preview,
+    // and truncated with CSS rather than pre-cut so it never clips a whole word for no
+    // reason on a wider snippet. The tooltip (full 80-char preview) still covers anything
+    // this snippet itself truncates.
+    const snippet = preview.slice(0, 40)
     return (
       <FastTooltip label={isUnread ? `New: ${preview}` : preview} align="left">
         <button
@@ -436,10 +442,11 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
           onPointerUp={onPointerUp}
           onClick={onClickCollapsed}
           style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
-          className={`fixed z-[45] flex h-10 w-10 touch-none cursor-grab items-center justify-center rounded-full border shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
+          className={`fixed z-[45] flex h-10 max-w-[180px] touch-none cursor-grab items-center gap-1.5 rounded-full border px-3 shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
           aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}`}
         >
-          <StickyNote className="h-4 w-4" />
+          <StickyNote className="h-4 w-4 shrink-0" />
+          <span className="truncate text-xs font-medium">{snippet}</span>
         </button>
       </FastTooltip>
     )
