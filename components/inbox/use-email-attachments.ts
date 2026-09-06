@@ -27,6 +27,18 @@ export interface StagedEmailFile {
   /** Storage object path — present once the upload finishes. */
   path?: string
   error?: string
+  /**
+   * A local `URL.createObjectURL` preview, image attachments only — set the
+   * instant a real `File` is staged (add() has the bytes in hand already,
+   * upload completion has nothing to do with it), so the chip can show the
+   * actual picture instead of a generic file icon (UX review, 2026-09-06:
+   * "the likelier mistake with a screenshot tool is the picture catching
+   * something it shouldn't" — the one destination with no recall deserves the
+   * same "look before you send" this codebase already gives the portal-chat
+   * destination). Revoked on remove/clear; never set for addFromSource,
+   * whose bytes are copied server-to-server with no local File to preview.
+   */
+  previewUrl?: string
 }
 
 /** What the compose/reply POST expects in `attachments`. */
@@ -62,12 +74,19 @@ export function useEmailAttachments() {
   }, [])
 
   const remove = useCallback((localId: string) => {
-    writeFiles((prev) => prev.filter((f) => f.localId !== localId))
+    writeFiles((prev) => {
+      const gone = prev.find((f) => f.localId === localId)
+      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl)
+      return prev.filter((f) => f.localId !== localId)
+    })
     setLimitNotice(null)
   }, [writeFiles])
 
   const clear = useCallback(() => {
-    writeFiles(() => [])
+    writeFiles((prev) => {
+      for (const f of prev) if (f.previewUrl) URL.revokeObjectURL(f.previewUrl)
+      return []
+    })
     setLimitNotice(null)
   }, [writeFiles])
 
@@ -83,6 +102,7 @@ export function useEmailAttachments() {
         name: file.name,
         size: file.size,
         mimeType: file.type || 'application/octet-stream',
+        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
       },
       file,
     }))

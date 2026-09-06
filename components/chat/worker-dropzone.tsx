@@ -43,6 +43,7 @@ export function WorkerDropZone({ onFiles, disabled, className, label, children }
     (e: React.DragEvent) => {
       if (disabled || !isFileDrag(e)) return
       e.preventDefault()
+      e.stopPropagation()
       depth.current += 1
       setDragging(true)
     },
@@ -52,6 +53,7 @@ export function WorkerDropZone({ onFiles, disabled, className, label, children }
   const onDragLeave = useCallback((e: React.DragEvent) => {
     if (!isFileDrag(e)) return
     e.preventDefault()
+    e.stopPropagation()
     depth.current -= 1
     if (depth.current <= 0) reset()
   }, [reset])
@@ -62,6 +64,7 @@ export function WorkerDropZone({ onFiles, disabled, className, label, children }
       // Required: without preventDefault on dragover the drop event never fires
       // and the browser opens the file instead.
       e.preventDefault()
+      e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
     },
     [disabled],
@@ -71,6 +74,18 @@ export function WorkerDropZone({ onFiles, disabled, className, label, children }
     (e: React.DragEvent) => {
       if (disabled || !isFileDrag(e)) return
       e.preventDefault()
+      // A drop this zone claims must not ALSO reach an ancestor's own drop
+      // handler — without this, an instance of this component mounted inside
+      // another element that independently handles drops (e.g. a compose
+      // dialog opened from within a screen that itself accepts a drop to
+      // start something new) sees the SAME drop twice: once here, correctly,
+      // and once on the ancestor, which was never the intended target. Found
+      // live, 2026-09-06: dragging a second file onto an open "new email"
+      // window nested inside the My Captures gallery bubbled past this
+      // handler into the gallery's own onDrop, which silently closed the
+      // whole gallery (draft and all) and opened a brand-new capture with
+      // the dropped file instead of attaching it to the email.
+      e.stopPropagation()
       reset()
       const dropped = Array.from(e.dataTransfer?.files ?? [])
       if (dropped.length) onFiles(dropped)

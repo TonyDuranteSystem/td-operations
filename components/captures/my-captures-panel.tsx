@@ -8,9 +8,11 @@
  * the page where I am but a new page should popup"). No page-level chrome
  * (heading, max-width) here on purpose — each consumer supplies its own.
  */
-import { useEffect, useMemo, useState } from 'react'
-import { Search, X, ImageOff, Send, Copy, Check } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Search, X, ImageOff, Send, Copy, Check, Download, Mail, AlertCircle } from 'lucide-react'
 import { ShareExistingModal } from '@/components/captures/share-existing-modal'
+import { ComposeDialog } from '@/components/inbox/compose-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface CaptureRow {
   id: string
@@ -37,6 +39,21 @@ export function MyCapturesPanel() {
   const [reloadToken, setReloadToken] = useState(0)
   const [sharingId, setSharingId] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
+  const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'error'>('idle')
+  const [emailState, setEmailState] = useState<'idle' | 'preparing' | 'error'>('idle')
+  const [emailPayload, setEmailPayload] = useState<{ file: File; subject: string } | null>(null)
+
+  // Synchronous truth for "which capture is actually open right now" — the
+  // lightbox is a full-screen overlay with no next/prev control, so openId
+  // can only ever go null<->id, never id1->id2 directly, but it CAN close
+  // (id->null) while a Download/Email fetch for that same id is still in
+  // flight. A closure-captured captureId can't see that; a ref read at the
+  // moment the fetch resolves can (same pattern as filesRef in
+  // use-email-attachments.ts).
+  const openIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    openIdRef.current = openId
+  }, [openId])
 
   // A failed load used to collapse into the SAME "You haven't captured
   // anything yet." empty state as genuinely having nothing (R099 violation,
@@ -75,6 +92,20 @@ export function MyCapturesPanel() {
 
   const openCapture = filtered.find((c) => c.id === openId) ?? null
 
+  // Every capture this tool produces is a PNG (canvasToPngFile) — but a
+  // capture that started life as a dropped/pasted non-PNG image keeps that
+  // ORIGINAL file's name verbatim on its own row (markup-editor.tsx re-encodes
+  // the bytes to PNG but not the name), so image_name can legitimately read
+  // "photo.jpg" on bytes that are actually PNG (bug-hunter finding,
+  // 2026-09-06). Building the download/attachment name from the capture's
+  // own (always non-empty, DB-constrained) title instead of the nullable,
+  // possibly-mismatched image_name/mime_type sidesteps that entirely — this
+  // name is honest about what the bytes actually are, always.
+  function captureFileName(title: string): string {
+    const safe = title.replace(/[/\\?%*:|"<>]/g, '-').trim() || 'screenshot'
+    return `${safe}.png`
+  }
+
   // Copies the actual picture (not a link to it) to the clipboard, so it can
   // be pasted straight into an email, a chat, anywhere — for a capture
   // that's NOT going through any of the three built-in destinations
@@ -82,17 +113,84 @@ export function MyCapturesPanel() {
   // Clipboard API's image-write; every capture this tool produces is one
   // (canvasToPngFile), so there's no format branch to get wrong here.
   const handleCopy = async (captureId: string) => {
+    if (copyState === 'copying') return
     setCopyState('copying')
     try {
       const res = await fetch(`/api/captures/${captureId}/image`)
       if (!res.ok) throw new Error('load failed')
       const blob = await res.blob()
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      // Only the SIDE EFFECT is skipped once the lightbox has moved on
+      // (copying something the user is no longer looking at is pointless,
+      // possibly surprising) — the state machine still resolves normally
+      // either way, or a genuine later attempt on a reopened capture would
+      // find copyState stuck at 'copying' forever and refuse to start
+      // (bug in an earlier version of this guard, caught before shipping).
+      if (openIdRef.current === captureId) {
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      }
       setCopyState('copied')
       setTimeout(() => setCopyState('idle'), 1500)
     } catch {
       setCopyState('error')
       setTimeout(() => setCopyState('idle'), 2500)
+    }
+  }
+
+  // Saves the actual picture to the device — a plain browser download, same
+  // fetch-then-blob the other two actions already use (Antonio, 2026-09-06:
+  // "a button to save it local"). Named "Download" to match this codebase's
+  // own established word for "export a copy" — "Save" already means
+  // something else here (persist a record), confirmed by every other Save
+  // button in this CRM (UX review, 2026-09-06).
+  const handleDownload = async (captureId: string, title: string) => {
+    if (downloadState === 'downloading') return
+    setDownloadState('downloading')
+    try {
+      const res = await fetch(`/api/captures/${captureId}/image`)
+      if (!res.ok) throw new Error('load failed')
+      const blob = await res.blob()
+      // See handleCopy's comment — only the side effect (the actual file
+      // save) is skipped once stale; the state machine always resolves.
+      if (openIdRef.current === captureId) {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = captureFileName(title)
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+      setDownloadState('idle')
+    } catch {
+      setDownloadState('error')
+      setTimeout(() => setDownloadState('idle'), 2500)
+    }
+  }
+
+  // Opens the CRM's own "compose a new email" window with the picture
+  // already attached — Antonio explicitly wants this to go through the
+  // inbox already built into the CRM, not a generic device share sheet
+  // ("we have our inbox in the CRM," 2026-09-06). Fetches first, THEN opens
+  // the dialog with the file already in hand — ComposeDialog only stages
+  // prefillFiles once per open session, so flipping it open before the
+  // bytes exist would race that guard.
+  const handleEmail = async (captureId: string, title: string) => {
+    if (emailState === 'preparing') return
+    setEmailState('preparing')
+    try {
+      const res = await fetch(`/api/captures/${captureId}/image`)
+      if (!res.ok) throw new Error('load failed')
+      const blob = await res.blob()
+      // See handleCopy's comment — only the side effect (popping open the
+      // email window) is skipped once stale; the state machine always
+      // resolves, so reopening this capture later isn't refused forever.
+      if (openIdRef.current === captureId) {
+        const file = new File([blob], captureFileName(title), { type: blob.type })
+        setEmailPayload({ file, subject: title })
+      }
+      setEmailState('idle')
+    } catch {
+      setEmailState('error')
+      setTimeout(() => setEmailState('idle'), 2500)
     }
   }
 
@@ -156,31 +254,58 @@ export function MyCapturesPanel() {
           onClick={() => setOpenId(null)}
         >
           <div className="flex max-h-full max-w-3xl flex-col gap-2" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between text-white">
-              <div>
-                <p className="text-sm font-medium">{openCapture.title}</p>
-                {openCapture.note && <p className="text-xs text-zinc-300">{openCapture.note}</p>}
+            <div className="flex items-center justify-between gap-2 text-white">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{openCapture.title}</p>
+                {openCapture.note && <p className="truncate text-xs text-zinc-300">{openCapture.note}</p>}
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setSharingId(openCapture.id)}
-                  className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-white hover:bg-white/10"
-                  aria-label="Share"
-                >
-                  <Send className="h-4 w-4" />
-                  Share
-                </button>
-                <button
-                  onClick={() => void handleCopy(openCapture.id)}
-                  className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-white hover:bg-white/10"
-                  aria-label="Copy picture"
-                >
-                  {copyState === 'copied' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Could not copy' : 'Copy'}
-                </button>
-                <button onClick={() => setOpenId(null)} className="rounded-full p-1.5 hover:bg-white/10" aria-label="Close">
-                  <X className="h-5 w-5" />
-                </button>
+              {/* Icon-only — four actions + Close no longer fit as icon+label
+                  on the ~350px-wide lightbox this renders at on Antonio's
+                  phone PWA without overflowing (UX review, 2026-09-06). The
+                  FastTooltip label is the sighted-mouse convenience; aria-label
+                  on each button carries the same words for anyone else. */}
+              <div className="flex shrink-0 items-center gap-0.5">
+                <FastTooltip label="Share">
+                  <button
+                    onClick={() => setSharingId(openCapture.id)}
+                    className="rounded-full p-2 text-white hover:bg-white/10"
+                    aria-label="Share"
+                  >
+                    <Send className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label={copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Could not copy' : 'Copy'}>
+                  <button
+                    onClick={() => void handleCopy(openCapture.id)}
+                    className="rounded-full p-2 text-white hover:bg-white/10"
+                    aria-label="Copy picture"
+                  >
+                    {copyState === 'copied' ? <Check className="h-4 w-4" /> : copyState === 'error' ? <AlertCircle className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </FastTooltip>
+                <FastTooltip label={downloadState === 'downloading' ? 'Downloading...' : downloadState === 'error' ? 'Could not download' : 'Download'}>
+                  <button
+                    onClick={() => void handleDownload(openCapture.id, openCapture.title)}
+                    className="rounded-full p-2 text-white hover:bg-white/10"
+                    aria-label="Download picture"
+                  >
+                    {downloadState === 'error' ? <AlertCircle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                  </button>
+                </FastTooltip>
+                <FastTooltip label={emailState === 'preparing' ? 'Preparing...' : emailState === 'error' ? 'Could not prepare email' : 'Email'}>
+                  <button
+                    onClick={() => void handleEmail(openCapture.id, openCapture.title)}
+                    className="rounded-full p-2 text-white hover:bg-white/10"
+                    aria-label="Send by email"
+                  >
+                    {emailState === 'error' ? <AlertCircle className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Close">
+                  <button onClick={() => setOpenId(null)} className="rounded-full p-2 hover:bg-white/10" aria-label="Close">
+                    <X className="h-5 w-5" />
+                  </button>
+                </FastTooltip>
               </div>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element -- server-proxied private image */}
@@ -205,6 +330,18 @@ export function MyCapturesPanel() {
           }}
         />
       )}
+
+      {/* z-[85]: above both the lightbox (z-[70]) and Share's own modal
+          (z-[80]) it can be opened on top of — ComposeDialog's own default
+          z-50 would otherwise render invisibly behind either one
+          (bug-hunter finding, 2026-09-06). */}
+      <ComposeDialog
+        open={emailPayload !== null}
+        onClose={() => setEmailPayload(null)}
+        prefillSubject={emailPayload?.subject ?? ''}
+        prefillFiles={emailPayload ? [emailPayload.file] : undefined}
+        zIndexClassName="z-[85]"
+      />
 
       {captures !== null && captures.length === 0 && (
         <div className="mt-16 flex flex-col items-center gap-2 text-zinc-300">
