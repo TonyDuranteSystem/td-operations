@@ -6,7 +6,7 @@ import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
-import { CRM_BASE_URL } from '@/lib/config'
+import { CRM_BASE_URL, PORTAL_BASE_URL } from '@/lib/config'
 import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
@@ -271,17 +271,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Message too long (max 5000 characters)' }, { status: 400 })
   }
 
-  // Validate attachment_url is from our storage only
+  // Validate attachment_url is from our storage, or our own access-controlled
+  // attachment proxy — never an arbitrary off-site link.
   // .trim() guards against trailing \n in env var (which broke uploads on 2026-04-18 when env vars were re-entered)
   const supabaseBaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()
-  if (attachment_url && !attachment_url.startsWith(supabaseBaseUrl)) {
+  // The proxy (app/api/portal/chat/attachment/route.ts) re-checks access on
+  // every view, so a Capture send (Phase 2, 2026-09-04) can point here
+  // instead of handing out a permanent public storage link.
+  const attachmentProxyPrefix = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=`
+  const isValidAttachmentUrl = (url: string) => url.startsWith(supabaseBaseUrl) || url.startsWith(attachmentProxyPrefix)
+  if (attachment_url && !isValidAttachmentUrl(attachment_url)) {
     return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
   }
 
   // Validate each attachment URL in the array
   if (Array.isArray(attachments)) {
     for (const att of attachments) {
-      if (!att.url || !att.url.startsWith(supabaseBaseUrl)) {
+      if (!att.url || !isValidAttachmentUrl(att.url)) {
         return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
       }
     }

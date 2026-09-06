@@ -52,3 +52,4 @@ docs/systems/td-books-ledger-plan.md|lib/owner-books-rules.ts,lib/owner-statemen
 docs/systems/research-console.md|lib/research/,components/research/,app/api/research/,app/(dashboard)/research/,scripts/migrations/20260817-1900-research-saved-searches.sql,scripts/migrations/20260817-2118-research-saved-searches-multi-entity.sql
 docs/systems/portal-chat-unread.md|app/api/portal/chat/read/route.ts,lib/portal/mark-thread-read.ts
 docs/systems/portal-chats.md|app/(dashboard)/portal-chats/page.tsx
+docs/systems/captures.md|lib/captures/,app/api/captures/,components/captures/,app/(dashboard)/captures/

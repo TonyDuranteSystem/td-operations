@@ -5,6 +5,7 @@ import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
 import { HelpToggle } from '@/components/help/help-toggle'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
+import { CaptureButton } from '@/components/captures/capture-button'
 
 export function DashboardHeader() {
   return (
@@ -15,6 +16,7 @@ export function DashboardHeader() {
       </div>
       <StaffAlertsBell />
       <HelpToggle />
+      <CaptureButton />
       <DashboardPushToggle refreshOnMount />
     </header>
   )
