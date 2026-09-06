@@ -27,10 +27,20 @@
  *   "company_wide", no contact attached — mirroring the "Whole company"
  *   choice the main Portal Chats composer already has (2026-09-06, Antonio:
  *   a real search only showed the two people at a two-person company, never
- *   the company itself). Genuinely different from picking a person, not
- *   just a label: notifyClientOfAdminMessage's ACCOUNT-only branch notifies
- *   EVERY eligible linked contact, not one, so the confirm screen's copy
- *   changes accordingly for this case (see below).
+ *   the company itself).
+ * - CORRECTED after live-testing the first version of this feature (it
+ *   claimed the wrong thing here): omitting contactId does NOT make
+ *   notifyClientOfAdminMessage notify everyone. The shared send route
+ *   (app/api/portal/chat) ALWAYS resolves some specific contact for an
+ *   account-scoped admin send with no explicit one (resolveAdminReplyContact
+ *   — returns null only when the account has ZERO linked contacts, which a
+ *   whole-company candidate never is, by construction) and notifies exactly
+ *   that one person, addressed_to_company or not. Confirmed live: a real
+ *   send to a 2-member test company still landed with a real, non-null
+ *   contact_id. addressed_to_company is exactly what its own original
+ *   comment already said — display/routing metadata, "never a privacy
+ *   gate" — not a different notification fan-out. The confirm screen's copy
+ *   below reflects this honestly.
  * - The Send button disables itself the instant it's tapped (no existing
  *   confirm-then-send component in this feature to inherit a busy-guard
  *   from — this is the first one, so double-tap-under-latency, a real
@@ -200,7 +210,7 @@ export function PortalChatDestinationPicker({
           {target.contactEmail && <p className="text-xs text-zinc-400">{target.contactEmail}</p>}
           <p className="mt-2 text-xs text-zinc-500">
             {target.wholeCompany
-              ? 'Everyone at this company with portal access will get an email and a phone notification.'
+              ? 'Not addressed to one person. Someone at the company will still get the email and phone notification — anyone linked could also see it if they check their portal chat.'
               : target.accountId
                 ? 'They’ll get an email and a phone notification. Anyone else linked to this company could also see it if they check their portal chat.'
                 : 'They’ll get an email and a phone notification.'}
