@@ -97,17 +97,31 @@ export async function searchPortalDestinations(query: string): Promise<PortalDes
   // Two passes, merged: contacts matched by their own name/email, and
   // contacts matched via their company's name (so typing a company surfaces
   // its people too) -- mirrors search-accounts/route.ts's two-pass shape.
-  const selectCols = "id, full_name, email, portal_email_sent_at, account_contacts(account_id, accounts(id, company_name, status))"
+  //
+  // The two passes need DIFFERENT embeds of account_contacts/accounts: the
+  // contact-name pass wants a plain (outer) embed -- a matched contact with
+  // no linked accounts must still return their personal candidate -- while
+  // the company-name pass needs `!inner` on BOTH hops so the .ilike() filter
+  // below actually has an inner-joined `accounts.company_name` to filter on.
+  // Bug found live (Antonio, 2026-09-05): this used to share ONE selectCols
+  // string with a plain account_contacts(...) embed, then the company-name
+  // query appended a SECOND, `!inner`-joined embed of the same relation on
+  // top of it -- two differently-joined embeds of the same relation name in
+  // one select, which silently broke the filter and made every company-name
+  // search return zero rows, plain substrings included (verified live: even
+  // "Widgets" against a real, eligible "...Widgets LLC" matched nothing).
+  const byContactCols = "id, full_name, email, portal_email_sent_at, account_contacts(account_id, accounts(id, company_name, status))"
+  const byCompanyCols = "id, full_name, email, portal_email_sent_at, account_contacts!inner(account_id, accounts!inner(id, company_name, status))"
 
   const [byContact, byCompany] = await Promise.all([
     supabaseAdmin
       .from("contacts")
-      .select(selectCols)
+      .select(byContactCols)
       .or(`full_name.ilike.${pattern},email.ilike.${pattern}`)
       .limit(MAX_CANDIDATES),
     supabaseAdmin
       .from("contacts")
-      .select(`${selectCols}, account_contacts!inner(account_id, accounts!inner(id, company_name, status))`)
+      .select(byCompanyCols)
       .ilike("account_contacts.accounts.company_name", pattern)
       .limit(MAX_CANDIDATES),
   ])

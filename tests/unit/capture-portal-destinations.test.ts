@@ -1,5 +1,58 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { toCandidates, type ContactRow } from '@/lib/captures/portal-destinations'
+
+// Captures exactly what each pass's .select() was called with, so the
+// regression this bug hunt found -- the company-name pass's select string
+// carrying a SECOND, differently-joined embed of account_contacts on top of
+// the contact-name pass's own plain embed, which silently broke the
+// .ilike("account_contacts.accounts.company_name", ...) filter and made
+// every company-name search return zero rows -- can never silently come
+// back. Two independent contact rows so the two passes are distinguishable
+// by which query "found" them: a company row that would ONLY ever surface
+// via the company-name pass (its own name/email cannot match anything).
+const contactRow: ContactRow = {
+  id: 'contact-name-match',
+  full_name: 'Jane Doe',
+  email: 'jane@example.com',
+  portal_email_sent_at: '2026-01-01T00:00:00Z',
+  account_contacts: [],
+}
+const companyRow: ContactRow = {
+  id: 'company-name-match',
+  full_name: 'Someone Else',
+  email: 'someone@example.com',
+  portal_email_sent_at: '2026-01-01T00:00:00Z',
+  account_contacts: [{ account_id: 'acct-1', accounts: { id: 'acct-1', company_name: 'Acme Widgets LLC', status: 'Active' } }],
+}
+
+const selectCalls = vi.hoisted(() => [] as string[])
+
+vi.mock('@/lib/supabase-admin', () => ({
+  supabaseAdmin: {
+    from: () => ({
+      select: (cols: string) => {
+        selectCalls.push(cols)
+        // one shared thenable so both .or(...) and .ilike(...) chain off it
+        const builder = {
+          or: () => builder,
+          ilike: (col: string) => {
+            // only the company-name pass filters this way -- return the row
+            // that's only findable through a real, working nested-embed filter
+            return col === 'account_contacts.accounts.company_name'
+              ? { limit: async () => ({ data: [companyRow], error: null }) }
+              : builder
+          },
+          limit: async () =>
+            // the contact-name pass (.or() then .limit()) returns the contact match
+            ({ data: cols.includes('!inner') ? [] : [contactRow], error: null }),
+        }
+        return builder
+      },
+    }),
+  },
+}))
+
+const { searchPortalDestinations } = await import('@/lib/captures/portal-destinations')
 
 function row(overrides: Partial<ContactRow> = {}): ContactRow {
   return {
@@ -92,5 +145,36 @@ describe('capture portal destination candidates', () => {
       }),
     )
     expect(candidates.filter((c) => c.accountId === 'acct-1')).toHaveLength(1)
+  })
+})
+
+describe('searchPortalDestinations — the two query passes', () => {
+  it('the company-name pass selects account_contacts/accounts exactly once each, both inner-joined', async () => {
+    selectCalls.length = 0
+    await searchPortalDestinations('widgets')
+    const companyPassCols = selectCalls.find((c) => c.includes('!inner'))
+    expect(companyPassCols).toBeDefined()
+    // the exact bug: a select string carrying a SECOND, plain embed of the
+    // same relation alongside the inner-joined one. Count occurrences of the
+    // embed key so a reintroduced duplicate — inner or not — fails this test.
+    expect(companyPassCols!.match(/account_contacts/g)).toHaveLength(1)
+    expect(companyPassCols!.match(/accounts/g)).toHaveLength(1)
+  })
+
+  it('a company-name search finds a contact reachable ONLY through their company name, not their own name/email', async () => {
+    const candidates = await searchPortalDestinations('widgets')
+    expect(candidates.some((c) => c.contactId === 'company-name-match' && c.companyName === 'Acme Widgets LLC')).toBe(true)
+  })
+
+  it('a contact-name search still finds a contact with no linked companies at all', async () => {
+    const candidates = await searchPortalDestinations('jane')
+    expect(candidates.some((c) => c.contactId === 'contact-name-match' && c.kind === 'personal')).toBe(true)
+  })
+
+  it('a query under 2 characters short-circuits without querying either pass', async () => {
+    selectCalls.length = 0
+    const candidates = await searchPortalDestinations('a')
+    expect(candidates).toEqual([])
+    expect(selectCalls).toHaveLength(0)
   })
 })
