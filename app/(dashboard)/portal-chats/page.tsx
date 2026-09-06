@@ -2073,12 +2073,21 @@ export default function PortalChatsPage() {
   // fetched FRESH from the account's own members table every time the thread
   // (or the reply target) changes — never trusted from selectedThreadMembers,
   // which is populated from account_contacts and can miss real members
-  // (council pass 1 & 2 finding). Only relevant for multi-member account
-  // threads — the picker itself only renders in that same condition below.
+  // (council pass 1 & 2 finding).
+  //
+  // Enabled on selectedAccountId ALONE (dev job e01fe70f) — it used to also
+  // require selectedThreadMembers.length > 0, but that state is only ever
+  // populated by the sidebar's own thread-click handler, never by "New Chat"
+  // search, a direct/hard ?account= navigation (every "jump to this client's
+  // chat" link on the dashboard), or the Actions tab — all three leave it at
+  // its initial []. That silently hid this whole feature on those paths,
+  // reintroducing the exact ambiguity it exists to remove. The render gates
+  // below now key on this query's own result (addressedToOptions), which is
+  // correct regardless of how staff got here.
   const { data: addressedToData } = useQuery<{ members: AddressedToOption[]; guessContactId: string | null }>({
     queryKey: ['portal-chat-addressed-to', selectedAccountId, replyToMsg?.id ?? null],
     queryFn: () => fetch(`/api/portal/chat/members?account_id=${selectedAccountId}${replyToMsg?.id ? `&reply_to_id=${replyToMsg.id}` : ''}`).then(r => r.json()),
-    enabled: !!selectedAccountId && selectedThreadMembers.length > 0,
+    enabled: !!selectedAccountId,
     staleTime: 60_000,
   })
   const addressedToOptions = addressedToData?.members ?? []
@@ -2788,6 +2797,17 @@ export default function PortalChatsPage() {
                         <button
                           key={action.id}
                           onClick={() => {
+                            // Clear the PREVIOUS thread's addressed-to selection before
+                            // switching (dev job e01fe70f, bug-hunter round 2) — this
+                            // entry point left it stale, so an explicit member/company
+                            // pick on account A could silently ride along into account
+                            // B's send. Same reset already applied at the sidebar click,
+                            // New Chat search, and popstate-restore handlers.
+                            setSelectedThreadCompanies([])
+                            setSelectedThreadMembers([])
+                            setSelectedCompanyId(null)
+                            setSelectedAddressedToContactId(null)
+                            setSelectedAddressedToCompany(false)
                             if (action.account_id) { setSelectedAccountId(action.account_id); setSelectedContactId(null) }
                             else if (action.contact_id) { setSelectedContactId(action.contact_id); setSelectedAccountId(null) }
                             setSidebarView('chats')
@@ -3942,8 +3962,19 @@ export default function PortalChatsPage() {
                           highlightedMessageId === msg.id && 'ring-2 ring-amber-400 ring-offset-2'
                         )}
                       >
-                        {/* Member badge — for account-level threads (multi-member LLC), show who wrote each client message */}
-                        {selectedThreadMembers.length > 0 && !isAdmin && msg.sender_name && (
+                        {/* Member badge — for account-level threads (multi-member LLC),
+                            show who wrote each client message. Gated on
+                            addressedToOptions (dev job e01fe70f, bug-hunter round 2),
+                            not selectedThreadMembers — same root cause as the two
+                            "addressed to" badges below: this used to silently
+                            disappear on the same three broken navigation paths.
+                            Kept scoped to a genuine multi-member account (not just
+                            `msg.sender_name` alone) so it doesn't start appearing on
+                            every single-contact personal thread too, where it would
+                            be redundant — addressedToOptions is empty whenever
+                            selectedAccountId is null, so this still only fires for
+                            account-scoped, 2+-real-member threads, exactly as before. */}
+                        {selectedAccountId && addressedToOptions.length > 1 && !isAdmin && msg.sender_name && (
                           <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-purple-100 text-purple-700">
                             {msg.sender_name}
                           </span>
@@ -3956,8 +3987,14 @@ export default function PortalChatsPage() {
                             different meaning, must not be confused (Erika Hall,
                             council pass 2). Staff-side only — this label is not sent
                             to the client (msg.addressed_to_name is populated by the
-                            admin-only GET query path; see route.ts). */}
-                        {selectedThreadMembers.length > 0 && isAdmin && msg.addressed_to_name && (
+                            admin-only GET query path; see route.ts).
+                            Gated on the message's own saved field alone, NOT on
+                            selectedThreadMembers (dev job e01fe70f) — the field was
+                            already validated as meaningful at send time, and gating a
+                            historical badge on live picker state meant the same saved
+                            message could show or hide its badge depending only on which
+                            navigation path staff used to reopen the thread. */}
+                        {isAdmin && msg.addressed_to_name && (
                           <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
                             For {msg.addressed_to_name}
                           </span>
@@ -3968,14 +4005,18 @@ export default function PortalChatsPage() {
                             badge above; mutually exclusive with it by construction
                             (addressed_to_name and addressed_to_company are never both
                             truthy on the same message — enforced server-side). */}
-                        {selectedThreadMembers.length > 0 && isAdmin && msg.addressed_to_company && (
+                        {isAdmin && msg.addressed_to_company && (
                           <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
                             For the whole company
                           </span>
                         )}
                         {/* Company badge — show on every message with an account_id when viewing a contact-level unified thread */}
                         {(() => {
-                          if (selectedThreadMembers.length > 0) return null // handled above
+                          // An account-scoped thread is handled by the two badges above
+                          // instead — checked via selectedAccountId itself (dev job
+                          // e01fe70f), not selectedThreadMembers, which the badges above
+                          // no longer depend on either and can legitimately be empty here.
+                          if (selectedAccountId) return null // handled above
                           const accountNameById = new Map(selectedThreadCompanies.map(c => [c.id, c.name]))
                           const companyName = msg.account_id ? accountNameById.get(msg.account_id) : null
                           // Show badge if we have a company name (multi-company thread) or sender_context is set
@@ -4371,11 +4412,21 @@ export default function PortalChatsPage() {
                 account when its account_contacts mirror is thin (council
                 pass 2, system-counselor: ~31% of members in ~49% of
                 multi-member accounts have no such link) — selectedThreadMembers
-                (sourced from the real members table) is checked as an
-                alternative trigger so the "Addressed to" control below stays
-                reachable for those accounts too, without changing the
-                existing audienceTotal-driven behavior for anyone else. */}
-            {!sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1) && (
+                is checked as an alternative trigger so the "Addressed to"
+                control below stays reachable for those accounts too, without
+                changing the existing audienceTotal-driven behavior for anyone
+                else. CORRECTION (dev job e01fe70f): selectedThreadMembers is
+                itself sourced from account_contacts too (see the comment on
+                the addressedToData query above), not the real members table —
+                the original comment here was wrong. addressedToOptions (the
+                query that IS backed by the real members table) is now ALSO
+                OR'd in as the authoritative trigger — without it, this outer
+                wrapper stayed closed on the exact three navigation paths the
+                inner picker (below) was just fixed to work on, whenever
+                account_contacts also happened to undercount that account:
+                the inner fix could never be reached from those paths for a
+                meaningful share of real multi-member accounts. */}
+            {!sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1) && (
               <div className="px-3 py-2 border-t bg-amber-50 flex flex-col gap-1.5 shrink-0">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
@@ -4395,8 +4446,10 @@ export default function PortalChatsPage() {
                     (council pass 2, Erika Hall). A dev job for this exact case
                     — Antonio, 2026-09-04: label only, message stays visible to
                     the whole company; this control is display metadata, never
-                    a privacy gate (lib/portal/admin-send-scope.ts unchanged). */}
-                {selectedAccountId && selectedThreadMembers.length > 0 && (
+                    a privacy gate (lib/portal/admin-send-scope.ts unchanged).
+                    Gated on addressedToOptions, not selectedThreadMembers (dev
+                    job e01fe70f) — see that query's own comment for why. */}
+                {selectedAccountId && addressedToOptions.length > 1 && (
                   <div className="flex items-center gap-1.5 pl-6">
                     <span className="text-[11px] text-amber-800/80">Addressed to:</span>
                     <DropdownMenu.Root>
@@ -5051,8 +5104,10 @@ export default function PortalChatsPage() {
 
               {/* Which member — only for multi-member account threads. Label
                   only (lib/portal/admin-send-scope.ts unchanged): the message
-                  stays visible to the whole company thread regardless. */}
-              {selectedAccountId && selectedThreadMembers.length > 0 && (
+                  stays visible to the whole company thread regardless. Gated
+                  on addressedToOptions, not selectedThreadMembers (dev job
+                  e01fe70f) — see that query's own comment for why. */}
+              {selectedAccountId && addressedToOptions.length > 1 && (
                 <div>
                   <label className="block text-xs font-medium text-zinc-500 mb-1.5">Addressed to</label>
                   <div className="flex gap-1.5 flex-wrap">
