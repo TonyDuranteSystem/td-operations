@@ -215,7 +215,7 @@ export function validateHexColor(color: string): string | null {
  * quoted client message shared into a discussion/channel).
  */
 export interface TeamCard {
-  kind: 'account' | 'invoice' | 'document' | 'task' | 'client_message' | 'link'
+  kind: 'account' | 'invoice' | 'document' | 'task' | 'client_message' | 'link' | 'email_confirm'
   title: string
   subtitle?: string
   /** In-app href the card links to (relative). */

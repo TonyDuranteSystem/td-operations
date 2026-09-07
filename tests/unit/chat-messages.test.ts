@@ -88,6 +88,38 @@ describe('displayBody', () => {
     expect(displayBody(msg({ id: 'm', message: '   ' }))).toBe('')
     expect(displayBody(null)).toBe('')
   })
+
+  it('THE INVISIBLE CONFIRM: an email_confirm card with no body text is never a blank bubble', () => {
+    // Before this, a message that was ONLY a card (no text) rendered nothing at
+    // all — including the one telling a human a client email was waiting on
+    // their confirm/cancel decision (bug-hunter, 2026-09-07).
+    const out = displayBody(msg({ id: 'm', message: '', card: { kind: 'email_confirm', title: 'Corrections for Federico Vassallo' } }))
+    expect(out).toContain('Corrections for Federico Vassallo')
+    expect(out.toLowerCase()).toContain('confirm')
+  })
+
+  it('summarizes a shared client-message card, including its subtitle', () => {
+    const out = displayBody(msg({
+      id: 'm', message: '',
+      card: { kind: 'client_message', title: 'Domenico Rossi', subtitle: 'Can you check my invoice?' },
+    }))
+    expect(out).toContain('Domenico Rossi')
+    expect(out).toContain('Can you check my invoice?')
+  })
+
+  it('summarizes a shared link card (e.g. an Inbox email share)', () => {
+    const out = displayBody(msg({ id: 'm', message: '', card: { kind: 'link', title: 'Fwd: USPTO Notice' } }))
+    expect(out).toContain('Fwd: USPTO Notice')
+  })
+
+  it('falls back to the card title for any other/unknown card kind', () => {
+    expect(displayBody(msg({ id: 'm', message: '', card: { kind: 'invoice', title: 'INV-000123' } }))).toContain('INV-000123')
+    expect(displayBody(msg({ id: 'm', message: '', card: { title: '' } }))).toBe('Shared')
+  })
+
+  it('real message text still wins over a card', () => {
+    expect(displayBody(msg({ id: 'm', message: 'see attached', card: { kind: 'link', title: 'ignored' } }))).toBe('see attached')
+  })
 })
 
 describe('isDeleted / attachmentCount', () => {
