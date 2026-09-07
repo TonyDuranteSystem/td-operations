@@ -15,7 +15,7 @@ import { TeamBoard } from './board'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
-import { format, isToday, isYesterday } from 'date-fns'
+import { format } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { uploadTeamAttachment, prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
@@ -25,6 +25,7 @@ import { TurnBadge } from '@/components/team-chat/turn-badge'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { sortPanelThreads, filterStreamRoots } from '@/lib/team/thread-meta'
 import { TEAM_COLORS, CLAUDE_SENDER_UUID, channelSlug, TEAM_WORK_STATUSES, TEAM_WORK_STATUS_LABELS, TEAM_STATUS_COLORS, type TeamWorkStatus } from '@/lib/team/workspace'
+import { msgTime } from '@/lib/team/chat-time'
 import type { ChatAttachment } from '@/lib/types'
 import type { TeamMsg, TeamThread, TeamMember, Reaction, ThreadMeta, ThreadListItem, BoardThread, LaterThread } from './types'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -39,12 +40,6 @@ function senderColor(id: string): string {
 }
 function initials(name: string): string {
   return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('')
-}
-function msgTime(ts: string): string {
-  const d = new Date(ts)
-  if (isToday(d)) return format(d, 'HH:mm')
-  if (isYesterday(d)) return `Yesterday ${format(d, 'HH:mm')}`
-  return format(d, 'MMM d, HH:mm')
 }
 function fileSize(b: number): string {
   if (b < 1024) return `${b} B`

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin } from '@/lib/auth'
+import { CLAUDE_SENDER_UUID } from '@/lib/team/workspace'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -69,12 +70,29 @@ export async function DELETE(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existing } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('id, sender_id, deleted_at')
+    .select('id, sender_id, thread_id, deleted_at')
     .eq('id', msgId)
     .single()
   if (!existing) return NextResponse.json({ error: 'Message not found' }, { status: 404 })
   if (existing.deleted_at) return NextResponse.json({ ok: true }) // already deleted — idempotent
-  if (existing.sender_id !== user.id && !isAdmin(user)) {
+
+  let allowed = existing.sender_id === user.id || isAdmin(user)
+  // A message Claude posted has no human author to defer to. Inside a DM,
+  // either of its two real participants may still retract it — a stuck error
+  // bubble, a relay that's gone stale — never in a channel/discussion with a
+  // wider audience, which stays admin-only exactly as before (2026-09-07).
+  if (!allowed && existing.sender_id === CLAUDE_SENDER_UUID && existing.thread_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: thread } = await (supabaseAdmin as any)
+      .from('internal_threads')
+      .select('thread_type, dm_key')
+      .eq('id', existing.thread_id)
+      .maybeSingle()
+    if (thread?.thread_type === 'dm' && (thread.dm_key ?? '').split(':').includes(user.id)) {
+      allowed = true
+    }
+  }
+  if (!allowed) {
     return NextResponse.json({ error: 'You can only delete your own messages.' }, { status: 403 })
   }
 

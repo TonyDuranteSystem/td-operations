@@ -33,7 +33,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare, X, Minus, Send, Loader2, StickyNote, Paperclip,
   Volume2, VolumeX, RotateCcw, Smile, MoreHorizontal, Pencil, Trash2, Copy, Plus, Building2,
-  ChevronLeft, Check,
+  ChevronLeft, Check, Bot,
 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -57,6 +57,8 @@ import {
   mergeChatMessages, displayBody, isDeleted, attachmentCount, summarizeReactions,
   type ChatMessage,
 } from '@/lib/team/chat-messages'
+import { msgTime } from '@/lib/team/chat-time'
+import { CLAUDE_SENDER_UUID } from '@/lib/team/workspace'
 import { ChatErrorBoundary } from '@/components/team-chat/chat-error-boundary'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
@@ -64,6 +66,15 @@ import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 import { OPEN_TEAM_CHAT_EVENT } from '@/lib/team/open-team-chat'
 
 const QUIET_KEY = 'td-floating-chat-quiet'
+/**
+ * Remembers the last DM opened, so a fresh launch (a PWA that got backgrounded
+ * and evicted, or a plain reload) can drop you straight back into it instead of
+ * the list — UX finding, 2026-09-07: this is the one conversation Antonio comes
+ * back to most, and every reopen was costing him a guaranteed extra tap.
+ * Deliberately DMs only, not client conversations — those are meant to be
+ * chosen each time, not defaulted into.
+ */
+const LAST_DM_THREAD_KEY = 'td-floating-chat-last-dm'
 
 /**
  * Don't re-mark the same conversation read more often than this. Gestures come
@@ -178,23 +189,56 @@ function FloatingChatInner() {
   useEffect(() => { myIdRef.current = myId }, [myId])
   useEffect(() => { dmIdsRef.current = myDmThreadIdSet(threads, myId) }, [threads, myId])
   useEffect(() => { pathnameRef.current = pathname }, [pathname])
+  // Remember the open thread ONLY while it's a real DM — see LAST_DM_THREAD_KEY.
+  useEffect(() => {
+    if (openThreadId && dmThreads.some((t) => t.id === openThreadId)) {
+      store.set(LAST_DM_THREAD_KEY, openThreadId)
+    }
+  }, [openThreadId, dmThreads])
 
   // ─── messages for the open conversation ───
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [msgError, setMsgError] = useState<string | null>(null)
 
+  /**
+   * Switching to a NEW thread — sets `openThreadId` and clears `messages` in the
+   * same state batch, so the two can never paint out of sync (bug-hunter,
+   * 2026-09-07): without this, React commits the new header with the OLD
+   * thread's messages still showing for one frame, because the effect that
+   * clears `messages` on `openThreadId` change only runs AFTER that paint.
+   * Once every row shows a name and a time, a stale message like that reads as
+   * a specific, wrong, timestamped claim rather than an obvious glitch — so
+   * every call site that opens a thread MUST go through this, not
+   * `setOpenThreadId` directly.
+   */
+  const switchToThread = useCallback((id: string) => {
+    setMessages([])
+    setOpenThreadId(id)
+  }, [])
+
+  // Only the NEWEST in-flight request for a thread may write state. Guarding on
+  // thread identity alone (openThreadIdRef) is not enough: a fast A → B → A
+  // revisit issues a fresh request for A each time, and if the FIRST A request
+  // resolves after the SECOND, the identity check still passes and the stale
+  // response overwrites the fresh one already on screen (senior-engineer,
+  // 2026-09-07).
+  const loadGenerationRef = useRef(0)
   const loadMessages = useCallback(async (threadId: string) => {
+    const generation = ++loadGenerationRef.current
     setLoadingMsgs(true); setMsgError(null)
     try {
       const d = await fetchMessages(threadId)
-      // Ignore a response for a conversation we have since switched away from.
-      if (openThreadIdRef.current !== threadId) return
+      // Ignore a response for a conversation we've since switched away from, or
+      // superseded by a newer request for the same thread.
+      if (openThreadIdRef.current !== threadId || loadGenerationRef.current !== generation) return
       setMessages(mergeChatMessages([], d.messages))
     } catch (e) {
-      setMsgError(e instanceof Error ? e.message : 'Could not load this conversation.')
+      if (loadGenerationRef.current === generation) {
+        setMsgError(e instanceof Error ? e.message : 'Could not load this conversation.')
+      }
     } finally {
-      setLoadingMsgs(false)
+      if (loadGenerationRef.current === generation) setLoadingMsgs(false)
     }
   }, [])
 
@@ -293,7 +337,7 @@ function FloatingChatInner() {
       if (typeof detail.draft === 'string' && detail.draft && !drafts.get(threadId)) {
         drafts.set(threadId, detail.draft)
       }
-      setOpenThreadId(threadId)
+      switchToThread(threadId)
       if (window.matchMedia('(min-width: 1024px)').matches) {
         setWindowOpen(true)
         setMinimized(false)
@@ -306,7 +350,7 @@ function FloatingChatInner() {
     }
     document.addEventListener(OPEN_TEAM_CHAT_EVENT, onOpen)
     return () => document.removeEventListener(OPEN_TEAM_CHAT_EVENT, onOpen)
-  }, [qc, markRead])
+  }, [qc, markRead, switchToThread])
 
   // ─── realtime ───
   // Own channel topic. The full chat page owns 'team-workspace'; a second
@@ -332,6 +376,7 @@ function FloatingChatInner() {
           quiet: quietRef.current,
           pathname: pathnameRef.current,
           senderId: row?.sender_id,
+          onBehalfOfUserId: row?.on_behalf_of_user_id,
           myId: myIdRef.current,
           threadId,
           myDmThreadIds: dmIdsRef.current,
@@ -353,7 +398,7 @@ function FloatingChatInner() {
         }
         if (decision === 'open') {
           setWindowOpen(true)
-          setOpenThreadId(threadId)
+          switchToThread(threadId)
           setMinimized(false)
         }
         // Either way the badge moves — refresh the counts.
@@ -369,7 +414,7 @@ function FloatingChatInner() {
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [qc])
+  }, [qc, switchToThread])
 
   // Re-sync when the tab wakes or the network returns — realtime replays nothing,
   // so a frozen PWA needs a real backfill, not just an invalidate.
@@ -422,14 +467,21 @@ function FloatingChatInner() {
           quiet={quiet}
           pathname={pathname}
           onToggleQuiet={toggleQuiet}
-          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false); markRead(id) }}
+          onPickThread={(id) => { switchToThread(id); setMinimized(false); markRead(id) }}
           onBack={() => setOpenThreadId(null)}
           onNewChat={() => setNewChatOpen(true)}
           onMinimize={() => setMinimized(true)}
           onClose={() => { setWindowOpen(false); setOpenThreadId(null); setMinimized(false) }}
           onEngage={() => markRead(openThreadId)}
           onChanged={() => { if (openThreadIdRef.current) loadMessages(openThreadIdRef.current) }}
-          onSent={(m) => { setMessages((prev) => mergeChatMessages(prev, [m])); markRead(openThreadId) }}
+          onSent={(m, sentThreadId) => {
+            // A send that resolves after switching away must not land in
+            // whatever conversation happens to be open now (bug-hunter,
+            // 2026-09-07) — it self-heals on the next real load of that thread.
+            if (openThreadIdRef.current !== sentThreadId) return
+            setMessages((prev) => mergeChatMessages(prev, [m]))
+            markRead(sentThreadId)
+          }}
           onError={setMsgError}
           onDismissMention={() => dismissMention(openThreadId)}
         />
@@ -445,6 +497,13 @@ function FloatingChatInner() {
           onClick={() => {
             // A drag that ends on the button must not also open it.
             if (launcher.dragging) return
+            // A fresh open (nothing already loaded this session) drops straight
+            // into the last DM you were in, if it's still a real one — rather
+            // than always making you tap through the list again.
+            if (!openThreadId) {
+              const last = store.get(LAST_DM_THREAD_KEY)
+              if (last && dmThreads.some((t) => t.id === last)) { switchToThread(last); markRead(last) }
+            }
             if (window.matchMedia('(min-width: 1024px)').matches) {
               setWindowOpen(true)
               setMinimized(false)
@@ -497,12 +556,16 @@ function FloatingChatInner() {
           loading={loadingMsgs}
           error={msgError}
           pathname={pathname}
-          onPickThread={(id) => { setOpenThreadId(id); setMinimized(false); markRead(id) }}
+          onPickThread={(id) => { switchToThread(id); setMinimized(false); markRead(id) }}
           onBack={() => setOpenThreadId(null)}
           onNewChat={() => setNewChatOpen(true)}
           onEngage={() => markRead(openThreadIdRef.current)}
           onChanged={() => { if (openThreadIdRef.current) loadMessages(openThreadIdRef.current) }}
-          onSent={(m) => { setMessages((prev) => mergeChatMessages(prev, [m])); markRead(openThreadIdRef.current) }}
+          onSent={(m, sentThreadId) => {
+            if (openThreadIdRef.current !== sentThreadId) return
+            setMessages((prev) => mergeChatMessages(prev, [m]))
+            markRead(sentThreadId)
+          }}
           onError={setMsgError}
           onClose={() => setSheetOpen(false)}
           onDismissMention={() => dismissMention(openThreadIdRef.current)}
@@ -513,7 +576,7 @@ function FloatingChatInner() {
         <NewChatDialog
           people={people}
           onOpenThread={(id) => {
-            setOpenThreadId(id)
+            switchToThread(id)
             setWindowOpen(true)
             setMinimized(false)
             qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })
@@ -549,7 +612,8 @@ function DesktopWindow(props: {
   onClose: () => void
   onEngage: () => void
   onChanged: () => void
-  onSent: (m: ChatMessage) => void
+  /** The message, and the id of the thread it was actually sent to. */
+  onSent: (m: ChatMessage, threadId: string) => void
   onError: (e: string | null) => void
   onDismissMention: () => void
 }) {
@@ -678,6 +742,8 @@ function DesktopWindow(props: {
             loading={props.loading}
             error={props.error}
             myId={props.myId}
+            nameFor={props.nameFor}
+            isDm={props.openThread?.thread_type === 'dm'}
             pathname={props.pathname}
             onEngage={props.onEngage}
             onChanged={props.onChanged}
@@ -942,6 +1008,10 @@ function MessageList(props: {
   loading: boolean
   error: string | null
   myId: string | null
+  /** Resolves a staff user id to a display name (for "on behalf of" lines). */
+  nameFor: (id: string | null) => string
+  /** Only a DM's two real participants may ever retract a message Claude sent. */
+  isDm: boolean
   pathname: string
   onEngage: () => void
   onChanged: () => void
@@ -1009,14 +1079,46 @@ function MessageList(props: {
           const mine = !!props.myId && m.sender_id === props.myId
           const gone = isDeleted(m)
           const files = attachmentCount(m)
+          // The AI's own fixed identity — styled so it can never be mistaken for
+          // a teammate at a glance (Luca's original report: he could only tell
+          // messages apart by re-reading the whole thread).
+          const isClaude = m.sender_id === CLAUDE_SENDER_UUID
+          // Claude relaying words someone actually dictated, vs. answering or
+          // acting on its own — the reader has no way to tell those apart
+          // otherwise (bug-hunter + UX, 2026-09-07).
+          const dictatedBy = !mine && !gone && m.on_behalf_of_user_id
+            ? props.nameFor(m.on_behalf_of_user_id)
+            : null
           return (
             <div key={m.id} className={`group flex ${mine ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-lg px-2.5 py-1.5 text-sm ${
                 gone ? 'bg-zinc-200 italic text-zinc-500'
                      : mine ? 'bg-emerald-500 text-white' : 'bg-white text-zinc-900 shadow-sm'
               }`}>
-                {!mine && !gone && (
-                  <p className="mb-0.5 text-[11px] font-medium opacity-70">{m.sender_name}</p>
+                {!gone && (
+                  <div className={`mb-0.5 flex items-center gap-1 text-[11px] ${mine ? 'text-white/70' : 'text-zinc-500'}`}>
+                    {!mine && (
+                      <span className={`flex items-center gap-0.5 ${isClaude ? 'font-semibold text-violet-600' : 'font-medium opacity-70'}`}>
+                        {isClaude && <Bot className="h-3 w-3" />}
+                        {m.sender_name}
+                      </span>
+                    )}
+                    <time dateTime={m.created_at ?? undefined} className={mine ? undefined : 'opacity-70'}>
+                      {msgTime(m.created_at)}
+                    </time>
+                    {m.edited_at && <span className="opacity-70">(edited)</span>}
+                  </div>
+                )}
+                {dictatedBy && (
+                  <p className="mb-1 text-[10px] italic opacity-60">on behalf of {dictatedBy}</p>
+                )}
+                {m.reply_to_preview && !gone && (
+                  <div className={`mb-1 truncate rounded border-l-2 px-1.5 py-0.5 text-[11px] ${
+                    mine ? 'border-white/40 bg-white/10 text-white/80' : 'border-zinc-300 bg-zinc-50 text-zinc-500'
+                  }`}>
+                    <span className="font-semibold">{m.reply_to_preview.sender_name}: </span>
+                    {m.reply_to_preview.deleted_at ? 'Message deleted' : (m.reply_to_preview.message ?? '').slice(0, 80)}
+                  </div>
                 )}
                 {/* break-words: the server allows 5000 characters, and a single
                     long URL would otherwise blow the window's width open. */}
@@ -1043,6 +1145,7 @@ function MessageList(props: {
                 <MessageMenu
                   message={m}
                   isMine={mine}
+                  canDeleteAsClaude={isClaude && props.isDm}
                   open={menuFor === m.id}
                   onToggle={() => setMenuFor(menuFor === m.id ? null : m.id)}
                   onNote={() => { setNoteFor(m); setMenuFor(null) }}
@@ -1085,12 +1188,19 @@ const QUICK_REACTIONS = ['👍', '✅', '🙏', '🔥', '👀', '❤️', '😂'
 function MessageMenu(props: {
   message: ChatMessage
   isMine: boolean
+  /**
+   * A message Claude sent has no human author to defer to — but inside a DM,
+   * either real participant may still retract it (a stuck error bubble, a
+   * relay that's gone stale). Never edit-able either way; only delete.
+   */
+  canDeleteAsClaude: boolean
   open: boolean
   onToggle: () => void
   onNote: () => void
   onChanged: () => void
   onError: (e: string | null) => void
 }) {
+  const canDelete = props.isMine || props.canDeleteAsClaude
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -1174,7 +1284,7 @@ function MessageMenu(props: {
                   <MenuRow icon={<Pencil className="h-4 w-4" />} label="Edit"
                     onClick={() => { setDraft(props.message.message ?? ''); setEditing(true) }} />
                 )}
-                {props.isMine && (
+                {canDelete && (
                   confirmDelete ? (
                     <MenuRow icon={<Trash2 className="h-4 w-4" />} label="Tap again to delete"
                       danger onClick={remove} />
@@ -1224,7 +1334,8 @@ function Composer(props: {
   threadId: string
   personKey: string
   onEngage: () => void
-  onSent: (m: ChatMessage) => void
+  /** The message, and the id of the thread it was actually sent to. */
+  onSent: (m: ChatMessage, threadId: string) => void
   onError: (e: string | null) => void
 }) {
   const [text, setText] = useState('')
@@ -1273,9 +1384,13 @@ function Composer(props: {
   const send = async () => {
     const body = text.trim()
     if (!body || busy) return
+    // Captured now, not read from `props` after the await below — the caller
+    // may have switched to a different conversation by the time this resolves,
+    // and the message must still say which thread it actually belongs to.
+    const sentThreadId = props.threadId
     setBusy(true); props.onError(null)
     try {
-      const res = await fetch(`/api/team/threads/${props.threadId}/messages`, {
+      const res = await fetch(`/api/team/threads/${sentThreadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: body }),
@@ -1288,7 +1403,7 @@ function Composer(props: {
       const d = await res.json()
       setText('') // only clear once it is genuinely gone
       drafts.delete(props.personKey)
-      if (d.message) props.onSent(d.message)
+      if (d.message) props.onSent(d.message, sentThreadId)
     } catch (e) {
       // Keep what was typed — it is still in the box to retry or copy out.
       props.onError(e instanceof Error ? e.message : 'Could not send — your message is still here.')
@@ -1369,7 +1484,8 @@ function MobileSheet(props: {
   onNewChat: () => void
   onEngage: () => void
   onChanged: () => void
-  onSent: (m: ChatMessage) => void
+  /** The message, and the id of the thread it was actually sent to. */
+  onSent: (m: ChatMessage, threadId: string) => void
   onError: (e: string | null) => void
   onClose: () => void
   onDismissMention: () => void
@@ -1419,6 +1535,8 @@ function MobileSheet(props: {
               loading={props.loading}
               error={props.error}
               myId={props.myId}
+              nameFor={props.nameFor}
+              isDm={props.openThread?.thread_type === 'dm'}
               pathname={props.pathname}
               onEngage={props.onEngage}
               onChanged={props.onChanged}
