@@ -9,11 +9,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const { mockRevalidatePath, mockSingle, mockUpdate, mockUpdateEq, mockListConfirmedApplications } = vi.hoisted(() => ({
+const { mockRevalidatePath, mockSingle, mockUpdate, mockUpdateEq, mockUpdateSelect, mockListConfirmedApplications } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockSingle: vi.fn(),
   mockUpdate: vi.fn(),
   mockUpdateEq: vi.fn(),
+  mockUpdateSelect: vi.fn(),
   mockListConfirmedApplications: vi.fn(),
 }))
 
@@ -47,9 +48,20 @@ vi.mock("@/lib/supabase-admin", () => ({
           single: mockSingle,
         })),
       })),
+      // Real chain: .update({...}).eq('id', paymentId)[.eq('updated_at', x)].select('id').
+      // .eq() is chainable (a second .eq() only happens when the code has a
+      // CAS token to guard against); .select() is always the terminal call
+      // and is what actually resolves.
       update: (updates: unknown) => {
         mockUpdate(updates)
-        return { eq: mockUpdateEq }
+        const chain = {
+          eq: (...args: unknown[]) => {
+            mockUpdateEq(...args)
+            return chain
+          },
+          select: (...args: unknown[]) => mockUpdateSelect(...args),
+        }
+        return chain
       },
     })),
   },
@@ -62,6 +74,9 @@ const PAYMENT_ID = "inv-1"
 beforeEach(() => {
   vi.clearAllMocks()
   mockUpdateEq.mockResolvedValue({ error: null })
+  // Default: one row matched — the common case for every test that doesn't
+  // specifically exercise the compare-and-swap guard.
+  mockUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
   mockListConfirmedApplications.mockResolvedValue([])
 })
 
@@ -265,13 +280,31 @@ describe("updateInvoice — correction path on an already-Paid invoice", () => {
       expect(call.amount_paid).toBe(-650)
     })
 
-    it("never lets credit_remaining go negative when consumed exceeds the corrected total", async () => {
+    // Regression test for the MAJOR finding from live 2026-09-07 (full
+    // second-round council review, Senior Engineer): correcting a credit
+    // note down below what's already been consumed used to silently floor
+    // credit_remaining at 0, absorbing the shortfall with no error and no
+    // trace. It's refused now instead.
+    it("refuses when consumed exceeds the corrected total, instead of silently absorbing the shortfall", async () => {
       // Note was -500, fully consumed (credit_remaining 0). Corrected down to -300.
       mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 0 } })
       const result = await updateInvoice(PAYMENT_ID, { total: -300 })
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/already been applied to other invoices/)
+      expect(mockUpdate).not.toHaveBeenCalled()
+    })
+
+    // Regression coverage for the blocker found live 2026-09-07 (same pass,
+    // AI Architect + Finance-Auditor independently): nothing re-asserted a
+    // credit note's total/amount/amount_paid stay negative on a correction —
+    // retyping the pre-filled negative number as a plain positive one (an
+    // easy, unlabeled mistake) silently flipped the sign.
+    it("forces the total/amount/amount_paid negative even when the corrected value is entered as positive", async () => {
+      mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+      const result = await updateInvoice(PAYMENT_ID, { total: 650 })
       expect(result.success).toBe(true)
       const call = mockUpdate.mock.calls[0][0]
-      expect(call.credit_remaining).toBe(0)
+      expect(call).toEqual(expect.objectContaining({ total: -650, amount: -650, subtotal: -650, amount_paid: -650, credit_remaining: 650 }))
     })
   })
 
@@ -346,5 +379,111 @@ describe("updateInvoice — ordinary edit keeps status honest relative to the re
     const call = mockUpdate.mock.calls[0][0]
     expect(call.status).toBe("Pending")
     expect(call.invoice_status).toBeUndefined()
+  })
+})
+
+// Regression coverage for the MAJOR finding from live 2026-09-07 (full
+// second-round council review, Bug-Hunter): nothing validated the sign of a
+// corrected total. A negative total on an ordinary (non-credit) invoice
+// could sail through the "ordinary edit" branch, get auto-promoted to Paid
+// with $0 actually recorded, and reach the client's own portal.
+describe("updateInvoice — total sign validation", () => {
+  it("refuses a negative total on an ordinary (non-credit) invoice", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: -500 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/can't be negative/)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("refuses a negative total even on a bare/legacy row (null invoice_status)", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: null } })
+    const result = await updateInvoice(PAYMENT_ID, { total: -1 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/can't be negative/)
+  })
+
+  it("still allows a negative total on a credit note", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    const result = await updateInvoice(PAYMENT_ID, { total: -300 })
+    expect(result.success).toBe(true)
+  })
+
+  it("allows zero", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 0 })
+    expect(result.success).toBe(true)
+  })
+})
+
+// Regression coverage for the HIGH finding from live 2026-09-07 (full
+// second-round council review, System Counselor + Finance-Auditor,
+// independently, the latter with a concrete numeric trace of real
+// Stripe-confirmed cash being silently erased): the confirmed-bank-payments
+// cross-check only ever has data for wire-transfer settlements — live
+// production data showed that's a small minority of Paid invoices. A card
+// or Whop payment gets no protection at all without this.
+describe("updateInvoice — typo refusal on card/Whop-settled invoices", () => {
+  it("refuses typo on a Stripe-settled invoice with no bank-feed ledger to check against", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid", stripe_payment_id: "ch_abc123" } })
+    mockListConfirmedApplications.mockResolvedValue([])
+    const result = await updateInvoice(PAYMENT_ID, { total: 100 }, "typo")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/card or Whop payment/)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("refuses typo on a Whop-settled invoice the same way", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid", whop_payment_id: "whop_xyz" } })
+    mockListConfirmedApplications.mockResolvedValue([])
+    const result = await updateInvoice(PAYMENT_ID, { total: 100 }, "typo")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/card or Whop payment/)
+  })
+
+  it("still allows typo when there's no stripe/whop id and no bank-feed ledger (a manual/cash payment)", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid" } })
+    mockListConfirmedApplications.mockResolvedValue([])
+    const result = await updateInvoice(PAYMENT_ID, { total: 850 }, "typo")
+    expect(result.success).toBe(true)
+  })
+
+  it("bank-feed check still takes precedence when both a ledger and a stripe id exist", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid", stripe_payment_id: "ch_abc123" } })
+    mockListConfirmedApplications.mockResolvedValue([{ id: "a1", feed_id: "f1", amount: 1000 }])
+    const result = await updateInvoice(PAYMENT_ID, { total: 1000 }, "typo")
+    expect(result.success).toBe(true)
+  })
+})
+
+// Regression coverage for the MEDIUM finding from live 2026-09-07 (full
+// second-round council review, Finance-Auditor, with a concrete race trace):
+// every sibling money-writer in this file guards its write against a stale
+// read; this one didn't, so a total edit computed off a stale snapshot could
+// overwrite only the fields it touched, leaving a concurrently-settled
+// invoice's real amount_paid/status behind — a genuine "Paid with a balance
+// due" state reached through a race instead of the branching logic.
+describe("updateInvoice — compare-and-swap on the write", () => {
+  it("guards the write with the row's updated_at when a total edit read it, and refuses if it changed underneath", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent", updated_at: "2026-09-07T10:00:00Z" } })
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null })
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed while you were editing/)
+    expect(mockUpdateEq).toHaveBeenCalledWith("updated_at", "2026-09-07T10:00:00Z")
+  })
+
+  it("succeeds when the row is unchanged (the common case)", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent", updated_at: "2026-09-07T10:00:00Z" } })
+    mockUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 })
+    expect(result.success).toBe(true)
+  })
+
+  it("does not guard the write at all when the edit never touched total (no money field to race)", async () => {
+    const result = await updateInvoice(PAYMENT_ID, { notes: "internal only" })
+    expect(result.success).toBe(true)
+    expect(mockSingle).not.toHaveBeenCalled()
+    expect(mockUpdateEq).not.toHaveBeenCalledWith("updated_at", expect.anything())
   })
 })

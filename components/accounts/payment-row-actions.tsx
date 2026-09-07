@@ -164,6 +164,13 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   // difference. Hide the action wherever there's already real money on it;
   // Edit is the safe path to reconcile a Partial invoice's balance.
   const hasRealPartialPayment = Number(payment.amount_paid ?? 0) > 0
+  // Fixed 2026-09-07 (second-round council review, 3 reviewers independently):
+  // a credit note's `amount_paid` is negative or zero (never positive), so
+  // the check above never recognizes it — Mark-as-Paid rendered for credit
+  // notes and, for at least one real creation path, actually fired a write
+  // that hid the credit from the netting engine permanently. A credit note
+  // is never "marked Paid" through this action at all.
+  const isCreditNote = statusValue === 'Credit'
   // Only a true Cancelled invoice can be brought back. Waived/Voided are
   // different lifecycle ends and have no reactivate path.
   const canReactivate = statusValue === 'Cancelled'
@@ -258,7 +265,7 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
           className="z-[100] w-52 bg-white border rounded-lg shadow-lg overflow-hidden"
           role="menu"
         >
-          {!isPaid && !isCancelled && !hasRealPartialPayment && (
+          {!isPaid && !isCancelled && !hasRealPartialPayment && !isCreditNote && (
             <button
               type="button"
               onClick={handleMarkPaid}
@@ -276,7 +283,7 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
               <Send className="h-4 w-4" /> Send reminder
             </button>
           )}
-          {isInvoiced && !isPaid && !isCancelled && (
+          {isInvoiced && !isPaid && !isCancelled && !isCreditNote && (
             <button
               type="button"
               onClick={() => { setMenuOpen(false); setVoidOpen(true) }}

@@ -837,7 +837,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {status === 'Draft' && (
           <ActionButton onClick={handleSendDraft} label="Send Invoice — email the invoice with PDF to the client (Draft → Sent)" icon={Send} color="text-blue-600" hoverBg="hover:bg-blue-100" />
         )}
-        {status !== 'Paid' && status !== 'Cancelled' && Number(invoice.amount_paid ?? 0) <= 0 && (
+        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && Number(invoice.amount_paid ?? 0) <= 0 && (
           <ActionButton onClick={handleMarkPaid} label="Mark as Paid — record this invoice as paid manually" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}
         {['Sent', 'Overdue', 'Partial'].includes(status) && (
@@ -846,7 +846,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {['Sent', 'Overdue', 'Partial'].includes(status) && (
           <ActionButton onClick={handleSendReminder} label="Send Reminder — send a short payment reminder email (no PDF)" icon={Send} color="text-sky-600" hoverBg="hover:bg-sky-100" />
         )}
-        {status !== 'Paid' && status !== 'Cancelled' && (
+        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && (
           <ActionButton onClick={handleVoid} label="Void Invoice — cancel this invoice and reverse any applied credits" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
         )}
         {status === 'Cancelled' && (

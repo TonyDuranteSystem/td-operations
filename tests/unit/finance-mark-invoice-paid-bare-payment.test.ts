@@ -15,6 +15,7 @@ const {
   mockUpdate,
   mockUpdateEq,
   mockUpdateNeq,
+  mockUpdateSelect,
   mockSyncTDInvoiceStatus,
   mockSyncTDInvoiceMirror,
   mockTriggerActivationIfPending,
@@ -24,6 +25,7 @@ const {
   mockUpdate: vi.fn(),
   mockUpdateEq: vi.fn(),
   mockUpdateNeq: vi.fn(),
+  mockUpdateSelect: vi.fn(),
   mockSyncTDInvoiceStatus: vi.fn(),
   mockSyncTDInvoiceMirror: vi.fn(),
   mockTriggerActivationIfPending: vi.fn(),
@@ -55,16 +57,22 @@ vi.mock("@/lib/supabase-admin", () => ({
           single: mockSingle,
         })),
       })),
-      // Real chain: .update({...}).eq('id', paymentId).neq('status', 'Paid').
-      // mockUpdateEq is called with the id (kept for existing assertions
-      // that don't care about the chain shape) and returns an object whose
-      // own .neq() is the one that actually resolves.
+      // Real chain: .update({...}).eq('id', paymentId).neq('status', 'Paid').select('id').
+      // mockUpdateEq/mockUpdateNeq are called with their real args (kept for
+      // existing assertions on the chain shape); mockUpdateSelect is what
+      // the terminal .select() resolves to — the row-count check added
+      // 2026-09-07, full second-round council review.
       update: (updates: unknown) => {
         mockUpdate(updates)
         return {
           eq: (...args: unknown[]) => {
             mockUpdateEq(...args)
-            return { neq: mockUpdateNeq }
+            return {
+              neq: (...neqArgs: unknown[]) => {
+                mockUpdateNeq(...neqArgs)
+                return { select: (...selectArgs: unknown[]) => mockUpdateSelect(...selectArgs) }
+              },
+            }
           },
         }
       },
@@ -94,7 +102,7 @@ const PAYMENT_ID = "pay-1"
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockUpdateNeq.mockResolvedValue({ error: null })
+  mockUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
   mockSyncTDInvoiceMirror.mockResolvedValue(undefined)
   mockTriggerActivationIfPending.mockResolvedValue(undefined)
 })
@@ -160,5 +168,47 @@ describe("markInvoicePaid — bare-payment amount fallback", () => {
     const result = await markInvoicePaid(PAYMENT_ID)
     expect(result.success).toBe(true)
     expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ amount_paid: 1500 }))
+  })
+
+  // Regression test for the blocker found live 2026-09-07 (full second-round
+  // council review, confirmed independently by 3 reviewers, one with a
+  // concrete live exploit path): a credit note's amount_paid is negative or
+  // zero, never positive, so the partial-payment guard above never
+  // recognized it — and for at least one real creation path (a paid-call
+  // credit note, which is left at status='Pending' until a follow-up write),
+  // this actually fired a write that hid the credit from the netting engine
+  // permanently. A credit note is never "marked Paid" through this action.
+  it("refuses to mark Paid on a credit note, regardless of amount_paid's sign", async () => {
+    mockSingle.mockResolvedValue({ data: { id: PAYMENT_ID, invoice_number: "CN-1", total: -500, amount: -500, amount_paid: -500, invoice_status: "Credit", account_id: "acc-1" } })
+    const result = await markInvoicePaid(PAYMENT_ID)
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/credit note/)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("refuses to mark Paid on a credit note even when amount_paid is 0 (a paid-call credit note before its follow-up write)", async () => {
+    mockSingle.mockResolvedValue({ data: { id: PAYMENT_ID, invoice_number: "CN-2", total: -300, amount: -300, amount_paid: 0, invoice_status: "Credit", account_id: "acc-1" } })
+    const result = await markInvoicePaid(PAYMENT_ID)
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/credit note/)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  // Regression test for the major finding from live 2026-09-07 (full
+  // second-round council review, Senior Engineer + Bug-Hunter,
+  // independently): the .neq('status','Paid') guard matching zero rows is
+  // not an error — supabase-js reports success either way — so without
+  // checking what actually matched, a stale double-click or a row that was
+  // already Paid by a different path would still run every side effect
+  // below (mirror sync, QB sync, activation trigger) and report success,
+  // even though nothing was actually written.
+  it("refuses when the guarded update matches no rows, instead of reporting false success", async () => {
+    mockSingle.mockResolvedValue({ data: { id: PAYMENT_ID, invoice_number: "INV-1", total: 1500, amount: 1500, account_id: "acc-1" } })
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null })
+    const result = await markInvoicePaid(PAYMENT_ID)
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/already be Paid/)
+    expect(mockSyncTDInvoiceStatus).not.toHaveBeenCalled()
+    expect(mockTriggerActivationIfPending).not.toHaveBeenCalled()
   })
 })

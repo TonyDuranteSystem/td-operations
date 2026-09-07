@@ -140,7 +140,7 @@ export async function markInvoicePaid(
 
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, total, amount, amount_paid, account_id')
+      .select('id, invoice_number, total, amount, amount_paid, invoice_status, account_id')
       .eq('id', paymentId)
       .single()
     if (!payment) throw new Error('Payment not found')
@@ -152,6 +152,23 @@ export async function markInvoicePaid(
     // amount on them. A real invoice always has `total` (via createTDInvoice),
     // so this only changes behavior for the un-invoiced case.
     const paidAmount = payment.total ?? payment.amount
+
+    // Fixed 2026-09-07 (full second-round council review): a credit note is
+    // never "marked Paid" through this button — it's already settled by
+    // definition, tracked through `credit_remaining`, not `amount_paid`.
+    // A credit note's `amount_paid` is negative, which the partial-payment
+    // guard below (a positivity check) never catches, and its coarse
+    // `status` is already 'Paid' at creation for most creation paths — but
+    // NOT all of them (the paid-call-credit path leaves `status='Pending'`
+    // until the follow-up write), so this button could actually fire a real
+    // write that flips a credit note's `invoice_status` to 'Paid', making it
+    // permanently invisible to credit-netting. Gate on the row's real type,
+    // not on a number's sign.
+    if (payment.invoice_status === 'Credit') {
+      throw new Error(
+        'This is a credit note, not an invoice — it settles through its own remaining-credit balance, not "Mark as Paid". Edit it directly if the amount needs correcting.'
+      )
+    }
 
     // Fixed 2026-09-07 (full council review, blocker #1): a genuinely
     // Partial invoice (real money already recorded) reaches this same
@@ -176,7 +193,7 @@ export async function markInvoicePaid(
     // matcher settled it after the page loaded, before a refresh — could
     // re-fire this and clobber the real historical paid_date with today.
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: markPaidErr } = await supabaseAdmin.from('payments').update({
+    const { data: markPaidRows, error: markPaidErr } = await supabaseAdmin.from('payments').update({
       status: 'Paid',
       invoice_status: 'Paid',
       amount_paid: paidAmount,
@@ -184,8 +201,18 @@ export async function markInvoicePaid(
       paid_date: today,
       payment_method: paymentMethod || null,
       updated_at: new Date().toISOString(),
-    }).eq('id', paymentId).neq('status', 'Paid')
+    }).eq('id', paymentId).neq('status', 'Paid').select('id')
     if (markPaidErr) throw new Error(`Failed to mark payment as paid: ${markPaidErr.message}`)
+    // Fixed 2026-09-07 (full second-round council review, Senior Engineer +
+    // Bug-Hunter, independently): the `.neq('status','Paid')` guard matching
+    // zero rows is not an error — supabase-js reports success either way —
+    // so without checking what actually matched, a stale double-click or a
+    // row that was already Paid by a different path (a credit note whose
+    // coarse status settles at creation, for one) would still run every
+    // side effect below and report success, even though nothing was written.
+    if (!markPaidRows || markPaidRows.length === 0) {
+      throw new Error('This invoice changed before the save landed — it may already be Paid. Refresh and check its current state before trying again.')
+    }
 
     // Sync to client_expenses (portal mirror). BOTH calls, status first: syncTDInvoiceStatus
     // maps only the STATUS (and is the sole emitter of the staff "Client paid" note), which is
@@ -455,6 +482,15 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   if (!before) return { success: false, error: 'Payment not found' }
   if (before.invoice_status === 'Cancelled' || before.status === 'Cancelled') {
     return { success: false, error: 'This invoice is already cancelled.' }
+  }
+  // Fixed 2026-09-07 (second-round council review, Bug-Hunter): voiding a
+  // credit note flips its invoice_status away from 'Credit', making its
+  // credit_remaining invisible to every credit-netting query (all of them
+  // filter on invoice_status='Credit'). Recoverable via Reactivate, but
+  // there's no reason to let it happen at all — a credit note isn't voided
+  // the way an invoice is.
+  if (before.invoice_status === 'Credit') {
+    return { success: false, error: 'This is a credit note — it isn\'t voided like an invoice. Edit it directly if it needs correcting.' }
   }
   const preVoidState = capturePreVoidState(before)
 
@@ -945,6 +981,9 @@ export async function updateInvoice(
     if (updates.due_date !== undefined) payUpdates.due_date = updates.due_date || null
     if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
     if (updates.message !== undefined) payUpdates.message = updates.message
+    // Set only when a total edit reads `current` below — the token the final
+    // write's compare-and-swap guards against, so a stale read can't land.
+    let expectedUpdatedAt: string | null = null
     if (updates.total !== undefined) {
       // Fixed 2026-09-06 (dev job ef5da377, Step 4): this used to set amount_due
       // to the new total outright, ignoring whatever was already paid — so
@@ -954,10 +993,25 @@ export async function updateInvoice(
       // again. amount_due is now derived from what's actually still owed.
       const { data: current } = await supabaseAdmin
         .from('payments')
-        .select('amount_paid, status, invoice_status, total, credit_remaining')
+        .select('amount_paid, status, invoice_status, total, credit_remaining, stripe_payment_id, whop_payment_id, updated_at')
         .eq('id', paymentId)
         .single()
       if (!current) throw new Error('Invoice not found')
+      expectedUpdatedAt = current.updated_at ?? null
+
+      const isCreditNote = current.invoice_status === 'Credit'
+
+      // Fixed 2026-09-07 (full second-round council review, Bug-Hunter +
+      // Finance-Auditor, independently): nothing anywhere validated the
+      // sign of a corrected total. For an ordinary invoice, a fat-fingered
+      // negative number could sail through the "ordinary edit" branch below
+      // and get auto-promoted to Paid with $0 actually recorded — reaching
+      // the client's own portal. Credit notes are the one deliberate
+      // exception (their total is always negative by convention); every
+      // other row must stay non-negative.
+      if (!isCreditNote && updates.total < 0) {
+        throw new Error('An invoice total can\'t be negative — negative amounts are only valid for credit notes.')
+      }
 
       const amountPaid = Number(current.amount_paid ?? 0)
       // invoice_status only, not the coarse status enum too — a credit note's
@@ -1032,9 +1086,24 @@ export async function updateInvoice(
             `This invoice has ${confirmedSum} in confirmed bank payments on file, which doesn't match the corrected total (${updates.total}). "Just a typo" isn't safe here — it would misrecord a real, verified payment. This needs a manual review instead.`
           )
         }
+        // Fixed 2026-09-07 (full second-round council review, System
+        // Counselor + Finance-Auditor, independently — the confirmed bank
+        // check above only ever has data for wire-transfer settlements;
+        // live production data showed that's a small minority of Paid
+        // invoices). A card (Stripe) or Whop payment is just as real and
+        // just as unsafe to silently overwrite, but there's no cheap way to
+        // re-verify the exact amount actually charged without calling out
+        // to Stripe/Whop directly — so when either is on file, "typo" is
+        // refused outright instead of trusting the number blindly, the same
+        // stance already taken for bank-confirmed money.
+        if (!confirmedSum && (current.stripe_payment_id || current.whop_payment_id)) {
+          throw new Error(
+            'This invoice was settled by a card or Whop payment, which can\'t be safely re-verified here. "Just a typo" isn\'t safe on it — check the actual charge amount before correcting, or use "The client only paid part of it" / "There\'s a new charge on top" instead.'
+          )
+        }
         payUpdates.amount_paid = updates.total
         payUpdates.amount_due = 0
-      } else if (current.invoice_status === 'Credit') {
+      } else if (isCreditNote) {
         // A credit note's real remaining balance lives in `credit_remaining`
         // — a SEPARATE field from `total`, consumed over time as it's
         // applied to later invoices (lib/operations/credit-netting.ts).
@@ -1046,7 +1115,27 @@ export async function updateInvoice(
         const oldTotalAbs = Math.abs(Number(current.total ?? 0))
         const consumed = Math.max(oldTotalAbs - Number(current.credit_remaining ?? 0), 0)
         const newTotalAbs = Math.abs(updates.total)
-        payUpdates.amount_paid = updates.total
+        // Fixed 2026-09-07 (full second-round council review, Senior
+        // Engineer): if more has already been consumed than the corrected
+        // total covers, silently flooring credit_remaining at 0 absorbed
+        // the shortfall with no error and no trace — staff would have no
+        // way to know the correction left a real discrepancy unexplained.
+        if (consumed > newTotalAbs) {
+          throw new Error(
+            `${consumed} of this credit note has already been applied to other invoices, which is more than the corrected amount (${newTotalAbs}) covers. Correcting it this low would silently write off the difference — this needs a manual review instead.`
+          )
+        }
+        // Fixed 2026-09-07 (same pass, AI Architect + Finance-Auditor,
+        // independently): a credit note's total/amount are always negative
+        // by convention (createCreditNote's own rule) — nothing re-asserted
+        // that on a correction, so retyping the pre-filled negative number
+        // as a plain positive one (an easy, unlabeled mistake) silently
+        // flipped a credit note's sign, including on a client-facing PDF.
+        // The sign is derived here, never trusted from the input.
+        payUpdates.total = -newTotalAbs
+        payUpdates.amount = -newTotalAbs
+        payUpdates.subtotal = -newTotalAbs
+        payUpdates.amount_paid = -newTotalAbs
         payUpdates.credit_remaining = Math.max(newTotalAbs - consumed, 0)
         payUpdates.amount_due = 0
       } else {
@@ -1081,9 +1170,26 @@ export async function updateInvoice(
       }
     }
 
+    // Fixed 2026-09-07 (full second-round council review, Finance-Auditor):
+    // every sibling money-writer in this file guards its write against a
+    // stale read (markInvoicePaid's `.neq('status','Paid')`,
+    // reactivateInvoice's `.eq('invoice_status','Cancelled')`,
+    // apply-payment.ts's explicit compare-and-swap) — this one didn't. A
+    // total edit computed off a snapshot that a concurrent payment then
+    // settled could overwrite only the fields it touched, leaving the
+    // concurrently-written amount_paid/status/invoice_status in place next
+    // to a now-wrong amount_due — a real, demonstrated "Paid with a balance
+    // due" state reached through a race instead of the branching logic.
+    // Only guarded when a total edit actually read `current`; the plain
+    // description/date/notes-only path has no money fields to race.
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: updatePayErr } = await supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
+    let updateQuery = supabaseAdmin.from('payments').update(payUpdates).eq('id', paymentId)
+    if (expectedUpdatedAt !== null) updateQuery = updateQuery.eq('updated_at', expectedUpdatedAt)
+    const { data: updatedRows, error: updatePayErr } = await updateQuery.select('id')
     if (updatePayErr) throw new Error(`Failed to update invoice: ${updatePayErr.message}`)
+    if (expectedUpdatedAt !== null && (!updatedRows || updatedRows.length === 0)) {
+      throw new Error('This invoice changed while you were editing it — refresh and check its current state before saving again.')
+    }
 
     // Re-sync to QB if amount changed (non-blocking)
     if (updates.total !== undefined) {
