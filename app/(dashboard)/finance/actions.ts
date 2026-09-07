@@ -1215,14 +1215,22 @@ export async function updateInvoice(
         // never touched credit_remaining at all, so a corrected note could
         // still hand out the old, wrong amount on a future invoice.
         const oldTotalAbs = Math.abs(Number(current.total ?? 0))
-        const consumed = Math.max(oldTotalAbs - Number(current.credit_remaining ?? 0), 0)
+        // Rounded to the cent (E2E QA sweep round 2, Bug-Hunter): computing
+        // this from a subtraction, unrounded, could land a hair off a clean
+        // 2-decimal figure from ordinary JS float error (e.g. 699.9900000000001
+        // instead of 699.99) — wrongly refusing a correction that's actually
+        // exact, on a row whose consumed amount happens to require this
+        // subtraction. Every sibling money comparison in this function
+        // already rounds for the same reason (see the typo-path and
+        // ordinary-edit branches above).
+        const consumed = Math.round(Math.max(oldTotalAbs - Number(current.credit_remaining ?? 0), 0) * 100) / 100
         const newTotalAbs = Math.abs(updates.total)
         // Fixed 2026-09-07 (full second-round council review, Senior
         // Engineer): if more has already been consumed than the corrected
         // total covers, silently flooring credit_remaining at 0 absorbed
         // the shortfall with no error and no trace — staff would have no
         // way to know the correction left a real discrepancy unexplained.
-        if (consumed > newTotalAbs) {
+        if (consumed > newTotalAbs + 0.001) {
           throw new Error(
             `${consumed} of this credit note has already been applied to other invoices, which is more than the corrected amount (${newTotalAbs}) covers. Correcting it this low would silently write off the difference — this needs a manual review instead.`
           )
@@ -1307,17 +1315,22 @@ export async function updateInvoice(
         // reconcileAccountCredits (lib/operations/credit-netting.ts).
         if (newAmountDue === 0 && current.status !== 'Paid') {
           payUpdates.status = 'Paid'
-          // Fixed 2026-09-07 (E2E production QA sweep, Senior Engineer): this
-          // used to tag invoice_status='Paid' whenever it was already
-          // non-null, regardless of whether the row had a real invoice_number
-          // — minting a "Paid, no invoice number" row, a state the system
-          // treats elsewhere as meaning "this isn't a real invoice"
-          // (app/api/invoices/[id]/pdf/route.ts falls back to a "DRAFT"
-          // label with no invoice_number; the Finance grid's own invoice
-          // list filters on invoice_status IS NOT NULL to mean "this is an
-          // invoice"). Only tag it Paid when there's an actual invoice
-          // behind it.
-          if (current.invoice_number != null) payUpdates.invoice_status = 'Paid'
+          // Fixed 2026-09-07 (E2E production QA sweep, Senior Engineer +
+          // Bug-Hunter, independently): this used to tag invoice_status='Paid'
+          // whenever it was already non-null, regardless of whether the row
+          // had a real invoice_number — minting a "Paid, no invoice number"
+          // row, a state the system treats elsewhere as meaning "this isn't a
+          // real invoice" (app/api/invoices/[id]/pdf/route.ts falls back to a
+          // "DRAFT" label with no invoice_number; the Finance grid's own
+          // invoice list filters on invoice_status IS NOT NULL to mean "this
+          // is an invoice"). The first fix checked only `!= null`, which
+          // missed this codebase's own established fake-invoice-number
+          // placeholders '1.0'/'2.0' — real production data, already
+          // special-cased the same way in payment-row-actions.tsx,
+          // account-detail.tsx, contact-detail.tsx, and td-invoice.ts. Only
+          // tag it Paid when there's an actual invoice behind it.
+          const hasRealInvoiceNumber = !!current.invoice_number && current.invoice_number !== '1.0' && current.invoice_number !== '2.0'
+          if (hasRealInvoiceNumber) payUpdates.invoice_status = 'Paid'
           payUpdates.paid_date = now.split('T')[0]
         } else if (newAmountDue > 0 && current.status === 'Paid') {
           payUpdates.status = 'Pending'

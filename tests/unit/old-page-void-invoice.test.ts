@@ -26,6 +26,7 @@ const {
   mockPaymentsUpdate,
   mockPaymentsUpdateEq,
   mockPaymentsUpdateIn,
+  mockPaymentsUpdateSelect,
   mockFeedsSelect,
   mockFeedsUpdate,
   mockCapturePreVoidState,
@@ -37,6 +38,7 @@ const {
   mockPaymentsUpdate: vi.fn(),
   mockPaymentsUpdateEq: vi.fn(),
   mockPaymentsUpdateIn: vi.fn(),
+  mockPaymentsUpdateSelect: vi.fn(),
   mockFeedsSelect: vi.fn(),
   mockFeedsUpdate: vi.fn(),
   mockCapturePreVoidState: vi.fn(),
@@ -87,7 +89,12 @@ vi.mock("@/lib/supabase-admin", () => ({
           return {
             eq: (...args: unknown[]) => {
               mockPaymentsUpdateEq(...args)
-              return { in: (...inArgs: unknown[]) => { mockPaymentsUpdateIn(...inArgs); return Promise.resolve({ error: null }) } }
+              return {
+                in: (...inArgs: unknown[]) => {
+                  mockPaymentsUpdateIn(...inArgs)
+                  return { select: mockPaymentsUpdateSelect }
+                },
+              }
             },
           }
         },
@@ -106,6 +113,7 @@ beforeEach(() => {
     data: { id: PAYMENT_ID, qb_invoice_id: null, status: "Sent", invoice_status: "Sent", amount_due: 500, amount_paid: 0, paid_date: null, credit_remaining: null },
   })
   mockCapturePreVoidState.mockReturnValue({ status: "Sent", invoice_status: "Sent" })
+  mockPaymentsUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
   mockFeedsSelect.mockResolvedValue({ data: [], error: null })
   mockListConfirmedApplications.mockResolvedValue([])
   mockPartitionFeedsForUnlink.mockReturnValue({ resetIds: [], clearIds: [] })
@@ -128,6 +136,22 @@ describe("old page's voidInvoice — unified cancellation vocabulary", () => {
   it("captures a pre-void snapshot for Reactivate to read back later", async () => {
     await voidInvoice(PAYMENT_ID, "2026-01-01T00:00:00Z")
     expect(mockCapturePreVoidState).toHaveBeenCalled()
+  })
+
+  // Regression coverage for a bug caught by a second QA round on the ACTUAL
+  // built code (Senior Engineer + Bug-Hunter, independently): this write had
+  // no row-count check, so a stale dialog (the row's real status moved on
+  // between opening it and clicking Void) silently matched zero rows yet
+  // still fell through into the bank-feed-release logic and reported
+  // success — undoing a real bank-feed match while the payments row itself
+  // was never touched.
+  it("refuses and skips bank-feed release when the update matches zero rows (stale dialog)", async () => {
+    mockPaymentsUpdateSelect.mockResolvedValue({ data: [], error: null })
+    const result = await voidInvoice(PAYMENT_ID, "2026-01-01T00:00:00Z")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/no longer be Draft, Sent, or Overdue/)
+    expect(mockFeedsSelect).not.toHaveBeenCalled()
+    expect(mockPartitionFeedsForUnlink).not.toHaveBeenCalled()
   })
 })
 

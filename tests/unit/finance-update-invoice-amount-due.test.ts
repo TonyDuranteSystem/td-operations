@@ -365,6 +365,19 @@ describe("updateInvoice — correction path on an already-Paid invoice", () => {
       expect(mockUpdate).not.toHaveBeenCalled()
     })
 
+    // Regression coverage for a bug caught by a second QA round on the ACTUAL
+    // built code (Bug-Hunter): the consumed-vs-corrected-total comparison had
+    // no rounding, unlike every sibling money comparison in this function —
+    // an ordinary JS float subtraction (1000 - 300.01) lands on
+    // 699.9900000000001, not the clean 699.99 a human would expect, and
+    // without rounding that wrongly refused a correction that's actually
+    // exact.
+    it("does not wrongly refuse a correction that exactly matches consumed, despite float subtraction error", async () => {
+      mockSingle.mockResolvedValue({ data: { amount_paid: -1000, status: "Paid", invoice_status: "Credit", total: -1000, credit_remaining: 300.01 } })
+      const result = await updateInvoice(PAYMENT_ID, { total: -699.99 })
+      expect(result.success).toBe(true)
+    })
+
     // Regression coverage for the blocker found live 2026-09-07 (same pass,
     // AI Architect + Finance-Auditor independently): nothing re-asserted a
     // credit note's total/amount/amount_paid stay negative on a correction —
@@ -411,6 +424,31 @@ describe("updateInvoice — ordinary edit keeps status honest relative to the re
     const call = mockUpdate.mock.calls[0][0]
     expect(call.status).toBe("Paid")
     expect(call.invoice_status).toBeUndefined()
+  })
+
+  // Regression coverage for a bug caught by a second QA round on the ACTUAL
+  // built code (Bug-Hunter): the first fix checked only `!= null` on
+  // invoice_number, missing this codebase's own established fake-invoice-number
+  // placeholders '1.0'/'2.0' (real production data, already special-cased the
+  // same way in payment-row-actions.tsx/account-detail.tsx/contact-detail.tsx/
+  // td-invoice.ts as "not really invoiced"). Promoting one of these to Paid
+  // must not tag invoice_status either, or it starts appearing on the Finance
+  // grid as a genuine invoice — exactly what this fix exists to prevent.
+  it("does not touch invoice_status when promoting a payment whose invoice_number is the '1.0'/'2.0' fake-invoice placeholder", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 750, status: "Pending", invoice_status: null, invoice_number: "1.0" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 750 })
+    expect(result.success).toBe(true)
+    const call = mockUpdate.mock.calls[0][0]
+    expect(call.status).toBe("Paid")
+    expect(call.invoice_status).toBeUndefined()
+  })
+
+  it("DOES tag invoice_status='Paid' for a real invoice_number", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 750, status: "Pending", invoice_status: null, invoice_number: "INV-000900" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 750 })
+    expect(result.success).toBe(true)
+    const call = mockUpdate.mock.calls[0][0]
+    expect(call.invoice_status).toBe("Paid")
   })
 
   it("leaves a genuinely still-open invoice alone (no promotion) when a balance remains", async () => {

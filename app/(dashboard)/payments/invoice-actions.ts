@@ -251,8 +251,16 @@ export async function voidInvoice(
   return safeAction(async () => {
     const now = new Date().toISOString()
 
+    // Fixed 2026-09-07 (E2E QA sweep round 2, Senior Engineer + Bug-Hunter,
+    // independently): this had no row-count check — a stale dialog (the row's
+    // real status moved on between opening it and clicking Void, e.g. the
+    // bank-feed matcher settled it, or a second tab/machine changed it first)
+    // silently matched zero rows here, yet fell straight through into the
+    // bank-feed-release logic below and reported success, undoing a real
+    // match while the payments row itself was never touched. Mirrors the
+    // check this file's own markInvoicePaid already has, a few lines above.
     // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
-    const { error } = await supabaseAdmin
+    const { data: voidedRows, error } = await supabaseAdmin
       .from('payments')
       .update({
         invoice_status: 'Cancelled',
@@ -264,8 +272,12 @@ export async function voidInvoice(
       })
       .eq('id', paymentId)
       .in('invoice_status', ['Draft', 'Sent', 'Overdue'])
+      .select('id')
 
     if (error) throw new Error(error.message)
+    if (!voidedRows || voidedRows.length === 0) {
+      throw new Error('This invoice changed before the void landed — it may no longer be Draft, Sent, or Overdue. Refresh and check its current state before trying again.')
+    }
 
     // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
