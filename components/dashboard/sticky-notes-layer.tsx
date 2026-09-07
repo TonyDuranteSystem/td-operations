@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2 } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin, CheckSquare } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac, type FracPos } from '@/lib/notes/note-position'
@@ -353,6 +353,45 @@ function StickyNotesInner() {
 
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
+  /**
+   * Select-and-park: Antonio, 2026-09-07 (Finance-page screenshot, notes scattered
+   * over real content): "I want a solution to select of them an move all together
+   * in another place." Desktop only — the mobile sheet is already a plain scrollable
+   * list, so the on-screen-clutter problem this solves doesn't exist there; a mobile
+   * note still parks fine one at a time via NoteCardBody's own Park button.
+   */
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [parking, setParking] = useState(false)
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+  const exitSelectMode = useCallback(() => { setSelectMode(false); setSelectedIds(new Set()) }, [])
+  const parkSelected = useCallback(async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setParking(true)
+    try {
+      const results = await Promise.all(ids.map((id) =>
+        fetch(API, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, action: 'park' }),
+        }).then((r) => r.ok).catch(() => false),
+      ))
+      const failed = results.filter((ok) => !ok).length
+      if (failed > 0) toast.error(`${failed} note${failed > 1 ? 's' : ''} couldn't be parked — try again.`)
+      invalidate()
+    } finally {
+      setParking(false)
+      exitSelectMode()
+    }
+  }, [selectedIds, invalidate, exitSelectMode])
+
   if (isError) return null // never block the CRM on a notes failure
 
   return (
@@ -361,9 +400,37 @@ function StickyNotesInner() {
       <div className="hidden lg:block">
         {notes.map((n) => (
           <DesktopNote key={n.id} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
-            isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)} />
+            isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)}
+            selectMode={selectMode} selected={selectedIds.has(n.id)} onToggleSelect={() => toggleSelected(n.id)} />
         ))}
       </div>
+
+      {/* DESKTOP: tidy-up toolbar — toggle select mode, then park everything checked. */}
+      {!selectMode && notes.length > 1 && (
+        <FastTooltip label="Select notes to park" align="left">
+          <button
+            onClick={() => setSelectMode(true)}
+            className="hidden lg:flex fixed bottom-4 left-[4.25rem] z-[45] h-11 w-11 items-center justify-center rounded-full border bg-white text-zinc-500 shadow-lg hover:bg-zinc-50"
+            aria-label="Select notes to park"
+          >
+            <CheckSquare className="h-5 w-5" />
+          </button>
+        </FastTooltip>
+      )}
+      {selectMode && (
+        <div className="hidden lg:flex fixed bottom-4 left-4 z-[46] items-center gap-2 rounded-full bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg">
+          <span>{selectedIds.size} selected</span>
+          <button
+            onClick={parkSelected}
+            disabled={selectedIds.size === 0 || parking}
+            className="flex items-center gap-1 rounded-full bg-amber-400 px-3 py-1 font-medium text-amber-950 disabled:opacity-40"
+          >
+            {parking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pin className="h-3.5 w-3.5" />}
+            Park
+          </button>
+          <button onClick={exitSelectMode} disabled={parking} className="rounded-full bg-white/10 px-3 py-1 hover:bg-white/20 disabled:opacity-40">Cancel</button>
+        </div>
+      )}
 
       {/* New note = the FULL editor (text, client, come-back date, who's it for) — not a
           mini popup (Antonio, 2026-07-29). Pre-fills the client from the page you're on. */}
@@ -381,19 +448,22 @@ function StickyNotesInner() {
         />
       )}
 
-      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
-      <FastTooltip label="New note — drag to move, double-click to reset" align="left">
-        <button
-          ref={deskFab.ref}
-          {...deskFab.dragProps}
-          style={deskFab.style}
-          onClick={() => { if (!deskFab.dragging) setComposing(true) }}
-          className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
-          aria-label="New note"
-        >
-          <Plus className="h-5 w-5" />
-        </button>
-      </FastTooltip>
+      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). Hidden during
+          select mode — the tidy-up toolbar takes this corner instead. */}
+      {!selectMode && (
+        <FastTooltip label="New note — drag to move, double-click to reset" align="left">
+          <button
+            ref={deskFab.ref}
+            {...deskFab.dragProps}
+            style={deskFab.style}
+            onClick={() => { if (!deskFab.dragging) setComposing(true) }}
+            className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+            aria-label="New note"
+          >
+            <Plus className="h-5 w-5" />
+          </button>
+        </FastTooltip>
+      )}
 
       {/* MOBILE: a pill that opens a sheet.
           RAISED above the composer band (bottom-24). At bottom-4 it sat exactly
@@ -465,7 +535,10 @@ function StickyNotesInner() {
  * CSS-only — the stored/dragged fraction itself is untouched, so a manually-dragged note
  * still tracks the cursor exactly; only where it's allowed to visually render is bounded.
  */
-function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead }: { note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void }) {
+function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead, selectMode, selected, onToggleSelect }: {
+  note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void
+  selectMode: boolean; selected: boolean; onToggleSelect: () => void
+}) {
   const ref = useRef<HTMLElement>(null)
   // initialPos was already resolved once, for every note together (stored spot, or the
   // first free cascade slot) — see notePositions in the parent. Only the FIRST value
@@ -477,12 +550,14 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
   const justDragged = useRef(false)
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if (selectMode) return // no dragging while selecting — a click here only toggles the checkbox
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
     const rect = ref.current!.getBoundingClientRect()
     drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, moved: false }
     ref.current!.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    if (selectMode) return
     const d = drag.current
     if (!d) return
     if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
@@ -492,6 +567,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     setPos({ x, y })
   }
   const onPointerUp = () => {
+    if (selectMode) return
     const d = drag.current
     drag.current = null
     if (d?.moved) {
@@ -503,6 +579,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     }
   }
   const onClickCollapsed = () => {
+    if (selectMode) { onToggleSelect(); return }
     if (justDragged.current) return
     setExpanded(true)
     // Expanding to the full preview text IS reading it (Antonio, 2026-09-05: red
@@ -510,7 +587,10 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     if (isUnread) onRead()
   }
 
-  if (!expanded) {
+  // Select mode shows every note as a compact, checkable chip regardless of its own
+  // expanded/collapsed state — a clean list to tick, rather than making "which part of
+  // an open card selects vs. opens it" a judgment call for every note shape.
+  if (!expanded || selectMode) {
     const preview = note.body.replace(/\s+/g, ' ').trim().slice(0, 80)
     // A short, always-visible snippet next to the icon (Antonio, 2026-09-05: "a short
     // description at the button what it is about") — shorter than the tooltip's preview,
@@ -519,7 +599,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     // this snippet itself truncates.
     const snippet = preview.slice(0, 40)
     return (
-      <FastTooltip label={isUnread ? `New: ${preview}` : preview} align="left">
+      <FastTooltip label={selectMode ? preview : (isUnread ? `New: ${preview}` : preview)} align="left">
         <button
           ref={ref as React.RefObject<HTMLButtonElement>}
           onPointerDown={onPointerDown}
@@ -527,9 +607,14 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
           onPointerUp={onPointerUp}
           onClick={onClickCollapsed}
           style={notePosStyle(pos, COLLAPSED_SIZE_REM)}
-          className={`fixed z-[45] flex h-10 max-w-[180px] touch-none cursor-grab items-center gap-1.5 rounded-full border px-3 shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
-          aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}`}
+          className={`fixed z-[45] flex h-10 max-w-[180px] items-center gap-1.5 rounded-full border px-3 shadow-lg ${selectMode ? 'cursor-pointer' : 'touch-none cursor-grab active:cursor-grabbing'} ${selectMode && selected ? 'ring-2 ring-offset-1 ring-blue-500' : ''} ${noteBgClasses(note, isUnread)}`}
+          aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}${selectMode ? (selected ? ', selected' : ', not selected') : ''}`}
         >
+          {selectMode && (
+            <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-current bg-white/40'}`}>
+              {selected && <Check className="h-3 w-3" />}
+            </span>
+          )}
           <StickyNote className="h-4 w-4 shrink-0" />
           <span className="truncate text-xs font-medium">{snippet}</span>
         </button>
@@ -708,6 +793,12 @@ function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { n
           <FastTooltip label="Snooze">
             <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
               className="rounded p-0.5 hover:bg-black/10" aria-label="Snooze"><Clock className="h-3.5 w-3.5" /></button>
+          </FastTooltip>
+          <FastTooltip label="Park — move it to the notes shelf, out of the way">
+            <button data-no-drag onClick={() => act({ action: 'park' })} disabled={busy}
+              className="rounded p-0.5 hover:bg-black/10 disabled:opacity-40" aria-label="Park this note">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pin className="h-3.5 w-3.5" />}
+            </button>
           </FastTooltip>
           {isAuthor && (
             <FastTooltip label="Share">

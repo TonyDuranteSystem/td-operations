@@ -22,13 +22,13 @@
  */
 
 import { useRef, useState } from 'react'
-import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send } from 'lucide-react'
+import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send, Pin } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { isDragGesture } from '@/lib/ui/draggable-fab'
 import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
-import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { isArchivedFor, isParkedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
@@ -75,7 +75,7 @@ export interface EditableNote {
   snoozed_until: string | null
   archived_at: string | null
   updated_at: string
-  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null }> | null
+  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null; parked_at: string | null }> | null
   staff_note_replies?: NoteReplyRow[] | null
   accounts?: { company_name: string | null } | null
   contacts?: { full_name: string | null } | null
@@ -154,6 +154,7 @@ export function NoteEditor({
   const dirty = !isCreate && canEditBody && body.trim() !== baseline.body
   const replyDirty = !isCreate && replyDraft.trim().length > 0
   const archivedForMe = !isCreate && (meId ? isArchivedFor(note, meId) : note.archived_at != null)
+  const parkedForMe = !isCreate && meId != null && isParkedFor(note, meId)
   const origin = !isCreate && note.origin_url ? safeOriginPath(note.origin_url) : null
 
   /** Open the chat about this note — the client's conversation, or the teammate DM. */
@@ -581,10 +582,21 @@ export function NoteEditor({
                     className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
                     <RotateCcw className="h-3 w-3" />Put it back
                   </button>
-                : <button onClick={() => quick({ action: 'archive' })} disabled={busy}
+                : parkedForMe
+                ? <button onClick={() => quick({ action: 'unpark' })} disabled={busy}
                     className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
-                    <Check className="h-3 w-3" />Mark done
-                  </button>}
+                    <RotateCcw className="h-3 w-3" />Send back to screen
+                  </button>
+                : <>
+                    <button onClick={() => quick({ action: 'archive' })} disabled={busy}
+                      className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                      <Check className="h-3 w-3" />Mark done
+                    </button>
+                    <button onClick={() => quick({ action: 'park' })} disabled={busy}
+                      className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                      <Pin className="h-3 w-3" />Park
+                    </button>
+                  </>}
 
               <button onClick={discuss} disabled={discussing || busy}
                 className="flex items-center gap-1 rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-200 disabled:opacity-50">
