@@ -7,7 +7,7 @@ import {
   getRecurringInvoiceTemplateForEdit,
   updateRecurringInvoiceTemplate,
   type RecurringTemplateEditRow,
-} from '@/app/(dashboard)/payments/recurring-invoice-actions'
+} from '@/app/(dashboard)/shared/recurring-invoice-actions'
 import { RECURRING_FREQUENCIES, type RecurringInvoiceFrequency, type UpdateRecurringInvoiceInput } from '@/lib/schemas/recurring-invoice'
 
 const FREQUENCY_LABELS: Record<RecurringInvoiceFrequency, string> = {

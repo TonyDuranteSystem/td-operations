@@ -9,7 +9,7 @@ import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-
 import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
 import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
 import { RecurringTab } from './recurring-tab'
-import type { RecurringTemplateListRow } from '@/app/(dashboard)/payments/recurring-invoice-actions'
+import type { RecurringTemplateListRow } from '@/app/(dashboard)/shared/recurring-invoice-actions'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface ClientSummary {

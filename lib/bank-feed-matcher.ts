@@ -1150,7 +1150,14 @@ async function settleInvoiceFromFeed(
     .maybeSingle()
 
   if (pendingAct) {
-    await supabaseAdmin
+    // Re-check `status` on the write itself (TOCTOU close, 2026-09-07 full
+    // council review — same race as lib/operations/activate-service.ts's
+    // triggerActivationIfPending, which this block duplicates): a manual
+    // mark-paid racing this matcher, or two overlapping feed passes, could
+    // both pass the read above. Only the write that still finds
+    // 'awaiting_payment' claims the row; the loser stands down instead of
+    // running activation (and its side effects) a second time.
+    const { data: claimed } = await supabaseAdmin
       .from("pending_activations")
       .update({
         status: "payment_confirmed",
@@ -1158,17 +1165,23 @@ async function settleInvoiceFromFeed(
         updated_at: now,
       })
       .eq("id", pendingAct.id)
+      .eq("status", "awaiting_payment")
+      .select("id")
 
-    // Trigger activate-service directly (no HTTP hop). Awaited so failures
-    // are logged; the caller still gets `matched: true` because the match
-    // itself succeeded.
-    try {
-      const activateResult = await runActivation(pendingAct.id)
-      if (!activateResult.ok) {
-        console.error(`[settleInvoiceFromFeed] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+    if (!claimed || claimed.length === 0) {
+      console.warn(`[settleInvoiceFromFeed] Lost the race for pending ${pendingAct.id} — another process already claimed it.`)
+    } else {
+      // Trigger activate-service directly (no HTTP hop). Awaited so failures
+      // are logged; the caller still gets `matched: true` because the match
+      // itself succeeded.
+      try {
+        const activateResult = await runActivation(pendingAct.id)
+        if (!activateResult.ok) {
+          console.error(`[settleInvoiceFromFeed] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+        }
+      } catch (err) {
+        console.error(`[settleInvoiceFromFeed] runActivation threw for pending ${pendingAct.id}:`, err)
       }
-    } catch (err) {
-      console.error(`[settleInvoiceFromFeed] runActivation threw for pending ${pendingAct.id}:`, err)
     }
   } else {
     // Path B: bank-feed-created invoices have no portal_invoice_id.

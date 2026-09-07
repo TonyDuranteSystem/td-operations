@@ -27,8 +27,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Briefcase, FileText, X, Loader2 } from 'lucide-react'
-import { InvoiceDialog } from '@/components/payments/invoice-dialog'
-import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { InvoiceDialog } from '@/components/shared/invoice-dialog'
+import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 

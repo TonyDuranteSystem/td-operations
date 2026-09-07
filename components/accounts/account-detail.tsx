@@ -53,10 +53,10 @@ import { ActivityFeed } from './activity-feed'
 import { AddressPicker } from '@/components/shared/address-picker'
 import { RAPicker } from '@/components/shared/ra-picker'
 import { PaymentRowActions } from '@/components/accounts/payment-row-actions'
-import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
+import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 import { TaxRowActions } from '@/components/tax-returns/tax-row-actions'
-import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
-import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/shared/invoice-dialog'
+import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { differenceInDays, parseISO, format } from 'date-fns'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
@@ -3226,12 +3226,15 @@ function PaymentSection({
                     description: p.description ?? null,
                     amount: p.amount ?? null,
                     total: p.total ?? null,
+                    amount_paid: p.amount_paid ?? null,
                     amount_currency: p.amount_currency ?? null,
                     status: p.status ?? null,
                     invoice_status: p.invoice_status ?? null,
                     due_date: p.due_date ?? null,
                     notes: p.notes ?? null,
                     message: (p as unknown as { message?: string | null }).message ?? null,
+                    account_id: p.account_id ?? null,
+                    contact_id: p.contact_id ?? null,
                   }} />
                 </div>
               </div>

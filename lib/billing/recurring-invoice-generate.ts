@@ -2,7 +2,7 @@
  * The ONE function that turns a recurring_invoice_templates row into a real
  * invoice for a single cycle. Used by BOTH the daily cron
  * (app/api/cron/recurring-invoices/route.ts) and the "create recurring
- * invoice" action (app/(dashboard)/payments/recurring-invoice-actions.ts) for
+ * invoice" action (app/(dashboard)/shared/recurring-invoice-actions.ts) for
  * the schedule's very first cycle — deliberately never two separate code
  * paths that could drift apart over time (Council review, dev job 4a854806,
  * third pass: the original plan had cycle 1 created through the ordinary

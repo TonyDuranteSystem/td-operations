@@ -137,8 +137,14 @@ export function CreateFromEmailDialog({ type, conversation, onClose }: CreateFro
           toast.success('Service delivery created from email')
         } else if (type === 'invoice') {
           if (!selectedAccount) { toast.error('Select a client account'); return }
-          // Redirect to payments page with account pre-selected
-          window.location.href = `/payments?tab=invoices&accountId=${selectedAccount.id}&accountName=${encodeURIComponent(selectedAccount.company_name)}`
+          // Redirect to Finance, scoped to this client (dev job ef5da377, Step 5).
+          // The old target (/payments?tab=invoices&accountId=...) pointed at a
+          // retired page whose own dialog never actually read accountId/accountName
+          // anyway (verified — neither param was ever consumed), so this had been a
+          // silent no-op pre-fill for a long time. Finance's real, working param is
+          // ?tab=clients&client=<id>, and it actually opens straight to that
+          // client's own invoice list instead of a blank New Invoice dialog.
+          window.location.href = `/finance?tab=clients&client=${selectedAccount.id}`
           return
         }
         onClose()

@@ -135,6 +135,63 @@ const FORM_CONFIG: Record<string, {
   },
 }
 
+/**
+ * Checks whether a just-paid invoice is what a pending client activation was
+ * waiting on, and if so, runs the activation chain — the same thing that
+ * happens automatically when the bank-feed matcher recognizes an incoming
+ * wire. Call this from EVERY "mark invoice paid" path: miss one and a
+ * client whose wire didn't auto-match stays frozen at "waiting for payment"
+ * forever, with nothing else in the system ever re-checking it. Originally
+ * only wired into the old Payment Tracker page's mark-paid action; found
+ * missing from Finance's (and the Account page's, which calls the same
+ * function) 2026-09-07 — dev job ef5da377.
+ */
+export async function triggerActivationIfPending(paymentId: string): Promise<void> {
+  const { data: pendingAct } = await supabase
+    .from("pending_activations")
+    .select("id, status")
+    .eq("portal_invoice_id", paymentId)
+    .eq("status", "awaiting_payment")
+    .maybeSingle()
+
+  if (!pendingAct) return
+
+  // Re-check `status` on the write itself (TOCTOU close, 2026-09-07 full
+  // council review): two near-simultaneous triggers — a manual mark-paid
+  // racing the bank-feed matcher, or two staff clicking at once — could
+  // both pass the read above. Only the write that actually still finds
+  // 'awaiting_payment' claims the row; the loser sees zero rows affected
+  // and stands down instead of running activation (and its side effects —
+  // a second referral payout among them) a second time.
+  const { data: claimed } = await supabase
+    .from("pending_activations")
+    .update({
+      status: "payment_confirmed",
+      payment_confirmed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", pendingAct.id)
+    .eq("status", "awaiting_payment")
+    .select("id")
+
+  if (!claimed || claimed.length === 0) {
+    console.warn(`[triggerActivationIfPending] Lost the race for pending ${pendingAct.id} — another process already claimed it.`)
+    return
+  }
+
+  // Trigger activate-service directly (no HTTP hop). Awaited so failures
+  // are logged; a failure here surfaces via server logs, not to the caller —
+  // the invoice is correctly Paid either way, this is best-effort follow-through.
+  try {
+    const activateResult = await runActivation(pendingAct.id)
+    if (!activateResult.ok) {
+      console.error(`[triggerActivationIfPending] runActivation returned error for pending ${pendingAct.id}: ${activateResult.error}`)
+    }
+  } catch (err) {
+    console.error(`[triggerActivationIfPending] runActivation threw for pending ${pendingAct.id}:`, err)
+  }
+}
+
 export async function runActivation(pending_activation_id: string): Promise<ActivationResult> {
   // Get pending activation
   const { data: activation, error: actErr } = await supabase

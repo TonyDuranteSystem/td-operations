@@ -44,6 +44,8 @@ import {
   deletePaymentPreview,
   updateInvoice,
 } from '@/app/(dashboard)/finance/actions'
+import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
+import { PaidInvoiceCorrectionPrompt, type CorrectionPath } from '@/components/shared/paid-invoice-correction-prompt'
 
 export interface PaymentRowLike {
   id: string
@@ -51,6 +53,7 @@ export interface PaymentRowLike {
   description: string | null
   amount: number | null
   total?: number | string | null
+  amount_paid?: number | string | null
   amount_currency: string | null
   status: string | null
   invoice_status?: string | null
@@ -154,6 +157,13 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const statusValue = (payment.invoice_status ?? payment.status ?? '').toString()
   const isPaid = statusValue === 'Paid'
   const isCancelled = statusValue === 'Cancelled' || statusValue === 'Waived' || statusValue === 'Voided'
+  // Fixed 2026-09-07 (full council review, blocker #1): a genuinely Partial
+  // row (real money already on file) isn't "Paid" by this check, so it was
+  // still eligible for the blunt Mark-as-Paid action below — which
+  // overwrites whatever's recorded with the full total, fabricating the
+  // difference. Hide the action wherever there's already real money on it;
+  // Edit is the safe path to reconcile a Partial invoice's balance.
+  const hasRealPartialPayment = Number(payment.amount_paid ?? 0) > 0
   // Only a true Cancelled invoice can be brought back. Waived/Voided are
   // different lifecycle ends and have no reactivate path.
   const canReactivate = statusValue === 'Cancelled'
@@ -248,7 +258,7 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
           className="z-[100] w-52 bg-white border rounded-lg shadow-lg overflow-hidden"
           role="menu"
         >
-          {!isPaid && !isCancelled && (
+          {!isPaid && !isCancelled && !hasRealPartialPayment && (
             <button
               type="button"
               onClick={handleMarkPaid}
@@ -381,23 +391,29 @@ function EditPaymentDialog({
   const [description, setDescription] = useState(payment.description ?? '')
   const [notes, setNotes] = useState(payment.notes ?? '')
   const [message, setMessage] = useState(payment.message ?? '')
+  // Set only when Save hits an already-Paid invoice with a changed amount —
+  // holds the non-total edits so they aren't lost while the correction
+  // prompt is up (dev job ef5da377).
+  const [pendingNonTotalUpdates, setPendingNonTotalUpdates] = useState<Record<string, unknown> | null>(null)
 
-  const handleSave = () => {
+  // Fixed 2026-09-07 (full council review, blocker #3): this used to also
+  // trigger on the coarse `status` field, which disagrees with
+  // `invoice_status` on real rows today — a credit note (status is ALWAYS
+  // 'Paid' at creation) and 46 real legacy/bare payments in production both
+  // read status='Paid' with a different invoice_status. Those rows showed
+  // this correction prompt and promised an outcome (reopen as Partial, etc.)
+  // that the server — which gates on invoice_status alone — silently never
+  // delivered, whichever option staff picked. invoice_status is the single
+  // source of truth for "is this actually a settled invoice", matching the
+  // server's own check two lines below in updateInvoice.
+  const isPaid = payment.invoice_status === 'Paid'
+
+  const applyUpdate = (
+    updates: { total?: number; due_date?: string; notes?: string; message?: string; description?: string },
+    correctionPath?: 'partial_payment' | 'typo'
+  ) => {
     startTransition(async () => {
-      const updates: { total?: number; due_date?: string; notes?: string; message?: string; description?: string } = {}
-      const newTotal = parseFloat(total)
-      if (!isNaN(newTotal) && newTotal !== Number(payment.total ?? payment.amount ?? 0)) updates.total = newTotal
-      if (dueDate !== (payment.due_date ?? '')) updates.due_date = dueDate
-      if (description !== (payment.description ?? '')) updates.description = description
-      if (notes !== (payment.notes ?? '')) updates.notes = notes
-      if (message !== (payment.message ?? '')) updates.message = message
-
-      if (Object.keys(updates).length === 0) {
-        onClose()
-        return
-      }
-
-      const result = await updateInvoice(payment.id, updates)
+      const result = await updateInvoice(payment.id, updates, correctionPath)
       if (result.success) {
         toast.success('Saved')
         onSaved()
@@ -406,6 +422,97 @@ function EditPaymentDialog({
         toast.error(result.error ?? 'Failed to save')
       }
     })
+  }
+
+  const handleSave = () => {
+    const updates: { total?: number; due_date?: string; notes?: string; message?: string; description?: string } = {}
+    const newTotal = parseFloat(total)
+    const totalChanged = !isNaN(newTotal) && newTotal !== Number(payment.total ?? payment.amount ?? 0)
+    if (totalChanged) updates.total = newTotal
+    if (dueDate !== (payment.due_date ?? '')) updates.due_date = dueDate
+    if (description !== (payment.description ?? '')) updates.description = description
+    if (notes !== (payment.notes ?? '')) updates.notes = notes
+    if (message !== (payment.message ?? '')) updates.message = message
+
+    if (Object.keys(updates).length === 0) {
+      onClose()
+      return
+    }
+
+    if (totalChanged && isPaid) {
+      const { total: _t, ...rest } = updates
+      setPendingNonTotalUpdates(rest)
+      return
+    }
+
+    applyUpdate(updates)
+  }
+
+  const handleCorrectionChoice = (path: CorrectionPath) => {
+    const newTotal = parseFloat(total)
+    const oldTotal = Number(payment.total ?? payment.amount ?? 0)
+    const nonTotal = pendingNonTotalUpdates ?? {}
+
+    if (path === 'new_charge') {
+      if (newTotal - oldTotal <= 0) {
+        toast.error("A new charge needs a higher amount than before — that's what becomes the new invoice.")
+        return
+      }
+      // Checked before anything is saved (fixed 2026-09-07, second bug-hunter
+      // pass): this used to run after the non-total fields were already
+      // saved, so a contact-only invoice with no linked account silently
+      // half-applied the edit while showing only an error toast.
+      if (!payment.account_id) {
+        toast.error('This invoice has no linked account — create the new invoice manually instead.')
+        return
+      }
+      startTransition(async () => {
+        if (Object.keys(nonTotal).length > 0) {
+          const r = await updateInvoice(payment.id, nonTotal)
+          if (!r.success) { toast.error(r.error ?? 'Failed to save the other changes'); return }
+        }
+        const difference = newTotal - oldTotal
+        const today = new Date().toISOString().split('T')[0]
+        const label = `Additional charge — ${payment.invoice_number ?? ''}`.trim()
+        const created = await createInvoice({
+          account_id: payment.account_id,
+          description: label,
+          amount_currency: (payment.amount_currency as 'USD' | 'EUR') || 'USD',
+          issue_date: today,
+          discount: 0,
+          items: [{ description: label, quantity: 1, unit_price: difference, amount: difference, sort_order: 0 }],
+        })
+        if (created.success) {
+          toast.success(`${payment.invoice_number ?? 'Invoice'} left unchanged — created ${created.data?.invoice_number} (Draft) for the difference`)
+          onSaved()
+          onClose()
+        } else {
+          toast.error(created.error ?? 'Failed to create the new invoice')
+        }
+      })
+      return
+    }
+
+    applyUpdate({ ...nonTotal, total: newTotal }, path)
+  }
+
+  if (pendingNonTotalUpdates !== null) {
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+          <PaidInvoiceCorrectionPrompt
+            invoiceLabel={payment.invoice_number ?? 'This invoice'}
+            currency={payment.amount_currency || 'USD'}
+            oldTotal={Number(payment.total ?? payment.amount ?? 0)}
+            newTotal={parseFloat(total) || 0}
+            currentAmountPaid={Number(payment.amount_paid ?? 0)}
+            isPending={isPending}
+            onCancel={() => setPendingNonTotalUpdates(null)}
+            onChoose={handleCorrectionChoice}
+          />
+        </div>
+      </div>
+    )
   }
 
   return (

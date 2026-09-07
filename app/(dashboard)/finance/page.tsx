@@ -7,7 +7,7 @@ import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { OpenInvoice } from './bank-feed-tab'
 import type { InvoiceRecord } from './all-invoices-tab'
-import { listRecurringInvoiceTemplates } from '@/app/(dashboard)/payments/recurring-invoice-actions'
+import { listRecurringInvoiceTemplates } from '@/app/(dashboard)/shared/recurring-invoice-actions'
 
 export const dynamic = 'force-dynamic'
 

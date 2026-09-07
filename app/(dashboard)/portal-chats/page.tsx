@@ -31,7 +31,7 @@ import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-te
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { filterForSurfaceAndContext, validateMetadata, type ChatContext, type QuickAction } from '@/lib/chat/quick-actions'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
-import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { HelpDot } from '@/components/help/help-dot'
 import {
   filterForSurfaceAndContext as filterTopicsForSurfaceAndContext,

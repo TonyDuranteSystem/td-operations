@@ -9,6 +9,10 @@ import { fastForwardToNextOccurrence, type RecurringFrequency } from "@/lib/bill
 import { getOfficeDateString } from "@/lib/portal/office-hours"
 
 /**
+ * Moved 2026-09-06 from app/(dashboard)/payments/recurring-invoice-actions.ts
+ * (dev job ef5da377, Step 1 of retiring the old Payment Tracker page) — this
+ * was always Finance's own feature, never used by the old page.
+ *
  * Recurring invoices are DELIBERATELY ISOLATED from `createInvoice` (the
  * ordinary one-time/tranche/installment action) — Antonio (2026-08-17): "I
  * want a fucking option to create a recurring invoice that [has] nothing to

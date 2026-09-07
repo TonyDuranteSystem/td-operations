@@ -112,3 +112,48 @@ export async function syncTDInvoiceMirror(
   // which is exactly the signal the admin button and CLI sweep want to see.
   return { changed: mirrorDiffers(before as never, after), before: before as MirrorSnapshot, after }
 }
+
+/**
+ * Deletes a payment's client_expenses mirror row and everything that
+ * references it (client_expense_items, client_invoice_documents) — BEFORE
+ * the payments row itself can be deleted. Neither child FK cascades, so
+ * skipping a step, or leaving its result unchecked, leaves the payments row
+ * permanently un-deletable (blocked by the still-present mirror) with its
+ * own line items already gone. No-op if the payment was never invoiced (no
+ * mirror row exists).
+ *
+ * Shared by deleteInvoice (the old Payment Tracker page) and deletePayment
+ * (Finance / the Account page) — previously duplicated, inconsistently and
+ * with unchecked errors in both places, until dev job ef5da377 found the
+ * gap live (any invoiced payment with recorded line items made Finance's
+ * delete fail every time) and consolidated it here.
+ */
+export async function deleteClientExpenseMirror(paymentId: string): Promise<void> {
+  const db = supabaseAdmin
+  const { data: mirrorRows, error: selectErr } = await db
+    .from('client_expenses')
+    .select('id')
+    .eq('td_payment_id', paymentId)
+  if (selectErr) throw new Error(`Looking up the client-portal mirror failed: ${selectErr.message}`)
+
+  const mirrorIds = (mirrorRows ?? []).map((r) => r.id)
+  if (mirrorIds.length === 0) return
+
+  const { error: itemsErr } = await db
+    .from('client_expense_items')
+    .delete()
+    .in('expense_id', mirrorIds)
+  if (itemsErr) throw new Error(`Deleting the mirror's line items failed: ${itemsErr.message}`)
+
+  const { error: docsErr } = await db
+    .from('client_invoice_documents')
+    .delete()
+    .in('expense_id', mirrorIds)
+  if (docsErr) throw new Error(`Deleting the mirror's attached documents failed: ${docsErr.message}`)
+
+  const { error: mirrorErr } = await db
+    .from('client_expenses')
+    .delete()
+    .eq('td_payment_id', paymentId)
+  if (mirrorErr) throw new Error(`Deleting the client-portal mirror failed: ${mirrorErr.message}`)
+}

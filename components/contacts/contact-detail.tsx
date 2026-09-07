@@ -12,8 +12,8 @@ import {
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
   Activity, Plus, GitBranch, Ban, Languages,
 } from 'lucide-react'
-import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/payments/invoice-dialog'
-import { createInvoice } from '@/app/(dashboard)/payments/invoice-actions'
+import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/shared/invoice-dialog'
+import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'

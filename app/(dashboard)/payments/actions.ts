@@ -8,16 +8,30 @@ import { createPaymentSchema, updatePaymentSchema, type CreatePaymentInput, type
 export async function markPaymentPaid(paymentId: string, updatedAt?: string): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+
+    // A bare payment placeholder never has `total` set (only `amount` —
+    // see createPaymentSchema); reading `total` here would write amount_paid
+    // as null. `amount` is the one field this row type always has.
+    const { data: payment, error: fetchErr } = await supabase
+      .from('payments')
+      .select('amount')
+      .eq('id', paymentId)
+      .single()
+    if (fetchErr) throw new Error(fetchErr.message)
+
     const today = new Date().toISOString().split('T')[0]
     const updates = {
       status: 'Paid',
       paid_date: today,
+      amount_paid: payment.amount,
+      amount_due: 0,
     }
 
     if (updatedAt) {
       const result = await updateWithLock('payments', paymentId, updates, updatedAt)
       if (!result.success) throw new Error(result.error)
     } else {
+      // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
       const { error } = await supabase
         .from('payments')
         .update({ ...updates, updated_at: new Date().toISOString() })
@@ -44,6 +58,7 @@ export async function updatePaymentStatus(paymentId: string, status: string, upd
       const result = await updateWithLock('payments', paymentId, updates, updatedAt)
       if (!result.success) throw new Error(result.error)
     } else {
+      // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
       const { error } = await supabase
         .from('payments')
         .update({ ...updates, updated_at: new Date().toISOString() })
@@ -65,6 +80,7 @@ export async function createPayment(input: CreatePaymentInput): Promise<ActionRe
   return safeAction(async () => {
     const supabase = createClient()
     const now = new Date().toISOString()
+    // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
     const { data, error } = await supabase
       .from('payments')
       .insert({ ...parsed.data, created_at: now, updated_at: now })

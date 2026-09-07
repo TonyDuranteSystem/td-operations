@@ -9,8 +9,8 @@ import {
   Ban, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { InvoiceDialog } from '@/components/payments/invoice-dialog'
-import { InvoiceNoteDot } from '@/components/payments/invoice-note-dot'
+import { InvoiceDialog } from '@/components/shared/invoice-dialog'
+import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
@@ -193,7 +193,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
         return
       }
       if (action === 'regenerate') {
-        const { regenerateInvoice } = await import('@/app/(dashboard)/payments/invoice-actions')
+        const { regenerateInvoice } = await import('@/app/(dashboard)/shared/invoice-actions')
         const result = await regenerateInvoice(invoiceId)
         if (!result.success) throw new Error(result.error)
         const applied = (result.data?.applied_credit as number) ?? 0

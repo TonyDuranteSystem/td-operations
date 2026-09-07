@@ -26,7 +26,7 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { markPaymentPaid } from '@/app/(dashboard)/payments/actions'
 import { EditPaymentDialog } from '@/components/payments/edit-payment-dialog'
 import { CreatePaymentDialog } from '@/components/payments/create-payment-dialog'
-import { InvoiceDialog } from '@/components/payments/invoice-dialog'
+import { InvoiceDialog } from '@/components/shared/invoice-dialog'
 import { InvoiceDetailDialog } from '@/components/payments/invoice-detail-dialog'
 
 interface PaymentItem {

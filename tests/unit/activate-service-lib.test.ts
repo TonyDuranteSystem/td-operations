@@ -38,7 +38,7 @@ vi.mock('@/lib/portal/tier-config', () => ({
 }))
 vi.mock('@/lib/gmail', () => ({ gmailPost: vi.fn() }))
 
-import { runActivation } from '@/lib/operations/activate-service'
+import { runActivation, triggerActivationIfPending } from '@/lib/operations/activate-service'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { autoCreatePortalUser } from '@/lib/portal/auto-create'
 
@@ -258,5 +258,119 @@ describe('runActivation', () => {
       expect(result.ok).toBe(true)
       expect(dataFormStateFrom(updateArgs)).toBe('NM')
     })
+  })
+})
+
+// Regression coverage for the bug found live 2026-09-07 (dev job ef5da377):
+// the newer "mark invoice paid" screens (Finance's own grid, and the Account
+// page's row action, which calls the same function) never checked whether
+// the invoice was what a client's setup was waiting on — only the old
+// Payment Tracker page's version did. A client whose wire didn't auto-match
+// and got marked paid by hand through either of the newer screens stayed
+// frozen at "waiting for payment" forever, with nothing re-checking it.
+// triggerActivationIfPending() is the shared fix, now called from all three
+// entry points (the old page's own markInvoicePaid, and Finance's, which the
+// Account page's button also uses).
+describe('triggerActivationIfPending', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('does nothing when the invoice is not what any pending activation is waiting on', async () => {
+    const chain = makeChain(null) // maybeSingle() defaults to { data: null }
+    const updateSpy = vi.fn(() => chain)
+    chain.update = updateSpy
+
+    vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+      if (table === 'pending_activations') return chain as ReturnType<typeof supabaseAdmin.from>
+      throw new Error(`unexpected table in this test: ${table}`)
+    })
+
+    await triggerActivationIfPending('payment-with-no-pending-activation')
+
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('marks the pending activation payment_confirmed and runs the activation chain when the invoice matches', async () => {
+    const pendingRow = { id: 'pa-id', status: 'awaiting_payment' }
+    const updateArgs: Array<Record<string, unknown>> = []
+
+    const paChain = makeChain(pendingRow)
+    // This test's job is only to prove the WIRING (found → claimed →
+    // runActivation called with the right id), not to re-verify
+    // runActivation's own huge internal behavior (covered by the other
+    // tests in this file). Making runActivation's own re-fetch see
+    // status: 'activated' lets it short-circuit immediately and harmlessly.
+    paChain.maybeSingle = vi.fn().mockResolvedValue({ data: pendingRow, error: null })
+    paChain.single = vi.fn().mockResolvedValue({ data: { ...pendingRow, status: 'activated' }, error: null })
+    // The claiming write (.update().eq().eq().select()) resolves through its
+    // OWN chain — a real Supabase update+select returns the matched rows as
+    // an ARRAY, which is what the TOCTOU re-check below actually inspects.
+    const claimResultChain = makeChain([{ id: 'pa-id' }])
+    paChain.update = vi.fn((args: Record<string, unknown>) => {
+      updateArgs.push(args)
+      return claimResultChain
+    })
+
+    vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+      if (table === 'pending_activations') return paChain as ReturnType<typeof supabaseAdmin.from>
+      return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+    })
+
+    await triggerActivationIfPending('the-just-paid-invoice-id')
+
+    expect(updateArgs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'payment_confirmed' }),
+    ]))
+  })
+
+  // Regression test for the major finding from live 2026-09-07 (full council
+  // review): the claiming write only checked `.eq('id', ...)`, with no
+  // re-check that the row was still 'awaiting_payment' at write time. Two
+  // near-simultaneous triggers (a manual mark-paid racing the bank-feed
+  // matcher, or two staff clicking at once) could both pass the read and
+  // both run activation — a duplicate referral payout among the risks.
+  it('stands down without running activation when another process already claimed the row (lost the race)', async () => {
+    const pendingRow = { id: 'pa-id', status: 'awaiting_payment' }
+    const paChain = makeChain(pendingRow)
+    paChain.maybeSingle = vi.fn().mockResolvedValue({ data: pendingRow, error: null })
+    const singleSpy = vi.fn()
+    paChain.single = singleSpy
+    // Zero rows matched the re-check — someone else's write already flipped
+    // status away from 'awaiting_payment' first.
+    const claimResultChain = makeChain([])
+    paChain.update = vi.fn(() => claimResultChain)
+
+    vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+      if (table === 'pending_activations') return paChain as ReturnType<typeof supabaseAdmin.from>
+      return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+    })
+
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await triggerActivationIfPending('the-just-paid-invoice-id')
+
+    // runActivation's own re-fetch (.single()) is never reached.
+    expect(singleSpy).not.toHaveBeenCalled()
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Lost the race'))
+    consoleWarnSpy.mockRestore()
+  })
+
+  it('logs rather than throws when the activation chain itself errors, so the invoice stays correctly marked Paid either way', async () => {
+    const pendingRow = { id: 'pa-id', status: 'awaiting_payment' }
+    const paChain = makeChain(pendingRow)
+    paChain.maybeSingle = vi.fn().mockResolvedValue({ data: pendingRow, error: null })
+    // runActivation's own re-fetch fails outright — exercises the catch path,
+    // not just the ok:false path.
+    paChain.single = vi.fn().mockRejectedValue(new Error('db unreachable'))
+    const claimResultChain = makeChain([{ id: 'pa-id' }])
+    paChain.update = vi.fn(() => claimResultChain)
+
+    vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+      if (table === 'pending_activations') return paChain as ReturnType<typeof supabaseAdmin.from>
+      return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+    })
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(triggerActivationIfPending('the-just-paid-invoice-id')).resolves.toBeUndefined()
+    expect(consoleErrorSpy).toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
   })
 })

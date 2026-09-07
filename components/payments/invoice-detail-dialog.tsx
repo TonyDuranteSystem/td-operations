@@ -12,8 +12,8 @@ import {
   markInvoicePaid,
   voidInvoice,
   getInvoiceWithItems,
-  regenerateInvoice,
 } from '@/app/(dashboard)/payments/invoice-actions'
+import { regenerateInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import type { InvoiceItem } from '@/lib/schemas/invoice'
 
 interface InvoiceDetailDialogProps {

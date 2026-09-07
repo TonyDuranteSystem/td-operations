@@ -140,24 +140,51 @@ export async function markInvoicePaid(
 
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, total, account_id')
+      .select('id, invoice_number, total, amount, amount_paid, account_id')
       .eq('id', paymentId)
       .single()
     if (!payment) throw new Error('Payment not found')
 
+    // Fixed 2026-09-06 (dev job ef5da377): this is also the "Mark as Paid"
+    // action reachable from an Account page's older, un-invoiced charges
+    // (rows with no formal invoice yet) — those never have `total` set, only
+    // `amount`. Reading `total` alone silently recorded a null/zero paid
+    // amount on them. A real invoice always has `total` (via createTDInvoice),
+    // so this only changes behavior for the un-invoiced case.
+    const paidAmount = payment.total ?? payment.amount
+
+    // Fixed 2026-09-07 (full council review, blocker #1): a genuinely
+    // Partial invoice (real money already recorded) reaches this same
+    // button. Writing `paidAmount` unconditionally overwrote that real,
+    // already-recorded amount with the full total — fabricating the
+    // difference as paid. The old Payment Tracker page never had this hole
+    // because its own eligibility gate excluded Partial rows outright; this
+    // one didn't carry that restriction forward. Money that's already on
+    // file is exactly what must never be silently overwritten.
+    const alreadyPaid = Number(payment.amount_paid ?? 0)
+    if (alreadyPaid > 0) {
+      throw new Error(
+        `This invoice already shows ${alreadyPaid} paid — marking it Paid here would overwrite that with the full amount instead of adding to it. Use Edit to reconcile the real balance, or apply the remaining payment through the normal payment-matching flow.`
+      )
+    }
+
     const today = new Date().toISOString().split('T')[0]
 
-    // Update payment record
+    // Update payment record. Excludes rows already Paid (found live 2026-09-07,
+    // second bug-hunter pass): unlike the old page's version, this had no
+    // status precondition at all, so a stale-rendered page — the bank-feed
+    // matcher settled it after the page loaded, before a refresh — could
+    // re-fire this and clobber the real historical paid_date with today.
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { error: markPaidErr } = await supabaseAdmin.from('payments').update({
       status: 'Paid',
       invoice_status: 'Paid',
-      amount_paid: payment.total,
+      amount_paid: paidAmount,
       amount_due: 0,
       paid_date: today,
       payment_method: paymentMethod || null,
       updated_at: new Date().toISOString(),
-    }).eq('id', paymentId)
+    }).eq('id', paymentId).neq('status', 'Paid')
     if (markPaidErr) throw new Error(`Failed to mark payment as paid: ${markPaidErr.message}`)
 
     // Sync to client_expenses (portal mirror). BOTH calls, status first: syncTDInvoiceStatus
@@ -166,7 +193,7 @@ export async function markInvoicePaid(
     // exactly what happened to the Aces invoice on 2026-07-22. syncTDInvoiceMirror is the
     // authoritative projection of the balances.
     const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
-    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(payment.total))
+    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(paidAmount))
     const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
     await syncTDInvoiceMirror(paymentId)
 
@@ -175,6 +202,15 @@ export async function markInvoicePaid(
       const { syncPaymentToQB } = await import('@/lib/qb-sync')
       syncPaymentToQB(paymentId, { paymentDate: today }).catch(() => {})
     } catch { /* QB sync not critical */ }
+
+    // If this invoice is what a client's setup was waiting on, continue it —
+    // the old Payment Tracker page's Mark Paid already did this; this button
+    // (used by both Finance's own grid and the Account page's row actions)
+    // did not, so a client whose payment got matched by hand instead of by
+    // the automatic bank-feed matcher stayed frozen with nothing re-checking
+    // it. Fixed 2026-09-07 (dev job ef5da377).
+    const { triggerActivationIfPending } = await import('@/lib/operations/activate-service')
+    await triggerActivationIfPending(paymentId)
 
     revalidatePath('/finance')
     revalidatePath('/payments')
@@ -294,13 +330,21 @@ export async function deletePayment(paymentId: string): Promise<ActionResult> {
     // pointing at an invoice that no longer exists as this payment.
     if (unlinkErr) throw new Error(`Failed to unlink bank feeds: ${unlinkErr.message}`)
 
-    // Remove client_expenses mirror if invoiced
-    if (payment.invoice_number) {
-      await supabaseAdmin
-        .from('client_expenses')
-        .delete()
-        .eq('td_payment_id', paymentId)
-    }
+    // Remove the client-portal mirror (and its own children) first — neither
+    // FK cascades, so this must run before the payments delete below and
+    // must not swallow a failure. Fixed 2026-09-06 (dev job ef5da377): this
+    // used to delete client_expenses directly without clearing its own
+    // client_expense_items first, so it failed every time on any invoiced
+    // payment that had recorded line items — confirmed live on sandbox.
+    // Shared with the old page's deleteInvoice so the two can't drift again.
+    const { deleteClientExpenseMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await deleteClientExpenseMirror(paymentId)
+
+    // Delete the invoice's own line items — this FK doesn't cascade either
+    // (confirmed live: fixing the mirror-cleanup above unmasked this as the
+    // NEXT failure, same session, same job). Missing entirely until now.
+    const { error: itemsErr } = await supabaseAdmin.from('payment_items').delete().eq('payment_id', paymentId)
+    if (itemsErr) throw new Error(`Deleting the invoice's line items failed: ${itemsErr.message}`)
 
     // Delete the payment row itself
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
@@ -888,7 +932,8 @@ export async function sendBulkReminders(
 
 export async function updateInvoice(
   paymentId: string,
-  updates: { description?: string; due_date?: string; notes?: string; message?: string; total?: number }
+  updates: { description?: string; due_date?: string; notes?: string; message?: string; total?: number },
+  correctionPath?: 'partial_payment' | 'typo'
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
@@ -901,10 +946,139 @@ export async function updateInvoice(
     if (updates.notes !== undefined) payUpdates.notes = updates.notes || null
     if (updates.message !== undefined) payUpdates.message = updates.message
     if (updates.total !== undefined) {
+      // Fixed 2026-09-06 (dev job ef5da377, Step 4): this used to set amount_due
+      // to the new total outright, ignoring whatever was already paid — so
+      // editing the amount on a Partial invoice erased the record of the
+      // partial payment, and editing it on an already-Paid invoice (this
+      // button has no status gate) reopened a paid invoice as owing money
+      // again. amount_due is now derived from what's actually still owed.
+      const { data: current } = await supabaseAdmin
+        .from('payments')
+        .select('amount_paid, status, invoice_status, total, credit_remaining')
+        .eq('id', paymentId)
+        .single()
+      if (!current) throw new Error('Invoice not found')
+
+      const amountPaid = Number(current.amount_paid ?? 0)
+      // invoice_status only, not the coarse status enum too — a credit note's
+      // `status` is ALSO always 'Paid' (createCreditNote always settles it),
+      // but its `invoice_status` is 'Credit', not 'Paid'. Checking the coarse
+      // enum here made editing a credit note's amount throw unconditionally
+      // (the client-side gate only checks invoice_status, so it never showed
+      // the correction prompt that would have supplied a path) — a real
+      // regression found live 2026-09-07, second bug-hunter pass. Every real
+      // invoice this gate is meant for sets both fields together (see
+      // markInvoicePaid), so this loses no legitimate case.
+      const wasFullyPaid = current.invoice_status === 'Paid'
+
+      // Fixed 2026-09-07 (dev job ef5da377, Antonio-approved 3-way prompt):
+      // editing the total on an already-Paid invoice is ambiguous — a typo
+      // fix, a real partial-payment correction, and a brand-new charge all
+      // LOOK like "the total changed" but need different treatment. The
+      // caller (the correction prompt on both Finance's and the Account
+      // page's Edit dialogs) must say which one this is; every non-Paid
+      // invoice (Draft/Sent/Partial/Overdue) is unaffected and keeps the
+      // plain behavior below.
+      if (wasFullyPaid && !correctionPath) {
+        throw new Error(
+          'This invoice is already marked Paid. Choose whether this is a partial-payment correction or a typo fix before saving.'
+        )
+      }
+
       payUpdates.total = updates.total
       payUpdates.amount = updates.total
       payUpdates.subtotal = updates.total
-      payUpdates.amount_due = updates.total
+
+      if (wasFullyPaid && correctionPath === 'partial_payment') {
+        // The client didn't actually pay the new (higher) total in full.
+        // Reopen the invoice to reflect what's really still owed — same
+        // enum split the codebase already uses elsewhere (payments.status
+        // has no "Partial" member; that lives only in invoice_status).
+        const newAmountDue = Math.max(updates.total - amountPaid, 0)
+        // Fixed 2026-09-07 (full council review): a corrected total that's
+        // still fully covered by what's already paid isn't a partial
+        // payment — there's nothing left owing to "reopen". Silently
+        // leaving amount_paid untouched here produced amount_paid > total
+        // with no record of why. "Just a typo" is the right option for a
+        // decrease.
+        if (newAmountDue === 0) {
+          throw new Error(
+            `The corrected amount (${updates.total}) doesn't exceed what's already been paid (${amountPaid}) — there's nothing to reopen as partial. Use "Just fixing a typo" instead if the number itself was wrong.`
+          )
+        }
+        payUpdates.amount_due = newAmountDue
+        payUpdates.status = 'Pending'
+        payUpdates.invoice_status = 'Partial'
+        payUpdates.paid_date = null
+      } else if (wasFullyPaid && correctionPath === 'typo') {
+        // The whole figure was mistyped, not just the total — "the payment
+        // itself doesn't change" means the invoice stays fully settled at
+        // the CORRECTED number, not that the old (also-wrong) amount_paid
+        // survives untouched. Found live 2026-09-07: leaving amount_paid at
+        // its old value here reproduced the exact Paid-with-a-balance-due
+        // bug this whole feature exists to prevent, just from the opposite
+        // direction (the fix, not the original bug).
+        //
+        // Fixed 2026-09-07 (full council review): this trusted the
+        // staff-entered number blindly, with no check against what a real
+        // bank transaction actually confirmed — so it could silently
+        // manufacture or erase real, verified cash. When this invoice has
+        // confirmed bank money on file, the correction must match it.
+        const { listConfirmedApplications } = await import('@/lib/finance/apply-payment')
+        const confirmed = await listConfirmedApplications(paymentId)
+        const confirmedSum = Math.round(confirmed.reduce((s, a) => s + Number(a.amount ?? 0), 0) * 100) / 100
+        if (confirmedSum > 0 && Math.abs(updates.total - confirmedSum) > 0.01) {
+          throw new Error(
+            `This invoice has ${confirmedSum} in confirmed bank payments on file, which doesn't match the corrected total (${updates.total}). "Just a typo" isn't safe here — it would misrecord a real, verified payment. This needs a manual review instead.`
+          )
+        }
+        payUpdates.amount_paid = updates.total
+        payUpdates.amount_due = 0
+      } else if (current.invoice_status === 'Credit') {
+        // A credit note's real remaining balance lives in `credit_remaining`
+        // — a SEPARATE field from `total`, consumed over time as it's
+        // applied to later invoices (lib/operations/credit-netting.ts).
+        // Correcting the note's total must preserve however much has
+        // ALREADY been consumed, not leave the old figure stale — found
+        // live 2026-09-07 (full council review): editing a credit note
+        // never touched credit_remaining at all, so a corrected note could
+        // still hand out the old, wrong amount on a future invoice.
+        const oldTotalAbs = Math.abs(Number(current.total ?? 0))
+        const consumed = Math.max(oldTotalAbs - Number(current.credit_remaining ?? 0), 0)
+        const newTotalAbs = Math.abs(updates.total)
+        payUpdates.amount_paid = updates.total
+        payUpdates.credit_remaining = Math.max(newTotalAbs - consumed, 0)
+        payUpdates.amount_due = 0
+      } else {
+        // An ordinary edit: recompute the balance from what's really been
+        // paid so far.
+        const newAmountDue = Math.max(updates.total - amountPaid, 0)
+        payUpdates.amount_due = newAmountDue
+        // Fixed 2026-09-07 (full council review): status was never touched
+        // here regardless of the resulting balance, which left two honest
+        // gaps this closes: (a) an edit that brings the balance to exactly
+        // 0 stayed in its old non-Paid status forever, so the automatic
+        // overdue-reminder pass (lib/billing/dunning.ts) could still chase
+        // a client who owes nothing; (b) a row whose coarse `status` is
+        // already 'Paid' (a bare/legacy pre-invoice payment can carry this
+        // even when invoice_status disagrees or is null) but whose edit
+        // creates a balance stayed labeled Paid with money owing — the same
+        // Paid-with-a-balance-due bug this whole feature exists to
+        // prevent, just reachable from this side. Mirrors the promote/
+        // reopen pattern already used by applyAvailableCreditToInvoice and
+        // reconcileAccountCredits (lib/operations/credit-netting.ts).
+        if (newAmountDue === 0 && current.status !== 'Paid') {
+          payUpdates.status = 'Paid'
+          if (current.invoice_status != null) payUpdates.invoice_status = 'Paid'
+          payUpdates.paid_date = now.split('T')[0]
+        } else if (newAmountDue > 0 && current.status === 'Paid') {
+          payUpdates.status = 'Pending'
+          if (current.invoice_status === 'Paid') {
+            payUpdates.invoice_status = amountPaid > 0 ? 'Partial' : 'Sent'
+          }
+          payUpdates.paid_date = null
+        }
+      }
     }
 
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c

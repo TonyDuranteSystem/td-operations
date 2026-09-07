@@ -3,8 +3,8 @@
 import { useState, useTransition } from 'react'
 import { Repeat, Loader2, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { toggleRecurringInvoice, deleteRecurringInvoiceTemplate, type RecurringTemplateListRow } from '@/app/(dashboard)/payments/recurring-invoice-actions'
-import { RecurringEditDialog } from '@/components/payments/recurring-edit-dialog'
+import { toggleRecurringInvoice, deleteRecurringInvoiceTemplate, type RecurringTemplateListRow } from '@/app/(dashboard)/shared/recurring-invoice-actions'
+import { RecurringEditDialog } from '@/components/shared/recurring-edit-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const FREQUENCY_LABELS: Record<string, string> = {

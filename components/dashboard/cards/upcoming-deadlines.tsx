@@ -53,7 +53,7 @@ export async function UpcomingDeadlinesCard() {
             ? `/accounts/${d.account_id}`
             : d.deadline_type?.toLowerCase().includes('tax')
               ? '/tax-returns'
-              : '/payments'
+              : '/finance'
 
           return (
             <Link
