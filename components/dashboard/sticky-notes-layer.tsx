@@ -27,6 +27,85 @@ import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
+// cascadePos's own starting row/column (note-position.ts: y=0.08, x=0.04) — plain
+// constants kept in sync here, not re-derived, since note-position.ts is deliberately
+// pixel-agnostic (fractions only) and has no reason to know about the fixed-size chrome
+// (header, sidebar) it now has to clear.
+const CASCADE_FIRST_ROW_VH = 8
+const CASCADE_FIRST_COL_VW = 4
+// Must clear the sticky desktop header (h-14 = 3.5rem) with a visible margin — measured
+// live, not assumed: on sandbox specifically, the dashboard layout also adds `mt-10`
+// (2.5rem) above the whole app to make room for the fixed orange sandbox banner
+// (`app/(dashboard)/layout.tsx`, `isSandbox ? '... mt-10' : 'h-screen'`), so the header
+// there actually sits at 2.5rem+3.5rem=6rem from the true top, not 3.5rem. Production has
+// no banner and no mt-10, so its header genuinely does start at the top — but this one
+// constant has no way to know which environment it's rendering in, so it's calibrated to
+// the taller (sandbox) case; production ends up with a bit of harmless extra headroom
+// rather than sandbox ending up under-cleared. A first version of this constant (4.5rem)
+// was calibrated against production's header alone and looked fine there, but still
+// visibly overlapped the header in sandbox — caught by measuring the actual rendered
+// element positions with getBoundingClientRect, not by eyeballing a screenshot.
+const HEADER_CLEARANCE_REM = 7
+// Must clear the desktop sidebar (aside is w-64 = 16rem at the lg breakpoint this
+// component only ever renders at) with a visible margin. Antonio, 2026-09-07 (second
+// screenshot, on Team Workspace): notes were still landing on the sidebar's own nav
+// links — the sidebar goes `static` (in normal document flow) at this same breakpoint,
+// which also drops its z-index to `auto`, so it can no longer rely on stacking order to
+// stay above a `fixed` note at z-45; only keeping the note out of that space at all works.
+const SIDEBAR_CLEARANCE_REM = 17
+// The two sizes notePosStyle is ever called with — the collapsed pill (fixed h-10,
+// max-w-[180px]) and the expanded card (fixed w-60; height is content-driven, so this
+// is a reasonable reserve for a typical note, not a hard cap — see notePosStyle's
+// own comment on the right/bottom edge below).
+const COLLAPSED_SIZE_REM = { width: 11.25, height: 2.5 }
+const EXPANDED_SIZE_REM = { width: 15, height: 14 }
+const EDGE_MARGIN_REM = 1
+
+/**
+ * Desktop note position as a CSS style — shifts the WHOLE cascade down-and-right
+ * together on a small screen, rather than flooring one note independently, so notes
+ * never bunch up against each other. An earlier version floored only `${pos.y*100}vh`
+ * per note: correct for row 0, but it compressed the gap to row 1 on any viewport short
+ * enough to need the floor at all — found by creating real notes and looking, not by
+ * reasoning about the CSS. Each inner `calc()`'s shared `max(0px, ...)` term is
+ * identical for every note on that axis, so relative spacing between rows/columns is
+ * preserved exactly — a shifted column 0 and a shifted column 1 both move by the same
+ * amount, so the 0.18-viewport-width gap between them survives untouched.
+ *
+ * The floor (the `clamp()`'s low end) is a second, independent fix (Antonio,
+ * 2026-09-07, third screenshot on Team Workspace: four OLD notes, each with its own
+ * stored/dragged position from before this clearance logic existed, still sitting on
+ * the sidebar). The inner shift is calibrated against cascadePos's OWN starting
+ * fraction (x=0.04 / y=0.08) — correct for anything the cascade itself ever generates,
+ * but a note can also carry a STORED position (drag-and-drop, or from before this fix
+ * shipped) anywhere down to 0, and the shift alone under-corrects any position closer to
+ * the edge than the cascade's own minimum. The floor is a hard backstop on top of that: a
+ * no-op for every position at or beyond the cascade minimum (the inner shift already
+ * lands those at-or-past the floor), and a genuine minimum for anything closer in — so
+ * both a fresh cascade note AND an old dragged one always clear the same chrome.
+ *
+ * The CEILING (the `clamp()`'s high end) exists because the shift above is a REGRESSION
+ * on the opposite edge if left unbounded — caught by an end-to-end review, not by any of
+ * this session's own live tests (which only ever pushed a note toward the LOW corner).
+ * `writePosition`'s own `clampFrac(v, 0.92)` reserves 8% of the viewport as margin so a
+ * dragged note can never go fully off-screen — a contract that held when position was
+ * rendered as a bare fraction, but the shift above is ADDED on top of that fraction with
+ * nothing capping the total, so a note dragged toward the right/bottom edge (a completely
+ * ordinary "tuck it out of the way" action) could render partly or fully past the
+ * viewport, with no visible trace and no way to drag it back. `width`/`height` let each
+ * call site (collapsed pill vs. expanded card) reserve exactly its own footprint at the
+ * high end; the expanded card's real height is content-driven, so `EXPANDED_SIZE_REM` is
+ * a reasonable typical-note reserve, not a hard cap — a note with an unusually long reply
+ * thread can still extend further, same as it always could before any of this session's
+ * changes (that risk is pre-existing and unrelated to the shift this fix adds).
+ */
+function notePosStyle(pos: FracPos, size: { width: number; height: number }): React.CSSProperties {
+  return {
+    left: `clamp(${SIDEBAR_CLEARANCE_REM}rem, calc(${pos.x * 100}vw + max(0px, ${SIDEBAR_CLEARANCE_REM}rem - ${CASCADE_FIRST_COL_VW}vw)), calc(100vw - ${size.width + EDGE_MARGIN_REM}rem))`,
+    top: `clamp(${HEADER_CLEARANCE_REM}rem, calc(${pos.y * 100}vh + max(0px, ${HEADER_CLEARANCE_REM}rem - ${CASCADE_FIRST_ROW_VH}vh)), calc(100vh - ${size.height + EDGE_MARGIN_REM}rem))`,
+  }
+}
+
 interface Note {
   id: string
   body: string
@@ -379,6 +458,12 @@ function StickyNotesInner() {
  * (isDragGesture) and the same ref-based (not state-based) click suppression — a past bug
  * here let a drag also OPEN the thing being dragged because suppression was React state,
  * captured stale at click time. A ref reads current at call time.
+ *
+ * Position comes from notePosStyle(pos, size), which clears the sticky desktop header
+ * (h-14 = 3.5rem, z-30) and the sidebar, AND keeps the note on-screen on the opposite
+ * (right/bottom) edge too — see notePosStyle's own comment for the full history. It's
+ * CSS-only — the stored/dragged fraction itself is untouched, so a manually-dragged note
+ * still tracks the cursor exactly; only where it's allowed to visually render is bounded.
  */
 function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead }: { note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void }) {
   const ref = useRef<HTMLElement>(null)
@@ -441,7 +526,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onClick={onClickCollapsed}
-          style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
+          style={notePosStyle(pos, COLLAPSED_SIZE_REM)}
           className={`fixed z-[45] flex h-10 max-w-[180px] touch-none cursor-grab items-center gap-1.5 rounded-full border px-3 shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
           aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}`}
         >
@@ -458,7 +543,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
+      style={notePosStyle(pos, EXPANDED_SIZE_REM)}
       className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${noteBgClasses(note, isUnread)}`}
     >
       <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} onCollapse={() => setExpanded(false)} />

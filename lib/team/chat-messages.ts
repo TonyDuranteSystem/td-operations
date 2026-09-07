@@ -5,14 +5,35 @@
  * duplicated sends, and retracted text staying on screen.
  */
 
+/** A message's rich card, when it carries one instead of (or alongside) text. */
+export interface ChatMessageCard {
+  kind?: string | null
+  title?: string | null
+  subtitle?: string | null
+}
+
+/** The parent message a reply quotes, as returned by the thread GET route. */
+export interface ChatMessageReplyPreview {
+  id: string
+  message: string | null
+  sender_name: string | null
+  deleted_at: string | null
+}
+
 export interface ChatMessage {
   id: string
   sender_id?: string | null
   sender_name?: string | null
   message?: string | null
   created_at?: string | null
+  edited_at?: string | null
   deleted_at?: string | null
   attachments?: unknown
+  card?: ChatMessageCard | null
+  /** The real staff member Claude is relaying this message for, if any. */
+  on_behalf_of_user_id?: string | null
+  reply_to_id?: string | null
+  reply_to_preview?: ChatMessageReplyPreview | null
 }
 
 /**
@@ -56,7 +77,32 @@ export function displayBody(m: ChatMessage | null | undefined): string {
   if (m.deleted_at) return DELETED_MESSAGE_TEXT
   const body = (m.message ?? '').trim()
   if (body) return body
+  if (m.card) return cardSummary(m.card)
   return attachmentCount(m) > 0 ? 'Attachment' : ''
+}
+
+/**
+ * One-line fallback for a message whose only content is a rich card — e.g. an
+ * @claude email awaiting Antonio's confirm/cancel, or a "share to team" sent
+ * with no note. Before this, a card-only message rendered as a blank bubble
+ * everywhere `displayBody` is used (the message list AND the note composer),
+ * which for an email_confirm card meant no visible way to even know a client
+ * email was waiting on a decision (bug-hunter, 2026-09-07). Deliberately a
+ * plain one-line summary, not the full interactive card — that stays on the
+ * full Team Chat page.
+ */
+function cardSummary(card: ChatMessageCard): string {
+  const title = (card.title ?? '').trim() || 'Shared'
+  switch (card.kind) {
+    case 'email_confirm':
+      return `📧 ${title} — open Team Chat to confirm`
+    case 'client_message':
+      return card.subtitle ? `💬 ${title}: ${card.subtitle}` : `💬 ${title}`
+    case 'link':
+      return `🔗 ${title}`
+    default:
+      return title
+  }
 }
 
 /** True when the message has been retracted. */

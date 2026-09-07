@@ -63,6 +63,22 @@ describe('decideAutoPop — identity races', () => {
   it('ignores a message with no thread', () => {
     expect(decide({ threadId: null })).toBe('ignore')
   })
+
+  it('THE DICTATED RELAY: never opens for my own words, relayed by Claude', () => {
+    // Antonio dictates "tell Luca X" — Claude is the sender, but it is still
+    // Antonio's own message landing in his own DM with Luca, not one arriving
+    // FOR him. Missed once in production (bug-hunter, 2026-09-07): his own
+    // window popped as if Luca had just messaged him.
+    expect(decide({ senderId: 'claude-sentinel', onBehalfOfUserId: 'antonio' })).toBe('ignore')
+  })
+
+  it('still opens a Claude message dictated by someone else', () => {
+    expect(decide({ senderId: 'claude-sentinel', onBehalfOfUserId: 'someone-else' })).toBe('open')
+  })
+
+  it('still opens a genuinely autonomous Claude message (no dictating actor)', () => {
+    expect(decide({ senderId: 'claude-sentinel', onBehalfOfUserId: null })).toBe('open')
+  })
 })
 
 describe('decideAutoPop — the brand-new conversation', () => {

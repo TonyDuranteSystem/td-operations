@@ -9,6 +9,11 @@
  *    asynchronously. During that window a naive "not my message → open" test
  *    compares against null and passes, so a message you sent from another tab
  *    pops a window at you. Unknown identity means DO NOT open.
+ *  - OWN WORDS, RELAYED BY CLAUDE. Dictating a message to a teammate makes
+ *    Claude the sender, not you — but it is still your own message, not one
+ *    arriving FOR you. Missed once in production: asking Claude to relay
+ *    something popped the sender's own window, as if someone had just written
+ *    to them (bug-hunter, 2026-09-07).
  *  - NOT MY CONVERSATION. Only direct messages to me, or a thread I am a
  *    participant of, may open the window. Channel chatter must never.
  *  - UNKNOWN THREAD. The set of my DM threads is refreshed on a timer, so the
@@ -47,6 +52,8 @@ export interface AutoPopInput {
   pathname: string
   /** Who sent it. */
   senderId: string | null | undefined
+  /** Who dictated it, when Claude is relaying a message on someone's behalf. */
+  onBehalfOfUserId?: string | null
   /** Who I am — null while still resolving. */
   myId: string | null | undefined
   /** The thread the message landed in. */
@@ -77,7 +84,7 @@ const SURFACES_THAT_HANDLE_THEMSELVES = ['/team-chat']
 
 export function decideAutoPop(input: AutoPopInput): AutoPopDecision {
   const {
-    isDesktop, quiet, pathname, senderId, myId, threadId,
+    isDesktop, quiet, pathname, senderId, onBehalfOfUserId, myId, threadId,
     myDmThreadIds, myConversationThreadIds, mentionsMe,
     overlayOpen, isTyping, openThreadId, minimized, alreadyRefreshed,
   } = input
@@ -86,6 +93,8 @@ export function decideAutoPop(input: AutoPopInput): AutoPopDecision {
   if (!myId) return 'ignore'
   // My own message, echoed back from another tab.
   if (senderId && senderId === myId) return 'ignore'
+  // My own words, relayed by Claude on my behalf — not a message TO me.
+  if (onBehalfOfUserId && onBehalfOfUserId === myId) return 'ignore'
   if (!threadId) return 'ignore'
 
   // The full chat page handles its own messages. NOTE: deliberately NOT

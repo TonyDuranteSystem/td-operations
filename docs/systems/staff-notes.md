@@ -1,5 +1,15 @@
 # Staff Sticky Notes (floating post-its)
-_Last verified against code: 2026-09-05b — Claude (**The collapsed icon (below) now shows a short text snippet next to the glyph, not just a bare icon** — Antonio: "can the small icon have a short description at the button what it is about?" A hover-only tooltip wasn't enough; the icon widened from a fixed `h-10 w-10` circle to a `h-10` pill (capped `max-w-[180px]`) with the icon plus a truncated slice of the note's own text, CSS-truncated with an ellipsis when it overflows. The tooltip (fuller preview) is unchanged, additive. Verified live, not just by reading the class name: created a long test note and checked the actual computed style (`text-overflow: ellipsis`, `overflow: hidden`) plus that the text genuinely overflows its box (`scrollWidth > clientWidth`), then confirmed it visually in a screenshot — an earlier claim in this same conversation that it was "cut off with an ellipsis" had been asserted from knowing what the CSS class does, not from having actually looked, and was caught and corrected. Re-confirmed drag / click-to-expand / minimize all still work with the new markup.)_
+_Last verified against code: 2026-09-07b — Claude (**END-TO-END QA PASS on the whole 2026-09-07 change set — dev job 00b702a1 + 1cab685e, Bug Hunter + live browser verification.** Antonio: "do an EtoE QA with the bug hunter." Found and fixed ONE real blocker, confirmed one accepted minor, and surfaced one genuinely separate pre-existing bug (spun off, not fixed here).
+**THE BLOCKER — the header/sidebar clearance fix (below) had no ceiling, only a floor.** `notePosStyle`'s shift is ADDED to every note's position uniformly to clear the header/sidebar on the LOW edge — correct there, but with nothing capping the HIGH edge, dragging a note toward the right or bottom (a completely ordinary "tuck it out of the way" action) could push it fully past the viewport with no visible trace and no way to drag it back. On a 1366px-wide window — one of the most common laptop resolutions — any drag past roughly x=0.84 (well inside the reachable 0–0.92 range `clampFrac` already allowed) made the note fully invisible. Caught by the Bug Hunter reading the actual math, not by any of this session's own live tests, which had only ever pushed a note toward the LOW corner. Fixed by switching `notePosStyle` from a floor-only `max()` to a real `clamp(floor, shiftedValue, ceiling)` on both axes — the ceiling reserves each render site's own real footprint (`COLLAPSED_SIZE_REM`/`EXPANDED_SIZE_REM` in `sticky-notes-layer.tsx`) plus a margin, so a note can never render past the opposite edge either. Verified live, precisely: dragged a real note to the exact scenario the Bug Hunter described (x≈0.92, y≈0.92 on a 1280×720 window) and read its actual rendered position — landed at exactly the calculated ceiling (`left: 1084px` = `100vw − 12rem`, `bottom: 704px`, 16px inside both edges), fully on-screen.
+**Accepted, not fixed:** dragging two DIFFERENT notes into the same protected floor/ceiling zone can now land them on top of EACH OTHER instead of on the header/sidebar — strictly better than the original bug (nothing ever blocks navigation chrome again), narrow (only when a second note is already at that exact reserved spot), and fully recoverable (drag either one away). A second Bug Hunter finding — a note archived only via the pre-2026-07-23 legacy shared column can generate a bell alert that the floating card will never honor, since the revive logic deliberately never reads that legacy fallback (same reasoning that protects it from the cross-user resurrection hazard, see the reply-revive entry below) — accepted as the same shape of honest degrade already signed off for `note_update`/snoozed notes; rare and decaying (needs a note older than the 2026-07-23 migration with zero per-person touches since).
+**Spun off, NOT fixed in this pass (out of scope — pre-existing, unrelated to any 2026-09-07 change):** found live while testing the ceiling fix — `sticky-notes-layer.tsx`'s `useEffect(() => prunePositions(notes.map(n=>n.id)), [notes])` fires once with an EMPTY list on initial mount (`notes` is `data?.notes ?? []`, and `data` is `undefined` until the first fetch resolves) — `prunePositions([])` deletes every stored position, not just stale ones. Reproduced directly: dragged a note, confirmed the position persisted to storage, did a genuine hard reload, and it came back at its default cascade slot with storage wiped to `{}`. Whether this bites real usage (client-side sidebar navigation keeps the query cache warm; only a genuine hard reload empties it) is unconfirmed — flagged as its own follow-up task, not chased down here.
+**Sandbox-testing note, not a code issue:** the shared sandbox alias got overwritten mid-QA by another active session's deploy — twice. Confirmed by the build-stamp banner showing an unexpected commit hash, and resolved by deploying WITHOUT promoting to the shared alias (`vercel deploy` alone, skipping `deploy-sandbox.sh`'s `alias set` step) and reaching that specific deployment directly via a Vercel protection-bypass query param (the bypass secret lives in the Projects API's `protectionBypass` field, not `vercel env ls` — see the reference memory this session pulled it from). Worth remembering for any session QA-ing on this shared project while another session might also be deploying.)_
+_Prior: 2026-09-07 — Claude (**A DONE NOTE COMES BACK WHEN SOMEONE REPLIES, and the desktop icons/Alerts button got two visual fixes — dev job 00b702a1 + 1cab685e, 5-reviewer council.** Antonio: he made a note for a client, Luca replied (correctly went red), Luca marked it Done right after, Antonio replied again — Luca got only the generic bell, the sticky note itself never came back. Root cause: marking a note Done drops it from that person's floating feed entirely (`isLiveFor`); the floating card's red state only ever checks notes already IN that feed, so an archived note can never be flagged red no matter what alerts exist for it — two independent gates, only one of which knew about Done.
+**First fix attempt was a council BLOCKER, not shipped:** clearing `staff_note_state.archived_at` for reply recipients — this silently erases the person's own Done decision and duplicates a mechanism that already existed (`noteActivityAt`, the "Updated after you marked it done" Notes-tab badge, already covers replies). Switched to the read-side alternative the AI Architect proposed and it independently voided every other reviewer's non-blocking finding too (no write left to race, fail silently, or need error handling for).
+**Shipped shape:** new `isLiveOrRevivedFor(note, userId, now)` in `lib/notes/staff-notes.ts` — same as `isLiveFor`, but a Done note also counts as live if the LATEST reply (via `latestReplyOf`, not `noteActivityAt` — deliberately reply-only, preserving the 2026-07-29 decision that an EDIT after Done stays badge-only, confirmed with Antonio to keep that distinction) is newer than this person's own explicit `archived_at`, and isn't their own reply (replying means you already read the thread). Only reads an EXPLICIT per-person `staff_note_state` row, never `isArchivedFor`'s legacy-column fallback — same reasoning as everywhere else in this file: the fallback belongs to nobody in particular, so acting on it here could revive a note for someone who never touched anything. `listActiveNotesForUser` (the floating layer) is the ONLY caller — `listNotesForAccount`/`listNotesForContact`/`filterLiveForUser` keep `isLiveFor` unchanged; nobody asked for a Done note to reappear on those widgets. No DB change, no write path, no migration.
+**Two small visual fixes bundled in from the same conversation** (Antonio sent screenshots): (1) the Staff Alerts bell's unread state was a pale `bg-red-50` tint with no animation — Antonio: "it must be solid blinking red, now it's too light." Both renderings (desktop button, mobile badge+icon) now switch to a solid `bg-red-600`/`text-white` with `animate-pulse` (the same Tailwind utility already used for attention states elsewhere in this codebase — sidebar unread badge, AI panel send button — reused rather than inventing new keyframes). (2) The floating desktop note icons were landing on top of BOTH the sticky header and the sidebar — two separate root causes, found in two rounds (Antonio caught the second live, on a real production screenshot, after the first shipped to sandbox alone): the header (`h-14`/56px, `sticky z-30`) only clears the cascade's default vertical start (`y:0.08` in `note-position.ts`) on viewports taller than ~700px; the sidebar (`w-64`/256px) drops to `z-auto` at the exact `lg` breakpoint this layer only ever renders at (it goes `static`/in-flow there, no longer a floating overlay, so it can't rely on stacking order against a `fixed` z-45 note), and the cascade's default horizontal start (`x:0.04`) is a viewport-width FRACTION that all but the widest windows fail to clear. Both fixed the same way, in `notePosStyle()` (`sticky-notes-layer.tsx`): `calc(fraction + max(0px, clearance - cascade-start))` on each axis — shifts the WHOLE grid together rather than flooring one note independently. A per-note floor was tried FIRST for the header fix alone and shipped a real regression to sandbox before being caught: it correctly floored row 0, but compressed the gap to row 1 on any viewport short enough to need it — found by creating real notes and looking, not by reasoning about the CSS, and fixed before it ever reached Antonio. Deliberately NOT touched, on both axes: the stored/dragged fraction itself, so a manually-dragged note still tracks the cursor exactly; only where the cascade's own landing zone renders is affected. `note-position.ts` and its 11 existing tests are untouched.
+8 new unit tests in `tests/unit/staff-notes.test.ts` pin `isLiveOrRevivedFor` (revives on a later reply from someone else; does not revive on no reply, an older reply, your own latest reply, while snoozed, or for a legacy pre-migration note with no per-person row). Full suite green (10,572 tests) before shipping; the one unrelated pre-existing local-build gap (`sharp`/`@sparticuz/chromium`/`puppeteer-core` missing from this machine's `node_modules`, present even on the main checkout, unconnected to anything touched here) is a known environment issue, not a regression from this change — Vercel's sandbox build installs cleanly from `package.json` regardless.)_
+_Prior: 2026-09-05b — Claude (**The collapsed icon (below) now shows a short text snippet next to the glyph, not just a bare icon** — Antonio: "can the small icon have a short description at the button what it is about?" A hover-only tooltip wasn't enough; the icon widened from a fixed `h-10 w-10` circle to a `h-10` pill (capped `max-w-[180px]`) with the icon plus a truncated slice of the note's own text, CSS-truncated with an ellipsis when it overflows. The tooltip (fuller preview) is unchanged, additive. Verified live, not just by reading the class name: created a long test note and checked the actual computed style (`text-overflow: ellipsis`, `overflow: hidden`) plus that the text genuinely overflows its box (`scrollWidth > clientWidth`), then confirmed it visually in a screenshot — an earlier claim in this same conversation that it was "cut off with an ellipsis" had been asserted from knowing what the CSS class does, not from having actually looked, and was caught and corrected. Re-confirmed drag / click-to-expand / minimize all still work with the new markup.)_
 _Prior: 2026-09-05 — Claude (**FLOATING NOTES: collapsed-by-default icons, a draggable note-writing popup, red/yellow unread state, and the actual fix for notes landing on top of each other.** Four related changes in one session, all from Antonio hitting the floating layer's rough edges in real use:
 
 (1) **DesktopNote collapses to a small icon by default** (a `h-10 w-10` circle, was always a fixed `w-60` open card) — Antonio: "reduce it in icon but always visible to open when we need." Click expands in place to the existing card; a new Minimize button (in NoteCardBody's action row, only rendered when a collapse handler is passed, so `MobileSheet`'s reuse of the same body is unaffected) collapses it back. Click-vs-drag reuses the same measured-distance threshold and ref-based click suppression already proven for the draggable FAB buttons (`isDragGesture` from `lib/ui/draggable-fab.ts`) — the exact stale-closure bug the 2026-07-23 entry below warns about (a drag also opening the thing being dragged, because suppression was React state read stale at click time) was checked for and guarded against here too, with a ref.
@@ -93,7 +103,11 @@ This is the CRM dashboard, not the client portal.
 - **Snooze = scheduling, not just hiding.** Presets are 10 min / 1 hour / tomorrow 9am / pick a
   date & time. A snoozed note leaves the floating layer and reappears at its time. Antonio's
   model: screen = now, Notes tab = everything.
-- **Done** is `archived_at` (soft) — recoverable from the Notes tab's Done section.
+- **Done** is `archived_at` (soft) — recoverable from the Notes tab's Done section. **A fresh
+  REPLY (not an edit) after Done brings the note back onto the floating screen automatically**
+  (2026-09-07) — nothing is overwritten; the person's own Done timestamp is untouched, the note
+  just becomes eligible for the floating feed again because there's newer reply activity than
+  their archive time. An edit after Done still only badges the Notes-tab card, unchanged.
 - A note optionally carries the client it's about (`account_id` / `contact_id`), auto-captured
   from the page you were on and changeable via the client picker.
 
@@ -114,9 +128,11 @@ This is the CRM dashboard, not the client portal.
   `app/api/crm/staff-notes/route.ts` (GET/POST/PATCH), `components/dashboard/sticky-notes-layer.tsx`
   (the global floating layer), `components/dashboard/notes-board.tsx` (Notes tab, List/Calendar
   switch), `components/dashboard/notes-calendar.tsx`, `app/(dashboard)/notes/page.tsx`.
-- **Feeds:** `?scope=active` = floating layer (live, not snoozed) and also returns `me` + the
-  shareable staff `members`; `?scope=all` = the Notes tab (incl. snoozed + done);
-  `?account_id=` / `?contact_id=` = per-record.
+- **Feeds:** `?scope=active` = floating layer (live, not snoozed, OR archived-with-a-newer-reply
+  — `isLiveOrRevivedFor` in `lib/notes/staff-notes.ts`) and also returns `me` + the shareable
+  staff `members`; `?scope=all` = the Notes tab (incl. snoozed + done); `?account_id=` /
+  `?contact_id=` = per-record, still plain `isLiveFor` — only the floating layer revives a Done
+  note on reply.
 - **Realtime** reuses the existing `ui_events` bus with a `notes` kind. **NO PAYLOAD, ever** —
   the bus re-dispatches to every staff tab, so a note body in the payload would broadcast a
   private note.
@@ -136,6 +152,52 @@ This is the CRM dashboard, not the client portal.
   pull-to-refresh, at z-index 45 — above the mobile top bar, BELOW every modal so a note can
   never trap a dialog's buttons. It has its OWN error boundary: an unhandled throw there would
   otherwise white-screen the whole CRM (there is no global error boundary).
+- **Desktop notes render ABOVE both the sticky header AND the sidebar** (z-45; the header is
+  z-30/`h-14`/56px, the sidebar is `w-64`/256px and drops to `z-auto` at the `lg` breakpoint this
+  layer only ever renders at, since it goes `static`/in-flow there instead of a floating overlay —
+  so it can no longer rely on stacking order to stay on top of a `fixed` z-45 note). `notePosStyle`
+  in `sticky-notes-layer.tsx` shifts the WHOLE cascade grid down-and-right together via
+  `calc(fraction + max(0px, clearance - cascade-start))` on each axis — not a per-note floor, which
+  was tried first and shipped a real regression (compressed the gap between row 0 and row 1 on any
+  short viewport, caught live before shipping, not by reasoning about the CSS) — so relative
+  spacing between notes is always preserved; only the anchor point moves. The header clearance only
+  bites on a short WINDOW; the sidebar clearance bites on nearly every window, since cascadePos's
+  first column is a viewport-width FRACTION but the sidebar is a fixed 256px (2026-09-07, Antonio's
+  second screenshot: notes still sitting on the sidebar's own nav links after the header-only fix).
+  Both are CSS-only — the stored/dragged fraction itself is untouched, so this never changes where
+  a note's position is remembered, only where the cascade's own landing zone visually renders.
+  **The clearance also has to cover a note with an already-STORED position, not just a fresh
+  cascade slot** — the shift alone only guarantees clearance for anything at or beyond cascadePos's
+  own starting fraction (x=0.04 / y=0.08); an old dragged position (or one saved before this
+  clearance logic existed) can sit anywhere down to 0, which the shift under-corrects. Fixed with
+  an outer `max(shiftedValue, flatClearance)` — a no-op for anything the cascade itself would ever
+  generate, a hard floor for anything closer to the edge (Antonio's actual notes on this exact page
+  were this case: each had its own saved spot from before the fix, which is why they were scattered
+  instead of lined up in a grid — confirmed by writing a note's stored position to the literal
+  corner via localStorage and re-measuring, not by re-reading the CSS).
+  **`HEADER_CLEARANCE_REM` is calibrated for SANDBOX, not production, on purpose:** sandbox's own
+  dashboard layout adds `mt-10` (2.5rem) above the whole app to make room for the fixed orange
+  "NOT PRODUCTION" banner (`app/(dashboard)/layout.tsx`) — production has no banner and no `mt-10`,
+  so its header genuinely starts at the true top of the viewport, 2.5rem higher than sandbox's
+  does. One constant can't know which environment it's in, so it's set for the taller (sandbox)
+  case; production ends up with a bit of harmless extra headroom instead of sandbox ending up
+  under-cleared. A first version of this constant was calibrated against production's header alone
+  and looked right in a screenshot, but still measurably overlapped the header in sandbox by 24px —
+  caught by reading the actual rendered element positions (`getBoundingClientRect`) after reload,
+  not by looking at another screenshot.
+  **The floor needs a matching CEILING, or it just moves the invisible-note bug to the opposite
+  edge** (2026-09-07, caught by an end-to-end review, not by any live test up to that point — every
+  prior live check in this fix's own history only ever pushed a note toward the LOW corner). The
+  shift that clears the header/sidebar is added to EVERY note uniformly; with nothing capping the
+  high end, `writePosition`'s own `clampFrac(v, 0.92)` — which exists specifically so a dragged note
+  can never go fully off-screen — no longer holds once the shift is layered on top of it, since the
+  shift is added to whatever the stored fraction already was. `notePosStyle` is `clamp(floor,
+  shiftedValue, ceiling)` on both axes now, not a floor-only `max()`; the ceiling reserves each call
+  site's own real footprint (`COLLAPSED_SIZE_REM` for the pill, `EXPANDED_SIZE_REM` for the open
+  card — the card's real height is content-driven, so this is a reasonable typical-note reserve, not
+  a hard cap on an unusually long reply thread) plus `EDGE_MARGIN_REM`. Verified by dragging a real
+  note to the exact high corner and reading its rendered position — landed precisely at the
+  calculated ceiling, not clipped.
 - **Mobile has no dragging.** Floating cards collapse to a bottom-LEFT pill + sheet (bottom-right
   belongs to toasts), and the calendar falls back to a list.
 - **A note's on-screen position is decided ONCE, for the whole active list together, and
@@ -151,7 +213,11 @@ This is the CRM dashboard, not the client portal.
   visibility predicate, so notes there would either return nothing or leak private ones.
 
 ## How to verify current state
-- Visibility rule: `npx vitest run tests/unit/staff-notes.test.ts` (16 tests) — private/shared/team.
+- Visibility rule + revive-on-reply: `npx vitest run tests/unit/staff-notes.test.ts` (66 tests) —
+  private/shared/team, and `isLiveOrRevivedFor` (a later reply from someone else revives a Done
+  note; an older reply, your own reply, a snooze, or a legacy note with no per-person row do not).
+  Live check: mark a shared note Done as the recipient, have the author reply, confirm it
+  reappears red on the recipient's floating screen without their Done timestamp changing.
 - Calendar maths: `npx vitest run tests/unit/note-calendar.test.ts` (21 tests) — local-day
   bucketing, Mon-first 42-cell grid, month/year rollover, overdue.
 - Cascade positioning: `npx vitest run tests/unit/note-position.test.ts` (11 tests) — a slot is
