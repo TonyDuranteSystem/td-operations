@@ -183,12 +183,14 @@ function FloatingChatInner() {
   const myIdRef = useRef<string | null>(null)
   const dmIdsRef = useRef<Set<string>>(new Set())
   const pathnameRef = useRef(pathname)
+  const threadsRef = useRef<ChatThreadRow[]>([])
   useEffect(() => { openThreadIdRef.current = openThreadId }, [openThreadId])
   useEffect(() => { minimizedRef.current = minimized }, [minimized])
   useEffect(() => { quietRef.current = quiet }, [quiet])
   useEffect(() => { myIdRef.current = myId }, [myId])
   useEffect(() => { dmIdsRef.current = myDmThreadIdSet(threads, myId) }, [threads, myId])
   useEffect(() => { pathnameRef.current = pathname }, [pathname])
+  useEffect(() => { threadsRef.current = threads }, [threads])
   // Remember the open thread ONLY while it's a real DM — see LAST_DM_THREAD_KEY.
   useEffect(() => {
     if (openThreadId && dmThreads.some((t) => t.id === openThreadId)) {
@@ -200,6 +202,20 @@ function FloatingChatInner() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [msgError, setMsgError] = useState<string | null>(null)
+  /**
+   * How many messages were unread THE MOMENT this thread was opened — frozen
+   * here, not recomputed, so the highlight doesn't shift under you while you
+   * read (Antonio, 2026-09-07: "make the new message read in different
+   * color"). Deliberately NOT the raw last_read_at timestamp: nothing the
+   * widget fetches returns that value, and computing it fresh would race the
+   * same-click `markRead()` call that advances it (verified this session —
+   * the mark-read POST is cheaper than the message GET and often lands
+   * first). `unread_count` is already trustworthy for a DM's own badge
+   * (docs/systems/team-workspace.md) and is already sitting in `threadsRef`
+   * from BEFORE this open touches anything, so reading it here has no race
+   * to have.
+   */
+  const [newCountAtOpen, setNewCountAtOpen] = useState(0)
 
   /**
    * Switching to a NEW thread — sets `openThreadId` and clears `messages` in the
@@ -213,6 +229,8 @@ function FloatingChatInner() {
    * `setOpenThreadId` directly.
    */
   const switchToThread = useCallback((id: string) => {
+    const target = threadsRef.current.find((t) => t.id === id)
+    setNewCountAtOpen(Number(target?.unread_count) || 0)
     setMessages([])
     setOpenThreadId(id)
   }, [])
@@ -462,6 +480,7 @@ function FloatingChatInner() {
           openThreadId={openThreadId}
           openThread={openThread}
           messages={messages}
+          newCount={newCountAtOpen}
           loading={loadingMsgs}
           error={msgError}
           quiet={quiet}
@@ -553,6 +572,7 @@ function FloatingChatInner() {
           openThread={openThread}
           title={openThread ? openTitle : 'Chats'}
           messages={messages}
+          newCount={newCountAtOpen}
           loading={loadingMsgs}
           error={msgError}
           pathname={pathname}
@@ -599,6 +619,8 @@ function DesktopWindow(props: {
   openThreadId: string | null
   openThread: ChatThreadRow | null
   messages: ChatMessage[]
+  /** How many of `messages` were unread the moment this thread was opened. */
+  newCount: number
   loading: boolean
   error: string | null
   myId: string | null
@@ -739,6 +761,7 @@ function DesktopWindow(props: {
         <>
           <MessageList
             messages={props.messages}
+            newCount={props.newCount}
             loading={props.loading}
             error={props.error}
             myId={props.myId}
@@ -1005,6 +1028,12 @@ function ChatList(props: {
 
 function MessageList(props: {
   messages: ChatMessage[]
+  /**
+   * How many of `messages` (counting from the end) were unread the moment
+   * this thread was opened — frozen at open time, see `newCountAtOpen`'s own
+   * comment. 0 highlights nothing.
+   */
+  newCount: number
   loading: boolean
   error: string | null
   myId: string | null
@@ -1075,7 +1104,13 @@ function MessageList(props: {
       )}
 
       <div className="flex flex-col gap-1.5">
-        {props.messages.map((m) => {
+        {(() => {
+          // The last `newCount` messages were unread when this thread was
+          // opened (see `newCountAtOpen`'s own comment for why it's a frozen
+          // count, not a live timestamp comparison). Clamped so a stale/odd
+          // count can never go negative or exceed what's actually on screen.
+          const newCutoffIndex = Math.max(0, props.messages.length - Math.max(0, props.newCount))
+          return props.messages.map((m, index) => {
           const mine = !!props.myId && m.sender_id === props.myId
           const gone = isDeleted(m)
           const files = attachmentCount(m)
@@ -1089,11 +1124,16 @@ function MessageList(props: {
           const dictatedBy = !mine && !gone && m.on_behalf_of_user_id
             ? props.nameFor(m.on_behalf_of_user_id)
             : null
+          // Never highlight your own messages as "new" — you wrote them.
+          // Antonio, 2026-09-07: "make the new message read in different color".
+          const isNew = !mine && !gone && index >= newCutoffIndex
           return (
             <div key={m.id} className={`group flex ${mine ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-lg px-2.5 py-1.5 text-sm ${
                 gone ? 'bg-zinc-200 italic text-zinc-500'
-                     : mine ? 'bg-emerald-500 text-white' : 'bg-white text-zinc-900 shadow-sm'
+                     : mine ? 'bg-emerald-500 text-white'
+                     : isNew ? 'border border-blue-200 bg-blue-50 text-zinc-900 shadow-sm'
+                     : 'bg-white text-zinc-900 shadow-sm'
               }`}>
                 {!gone && (
                   <div className={`mb-0.5 flex items-center gap-1 text-[11px] ${mine ? 'text-white/70' : 'text-zinc-500'}`}>
@@ -1155,7 +1195,8 @@ function MessageList(props: {
               )}
             </div>
           )
-        })}
+          })
+        })()}
         <div ref={endRef} />
       </div>
 
@@ -1476,6 +1517,8 @@ function MobileSheet(props: {
   openThread: ChatThreadRow | null
   title: string
   messages: ChatMessage[]
+  /** How many of `messages` were unread the moment this thread was opened. */
+  newCount: number
   loading: boolean
   error: string | null
   pathname: string
@@ -1532,6 +1575,7 @@ function MobileSheet(props: {
           <>
             <MessageList
               messages={props.messages}
+              newCount={props.newCount}
               loading={props.loading}
               error={props.error}
               myId={props.myId}
