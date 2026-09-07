@@ -219,12 +219,12 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
         <FastTooltip label="Staff Alerts">
           <button
             onClick={() => setOpen(true)}
-            className="relative p-2 rounded-md hover:bg-zinc-100 text-zinc-500"
+            className={`relative p-2 rounded-md hover:bg-zinc-100 ${count > 0 ? 'text-red-600' : 'text-zinc-500'}`}
             aria-label={`Staff Alerts${count ? `, ${count} unread` : ''}`}
           >
             <MessageSquare className="h-5 w-5" />
             {count > 0 && (
-              <span className="absolute top-0.5 right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+              <span className="absolute top-0.5 right-0.5 flex h-4 min-w-4 animate-pulse items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
                 {count > 9 ? '9+' : count}
               </span>
             )}
@@ -254,7 +254,7 @@ export function StaffAlertsBell({ compact = false }: { compact?: boolean }) {
           onClick={() => (open ? requestClose() : setOpen(true))}
           className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors border ${
             count > 0
-              ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+              ? 'animate-pulse bg-red-600 text-white border-red-600 hover:bg-red-700'
               : 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200'
           }`}
           aria-label={`Staff Alerts${count ? `, ${count} unread` : ''}`}
