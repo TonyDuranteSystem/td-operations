@@ -157,7 +157,7 @@ export function ParkedNotesTrigger({ compact = false }: { compact?: boolean }) {
           {count > 0 ? `Parked (${count})` : 'Parked'}
         </button>
       </FastTooltip>
-      {open && count > 0 && (
+      {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-2 z-50 w-96 max-h-[70vh] overflow-y-auto rounded-lg border bg-white shadow-lg">
