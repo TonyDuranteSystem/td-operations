@@ -30,7 +30,12 @@ const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
   Sent: { bg: 'bg-blue-100', text: 'text-blue-700' },
   Paid: { bg: 'bg-emerald-100', text: 'text-emerald-700' },
   Overdue: { bg: 'bg-red-100', text: 'text-red-700' },
+  // 'Voided' is this page's own legacy label; 'Cancelled' is what this
+  // page's own void action now actually writes (fixed 2026-09-07, E2E
+  // production QA sweep — unified with the new Finance page's vocabulary so
+  // Reactivate can find these rows). Both styled identically.
   Voided: { bg: 'bg-zinc-200', text: 'text-zinc-500' },
+  Cancelled: { bg: 'bg-zinc-200', text: 'text-zinc-500' },
   Credit: { bg: 'bg-purple-100', text: 'text-purple-700' },
 }
 
@@ -102,7 +107,11 @@ export function InvoiceDetailDialog({ open, onClose, paymentId, invoiceNumber, i
   const isDraft = status === 'Draft'
   const isSent = status === 'Sent'
   const isOverdue = status === 'Overdue'
-  const isVoided = status === 'Voided'
+  // Checks BOTH labels (fixed 2026-09-07, E2E production QA sweep): this
+  // page's own void action now writes 'Cancelled' (unified with the new
+  // Finance page), but a row voided before that change still reads 'Voided'
+  // — both mean the same thing to this dialog.
+  const isVoided = status === 'Voided' || status === 'Cancelled'
   const isCredit = status === 'Credit'
   const canEdit = isDraft
   const canDelete = isDraft

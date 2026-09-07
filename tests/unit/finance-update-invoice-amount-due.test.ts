@@ -21,6 +21,9 @@ const {
   mockItemsSelect,
   mockItemsDelete,
   mockItemsInsert,
+  mockCreditItemUpdate,
+  mockCreditItemUpdateEq,
+  mockNotesInsert,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockSingle: vi.fn(),
@@ -33,6 +36,13 @@ const {
   mockItemsSelect: vi.fn(),
   mockItemsDelete: vi.fn(),
   mockItemsInsert: vi.fn(),
+  mockCreditItemUpdate: vi.fn(),
+  mockCreditItemUpdateEq: vi.fn(),
+  mockNotesInsert: vi.fn(),
+}))
+
+vi.mock("@/lib/notes/staff-notes", () => ({
+  notesTable: () => ({ insert: (...args: unknown[]) => mockNotesInsert(...args) }),
 }))
 
 vi.mock("@/lib/finance/apply-payment", () => ({
@@ -86,6 +96,13 @@ vi.mock("@/lib/supabase-admin", () => ({
             eq: mockItemsDelete,
           })),
           insert: mockItemsInsert,
+          // The credit-note direct line-item write (single row, matched by
+          // id) — a separate shape from the ordinary-invoice delete+reinsert
+          // above.
+          update: (updates: unknown) => {
+            mockCreditItemUpdate(updates)
+            return { eq: mockCreditItemUpdateEq }
+          },
         }
       }
       return {
@@ -125,6 +142,8 @@ beforeEach(() => {
   mockItemsSelect.mockResolvedValue({ data: [], error: null })
   mockItemsDelete.mockResolvedValue({ error: null })
   mockItemsInsert.mockResolvedValue({ error: null })
+  mockCreditItemUpdateEq.mockResolvedValue({ error: null })
+  mockNotesInsert.mockResolvedValue({ error: null })
   mockUpdateEq.mockResolvedValue({ error: null })
   // Default: one row matched — the common case for every test that doesn't
   // specifically exercise the compare-and-swap guard.
@@ -375,7 +394,7 @@ describe("updateInvoice — correction path on an already-Paid invoice", () => {
 describe("updateInvoice — ordinary edit keeps status honest relative to the recomputed balance", () => {
   it("promotes a non-Paid invoice to Paid when the corrected total is now fully covered by what's on file", async () => {
     // Sent/Partial invoice, $600 already paid, corrected total matches it exactly.
-    mockSingle.mockResolvedValue({ data: { amount_paid: 600, status: "Pending", invoice_status: "Partial" } })
+    mockSingle.mockResolvedValue({ data: { amount_paid: 600, status: "Pending", invoice_status: "Partial", invoice_number: "INV-000600" } })
     const result = await updateInvoice(PAYMENT_ID, { total: 600 })
     expect(result.success).toBe(true)
     const call = mockUpdate.mock.calls[0][0]
@@ -406,16 +425,28 @@ describe("updateInvoice — ordinary edit keeps status honest relative to the re
 
   // The reverse direction: a bare/legacy payment can carry coarse
   // status='Paid' even when invoice_status disagrees or is null (the exact
-  // 46-row mismatch the System Counselor found live in production). Editing
-  // its amount up must not leave it labeled Paid with money owing — the
-  // same Paid-with-a-balance-due bug this whole feature exists to prevent.
-  it("un-marks a coarse-status-Paid bare payment as Pending when the correction creates a balance", async () => {
+  // ~47-row mismatch found live in production, E2E QA sweep 2026-09-07).
+  // Updated same day: this row shape is now caught by wasFullyPaid itself
+  // (a deliberate, later fix in the SAME pass — these rows used to bypass
+  // the entire correction-path safety net when edited) — so it now
+  // REQUIRES a correctionPath like any other Paid invoice, rather than
+  // silently falling through to this "ordinary edit" branch's own demote
+  // logic. That branch's demote logic (below) still covers the narrower
+  // case where invoice_status has drifted to some OTHER non-Paid value.
+  it("requires a correctionPath for a coarse-status-Paid bare/legacy payment, same as any other Paid invoice", async () => {
     mockSingle.mockResolvedValue({ data: { amount_paid: 500, status: "Paid", invoice_status: null } })
     const result = await updateInvoice(PAYMENT_ID, { total: 600 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/already marked Paid/)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("correctly reopens a coarse-status-Paid bare/legacy payment as Partial when given a correctionPath", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 500, status: "Paid", invoice_status: null } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 600 }, "partial_payment")
     expect(result.success).toBe(true)
     const call = mockUpdate.mock.calls[0][0]
-    expect(call).toEqual(expect.objectContaining({ total: 600, amount_due: 100, status: "Pending", paid_date: null }))
-    expect(call.invoice_status).toBeUndefined()
+    expect(call).toEqual(expect.objectContaining({ total: 600, amount_due: 100, status: "Pending", invoice_status: "Partial", paid_date: null }))
   })
 
   // A drifted row where the coarse status says Paid but invoice_status has
@@ -595,5 +626,130 @@ describe("updateInvoice — line-item rewrite integration", () => {
       PAYMENT_ID,
       [expect.objectContaining({ description: "Service", amount: 500, sort_order: 0 })],
     )
+  })
+})
+
+// Regression coverage for the E2E production QA sweep (2026-09-07): a
+// corrected credit note's line items never got touched, so its
+// client-downloadable PDF (items and header total sourced independently)
+// permanently disagreed with itself. Deliberately NOT routed through
+// adjustSingleServiceLineForTotal — see the code comment for why that
+// function refuses every credit note unconditionally.
+describe("updateInvoice — credit note line-item correction", () => {
+  it("writes the single line item directly to match the corrected total", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    mockItemsSelect.mockResolvedValue({ data: [{ id: "item-1", description: "Referral reward", quantity: 1 }], error: null })
+    const result = await updateInvoice(PAYMENT_ID, { total: -400 })
+    expect(result.success).toBe(true)
+    expect(mockAdjustSingleServiceLineForTotal).not.toHaveBeenCalled()
+    expect(mockCreditItemUpdate).toHaveBeenCalledWith({ unit_price: -400, amount: -400 })
+    expect(mockSyncClientExpenseItemsMirror).toHaveBeenCalledWith(
+      PAYMENT_ID,
+      [expect.objectContaining({ description: "Referral reward", quantity: 1, unit_price: -400, amount: -400, sort_order: 0 })],
+    )
+  })
+
+  it("refuses (does not guess) when a credit note has more than one line item", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    mockItemsSelect.mockResolvedValue({
+      data: [{ id: "item-1", description: "A", quantity: 1 }, { id: "item-2", description: "B", quantity: 1 }],
+      error: null,
+    })
+    const result = await updateInvoice(PAYMENT_ID, { total: -400 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/more than one line item/)
+    expect(mockCreditItemUpdate).not.toHaveBeenCalled()
+    // The whole save is blocked — the header total is not written either.
+    expect(mockUpdateEq).not.toHaveBeenCalled()
+  })
+
+  it("does nothing line-item-wise when a credit note has zero line items", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    mockItemsSelect.mockResolvedValue({ data: [], error: null })
+    const result = await updateInvoice(PAYMENT_ID, { total: -400 })
+    expect(result.success).toBe(true)
+    expect(mockCreditItemUpdate).not.toHaveBeenCalled()
+    expect(mockSyncClientExpenseItemsMirror).not.toHaveBeenCalled()
+  })
+})
+
+// Regression coverage for the E2E production QA sweep (2026-09-07,
+// Bug-Hunter): the Edit action has no status gate, and a cancelled/voided
+// invoice fell into the "ordinary edit" branch, which could silently
+// promote it back to Paid at a new total while amount_paid stayed at
+// whatever it was before voiding.
+describe("updateInvoice — refuses editing a cancelled/voided invoice", () => {
+  it("refuses when status/invoice_status are the new page's 'Cancelled'/'Cancelled'", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Cancelled", invoice_status: "Cancelled" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 950 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/voided.cancelled/i)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("refuses when status/invoice_status are the old page's 'Waived'/'Voided'", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Waived", invoice_status: "Voided" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 950 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/voided.cancelled/i)
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("does not refuse a credit note, even though 'Credit' is a terminal status elsewhere", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    mockItemsSelect.mockResolvedValue({ data: [{ id: "item-1", description: "Referral reward", quantity: 1 }], error: null })
+    const result = await updateInvoice(PAYMENT_ID, { total: -400 })
+    expect(result.success).toBe(true)
+  })
+})
+
+// Regression coverage for the E2E production QA sweep (2026-09-07, Antonio's
+// explicit call: flag it, don't auto-revoke). Reopening a Paid invoice as
+// Partial does not pull back any portal access/services already granted —
+// this is the only signal that it happened.
+describe("updateInvoice — flags staff when a Paid invoice reopens as Partial", () => {
+  it("creates a team-visible staff note describing what happened", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid", invoice_number: "INV-000900", account_id: "acct-1" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 1400 }, "partial_payment")
+    expect(result.success).toBe(true)
+    expect(mockNotesInsert).toHaveBeenCalledWith(expect.objectContaining({
+      visibility: "team",
+      account_id: "acct-1",
+      body: expect.stringContaining("INV-000900"),
+    }))
+  })
+
+  it("does not flag a typo correction (nothing was actually reopened)", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid" } })
+    mockListConfirmedApplications.mockResolvedValue([])
+    const result = await updateInvoice(PAYMENT_ID, { total: 950 }, "typo")
+    expect(result.success).toBe(true)
+    expect(mockNotesInsert).not.toHaveBeenCalled()
+  })
+})
+
+// Regression coverage for the E2E production QA sweep (2026-09-07,
+// Bug-Hunter): the paid-call-credit feature (lib/operations/paid-call-credit.ts)
+// stamps a stripe_payment_id onto an invoice purely as a bank-feed matching
+// key when a call is attached by hand from a real bank transaction — not
+// because a card was actually charged. The original fix for the
+// Finance-Auditor's mixed-payment bug must not wrongly block this case.
+describe("updateInvoice — typo path distinguishes a real card charge from a matching-key stamp", () => {
+  it("still refuses when bank money only PARTIALLY covers the current total (the original mixed-payment bug)", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 1000, status: "Paid", invoice_status: "Paid", total: 1000, stripe_payment_id: "ch_abc123" } })
+    mockListConfirmedApplications.mockResolvedValue([{ amount: 400, feed_id: "feed-1" }])
+    const result = await updateInvoice(PAYMENT_ID, { total: 400 }, "typo")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/card or Whop payment/)
+  })
+
+  it("allows it when confirmed bank money already fully covers the CURRENT total (paid-call-credit's matching-key case)", async () => {
+    // Corrected total matches the confirmed bank sum exactly — the realistic
+    // shape for this case (a typo elsewhere, e.g. the description, prompted
+    // the edit; the bank-confirmed amount was always right).
+    mockSingle.mockResolvedValue({ data: { amount_paid: 500, status: "Paid", invoice_status: "Paid", total: 500, stripe_payment_id: "pi_matching_key_only" } })
+    mockListConfirmedApplications.mockResolvedValue([{ amount: 500, feed_id: "feed-1" }])
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 }, "typo")
+    expect(result.success).toBe(true)
   })
 })
