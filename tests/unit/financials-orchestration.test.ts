@@ -45,6 +45,60 @@ describe("extractWizardMembers", () => {
     })
     expect(out).toEqual([{ name: "Sofia Marinoni", pct: 100 }])
   })
+
+  it("a stray company_name on an individual member never wins over their real name (Donato Ciardo, 2026-09-01)", () => {
+    // The wizard left a company_name value on an individual's entry (the
+    // LLC's own name). Before the fix this silently replaced the member's
+    // name, crediting the company itself with ownership and dropping the
+    // real person from their own K-1.
+    const out = extractWizardMembers({
+      member_0_member_type: "individual",
+      member_0_member_first_name: "Donato",
+      member_0_member_last_name: "Ciardo",
+      member_0_member_ownership_pct: 99,
+      member_0_member_company_name: "Fast Consulting LLC",
+      member_1_member_type: "individual",
+      member_1_member_first_name: "Cristian",
+      member_1_member_last_name: "Ciardo",
+      member_1_member_ownership_pct: 1,
+    })
+    expect(out).toEqual([
+      { name: "Donato Ciardo", pct: 99 },
+      { name: "Cristian Ciardo", pct: 1 },
+    ])
+  })
+
+  it("falls back to the legacy additional_members array when no flat member_N_ keys exist (PlayLover International LLC / Easy English LLC, 2026-09-01)", () => {
+    // The standalone legacy tax form (app/tax-form/[token]) sends co-members
+    // as an additional_members array instead of flat member_{idx}_ keys —
+    // a shape this function's regex cannot match at all. Before this
+    // fallback, every co-member from an account submitted this way was
+    // silently absent from ownership, not merely misnamed.
+    const out = extractWizardMembers({
+      owner_first_name: "Christian",
+      owner_last_name: "Pozza",
+      additional_members: [
+        { member_name: "Stefano Mozzicato", member_ownership_pct: "50", member_tax_residency: "Emirati Arabi Uniti" },
+      ],
+    })
+    expect(out).toEqual([
+      { name: "Christian Pozza", pct: null },
+      { name: "Stefano Mozzicato", pct: 50 },
+    ])
+  })
+
+  it("flat member_N_ keys win over additional_members when both are present", () => {
+    const out = extractWizardMembers({
+      owner_first_name: "Should", owner_last_name: "BeIgnored",
+      member_0_member_first_name: "Sofia", member_0_member_last_name: "Marinoni", member_0_member_ownership_pct: 100,
+      additional_members: [{ member_name: "Ghost Member", member_ownership_pct: "50" }],
+    })
+    expect(out).toEqual([{ name: "Sofia Marinoni", pct: 100 }])
+  })
+
+  it("empty additional_members array does not fabricate an owner-only entry that the caller can't distinguish from 'no data'", () => {
+    expect(extractWizardMembers({ owner_first_name: "Solo", owner_last_name: "Owner", additional_members: [] })).toEqual([])
+  })
 })
 
 describe("extractWizardOwner", () => {

@@ -3,12 +3,6 @@ import { describe, it, expect, vi } from 'vitest'
 /**
  * Unit tests for Phase 1: Contact-Centric Migration
  * Tests the new query functions and nav visibility logic.
- *
- * Phase C (ITIN Chain Fix 2026-05-11): getContactOnlyNavVisibility is now
- * async and accepts optional contactId so the ITIN-at-Client-Signing flag can
- * be computed. When called with no contactId, it skips the DB lookup and
- * returns the legacy hardcoded shape with itinAtClientSigning=false. The
- * Supabase admin client is unused in the no-arg path so no mock is needed.
  */
 
 vi.mock('@sentry/nextjs', () => ({
@@ -30,10 +24,9 @@ describe('getContactOnlyNavVisibility', () => {
     expect(nav.customers).toBe(false)
   })
 
-  it('returns exactly 10 keys (adds itinAtClientSigning in Phase C)', async () => {
+  it('returns exactly 9 keys', async () => {
     const nav = await getContactOnlyNavVisibility()
-    expect(Object.keys(nav).length).toBe(10)
-    expect(nav.itinAtClientSigning).toBe(false)
+    expect(Object.keys(nav).length).toBe(9)
   })
 })
 

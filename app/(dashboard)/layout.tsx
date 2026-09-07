@@ -15,6 +15,8 @@ import { ClearAllToasts } from '@/components/dashboard/clear-all-toasts'
 import { UiEventListener } from '@/components/dashboard/ui-event-listener'
 import { DashboardPullToRefresh } from '@/components/dashboard/pull-to-refresh'
 import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
+import CaptureLayer from '@/components/captures/capture-layer'
+import MyCapturesOverlay from '@/components/captures/my-captures-overlay'
 import FloatingChat from '@/components/team-chat/floating-chat'
 import { isFloatingChatEnabled } from '@/lib/settings'
 import type { Metadata } from 'next'
@@ -174,6 +176,16 @@ export default async function DashboardLayout({
         <CommandPalette />
         <AiAgentPanel enabled={showAiAgent} />
         <StickyNotesLayer />
+        {/* Mounted OUTSIDE <main>, same reason as StickyNotesLayer/FloatingChat:
+            it must survive navigating to a different page while a capture is
+            in progress (Antonio, 2026-09-04). Its own trigger button lives in
+            the top bar (DashboardHeader / Sidebar), not here — this only
+            renders when CaptureProvider's isOpen is true. */}
+        <CaptureLayer />
+        {/* "My captures" as a popup, not a page navigation (Antonio,
+            2026-09-04) — its own on/off switch on CaptureProvider, independent
+            of the capture-creation flow above. */}
+        <MyCapturesOverlay />
         {/* Mounted AFTER the notes layer so the chat wins a same-corner overlap
             (it also sits one z-step above), and OUTSIDE <main> so it never
             fights pull-to-refresh. It carries its own crash guard: the

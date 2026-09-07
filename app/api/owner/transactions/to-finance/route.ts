@@ -9,7 +9,7 @@
  * from the owner's books, and returns the feed to the review queue.
  */
 import { createClient } from '@/lib/supabase/server'
-import { isAdmin } from '@/lib/auth'
+import { isOwnerOnly } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import { sendOwnerLedgerRowToFinance } from '@/lib/finance/owner-ledger-projection'
 
@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 export async function POST(req: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  if (!user || !isOwnerOnly(user)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

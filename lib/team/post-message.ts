@@ -25,16 +25,20 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import {
   CLAUDE_SENDER_UUID,
   CLAUDE_SENDER_NAME,
+  otherDmParty,
 } from '@/lib/team/workspace'
 import { resolveMentions, listTeamMembers } from '@/lib/team/directory'
 import { findOrCreateDm } from '@/lib/team/dm'
 import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
-import { validateTeamPostTarget, validateTeamPostMessage } from '@/lib/team/post-message-validate'
+import { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments } from '@/lib/team/post-message-validate'
 import { resolveActingUser } from '@/lib/team/acting-user'
+import type { ChatAttachment } from '@/lib/types'
 
-export { validateTeamPostTarget, validateTeamPostMessage, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
+export { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
+
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '')
 
 export interface PostTeamMessageInput {
   /** Channel slug or name (or "general" for the general room). */
@@ -53,6 +57,13 @@ export interface PostTeamMessageInput {
   message: string
   /** Optional rich card (validated via validateTeamCard). */
   card?: unknown
+  /**
+   * Optional file attachments — same shape portal chat uses. Every url must be
+   * hosted on our own Storage (validateTeamPostAttachments enforces this), so
+   * a caller must first land the file there (e.g. portal_chat_attach_file, or
+   * any tool that returns a Storage-hosted url) before passing it here.
+   */
+  attachments?: ChatAttachment[] | null
   /**
    * The STAFF user (auth uuid or email) who dictated this message, when the
    * calling surface knows it for certain. Stamped on the row so that person is
@@ -75,9 +86,22 @@ export interface PostTeamMessageResult {
 
 /**
  * Resolve the target selector to a thread id + type. Returns null if not found.
+ *
+ * `actingUserId`, when known, is the REAL staff member dictating a `dm_user_id`
+ * send — used as one of the two DM parties instead of the Claude sentinel
+ * (bug-hunter, 2026-09-05). Before this, every dm_user_id DM was permanently
+ * keyed to "Claude:target" regardless of who dictated it, so the human who
+ * asked Claude to send it could never find the conversation again on ANY
+ * surface (get_team_threads, search, the floating widget, the main Team Chat
+ * page's own Direct Messages list all gate visibility on "does dm_key contain
+ * MY id") — invisible to them from message one, every single time, while the
+ * recipient could see it fine. Falls back to the sentinel only when no acting
+ * user is known (a genuinely autonomous Claude-initiated DM, not dictated by
+ * anyone specific) — that case is correctly Claude's own conversation.
  */
 async function resolveTargetThread(
   input: Pick<PostTeamMessageInput, 'channel' | 'thread_id' | 'dm_user_id'>,
+  actingUserId: string | null,
 ): Promise<{ thread_id: string; thread_type: string; channel_slug: string | null; channel_name: string | null; dm_key: string | null } | null> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = supabaseAdmin as any
@@ -98,7 +122,7 @@ async function resolveTargetThread(
   }
 
   if (input.dm_user_id) {
-    const { thread } = await findOrCreateDm(CLAUDE_SENDER_UUID, input.dm_user_id)
+    const { thread } = await findOrCreateDm(actingUserId ?? CLAUDE_SENDER_UUID, input.dm_user_id)
     return { thread_id: thread.id, thread_type: 'dm', channel_slug: null, channel_name: null, dm_key: thread.dm_key ?? null }
   }
 
@@ -137,8 +161,26 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   if (targetErr) throw new Error(targetErr)
   const msgErr = validateTeamPostMessage(input.message, input.card)
   if (msgErr) throw new Error(msgErr)
+  const attachErr = validateTeamPostAttachments(input.attachments, SUPABASE_URL)
+  if (attachErr) throw new Error(attachErr)
 
-  const target = await resolveTargetThread(input)
+  // ── Acting user ("on behalf of") ──────────────────────────────────────────
+  // Resolve the dictating staff member against the directory. Best-effort and
+  // fail-to-null: an unresolvable/foreign id must degrade to "notify everyone"
+  // (today's behavior), never block the send and never guess (council rule).
+  // Resolved BEFORE the target thread (bug-hunter, 2026-09-05) specifically so
+  // a dm_user_id send can be keyed to the real acting user, not the Claude
+  // sentinel — see resolveTargetThread's own doc comment for why that matters.
+  let actingUserId: string | null = null
+  if (input.on_behalf_of) {
+    try {
+      actingUserId = resolveActingUser(await listTeamMembers(), input.on_behalf_of)
+    } catch {
+      actingUserId = null
+    }
+  }
+
+  const target = await resolveTargetThread(input, actingUserId)
   if (!target) throw new Error('Target thread not found (check the channel slug/name, thread id, or user id).')
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -173,19 +215,6 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     rootId = (root.root_id ?? root.id) as string
   }
 
-  // ── Acting user ("on behalf of") ──────────────────────────────────────────
-  // Resolve the dictating staff member against the directory. Best-effort and
-  // fail-to-null: an unresolvable/foreign id must degrade to "notify everyone"
-  // (today's behavior), never block the send and never guess (council rule).
-  let actingUserId: string | null = null
-  if (input.on_behalf_of) {
-    try {
-      actingUserId = resolveActingUser(await listTeamMembers(), input.on_behalf_of)
-    } catch {
-      actingUserId = null
-    }
-  }
-
   const message = input.message.trim()
   // Excluding the ACTING user from mention resolution gives typed-message
   // parity: resolveMentions never includes the sender, and for a dictated
@@ -204,6 +233,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     root_id: rootId,
     reply_to_id: rootId,
     card: input.card ?? null,
+    attachments: input.attachments ?? null,
     mentions: mentions.matchedHandles.length ? mentions.matchedHandles : [],
     mentioned_user_ids: mentions.userIds,
     read_at: now,
@@ -258,7 +288,8 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   // a real user; the ACTING user (who dictated this message) is excluded from
   // every branch exactly as if they had typed it themselves.
   try {
-    const preview = message.slice(0, 120) || (input.card ? '📇 Shared a card' : 'New message')
+    const preview = message.slice(0, 120)
+      || (input.attachments?.length ? `📎 ${input.attachments[0].name}` : input.card ? '📇 Shared a card' : 'New message')
     const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
     // Per-thread tag so two bugs don't replace each other on the lock screen.
     const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`
@@ -273,9 +304,12 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
     } else if (target.thread_type === 'dm') {
       // A DM goes to the ONE other participant. It used to broadcast, so a note
       // Claude sent privately to Luca previewed on every staff device. A DM the
-      // acting user dictated TO THEMSELF pushes nobody.
-      const otherId = (target.dm_key ?? '').split(':').find(id => id && id !== CLAUDE_SENDER_UUID)
-      if (otherId && otherId !== actingUserId) {
+      // acting user dictated TO THEMSELF pushes nobody. otherDmParty (pure,
+      // unit-tested) excludes both the Claude sentinel and the acting user —
+      // see its own doc comment for why filtering on the sentinel alone broke
+      // once a dictated DM could be keyed to the real acting user.
+      const otherId = otherDmParty(target.dm_key, [CLAUDE_SENDER_UUID, actingUserId])
+      if (otherId) {
         await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
       }
     } else if (target.thread_type === 'channel' || target.thread_type === 'general') {

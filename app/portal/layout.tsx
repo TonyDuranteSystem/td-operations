@@ -3,7 +3,7 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getPortalAccountById } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getPortalAccountById, getUnpaidInvoiceCount } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
@@ -89,8 +89,8 @@ export default async function PortalLayout({
     const tmTier = tmAccount?.portal_tier ?? 'active'
     const tmSuspended = tmAccount?.status === 'Suspended'
     const [tmActiveServices, tmNavVisibility, tmTranslations] = tmSelectedAccountId
-      ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId, undefined), loadTranslationsForLocale(tmLocale)])
-      : [[] as string[], await getContactOnlyNavVisibility(undefined), await loadTranslationsForLocale(tmLocale)]
+      ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId), loadTranslationsForLocale(tmLocale)])
+      : [[] as string[], await getContactOnlyNavVisibility(), await loadTranslationsForLocale(tmLocale)]
 
     return (
       <Providers>
@@ -245,23 +245,31 @@ export default async function PortalLayout({
   const [activeServices, navVisibility, unreadChatCount] = selectedAccountId
     ? await Promise.all([
         getPortalActiveServices(selectedAccountId),
-        getPortalNavVisibility(selectedAccountId, contactId || undefined),
+        getPortalNavVisibility(selectedAccountId),
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
     : await Promise.all([
         Promise.resolve([] as string[]),
-        getContactOnlyNavVisibility(contactId || undefined),
+        getContactOnlyNavVisibility(),
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
 
   // Tab counts, in parallel to avoid adding a serial round-trip to every page:
-  //  - unreadDocsCount → Documents tab pulse + count (unopened client docs)
-  //  - toSignCount     → Sign Documents tab "new" blink (lease, OA, SS-4, e-sign…)
-  const [unreadDocsCount, toSignCount] = await Promise.all([
-    contactId ? getUnopenedDocsCount(contactId, accounts.map(a => a.id)) : Promise.resolve(0),
+  //  - unreadDocsCount   → Documents tab pulse + count (unopened client docs)
+  //  - toSignCount       → Sign Documents tab "new" blink (lease, OA, SS-4, e-sign…)
+  //  - unpaidInvoiceCount → TD Billing tab pulse + count (Sent/Overdue/Partial TD invoices)
+  // Each wrapped in .catch — a genuine network-layer failure in any one of
+  // these (not a normal query error, those already fail open inside their own
+  // functions, but an actual dropped connection) must not throw out of this
+  // async layout: there is no root-level error page to catch a throw at this
+  // exact level, so it would blank the whole portal shell instead of just one
+  // badge (council review, 2026-09-04).
+  const [unreadDocsCount, toSignCount, unpaidInvoiceCount] = await Promise.all([
+    contactId ? getUnopenedDocsCount(contactId, accounts.map(a => a.id)).catch(() => 0) : Promise.resolve(0),
     contactId && selectedAccountId
-      ? getToSignCount({ selectedAccountId, contactId, userEmail: user.email })
+      ? getToSignCount({ selectedAccountId, contactId, userEmail: user.email }).catch(() => 0)
       : Promise.resolve(0),
+    selectedAccountId ? getUnpaidInvoiceCount(selectedAccountId).catch(() => 0) : Promise.resolve(0),
   ])
 
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
@@ -298,6 +306,7 @@ export default async function PortalLayout({
             unreadChatCount={unreadChatCount}
             unreadDocsCount={unreadDocsCount}
             toSignCount={toSignCount}
+            unpaidInvoiceCount={unpaidInvoiceCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={effectivePortalRole}

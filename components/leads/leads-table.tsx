@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { Search, ChevronRight, ChevronLeft, Phone, Mail, UserCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { LeadListItem } from '@/lib/types'
@@ -56,11 +56,37 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
+  // The filter values we've actually told the server about — updated
+  // synchronously the instant we act, NOT after the async navigation
+  // resolves. React keeps every filter PROP stale for the whole pending
+  // window (that's what the opacity-50 dimming below is showing), so a
+  // second action fired before the first navigation lands must never read a
+  // prop directly for this purpose. Covers EVERY filter, not just search: a
+  // fast search-clear could otherwise be skipped or resurrected (round 1),
+  // and firing two different filters back-to-back could otherwise silently
+  // drop the first one (round 2 — found by adversarial review, 2026-09-03,
+  // on the sibling Accounts/Conversations pages which have more than one
+  // non-search filter; applied here too for the same guarantee).
+  const lastFiltersRef = useRef({ q: query, status: statusFilter })
+
+  // Resync when the URL changed for a reason OTHER than our own action above
+  // — browser back/forward, or a link elsewhere setting these params.
+  // Guarded on the ref (not a plain "prop changed" check): when a prop
+  // finally catches up to what WE set, that's our own change settling, and
+  // must NOT overwrite the search box — the user may have already typed
+  // something newer in the meantime. Only an unexpected prop value (one we
+  // didn't just ask for) means an external navigation happened.
+  useEffect(() => {
+    if (query !== lastFiltersRef.current.q || statusFilter !== lastFiltersRef.current.status) {
+      lastFiltersRef.current = { q: query, status: statusFilter }
+      setSearch(query)
+    }
+  }, [query, statusFilter])
 
   function buildParams(overrides: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    const q = overrides.q ?? query
-    const s = overrides.status ?? statusFilter
+    const q = overrides.q ?? lastFiltersRef.current.q
+    const s = overrides.status ?? lastFiltersRef.current.status
     const p = overrides.page ?? ''
     if (q) params.set('q', q)
     if (s && s !== 'all') params.set('status', s)
@@ -68,7 +94,8 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
     return params.toString()
   }
 
-  function updateFilter(key: string, value: string) {
+  function updateFilter(key: 'q' | 'status', value: string) {
+    lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
     startTransition(() => {
       router.push(`/leads?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -85,6 +112,18 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
     updateFilter('q', search)
   }
 
+  // Typing only searches on submit (below), but CLEARING the box must reset
+  // immediately — otherwise backspacing to empty, or a phone keyboard's own
+  // clear control, leaves the list stuck on the last search with no visible
+  // way to get back to the full list (reported live, 2026-09-02).
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value
+    setSearch(value)
+    if (value === '' && lastFiltersRef.current.q !== '') {
+      updateFilter('q', '')
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Filters */}
@@ -94,7 +133,7 @@ export function LeadsTable({ items, query, statusFilter, stats, currentPage, tot
           <input
             type="text"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={handleSearchChange}
             placeholder="Search name or email..."
             className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />

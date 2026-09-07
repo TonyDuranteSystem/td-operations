@@ -5,6 +5,7 @@ import {
   computeClickToApplyCredit,
   isCreditLine,
   sumLineAmounts,
+  adjustSingleServiceLineForTotal,
   CREDIT_LINE_LABEL,
 } from "@/lib/portal/invoice-regenerate"
 
@@ -141,5 +142,105 @@ describe("buildRegeneratedLineItems", () => {
       // line is a service adjustment.
       { description: CREDIT_LINE_LABEL, quantity: 1, unit_price: -100, amount: -100, item_type: "service" },
     ])
+  })
+})
+
+describe("adjustSingleServiceLineForTotal", () => {
+  it("adjusts the one service line to match the new total (ShoppyVerse shape: single line, no credit)", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ ...svc("LLC Annual Management — 2nd Installment 2026", 2000), item_type: "service" }],
+      1000,
+    )
+    expect(r.ok).toBe(true)
+    expect(r.items).toHaveLength(1)
+    expect(r.items[0]).toMatchObject({ description: "LLC Annual Management — 2nd Installment 2026", unit_price: 1000, amount: 1000 })
+    expect(sumLineAmounts(r.items)).toBe(1000)
+  })
+
+  it("leaves an existing credit line untouched and adjusts only the service line (Growly shape)", () => {
+    const items = [
+      { ...svc("LLC Annual Management — 2nd Installment 2026", 1000), item_type: "service" },
+      { description: CREDIT_LINE_LABEL, quantity: 1, unit_price: -200, amount: -200, item_type: "service" },
+    ]
+    // Correcting the total to 849 (the true gross) minus the untouched -200 credit → service line becomes 649.
+    const r = adjustSingleServiceLineForTotal(items, 649)
+    expect(r.ok).toBe(true)
+    expect(r.items).toHaveLength(2)
+    expect(r.items[0]).toMatchObject({ unit_price: 849, amount: 849 })
+    expect(r.items[1]).toMatchObject({ description: CREDIT_LINE_LABEL, unit_price: -200, amount: -200 })
+    expect(sumLineAmounts(r.items)).toBe(649)
+  })
+
+  it("refuses when there is no service line to adjust", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: CREDIT_LINE_LABEL, quantity: 1, unit_price: -200, amount: -200 }],
+      500,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/no service line/i)
+    expect(r.items).toHaveLength(1) // unchanged, returned as-is
+  })
+
+  it("refuses when there is more than one service line (ambiguous which one to adjust)", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [svc("Setup", 500), svc("Filing fee", 300)],
+      600,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/more than one line/i)
+  })
+
+  it("refuses when the one non-credit line is a card-processing fee — never lets a total edit silently absorb the fee", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Card processing fee", quantity: 1, unit_price: 50, amount: 50, item_type: "fee" }],
+      75,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it("refuses when a real service line sits alongside a fee line (two non-credit lines)", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [
+        { ...svc("Installment 2 (Jun)", 1000), item_type: "service" },
+        { description: "Card processing fee", quantity: 1, unit_price: 50, amount: 50, item_type: "fee" },
+      ],
+      1100,
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it("preserves quantity, recomputing unit_price so quantity × unit_price = the corrected amount", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Monthly fee", quantity: 4, unit_price: 100, amount: 400 }],
+      600,
+    )
+    expect(r.ok).toBe(true)
+    expect(r.items[0]).toMatchObject({ quantity: 4, unit_price: 150, amount: 600 })
+  })
+
+  it("rounds money to cents", () => {
+    const r = adjustSingleServiceLineForTotal([svc("Service", 1000)], 333.335)
+    expect(r.ok).toBe(true)
+    expect(r.items[0].amount).toBeCloseTo(333.34, 2)
+  })
+
+  it("refuses when quantity doesn't divide the corrected total evenly to the cent (finance-auditor finding)", () => {
+    // qty 3 against $1000 → unit_price would round to 333.33, and 333.33 × 3 = 999.99 ≠ 1000.00
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Retainer", quantity: 3, unit_price: 333.33, amount: 999.99 }],
+      1000,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/doesn't divide evenly/i)
+    expect(r.items).toHaveLength(1) // unchanged, returned as-is
+  })
+
+  it("still succeeds when quantity divides the corrected total evenly", () => {
+    const r = adjustSingleServiceLineForTotal(
+      [{ description: "Retainer", quantity: 4, unit_price: 100, amount: 400 }],
+      800,
+    )
+    expect(r.ok).toBe(true)
+    expect(r.items[0]).toMatchObject({ quantity: 4, unit_price: 200, amount: 800 })
   })
 })

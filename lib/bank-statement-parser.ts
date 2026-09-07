@@ -10,7 +10,7 @@
  */
 
 import { sniffCsvDialect, parseDelimitedRows, detectCsvSignature, parseRelayCSV, parseMercuryCSV, parseRevolutCSV, parseSlashCSV, parseGenericCSV, stableRowRef, dedupeRefs } from "./bank-csv-parsers"
-import { matchMemberName, findNearMissMembers, SUSPECTED_SEP, ASK_CLIENT_NOTE } from "./tax/member-names"
+import { matchMemberForTransaction, findNearMissMembers, SUSPECTED_SEP, ASK_CLIENT_NOTE } from "./tax/member-names"
 export { ASK_CLIENT_NOTE, suspectedMemberFromNotes } from "./tax/member-names"
 
 // The suspected-member mark lives in ./tax/member-names (pure, client-safe):
@@ -163,7 +163,20 @@ export function categorizeTransaction(
     // old test lowercased and called String.includes, which both missed
     // "JOSE MUNOZ" against a CRM "Josè Muñoz" — a missed member is a silently
     // deducted owner draw — and let a short name hide inside a longer word.
-    const matched = matchMemberName(`${desc} ${cp}`, memberNames)
+    //
+    // COUNTERPARTY RAW, DESCRIPTION THROUGH payeePart (2026-09-03, Fast
+    // Consulting / MushBrew / THW incident). Joining `${desc} ${cp}` and
+    // searching the whole blob let a member's name in the DESCRIPTION alone
+    // outrank an already-correct, different vendor sitting in the
+    // COUNTERPARTY: Relay's "{Vendor} | Spend | ... - Sent By {Cardholder}"
+    // format named the corporate card's holder, not the payee, and every one
+    // of 281 real rows checked had a clean distinct vendor in counterparty
+    // already. matchMemberForTransaction (lib/tax/member-names.ts) checks
+    // counterparty raw first — a wire truly made out to a member must still
+    // fire with nothing else to go on, preserving the Dynamiq fix above — and
+    // only falls back to the description with the card-holder / reference
+    // noise stripped out.
+    const matched = matchMemberForTransaction(desc, cp, memberNames)
     if (matched) {
       if (tx.amount < 0) {
         category = "distribution"

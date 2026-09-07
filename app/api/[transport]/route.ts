@@ -177,7 +177,7 @@ const handler = createMcpHandler(
 // Priority: check static key first (fast), then OAuth token (DB lookup)
 
 import { validateAccessToken } from "@/lib/oauth"
-import { runWithMcpAuthContext } from "@/lib/mcp/auth-context"
+import { runWithMcpAuthContext, resolveAdditionalStaticKeyEmail, resolvePrimaryStaticKeyEmail } from "@/lib/mcp/auth-context"
 
 function withAuth(
   mcpHandler: (req: Request) => Promise<Response>
@@ -208,11 +208,26 @@ function withAuth(
     const token = authHeader.slice(7)
 
     // Method 1: Static API key (Claude Code)
+    //
+    // TD_MCP_API_KEY is Antonio's own key — kept as its own env var rather than
+    // folded into the map below so his access can never depend on that map
+    // being present or well-formed. TD_MCP_ADDITIONAL_KEYS is an optional JSON
+    // object of {"email": "key"} for anyone ELSE running a Claude Code session
+    // against this server, e.g. {"luca@tonydurante.us": "<their own secret>"}.
+    //
+    // Resolving a real, specific email HERE — not leaving "static" unattributed
+    // — is the fix for a real gap: every static key used to be silently treated
+    // as Antonio himself (see lib/mcp/auth-context.ts), so the day a second
+    // person's key existed, their requests would have inherited Antonio's own
+    // access to his private Drive folder and been mis-attributed as him in
+    // team chat. One key per person, resolved before the request context is
+    // ever created, closes both at once.
     if (token === apiKey) {
-      // The auth-method context lets identity-sensitive tools (team_chat_send's
-      // "on behalf of" stamp) distinguish the shared Claude Code key from an
-      // identified OAuth session — see lib/mcp/auth-context.ts.
-      return runWithMcpAuthContext({ method: "static" }, () => mcpHandler(req))
+      return runWithMcpAuthContext({ method: "static", email: resolvePrimaryStaticKeyEmail() }, () => mcpHandler(req))
+    }
+    const additionalKeyEmail = resolveAdditionalStaticKeyEmail(token)
+    if (additionalKeyEmail) {
+      return runWithMcpAuthContext({ method: "static", email: additionalKeyEmail }, () => mcpHandler(req))
     }
 
     // Method 2: OAuth access token (Claude.ai)

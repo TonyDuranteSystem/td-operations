@@ -33,7 +33,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare, X, Minus, Send, Loader2, StickyNote, Paperclip,
   Volume2, VolumeX, RotateCcw, Smile, MoreHorizontal, Pencil, Trash2, Copy, Plus, Building2,
-  ChevronLeft,
+  ChevronLeft, Check,
 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -231,6 +231,38 @@ function FloatingChatInner() {
     }
   }, [qc])
 
+  // "Mark done" — personal dismiss of THIS conversation's mentions (2026-09-05,
+  // Antonio's direct ask after the ever_mentioned fix). Reappears in the
+  // CLIENTS list on a fresh mention; see the dismiss-mention route + its
+  // migration for why this can't just piggyback on markRead above.
+  //
+  // Sends `asOf` = the click's own timestamp, captured HERE before the
+  // request goes out — not left for the server to stamp on arrival
+  // (bug-hunter, 2026-09-05: server-processing latency was extra room for a
+  // genuinely fresh mention, sent before the click, to lose the race and be
+  // silently swallowed). A real, deliberate button click also gets the same
+  // R099 error surfacing Composer.send/MessageMenu.call use — unlike
+  // markRead's silent best-effort ping above, a failed "Mark done" should not
+  // read as done to someone who just watched it not disappear.
+  const dismissMention = useCallback(async (threadId: string | null) => {
+    if (!threadId) return
+    setMsgError(null)
+    try {
+      const res = await fetch(`/api/team/threads/${threadId}/dismiss-mention`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asOf: new Date().toISOString() }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not mark done — try again.')
+      }
+      qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })
+    } catch (e) {
+      setMsgError(e instanceof Error ? e.message : 'Could not mark done — try again.')
+    }
+  }, [qc])
+
   // ─── external "open this thread" ───
   //
   // Lets another surface (the "Discuss this note" button) open a specific
@@ -399,6 +431,7 @@ function FloatingChatInner() {
           onChanged={() => { if (openThreadIdRef.current) loadMessages(openThreadIdRef.current) }}
           onSent={(m) => { setMessages((prev) => mergeChatMessages(prev, [m])); markRead(openThreadId) }}
           onError={setMsgError}
+          onDismissMention={() => dismissMention(openThreadId)}
         />
       )}
 
@@ -472,6 +505,7 @@ function FloatingChatInner() {
           onSent={(m) => { setMessages((prev) => mergeChatMessages(prev, [m])); markRead(openThreadIdRef.current) }}
           onError={setMsgError}
           onClose={() => setSheetOpen(false)}
+          onDismissMention={() => dismissMention(openThreadIdRef.current)}
         />
       )}
 
@@ -517,6 +551,7 @@ function DesktopWindow(props: {
   onChanged: () => void
   onSent: (m: ChatMessage) => void
   onError: (e: string | null) => void
+  onDismissMention: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<FracPos>(CHAT_WINDOW_DEFAULT_POS)
@@ -593,6 +628,13 @@ function DesktopWindow(props: {
             <FastTooltip label="New chat">
               <button data-no-drag onClick={props.onNewChat} className="rounded p-1 hover:bg-white/20" aria-label="New chat">
                 <Plus className="h-4 w-4" />
+              </button>
+            </FastTooltip>
+          )}
+          {!props.isList && props.openThread?.thread_type === 'discussion' && props.openThread?.ever_mentioned === true && (
+            <FastTooltip label="Mark done — clears from your list until mentioned again">
+              <button data-no-drag onClick={props.onDismissMention} className="rounded p-1 hover:bg-white/20" aria-label="Mark done">
+                <Check className="h-4 w-4" />
               </button>
             </FastTooltip>
           )}
@@ -1330,6 +1372,7 @@ function MobileSheet(props: {
   onSent: (m: ChatMessage) => void
   onError: (e: string | null) => void
   onClose: () => void
+  onDismissMention: () => void
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[47] flex flex-col justify-end bg-black/30" onClick={props.onClose}>
@@ -1347,6 +1390,11 @@ function MobileSheet(props: {
             {!props.openThreadId && (
               <button onClick={props.onNewChat} className="rounded p-1 hover:bg-white/20" aria-label="New chat">
                 <Plus className="h-4 w-4" />
+              </button>
+            )}
+            {!!props.openThreadId && props.openThread?.thread_type === 'discussion' && props.openThread?.ever_mentioned === true && (
+              <button onClick={props.onDismissMention} className="rounded p-1 hover:bg-white/20" aria-label="Mark done">
+                <Check className="h-4 w-4" />
               </button>
             )}
             <button onClick={props.onClose} className="rounded p-1 hover:bg-white/20" aria-label="Close">

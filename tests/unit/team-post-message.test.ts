@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { validateTeamPostTarget, validateTeamPostMessage, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
+import { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
 
 describe('validateTeamPostTarget', () => {
   it('accepts exactly one target', () => {
@@ -37,5 +37,37 @@ describe('validateTeamPostMessage', () => {
   it('rejects an invalid card but accepts none', () => {
     expect(validateTeamPostMessage('hi', null)).toBeNull()
     expect(validateTeamPostMessage('hi', { kind: 'link' })).toBeTruthy() // missing required card fields
+  })
+})
+
+describe('validateTeamPostAttachments', () => {
+  const HOST = 'https://ydzipybqeebtpcvsbtvs.supabase.co'
+  const ok = { url: `${HOST}/storage/v1/object/public/assets/foo.pdf`, name: 'foo.pdf' }
+
+  it('accepts none / empty / null', () => {
+    expect(validateTeamPostAttachments(undefined, HOST)).toBeNull()
+    expect(validateTeamPostAttachments(null, HOST)).toBeNull()
+    expect(validateTeamPostAttachments([], HOST)).toBeNull()
+  })
+  it('accepts an attachment hosted on our own Storage', () => {
+    expect(validateTeamPostAttachments([ok], HOST)).toBeNull()
+  })
+  it('accepts multiple valid attachments', () => {
+    expect(validateTeamPostAttachments([ok, { ...ok, url: `${HOST}/storage/v1/object/public/assets/bar.png`, name: 'bar.png' }], HOST)).toBeNull()
+  })
+  it('rejects an off-site URL', () => {
+    expect(validateTeamPostAttachments([{ url: 'https://evil.example.com/f.pdf', name: 'f.pdf' }], HOST)).toMatch(/must be hosted on our own storage/i)
+  })
+  it('rejects a missing url', () => {
+    expect(validateTeamPostAttachments([{ url: '', name: 'f.pdf' }], HOST)).toMatch(/needs a url/i)
+  })
+  it('rejects a missing name', () => {
+    expect(validateTeamPostAttachments([{ url: `${HOST}/storage/v1/object/public/assets/f.pdf`, name: '' }], HOST)).toMatch(/needs a name/i)
+  })
+  it('one bad attachment among good ones still fails the whole batch', () => {
+    expect(validateTeamPostAttachments([ok, { url: 'https://evil.example.com/f.pdf', name: 'f.pdf' }], HOST)).toMatch(/must be hosted on our own storage/i)
+  })
+  it('with no configured host, only checks presence (defense in depth without blocking local/test runs)', () => {
+    expect(validateTeamPostAttachments([{ url: 'https://anywhere.example.com/f.pdf', name: 'f.pdf' }], '')).toBeNull()
   })
 })

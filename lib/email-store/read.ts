@@ -14,6 +14,7 @@
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { rewriteCidSources, safeEmailDate } from "@/lib/inbox/email-html"
+import { isOwnMailboxAddress } from "@/lib/gmail"
 import type { InboxMessage } from "@/lib/types"
 import { EMAIL_CONTENT_BUCKET } from "./capture"
 import { assertMailbox, type Mailbox } from "./paths"
@@ -21,8 +22,6 @@ import { assertMailbox, type Mailbox } from "./paths"
 // email tables aren't in the generated Database types yet (same escape as sync.ts).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-
-const OUR_ADDRESSES = ["support@tonydurante.us", "antonio.durante@tonydurante.us"]
 
 export interface StoredThread {
   subject: string
@@ -154,7 +153,11 @@ export async function loadStoredThread(
     }))
 
     const fromAddr = raw.from_email || ""
-    const isOutbound = OUR_ADDRESSES.some((a) => fromAddr.includes(a))
+    // Same shared "ours" definition the live-Gmail read path uses
+    // (app/api/inbox/messages/[id]/route.ts) — this local copy previously
+    // missed real send-as aliases (office@, compliance@), which would have
+    // disagreed with the live path on the identical message (dev job ec61a2ae).
+    const isOutbound = isOwnMailboxAddress(fromAddr)
     const toLine = (raw.to_emails ?? []).join(", ")
 
     messages.push({

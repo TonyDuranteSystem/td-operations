@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, AlertTriangle, StickyNote, Link2, Languages } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -15,7 +15,6 @@ import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
-import { ThreadIssuesPanel } from '@/components/portal-chats/thread-issues-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
@@ -39,6 +38,7 @@ import {
   type TopicTemplate,
 } from '@/lib/chat/topic-templates'
 import { interpolateBodyTemplate, interpolateStringStrict } from '@/lib/chat/handler-primitives'
+import type { AddressedToOption } from '@/lib/portal/addressed-to'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -147,6 +147,13 @@ interface ChatMessage {
   // PR 2 Step 6 (2026-05-05): tag chosen by sender. NULL = legacy
   // untagged message (pre-PR 2). Renders without a badge.
   sender_context?: 'person' | 'company' | null
+  // "Addressed to" label (dev job 08a8be62) — resolved name of the member this
+  // company-scoped staff message was addressed to, when set. Staff-facing only.
+  addressed_to_name?: string | null
+  // Explicit "addressed to the whole company" (dev job 08a8be62, 2026-09-05) —
+  // a DIFFERENT state from addressed_to_name being null, which just means
+  // nobody set anything. Staff-facing only, same as addressed_to_name.
+  addressed_to_company?: boolean
   created_at: string
   attachment_url?: string
   attachment_name?: string
@@ -282,6 +289,75 @@ export default function PortalChatsPage() {
   const [selectedThreadCompanies, setSelectedThreadCompanies] = useState<{ id: string; name: string; overdue?: OverdueSummary | null; closed?: boolean }[]>([])
   /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
   const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
+  // "Addressed to" — staff-picked label for WHICH member of a multi-member
+  // account this message is addressed to (dev job 08a8be62). Display
+  // metadata only — never gates visibility (lib/portal/admin-send-scope.ts
+  // is untouched by this feature). null = "no explicit pick yet, defer to
+  // the system's guess" — mirrors the existing panelCompanyId fallback
+  // pattern below, not a separate flag, so there's no extra state to keep
+  // in sync. Reset everywhere selectedCompanyId already resets (thread
+  // switch, New Chat, mobile Back) since a stale pick from a DIFFERENT
+  // account's roster must never silently carry into this one.
+  const [selectedAddressedToContactId, setSelectedAddressedToContactId] = useState<string | null>(null)
+  // Explicit "addressed to the whole company" (Antonio, 2026-09-05, dev job
+  // 08a8be62 — found live on a real multi-member account: the picker only
+  // ever offered individual members, with no way to say "the whole company"
+  // itself, and the unset default looked identical to a message nobody had
+  // bothered to label). A SEPARATE boolean, not a sentinel value stuffed
+  // into selectedAddressedToContactId — that field is compared directly
+  // against real contact ids elsewhere (`addressedToOptions.find(o =>
+  // o.contactId === ...)`), and a magic string there risks matching or
+  // breaking that comparison by accident. Mutually exclusive with a
+  // specific member — enforced on every click that sets either one, not
+  // just server-side. Never guessed/defaulted like a member pick can be
+  // (pickAddressedToGuess) — this one is opt-in only, since the entire
+  // point is that staff meant it, not that the system assumed it. Reset
+  // everywhere selectedAddressedToContactId already resets.
+  const [selectedAddressedToCompany, setSelectedAddressedToCompany] = useState(false)
+  const [addressedToJustChanged, setAddressedToJustChanged] = useState(false)
+  // Pre-send confirmation pop-up (Antonio, 2026-09-04 — explicit, deliberate
+  // override of the council's ambient-indicator recommendation, made AFTER
+  // seeing the ambient version live and rejecting it: "I want a pop-up...
+  // Even in a single-member LLC, there is a personal and a company"). Opens
+  // on EVERY send, every conversation shape, no exceptions — the modal reads
+  // and edits the SAME live selection state the ambient chips already used
+  // (selectedCompanyId / selectedAddressedToContactId / adminActiveTopic), so
+  // there is no separate copy of the choice to keep in sync; it is captured
+  // at "Confirm & Send" time, mirroring the existing capture-before-await
+  // discipline (dev job c3bb4abc) one step later than before.
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false)
+  // Modal's OWN "create a new topic" toggle — deliberately NOT the ambient
+  // tab bar's adminCreatingTopic/adminNewTopicInput, even though the modal
+  // reuses that shared pair's OUTPUT (adminActiveTopic) on commit. Found by
+  // testing: the ambient tab bar stays mounted behind the modal's backdrop,
+  // so sharing the toggle meant BOTH inputs rendered at once, both with
+  // autoFocus — the second one stealing focus fired the first one's onBlur,
+  // which reset the (shared) flag back to false before a single character
+  // could be typed. This pair is ephemeral UI state private to one widget at
+  // a time, unlike adminActiveTopic itself, which correctly stays shared.
+  const [modalCreatingTopic, setModalCreatingTopic] = useState(false)
+  const [modalNewTopicInput, setModalNewTopicInput] = useState('')
+  // Which conversation the modal was opened FOR (bug-hunter review,
+  // 2026-09-04, before ship). The modal can sit open indefinitely by design
+  // (staff take their time deciding) — but this page also supports switching
+  // conversations via the browser Back button while it's open
+  // (use-selection-history's popstate listener is window-level and isn't
+  // blocked by the modal's backdrop the way a mouse click would be). Without
+  // pinning, the modal keeps re-rendering to reflect whatever conversation is
+  // NOW selected, while still LOOKING like the confirmation staff already
+  // read for the ORIGINAL one — "Confirm & Send" would target a conversation
+  // never actually confirmed. Pinned at open time; the effect below force-
+  // closes the modal the instant the selection drifts away from it, treating
+  // a conversation switch as an implicit cancel — never a silent redirect.
+  const [sendConfirmTargetKey, setSendConfirmTargetKey] = useState<string | null>(null)
+  // Single close path so a leftover "typing a new topic" draft never survives
+  // into the next time the modal opens.
+  const closeSendConfirm = () => {
+    setSendConfirmOpen(false)
+    setModalCreatingTopic(false)
+    setModalNewTopicInput('')
+    setSendConfirmTargetKey(null)
+  }
   const [selectedName, setSelectedName] = useState<{ company: string; contact?: string } | null>(null)
   // Company CONTEXT for read-only side panels (AI assistant, Issues, To-Do
   // cards, notes, the solo-company realtime arm): the explicit chip selection
@@ -324,9 +400,9 @@ export default function PortalChatsPage() {
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email' | 'worker' | 'issues'>('messages')
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email' | 'worker'>('messages')
   // Chat-list filter chip: all / unread / whatsnew / issues.
-  const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew' | 'issues'>('all')
+  const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew'>('all')
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -347,6 +423,12 @@ export default function PortalChatsPage() {
   useSelectionHistory(
     { account: selectedAccountId, contact: selectedContactId, thread: selectedThreadId, view: sidebarView },
     (v) => {
+      // Bug-hunter review, 2026-09-05 (round 3, before ship): whether this
+      // restore is landing on the SAME client conversation must be captured
+      // BEFORE the setters below overwrite selectedAccountId/selectedContactId
+      // — it's the one fact that decides whether the send-scope reset further
+      // down is safe or a real bug.
+      const isSameConversation = v.account === selectedAccountId && v.contact === selectedContactId
       setSelectedAccountId(v.account)
       setSelectedContactId(v.contact)
       setSelectedThreadId(v.thread)
@@ -358,7 +440,8 @@ export default function PortalChatsPage() {
       const t = threads?.find(x => (v.account ? x.account_id === v.account : v.contact ? x.contact_id === v.contact : false))
       if (!t) {
         setSelectedName(null); setSelectedThreadContactId(null)
-        setSelectedThreadMembers([]); setSelectedThreadCompanies([]); setSelectedCompanyId(null)
+        setSelectedThreadMembers([]); setSelectedThreadCompanies([])
+        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }
         return
       }
       const members = t.members ?? []
@@ -375,9 +458,42 @@ export default function PortalChatsPage() {
       // The old first-open-company default is how the 2026-08-07 cross-company
       // leak happened (dev job 4bad3094). Company sends now require an explicit
       // chip click; panels derive their own context via panelCompanyId.
-      setSelectedCompanyId(null)
+      //
+      // BUT that reset must only fire when this restore is actually landing on
+      // a DIFFERENT client conversation — not on every popstate. Before this
+      // guard, clicking the Internal tab to glance at a team thread and clicking
+      // back to Chats (or any Back/Forward step that doesn't change which
+      // client is selected) pushed a history entry that, on restore, silently
+      // reset an already-confirmed "send as Company X" choice back to
+      // Personal — including while the pre-send confirmation pop-up was open
+      // and still showing "Company X" on screen, so staff confirming what they
+      // saw would have actually sent it person-scoped instead. Bug-hunter
+      // review, 2026-09-05 (round 3, before ship). Restoring onto a genuinely
+      // different client still resets both, exactly as the 2026-08-07 fix
+      // requires — this narrows WHEN the reset fires, it doesn't remove it.
+      if (!isSameConversation) {
+        setSelectedCompanyId(null)
+        setSelectedAddressedToContactId(null)
+        setSelectedAddressedToCompany(false)
+      }
     },
   )
+  // Force-closes the pre-send confirmation pop-up the instant its pinned
+  // conversation (see sendConfirmTargetKey above) drifts away, OR the client-
+  // chat panel it belongs to gets hidden behind an internal staff thread —
+  // selectedThreadId being set hides this same panel outright (see its
+  // `hidden` toggle a few hundred lines down). Watching only account/contact
+  // missed that second case: switching to an internal thread while staying
+  // on the same client's account/contact left the pop-up floating on top of
+  // the now-hidden client panel instead of closing with it. Bug-hunter
+  // review, 2026-09-05 (round 3, before ship). Placed after selectedThreadId
+  // is declared above — TypeScript block-scoping requires it.
+  useEffect(() => {
+    if (!sendConfirmOpen) return
+    const currentKey = selectedAccountId || selectedContactId || null
+    if (currentKey !== sendConfirmTargetKey || selectedThreadId) closeSendConfirm()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId, selectedThreadId])
   const [internalReplyText, setInternalReplyText] = useState('')
   const [internalPendingFile, setInternalPendingFile] = useState<PendingAdminFile | null>(null)
   const [internalUploading, setInternalUploading] = useState(false)
@@ -677,17 +793,6 @@ export default function PortalChatsPage() {
     refetchInterval: 60_000,
   })
 
-  // Per-thread ⚠️ = this client has open diagnostic issues. Reads the cheap
-  // cached counts (client_issue_counts); the full diagnostic + fixes run in the
-  // Issues tab. Only accounts with >0 issues are returned.
-  const { data: issueCounts } = useQuery<{
-    counts: Record<string, { error: number; warning: number }>
-  }>({
-    queryKey: ['portal-chat-issue-counts'],
-    queryFn: () => fetch('/api/portal-chats/issue-counts').then(r => r.json()),
-    refetchInterval: 120_000,
-  })
-
   // Real-time green dot: Gmail push → /api/webhooks/gmail-push inserts a
   // wake-up row → refetch unread buckets within seconds (60s poll = fallback).
   useEffect(() => {
@@ -878,16 +983,59 @@ export default function PortalChatsPage() {
       toast.error("Couldn't find that message — it may be much older or deleted.")
       return
     }
-    didScrollToTargetRef.current = true
     setAdminActiveTopic(target.topic ?? null)
-    const flash = window.setTimeout(() => {
+    // didScrollToTargetRef flips to "resolved" only once the scroll actually
+    // HAPPENS — never on a bare attempt. Two bugs lived in the old single
+    // "set true, then look up the element" shape:
+    //  1. Flipping it BEFORE scheduling the scroll let the jump-to-latest
+    //     effect's own deep-link guard see "resolved" up to 120ms before any
+    //     scroll had happened, so a messages update landing in that window (a
+    //     realtime sync or the near-simultaneous background refetch that
+    //     already fires on a fresh load) could jump to the bottom first, and
+    //     this timeout then had nothing left to override.
+    //  2. Flipping it INSIDE the timeout but before checking the element
+    //     existed meant a transient miss (the message list re-rendering at
+    //     that exact 120ms mark — very plausible on a fresh load with the
+    //     same near-simultaneous refetch above) gave up FOREVER with no retry
+    //     and no error, since the "not found" toast only covers the separate
+    //     not-in-combinedMessages case above.
+    // Both silently reproduced "opens the chat, not that specific message"
+    // (Antonio, 2026-09-02). Verified live: a bare retry-on-next-data-change
+    // wasn't enough either — on a genuinely fresh load the element doesn't
+    // reliably exist within ~2s (a busy account's list, hydration, and the
+    // topic-switch re-render all compete for that window), but nothing else
+    // changes `combinedMessages` in that window to retry a one-shot miss.
+    // POLL for the element with a generous ceiling instead of guessing a delay.
+    // A found-and-scrolled element is NOT trusted blindly: right after the
+    // topic-switch re-render, getElementById can return a transient/duplicate
+    // node from a reconciliation pass that's discarded a moment later — the
+    // scroll silently lands on a node nobody keeps, so a NEXT-FRAME check
+    // confirms the target actually ended up on screen before giving up on it.
+    let attempts = 0
+    const tryScroll = () => {
       const el = document.getElementById(`pc-msg-${targetMessageId}`)
-      if (!el) return
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      setHighlightedMessageId(targetMessageId)
-      window.setTimeout(() => setHighlightedMessageId(null), 2800)
-    }, 120) // let the topic switch re-render the list first
-    return () => window.clearTimeout(flash)
+      if (el) {
+        el.scrollIntoView({ behavior: 'instant', block: 'center' })
+        requestAnimationFrame(() => {
+          const check = document.getElementById(`pc-msg-${targetMessageId}`)
+          const rect = check?.getBoundingClientRect()
+          const onScreen = rect && rect.bottom > 0 && rect.top < window.innerHeight
+          if (check && onScreen) {
+            didScrollToTargetRef.current = true
+            setHighlightedMessageId(targetMessageId)
+            setTimeout(() => setHighlightedMessageId(null), 2800)
+            return
+          }
+          attempts += 1
+          if (attempts < 75) timer = setTimeout(tryScroll, 200) // ~15s ceiling
+        })
+        return
+      }
+      attempts += 1
+      if (attempts < 75) timer = setTimeout(tryScroll, 200) // ~15s ceiling
+    }
+    let timer = setTimeout(tryScroll, 120) // let the topic switch re-render the list first
+    return () => clearTimeout(timer)
   }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
   // Unread count per topic tab (client + system messages not yet read by admin).
@@ -1689,13 +1837,24 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToContactId: string | null; targetAddressedToCompany: boolean }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(targetAccountId
-            ? { account_id: targetAccountId }
+            ? {
+                account_id: targetAccountId,
+                // "Addressed to" label (dev job 08a8be62) — display metadata
+                // only, deliberately NOT sent as contact_id/sender_context
+                // (that pair is decideAdminSendScope's leak-prevention gate,
+                // which only recognizes account_contacts links and would
+                // wrongly reject a real company-type member). Sent as its
+                // own field; the server drops it silently if invalid rather
+                // than blocking the send.
+                ...(targetAddressedToContactId ? { addressed_to_contact_id: targetAddressedToContactId } : {}),
+                ...(targetAddressedToCompany ? { addressed_to_company: true } : {}),
+              }
             : {
                 contact_id: targetContactId,
                 // Person-thread sends declare their scope explicitly (2026-08-07
@@ -1711,7 +1870,10 @@ export default function PortalChatsPage() {
           topic: targetTopic || undefined,
         }),
       })
-      if (!res.ok) throw new Error('Failed to send')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to send — please try again.')
+      }
       return res.json()
     },
     onSuccess: async (_data, variables) => {
@@ -1756,6 +1918,16 @@ export default function PortalChatsPage() {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', targetKey] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
+    // A rejected send used to fail completely silently — no toast, no
+    // visible state change, staff had no way to know the message never
+    // went out (council pass 2, senior-engineer). The draft/attachments are
+    // deliberately left in place on failure so staff can just hit Send
+    // again — note that a retry with an attachment re-uploads the file
+    // (accepted cost for now; caching the already-uploaded URL is a
+    // separate follow-up if it ever comes up in practice).
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send — please try again.')
+    },
   })
 
   // Reset topic when thread changes
@@ -1763,6 +1935,15 @@ export default function PortalChatsPage() {
     setAdminActiveTopic(null)
     setAdminCreatingTopic(false)
     setAdminNewTopicInput('')
+  }, [selectedAccountId, selectedContactId])
+
+  // Reset the "addressed to" pick when the thread changes — same trigger as
+  // topic above. Belt-and-braces alongside the resets in the thread-click
+  // handler and useSelectionHistory restore: a stale pick from a DIFFERENT
+  // account's member roster must never carry into this one.
+  useEffect(() => {
+    setSelectedAddressedToContactId(null)
+    setSelectedAddressedToCompany(false)
   }, [selectedAccountId, selectedContactId])
 
   // Scroll to the latest message. On OPENING a thread we jump instantly to the
@@ -1776,6 +1957,19 @@ export default function PortalChatsPage() {
     const threadKey = selectedAccountId ?? selectedContactId ?? null
     const isThreadSwitch = scrollThreadKeyRef.current !== threadKey
     scrollThreadKeyRef.current = threadKey
+    // A ?message= deep link OWNS the scroll position for this page view, full
+    // stop — not just "until resolved". Gating only on unresolved was still
+    // wrong: once the deep-link scroll succeeded, this effect's own guard
+    // opened back up, and the very next unrelated `messages` update (the
+    // mark-as-read POST's own refetch fires within a second of opening the
+    // thread) hit the unconditional smooth-scroll-to-bottom below and yanked
+    // the view away from the message that was just centered — silently
+    // landing back at the newest message instead of the linked one (Antonio,
+    // 2026-09-02: "it opens the chat, not that specific message"). It's also
+    // the right product behaviour regardless of the bug: someone who followed
+    // a link to one historical message is reading history, not asking to be
+    // snapped to "latest" the moment any background refetch lands.
+    if (targetMessageId) return
     if (isThreadSwitch) {
       // Two frames + a short fallback so late layout (images, tabs) can't strand
       // the view above the last message.
@@ -1785,7 +1979,7 @@ export default function PortalChatsPage() {
       return () => clearTimeout(t)
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, selectedAccountId, selectedContactId])
+  }, [messages, selectedAccountId, selectedContactId, targetMessageId])
 
   // Auto-grow textareas
   useEffect(() => {
@@ -1875,6 +2069,49 @@ export default function PortalChatsPage() {
     ? (selectedName?.company ?? 'this company')
     : (selectedThreadCompanies.find(c => c.id === selectedCompanyId)?.name ?? 'this company')
 
+  // "Addressed to" — real member roster + a pre-fill guess (dev job 08a8be62),
+  // fetched FRESH from the account's own members table every time the thread
+  // (or the reply target) changes — never trusted from selectedThreadMembers,
+  // which is populated from account_contacts and can miss real members
+  // (council pass 1 & 2 finding).
+  //
+  // Enabled on selectedAccountId ALONE (dev job e01fe70f) — it used to also
+  // require selectedThreadMembers.length > 0, but that state is only ever
+  // populated by the sidebar's own thread-click handler, never by "New Chat"
+  // search, a direct/hard ?account= navigation (every "jump to this client's
+  // chat" link on the dashboard), or the Actions tab — all three leave it at
+  // its initial []. That silently hid this whole feature on those paths,
+  // reintroducing the exact ambiguity it exists to remove. The render gates
+  // below now key on this query's own result (addressedToOptions), which is
+  // correct regardless of how staff got here.
+  const { data: addressedToData } = useQuery<{ members: AddressedToOption[]; guessContactId: string | null }>({
+    queryKey: ['portal-chat-addressed-to', selectedAccountId, replyToMsg?.id ?? null],
+    queryFn: () => fetch(`/api/portal/chat/members?account_id=${selectedAccountId}${replyToMsg?.id ? `&reply_to_id=${replyToMsg.id}` : ''}`).then(r => r.json()),
+    enabled: !!selectedAccountId,
+    staleTime: 60_000,
+  })
+  const addressedToOptions = addressedToData?.members ?? []
+  // null selection defers to the guess — mirrors panelCompanyId's own
+  // selectedCompanyId-or-fallback pattern a few lines above, so a fresh
+  // guess (e.g. the reply target changed) shows up live unless staff has
+  // explicitly picked someone for THIS thread already.
+  const effectiveAddressedToContactId = selectedAddressedToContactId ?? addressedToData?.guessContactId ?? null
+  const addressedToSelectedOption = addressedToOptions.find(o => o.contactId === effectiveAddressedToContactId) ?? null
+  // Brief highlight, not a continuous pulse — that pattern already means
+  // "unread, needs a response" elsewhere on this page (Erika Hall, council
+  // pass 2); reusing it here would dilute what it means everywhere else.
+  const prevAddressedToGuessRef = useRef<string | null>(null)
+  useEffect(() => {
+    const guess = addressedToData?.guessContactId ?? null
+    if (prevAddressedToGuessRef.current !== null && prevAddressedToGuessRef.current !== guess && selectedAddressedToContactId === null && !selectedAddressedToCompany) {
+      setAddressedToJustChanged(true)
+      const t = setTimeout(() => setAddressedToJustChanged(false), 1500)
+      return () => clearTimeout(t)
+    }
+    prevAddressedToGuessRef.current = guess
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressedToData?.guessContactId])
+
   const selectedClosedCompany = selectedThreadCompanies.find(c => c.id === selectedCompanyId && c.closed)
   const sendingToClosedAccount = selectedAccountId
     ? !!currentThreadForGuard?.account_closed
@@ -1883,16 +2120,62 @@ export default function PortalChatsPage() {
     ? (currentThreadForGuard?.company_name ?? 'This company')
     : (selectedClosedCompany?.name ?? 'This company')
 
-  const handleSend = async () => {
+  // Opens the pre-send confirmation pop-up (Antonio, 2026-09-04) instead of
+  // sending directly. Every guard that used to gate the send itself still
+  // gates opening the pop-up — an empty message, a closed account, or an
+  // in-flight send never gets as far as the modal. The actual send only
+  // happens from performSend(), fired by the modal's own "Confirm & Send"
+  // button, never from here.
+  const handleSend = () => {
     if ((!replyText.trim() && pendingAdminFiles.length === 0) || (!selectedAccountId && !selectedContactId) || sendMutation.isPending || uploadingAdminFile) return
     if (sendingToClosedAccount) {
       toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
       return
     }
     if (isRecording) stopRecording()
-    if (inputRef.current) inputRef.current.style.height = 'auto'
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+      // Blur so further typing while the modal is open can't silently
+      // change what's about to be sent (bug-hunter review, 2026-09-04) —
+      // the modal shows no message preview, so drift here would be invisible.
+      inputRef.current.blur()
+    }
+    setSendConfirmTargetKey(selectedAccountId || selectedContactId || null)
+    setSendConfirmOpen(true)
+  }
 
-    // Captured now, at click time, before any upload/network await — this is
+  // Fires the actual send, exactly as handleSend used to do inline — the only
+  // change is WHEN this runs: after "Confirm & Send" inside the pop-up,
+  // instead of immediately on the composer's Send button. The capture-before-
+  // await discipline is unchanged and just as necessary here: the modal can
+  // sit open for as long as staff takes to decide, which is a longer window
+  // than the old attachment-upload await this pattern was originally built
+  // for (dev job c3bb4abc).
+  const performSend = async () => {
+    // Guard against a fast double-click on "Confirm & Send" firing twice
+    // before the modal's own re-render closes it — mirrors handleSend's
+    // original isPending guard, now needed here since the modal can sit
+    // open indefinitely and the click is a second, later event.
+    if (sendMutation.isPending || uploadingAdminFile) return
+    // Re-check the closed-account guard: staff could switch the company chip
+    // to a closed one WHILE the modal was open, after handleSend's own check
+    // already passed.
+    if (sendingToClosedAccount) {
+      toast.error(`${closedTargetName} is closed — the client can't see messages here. Pick an active company or "Personal".`)
+      return
+    }
+    // A pending free-text topic (staff typed a new one but clicked Confirm &
+    // Send instead of pressing Enter) does NOT reliably commit via the
+    // input's onBlur before this click fires — the newly-appearing topic
+    // chip shifts the layout, so the blur-then-click sequence can land the
+    // click just off the button. Commit it here directly rather than trust
+    // that ordering: this is the one value read from modal-local state
+    // instead of the shared adminActiveTopic, precisely because relying on
+    // the shared value would be relying on the same unreliable blur.
+    const pendingTopic = modalCreatingTopic && modalNewTopicInput.trim() ? modalNewTopicInput.trim() : null
+    if (pendingTopic) setAdminActiveTopic(pendingTopic)
+    closeSendConfirm()
+    // Captured now, at confirm-click time, before any upload/network await — this is
     // the conversation the send is actually FOR, regardless of where staff
     // is looking by the time it completes. Dev job c3bb4abc.
     //
@@ -1908,7 +2191,27 @@ export default function PortalChatsPage() {
     const targetAccountId = selectedAccountId
     const targetContactId = selectedContactId
     const targetCompanyId = selectedCompanyId
-    const targetTopic = adminActiveTopic
+    const targetTopic = pendingTopic ?? adminActiveTopic
+    // "Addressed to" label (dev job 08a8be62) — same capture-before-await
+    // discipline as the four values above (dev job c3bb4abc): must be
+    // frozen here, at click time, never re-read from live state inside
+    // mutationFn after the attachment-upload await.
+    //
+    // targetAddressedToCompany is captured from selectedAddressedToCompany
+    // directly, NOT effectiveAddressedToContactId's sibling logic — and
+    // when it's set, targetAddressedToContactId is forced to null HERE,
+    // not left to fall through to the guess. effectiveAddressedToContactId
+    // is `selectedAddressedToContactId ?? addressedToData?.guessContactId
+    // ?? null` — clicking "Whole company" sets selectedAddressedToContactId
+    // to null explicitly, which is exactly the case that `??` fallback
+    // exists for, so without this the guessed member would ride along in
+    // the very same payload as the explicit "whole company" flag. The
+    // server independently enforces the same exclusivity (dev job
+    // 08a8be62, app/api/portal/chat/route.ts), so this couldn't reach
+    // storage either way — fixing it here too means the request itself is
+    // never self-contradictory, not just the row that lands from it.
+    const targetAddressedToCompany = selectedAddressedToCompany
+    const targetAddressedToContactId = targetAddressedToCompany ? null : effectiveAddressedToContactId
 
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
@@ -1919,7 +2222,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -1927,7 +2230,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
     }
   }
 
@@ -2181,7 +2484,7 @@ export default function PortalChatsPage() {
         </div>
         {/* Filter chips + issues total */}
         <div className="px-3 py-2 border-b flex items-center gap-1.5 flex-wrap">
-          {([['all', 'All'], ['unread', 'Unread'], ['whatsnew', "What's New"], ['issues', 'Issues']] as const).map(([key, label]) => (
+          {([['all', 'All'], ['unread', 'Unread'], ['whatsnew', "What's New"]] as const).map(([key, label]) => (
             <button
               key={key}
               onClick={() => setListFilter(key)}
@@ -2190,17 +2493,6 @@ export default function PortalChatsPage() {
               {label}
             </button>
           ))}
-          {Object.keys(issueCounts?.counts || {}).length > 0 && (
-            <FastTooltip label="Clients with open issues — click to filter">
-              <button
-                onClick={() => setListFilter('issues')}
-                className="ml-auto text-[11px] text-amber-700 font-medium hover:underline"
-                aria-label="Clients with open issues — click to filter"
-              >
-                ⚠️ {Object.keys(issueCounts?.counts || {}).length}
-              </button>
-            </FastTooltip>
-          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {threadsLoading ? (
@@ -2219,10 +2511,6 @@ export default function PortalChatsPage() {
               if (listFilter === 'whatsnew') {
                 const wn = (t.account_id ? whatsNewCounts?.by_account?.[t.account_id] : whatsNewCounts?.by_contact?.[t.contact_id ?? '']) ?? 0
                 if (!(wn > 0)) return false
-              }
-              if (listFilter === 'issues') {
-                const ic = t.account_id ? issueCounts?.counts?.[t.account_id] : undefined
-                if (!ic || (ic.error + ic.warning) <= 0) return false
               }
               if (!chatSearch.trim()) return true
               const q = chatSearch.toLowerCase()
@@ -2247,6 +2535,8 @@ export default function PortalChatsPage() {
                       setSelectedThreadMembers(members)
                       setSelectedThreadCompanies([])
                       setSelectedCompanyId(null)
+                      setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToCompany(false)
                     } else {
                       // Contact-level thread: fetch by contact_id
                       setSelectedName({ company: thread.contact_name || thread.company_name, contact: companies.map(c => c.name).join(' · ') || undefined })
@@ -2263,6 +2553,8 @@ export default function PortalChatsPage() {
                       // click; read-only panels keep their company context via
                       // panelCompanyId.
                       setSelectedCompanyId(null)
+                      setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToCompany(false)
                     }
                     setSidebarView('chats')
                   }}
@@ -2377,23 +2669,6 @@ export default function PortalChatsPage() {
                           </span>
                         ) : null
                       })()}
-                      {/* Issues: ⚠️ = this client has open diagnostic problems (red = errors,
-                          amber = warnings). Reads the cached count; the Issues tab shows the
-                          detail + one-click fixes. */}
-                      {(() => {
-                        const ic = thread.account_id ? issueCounts?.counts?.[thread.account_id] : undefined
-                        const total = ic ? ic.error + ic.warning : 0
-                        if (total <= 0) return null
-                        const hasError = (ic?.error ?? 0) > 0
-                        return (
-                          <span
-                            className={`px-1.5 py-0.5 rounded-full text-xs font-semibold text-white ${hasError ? 'bg-red-600' : 'bg-amber-500'}`}
-                            title={`${total} issue${total === 1 ? '' : 's'} — open the Issues tab to fix`}
-                          >
-                            ⚠️ {total}
-                          </span>
-                        )
-                      })()}
                       {/* (Legacy orange task-count dot retired — purple What's New dot above is the single signal now.) */}
                       {/* Chat unread: RED pill (red=chat, purple=What's New, green=email) */}
                       {thread.unread_count > 0 && (
@@ -2446,7 +2721,19 @@ export default function PortalChatsPage() {
               {searchExtraAccounts.map(acct => (
                 <button
                   key={acct.id}
-                  onClick={() => { setSelectedAccountId(acct.id); setChatSearch('') }}
+                  onClick={() => {
+                    // Clear the PREVIOUS thread's company/member selection before
+                    // switching — this entry point used to leave it stale (council
+                    // pass 2, bug-hunter), the same shape as the 2026-08-07 leak.
+                    setSelectedContactId(null)
+                    setSelectedThreadCompanies([])
+                    setSelectedThreadMembers([])
+                    setSelectedCompanyId(null)
+                    setSelectedAddressedToContactId(null)
+                    setSelectedAddressedToCompany(false)
+                    setSelectedAccountId(acct.id)
+                    setChatSearch('')
+                  }}
                   className="w-full px-4 py-3 text-left border-b hover:bg-blue-50 transition-colors"
                 >
                   <div className="flex items-center gap-2">
@@ -2510,6 +2797,17 @@ export default function PortalChatsPage() {
                         <button
                           key={action.id}
                           onClick={() => {
+                            // Clear the PREVIOUS thread's addressed-to selection before
+                            // switching (dev job e01fe70f, bug-hunter round 2) — this
+                            // entry point left it stale, so an explicit member/company
+                            // pick on account A could silently ride along into account
+                            // B's send. Same reset already applied at the sidebar click,
+                            // New Chat search, and popstate-restore handlers.
+                            setSelectedThreadCompanies([])
+                            setSelectedThreadMembers([])
+                            setSelectedCompanyId(null)
+                            setSelectedAddressedToContactId(null)
+                            setSelectedAddressedToCompany(false)
                             if (action.account_id) { setSelectedAccountId(action.account_id); setSelectedContactId(null) }
                             else if (action.contact_id) { setSelectedContactId(action.contact_id); setSelectedAccountId(null) }
                             setSidebarView('chats')
@@ -2868,7 +3166,7 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]) }}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
@@ -3039,25 +3337,6 @@ export default function PortalChatsPage() {
                 >
                   <ClipboardList className="h-3.5 w-3.5" />
                   To Do
-                </button>
-                <button
-                  onClick={() => setChatViewMode('issues')}
-                  className={cn(
-                    'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
-                    chatViewMode === 'issues'
-                      ? 'text-amber-600 border-b-2 border-amber-500 bg-amber-50/40'
-                      : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
-                  )}
-                >
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Issues
-                  {(() => {
-                    const ic = selectedAccountId ? issueCounts?.counts?.[selectedAccountId] : undefined
-                    const total = ic ? ic.error + ic.warning : 0
-                    return total > 0 ? (
-                      <span className="ml-0.5 px-1 rounded-full text-[10px] bg-amber-500 text-white">{total}</span>
-                    ) : null
-                  })()}
                 </button>
                 {(() => {
                   // This client's unread-email count (same keying as the green
@@ -3298,8 +3577,6 @@ export default function PortalChatsPage() {
                   })
                 }}
               />
-            ) : chatViewMode === 'issues' && (selectedAccountId || panelCompanyId) ? (
-              <ThreadIssuesPanel accountId={selectedAccountId || panelCompanyId} />
             ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
               <ThreadTodoPanel accountId={selectedAccountId || panelCompanyId} contactId={selectedContactId} />
             ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
@@ -3685,15 +3962,61 @@ export default function PortalChatsPage() {
                           highlightedMessageId === msg.id && 'ring-2 ring-amber-400 ring-offset-2'
                         )}
                       >
-                        {/* Member badge — for account-level threads (multi-member LLC), show who wrote each client message */}
-                        {selectedThreadMembers.length > 0 && !isAdmin && msg.sender_name && (
+                        {/* Member badge — for account-level threads (multi-member LLC),
+                            show who wrote each client message. Gated on
+                            addressedToOptions (dev job e01fe70f, bug-hunter round 2),
+                            not selectedThreadMembers — same root cause as the two
+                            "addressed to" badges below: this used to silently
+                            disappear on the same three broken navigation paths.
+                            Kept scoped to a genuine multi-member account (not just
+                            `msg.sender_name` alone) so it doesn't start appearing on
+                            every single-contact personal thread too, where it would
+                            be redundant — addressedToOptions is empty whenever
+                            selectedAccountId is null, so this still only fires for
+                            account-scoped, 2+-real-member threads, exactly as before. */}
+                        {selectedAccountId && addressedToOptions.length > 1 && !isAdmin && msg.sender_name && (
                           <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-purple-100 text-purple-700">
                             {msg.sender_name}
                           </span>
                         )}
+                        {/* "Addressed to" badge (dev job 08a8be62) — for account-level
+                            threads, show who a STAFF message was addressed to, so it
+                            stays visible when scrolling back later, not just at the
+                            moment of sending. Deliberately a different color (teal)
+                            from the purple "who wrote this" badge above — same page,
+                            different meaning, must not be confused (Erika Hall,
+                            council pass 2). Staff-side only — this label is not sent
+                            to the client (msg.addressed_to_name is populated by the
+                            admin-only GET query path; see route.ts).
+                            Gated on the message's own saved field alone, NOT on
+                            selectedThreadMembers (dev job e01fe70f) — the field was
+                            already validated as meaningful at send time, and gating a
+                            historical badge on live picker state meant the same saved
+                            message could show or hide its badge depending only on which
+                            navigation path staff used to reopen the thread. */}
+                        {isAdmin && msg.addressed_to_name && (
+                          <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
+                            For {msg.addressed_to_name}
+                          </span>
+                        )}
+                        {/* Explicit "whole company" badge (dev job 08a8be62, 2026-09-05) —
+                            a DIFFERENT, distinguishable state from no badge at all
+                            (nobody set anything). Same color/placement as the per-member
+                            badge above; mutually exclusive with it by construction
+                            (addressed_to_name and addressed_to_company are never both
+                            truthy on the same message — enforced server-side). */}
+                        {isAdmin && msg.addressed_to_company && (
+                          <span className="inline-block text-[9px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded mb-0.5 bg-teal-500/30 text-teal-50">
+                            For the whole company
+                          </span>
+                        )}
                         {/* Company badge — show on every message with an account_id when viewing a contact-level unified thread */}
                         {(() => {
-                          if (selectedThreadMembers.length > 0) return null // handled above
+                          // An account-scoped thread is handled by the two badges above
+                          // instead — checked via selectedAccountId itself (dev job
+                          // e01fe70f), not selectedThreadMembers, which the badges above
+                          // no longer depend on either and can legitimately be empty here.
+                          if (selectedAccountId) return null // handled above
                           const accountNameById = new Map(selectedThreadCompanies.map(c => [c.id, c.name]))
                           const companyName = msg.account_id ? accountNameById.get(msg.account_id) : null
                           // Show badge if we have a company name (multi-company thread) or sender_context is set
@@ -4085,17 +4408,125 @@ export default function PortalChatsPage() {
                 and/or chat-capable portal teammates). Informational, not
                 blocking: staff chose the company explicitly; this makes the
                 audience visible before they hit send (2026-08-07 leak fix). */}
-            {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
-              <div className="px-3 py-2 border-t bg-amber-50 flex items-start gap-2 shrink-0">
-                <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-                <p className="text-[12px] text-amber-800 leading-snug">
-                  Visible to everyone in <span className="font-semibold">{audienceTargetName}</span>:{' '}
-                  {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
-                  {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
-                    <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
-                  )}
-                  . Don&apos;t send anything meant only for one person{selectedAccountId ? '' : ' — use “Personal” for that'}.
-                </p>
+            {/* audienceTotal alone can undercount a genuinely multi-member
+                account when its account_contacts mirror is thin (council
+                pass 2, system-counselor: ~31% of members in ~49% of
+                multi-member accounts have no such link) — selectedThreadMembers
+                is checked as an alternative trigger so the "Addressed to"
+                control below stays reachable for those accounts too, without
+                changing the existing audienceTotal-driven behavior for anyone
+                else. CORRECTION (dev job e01fe70f): selectedThreadMembers is
+                itself sourced from account_contacts too (see the comment on
+                the addressedToData query above), not the real members table —
+                the original comment here was wrong. addressedToOptions (the
+                query that IS backed by the real members table) is now ALSO
+                OR'd in as the authoritative trigger — without it, this outer
+                wrapper stayed closed on the exact three navigation paths the
+                inner picker (below) was just fixed to work on, whenever
+                account_contacts also happened to undercount that account:
+                the inner fix could never be reached from those paths for a
+                meaningful share of real multi-member accounts. */}
+            {!sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1) && (
+              <div className="px-3 py-2 border-t bg-amber-50 flex flex-col gap-1.5 shrink-0">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-[12px] text-amber-800 leading-snug">
+                    Visible to everyone in <span className="font-semibold">{audienceTargetName}</span>:{' '}
+                    {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                    {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
+                      <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
+                    )}
+                    . Don&apos;t send anything meant only for one person{selectedAccountId ? '' : ' — use “Personal” for that'}.
+                  </p>
+                </div>
+                {/* "Addressed to" — kept as its OWN sentence, not merged into the
+                    one above: the member count comes from account_contacts and
+                    this picker's options come from the real members table, and
+                    the two are documented elsewhere as routinely disagreeing
+                    (council pass 2, Erika Hall). A dev job for this exact case
+                    — Antonio, 2026-09-04: label only, message stays visible to
+                    the whole company; this control is display metadata, never
+                    a privacy gate (lib/portal/admin-send-scope.ts unchanged).
+                    Gated on addressedToOptions, not selectedThreadMembers (dev
+                    job e01fe70f) — see that query's own comment for why. */}
+                {selectedAccountId && addressedToOptions.length > 1 && (
+                  <div className="flex items-center gap-1.5 pl-6">
+                    <span className="text-[11px] text-amber-800/80">Addressed to:</span>
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            'inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-white border border-teal-200 text-teal-700 hover:bg-teal-50 transition-shadow',
+                            addressedToJustChanged && 'ring-2 ring-teal-400 ring-offset-1',
+                          )}
+                        >
+                          {/* selectedAddressedToCompany must be checked FIRST, not
+                              folded into addressedToSelectedOption's own fallback —
+                              found live testing the fix that introduced it: choosing
+                              "Whole company" sets selectedAddressedToContactId to null,
+                              which is exactly the condition effectiveAddressedToContactId
+                              falls through to the GUESSED member for, so
+                              addressedToSelectedOption resolves to that guessed
+                              member's option (non-null) and this label would show their
+                              name instead of "Whole company" — even though the send
+                              itself was already fixed to ignore the guess in this exact
+                              case (performSend). Same bug, different call site; this one
+                              only affects what staff SEE, not what gets sent, but it's
+                              directly misleading right after making the choice. */}
+                          {selectedAddressedToCompany ? 'Whole company' : (addressedToSelectedOption?.name ?? 'Whole company')}
+                          <ChevronDown className="h-3 w-3 shrink-0" />
+                        </button>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          className="min-w-[180px] max-h-[240px] overflow-y-auto rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50"
+                          align="start"
+                          sideOffset={4}
+                        >
+                          {/* Explicit "whole company" choice (Antonio, 2026-09-05, dev
+                              job 08a8be62) — found live: this list used to offer ONLY
+                              individual members, with no way to say "the company itself,"
+                              and the unset default looked identical to a message nobody
+                              had bothered to label. This is a genuine, saved choice
+                              (addressed_to_company on the message), not a cosmetic
+                              reset-to-default — see the migration for why that
+                              distinction matters. */}
+                          <DropdownMenu.Item
+                            className={cn(
+                              'px-3 py-1.5 text-sm cursor-pointer outline-none',
+                              selectedAddressedToCompany ? 'bg-teal-50 text-teal-700 font-medium' : 'text-zinc-700 hover:bg-teal-50'
+                            )}
+                            onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                          >
+                            Whole company
+                          </DropdownMenu.Item>
+                          {addressedToOptions.length === 0 && (
+                            <div className="px-3 py-2 text-xs text-zinc-400">No members on file for this company yet.</div>
+                          )}
+                          {addressedToOptions.map(opt => (
+                            opt.resolvable ? (
+                              <DropdownMenu.Item
+                                key={opt.memberId}
+                                className="px-3 py-1.5 text-sm text-zinc-700 hover:bg-teal-50 cursor-pointer outline-none"
+                                onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
+                              >
+                                {opt.name}
+                              </DropdownMenu.Item>
+                            ) : (
+                              <FastTooltip key={opt.memberId} label="No linked contact on file for this member yet — can't be addressed individually.">
+                                <DropdownMenu.Item disabled className="px-3 py-1.5 text-sm text-zinc-300 cursor-not-allowed outline-none">
+                                  {opt.name}
+                                </DropdownMenu.Item>
+                              </FastTooltip>
+                            )
+                          ))}
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+                    <HelpDot helpKey="chat.addressedTo" />
+                  </div>
+                )}
               </div>
             )}
 
@@ -4451,6 +4882,15 @@ export default function PortalChatsPage() {
                         if (sidebarView === 'internal') {
                           createInternalThread(acct.id, '', `Discussion about ${acct.company_name}`)
                         } else {
+                          // Clear the PREVIOUS thread's company/member selection
+                          // before switching — this entry point used to leave it
+                          // stale (council pass 2, bug-hunter), the same shape as
+                          // the 2026-08-07 leak.
+                          setSelectedThreadCompanies([])
+                          setSelectedThreadMembers([])
+                          setSelectedCompanyId(null)
+                          setSelectedAddressedToContactId(null)
+                          setSelectedAddressedToCompany(false)
                           setSelectedAccountId(acct.id)
                           setSelectedContactId(null)
                           setSelectedName({ company: acct.company_name, contact: acct.contact_name || undefined })
@@ -4571,6 +5011,273 @@ export default function PortalChatsPage() {
                 className="flex items-center gap-1 text-sm font-medium bg-violet-600 text-white rounded px-3 py-1.5 disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" /> {addTodoMutation.isPending ? 'Adding…' : 'Add to board'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pre-send confirmation pop-up (dev job 08a8be62; Antonio, 2026-09-04 —
+          explicit override of the earlier ambient-only design, made AFTER
+          seeing that version live on a real single-member LLC and rejecting
+          it: "I want a pop-up... Even in a single-member LLC, there is a
+          personal and a company"). Opens on EVERY send, every conversation
+          shape, no exceptions — reads and writes the SAME live selection
+          state the ambient chips above the composer already use, so there is
+          no second copy of the choice to keep in sync. Deliberately does NOT
+          rebuild the catalog-driven topic-template picker (the tab bar above
+          the message list) — it reuses the same underlying adminActiveTopic
+          state via the simpler existing-topics-as-chips + free-text
+          mechanism, which fully covers "an existing topic, or a new one"
+          without a second topic-selection implementation to keep in sync. */}
+      {sendConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={closeSendConfirm}>
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
+              <Send className="h-4 w-4 text-blue-500" />
+              <h3 className="text-sm font-semibold text-zinc-800">Before you send</h3>
+              <button onClick={closeSendConfirm} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 overflow-y-auto">
+              {/* Personal vs company (+ which company, if the contact has more
+                  than one) — only when this dimension exists at all for this
+                  thread. An account-level thread (selectedAccountId set) is
+                  always company-scoped by construction; there is no ambient
+                  "personal" path out of it today, so this section correctly
+                  does not appear there. */}
+              {selectedThreadCompanies.length > 0 && !selectedAccountId && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Send as</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {selectedThreadCompanies.map(c => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedCompanyId(c.id)}
+                        className={cn(
+                          'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[220px] truncate',
+                          c.closed
+                            ? (selectedCompanyId === c.id ? 'bg-red-600 text-white border-red-600' : 'border-red-200 text-red-600 hover:bg-red-50')
+                            : (selectedCompanyId === c.id ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50')
+                        )}
+                      >
+                        {c.name}{c.closed ? ' (closed)' : ''}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCompanyId(null)}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                        !selectedCompanyId ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      Personal
+                    </button>
+                  </div>
+                  {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
+                    <p className="text-[11px] text-amber-700 mt-1.5">
+                      Visible to everyone in {audienceTargetName}: {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                      {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Closed-account warning — deliberately its OWN block, not nested
+                  inside "Send as" above: sendingToClosedAccount can be true for
+                  an ACCOUNT-scoped thread too (selectedAccountId set), which has
+                  no "Send as" section at all, so a warning nested in there never
+                  rendered for that shape — Confirm & Send was silently disabled
+                  with no explanation anywhere in the pop-up. Bug-hunter review,
+                  2026-09-05 (round 3, before ship). Covers both shapes with one
+                  block instead of duplicating it into each branch. */}
+              {sendingToClosedAccount && (
+                <p className="text-[11px] text-red-600">
+                  {closedTargetName} is closed — the client can&apos;t see messages here.{' '}
+                  {selectedAccountId ? 'This conversation is archived.' : 'Pick an active company or "Personal".'}
+                </p>
+              )}
+
+              {/* Which member — only for multi-member account threads. Label
+                  only (lib/portal/admin-send-scope.ts unchanged): the message
+                  stays visible to the whole company thread regardless. Gated
+                  on addressedToOptions, not selectedThreadMembers (dev job
+                  e01fe70f) — see that query's own comment for why. */}
+              {selectedAccountId && addressedToOptions.length > 1 && (
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 mb-1.5">Addressed to</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {/* Explicit "whole company" choice (Antonio, 2026-09-05, dev job
+                        08a8be62) — found live: this row used to offer ONLY individual
+                        members, no way to say "the company itself," and the unset
+                        default looked identical to a message nobody had bothered to
+                        label. A genuine, saved choice (addressed_to_company on the
+                        message), not a cosmetic reset — see the migration comment. */}
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                        selectedAddressedToCompany ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      Whole company
+                    </button>
+                    {addressedToOptions.length === 0 && (
+                      <p className="text-xs text-zinc-400">No members on file for this company yet.</p>
+                    )}
+                    {addressedToOptions.map(opt => (
+                      opt.resolvable ? (
+                        <button
+                          key={opt.memberId}
+                          type="button"
+                          onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
+                          className={cn(
+                            'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                            !selectedAddressedToCompany && effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                          )}
+                        >
+                          {opt.name}
+                        </button>
+                      ) : (
+                        <FastTooltip key={opt.memberId} label="No linked contact on file for this member yet — can't be addressed individually.">
+                          <span className="px-3 py-1.5 text-sm rounded-full border border-zinc-200 text-zinc-300 cursor-not-allowed">{opt.name}</span>
+                        </FastTooltip>
+                      )
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5">Label only — the whole company still sees this message.</p>
+                </div>
+              )}
+
+              {/* Topic — existing topics from this thread as chips, or free-text a new one.
+                  FIXED height (not just a max — min AND max pinned to the same value) +
+                  its own scroll: a growing thread accumulates topics over time, and —
+                  the actual bug this was built to fix — committing a brand-new topic
+                  adds a chip that can wrap the row onto a second line for the FIRST
+                  time (e.g. a thread with few topics so far, all still fitting on one
+                  line). A plain max-height does NOT stop that specific transition: the
+                  row is still shorter than the cap right up until the new chip lands,
+                  so it grows anyway. Any growth here pushes the Confirm & Send button
+                  down by exactly the height of that new line at the instant it
+                  appears — a click already aimed at the button's pre-wrap position
+                  (mousedown fires, blur commits the topic and the wrap happens,
+                  mouseup/click then resolve against the NEW layout) lands just below
+                  it and hits nothing. Reproduced directly, twice, including after an
+                  earlier fix that made send-time state reading more robust but didn't
+                  touch this: the click was missing the button ENTIRELY, so no code
+                  inside the button's own handler could ever have run. Pinning this
+                  row's height so it NEVER changes, from the very first render,
+                  regardless of topic count, removes the shift at its source —
+                  independent of click/touch timing, blur ordering, or how many
+                  topics a given thread happens to have today. */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1.5">Topic</label>
+                <div className="flex gap-1.5 flex-wrap items-start content-start h-20 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdminActiveTopic(null)
+                      // Picking an EXISTING topic is an explicit, unambiguous choice —
+                      // it must win over a still-open, uncommitted free-text draft
+                      // sitting in the "New topic" box below, not silently lose to it
+                      // at send time (performSend prefers a pending free-text draft
+                      // over adminActiveTopic; onBlur intentionally leaves that draft
+                      // untouched when focus moves elsewhere, see the input's own
+                      // comment). Clearing it HERE, in the same click that sets the
+                      // real selection, is safe and unambiguous, unlike onBlur.
+                      setModalCreatingTopic(false)
+                      setModalNewTopicInput('')
+                    }}
+                    className={cn(
+                      'px-3 py-1.5 text-sm rounded-full border transition-colors',
+                      !adminActiveTopic ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                    )}
+                  >
+                    General
+                  </button>
+                  {(adminActiveTopic && !adminTopics.includes(adminActiveTopic) ? [...adminTopics, adminActiveTopic] : adminTopics).map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setAdminActiveTopic(t)
+                        setModalCreatingTopic(false)
+                        setModalNewTopicInput('')
+                      }}
+                      className={cn(
+                        'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[160px] truncate',
+                        adminActiveTopic === t ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                      )}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                  {modalCreatingTopic ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={modalNewTopicInput}
+                      onChange={e => setModalNewTopicInput(e.target.value.slice(0, 100))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && modalNewTopicInput.trim()) {
+                          setAdminActiveTopic(modalNewTopicInput.trim())
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
+                        } else if (e.key === 'Escape') {
+                          setModalNewTopicInput('')
+                          setModalCreatingTopic(false)
+                        }
+                      }}
+                      // Deliberately no onBlur handler (bug-hunter review, 2026-09-04
+                      // — two bugs found here, in sequence). Losing focus is NOT the
+                      // same as the user deciding anything: clicking a company chip,
+                      // a member chip, or Confirm & Send all blur this input first,
+                      // as an ordinary side effect of moving focus elsewhere — before
+                      // that click's own handler ever runs. An earlier version
+                      // committed the typed text to the shared adminActiveTopic on
+                      // every blur, which meant typing a topic then clicking Cancel,
+                      // the X, the backdrop, or any chip silently changed the
+                      // conversation's active topic even when the user meant to
+                      // cancel or pick something else. The fix-of-that-fix (clearing
+                      // instead of committing) turned out just as wrong: blur fires
+                      // BEFORE Confirm & Send's own click handler, so clearing here
+                      // wiped the exact pending-topic state performSend depends on
+                      // reading, breaking single-click confirm entirely. Leaving the
+                      // draft untouched on blur is the only option that serves every
+                      // path correctly: Enter explicitly commits it (below), Escape
+                      // explicitly discards it (below), closeSendConfirm() discards
+                      // it on Cancel/X/backdrop/a completed send, and it simply
+                      // survives — still open, still showing what was typed — if the
+                      // user clicks some other control first and comes back to it.
+                      placeholder="Topic name…"
+                      className="px-3 py-1.5 text-sm rounded-full border border-blue-300 outline-none w-32"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setModalCreatingTopic(true)}
+                      className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-full border border-dashed border-zinc-300 text-zinc-500 hover:text-zinc-700 hover:border-zinc-400 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> New topic
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3 border-t shrink-0">
+              <button onClick={closeSendConfirm} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button
+                disabled={sendingToClosedAccount || sendMutation.isPending || uploadingAdminFile}
+                onClick={performSend}
+                className="flex items-center gap-1.5 text-sm font-medium bg-blue-600 text-white rounded px-4 py-1.5 disabled:opacity-40"
+              >
+                <Send className="h-3.5 w-3.5" /> {(sendMutation.isPending || uploadingAdminFile) ? 'Sending…' : 'Confirm & Send'}
               </button>
             </div>
           </div>

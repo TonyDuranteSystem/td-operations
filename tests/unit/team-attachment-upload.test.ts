@@ -72,7 +72,9 @@ describe('uploadTeamAttachment — network retry + reporting', () => {
   it('after retries are exhausted, throws a friendly message and reports the failure', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ signedUrl: 'https://x.supabase.co/upload/sign/abc', publicUrl: 'https://x.supabase.co/public/abc.png' }))
-      // All 3 PUT attempts fail at the network level.
+      // All 4 PUT attempts fail at the network level (shared retry default,
+      // lib/chat/upload-with-retry.ts — 2026-09-01, dev job 62a64f2b child).
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
@@ -116,6 +118,7 @@ describe('uploadTeamAttachment — network retry + reporting', () => {
   it('reporting failure never surfaces to the caller — the original error still wins', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ signedUrl: 'https://x.supabase.co/upload/sign/abc', publicUrl: 'https://x.supabase.co/public/abc.png' }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))

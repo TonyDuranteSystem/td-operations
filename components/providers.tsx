@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { HelpProvider } from '@/components/help/help-provider'
+import { CaptureProvider } from '@/components/captures/capture-provider'
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -34,7 +35,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <HelpProvider>{children}</HelpProvider>
+      <HelpProvider>
+        <CaptureProvider>{children}</CaptureProvider>
+      </HelpProvider>
     </QueryClientProvider>
   )
 }

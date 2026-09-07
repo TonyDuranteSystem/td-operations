@@ -76,6 +76,17 @@ export default function TeamWorkspacePage() {
   const [editing, setEditing] = useState<TeamMsg | null>(null)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  // Attachments that already finished uploading on a prior attempt but whose
+  // send didn't complete (another file failed, or the final POST itself
+  // failed) — kept out of pendingFiles so a retry never re-uploads them and
+  // orphans a duplicate storage object. Thread-scoped by construction: every
+  // write to this state (and to pendingFiles) inside handleSend is gated on
+  // `selectedIdRef.current === selectedId` first, so a send whose thread the
+  // user has since navigated away from can never leak its leftover state
+  // into whatever conversation is now on screen (2026-09-01, dev job
+  // ae61b03c — bug-hunter found the earlier version of this fix leaked a
+  // successfully-uploaded file across channels on a mid-upload thread switch).
+  const [cachedAttachments, setCachedAttachments] = useState<ChatAttachment[]>([])
   const [showEmoji, setShowEmoji] = useState(false)
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [commandQuery, setCommandQuery] = useState<string | null>(null)
@@ -121,6 +132,12 @@ export default function TeamWorkspacePage() {
   // Mirror of pendingFiles for the file-intake cap math (avoids a stale closure
   // when drop/paste/paperclip fire in quick succession).
   const pendingFilesRef = useRef<File[]>([])
+  // Same mirror for cachedAttachments — the cap must count files already
+  // uploaded-and-cached from a prior partial-failure retry too, or a message
+  // can end up carrying more than CHAT_ATTACHMENT_MAX_COUNT attachments once
+  // one has failed and the user adds fresh ones afterward (bug-hunter finding,
+  // 2026-09-01, dev job ae61b03c).
+  const cachedAttachmentsRef = useRef<ChatAttachment[]>([])
   const emojiRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
@@ -289,6 +306,19 @@ export default function TeamWorkspacePage() {
     // the panel back open while the user is reading the stream).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, loadMessages])
+
+  // A file staged (or already uploaded and cached) for one conversation must
+  // never silently ride along into whichever conversation the user switches
+  // to next — confirmed live: a bug-hunter review of the 2026-09-01 retry fix
+  // found this could send an already-uploaded file into the WRONG client's
+  // channel. handleSend's own writes to these two are additionally gated on
+  // selectedIdRef at the moment they run (covers a send still in flight when
+  // the user navigates away); this effect covers the simpler case — files
+  // staged but never sent before switching.
+  useEffect(() => {
+    setPendingFiles([])
+    setCachedAttachments([])
+  }, [selectedId])
 
   // Realtime: messages + thread list
   useEffect(() => {
@@ -471,19 +501,27 @@ export default function TeamWorkspacePage() {
     })
   }
 
-  // Keep the ref in sync so file-intake reads the live staged list.
+  // Keep the refs in sync so file-intake reads the live staged/cached lists.
   useEffect(() => { pendingFilesRef.current = pendingFiles }, [pendingFiles])
+  useEffect(() => { cachedAttachmentsRef.current = cachedAttachments }, [cachedAttachments])
 
   // Single intake path for the paperclip, drag-drop, and paste. Validates + caps
   // at add-time and tells the user what was rejected or dropped (never fails
   // silently), then stages the survivors. The final slice is a concurrency
-  // safety net so two near-simultaneous batches can't exceed the cap.
+  // safety net so two near-simultaneous batches can't exceed the cap. Room is
+  // computed against pendingFiles AND cachedAttachments together — a file
+  // already uploaded from a prior partial failure still counts against the
+  // per-message limit, or the total can exceed it once the pending side gets
+  // topped back up.
   const addPendingFiles = useCallback((incoming: File[]) => {
     if (!incoming.length) return
-    const { accepted, rejected, overflow } = prepareChatFiles(incoming, pendingFilesRef.current.length)
+    const alreadyCounted = pendingFilesRef.current.length + cachedAttachmentsRef.current.length
+    const { accepted, rejected, overflow } = prepareChatFiles(incoming, alreadyCounted)
     if (rejected.length) toast.error(`Couldn't attach ${rejected.join(', ')} — programs, scripts, and empty items aren't allowed.`)
     if (overflow > 0) toast.error(`Only ${CHAT_ATTACHMENT_MAX_COUNT} files per message — ${overflow} not added.`)
-    if (accepted.length) setPendingFiles(prev => [...prev, ...accepted].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
+    if (accepted.length) {
+      setPendingFiles(prev => [...prev, ...accepted].slice(0, Math.max(0, CHAT_ATTACHMENT_MAX_COUNT - cachedAttachmentsRef.current.length)))
+    }
   }, [])
 
   // Paste a screenshot/file into the composer. Only intercept when the clipboard
@@ -509,7 +547,7 @@ export default function TeamWorkspacePage() {
       setShowNewConversation(true)
       return
     }
-    if ((!msg && pendingFiles.length === 0) || !selectedId || sending || uploading) return
+    if ((!msg && pendingFiles.length === 0 && cachedAttachments.length === 0) || !selectedId || sending || uploading) return
     if (isRecording) stopRecording()
 
     // Edit mode
@@ -532,30 +570,91 @@ export default function TeamWorkspacePage() {
     setSending(true)
     const sentText = msg
     const sentReply = replyTo
-    const files = [...pendingFiles]
+    // The thread this send belongs to. Stable for the rest of this call even
+    // if the user switches conversations mid-upload — used to gate every
+    // composer-state write below so a send in flight for THIS thread can
+    // never leak its attachments/text into whatever thread is on screen by
+    // the time it resolves (bug-hunter finding, 2026-09-01, dev job
+    // ae61b03c). The actual upload + message POST still always go to this
+    // thread regardless — only the local UI-state writes are gated.
+    const sendThreadId = selectedId
+    const stillHere = () => selectedIdRef.current === sendThreadId
+    const filesToUpload = [...pendingFiles]
+    // Clear immediately — the file(s) are now "in flight", not "staged".
+    // Leaving pendingFiles populated through the whole upload attempt is
+    // what caused the previous version of this fix to duplicate a file: on
+    // failure, the re-stage step merged the failed file back into a
+    // `pendingFiles` that had never actually been cleared.
     setText(''); setReplyTo(null); setPendingFiles([]); setMentionQuery(null)
     try {
-      let attachments: ChatAttachment[] | null = null
-      if (files.length) {
+      // Start from whatever already uploaded successfully on a prior failed
+      // attempt (final-POST failure, or a partial multi-file failure) — never
+      // re-upload those, or the same file lands twice as an orphaned Storage
+      // object.
+      const attachments: ChatAttachment[] = [...cachedAttachments]
+      if (filesToUpload.length) {
         setUploading(true)
         try {
-          attachments = await Promise.all(files.map(f => uploadTeamAttachment(f, selectedId)))
+          const results = await Promise.allSettled(filesToUpload.map(f => uploadTeamAttachment(f, sendThreadId)))
+          const stillFailed: File[] = []
+          results.forEach((res, i) => {
+            if (res.status === 'fulfilled') attachments.push(res.value)
+            else stillFailed.push(filesToUpload[i])
+          })
+          if (stillFailed.length > 0) {
+            // Hold the whole send: cache what succeeded so a retry doesn't
+            // redo it, re-stage only what actually failed, restore the typed
+            // text so nothing the user wrote is lost — but only if they're
+            // still looking at this thread. If they've switched away, drop
+            // it silently rather than dumping it into a different
+            // conversation's composer; the toast below still tells them.
+            if (stillHere()) {
+              setCachedAttachments(attachments)
+              setPendingFiles(prev => [...stillFailed, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
+              setText(sentText); setReplyTo(sentReply)
+            }
+            const firstFailure = results.find((res): res is PromiseRejectedResult => res.status === 'rejected')
+            const detail = firstFailure?.reason instanceof Error && firstFailure.reason.message
+              ? firstFailure.reason.message
+              : 'Upload failed. Please check your connection and try again.'
+            toast.error(stillFailed.length < filesToUpload.length
+              ? `${stillFailed.length} of ${filesToUpload.length} files couldn't upload. ${detail}`
+              : detail)
+            return
+          }
         } finally { setUploading(false) }
       }
+      // Every attachment (newly uploaded + previously cached) is now safely
+      // on Storage. Cache them BEFORE attempting the send itself, so a
+      // failure on the send step still has them ready for a bare retry with
+      // no re-upload — again, only into this thread's own composer state.
+      if (stillHere()) { setCachedAttachments(attachments); setPendingFiles([]) }
       // Reply target: a quoted message, else the open thread's root, else a
       // top-level channel post. The server flattens to the correct thread root.
       const replyTargetId = sentReply?.id ?? openRootId ?? null
-      const r = await fetch(`/api/team/threads/${selectedId}/messages`, {
+      // Hard cap as a last line of defense, independent of the intake-side
+      // cap in addPendingFiles — cachedAttachments + newly uploaded is a
+      // union that must never exceed the per-message limit regardless of how
+      // it was assembled.
+      const cappedAttachments = attachments.slice(0, CHAT_ATTACHMENT_MAX_COUNT)
+      const r = await fetch(`/api/team/threads/${sendThreadId}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: sentText, reply_to_id: replyTargetId, attachments }),
+        body: JSON.stringify({ message: sentText, reply_to_id: replyTargetId, attachments: cappedAttachments.length ? cappedAttachments : null }),
       })
       if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to send') }
+      // The send itself succeeded — nothing left to protect against a retry.
+      if (stillHere()) setCachedAttachments([])
       // Optimistically render the sender's own message immediately, instead of
       // waiting for the realtime round-trip (which can lag or drop). The realtime
       // INSERT handler dedups by id, so no double render. If @claude was pinged,
-      // its placeholder arrives via realtime/poll.
+      // its placeholder arrives via realtime/poll. Gated on stillHere(): if the
+      // user switched conversations while this send was in flight, the message
+      // still needs to be POSTed to its real thread (already done above) but
+      // must not visually appear inside whatever DIFFERENT thread is open now
+      // — the realtime subscription for the correct thread will pick it up
+      // normally whenever the user goes back to it.
       const d = await r.json().catch(() => null)
-      if (d?.message) {
+      if (d?.message && stillHere()) {
         setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, {
           ...d.message,
           reply_to_preview: sentReply
@@ -577,14 +676,18 @@ export default function TeamWorkspacePage() {
         }
       }
     } catch (e) {
+      // Reached only when the final send POST itself fails — any attachments
+      // were already uploaded and cached above (setCachedAttachments), so a
+      // bare retry sends them as-is. Do NOT re-stage filesToUpload here: they
+      // already succeeded and are no longer pending — redoing them would
+      // upload the same bytes a second time and orphan a duplicate object.
+      // Gated the same way as every other write in this function: only
+      // restore the draft into the composer if the user is still on the
+      // thread this send was for.
       toast.error(e instanceof Error && e.message ? e.message : 'Failed to send')
-      setText(sentText); setReplyTo(sentReply)
-      // Keep the staged files so the send can be retried. Merge (not overwrite)
-      // in case the user staged another file during the in-flight upload; the
-      // slice keeps the per-message cap intact.
-      if (files.length) setPendingFiles(prev => [...files, ...prev].slice(0, CHAT_ATTACHMENT_MAX_COUNT))
+      if (stillHere()) { setText(sentText); setReplyTo(sentReply) }
     } finally { setSending(false); inputRef.current?.focus() }
-  }, [text, pendingFiles, selectedId, sending, uploading, replyTo, editing, openRootId, isRecording, stopRecording])
+  }, [text, pendingFiles, cachedAttachments, selectedId, sending, uploading, replyTo, editing, openRootId, isRecording, stopRecording])
 
   // Open a Slack thread pane on a root message: mark it read (per-thread), clear
   // its local unread dot, and default the composer to reply to the root.
@@ -1659,14 +1762,24 @@ export default function TeamWorkspacePage() {
               </div>
             )}
 
-            {/* File strip */}
-            {pendingFiles.length > 0 && (
+            {/* File strip — both files still to upload AND files already
+                uploaded from a prior failed attempt (cachedAttachments) get
+                shown here, so nothing about what's about to send is hidden
+                from the person about to send it. */}
+            {(pendingFiles.length > 0 || cachedAttachments.length > 0) && (
               <div className="shrink-0 px-4 py-2 border-t border-zinc-100 bg-zinc-50 flex flex-wrap gap-2">
+                {cachedAttachments.map((a, i) => (
+                  <div key={`cached-${i}`} className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1.5 max-w-[200px]">
+                    <FileText className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <div className="min-w-0"><p className="text-[11px] font-medium text-zinc-700 truncate">{a.name}</p><p className="text-[10px] text-emerald-600">Uploaded — ready to send</p></div>
+                    <button onClick={() => setCachedAttachments(p => p.filter((_, x) => x !== i))} disabled={sending || uploading} className="p-0.5 text-zinc-400 hover:text-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed"><X className="h-3 w-3" /></button>
+                  </div>
+                ))}
                 {pendingFiles.map((f, i) => (
                   <div key={i} className="flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-2 py-1.5 max-w-[200px]">
                     <FileText className="h-4 w-4 text-zinc-400 shrink-0" />
                     <div className="min-w-0"><p className="text-[11px] font-medium text-zinc-700 truncate">{f.name}</p><p className="text-[10px] text-zinc-400">{fileSize(f.size)}</p></div>
-                    <button onClick={() => setPendingFiles(p => p.filter((_, x) => x !== i))} className="p-0.5 text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                    <button onClick={() => setPendingFiles(p => p.filter((_, x) => x !== i))} disabled={sending || uploading} className="p-0.5 text-zinc-400 hover:text-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed"><X className="h-3 w-3" /></button>
                   </div>
                 ))}
               </div>
@@ -1708,11 +1821,12 @@ export default function TeamWorkspacePage() {
                       </div>
                     )}
                   </div>
-                  <button onClick={() => fileRef.current?.click()} disabled={uploading} className={cn('p-2 rounded-full shrink-0', pendingFiles.length ? 'text-blue-600 bg-blue-100' : 'text-zinc-400 hover:bg-zinc-100')}>
+                  <button onClick={() => fileRef.current?.click()} disabled={sending || uploading} className={cn('p-2 rounded-full shrink-0', pendingFiles.length ? 'text-blue-600 bg-blue-100' : 'text-zinc-400 hover:bg-zinc-100')}>
                     {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Paperclip className="h-5 w-5" />}
                   </button>
                   <input ref={fileRef} type="file" multiple onChange={e => { addPendingFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} className="hidden" />
                   <textarea ref={inputRef} value={text} onChange={e => onTextChange(e.target.value)}
+                    disabled={sending || uploading}
                     onPaste={handlePaste}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1726,7 +1840,7 @@ export default function TeamWorkspacePage() {
                 </div>
                 {sending || uploading ? (
                   <button disabled className="w-12 h-12 rounded-full bg-zinc-800 text-white flex items-center justify-center shrink-0"><Loader2 className="h-5 w-5 animate-spin" /></button>
-                ) : (text.trim() || pendingFiles.length) ? (
+                ) : (text.trim() || pendingFiles.length || cachedAttachments.length) ? (
                   <button onClick={handleSend} className="w-12 h-12 rounded-full bg-zinc-800 text-white hover:bg-zinc-700 flex items-center justify-center shrink-0">{editing ? <Check className="h-5 w-5" /> : <Send className="h-5 w-5" />}</button>
                 ) : voiceSupported ? (
                   <button onPointerDown={startRecording} onPointerUp={stopRecording} className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0', isRecording ? 'bg-red-500 text-white animate-pulse' : isTranscribing ? 'bg-violet-500 text-white' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200')}>

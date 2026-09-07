@@ -23,7 +23,7 @@
 
 import { computePnlTotals } from "@/lib/pnl-generator"
 import { sameName, type ResolvedMember } from "./ownership-resolution"
-import { confirmedMemberFromNote } from "./member-names"
+import { confirmedMemberFromNote, matchMemberForTransaction } from "./member-names"
 import { validatedExtraction, type PriorReturnCaseRecord } from "./prior-return-case"
 import { toUsd, type FxRates } from "./fx"
 import { mergeBankBalances, type ProvidedBankBalance, type BankBalancesSummary } from "./bank-balances"
@@ -183,16 +183,32 @@ export function confirmedMemberFromNotes(notes: string | null | undefined, membe
   return members.find(m => sameName(m.name, name)) ?? null
 }
 
-/** Match a counterparty/description to a member by name. Exported for tests. */
-export function attributeToMember(text: string | null, members: ResolvedMember[]): ResolvedMember | null {
-  if (!text) return null
-  for (const m of members) {
-    if (sameName(text, m.name)) return m
-    // counterparty often embeds the name in extra text ("Wire to Sofia Marinoni — distribution")
-    const tokens = m.name.toLowerCase().split(/\s+/).filter(t => t.length > 2)
-    if (tokens.length >= 2 && tokens.every(t => text.toLowerCase().includes(t))) return m
-  }
-  return null
+/**
+ * Match a transaction to a member by name. Exported for tests.
+ *
+ * Delegates to matchMemberForTransaction (member-names.ts) — NOT sameName's
+ * token-subset check — because `description`/`counterparty` are raw bank
+ * free text, and a token-subset check over an entire string matches whenever
+ * a member's first AND last name both appear as separate words ANYWHERE in
+ * it, in any order, for any reason: the same failure the categoriser had
+ * (2026-09-03) — a corporate-card line like "Airbnb | Spend | Donato Ciardo -
+ * 5221 (Spese)" contains "donato" and "ciardo" as tokens without Donato being
+ * the payee. sameName is right elsewhere in this file for comparing two
+ * already-clean names (confirmedMemberFromNotes above, prior-K1 matching
+ * below) — it is wrong here for the same reason it was wrong in the
+ * categoriser.
+ *
+ * TWO ARGUMENTS, NOT ONE (2026-09-03 council finding): an earlier version of
+ * this fix took a single `text` and applied payeePart to whichever field the
+ * caller passed — which strips counterparty too, contradicting
+ * matchMemberForTransaction's own rule that counterparty is checked RAW
+ * because a wire genuinely made out to a member must always be caught with
+ * nothing else to go on. Taking both fields and delegating directly is both
+ * the fix and the simpler shape — one rule, three call sites, no fork.
+ */
+export function attributeToMember(description: string | null, counterparty: string | null, members: ResolvedMember[]): ResolvedMember | null {
+  const matched = matchMemberForTransaction(description, counterparty, members.map(m => m.name))
+  return matched ? members.find(m => m.name === matched) ?? null : null
 }
 
 /** Beginning cash from a validated prior return — from a client upload
@@ -377,8 +393,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
   for (const t of contribTxs) {
     // Same precedence as distributions — a confirmed member wins.
     const m = confirmedMemberFromNotes(t.notes, allocatable)
-      ?? attributeToMember(t.counterparty, allocatable)
-      ?? attributeToMember(t.description, allocatable)
+      ?? attributeToMember(t.description, t.counterparty, allocatable)
     if (m) byMember.get(m.name)!.contributions += Number(t.amount)
     else unattributedContrib += Number(t.amount)
   }
@@ -386,8 +401,7 @@ export function buildFinancialDraft(input: BuildDraftInput): FinancialDraft {
     // The client's own confirmation wins over name-matching — it is the only
     // signal that can identify a surname-only payee.
     const m = confirmedMemberFromNotes(t.notes, allocatable)
-      ?? attributeToMember(t.counterparty, allocatable)
-      ?? attributeToMember(t.description, allocatable)
+      ?? attributeToMember(t.description, t.counterparty, allocatable)
     if (m) byMember.get(m.name)!.distributions += Number(t.amount)
     else unattributedDist += Number(t.amount)
   }

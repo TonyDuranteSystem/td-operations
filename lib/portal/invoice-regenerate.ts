@@ -136,3 +136,85 @@ export function buildRegeneratedLineItems(
 export function sumLineAmounts(items: RebuildLineItem[]): number {
   return Math.round((items ?? []).reduce((s, i) => s + (Number(i.amount) || 0), 0) * 100) / 100
 }
+
+export interface AdjustTotalResult {
+  items: RebuildLineItem[]
+  ok: boolean
+  reason?: string
+}
+
+/**
+ * When staff correct an invoice's TOTAL directly (not a credit-apply — see
+ * `buildRegeneratedLineItems` for that), the one adjustable service line
+ * absorbs the difference; any existing credit line is left exactly as-is,
+ * since correcting a total is not the same action as re-deriving a credit.
+ * Origin: the 2026-08-31 ShoppyVerse/Growly investigation — `updateInvoice`
+ * (app/(dashboard)/finance/actions.ts) could change `payments.total` with no
+ * corresponding change to `payment_items`, so the invoice DOCUMENT (and its
+ * client-portal mirror) kept showing the pre-correction figure forever.
+ *
+ * REFUSES rather than guessing when the shape is ambiguous — zero, or more
+ * than one, non-credit line. A 'fee' line counts as non-credit here on
+ * purpose: an invoice carrying a card-processing-fee line is refused too,
+ * rather than risking the fee line silently absorbing an unrelated total
+ * correction (the fee must stay exactly what the processor actually
+ * charged). Every real correction this was built for (ShoppyVerse, Growly,
+ * Achievers Group) has exactly one service line, so the common case is
+ * unaffected — this only blocks the genuinely unclear cases.
+ */
+export function adjustSingleServiceLineForTotal(
+  items: RebuildLineItem[],
+  newTotal: number,
+): AdjustTotalResult {
+  const safeItems = items ?? []
+  const credit = safeItems.filter((i) => isCreditLine(i))
+  // A fee line is never adjustable, even when it's the only non-credit line —
+  // it must stay exactly what the card processor actually charged, never
+  // silently absorb an unrelated total correction.
+  const adjustable = safeItems.filter((i) => !isCreditLine(i) && i.item_type !== "fee")
+  const feeLines = safeItems.filter((i) => !isCreditLine(i) && i.item_type === "fee")
+  if (adjustable.length !== 1 || feeLines.length > 0) {
+    return {
+      items: safeItems,
+      ok: false,
+      reason: feeLines.length > 0
+        ? "This invoice has a card-processing-fee line — edit the line items directly instead of the total alone."
+        : adjustable.length === 0
+          ? "No service line found to adjust — edit the line items directly."
+          : "More than one line makes up this invoice — edit the line items directly instead of the total alone.",
+    }
+  }
+  const creditTotal = sumLineAmounts(credit)
+  const target = Math.round((Number(newTotal) - creditTotal) * 100) / 100
+  const line = adjustable[0]
+  const qty = Number(line.quantity) || 1
+  // Refuse rather than guess when quantity doesn't divide the target evenly to the cent
+  // (finance-auditor council finding, 2026-09-01): rounding unit_price independently of
+  // amount, unguarded, could leave quantity × unit_price off by a cent from the line's own
+  // amount — a self-inconsistent figure on the actual invoice document (both are rendered as
+  // separate columns on the PDF). Every real correction this was built for (ShoppyVerse,
+  // Growly, Achievers Group) has quantity 1, so this only blocks the genuinely ambiguous case.
+  const targetCents = Math.round(target * 100)
+  if (qty !== 1 && targetCents % qty !== 0) {
+    return {
+      items: safeItems,
+      ok: false,
+      reason: `The corrected total doesn't divide evenly across this line's quantity (${qty}) — edit the line items directly instead of the total alone.`,
+    }
+  }
+  const adjustedLine: RebuildLineItem = {
+    description: line.description,
+    quantity: qty,
+    unit_price: Math.round((target / qty) * 100) / 100,
+    amount: target,
+    item_type: line.item_type === "fee" ? "fee" : "service",
+  }
+  const preservedCredit = credit.map((c) => ({
+    description: c.description,
+    quantity: Number(c.quantity) || 1,
+    unit_price: c.unit_price,
+    amount: c.amount,
+    item_type: c.item_type === "fee" ? "fee" : "service",
+  }))
+  return { items: [adjustedLine, ...preservedCredit], ok: true }
+}

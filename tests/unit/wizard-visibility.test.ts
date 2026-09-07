@@ -22,40 +22,57 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 interface SDRow { service_type: string }
 interface WizardRow { id: string }
 
+interface SDStageRow { stage: string }
+
 let sdAccountFixture: SDRow[] = []
 let sdContactFixture: SDRow[] = []
 let wizardProgressFixture: WizardRow[] = []
+let itinSubmissionsFixture: WizardRow[] = []
+let onboardingSubmissionsFixture: WizardRow[] = []
+/** The formation SD-stage fallback fixture — distinct from sdAccount/sdContact (different query shape: .eq('service_type','Company Formation') + .eq('status','active'), never .in()). */
+let sdFormationStageFixture: SDStageRow[] = []
 
 // Track query shape so we can route the fixture per branch.
 let lastFromTable = ""
-let chainState: { isAccountQuery: boolean; isContactQuery: boolean } = {
+let chainState: { isAccountQuery: boolean; isContactQuery: boolean; isFormationStageQuery: boolean } = {
   isAccountQuery: false,
   isContactQuery: false,
+  isFormationStageQuery: false,
 }
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
       lastFromTable = table
-      chainState = { isAccountQuery: false, isContactQuery: false }
+      chainState = { isAccountQuery: false, isContactQuery: false, isFormationStageQuery: false }
       const chain = {
         select: vi.fn().mockReturnThis(),
-        eq: vi.fn((col: string, _val: unknown) => {
+        eq: vi.fn((col: string, val: unknown) => {
           if (col === "account_id") chainState.isAccountQuery = true
           if (col === "contact_id") chainState.isContactQuery = true
+          if (col === "service_type" && val === "Company Formation") chainState.isFormationStageQuery = true
           return chain
         }),
         in: vi.fn().mockReturnThis(),
         is: vi.fn().mockReturnThis(),
+        order: vi.fn().mockReturnThis(),
         limit: vi.fn(() => {
           if (lastFromTable === "service_deliveries") {
-            const data = chainState.isAccountQuery
-              ? sdAccountFixture
-              : sdContactFixture
+            const data = chainState.isFormationStageQuery
+              ? sdFormationStageFixture
+              : chainState.isAccountQuery
+                ? sdAccountFixture
+                : sdContactFixture
             return Promise.resolve({ data, error: null })
           }
           if (lastFromTable === "wizard_progress") {
             return Promise.resolve({ data: wizardProgressFixture, error: null })
+          }
+          if (lastFromTable === "itin_submissions") {
+            return Promise.resolve({ data: itinSubmissionsFixture, error: null })
+          }
+          if (lastFromTable === "onboarding_submissions") {
+            return Promise.resolve({ data: onboardingSubmissionsFixture, error: null })
           }
           return Promise.resolve({ data: [], error: null })
         }),
@@ -71,8 +88,11 @@ beforeEach(() => {
   sdAccountFixture = []
   sdContactFixture = []
   wizardProgressFixture = []
+  itinSubmissionsFixture = []
+  onboardingSubmissionsFixture = []
+  sdFormationStageFixture = []
   lastFromTable = ""
-  chainState = { isAccountQuery: false, isContactQuery: false }
+  chainState = { isAccountQuery: false, isContactQuery: false, isFormationStageQuery: false }
 })
 
 // ─── Branch 1: SD-by-account ───────────────────────────
@@ -162,16 +182,33 @@ describe("computeHasWizardPending — tier-based onboarding fallback (Commit C)"
     expect(result).toBe(true)
   })
 
-  it("returns false when tier='formation' but contact has already submitted a wizard", async () => {
+  it("returns false when tier='formation' and the company's own SD has advanced past Payment Confirmed", async () => {
     sdAccountFixture = []
     sdContactFixture = []
-    wizardProgressFixture = [{ id: "wp-1" }]
+    sdFormationStageFixture = [{ stage: "Wizard Submitted" }]
     const result = await computeHasWizardPending({
       contactId: "contact-1",
       selectedAccountId: "",
       portalTier: "formation",
     })
     expect(result).toBe(false)
+  })
+
+  it("round 3 regression guard (dev job 9a9c5cf5): a bare wizard_progress row must NOT satisfy the formation check on its own — it is never scoped to a company, so an OLD company's permanent submitted row must not silence a genuinely unsubmitted NEW one", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    // Simulates an old, unrelated, already-formed company's PERMANENT
+    // wizard_progress row — the exact false-negative a code-diff Bug Hunter
+    // pass caught: the formation branch used to check this table directly
+    // and short-circuit before ever consulting the company's own SD stage.
+    wizardProgressFixture = [{ id: "wp-old-company" }]
+    sdFormationStageFixture = [] // the CURRENT company has no active SD yet at all
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
   })
 
   it("does NOT trigger tier fallback when tier is 'active'", async () => {
@@ -245,6 +282,102 @@ describe("computeHasWizardPending — person-owned ITIN with a company selected"
     sdAccountFixture = []
     sdContactFixture = [{ service_type: "ITIN" }, { service_type: "Company Closure" }]
     wizardProgressFixture = [{ id: "wp-itin" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(true)
+  })
+})
+
+// ─── Fallback (dev job 9a9c5cf5): submission-table proof when
+// wizard_progress silently failed to write ───
+
+describe("computeHasWizardPending — submission-table fallback when wizard_progress is missing", () => {
+  it("formation tier fallback: does NOT nag when wizard_progress is empty but the company's SD already advanced past Payment Confirmed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    sdFormationStageFixture = [{ stage: "Wizard Submitted" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("formation tier fallback: still nags when the company's SD is still at Payment Confirmed (genuinely not submitted)", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    sdFormationStageFixture = [{ stage: "Payment Confirmed" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("formation tier fallback: still nags when no active Company Formation SD exists at all", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    sdFormationStageFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "formation",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("tier fallback: does NOT nag when wizard_progress is empty but onboarding_submissions shows reviewed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    onboardingSubmissionsFixture = [{ id: "os-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "onboarding",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("tier fallback: still nags when NEITHER wizard_progress NOR the submission table shows a completion", async () => {
+    sdAccountFixture = []
+    sdContactFixture = []
+    wizardProgressFixture = []
+    onboardingSubmissionsFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "",
+      portalTier: "onboarding",
+    })
+    expect(result).toBe(true)
+  })
+
+  it("ITIN fallback: does NOT nag when wizard_progress is empty but itin_submissions shows completed", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }]
+    wizardProgressFixture = []
+    itinSubmissionsFixture = [{ id: "itin-1" }]
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("ITIN fallback: still nags when neither wizard_progress nor itin_submissions shows a completion", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }]
+    wizardProgressFixture = []
+    itinSubmissionsFixture = []
     const result = await computeHasWizardPending({
       contactId: "contact-1",
       selectedAccountId: "acc-1",

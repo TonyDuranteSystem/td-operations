@@ -207,7 +207,7 @@ export interface CategorizableRow {
 }
 
 /** A pending change to one transaction produced by the deterministic passes. */
-export type RecatUpdate = { category?: string; subcategory?: string; notes?: string; ai_lean?: string; ai_bucket?: string }
+export type RecatUpdate = { category?: string; subcategory?: string; is_related_party?: boolean; notes?: string; ai_lean?: string; ai_bucket?: string }
 
 /**
  * PURE deterministic core of {@link recategorizeAccountYear}: pass 1 (rules),
@@ -255,13 +255,24 @@ export function computeRecategorizationUpdates(
     // uncategorized), stale note and all — proven by the 3-run repro.
     const isAutoTagged = (row.notes ?? "").startsWith("auto:")
     if ((isAiTagged || isAutoTagged) && next.category === "uncategorized") continue
-    if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "")) {
+    const relatedPartyChanged = next.is_related_party !== Boolean(row.is_related_party)
+    if (next.category !== row.category || next.subcategory !== (row.subcategory ?? "") || relatedPartyChanged) {
       // When a rule overrides an AI suggestion the "ai:" tag no longer applies.
       // The suspected-member mark is NOT handled here — it is stamped after the
       // later passes, because those passes overwrite notes and would erase it.
+      //
+      // is_related_party MUST travel with category (2026-09-03, council
+      // finding). This field used to be silently dropped here, so a row moved
+      // OFF a member-distribution category by this same pass kept its stale
+      // is_related_party=true forever — which, combined with the
+      // now-correctly-recomputed matchesMemberName()=false in
+      // validation-breakdown.ts, makes the row newly appear as a genuine
+      // related-party transaction (real Form 5472 exposure) even though it
+      // was just corrected to an ordinary expense/income row.
       updates.set(row.id as string, {
         category: next.category,
         subcategory: next.subcategory,
+        is_related_party: next.is_related_party,
         ...(isAiTagged ? { notes: "" } : {}),
       })
     }
@@ -532,12 +543,16 @@ export async function recategorizeAccountYear(
     // truthiness here would have skipped the clear and left the mark for ever,
     // so the presence of the key is what counts.
     const notesChanged = u.notes !== undefined && u.notes !== ((orig.notes as string) ?? "")
-    if (!catChanged && !notesChanged) continue
+    // is_related_party must be written whenever it actually differs — see the
+    // comment where this field is set, above (2026-09-03 council finding).
+    const relatedPartyChanged = u.is_related_party !== undefined && u.is_related_party !== Boolean(orig.is_related_party)
+    if (!catChanged && !notesChanged && !relatedPartyChanged) continue
     // Report-only: count it and move on. Counted the same way a real run counts
     // it, so "would change N" and "changed N" are the same number.
     if (dryRun) { recategorized++; if (catChanged) categoryChanged++; if (markChangedIds.has(id)) marksChanged++; continue }
     const payload: Record<string, unknown> = { category: nextCategory, subcategory: nextSub }
     if (u.notes !== undefined) payload.notes = u.notes
+    if (u.is_related_party !== undefined) payload.is_related_party = u.is_related_party
 
     // THE CLIENT MAY BE ANSWERING WHILE THIS RUNS. The decision to skip human
     // answers is taken from the snapshot read at the top of this function, but

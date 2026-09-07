@@ -6,6 +6,13 @@ import { resolveThreadTitle } from "@/lib/team/thread-title"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { listAllAuthUsers } from "@/lib/auth-admin-helpers"
 
+const attachmentSchema = z.object({
+  url: z.string().describe("File URL — must already be hosted on our own Storage (e.g. from portal_chat_attach_file). An off-site URL is rejected."),
+  name: z.string().describe("Display filename shown on the attachment chip."),
+  mime_type: z.string().optional(),
+  size: z.number().optional(),
+})
+
 /**
  * team_chat_send — post a message into the internal Team Workspace ("team chat")
  * AS Claude. Staff-only, never client-visible. Shares the same choke-point
@@ -25,6 +32,8 @@ Target — provide EXACTLY ONE:
 
 ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own thread instead of as a new message in the channel, and the teammate's notification opens the bug. ALWAYS prefer this when replying about a bug someone already opened; a bare channel post detaches the answer from the bug it belongs to. Get the root id from team_chat_read_thread (the link Antonio pasted carries it). Cannot be combined with dm_user_id.
 
+ATTACHING A FILE — pass attachments (same shape as portal_chat_send). Every url must already be hosted on our own Storage — an arbitrary external link is rejected, and a plain link pasted into the message text does NOT render as a real attachment chip. To get a file onto our Storage first, use portal_chat_attach_file (source='drive'/'gmail'/'url'/'supabase_storage') — it returns a url safe to pass here even though its name says "portal".
+
 ⚠️ MANDATORY — approval before sending (same rule as gmail_send): SHOW THE FULL DRAFT (target + exact message) in chat and WAIT for Antonio's explicit approval ("send it" / "go") before calling this tool. A general "tell Luca about X" is NOT approval — show the draft first. Never call this on the first turn that proposes the message.`,
     {
       channel: z.string().optional().describe('Channel slug or name (e.g. "td-dev", "general"). Provide exactly one target.'),
@@ -32,8 +41,9 @@ ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own
       dm_user_id: z.string().uuid().optional().describe("Staff user UUID to DM as Claude. Provide exactly one target."),
       root_id: z.string().uuid().optional().describe("Root message UUID of an existing thread — answer INSIDE that bug/topic rather than posting a new message into the channel. Must belong to the targeted channel."),
       message: z.string().describe('Message body. @mention staff (e.g. "@Luca") to push them.'),
+      attachments: z.array(attachmentSchema).optional().describe("Real file attachments (rendered as chips, not text links). Every url must already be on our own Storage — see portal_chat_attach_file."),
     },
-    async ({ channel, thread_id, dm_user_id, root_id, message }) => {
+    async ({ channel, thread_id, dm_user_id, root_id, message, attachments }) => {
       try {
         // Who is dictating this send: the static Claude Code key maps to the
         // configured operator (Antonio); an OAuth connector session maps to its
@@ -41,7 +51,7 @@ ANSWERING A SPECIFIC BUG — add root_id: the answer lands INSIDE that bug's own
         // see lib/mcp/auth-context.ts). The stamp silences ONLY that person's
         // push/toast/unread for their own dictated message.
         const { actingEmailForTeamChat } = await import("@/lib/mcp/auth-context")
-        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, on_behalf_of: actingEmailForTeamChat() })
+        const result = await postTeamMessage({ channel, thread_id, dm_user_id, root_id, message, attachments, on_behalf_of: actingEmailForTeamChat() })
         const who = result.mentioned_user_ids.length
           ? ` (pushed ${result.mentioned_user_ids.length} mentioned teammate${result.mentioned_user_ids.length > 1 ? "s" : ""})`
           : ""

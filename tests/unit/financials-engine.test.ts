@@ -39,11 +39,54 @@ const PRIOR: PriorReturnCaseRecord = {
 }
 
 describe("attributeToMember", () => {
-  it("matches exact, embedded, and normalized names; null otherwise", () => {
-    expect(attributeToMember("Sofia Marinoni", MEMBERS.members)?.name).toBe("Sofia Marinoni")
-    expect(attributeToMember("Wire to SOFIA MARINONI — owner draw", MEMBERS.members)?.name).toBe("Sofia Marinoni")
-    expect(attributeToMember("STRIPE", MEMBERS.members)).toBeNull()
-    expect(attributeToMember(null, MEMBERS.members)).toBeNull()
+  it("matches exact, embedded, and normalized names in the description; null otherwise", () => {
+    expect(attributeToMember("Sofia Marinoni", null, MEMBERS.members)?.name).toBe("Sofia Marinoni")
+    expect(attributeToMember("Wire to SOFIA MARINONI — owner draw", null, MEMBERS.members)?.name).toBe("Sofia Marinoni")
+    expect(attributeToMember("STRIPE", null, MEMBERS.members)).toBeNull()
+    expect(attributeToMember(null, null, MEMBERS.members)).toBeNull()
+  })
+
+  it("matches a name in the counterparty too", () => {
+    expect(attributeToMember(null, "Sofia Marinoni", MEMBERS.members)?.name).toBe("Sofia Marinoni")
+  })
+
+  /**
+   * REGRESSION (2026-09-03, council finding, second round). The FIRST version
+   * of this fix took a single `text` argument and applied payeePart to
+   * whichever field the caller passed — which strips the COUNTERPARTY too,
+   * contradicting matchMemberForTransaction's own rule that counterparty is
+   * checked RAW because a wire genuinely made out to a member must always be
+   * caught with nothing else to go on. A counterparty shaped like
+   * "<something> ref <Member>" would have been silently un-attributed — the
+   * money would fall into the ownership-%-spread pool instead of being
+   * credited to the right member's capital account. Only reachable with the
+   * TWO-argument signature: the single-argument version made this untestable.
+   */
+  it("does not strip the counterparty — a marker-shaped counterparty still attributes correctly", () => {
+    expect(attributeToMember(null, "Payment ref Sofia Marinoni", MEMBERS.members)?.name).toBe("Sofia Marinoni")
+  })
+
+  /**
+   * REGRESSION (2026-09-03). The prior implementation matched via sameName's
+   * token-subset check over the WHOLE raw string — true whenever a member's
+   * first AND last name both appear as separate words anywhere in it, in any
+   * order, for any reason. A corporate-card line naming the CARD HOLDER (not
+   * the payee) tripped this even though it should never attribute a member
+   * here at all — this text is not even a distribution/contribution row in
+   * production (the categorizer fix keeps it as an expense), but if this
+   * function is ever reached with such text, it must not misattribute it.
+   */
+  it("does not attribute a corporate-card holder label to that member", () => {
+    expect(attributeToMember("Zapier.Com | Spend | Sofia Marinoni - 4521 (Spese)", "Zapier.Com", MEMBERS.members)).toBeNull()
+    expect(attributeToMember(
+      "FBC Consulting & Services | Spend | business service - Sent By Sofia Marinoni",
+      "FBC Consulting & Services",
+      MEMBERS.members,
+    )).toBeNull()
+  })
+
+  it("does not attribute a member named only in a supplier's payment reference (same fix, same reason)", () => {
+    expect(attributeToMember("Sent money to Lope Gomez with reference Marco Bianchi factura", "Lope Gomez", MEMBERS.members)).toBeNull()
   })
 })
 

@@ -4,7 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callAI } from '@/lib/portal/ai-provider'
 import { fetchKBContext, buildKBQuery } from '@/lib/portal/kb-context'
-import { gmailGet, extractBody, getHeader } from '@/lib/gmail'
+import { gmailGet, extractBody, getHeader, isOwnMailboxAddress } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { threadId, mailbox } = await request.json()
+  const { threadId, mailbox, messageId: targetMessageId } = await request.json()
   if (!threadId) {
     return NextResponse.json({ error: 'threadId required' }, { status: 400 })
   }
@@ -51,12 +51,30 @@ export async function POST(request: NextRequest) {
       const headers = payload?.headers ?? []
       const from = getHeader(headers, 'From') ?? ''
       const body = extractBody(payload) ?? ''
-      const isAdmin = from.includes('tonydurante.us')
-      return { from, body: body.slice(0, 1000), isAdmin }
+      const isAdmin = isOwnMailboxAddress(from)
+      return { id: msg.id as string, from, body: body.slice(0, 1000), isAdmin }
     })
 
-    const lastMessage = messages[messages.length - 1]
-    const senderEmail = lastMessage?.from?.match(/<([^>]+)>/)?.[1] ?? lastMessage?.from ?? ''
+    // Same "which message" resolution as Reply/Draft (lib/inbox/reply-target.ts,
+    // duplicated here in-line since this route already has the thread in
+    // hand): an explicit pick from the client, else the newest message NOT
+    // sent by us, else — nothing else sent us anything yet — the literal
+    // newest. Previously this always used the thread's literal newest
+    // message, which resolved the WRONG contact's CRM context whenever our
+    // own prior reply happened to be newest (the exact condition behind both
+    // confirmed misdirect incidents).
+    const targetIndex = targetMessageId
+      ? messages.findIndex((m: { id: string }) => m.id === targetMessageId)
+      : -1
+    const fallbackIndex = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (!messages[i].isAdmin) return i
+      }
+      return messages.length - 1
+    })()
+    const resolvedIndex = targetIndex >= 0 ? targetIndex : fallbackIndex
+    const targetMessage = messages[resolvedIndex]
+    const senderEmail = targetMessage?.from?.match(/<([^>]+)>/)?.[1] ?? targetMessage?.from ?? ''
     const subject = getHeader(thread.messages[0]?.payload?.headers ?? [], 'Subject') ?? ''
 
     // 3. Look up sender in CRM
@@ -128,7 +146,7 @@ export async function POST(request: NextRequest) {
 
     // 5. Fetch KB context
     const kbQuery = buildKBQuery(
-      lastMessage?.body?.slice(0, 100) ?? subject,
+      targetMessage?.body?.slice(0, 100) ?? subject,
       services?.map(s => s.service_type).filter(Boolean) as string[] ?? []
     )
     const kbContext = await fetchKBContext(kbQuery)
@@ -144,13 +162,22 @@ export async function POST(request: NextRequest) {
       payments?.length ? `\nRecent Payments:\n${payments.map(p => `- ${p.description || 'Payment'}: $${p.amount} (${p.status})`).join('\n')}` : '',
     ].filter(Boolean).join('\n')
 
+    // The target message is marked explicitly rather than relying on "the
+    // latest one" — it may not be, when staff (or the frozen default)
+    // targeted an earlier message in the thread. A version of this bug that
+    // only fixed WHO the reply's CRM context resolves to, while still
+    // telling the model to answer "the latest message", would draft a
+    // reply with the right company facts answering the wrong question —
+    // more dangerous than the original bug because it reads as trustworthy.
     const threadText = messages
-      .map((m: { isAdmin: boolean; body: string }) => `${m.isAdmin ? 'Antonio' : 'Client'}: ${m.body}`)
+      .map((m: { isAdmin: boolean; body: string }, i: number) =>
+        `${m.isAdmin ? 'Antonio' : 'Client'}${i === resolvedIndex ? ' [THIS IS THE MESSAGE TO REPLY TO]' : ''}: ${m.body}`
+      )
       .join('\n---\n')
 
     const systemPrompt = `You are an AI email assistant for Antonio, who runs Tony Durante LLC (US business formation & tax consulting).
 
-YOUR JOB: Draft a professional email reply to the latest message in this thread. Write as if you ARE Antonio.
+YOUR JOB: Draft a professional email reply to the message marked "[THIS IS THE MESSAGE TO REPLY TO]" below — NOT necessarily the last message in the thread. Write as if you ARE Antonio.
 
 SUBJECT: ${subject}
 
@@ -172,7 +199,7 @@ RULES:
 
     const result = await callAI({
       systemPrompt,
-      userPrompt: `Email thread:\n\n${threadText}\n\nDraft Antonio's reply to the latest message:`,
+      userPrompt: `Email thread:\n\n${threadText}\n\nDraft Antonio's reply to the message marked [THIS IS THE MESSAGE TO REPLY TO] above:`,
       maxTokens: 600,
       temperature: 0.7,
     })

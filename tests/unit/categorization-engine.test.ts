@@ -59,6 +59,85 @@ describe('member equity auto-booking (2026-07-07 — Dynamiq: wires to members m
   })
 
   /**
+   * REGRESSION (2026-09-03) — Fast Consulting LLC, MushBrew LLC, THW Global
+   * LLC. Relay's corporate-card export names the CARD HOLDER in the
+   * description ("Spend" / "Receive") while counterparty already correctly
+   * names the real vendor. Before this fix, every one of these booked as a
+   * personal distribution to the card holder. Real production strings.
+   */
+  it('a corporate-card purchase with a real vendor in counterparty is never a member distribution', () => {
+    const donato = ['Donato Ciardo', 'Cristian Ciardo']
+    const fbc = applyRules(
+      tx('FBC Consulting & Services | Spend | business service - Sent By Donato Ciardo', -1780, { counterparty: 'FBC Consulting & Services' }),
+      [], donato,
+    )
+    expect(fbc.category).not.toBe('distribution')
+    expect(fbc.is_related_party).toBe(false)
+
+    const airbnb = applyRules(
+      tx('Airbnb | Spend | Donato Ciardo - 5221 (Spese)', -3623.26, { counterparty: 'Airbnb' }),
+      [], donato,
+    )
+    expect(airbnb.category).not.toBe('distribution')
+
+    const hungary = ['Peter Czegle', 'Balint Gulyas']
+    const pharmacy = applyRules(
+      tx("ARANYKEHELY PATIKA | Spend | Peter Czegle - 0677 (CP's card)", -27.18, { counterparty: 'ARANYKEHELY PATIKA' }),
+      [], hungary,
+    )
+    expect(pharmacy.category).not.toBe('distribution')
+
+    // The mirror image — a refund/credit back to the card ("Receive").
+    const refund = applyRules(
+      tx("OBI | Receive | Balint Gulyas - 3855 (GB's card)", 5.44, { counterparty: 'OBI' }),
+      [], hungary,
+    )
+    expect(refund.category).not.toBe('contribution')
+  })
+
+  /**
+   * REGRESSION (2026-09-03) — Estro LLC. A training course is literally
+   * branded with the owner's name ("corso Giulia Fiorenza"). A customer
+   * paying for the course is company revenue, not the owner's capital
+   * contribution — the causale mentioning her is what the course is called,
+   * not who was paid.
+   */
+  it('a product/course named after the owner does not turn customer revenue into a contribution', () => {
+    const out = applyRules(
+      tx('Ricevuto denaro da ILACQUA CARMELO con causale Saldo quinta rata percorso Giulia Fiorenza', 1084, { counterparty: 'ILACQUA CARMELO' }),
+      [], ['Giulia Fiorenza'],
+    )
+    expect(out.category).not.toBe('contribution')
+    expect(out.category).toBe('income') // falls through to the generic "Ricevuto denaro da" rule
+  })
+
+  it('a wire genuinely made out to the member still fires even when a card-transaction word appears elsewhere', () => {
+    // Dynamiq preservation, restated at the applyRules layer: the member IS
+    // the counterparty, so it must win regardless of what the description says.
+    const out = applyRules(
+      tx('Spend transfer', -50, { counterparty: 'Sofia Marinoni' }),
+      [], ['Sofia Marinoni'],
+    )
+    expect(out.category).toBe('distribution')
+  })
+
+  /**
+   * REGRESSION (2026-09-03, bug-hunter finding, second round) — end-to-end at
+   * the real production entry point. A plain English sentence using "spend"/
+   * "receive" as an ordinary verb, with no counterparty to fall back on, must
+   * still book as a member distribution/contribution — not silently fall to
+   * uncategorized (which folds into income/expense by sign with zero flag,
+   * the exact "looks complete but isn't" failure named in pnl-generator.ts's
+   * own B&P $594k incident comment).
+   */
+  it('a plain-English wire memo using "receive"/"spend" as a verb still books as owner equity', () => {
+    const inflow = applyRules(tx('To receive urgent funds from Marco Rossi', 2500), [], ['Marco Rossi'])
+    expect(inflow.category).toBe('contribution')
+    const outflow = applyRules(tx('Approved to spend by Marco Rossi for personal use', -1500), [], ['Marco Rossi'])
+    expect(outflow.category).toBe('distribution')
+  })
+
+  /**
    * THE PAYEE MUST BE SEARCHED SEPARATELY FROM THE MEMO (2026-08-04).
    *
    * The near-miss check cuts a line at its payment reference, so a supplier's
@@ -292,9 +371,33 @@ describe('computeRecategorizationUpdates (parity core)', () => {
       const exact = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27 })
       const first = computeRecategorizationUpdates([exact], [], members, '').updates
       expect(first.get('ex')?.category).toBe('distribution')
-      // ...and re-running on the booked row writes nothing.
-      const booked = crow({ id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27, category: 'distribution', subcategory: 'member_distribution' })
+      expect(first.get('ex')?.is_related_party).toBe(true)
+      // ...and re-running on the booked row (is_related_party included, as a
+      // real booked distribution always carries it) writes nothing.
+      const booked = crow({
+        id: 'ex', description: 'Sent money to Donato Renato Berini', amount: -4464.27,
+        category: 'distribution', subcategory: 'member_distribution', is_related_party: true,
+      })
       expect(computeRecategorizationUpdates([booked], [], members, '').updates.get('ex')).toBeUndefined()
+    })
+
+    /**
+     * REGRESSION (2026-09-03, council finding). is_related_party used to be
+     * silently dropped from every update this function produces — a row moved
+     * OFF a member category kept a stale is_related_party=true forever, which
+     * (combined with the now-correct matchesMemberName()=false in
+     * validation-breakdown.ts) makes it newly appear as a genuine
+     * related-party transaction. This must travel with the category flip.
+     */
+    it('is_related_party clears when a row is corrected OFF a member category', () => {
+      const stale = crow({
+        id: 'fix', description: 'FBC Consulting & Services | Spend | business service - Sent By Donato Ciardo',
+        counterparty: 'FBC Consulting & Services', amount: -1780,
+        category: 'distribution', subcategory: 'member_distribution', is_related_party: true, notes: 'Member: Donato Ciardo',
+      })
+      const update = computeRecategorizationUpdates([stale], [], ['Donato Ciardo'], '').updates.get('fix')
+      expect(update?.category).not.toBe('distribution')
+      expect(update?.is_related_party).toBe(false)
     })
 
     it('a human answer is never reopened, however many times it runs', () => {

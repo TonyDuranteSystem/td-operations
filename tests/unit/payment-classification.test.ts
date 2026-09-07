@@ -64,6 +64,19 @@ describe('payment-classification — never reads description', () => {
     expect(isLivePayment(p({ invoice_status: 'Cancelled' }))).toBe(false)
   })
 
+  it('isLivePayment guards Voided and Credit rows too (widened 2026-09-01, bug-hunter finding)', () => {
+    // Before this widening, a Voided installment invoice still counted as "live" here, so the
+    // annual-installments cron's duplicate guard treated a voided-and-never-reissued invoice as
+    // proof the client was already billed and silently stopped billing them for it forever.
+    expect(isLivePayment(p({ invoice_status: 'Voided' }))).toBe(false)
+    expect(isLivePayment(p({ invoice_status: 'Credit' }))).toBe(false)
+    expect(isSecondInstallment(p({ payment_category: 'installment_2', year: 2026, invoice_status: 'Voided' }), 2026)).toBe(false)
+  })
+
+  it('a null invoice_status still counts as live (no false-dead from a missing column)', () => {
+    expect(isLivePayment(p({ invoice_status: null }))).toBe(true)
+  })
+
   it('isPaymentCategory is a runtime guard over the known vocabulary', () => {
     expect(PAYMENT_CATEGORIES.every(isPaymentCategory)).toBe(true)
     expect(isPaymentCategory('installment_3')).toBe(false)

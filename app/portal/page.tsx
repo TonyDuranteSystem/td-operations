@@ -374,15 +374,45 @@ export default async function PortalDashboardPage() {
     // into a passive "Data submitted — we're reviewing" state (Tier Model B).
     let wizardSubmitted = false
     if (contactId) {
+      // NOTE (dev job 9a9c5cf5, round 3): this code path is only ever
+      // reached for a contact WITHOUT an in-progress or materialized
+      // formation — a formation-tier or active-formation contact returns
+      // earlier from this function (see the `authTier === 'formation' ||
+      // hasActiveFormation` branch above) via its own, separately and
+      // correctly scoped FormationDashboard wizard-status lookup. So
+      // checking `wizard_type='formation'` here can only ever match an
+      // OLD, unrelated, already-formed company's permanent submitted row —
+      // never the contact's actual current situation. Round 2 of this fix
+      // added a Company-Formation SD-stage fallback here that was
+      // structurally dead code for that exact reason (bug-hunter finding,
+      // round 3) — removed. Scoped to 'onboarding' only.
       const { data: wp } = await supabaseAdmin
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .in('wizard_type', ['onboarding', 'formation'])
+        .eq('wizard_type', 'onboarding')
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
+      // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+      // silently (2026-08-27 missing-column incident), leaving a client who
+      // genuinely submitted stuck on "Complete Setup" forever. No
+      // equivalent early SD exists for onboarding to key on instead
+      // (account/SD creation is deferred to wizard submit), so this stays
+      // contact-scoped, not company-scoped — a narrower, documented,
+      // pre-existing limitation, not currently exercised by any real
+      // client (verified live during this investigation).
+      if (!wizardSubmitted) {
+        const { data: os } = await supabaseAdmin
+          .from('onboarding_submissions')
+          .select('id')
+          .eq('contact_id', contactId)
+          .in('status', ['completed', 'reviewed'])
+          .limit(1)
+          .maybeSingle()
+        wizardSubmitted = !!os
+      }
     }
 
     // Pending actions for clients who have a portal account but no active
@@ -416,14 +446,21 @@ export default async function PortalDashboardPage() {
             </h2>
             {noAccountFlows.map(f =>
               f.steps ? (
-                <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} />
+                <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} isNew={f.isNew} />
               ) : (
                 <Link
                   key={f.id}
                   href={`/portal/flows/${f.id}`}
                   className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2 hover:border-zinc-300 transition-colors"
                 >
-                  <span className="text-sm font-medium text-zinc-900">{f.title}</span>
+                  <span className="text-sm font-medium text-zinc-900 flex items-center gap-2">
+                    {f.title}
+                    {f.isNew && (
+                      <span className="h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
+                        {t('documents.new', locale, translations)}
+                      </span>
+                    )}
+                  </span>
                   <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
                     {t('dashboard.active', locale, translations)}
                   </span>
@@ -577,15 +614,45 @@ export default async function PortalDashboardPage() {
     // Gallacci 2026-04-18 case) and post-promote rows still keep contact_id.
     let wizardSubmitted = false
     if (contactId) {
+      // NOTE (dev job 9a9c5cf5, round 3): this code path is only ever
+      // reached for a contact WITHOUT an in-progress or materialized
+      // formation — a formation-tier or active-formation contact returns
+      // earlier from this function (see the `authTier === 'formation' ||
+      // hasActiveFormation` branch above) via its own, separately and
+      // correctly scoped FormationDashboard wizard-status lookup. So
+      // checking `wizard_type='formation'` here can only ever match an
+      // OLD, unrelated, already-formed company's permanent submitted row —
+      // never the contact's actual current situation. Round 2 of this fix
+      // added a Company-Formation SD-stage fallback here that was
+      // structurally dead code for that exact reason (bug-hunter finding,
+      // round 3) — removed. Scoped to 'onboarding' only.
       const { data: wp } = await supabaseAdmin
         .from('wizard_progress')
         .select('id')
         .eq('contact_id', contactId)
-        .in('wizard_type', ['onboarding', 'formation'])
+        .eq('wizard_type', 'onboarding')
         .eq('status', 'submitted')
         .limit(1)
         .maybeSingle()
       wizardSubmitted = !!wp
+      // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+      // silently (2026-08-27 missing-column incident), leaving a client who
+      // genuinely submitted stuck on "Complete Setup" forever. No
+      // equivalent early SD exists for onboarding to key on instead
+      // (account/SD creation is deferred to wizard submit), so this stays
+      // contact-scoped, not company-scoped — a narrower, documented,
+      // pre-existing limitation, not currently exercised by any real
+      // client (verified live during this investigation).
+      if (!wizardSubmitted) {
+        const { data: os } = await supabaseAdmin
+          .from('onboarding_submissions')
+          .select('id')
+          .eq('contact_id', contactId)
+          .in('status', ['completed', 'reviewed'])
+          .limit(1)
+          .maybeSingle()
+        wizardSubmitted = !!os
+      }
     }
 
     // Pending actions (signatures, invoices, wizards) for pre-active tier clients.
@@ -880,14 +947,21 @@ export default async function PortalDashboardPage() {
           </h2>
           {flowsForStatus.map(f =>
             f.steps ? (
-              <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} />
+              <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} isNew={f.isNew} />
             ) : (
               <Link
                 key={f.id}
                 href={`/portal/flows/${f.id}`}
                 className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2 hover:border-zinc-300 transition-colors"
               >
-                <span className="text-sm font-medium text-zinc-900">{f.title}</span>
+                <span className="text-sm font-medium text-zinc-900 flex items-center gap-2">
+                  {f.title}
+                  {f.isNew && (
+                    <span className="h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
+                      {t('documents.new', locale, translations)}
+                    </span>
+                  )}
+                </span>
                 <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
                   {t('flows.active', locale, translations)}
                 </span>

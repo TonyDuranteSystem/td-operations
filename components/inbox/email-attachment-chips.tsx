@@ -34,7 +34,10 @@ export function EmailAttachmentChips({ attachments }: { attachments: EmailAttach
             }`}
             title={f.error || f.name}
           >
-            {f.error ? (
+            {f.previewUrl && !f.error ? (
+              // eslint-disable-next-line @next/next/no-img-element -- a local blob preview, not a remote image
+              <img src={f.previewUrl} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+            ) : f.error ? (
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
             ) : f.path ? (
               <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-400" />

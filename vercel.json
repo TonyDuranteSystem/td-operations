@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/cron/refresh-issue-counts",
-      "schedule": "0 8 * * *"
-    },
-    {
       "path": "/api/cron/payment-integrity-alarm",
       "schedule": "0 9 * * *"
     },
@@ -187,10 +183,6 @@
     {
       "path": "/api/cron/email-unsnooze",
       "schedule": "*/10 * * * *"
-    },
-    {
-      "path": "/api/cron/tax-restale-sweep",
-      "schedule": "0 */4 * * *"
     },
     {
       "path": "/api/cron/plan-referrer-notify",

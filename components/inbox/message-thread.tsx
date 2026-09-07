@@ -10,10 +10,12 @@ import { emailSnippet } from '@/lib/inbox/email-html'
 import { splitQuotedText } from '@/lib/inbox/email-quote'
 import { printEmailThread } from '@/lib/inbox/print-email'
 import { resolveAttachmentType, shouldOpenInTab } from '@/lib/inbox/attachment-open'
+import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 import { EmailHtmlFrame } from './email-html-frame'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
-import { Link2, Printer } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { Link2, Printer, Reply, ReplyAll, Forward as ForwardIcon, MoreHorizontal } from 'lucide-react'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
 type ThreadAttachment = NonNullable<InboxMessage['attachments']>[number]
@@ -174,12 +176,35 @@ function PlainEmailBody({ content }: { content: string }) {
   )
 }
 
+export interface ReplyTarget {
+  messageId: string
+  sender: string
+  mode: 'reply' | 'replyAll'
+}
+
 interface MessageThreadProps {
   conversation: InboxConversation
   /** Optional: receives a Print/Save-as-PDF handler for the loaded email thread
    *  (null while unavailable). Lets a parent toolbar trigger printing the thread
    *  it doesn't itself hold the bodies for. Omitted by the portal-chats reuse. */
   registerPrint?: (fn: (() => void) | null) => void
+  /** Staff explicitly clicked "Reply" or "Reply All" on one message card —
+   *  including one of our OWN sent messages (Antonio, 2026-09-03: dev job
+   *  208f39ad — every message gets these actions, not just the client's). */
+  onReplyTo?: (target: ReplyTarget) => void
+  /** Staff explicitly clicked "Forward" on one message card — forwards
+   *  THAT message, not whichever the toolbar's own Forward button would
+   *  otherwise guess (dev job 208f39ad). */
+  onForward?: (messageId: string) => void
+  /**
+   * Same registration pattern as registerPrint: exposes a GETTER (not a
+   * pushed value) for "which message would an untargeted reply go to right
+   * now" — the newest message NOT sent by us, recomputed as messages load —
+   * so the composer can read a fresh snapshot at the moment it freezes its
+   * target, without this component's own re-renders/polls forcing the
+   * composer to re-render too.
+   */
+  registerDefaultReplyTarget?: (fn: (() => Omit<ReplyTarget, 'mode'> | null) | null) => void
 }
 
 interface ThreadResponse {
@@ -202,7 +227,7 @@ function formatMessageTime(dateStr: string) {
   })
 }
 
-export function MessageThread({ conversation, mailbox, registerPrint }: MessageThreadProps & { mailbox?: string }) {
+export function MessageThread({ conversation, mailbox, registerPrint, onReplyTo, onForward, registerDefaultReplyTarget }: MessageThreadProps & { mailbox?: string }) {
   const queryClient = useQueryClient()
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -386,6 +411,24 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
     return () => registerPrint(null)
   }, [data, registerPrint])
 
+  // Same registration pattern as Print above. A GETTER, not a pushed value —
+  // this component's own 15s poll must not force the composer to re-render
+  // (or worse, silently re-resolve its already-frozen target) on every tick;
+  // the composer reads a fresh snapshot only at the moment it needs one.
+  useEffect(() => {
+    if (!registerDefaultReplyTarget) return
+    const msgs = data?.channel === 'gmail' ? data?.messages : undefined
+    if (!msgs || msgs.length === 0) {
+      registerDefaultReplyTarget(null)
+      return
+    }
+    registerDefaultReplyTarget(() => {
+      const picked = pickNewestNonOwnMessage(msgs)
+      return picked ? { messageId: picked.id, sender: picked.sender } : null
+    })
+    return () => registerDefaultReplyTarget(null)
+  }, [data, registerDefaultReplyTarget])
+
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -539,6 +582,64 @@ export function MessageThread({ conversation, mailbox, registerPrint }: MessageT
                     </span>
                   </button>
                 </FastTooltip>
+                {/* One "more actions" menu per message — Reply / Reply All /
+                    Forward, on EVERY message including our own sent ones
+                    (Antonio, 2026-09-03: "I want the reply, reply all and
+                    forward on every single thread and messages even on the
+                    sent one"). Used to be two icons shown only on client
+                    messages; a UX review found tripling that to 3 icons on
+                    EVERY card would crowd the header, especially on a phone,
+                    so this consolidates into one trigger (dev job 208f39ad).
+                    Replying to our own message is now safe — it addresses
+                    that message's own original recipient(s), never back to
+                    us (lib/inbox/reply-target.ts). */}
+                {(onReplyTo || onForward) && (
+                  <DropdownMenu.Root>
+                    <FastTooltip label="Reply, Reply All, or Forward">
+                      <DropdownMenu.Trigger asChild>
+                        <button
+                          type="button"
+                          aria-label="More actions for this message"
+                          className="shrink-0 p-1.5 rounded text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200/60"
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </button>
+                      </DropdownMenu.Trigger>
+                    </FastTooltip>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        className="min-w-[160px] rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50"
+                        align="end"
+                        sideOffset={4}
+                      >
+                        {onReplyTo && (
+                          <>
+                            <DropdownMenu.Item
+                              className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                              onSelect={() => onReplyTo({ messageId: msg.id, sender: msg.sender, mode: 'reply' })}
+                            >
+                              <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item
+                              className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                              onSelect={() => onReplyTo({ messageId: msg.id, sender: msg.sender, mode: 'replyAll' })}
+                            >
+                              <ReplyAll className="h-3.5 w-3.5 text-zinc-400" /> Reply All
+                            </DropdownMenu.Item>
+                          </>
+                        )}
+                        {onForward && (
+                          <DropdownMenu.Item
+                            className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                            onSelect={() => onForward(msg.id)}
+                          >
+                            <ForwardIcon className="h-3.5 w-3.5 text-zinc-400" /> Forward
+                          </DropdownMenu.Item>
+                        )}
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                )}
                 <FastTooltip label="Print this email">
                   <button
                     type="button"

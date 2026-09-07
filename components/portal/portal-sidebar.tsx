@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { purgeAllCaches } from '@/lib/portal/sw-scope'
 import {
@@ -24,7 +24,6 @@ import {
   PenLine,
   FilePen,
   PlusCircle,
-  Mail,
   MapPin,
   Landmark,
   Palette,
@@ -35,6 +34,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
 import { LanguageSwitcher } from './language-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
+import { NavItemHint } from './nav-item-hint'
 import type { PortalAccount } from '@/lib/types'
 import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
@@ -51,6 +51,8 @@ interface PortalSidebarProps {
   unreadDocsCount?: number
   /** Documents awaiting this client's signature — drives the Sign tab "new" blink. */
   toSignCount?: number
+  /** Unpaid TD invoices (Sent/Overdue) — drives the TD Billing tab pulse + count. */
+  unpaidInvoiceCount?: number
   hasWizardPending?: boolean
   accountType?: string | null
   contactId?: string
@@ -80,6 +82,7 @@ interface NavItem {
   wizardDynamic?: boolean // if true, also show when hasWizardPending is true
   partnerOnly?: boolean // if true, only show for partner portal
   teamAdminOnly?: boolean // if true, only show when canManageTeam is true (Portal Team Access)
+  hintKey?: string // if set, the info-popover text uses nav.hint.<hintKey> instead of deriving it from key
 }
 
 // (NavGroup interface removed in PR 2 Step 7 — sections are now hard-coded
@@ -110,7 +113,6 @@ const personalItems: NavItem[] = [
   // "Client Signing" stage (Phase C, 2026-05-11). The page shows the generated
   // W-7 + 1040-NR PDFs and the mailing instructions for the client to mail to
   // Antonio's CAA office.
-  { key: 'nav.itinDocuments', href: '/portal/itin-documents', icon: Mail, visibilityKey: 'itinAtClientSigning' },
   { key: 'nav.referrals', href: '/portal/referrals', icon: Share2 },
   { key: 'nav.profile', href: '/portal/profile', icon: User },
 ]
@@ -122,6 +124,10 @@ const personalItems: NavItem[] = [
 // Expenses tab with contact-scoped TD invoices (PR 2 Step 4).
 const personalInvoicesItem: NavItem = {
   key: 'nav.invoices', href: '/portal/invoices', icon: Receipt,
+  // Distinct hint text — this branch renders only the Expenses tab for a
+  // no-company client (see comment above), not the company's sales-invoicing
+  // system the shared 'nav.invoices' hint describes.
+  hintKey: 'invoicesPersonal',
 }
 
 // Tier-specific items shown above the Personal section (CTAs the client hits
@@ -188,8 +194,9 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
@@ -308,6 +315,15 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     // Strip query params for path matching
     const hrefPath = href.split('?')[0]
     if (hrefPath === '/portal') return pathname === '/portal'
+    // TD Billing is a redirect (see app/portal/billing/page.tsx) that lands on
+    // /portal/invoices?tab=expenses — matched on the actual tab, not just the
+    // shared route, so viewing the Sales or Vendors tab of that same page
+    // (the separate "Invoices" nav item) doesn't also silence the billing
+    // pulse before the client has ever seen an unpaid TD invoice (council
+    // review, 2026-09-04).
+    if (hrefPath === '/portal/billing') {
+      return pathname.startsWith('/portal/invoices') && searchParams.get('tab') === 'expenses'
+    }
     return pathname.startsWith(hrefPath)
   }
 
@@ -428,18 +444,28 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     return base
   })()
 
+  // Each NavItem's `key` is already 'nav.xxx' — its hover/tap description
+  // lives at the matching 'nav.hint.xxx' key by default. `hintKey` overrides
+  // that when the same key renders two different contexts with different
+  // real behavior (e.g. the no-company Invoices item — see personalInvoicesItem).
+  const navHintText = (item: NavItem) => t(`nav.hint.${item.hintKey ?? item.key.slice(4)}`)
+
   const renderNavItem = (item: NavItem) => {
     const isDocsItem = item.href === '/portal/documents'
     const isSignItem = item.href === '/portal/sign'
+    const isBillingItem = item.href === '/portal/billing'
     // Documents tab pulses while there are unopened client-visible docs; the
     // Sign Documents tab pulses while there is anything awaiting signature
-    // (lease, OA, SS-4, e-sign, …). Both stop once the client is on that page.
+    // (lease, OA, SS-4, e-sign, …); TD Billing pulses while an invoice is
+    // unpaid. All three stop once the client is on that page.
     const docsPulse = isDocsItem && unreadDocsCount > 0 && !isActive(item.href)
     const signPulse = isSignItem && toSignCount > 0 && !isActive(item.href)
+    const billingPulse = isBillingItem && unpaidInvoiceCount > 0 && !isActive(item.href)
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0
       ? liveUnreadCount
       : (isDocsItem && unreadDocsCount > 0 ? unreadDocsCount
-        : (isSignItem && toSignCount > 0 ? toSignCount : 0))
+        : (isSignItem && toSignCount > 0 ? toSignCount
+          : (isBillingItem && unpaidInvoiceCount > 0 ? unpaidInvoiceCount : 0)))
 
     // Context-aware label for the wizard nav item.
     // The tab serves two purposes depending on the client's stage:
@@ -477,7 +503,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           isActive(item.href)
             ? 'bg-blue-50 text-blue-700'
             : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900',
-          (docsPulse || signPulse) && 'animate-pulse'
+          (docsPulse || signPulse || billingPulse) && 'animate-pulse'
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />
@@ -492,6 +518,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             NEW
           </span>
         )}
+        <NavItemHint itemKey={item.key} text={navHintText(item)} label={navLabel} />
       </Link>
     )
   }

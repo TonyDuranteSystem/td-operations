@@ -4,10 +4,12 @@ import {
   mentionsClaude,
   shouldAutoContinueWithClaude,
   dmKey,
+  otherDmParty,
   channelSlug,
   validateHexColor,
   validateTeamCard,
   CLAUDE_MENTION_ID,
+  CLAUDE_SENDER_UUID,
   isValidWorkStatus,
   TEAM_WORK_STATUSES,
   TEAM_WORK_STATUS_LABELS,
@@ -114,6 +116,42 @@ describe('dmKey', () => {
   it('throws when an id is missing', () => {
     expect(() => dmKey('', 'x')).toThrow()
     expect(() => dmKey('x', '')).toThrow()
+  })
+})
+
+// Bug-hunter, 2026-09-05: a real production message sent via team_chat_send's
+// dm_user_id path was permanently invisible to the staff member who dictated
+// it (Antonio), because the DM was always keyed to the Claude sentinel rather
+// than the real acting user — see lib/team/post-message.ts's
+// resolveTargetThread for the fix. This is the OTHER half of that same fix:
+// once a dictated DM's dm_key can be "actingUser:target" instead of always
+// "Claude:target", naively excluding only the sentinel to find "the other
+// participant" (for push targeting) could return the ACTOR instead of the
+// real recipient.
+describe('otherDmParty — finding who a dictated DM actually goes to', () => {
+  it('old shape: Claude-keyed thread, excluding just the sentinel finds the real recipient', () => {
+    const key = dmKey(CLAUDE_SENDER_UUID, 'luca')
+    expect(otherDmParty(key, [CLAUDE_SENDER_UUID, null])).toBe('luca')
+  })
+
+  it('new shape: actor-keyed thread — excluding ONLY the sentinel would wrongly return the actor; excluding both finds the real recipient', () => {
+    const key = dmKey('antonio', 'luca')
+    // The regression this test pins: with only the sentinel excluded (the
+    // pre-fix behaviour), neither half is the sentinel, so .find() would
+    // return whichever id sorts first — 'antonio', the actor, not 'luca'.
+    expect(otherDmParty(key, [CLAUDE_SENDER_UUID])).toBe('antonio')
+    // The actual fix: excluding the acting user too finds the real recipient.
+    expect(otherDmParty(key, [CLAUDE_SENDER_UUID, 'antonio'])).toBe('luca')
+  })
+
+  it('self-DM: the actor dictated a note to themselves — nobody is pushed', () => {
+    const key = dmKey('antonio', 'antonio')
+    expect(otherDmParty(key, [CLAUDE_SENDER_UUID, 'antonio'])).toBeNull()
+  })
+
+  it('tolerates a null/empty key and an all-null exclude list', () => {
+    expect(otherDmParty(null, [])).toBeNull()
+    expect(otherDmParty('', [null, undefined])).toBeNull()
   })
 })
 

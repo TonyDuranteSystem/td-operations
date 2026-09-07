@@ -940,8 +940,16 @@ export function normalizeTaxPayloadForPdf(
     for (let i = 0; i < count; i++) {
       const get = (k: string) => out[`member_${i}_${k}`]
       if (!get("member_first_name") && !get("member_last_name") && !get("member_company_name")) continue
+      // A company_name value must never win for an individual member — same
+      // fix and same real incident as lib/tax/financials-orchestration.ts's
+      // extractWizardMembers (Donato Ciardo, 2026-09-01): a stray company_name
+      // on an individual's entry silently replaced their name with the LLC's
+      // own name in this accountant-facing summary.
+      const isCompanyMember = get("member_type") === "company"
       membersList.push({
-        member_name: get("member_company_name") || `${get("member_first_name") ?? ""} ${get("member_last_name") ?? ""}`.trim(),
+        member_name: isCompanyMember && get("member_company_name")
+          ? get("member_company_name")
+          : `${get("member_first_name") ?? ""} ${get("member_last_name") ?? ""}`.trim(),
         member_kind: get("member_type"),
         member_citizenship: get("member_citizenship"),
         member_residence_country: get("member_residence_country"),

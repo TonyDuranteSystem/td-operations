@@ -424,6 +424,52 @@ export function encodeAddressHeader(value: string): string {
 }
 
 /**
+ * Our own mailboxes — a reply must never target one of these as a recipient.
+ * Includes send-as ALIASES on the support@ mailbox (office@, compliance@),
+ * confirmed live in real client threads (2026-09-03) — a message sent under
+ * either alias was previously misclassified as "the client" by every reader
+ * of this list, which is the same self-reply misdirect this list exists to
+ * prevent, just under a different address. Dormant since ~Feb 2026 but still
+ * genuinely ours; a retired alias staying on this list costs nothing.
+ */
+export const OWN_MAILBOX_ADDRESSES = [
+  "support@tonydurante.us",
+  "antonio.durante@tonydurante.us",
+  "office@tonydurante.us",
+  "compliance@tonydurante.us",
+] as const
+
+export function isOwnMailboxAddress(address: string): boolean {
+  const bare = address.toLowerCase().trim()
+  return OWN_MAILBOX_ADDRESSES.some((a) => bare.includes(a))
+}
+
+/**
+ * Extract EVERY email address out of a raw To/Cc header value — which may
+ * hold several "Name" <addr> entries, some with a comma INSIDE the display
+ * name ("Popescu, Dragos" <dragos@payset.io>). Splitting on "," first (as
+ * lib/email-index/sync.ts does today) breaks exactly that case; matching the
+ * address pattern directly sidesteps it — comma placement never matters.
+ * Returns lowercase, deduplicated bare addresses (no display names) in the
+ * order they first appear.
+ */
+export function extractAllEmailAddresses(headerValue: string): string[] {
+  if (!headerValue) return []
+  const matches = headerValue.match(/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+/g)
+  if (!matches) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const m of matches) {
+    const addr = m.toLowerCase()
+    if (!seen.has(addr)) {
+      seen.add(addr)
+      out.push(addr)
+    }
+  }
+  return out
+}
+
+/**
  * Extract email body as plain text (strips HTML tags).
  * Used for snippets, forwarding, and non-HTML contexts.
  */

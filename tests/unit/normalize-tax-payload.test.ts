@@ -84,10 +84,12 @@ describe('normalizeTaxPayloadForPdf — members fold (parity with legacy inline 
   it('folds member_N_ keys into members_list and drops the raw keys', () => {
     const data: Record<string, unknown> = {
       member_count: 2,
+      member_0_member_type: 'individual',
       member_0_member_first_name: 'Anna',
       member_0_member_last_name: 'Rossi',
       member_0_member_citizenship: 'Italy',
       member_0_member_ownership_pct: 60,
+      member_1_member_type: 'company',
       member_1_member_company_name: 'HOLDCO SRL',
       member_1_member_ownership_pct: 40,
     }
@@ -98,6 +100,28 @@ describe('normalizeTaxPayloadForPdf — members fold (parity with legacy inline 
     expect(members[1].member_name).toBe('HOLDCO SRL')
     expect(out.member_count).toBeUndefined()
     expect(Object.keys(out).some(k => /^member_\d+_/.test(k))).toBe(false)
+  })
+
+  it('a stray company_name on an individual member never wins over their real name (Donato Ciardo, 2026-09-01)', () => {
+    // Same real incident and same fix as lib/tax/financials-orchestration.ts's
+    // extractWizardMembers — this file independently folds the same wizard
+    // keys for the accountant-facing summary PDF and had the identical gap.
+    const data: Record<string, unknown> = {
+      member_count: 2,
+      member_0_member_type: 'individual',
+      member_0_member_first_name: 'Donato',
+      member_0_member_last_name: 'Ciardo',
+      member_0_member_ownership_pct: 99,
+      member_0_member_company_name: 'Fast Consulting LLC',
+      member_1_member_type: 'individual',
+      member_1_member_first_name: 'Cristian',
+      member_1_member_last_name: 'Ciardo',
+      member_1_member_ownership_pct: 1,
+    }
+    const out = normalizeTaxPayloadForPdf(data)
+    const members = out.members_list as Record<string, unknown>[]
+    expect(members[0].member_name).toBe('Donato Ciardo')
+    expect(members[1].member_name).toBe('Cristian Ciardo')
   })
 
   it('skips empty member slots (member_count over-reports)', () => {

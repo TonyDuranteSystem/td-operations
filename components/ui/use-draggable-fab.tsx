@@ -1,10 +1,15 @@
 'use client'
 
 /**
- * Makes a floating button draggable — desktop and touch.
+ * Makes a floating button (or, generically, any element — see the type
+ * parameter below) draggable — desktop and touch.
  *
  * One hook, used by the green chat launcher and the amber notes pill, so the
- * two behave identically and a fix lands in both.
+ * two behave identically and a fix lands in both. Also reused (2026-09-04,
+ * Antonio: "can the popup page be moved?") as the drag handle for the My
+ * Captures popup's header bar — a <div>, not a <button> — via the generic
+ * type parameter (`useDraggableFab<HTMLDivElement>(key)`), which defaults to
+ * `HTMLButtonElement` so neither existing caller needed a single change.
  *
  * The three things that make touch-dragging a button safe, all handled here:
  *
@@ -41,8 +46,30 @@ const store = {
   },
 }
 
-export function useDraggableFab(storageKey: string) {
-  const ref = useRef<HTMLButtonElement | null>(null)
+export function useDraggableFab<T extends HTMLElement = HTMLButtonElement>(
+  storageKey: string,
+  opts?: {
+    /**
+     * Pass a value that changes when the caller starts rendering the real
+     * element — e.g. an `isOpen` boolean — if that element is EVER absent
+     * from the DOM (returns null / is conditionally unmounted) rather than
+     * always present like the hook's original two callers (a FAB button,
+     * always on screen). Without this, a caller that starts closed gets its
+     * one-time position-restore effect below measuring a `ref.current` that
+     * doesn't exist yet, which disables the whole clamp for that read (the
+     * clamp's "no measured box" fallback is deliberately the loosest
+     * possible bound, so the position was never actually kept on screen) —
+     * confirmed live, bug-hunter finding 2026-09-04: a position saved on a
+     * wide desktop reopened mostly off-screen on Antonio's phone-PWA width.
+     * Including this in the effect's deps re-runs the SAME restore-and-clamp
+     * logic once the element is real and measurable, so it self-corrects the
+     * moment the caller can actually show it — optional, so neither existing
+     * always-mounted caller needs to pass it or changes behavior.
+     */
+    remeasureOn?: unknown
+  },
+) {
+  const ref = useRef<T | null>(null)
   const [pos, setPos] = useState<FabPos | null>(null)
   const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
   /**
@@ -65,7 +92,8 @@ export function useDraggableFab(storageKey: string) {
     setPos(clampFabPos(stored, {
       vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
     }))
-  }, [storageKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey, opts?.remeasureOn])
 
   // Keep it on screen when the viewport changes under it (rotation, resize,
   // the mobile keyboard opening).
@@ -87,7 +115,7 @@ export function useDraggableFab(storageKey: string) {
     }
   }, [])
 
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerDown = useCallback((e: React.PointerEvent<T>) => {
     const el = ref.current
     if (!el) return
     const rect = el.getBoundingClientRect()
@@ -102,7 +130,7 @@ export function useDraggableFab(storageKey: string) {
     try { el.setPointerCapture(e.pointerId) } catch { /* not all pointers capture */ }
   }, [])
 
-  const onPointerMove = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerMove = useCallback((e: React.PointerEvent<T>) => {
     const d = drag.current
     if (!d) return
     if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return

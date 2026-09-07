@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { Check, ChevronRight } from 'lucide-react'
 import type { FlowStep } from '@/lib/flows/flow-progress'
+import { useLocale } from '@/lib/portal/use-locale'
 
 /**
  * Generic client-facing flow progress stepper — the visual language of
@@ -20,17 +21,27 @@ export function FlowProgressTracker({
   title,
   steps,
   href,
+  isNew = false,
 }: {
   title: string
   steps: FlowStep[]
   /** When set, the title links to the flow detail page with a "details" chevron. */
   href?: string
+  /** Shows a "NEW" tag next to the title — this service delivery was created recently. */
+  isNew?: boolean
 }) {
   const currentRef = useRef<HTMLLIElement | null>(null)
+  const { t } = useLocale()
 
   useEffect(() => {
     currentRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
   }, [])
+
+  const newBadge = isNew && (
+    <span className="h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold normal-case tracking-normal">
+      {t('flows.new')}
+    </span>
+  )
 
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">
@@ -39,31 +50,22 @@ export function FlowProgressTracker({
           href={href}
           className="group mb-4 flex items-center justify-between gap-2 text-sm font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800"
         >
-          <span>{title}</span>
+          <span className="flex items-center gap-2">
+            {title}
+            {newBadge}
+          </span>
           <ChevronRight className="h-4 w-4 text-zinc-400 group-hover:text-zinc-700" />
         </Link>
       ) : (
-        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4">
+        <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide mb-4 flex items-center gap-2">
           {title}
+          {newBadge}
         </h2>
       )}
       <div className="overflow-x-auto pb-2 -mx-1 px-1">
         <ol className="flex items-start min-w-max" aria-label={title}>
-          {steps.map((step, i) => (
-            <li
-              key={step.stageName}
-              ref={step.state === 'current' ? currentRef : undefined}
-              className="flex items-start"
-            >
-              {/* Connector line before every dot except the first */}
-              {i > 0 && (
-                <div
-                  className={`mt-3 h-0.5 w-6 sm:w-9 shrink-0 ${
-                    step.state === 'future' ? 'bg-zinc-200' : 'bg-emerald-500'
-                  }`}
-                  aria-hidden
-                />
-              )}
+          {steps.map((step, i) => {
+            const stepBody = (
               <div className="flex flex-col items-center w-16 sm:w-20">
                 {step.state === 'completed' && (
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white">
@@ -71,7 +73,13 @@ export function FlowProgressTracker({
                   </span>
                 )}
                 {step.state === 'current' && (
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white ring-4 ring-blue-100 text-[11px]">
+                  <span
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-white text-[11px] ${
+                      step.isActionRequired
+                        ? 'bg-amber-400 ring-4 ring-amber-200 animate-pulse'
+                        : 'bg-blue-600 ring-4 ring-blue-100'
+                    }`}
+                  >
                     {step.icon ?? '•'}
                   </span>
                 )}
@@ -80,18 +88,53 @@ export function FlowProgressTracker({
                 )}
                 <span
                   className={`mt-1.5 text-center text-[10px] leading-tight ${
-                    step.state === 'current'
-                      ? 'font-semibold text-blue-700'
-                      : step.state === 'completed'
-                        ? 'text-zinc-600'
-                        : 'text-zinc-400'
+                    step.isActionRequired
+                      ? 'font-semibold text-amber-700'
+                      : step.state === 'current'
+                        ? 'font-semibold text-blue-700'
+                        : step.state === 'completed'
+                          ? 'text-zinc-600'
+                          : 'text-zinc-400'
                   }`}
                 >
                   {step.label}
                 </span>
+                {step.isActionRequired && (
+                  <span className="mt-0.5 text-center text-[9px] font-semibold text-amber-600">
+                    {t('decisions.actionRequired')}
+                  </span>
+                )}
               </div>
-            </li>
-          ))}
+            )
+
+            return (
+              <li
+                key={step.stageName}
+                ref={step.state === 'current' ? currentRef : undefined}
+                className="flex items-start"
+              >
+                {/* Connector line before every dot except the first */}
+                {i > 0 && (
+                  <div
+                    className={`mt-3 h-0.5 w-6 sm:w-9 shrink-0 ${
+                      step.state === 'future' ? 'bg-zinc-200' : 'bg-emerald-500'
+                    }`}
+                    aria-hidden
+                  />
+                )}
+                {step.isActionRequired && step.actionHref ? (
+                  <Link
+                    href={step.actionHref}
+                    className="rounded-lg -m-1 p-1 hover:bg-amber-50 transition-colors"
+                  >
+                    {stepBody}
+                  </Link>
+                ) : (
+                  stepBody
+                )}
+              </li>
+            )
+          })}
         </ol>
       </div>
     </div>

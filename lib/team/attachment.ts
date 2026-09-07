@@ -4,9 +4,15 @@
  * Mirrors lib/portal/chat-attachment.ts::uploadChatAttachment but targets the
  * team upload-url route (thread-scoped, not account/contact-scoped). Reuses the
  * SAME validation rules so team and client chat never drift on size/type policy.
+ * The network-retry primitive is shared too (lib/chat/upload-with-retry.ts) —
+ * it used to be defined locally here only, which is exactly how the client-
+ * facing portal chat ended up with none of this protection at all (2026-09-01,
+ * dev job 62a64f2b child). Any future retry-behavior change belongs in that
+ * shared file, not copy-pasted into this one again.
  */
 import type { ChatAttachment } from '@/lib/types'
 import { validateChatAttachment, CHAT_ATTACHMENT_MAX_MB } from '@/lib/portal/chat-attachment'
+import { fetchWithNetworkRetry } from '@/lib/chat/upload-with-retry'
 
 /** Max files that can ride on a single chat message. */
 export const CHAT_ATTACHMENT_MAX_COUNT = 5
@@ -93,33 +99,15 @@ function reportTeamAttachmentError(payload: { route: string; message: string; th
 }
 
 /**
- * A network-level fetch failure (the browser's own TypeError — connection
- * dropped, DNS blip, momentary offline) is usually gone a second later.
- * Retries ONLY that case — a completed response with a bad status (413, a
- * JSON error body, etc.) is a real answer from the server and is NOT retried
- * here; the caller still handles those exactly as before.
- */
-async function fetchWithNetworkRetry(input: string, init: RequestInit, attempts = 3, delayMs = 800): Promise<Response> {
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return await fetch(input, init)
-    } catch (err) {
-      if (attempt === attempts) throw err
-      await new Promise(resolve => setTimeout(resolve, delayMs * attempt))
-    }
-  }
-  // Unreachable — the loop above always returns or throws on its last attempt.
-  throw new Error('Upload failed. Please check your connection and try again.')
-}
-
-/**
  * Upload a single file to team-chat storage via a signed URL.
  * Throws Error(<user-friendly message>) on any failure (R099 — callers surface
  * err.message directly instead of a generic toast). A network-level failure
- * (as opposed to a completed error response) is quietly retried a couple of
- * times first — most such failures are a passing blip, and the composer
- * already keeps the typed text + staged files for the user, so a transparent
- * retry means most people never see an error at all.
+ * (as opposed to a completed error response) is quietly retried via the
+ * shared fetchWithNetworkRetry (lib/chat/upload-with-retry.ts) — up to ~30s
+ * of real wall-clock room, bounded by a per-attempt timeout so a stalled
+ * connection can't hang forever — before the caller ever sees an error. The
+ * composer keeps the typed text + staged files for the user on failure, so a
+ * transparent retry means most people never see an error at all.
  */
 export async function uploadTeamAttachment(file: File, threadId: string): Promise<ChatAttachment> {
   const validationError = validateChatAttachment(file.name, file.size, file.type)

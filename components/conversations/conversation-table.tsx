@@ -1,7 +1,8 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
+import { cn } from '@/lib/utils'
 import { Search, ChevronRight, ChevronLeft, ExternalLink, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 
@@ -65,14 +66,39 @@ export function ConversationTable({
 }: ConversationTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
-  const [, startTransition] = useTransition()
+  const [isPending, startTransition] = useTransition()
+  // The filter values we've actually told the server about — updated
+  // synchronously the instant we act, NOT after the async navigation
+  // resolves. Covers EVERY filter, not just search: this page has THREE
+  // other filters (topic, source, status) — firing two of them in quick
+  // succession before the first navigation resolves used to silently drop
+  // the first one, because the second call fell back to a still-stale prop
+  // for it. Found by adversarial review, 2026-09-03 (round 3 — the original
+  // round-2 fix only covered search).
+  const lastFiltersRef = useRef({ q: query, topic: topicFilter, source: sourceFilter, status: statusFilter })
+
+  // Resync when the URL changed for a reason OTHER than our own action —
+  // browser back/forward, or a link elsewhere setting these params. See
+  // leads-table.tsx for why this is guarded on the ref, not a plain
+  // "prop changed" check.
+  useEffect(() => {
+    if (
+      query !== lastFiltersRef.current.q ||
+      topicFilter !== lastFiltersRef.current.topic ||
+      sourceFilter !== lastFiltersRef.current.source ||
+      statusFilter !== lastFiltersRef.current.status
+    ) {
+      lastFiltersRef.current = { q: query, topic: topicFilter, source: sourceFilter, status: statusFilter }
+      setSearch(query)
+    }
+  }, [query, topicFilter, sourceFilter, statusFilter])
 
   function buildParams(overrides: Record<string, string> = {}) {
     const params = new URLSearchParams()
-    const q = overrides.q ?? query
-    const t = overrides.topic ?? topicFilter
-    const s = overrides.source ?? sourceFilter
-    const st = overrides.status ?? statusFilter
+    const q = overrides.q ?? lastFiltersRef.current.q
+    const t = overrides.topic ?? lastFiltersRef.current.topic
+    const s = overrides.source ?? lastFiltersRef.current.source
+    const st = overrides.status ?? lastFiltersRef.current.status
     const p = overrides.page ?? ''
     if (q) params.set('q', q)
     if (t) params.set('topic', t)
@@ -82,7 +108,8 @@ export function ConversationTable({
     return params.toString()
   }
 
-  function updateFilter(key: string, value: string) {
+  function updateFilter(key: 'q' | 'topic' | 'source' | 'status', value: string) {
+    lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
     startTransition(() => {
       router.push(`/conversations?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -99,6 +126,18 @@ export function ConversationTable({
     updateFilter('q', search)
   }
 
+  // Typing only searches on submit (below), but CLEARING the box must reset
+  // immediately — otherwise backspacing to empty, or a phone keyboard's own
+  // clear control, leaves the list stuck on the last search with no visible
+  // way to get back to the full list (same defect found on Leads, 2026-09-02).
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value
+    setSearch(value)
+    if (value === '' && lastFiltersRef.current.q !== '') {
+      updateFilter('q', '')
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Filters */}
@@ -108,7 +147,7 @@ export function ConversationTable({
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={handleSearchChange}
             placeholder="Search client (account, contact, lead)..."
             className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -148,9 +187,17 @@ export function ConversationTable({
         </select>
       </div>
 
-      {/* Table */}
-      <div className="rounded-lg border bg-white overflow-hidden">
-        <table className="w-full text-sm">
+      {/* Table — overflow-x-auto + min-w so all columns stay reachable by
+          horizontal scroll on a phone viewport, instead of being clipped and
+          unreachable under the previous overflow-hidden (2026-09-02). The
+          forced min-width is scoped to below `md` only (max-md:) — applied
+          unconditionally it also forced a scrollbar on an ordinary desktop
+          window in the ~1024-1040px range, where the sidebar's own
+          responsive breakpoint leaves less room than min-w-[720px] wants
+          even though the page isn't remotely mobile (found by adversarial
+          review, 2026-09-02). */}
+      <div className={cn('rounded-lg border bg-white overflow-x-auto transition-opacity', isPending && 'opacity-50')}>
+        <table className="w-full max-md:min-w-[720px] text-sm">
           <thead className="bg-zinc-50 text-zinc-500 text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left font-medium px-4 py-3">Client</th>
@@ -248,14 +295,14 @@ export function ConversationTable({
           <div className="flex gap-2">
             <button
               onClick={() => goToPage(currentPage - 1)}
-              disabled={currentPage <= 1}
+              disabled={currentPage <= 1 || isPending}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg border bg-white disabled:opacity-50"
             >
               <ChevronLeft className="h-4 w-4" /> Prev
             </button>
             <button
               onClick={() => goToPage(currentPage + 1)}
-              disabled={currentPage >= totalPages}
+              disabled={currentPage >= totalPages || isPending}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg border bg-white disabled:opacity-50"
             >
               Next <ChevronRight className="h-4 w-4" />

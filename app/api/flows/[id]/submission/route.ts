@@ -61,16 +61,51 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       }
 
       const row = wp?.[0]
+      if (row) {
+        return NextResponse.json({
+          success: true,
+          source: 'formation',
+          submission: {
+            entity_type: null,
+            tax_year: null,
+            review_status: row.status ?? null,
+            created_at: row.updated_at ?? row.created_at ?? null,
+            submitted_data: row.data ?? null,
+          },
+        })
+      }
+
+      // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+      // silently (2026-08-27 missing-column incident being the proven
+      // case — Francesco Lussignoli, live production, staff saw "No
+      // submitted data found" for a client who had genuinely submitted).
+      // formation_submissions carries the same data independently.
+      const { data: sub, error: subErr } = await supabaseAdmin
+        .from('formation_submissions')
+        .select('submitted_data, status, created_at')
+        .eq('contact_id', sd.contact_id)
+        .in('status', ['completed', 'reviewed'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (subErr) {
+        return NextResponse.json(
+          { success: false, error: `Could not load formation wizard: ${subErr.message}` },
+          { status: 500 },
+        )
+      }
+
       return NextResponse.json({
         success: true,
         source: 'formation',
-        submission: row
+        submission: sub
           ? {
               entity_type: null,
               tax_year: null,
-              review_status: row.status ?? null,
-              created_at: row.updated_at ?? row.created_at ?? null,
-              submitted_data: row.data ?? null,
+              review_status: sub.status ?? null,
+              created_at: sub.created_at ?? null,
+              submitted_data: sub.submitted_data ?? null,
             }
           : null,
       })

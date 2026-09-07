@@ -27,7 +27,7 @@ import {
   matchMemberName, findNearMissMember, normalizeForMatch, nameParts, payeePart, looksLikeCompany,
   MIN_NAME_PART_LENGTH, MIN_NAME_PARTS, MIN_SURNAME_LENGTH, MIN_FULL_NAME_LENGTH,
   findNearMissMembers, suspectedMembersFromNotes, ASK_CLIENT_NOTE, SUSPECTED_SEP,
-  candidatesFromNote, confirmedMemberFromNote,
+  candidatesFromNote, confirmedMemberFromNote, matchMemberForTransaction,
 } from '@/lib/tax/member-names'
 
 describe('isUsableMemberName — the single predicate', () => {
@@ -328,6 +328,99 @@ describe('the builders agree', () => {
       const viaDisplayName = filterMemberNames([`${c.first_name ?? ''} ${c.last_name ?? ''}`.trim()])
       expect(viaContacts).toEqual(viaDisplayName)
     }
+  })
+})
+
+/**
+ * REGRESSION (2026-09-03) — Fast Consulting LLC / MushBrew LLC / THW Global
+ * LLC. Real Relay corporate-card descriptions name the CARD HOLDER, not the
+ * payee, while counterparty already correctly names the real vendor. Strings
+ * below are the actual production text (company names changed where they
+ * were the client's own vendor, kept verbatim where they matter to the shape).
+ */
+describe('matchMemberForTransaction — counterparty raw, description through payeePart', () => {
+  const fastConsulting = ['Donato Ciardo', 'Cristian Ciardo']
+
+  it('a real vendor in counterparty wins even though the card holder is named in the description ("Spend")', () => {
+    expect(matchMemberForTransaction(
+      'FBC Consulting & Services | Spend | business service - Sent By Donato Ciardo',
+      'FBC Consulting & Services',
+      fastConsulting,
+    )).toBeNull()
+    expect(matchMemberForTransaction(
+      'Airbnb | Spend | Donato Ciardo - 5221 (Spese)',
+      'Airbnb',
+      fastConsulting,
+    )).toBeNull()
+    expect(matchMemberForTransaction(
+      "ARANYKEHELY PATIKA | Spend | Peter Czegle - 0677 (CP's card)",
+      'ARANYKEHELY PATIKA',
+      ['Peter Czegle', 'Balint Gulyas'],
+    )).toBeNull()
+  })
+
+  it('the same holds for a "Receive" line (a refund/credit back to the card)', () => {
+    expect(matchMemberForTransaction(
+      "OBI | Receive | Balint Gulyas - 3855 (GB's card)",
+      'OBI',
+      ['Peter Czegle', 'Balint Gulyas'],
+    )).toBeNull()
+  })
+
+  it('a training course product NAMED AFTER the owner is not a payment to the owner', () => {
+    // Estro LLC: "corso Giulia Fiorenza" is the course's brand name, not the payee.
+    expect(matchMemberForTransaction(
+      'Ricevuto denaro da ILACQUA CARMELO con causale Saldo quinta rata percorso Giulia Fiorenza',
+      'ILACQUA CARMELO',
+      ['Giulia Fiorenza'],
+    )).toBeNull()
+  })
+
+  it('a wire genuinely made out to the member still fires — counterparty is checked RAW (Dynamiq preserved)', () => {
+    expect(matchMemberForTransaction('Wire transfer', 'Donato Renato Berini', ['Donato Renato Berini'])).toBe('Donato Renato Berini')
+  })
+
+  it('a blank counterparty still falls back to the description (Dynamiq preserved)', () => {
+    expect(matchMemberForTransaction(
+      'ONLINE DOMESTIC WIRE TRANSFER VIA: COMMUNITY FSB/026073150 A/C: ANDREA BOSCO MONTE DA CAPARICA PT',
+      '',
+      ['Andrea Bosco'],
+    )).toBe('Andrea Bosco')
+    expect(matchMemberForTransaction('Peter Czegle', '', ['Peter Czegle'])).toBe('Peter Czegle')
+  })
+
+  it('a supplier invoice reference mentioning a member by coincidence is not a payment to them', () => {
+    expect(matchMemberForTransaction(
+      'Sent money to Lope Gómez Ibáñez with reference Marinoni factura 2024-005',
+      'Lope Gómez Ibáñez',
+      ['Sofia Marinoni'],
+    )).toBeNull()
+  })
+
+  /**
+   * REGRESSION (2026-09-03, bug-hunter finding, second round). The FIRST
+   * version of this fix added bare words "spend"/"receive" to the general
+   * REFERENCE_MARKERS list. "Causale"/"concepto"/"motivo" are technical
+   * reference-field labels nobody types in a sentence — "spend" and "receive"
+   * are ordinary English verbs, and TD's client base writes wire memos in
+   * plain, often non-native English. A genuine inflow/outflow with no
+   * counterparty to fall back on would have had its payee cut away by the
+   * bare word, silently missing a real member payment — the exact 2026-07-07
+   * Dynamiq failure this whole mechanism exists to prevent. The fix now
+   * matches Relay's LITERAL pipe-bounded structure, never a bare word.
+   */
+  it('an ordinary sentence using "spend"/"receive" as a plain verb still finds the member (no counterparty to fall back on)', () => {
+    expect(matchMemberForTransaction('To receive urgent funds from Marco Rossi', '', ['Marco Rossi'])).toBe('Marco Rossi')
+    expect(matchMemberForTransaction('Approved to spend by Marco Rossi for personal use', '', ['Marco Rossi'])).toBe('Marco Rossi')
+  })
+
+  it('a vendor whose own name starts with "Spend"/"Receive" keeps its name — the cut anchors on the pipe-bounded label, not the bare word', () => {
+    expect(matchMemberForTransaction(
+      'Spend Club | Spend | monthly fee - Sent By Donato Ciardo',
+      'Spend Club',
+      ['Donato Ciardo'],
+    )).toBeNull() // still correctly excluded — "Spend Club" is the vendor, not a member
+    expect(payeePart('Spend Club | Spend | monthly fee - Sent By Donato Ciardo')).toBe('spend club')
   })
 })
 

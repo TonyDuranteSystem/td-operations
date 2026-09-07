@@ -31,14 +31,21 @@ export function PortalFlowStatusSection({
       </h2>
       {flows.map(f =>
         f.steps ? (
-          <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} />
+          <FlowProgressTracker key={f.id} title={f.title} steps={f.steps} href={`/portal/flows/${f.id}`} isNew={f.isNew} />
         ) : (
           <Link
             key={f.id}
             href={`/portal/flows/${f.id}`}
             className="bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between gap-2 hover:border-zinc-300 transition-colors"
           >
-            <span className="text-sm font-medium text-zinc-900">{f.title}</span>
+            <span className="text-sm font-medium text-zinc-900 flex items-center gap-2">
+              {f.title}
+              {f.isNew && (
+                <span className="h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
+                  {t('flows.new', locale, translations)}
+                </span>
+              )}
+            </span>
             <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600">
               {t('flows.active', locale, translations)}
             </span>

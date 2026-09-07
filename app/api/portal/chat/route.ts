@@ -6,13 +6,14 @@ import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
-import { CRM_BASE_URL } from '@/lib/config'
+import { CRM_BASE_URL, PORTAL_BASE_URL } from '@/lib/config'
 import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
+import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -107,7 +108,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabaseAdmin
     .from('portal_messages')
-    .select('*, contacts:contact_id(full_name)')
+    .select('*, contacts:contact_id(full_name), addressed_to_contact:addressed_to_contact_id(full_name)')
     .order('created_at', { ascending: false })
     .limit(limit)
 
@@ -184,12 +185,35 @@ export async function GET(request: NextRequest) {
   // Flatten contact name into sender_name for display
   const messages = (data ?? []).map(msg => {
     const contact = msg.contacts as unknown as { full_name: string } | null
-    const { contacts: _contacts, ...rest } = msg
+    const addressedToContact = msg.addressed_to_contact as unknown as { full_name: string } | null
+    const { contacts: _contacts, addressed_to_contact: _addressedToContact, ...rest } = msg
+    // addressed_to_contact_id / addressed_to_company aren't in the generated
+    // Supabase types yet (known drift — see reference_ci_schema_drift_unfixable
+    // in memory; the columns are real and confirmed live), so they ride along
+    // inside `rest` untyped, same as `sender_name` above. Named here via a cast
+    // (not destructured by name — that fails typecheck) only so they can be
+    // omitted from the client-facing projection below.
+    const restTyped = rest as typeof rest & { addressed_to_contact_id?: string | null; addressed_to_company?: boolean }
+    const { addressed_to_contact_id: _omit1, addressed_to_company: _omit2, ...restWithoutAddressedTo } = restTyped
     return {
-      ...rest,
+      // Staff-only projection (dev job e01fe70f) — every design comment on this
+      // feature already says "staff-side only" / "not sent to the client", but
+      // addressed_to_contact_id / addressed_to_company were reaching every
+      // client caller anyway via this wildcard select (nothing downstream
+      // renders them — grep of app/portal/** confirms zero references — so
+      // this was over-exposure in the payload, not an on-screen leak, but
+      // real all the same).
+      ...(isClientUser ? restWithoutAddressedTo : rest),
       // Contact name for client/owner messages; stored sender_name (the teammate's
       // display name) when there's no contact; null → UI shows its generic label.
       sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
+      // "Addressed to" label (dev job 08a8be62) — staff-facing display of who a
+      // company-scoped message was addressed to. Resolved here (not client-side)
+      // so it survives even if the addressed member later drops out of
+      // selectedThreadMembers (e.g. removed from the roster) — the historical
+      // record still shows who it was FOR at send time. Staff-only, same reason
+      // as above.
+      ...(isClientUser ? {} : { addressed_to_name: addressedToContact?.full_name ?? null }),
     }
   }).reverse()
 
@@ -206,7 +230,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_contact_id: rawAddressedToContactId, addressed_to_company: rawAddressedToCompany } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -263,17 +287,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Message too long (max 5000 characters)' }, { status: 400 })
   }
 
-  // Validate attachment_url is from our storage only
+  // Validate attachment_url is from our storage, or our own access-controlled
+  // attachment proxy — never an arbitrary off-site link.
   // .trim() guards against trailing \n in env var (which broke uploads on 2026-04-18 when env vars were re-entered)
   const supabaseBaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()
-  if (attachment_url && !attachment_url.startsWith(supabaseBaseUrl)) {
+  // The proxy (app/api/portal/chat/attachment/route.ts) re-checks access on
+  // every view, so a Capture send (Phase 2, 2026-09-04) can point here
+  // instead of handing out a permanent public storage link.
+  const attachmentProxyPrefix = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=`
+  const isValidAttachmentUrl = (url: string) => url.startsWith(supabaseBaseUrl) || url.startsWith(attachmentProxyPrefix)
+  if (attachment_url && !isValidAttachmentUrl(attachment_url)) {
     return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
   }
 
   // Validate each attachment URL in the array
   if (Array.isArray(attachments)) {
     for (const att of attachments) {
-      if (!att.url || !att.url.startsWith(supabaseBaseUrl)) {
+      if (!att.url || !isValidAttachmentUrl(att.url)) {
         return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
       }
     }
@@ -373,6 +403,38 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+  // "Addressed to" member label (dev job 08a8be62) — display metadata only,
+  // deliberately NOT part of decideAdminSendScope's contract above. Only
+  // meaningful for a staff send into an account-level (multi-member) thread.
+  // Validated against the account's REAL member roster (lib/portal/addressed-to.ts,
+  // the `members` table, not account_contacts) so a stale/wrong value never
+  // reaches storage — but an invalid value is dropped, never blocks the send:
+  // this is a label, not a gate.
+  let addressedToContactId: string | null = null
+  if (typeof rawAddressedToContactId === 'string' && rawAddressedToContactId && senderType === 'admin' && account_id) {
+    try {
+      const roster = await resolveAccountMembersForChat(account_id)
+      if (roster.some(o => o.resolvable && o.contactId === rawAddressedToContactId)) {
+        addressedToContactId = rawAddressedToContactId
+      } else {
+        console.warn('[portal/chat] addressed_to_contact_id not in the account\'s resolved member roster, dropped:', rawAddressedToContactId, account_id)
+      }
+    } catch (err) {
+      console.error('[portal/chat] addressed_to_contact_id validation failed, dropped (non-fatal):', err)
+    }
+  }
+  // "Addressed to the whole company" (dev job 08a8be62, 2026-09-05) — a
+  // distinct, explicit label from "nobody set anything," not a synonym for
+  // it (see the migration comment on this column). Same admin/account gate
+  // as the per-member label above. Mutually exclusive with a specific
+  // member — enforced here too, not just by the database CHECK constraint,
+  // so a bad request never even reaches the constraint: if both were
+  // somehow sent together, the explicit "whole company" choice wins and the
+  // member label is dropped, since a client that sent both is confused
+  // about its own state and this is the safer of the two to keep silent.
+  const addressedToCompany = rawAddressedToCompany === true && senderType === 'admin' && !!account_id
+  if (addressedToCompany) addressedToContactId = null
+
   const { data, error } = await insertSurface
     .from('portal_messages')
     .insert({
@@ -388,6 +450,8 @@ export async function POST(request: NextRequest) {
       attachment_name: attachment_name || null,
       attachments: Array.isArray(attachments) ? attachments : [],
       reply_to_id: reply_to_id || null,
+      addressed_to_contact_id: addressedToContactId,
+      addressed_to_company: addressedToCompany,
       ...(inheritedServiceDeliveryId ? { service_delivery_id: inheritedServiceDeliveryId } : {}),
     })
     .select('*, contacts:contact_id(full_name)')

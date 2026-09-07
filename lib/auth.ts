@@ -40,6 +40,18 @@ export function isProtectedAdminEmail(email: string | null | undefined): boolean
   return ADMIN_EMAILS.includes(email ?? "")
 }
 
+/**
+ * My Finances (the owner's own private books) — Antonio's own account ONLY.
+ * Deliberately stricter than isSecureAdmin(): a real account can legitimately
+ * carry app_metadata.role === "admin" for OTHER admin-area testing/work
+ * (e.g. the qa-staff@ account) without that meaning it should ever see
+ * Antonio's own financial data. This checks the email itself, nothing else.
+ */
+export function isOwnerOnly(user: User | null): boolean {
+  if (!user) return false
+  return ADMIN_EMAILS.includes(user.email ?? "")
+}
+
 export function isTeam(user: User | null): boolean {
   if (!user) return false
   return !isClient(user) && !isAdmin(user)

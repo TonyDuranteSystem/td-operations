@@ -35,7 +35,7 @@ interface BookkeeperTabProps {
   year?: number
 }
 
-export function BookkeeperTab({ year: _year }: BookkeeperTabProps) {
+export function BookkeeperTab({ year }: BookkeeperTabProps) {
   const [reviews, setReviews] = useState<Review[]>([])
   const [selectedReview, setSelectedReview] = useState<string | null>(null)
   const [items, setItems] = useState<ReviewItem[]>([])
@@ -47,12 +47,26 @@ export function BookkeeperTab({ year: _year }: BookkeeperTabProps) {
   const [filterSection, setFilterSection] = useState<string>('')
   const [filterStatus, setFilterStatus] = useState<string>('pending')
 
+  /**
+   * Reviews for the SELECTED year.
+   *
+   * Until 2026-08-30 this tab took the year prop and never used it, fetching every
+   * review from every year — so the page's year selector sat there doing nothing
+   * on this tab. Keyed on `year` so switching the selector re-fetches; the open
+   * review and its items are cleared too, since a review from the previous year
+   * must not stay on screen (and its items are fetched by review id, which would
+   * otherwise keep showing the old year's questions under the new year).
+   */
   useEffect(() => {
-    fetch('/api/owner/bookkeeper')
+    setLoadingReviews(true)
+    setSelectedReview(null)
+    setItems([])
+    const qs = year ? `?year=${year}` : ''
+    fetch(`/api/owner/bookkeeper${qs}`)
       .then(r => r.json())
       .then(d => { setReviews(d.reviews ?? []); setLoadingReviews(false) })
       .catch(() => setLoadingReviews(false))
-  }, [])
+  }, [year])
 
   async function loadItems(reviewId: string) {
     setLoadingItems(true)
@@ -112,9 +126,16 @@ export function BookkeeperTab({ year: _year }: BookkeeperTabProps) {
 
         {reviews.length === 0 ? (
           <div className="rounded-lg border-2 border-dashed border-zinc-200 py-8 text-center">
-            <p className="text-sm text-zinc-500">No review sessions yet.</p>
+            {/* Now that the list is year-scoped, "nothing here" must say WHICH year —
+                otherwise an empty panel reads as broken rather than as "try another
+                year", which is the whole reason the selector was inert before. */}
+            <p className="text-sm text-zinc-500">
+              {year ? `No review sessions for ${year}.` : 'No review sessions yet.'}
+            </p>
             <p className="mt-1 text-xs text-zinc-400">
-              Import Tasha&apos;s review questions via the API to get started.
+              {year
+                ? 'Use the year selector above to check another year.'
+                : 'Import the bookkeeper review questions via the API to get started.'}
             </p>
           </div>
         ) : (

@@ -125,6 +125,26 @@ export function dmKey(userIdA: string, userIdB: string): string {
 }
 
 /**
+ * The one real recipient in a DM's key, given every id that is NOT a genuine
+ * recipient (the Claude sentinel, and/or the human dictating the message).
+ *
+ * Extracted (bug-hunter, 2026-09-05) after a dm_key stopped always being
+ * "Claude:target" — once a dictated DM is keyed to the real acting user
+ * instead of the sentinel (see lib/team/post-message.ts's resolveTargetThread),
+ * filtering on the sentinel ALONE left an arbitrary sorted-first id standing
+ * in as "the other participant," which could target a push at the person who
+ * DICTATED the message instead of who it was actually sent to. Filtering out
+ * every known non-recipient identity at once is correct for every shape:
+ * old sentinel-keyed threads, new actor-keyed threads, and the self-DM case
+ * (every id excluded, so nothing remains and nobody is pushed).
+ */
+export function otherDmParty(dmKey: string | null | undefined, excludeIds: readonly (string | null | undefined)[]): string | null {
+  const exclude = new Set(excludeIds.filter((id): id is string => !!id))
+  const parts = (dmKey ?? '').split(':')
+  return parts.find(id => id && !exclude.has(id)) ?? null
+}
+
+/**
  * Slugify a channel name: lower-case, spaces/underscores → hyphens, strip
  * anything but [a-z0-9-], collapse repeats, trim hyphens, cap length. Returns
  * '' for empty/garbage input so the caller can reject it.

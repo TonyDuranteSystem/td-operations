@@ -18,6 +18,8 @@
  * tracker's defensive "don't guess" stance without hiding the whole flow.
  */
 
+import { actionStageConfigFor } from '@/lib/portal/action-stage-registry'
+
 export interface FlowStageRow {
   stage_name: string
   stage_order: number
@@ -37,6 +39,14 @@ export interface FlowStep {
   /** Optional catalog icon (emoji/char), or null. */
   icon: string | null
   state: 'completed' | 'current' | 'future'
+  /** True when this is the CURRENT stage AND it's registered in
+   *  action-stage-registry.ts as needing the client's action. The stepper
+   *  glows amber and links straight to the action instead of the default
+   *  flow-detail link. */
+  isActionRequired: boolean
+  /** Where the action-required glow links to (action-stage-registry.ts's
+   *  link, with {sd_id} interpolated), or null when not applicable. */
+  actionHref: string | null
 }
 
 export interface FlowProgress {
@@ -169,6 +179,8 @@ export function buildFlowSteps(
   stages: FlowStageRow[],
   currentStageName: string | null,
   locale: 'en' | 'it',
+  serviceType: string,
+  sdId: string,
 ): FlowStep[] | null {
   const labelled = stages
     .filter(s => s.client_label !== null)
@@ -187,17 +199,23 @@ export function buildFlowSteps(
     }
   }
 
-  return labelled.map((s, i) => ({
-    stageName: s.stage_name,
-    label: labelFor(s, locale) ?? s.stage_name,
-    icon: s.icon ?? null,
-    state:
+  return labelled.map((s, i) => {
+    const state: FlowStep['state'] =
       currentIdx === -1
         ? 'future'
         : i < currentIdx
           ? 'completed'
           : i === currentIdx
             ? 'current'
-            : 'future',
-  }))
+            : 'future'
+    const actionConfig = state === 'current' ? actionStageConfigFor(serviceType, s.stage_name) : null
+    return {
+      stageName: s.stage_name,
+      label: labelFor(s, locale) ?? s.stage_name,
+      icon: s.icon ?? null,
+      state,
+      isActionRequired: actionConfig !== null,
+      actionHref: actionConfig ? actionConfig.link.replace('{sd_id}', sdId) : null,
+    }
+  })
 }

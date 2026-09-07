@@ -4,13 +4,60 @@
  * Pure, so the two things most likely to drift are testable: WHO may be messaged
  * (a partner must never appear in a staff DM picker) and WHAT the badge counts.
  *
- * ON THE BADGE. The window's pill deliberately counts DIRECT MESSAGES ONLY, and
- * is labelled as such. It is NOT the sidebar's number and must not be reconciled
- * with it: the sidebar mixes grains (DM unread + participant-conversation unread
- * + mentions + followed threads), so making the two agree would mean either
- * inflating the pill with things the window cannot show, or quietly changing the
- * sidebar. Two honest different numbers beat one dishonest shared one — but they
- * are computed from the SAME rows, so neither can go stale while the other moves.
+ * ON THE BADGE. The pill counts unread direct messages PLUS unread client
+ * conversations the viewer actually participates in (below) — not the
+ * sidebar's own number, and not reconciled with it on purpose: the sidebar
+ * mixes grains (DM unread + participant-conversation unread + mentions +
+ * followed threads), so making the two agree would mean either inflating the
+ * pill with things the window cannot show, or quietly changing the sidebar.
+ * Two honest different numbers beat one dishonest shared one — but they are
+ * computed from the SAME rows, so neither can go stale while the other moves.
+ *
+ * CLIENT CONVERSATIONS ARE SCOPED TO GENUINE ENGAGEMENT ONLY (Antonio,
+ * 2026-09-04): "I don't want to have all that conversations in the floating.
+ * it's noise." `openConversations` used to list every live client
+ * conversation company-wide, so a colleague's own routine back-and-forth with
+ * a client you have no connection to showed up in your own list with its own
+ * (real, but not yours) unread count.
+ *
+ * TWO WRONG FIXES SHIPPED BEFORE THIS ONE, LEARN FROM BOTH:
+ *
+ * (1) Filtered on `is_participant` (a row exists in internal_thread_reads) —
+ * correct in theory (already the established check three other consumers of
+ * this same RPC row use: lib/team/workspace.ts's two notification builders,
+ * realtime-notifications.tsx's toast filter) but WRONG here, discovered live
+ * in production: `is_participant` is true the instant a row exists, and TWO
+ * existing paths (findOrCreateConversation on every new client conversation;
+ * the share route's admin-notify fallback) deliberately seed EVERY other
+ * staff member with a row whose `last_read_at` is the epoch (1970-01-01) —
+ * on purpose, so a ring/dot fires once. Correct for THOSE surfaces; it made
+ * this filter nearly a no-op (120 of Antonio's 122 live discussion threads).
+ *
+ * (2) Filtered on a genuine (non-epoch) `last_read_at` instead — real
+ * engagement, provably better (47 of 122), shipped, STILL wrong: asked
+ * directly why the list was still full, Antonio: "I don't read them at all
+ * unless i have been mentioned. but they are messy because most of them are
+ * luca or claude conversation about the clients." Checked a sample of the 47:
+ * zero messages actually SENT by him in any of them — a genuine last_read_at
+ * only proves he once opened a thread to check on it (a real habit of his,
+ * "I have to know everything"), not that it means anything to him day to day.
+ *
+ * `ever_mentioned` (below) is what he actually described: has he EVER been
+ * @mentioned in this conversation, regardless of read state. Computed
+ * server-side in app/api/team/threads/route.ts. Verified against his real
+ * account before shipping: 122 discussion threads → 1. Any client's
+ * conversation also remains reachable on purpose through "New chat" (search
+ * by company) regardless of this list's state.
+ *
+ * (3) SAME DAY, follow-up: "in the floating chat, after reading a message I
+ * want the option to mark it done and disappear from the list" — confirmed it
+ * should REAPPEAR on a fresh mention, not hide forever. So `ever_mentioned` is
+ * no longer a permanent-once-true fact: the server compares each mention's
+ * timestamp against the caller's own dismissal stamp for that thread
+ * (internal_thread_mention_dismissals, set via POST
+ * .../threads/[id]/dismiss-mention) and only counts mentions newer than it.
+ * The "mark done" button lives in the open-thread header, not the list row,
+ * per Antonio's own placement choice.
  */
 
 /** A staff member who may be picked in the person switcher. */
@@ -36,6 +83,18 @@ export interface ChatThreadRow {
   client_label?: string | null
   resolved_at?: string | null
   archived_at?: string | null
+  /** Does a row exist in internal_thread_reads for the viewer? TRUE almost
+   *  always for a live discussion thread — see the file header before using
+   *  this for "is this genuinely mine." Kept only because the RPC still
+   *  returns it and other consumers of these same rows key on it correctly. */
+  is_participant?: boolean | null
+  /** Has the viewer EVER been @mentioned in this thread (any message, any
+   *  time, regardless of read state)? Computed server-side in
+   *  app/api/team/threads/route.ts (NOT by get_team_threads itself); only
+   *  meaningful for `discussion` threads. This — not `is_participant`, not a
+   *  genuine-read timestamp — is what "mine" means for this file's
+   *  quick-list, per Antonio's own words: see the file header. */
+  ever_mentioned?: boolean | null
 }
 
 /**
@@ -105,7 +164,8 @@ export function dmUnreadCount(
 }
 
 /**
- * The client conversations the window can open — live ones only, newest first.
+ * The client conversations the window can open — live ones the viewer
+ * actually participates in, newest first.
  *
  * These are ordinary top-level threads, each already carrying its own title,
  * its own read pointer and its own place in Team Workspace. That is the whole
@@ -114,17 +174,87 @@ export function dmUnreadCount(
  * about it.
  *
  * Resolved and archived ones are dropped — the window shows what is live now;
- * the full Team Chat page is where you go digging.
+ * the full Team Chat page is where you go digging. Ones the viewer has never
+ * been @mentioned in are dropped too (`ever_mentioned` — see the file header
+ * for the two other, wrong things this was before): this list is a quick
+ * "what's mine" glance, not a company-wide directory of every open client
+ * conversation regardless of who is actually in it.
  */
 export function openConversations(
   threads: readonly ChatThreadRow[] | null | undefined,
   limit = 20,
 ): ChatThreadRow[] {
   return (threads ?? [])
-    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at)
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_mentioned)
     .slice()
     .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
     .slice(0, limit)
+}
+
+/** A raw mention: some message in a thread that names the viewer. */
+export interface MentionRow {
+  threadId: string
+  createdAt: string
+}
+
+/** A viewer's "mark done" for a thread — see app/api/team/threads/[id]/dismiss-mention. */
+export interface MentionDismissalRow {
+  threadId: string
+  dismissedAt: string
+}
+
+/**
+ * Which threads still count as "ever_mentioned" after "mark done" dismissals.
+ *
+ * Extracted as its own pure function (2026-09-05) specifically so this
+ * comparison — the exact kind of timestamp logic that got "mine" wrong twice
+ * already today — is unit-tested directly rather than trusted inline in the
+ * route. A thread counts if it has ANY mention with no dismissal recorded for
+ * it, OR a mention newer than its most recent dismissal. Dismissing does not
+ * touch other threads, and a mention that arrives AFTER a dismissal brings
+ * the thread back — "mark done" is a personal snooze on mentions-so-far, not
+ * a permanent hide.
+ */
+export function everMentionedThreadIds(
+  mentions: readonly MentionRow[] | null | undefined,
+  dismissals: readonly MentionDismissalRow[] | null | undefined,
+): Set<string> {
+  const dismissedAt = new Map<string, number>()
+  for (const d of dismissals ?? []) {
+    if (!d?.threadId || !d.dismissedAt) continue
+    const t = new Date(d.dismissedAt).getTime()
+    if (Number.isNaN(t)) continue
+    dismissedAt.set(d.threadId, t)
+  }
+  const result = new Set<string>()
+  for (const m of mentions ?? []) {
+    if (!m?.threadId || !m.createdAt) continue
+    const mentionedAt = new Date(m.createdAt).getTime()
+    if (Number.isNaN(mentionedAt)) continue
+    const cutoff = dismissedAt.get(m.threadId)
+    if (cutoff === undefined || mentionedAt > cutoff) result.add(m.threadId)
+  }
+  return result
+}
+
+/**
+ * What "mark done" should actually stamp as dismissed_at.
+ *
+ * Prefers the CLIENT's own timestamp — captured at the moment of the click,
+ * before the request even goes out — over the server's "now" at the moment
+ * this request happens to be processed (bug-hunter, 2026-09-05: server
+ * queueing/processing latency was extra room for a mention sent just before
+ * the click to lose the race against a dismissal timestamped after it). Only
+ * trusted if it parses AND is not in the future relative to the server's own
+ * clock — a bad, missing, or (clock-skewed / tampered) future client value
+ * falls back to the server's own "now" rather than being used as-is.
+ */
+export function resolveDismissedAt(clientAsOf: unknown, serverNowMs: number): string {
+  if (typeof clientAsOf === 'string') {
+    const t = new Date(clientAsOf).getTime()
+    if (!Number.isNaN(t) && t <= serverNowMs) return new Date(t).toISOString()
+  }
+  return new Date(serverNowMs).toISOString()
 }
 
 /** A conversation's display name, preferring what the server already resolved. */

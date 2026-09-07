@@ -129,8 +129,19 @@ export function computeBillingStatus(
 
   // Match installment payments by the structured category + year stamp — never
   // by the installment label or the free-text description.
-  const inst1 = payments.find(p => isFirstInstallment(p, year))
-  const inst2 = payments.find(p => isSecondInstallment(p, year))
+  //
+  // When more than one row matches (should not happen going forward — a database rule now
+  // prevents it — but historical data predates that rule), prefer a Paid row, then the most
+  // recently paid, over an unordered `.find()` that could otherwise surface an older/replaced
+  // invoice ahead of the one that actually settled (bug-hunter council finding, 2026-09-01).
+  const byPaidFirst = (a: BillingPaymentRow, b: BillingPaymentRow) => {
+    const aPaid = a.status === 'Paid' ? 1 : 0
+    const bPaid = b.status === 'Paid' ? 1 : 0
+    if (aPaid !== bPaid) return bPaid - aPaid
+    return (b.paid_date ?? '').localeCompare(a.paid_date ?? '')
+  }
+  const inst1 = payments.filter(p => isFirstInstallment(p, year)).sort(byPaidFirst)[0]
+  const inst2 = payments.filter(p => isSecondInstallment(p, year)).sort(byPaidFirst)[0]
 
   const beforeJune = month < 6
 

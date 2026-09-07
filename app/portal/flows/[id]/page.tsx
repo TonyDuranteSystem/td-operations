@@ -16,6 +16,7 @@ import { buildFlowSteps, buildJourneySteps, type FlowStageRow } from '@/lib/flow
 import { deriveFlowYear, buildFlowTopic, ALL_FLOW_TYPES, CONTACT_FLOW_TYPES } from '@/lib/flows/resolve-flows'
 import { isClientSafeFlowDoc } from '@/lib/flows/flow-doc-visibility'
 import { MAILING_DESTINATION_LINES } from '@/lib/td-address'
+import { isWithinNewBadgeWindow } from '@/lib/portal/queries'
 
 export const dynamic = 'force-dynamic'
 
@@ -128,7 +129,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   // Contact-scoped flows (ITIN) get the rich, clickable per-stage journey driven
   // by client_description; account flows keep the compact horizontal stepper.
   const isContactFlow = (CONTACT_FLOW_TYPES as readonly string[]).includes(sd.service_type)
-  const steps = isContactFlow ? null : buildFlowSteps(stages, sd.stage ?? null, locale)
+  const steps = isContactFlow ? null : buildFlowSteps(stages, sd.stage ?? null, locale, sd.service_type, sd.id)
   const journey = isContactFlow ? buildJourneySteps(stages, sd.stage ?? null, locale) : null
   const year = deriveFlowYear(sd)
   const title = buildFlowTopic(sd.service_type, year) || sd.service_name || sd.service_type || 'Service'
@@ -285,7 +286,11 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
           shipping={shipping}
         />
       ) : steps ? (
-        <FlowProgressTracker title={t('flowDetail.progress', locale, translations)} steps={steps} />
+        <FlowProgressTracker
+          title={t('flowDetail.progress', locale, translations)}
+          steps={steps}
+          isNew={isWithinNewBadgeWindow(sd.created_at as string)}
+        />
       ) : (
         <div className="bg-white rounded-xl border shadow-sm p-5">
           <span className="text-sm text-zinc-600">{t('flowDetail.serviceActive', locale, translations)}</span>

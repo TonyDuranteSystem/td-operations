@@ -7,8 +7,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { logAction } from "@/lib/mcp/action-log"
+import { callerIsOwner } from "@/lib/mcp/auth-context"
 import {
   searchFiles,
+  searchOwnerDriveFiles,
   listFolder,
   getFileMetadata,
   uploadFile,
@@ -69,7 +71,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_search",
-    "Search files and folders on the Tony Durante LLC Shared Drive by name or keyword. Returns file names, sizes, modification dates, and direct links. Optionally filter by MIME type (e.g. 'application/pdf' for PDFs only). For browsing a known folder, use drive_list_folder instead.",
+    "Search files and folders by name or keyword. Searches the Tony Durante LLC Shared Drive (client documents). When the caller is the owner, ALSO searches the owner's own private accounting folder in his personal Drive, reported as a clearly separated second section. Returns file names, sizes, modification dates, and direct links. Optionally filter by MIME type (e.g. 'application/pdf' for PDFs only). For browsing a known folder, use drive_list_folder instead.",
     {
       query: z.string().describe("Search text (matches file/folder names)"),
       mime_type: z.string().optional().describe("Filter by MIME type (e.g. 'application/pdf', 'application/vnd.google-apps.folder')"),
@@ -79,25 +81,53 @@ export function registerDriveTools(server: McpServer) {
       try {
         const result = (await searchFiles(query, mime_type, max_results)) as { files: DriveFile[] }
 
-        if (!result.files || result.files.length === 0) {
+        // The owner's own accounting folder is a SEPARATE identity and a separate
+        // section — never merged into the client results, so a search for a
+        // client's statement can't bury the operator in his own paperwork.
+        // A failure here must not take down normal client search, which is what
+        // every other caller depends on.
+        let ownerFiles: DriveFile[] = []
+        let ownerError: string | null = null
+        if (callerIsOwner()) {
+          try {
+            const ownerResult = (await searchOwnerDriveFiles(query, mime_type, max_results)) as { files?: DriveFile[] }
+            ownerFiles = ownerResult.files || []
+          } catch (e) {
+            ownerError = e instanceof Error ? e.message : String(e)
+          }
+        }
+
+        const sharedFiles = result.files || []
+        if (sharedFiles.length === 0 && ownerFiles.length === 0 && !ownerError) {
           return {
             content: [{ type: "text" as const, text: `📭 No files found matching "${query}"` }],
           }
         }
 
-        const lines = [
-          `🔍 Found ${result.files.length} result(s) for "${query}"`,
-          "",
-        ]
-
-        for (const f of result.files) {
+        const renderFile = (f: DriveFile) => {
           const icon = mimeIcon(f.mimeType)
           const size = f.mimeType === "application/vnd.google-apps.folder" ? "" : ` (${formatSize(f.size)})`
           const modified = f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString() : ""
-          lines.push(`${icon} ${f.name}${size}`)
-          lines.push(`   📅 Modified: ${modified}`)
-          lines.push(`   🔗 ${f.webViewLink || `ID: ${f.id}`}`)
-          lines.push("")
+          return [
+            `${icon} ${f.name}${size}`,
+            `   📅 Modified: ${modified}`,
+            `   🔗 ${f.webViewLink || `ID: ${f.id}`}`,
+            "",
+          ]
+        }
+
+        const lines = [
+          `🔍 Company Shared Drive — ${sharedFiles.length} result(s) for "${query}"`,
+          "",
+        ]
+        for (const f of sharedFiles) lines.push(...renderFile(f))
+
+        if (ownerFiles.length > 0) {
+          lines.push(`🔒 Your personal accounting folder — ${ownerFiles.length} result(s)`, "")
+          for (const f of ownerFiles) lines.push(...renderFile(f))
+        }
+        if (ownerError) {
+          lines.push(`⚠️ Your personal accounting folder could not be searched: ${ownerError}`, "")
         }
 
         return {

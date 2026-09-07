@@ -181,14 +181,14 @@ describe('getPortalActionItemsByContact', () => {
     )
   })
 
-  it('queries payments filtered by contact_id, account_id IS NULL, status in (Sent, Overdue)', async () => {
+  it('queries payments filtered by contact_id, account_id IS NULL, status in (Sent, Overdue, Partial)', async () => {
     mockData = []
     await getPortalActionItemsByContact('contact-1')
     expect(captured).toEqual(
       expect.arrayContaining([
         { method: 'eq', column: 'contact_id', value: 'contact-1' },
         { method: 'is', column: 'account_id', value: null },
-        { method: 'in', column: 'invoice_status', value: ['Sent', 'Overdue'] },
+        { method: 'in', column: 'invoice_status', value: ['Sent', 'Overdue', 'Partial'] },
       ]),
     )
   })

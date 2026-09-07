@@ -545,7 +545,27 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           .limit(1)
           .maybeSingle()
 
-        if (submittedWp) {
+        // FALLBACK (dev job 9a9c5cf5): a wizard_progress write can fail
+        // silently for reasons unrelated to whether the client actually
+        // submitted (the 2026-08-27 missing-column incident being one).
+        // THIS job's own submission record (p.submission_id) is
+        // independent proof the wizard was genuinely submitted — and,
+        // unlike a contact-wide lookup, it can never cross-link a
+        // DIFFERENT company's submission for a repeat client, because
+        // it's pinned to the exact submission this job was dispatched
+        // for.
+        let hasProof = !!submittedWp
+        if (!hasProof && p.submission_id) {
+          const { data: fallbackSub } = await supabaseAdmin
+            .from("formation_submissions")
+            .select("id, status")
+            .eq("id", p.submission_id)
+            .in("status", ["completed", "reviewed"])
+            .maybeSingle()
+          hasProof = !!fallbackSub
+        }
+
+        if (hasProof) {
           try {
             const adv = await advanceServiceDelivery({
               delivery_id: sdId,
@@ -565,7 +585,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
             result.steps.push(step("service_delivery_advance", "error", e instanceof Error ? e.message : String(e)))
           }
         } else {
-          result.steps.push(step("service_delivery_advance", "skipped", "Formation wizard_progress not 'submitted' yet"))
+          result.steps.push(step("service_delivery_advance", "skipped", "Neither wizard_progress nor the formation_submissions fallback shows this submission as submitted yet"))
         }
       }
     } else {
@@ -623,7 +643,47 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
     result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
   } else {
   try {
-    const { error: formErr } = await supabaseAdmin
+    // Captured BEFORE this pass's own write, so it reflects whether a
+    // PRIOR pass already reviewed this exact row (dev job 9a9c5cf5, round
+    // 5) — mirrors tax-form-setup.ts's reviewStatusPriorToThisSubmission.
+    // A non-null status here means this is a genuine resubmission of the
+    // SAME row (stable token), not the row's first pass through this step.
+    const { data: priorSub } = await supabaseAdmin
+      .from("formation_submissions")
+      .select("status, reviewed_at")
+      .eq("id", p.submission_id)
+      .maybeSingle()
+    const wasAlreadyReviewed = !!(priorSub?.status && priorSub.status !== "completed")
+    // A GENUINE resubmission (round 7 bug-hunter finding) must still be
+    // able to retire the stale note and fire a fresh one — formation has
+    // no content-hash column to prove "the data actually changed" (unlike
+    // closure_submissions.last_processed_hash), so this uses TIME as the
+    // available signal instead: a job-queue retry of THIS SAME attempt
+    // reruns within seconds to a few minutes; a real client editing and
+    // resubmitting realistically takes much longer. Anything reviewed
+    // more than RETRY_WINDOW_MS ago is treated as a genuinely separate,
+    // later submission event, safe to retire-and-refire. Imperfect (a
+    // client who resubmits within the window still gets no fresh alert),
+    // but strictly better than never retiring at all.
+    const RETRY_WINDOW_MS = 15 * 60 * 1000
+    const reviewedAtMs = priorSub?.reviewed_at ? new Date(priorSub.reviewed_at).getTime() : null
+    const isGenuineResubmission =
+      wasAlreadyReviewed && reviewedAtMs !== null && Date.now() - reviewedAtMs > RETRY_WINDOW_MS
+
+    // TOCTOU guard (bug-hunter finding, round 7): only transition
+    // completed → reviewed. Without `.eq("status","completed")` here, this
+    // write ran EVERY pass through this step — including a job-queue retry
+    // of an already-succeeded attempt (see the 3b comment below) and a
+    // genuine resubmit, where the wizard-submit route deliberately
+    // PRESERVES "reviewed" status (preserveReviewedStatus, dev job
+    // ca788354) rather than resetting it — re-stamping reviewed_at/
+    // completed_at to "now" in either case is the identical 17-days-adrift
+    // defect ca788354 fixed on the route side but never closed here on the
+    // handler side. Guarding on the row's OWN current status (not a value
+    // read moments earlier, which the update below could itself race
+    // against) makes a no-op retry/resubmit provably safe: 0 rows affected,
+    // timestamps untouched.
+    const { data: updatedRows, error: formErr } = await supabaseAdmin
       .from("formation_submissions")
       .update({
         status: "reviewed",
@@ -636,11 +696,55 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
       })
       .eq("id", p.submission_id)
+      .eq("status", "completed")
+      .select("id")
 
     if (formErr) {
       result.steps.push(step("form_reviewed", "error", formErr.message))
+    } else if (!updatedRows || updatedRows.length === 0) {
+      result.steps.push(step("form_reviewed", "skipped", "Already reviewed — reviewed_at/completed_at left untouched"))
     } else {
       result.steps.push(step("form_reviewed", "ok", "Form → reviewed"))
+    }
+
+    // ─── 3b. STAFF WHAT'S NEW ALERT (dev job 9a9c5cf5, round 5) ───
+    // Before this, formation had NO dedicated "client submitted the
+    // wizard" event at all — staff relied entirely on the unconditional
+    // email below and the ONE-TIME payment note, which is routinely
+    // dismissed before the wizard is even started (real incident:
+    // Francesco Lussignoli). Gated on formStatusWrite (already true in
+    // this branch) so a refused/ambiguous re-submit — deliberately silent
+    // by Antonio's ruling, dev job ca788354 — never fires this either.
+    //
+    // Retires the existing note ONLY for a genuinely separate, later
+    // resubmission (`isGenuineResubmission`, time-gated above) — NEVER for
+    // a bare "row already reviewed" signal (bug-hunter finding, round 6:
+    // that alone can't be trusted, since THIS SAME job attempt just
+    // flipped it a few lines up, and a later step throwing would put the
+    // job back in the retry queue, making a mere retry look identical to
+    // a resubmission from the row's status alone). Round 7's follow-up
+    // finding: never retiring at all (the round-6 fix) silently broke
+    // genuine resubmissions too — every one after the first was swallowed
+    // forever by emitClientChatEvent's own dedup, since nothing ever
+    // unblocked it. Retire is now gated on the time-based signal instead.
+    if (!formErr && p.contact_id) {
+      try {
+        const { emitFormationWizardSubmittedEvent, retireFormationWizardSubmittedNote } =
+          await import("@/lib/portal/chat-events")
+        if (isGenuineResubmission) {
+          await retireFormationWizardSubmittedNote({ formationSubmissionId: p.submission_id })
+        }
+        const chat = await emitFormationWizardSubmittedEvent({
+          formation_submission_id: p.submission_id,
+          contact_id: p.contact_id,
+          is_resubmission: isGenuineResubmission,
+        })
+        result.steps.push(
+          step("staff_whats_new_alert", chat.emitted ? "ok" : "skipped", chat.reason ?? "client chat event emitted"),
+        )
+      } catch (e) {
+        result.steps.push(step("staff_whats_new_alert", "error", e instanceof Error ? e.message : String(e)))
+      }
     }
   } catch (e) {
     result.steps.push(step("form_reviewed", "error", e instanceof Error ? e.message : String(e)))

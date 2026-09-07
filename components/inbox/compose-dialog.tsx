@@ -51,6 +51,16 @@ interface ComposeDialogProps {
    *  images. Copied into the composer as removable chips, never sent silently. */
   prefillAttachmentSources?: PrefillAttachmentSource[]
   /**
+   * Real File objects to stage as attachments the moment the dialog opens —
+   * for a caller that already has the bytes in the browser (e.g. a captured
+   * screenshot fetched from our own private image endpoint), as opposed to
+   * prefillAttachmentSources' server-to-server copy from an existing Gmail
+   * message. Goes through the SAME upload path (add()) a manual paperclip
+   * attachment does — same validation, same size limits, same thumbnail
+   * preview for images (2026-09-06).
+   */
+  prefillFiles?: File[]
+  /**
    * Offer the "send from Antonio" choice. Server-gated regardless
    * (lib/inbox/mailbox-access.ts); false just hides a control that would 403.
    * Defaults false, so surfaces that don't know the caller's role — the
@@ -58,6 +68,15 @@ interface ComposeDialogProps {
    * they did before this control existed.
    */
   canUsePersonalMailbox?: boolean
+  /**
+   * Overrides the dialog's own stacking level — it defaults to z-50, which
+   * is correct when opened from a normal page but renders BEHIND an already-
+   * open full-screen overlay with a higher z-index of its own (e.g. the My
+   * Captures gallery's lightbox, z-[70]) — the dialog would open with no
+   * visible effect. Mirrors the exact z-[80] precedent share-existing-modal.tsx
+   * already set for stacking above that same lightbox (2026-09-06).
+   */
+  zIndexClassName?: string
 }
 
 export function ComposeDialog({
@@ -72,7 +91,9 @@ export function ComposeDialog({
   prefillLinkLabel = '',
   prefillTag = '',
   prefillAttachmentSources,
+  prefillFiles,
   canUsePersonalMailbox = false,
+  zIndexClassName = 'z-50',
 }: ComposeDialogProps) {
   const [to, setTo] = useState(prefillTo)
   const [cc, setCc] = useState('')
@@ -139,6 +160,22 @@ export function ComposeDialog({
       void addFromSource(prefillAttachmentSources)
     }
   }, [open, prefillAttachmentSources, addFromSource])
+
+  // Same one-shot-per-open-session guard as prefillAttachmentSources above,
+  // for a caller handing down real File objects instead (2026-09-06).
+  const addFiles = attachments.add
+  const prefillFilesDoneRef = useRef(false)
+  useEffect(() => {
+    if (!open) {
+      prefillFilesDoneRef.current = false
+      return
+    }
+    if (prefillFilesDoneRef.current) return
+    prefillFilesDoneRef.current = true
+    if (prefillFiles && prefillFiles.length > 0) {
+      void addFiles(prefillFiles)
+    }
+  }, [open, prefillFiles, addFiles])
 
   // While the dialog is open, a drop that MISSES the drop zone must not make
   // the browser navigate to the file and destroy the draft.
@@ -332,7 +369,7 @@ export function ComposeDialog({
     <WorkerDropZone
       onFiles={(f) => void attachments.add(f)}
       label="Drop files to attach"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className={`fixed inset-0 ${zIndexClassName} flex items-center justify-center bg-black/40`}
     >
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 flex flex-col max-h-[85vh]">
         {/* Header */}

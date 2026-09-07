@@ -3,31 +3,25 @@
 /**
  * P3.4 #3 — Client health diagnostic panel (contact-side).
  *
- * Single read-only surface that runs both per-contact audits
- * (diagnose-contact + audit-chain) in parallel and renders their checks
- * grouped and color-coded in one place. Fix actions remain in the
- * existing dialogs (ContactDiagnosticDialog + ChainAuditDialog) — this
- * panel includes launchers for each.
+ * Single read-only surface that runs the per-contact chain audit and
+ * renders its checks grouped and color-coded. Fix actions remain in the
+ * existing dialog (ChainAuditDialog) — this panel includes a launcher.
  *
- * Per plan L631 ("Client health diagnostic panel — one screen showing
- * every audit check for a single account/contact").
+ * The diagnose-contact engine this panel used to also show was removed
+ * 2026-09-02 (Antonio: unused, and its checks/fixes had confirmed
+ * correctness bugs — see dev_task 525e0e67). Chain Audit is unrelated
+ * and stays.
  */
 
 import { useState, useEffect, useCallback } from 'react'
 import {
   Loader2, CheckCircle2, AlertCircle, XCircle, Info,
-  RefreshCw, Stethoscope, Link2,
+  RefreshCw, Link2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { ContactDiagnosticDialog } from './contact-diagnostic-dialog'
 import { ChainAuditDialog } from './chain-audit-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { combineSummaries, rollupStatus, type HealthCheck as Check, type HealthSummary } from '@/lib/contact-health-helpers'
-
-interface DiagnoseResult {
-  checks: Check[]
-  summary: HealthSummary
-}
 
 interface AccountAudit {
   account_id: string
@@ -63,23 +57,16 @@ const STATUS_BG = {
 export function ContactHealthPanel({ contactId, contactName }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [diagnose, setDiagnose] = useState<DiagnoseResult | null>(null)
   const [chain, setChain] = useState<ChainResult | null>(null)
-  const [showDiagnose, setShowDiagnose] = useState(false)
   const [showChain, setShowChain] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [dRes, cRes] = await Promise.all([
-        fetch(`/api/crm/admin-actions/diagnose-contact?contact_id=${contactId}`),
-        fetch(`/api/crm/admin-actions/audit-chain?contact_id=${contactId}`),
-      ])
-      if (!dRes.ok) throw new Error(`Diagnose contact: HTTP ${dRes.status}`)
+      const cRes = await fetch(`/api/crm/admin-actions/audit-chain?contact_id=${contactId}`)
       if (!cRes.ok) throw new Error(`Chain audit: HTTP ${cRes.status}`)
-      const [dJson, cJson] = await Promise.all([dRes.json(), cRes.json()])
-      setDiagnose(dJson)
+      const cJson = await cRes.json()
       setChain(cJson)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -90,9 +77,9 @@ export function ContactHealthPanel({ contactId, contactName }: Props) {
 
   useEffect(() => { load() }, [load])
 
-  const combined = combineSummaries(diagnose?.summary, chain?.summary)
+  const combined = combineSummaries(chain?.summary)
 
-  if (loading && !diagnose && !chain) {
+  if (loading && !chain) {
     return (
       <div className="flex items-center justify-center py-16 text-zinc-500">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
@@ -143,16 +130,6 @@ export function ContactHealthPanel({ contactId, contactName }: Props) {
         </div>
 
         <div className="flex flex-wrap gap-2 pt-2 border-t">
-          <FastTooltip label="Open the full diagnostic dialog with fix actions">
-            <button
-              onClick={() => setShowDiagnose(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-zinc-50"
-              aria-label="Open the full diagnostic dialog with fix actions"
-            >
-              <Stethoscope className="h-3.5 w-3.5" />
-              Run Fix Actions — Diagnostic
-            </button>
-          </FastTooltip>
           <FastTooltip label="Open the full chain audit dialog with fix actions">
             <button
               onClick={() => setShowChain(true)}
@@ -165,13 +142,6 @@ export function ContactHealthPanel({ contactId, contactName }: Props) {
           </FastTooltip>
         </div>
       </div>
-
-      {/* Contact diagnostic checks */}
-      <CheckSection
-        title="Contact Diagnostic"
-        subtitle="Lead → contact → offer → payment → wizard → portal integrity"
-        checks={diagnose?.checks ?? []}
-      />
 
       {/* Chain audit — global checks */}
       <CheckSection
@@ -190,13 +160,7 @@ export function ContactHealthPanel({ contactId, contactName }: Props) {
         />
       ))}
 
-      {/* Mount dialogs for fix actions */}
-      <ContactDiagnosticDialog
-        open={showDiagnose}
-        onClose={() => { setShowDiagnose(false); load() }}
-        contactId={contactId}
-        contactName={contactName}
-      />
+      {/* Mount dialog for fix actions */}
       <ChainAuditDialog
         open={showChain}
         onClose={() => { setShowChain(false); load() }}

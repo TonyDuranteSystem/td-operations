@@ -6,6 +6,7 @@ import {
   extractBodyWithType,
   extractAttachments,
   extractInlineImages,
+  isOwnMailboxAddress,
   type GmailAPIMessage,
 } from "@/lib/gmail"
 import { rewriteCidSources, safeEmailDate } from "@/lib/inbox/email-html"
@@ -138,9 +139,11 @@ export async function GET(
           attachmentId: img.attachmentId,
         }))
 
-        const isOutbound =
-          from.includes("support@tonydurante.us") ||
-          from.includes("antonio.durante@tonydurante.us")
+        // Single shared definition of "ours" (lib/gmail.ts) — a bare 2-address
+        // copy here previously missed real send-as aliases (office@,
+        // compliance@), which fed straight into the reply-target default and
+        // the per-message Reply button visibility (dev job ec61a2ae).
+        const isOutbound = isOwnMailboxAddress(from)
 
         return {
           id: msg.id,

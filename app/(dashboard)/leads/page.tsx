@@ -1,10 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 import { LeadsTable } from '@/components/leads/leads-table'
+import { ExistingClientNewCalls } from '@/components/leads/existing-client-new-calls'
 import { LeadsKanban } from './components/leads-kanban'
 import { LeadsViewToggle } from './components/leads-view-toggle'
 import { LeadsClientFilterToggle } from './components/leads-client-filter-toggle'
 import { CreateLeadButton } from './components/create-lead-button'
 import type { LeadListItem } from '@/lib/types'
+import { findExistingClientNewCalls } from '@/lib/leads/existing-client-new-calls'
+
+const NEW_CALL_WINDOW_DAYS = 14
 
 const PAGE_SIZE = 50
 
@@ -141,6 +145,30 @@ export default async function LeadsPage({
     lost: items.filter(l => l.status === 'Lost').length,
   }
 
+  // Existing clients with a new call — independent of the tab/pagination
+  // above, so it stays visible no matter which of the 3 tabs is selected.
+  const { data: existingClientLeads } = await supabase
+    .from('leads')
+    .select('id, full_name, existing_client_contact_id, converted_to_contact_id')
+    .or('status.eq.Converted,existing_client_contact_id.not.is.null')
+
+  let existingClientNewCalls: ReturnType<typeof findExistingClientNewCalls> = []
+  if (existingClientLeads && existingClientLeads.length > 0) {
+    const windowStart = new Date(Date.now() - NEW_CALL_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    const ecLeadIds = existingClientLeads.map(l => l.id)
+    const ecContactIds = Array.from(new Set(
+      existingClientLeads.map(l => l.existing_client_contact_id ?? l.converted_to_contact_id).filter((id): id is string => !!id)
+    ))
+    const orParts = [`lead_id.in.(${ecLeadIds.join(',')})`]
+    if (ecContactIds.length > 0) orParts.push(`contact_id.in.(${ecContactIds.join(',')})`)
+    const { data: recentCalls } = await supabase
+      .from('call_summaries')
+      .select('lead_id, contact_id, created_at')
+      .gte('created_at', windowStart)
+      .or(orParts.join(','))
+    existingClientNewCalls = findExistingClientNewCalls(existingClientLeads, recentCalls ?? [])
+  }
+
   return (
     <div className="p-6 lg:p-8">
       <div className="flex items-center justify-between mb-6">
@@ -155,6 +183,8 @@ export default async function LeadsPage({
           <LeadsViewToggle currentView={viewMode} />
         </div>
       </div>
+
+      <ExistingClientNewCalls items={existingClientNewCalls} />
 
       <div className="mb-4">
         <LeadsClientFilterToggle

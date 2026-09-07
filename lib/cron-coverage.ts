@@ -56,15 +56,10 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // General-purpose recurring TD invoicing (dev job 4a854806) — reads
   // recurring_invoice_templates and generates via createTDInvoice, Draft-only.
   "/api/cron/recurring-invoices": "15 8 * * *",
-  "/api/cron/refresh-issue-counts": "0 8 * * *",
   "/api/cron/payment-integrity-alarm": "0 9 * * *",
   "/api/cron/tax-reactivation": "30 10 * * *",
   "/api/cron/tax-completion-sweep": "*/30 * * * *",
   "/api/cron/tax-archive-sweep": "*/15 * * * *",
-  // Re-sorts a client's transactions after their record improves (members
-  // linked, legal name fixed, related companies declared). REPORT-ONLY until
-  // TAX_RESTALE_SWEEP_DRY_RUN is "false". 4-hourly: the inputs change rarely.
-  "/api/cron/tax-restale-sweep": "0 */4 * * *",
   // Payment-plan deals with a referrer/partner that just became fully paid in
   // real cash — flags staff toward the "Release commission" action. State-based
   // sweep, deliberately not a hook on any single payment-confirmation path.

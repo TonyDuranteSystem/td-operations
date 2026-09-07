@@ -51,7 +51,7 @@ function manualInvoiceIdempotencyKey(
 
 export async function createInvoice(
   input: CreateInvoiceInput
-): Promise<ActionResult<{ id: string; invoice_number: string }>> {
+): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
   const parsed = createInvoiceSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
@@ -159,6 +159,12 @@ export async function createInvoice(
       issue_date: invoiceData.issue_date,
       message: invoiceData.message || undefined,
       installment: invoiceData.installment || undefined,
+      // Billing year for the installment badge + duplicate check (both keyed on
+      // account + payment_category + year) — derived from the issue date, since
+      // this dialog has no separate year field. Was silently never sent before
+      // this fix (merged in from main 2026-09-07), so a real installment invoice
+      // had no year on it at all.
+      year: invoiceData.installment ? Number(invoiceData.issue_date.slice(0, 4)) : undefined,
       idempotency_key: idempotencyKey,
       // ⛔ These three were being silently dropped — the dialog collects and
       // sends them, but nothing ever forwarded them to createTDInvoice, so
@@ -201,7 +207,7 @@ export async function createInvoice(
     // is deleted (dev job ef5da377, Step 6).
     revalidatePath('/payments')
     revalidatePath('/finance')
-    return { id: result.paymentId, invoice_number: result.invoiceNumber }
+    return { id: result.paymentId, invoice_number: result.invoiceNumber, duplicate_warning: result.duplicate_warning }
   }, {
     action_type: 'create',
     table_name: 'payments',

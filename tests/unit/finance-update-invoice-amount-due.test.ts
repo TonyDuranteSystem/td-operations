@@ -9,17 +9,47 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const { mockRevalidatePath, mockSingle, mockUpdate, mockUpdateEq, mockUpdateSelect, mockListConfirmedApplications } = vi.hoisted(() => ({
+const {
+  mockRevalidatePath,
+  mockSingle,
+  mockUpdate,
+  mockUpdateEq,
+  mockUpdateSelect,
+  mockListConfirmedApplications,
+  mockAdjustSingleServiceLineForTotal,
+  mockSyncClientExpenseItemsMirror,
+  mockItemsSelect,
+  mockItemsDelete,
+  mockItemsInsert,
+} = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockSingle: vi.fn(),
   mockUpdate: vi.fn(),
   mockUpdateEq: vi.fn(),
   mockUpdateSelect: vi.fn(),
   mockListConfirmedApplications: vi.fn(),
+  mockAdjustSingleServiceLineForTotal: vi.fn(),
+  mockSyncClientExpenseItemsMirror: vi.fn(),
+  mockItemsSelect: vi.fn(),
+  mockItemsDelete: vi.fn(),
+  mockItemsInsert: vi.fn(),
 }))
 
 vi.mock("@/lib/finance/apply-payment", () => ({
   listConfirmedApplications: (...args: unknown[]) => mockListConfirmedApplications(...args),
+}))
+
+// Merged in from main (the ShoppyVerse/Growly line-item-rewrite fix): this
+// test file's own focus is the money-correctness branching, not the
+// line-item mechanics (that has its own dedicated, thorough test file on
+// main) — mocked at the module boundary so every existing test can pass
+// through it harmlessly via the beforeEach default below, rather than
+// needing a realistic payment_items fixture for every single case.
+vi.mock("@/lib/portal/invoice-regenerate", () => ({
+  adjustSingleServiceLineForTotal: (...args: unknown[]) => mockAdjustSingleServiceLineForTotal(...args),
+}))
+vi.mock("@/lib/portal/td-invoice-mirror", () => ({
+  syncClientExpenseItemsMirror: (...args: unknown[]) => mockSyncClientExpenseItemsMirror(...args),
 }))
 
 vi.mock("@/lib/server-action", () => ({
@@ -42,28 +72,45 @@ vi.mock("next/cache", () => ({
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
-    from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: mockSingle,
-        })),
-      })),
-      // Real chain: .update({...}).eq('id', paymentId)[.eq('updated_at', x)].select('id').
-      // .eq() is chainable (a second .eq() only happens when the code has a
-      // CAS token to guard against); .select() is always the terminal call
-      // and is what actually resolves.
-      update: (updates: unknown) => {
-        mockUpdate(updates)
-        const chain = {
-          eq: (...args: unknown[]) => {
-            mockUpdateEq(...args)
-            return chain
-          },
-          select: (...args: unknown[]) => mockUpdateSelect(...args),
+    from: vi.fn((table: string) => {
+      // The line-item rewrite (merged in from main) reads/writes a SEPARATE
+      // table from the `payments` row this file's own tests care about.
+      if (table === "payment_items") {
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              order: mockItemsSelect,
+            })),
+          })),
+          delete: vi.fn(() => ({
+            eq: mockItemsDelete,
+          })),
+          insert: mockItemsInsert,
         }
-        return chain
-      },
-    })),
+      }
+      return {
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            single: mockSingle,
+          })),
+        })),
+        // Real chain: .update({...}).eq('id', paymentId)[.eq('updated_at', x)].select('id').
+        // .eq() is chainable (a second .eq() only happens when the code has a
+        // CAS token to guard against); .select() is always the terminal call
+        // and is what actually resolves.
+        update: (updates: unknown) => {
+          mockUpdate(updates)
+          const chain = {
+            eq: (...args: unknown[]) => {
+              mockUpdateEq(...args)
+              return chain
+            },
+            select: (...args: unknown[]) => mockUpdateSelect(...args),
+          }
+          return chain
+        },
+      }
+    }),
   },
 }))
 
@@ -73,6 +120,11 @@ const PAYMENT_ID = "inv-1"
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockAdjustSingleServiceLineForTotal.mockReturnValue({ ok: true, items: [] })
+  mockSyncClientExpenseItemsMirror.mockResolvedValue({ synced: true })
+  mockItemsSelect.mockResolvedValue({ data: [], error: null })
+  mockItemsDelete.mockResolvedValue({ error: null })
+  mockItemsInsert.mockResolvedValue({ error: null })
   mockUpdateEq.mockResolvedValue({ error: null })
   // Default: one row matched — the common case for every test that doesn't
   // specifically exercise the compare-and-swap guard.
@@ -485,5 +537,63 @@ describe("updateInvoice — compare-and-swap on the write", () => {
     expect(result.success).toBe(true)
     expect(mockSingle).not.toHaveBeenCalled()
     expect(mockUpdateEq).not.toHaveBeenCalledWith("updated_at", expect.anything())
+  })
+})
+
+// Coverage for the line-item rewrite merged in from main 2026-09-07 (the
+// 2026-08-31 ShoppyVerse/Growly fix, originally independent of every fix
+// above — reconciled here after both sides touched updateInvoice while this
+// branch was diverged from main for a long time). Its own money math has a
+// dedicated, thorough test file on main; these tests only pin the
+// INTEGRATION — that it runs with the right final number, that it's
+// deliberately skipped for a credit note, and that a refusal from it
+// actually blocks the save rather than partially applying.
+describe("updateInvoice — line-item rewrite integration", () => {
+  it("adjusts the line items using the FINAL total, not the raw input, for an ordinary edit", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent" } })
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 })
+    expect(result.success).toBe(true)
+    expect(mockAdjustSingleServiceLineForTotal).toHaveBeenCalledWith(expect.anything(), 500)
+  })
+
+  it("adjusts the line items using the CORRECTED (typo) total, not the pre-typo one", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 850, status: "Paid", invoice_status: "Paid" } })
+    mockListConfirmedApplications.mockResolvedValue([])
+    const result = await updateInvoice(PAYMENT_ID, { total: 700 }, "typo")
+    expect(result.success).toBe(true)
+    expect(mockAdjustSingleServiceLineForTotal).toHaveBeenCalledWith(expect.anything(), 700)
+  })
+
+  it("skips the line-item rewrite entirely for a credit note", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: -500, status: "Paid", invoice_status: "Credit", total: -500, credit_remaining: 500 } })
+    const result = await updateInvoice(PAYMENT_ID, { total: -650 })
+    expect(result.success).toBe(true)
+    expect(mockAdjustSingleServiceLineForTotal).not.toHaveBeenCalled()
+    expect(mockItemsDelete).not.toHaveBeenCalled()
+  })
+
+  it("blocks the whole save when the line-item adjuster refuses (ambiguous shape), leaving the invoice untouched", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent" } })
+    mockAdjustSingleServiceLineForTotal.mockReturnValue({ ok: false, items: [], reason: "More than one line makes up this invoice — edit the line items directly instead of the total alone." })
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/more than one line/i)
+    // The header write never runs — the refusal fires before it.
+    expect(mockUpdate).not.toHaveBeenCalled()
+  })
+
+  it("uses the adjusted items (not the raw current ones) for both the payment_items rewrite and the client-mirror sync", async () => {
+    mockSingle.mockResolvedValue({ data: { amount_paid: 0, status: "Pending", invoice_status: "Sent" } })
+    const adjustedItems = [{ description: "Service", quantity: 1, unit_price: 500, amount: 500, item_type: "service" }]
+    mockAdjustSingleServiceLineForTotal.mockReturnValue({ ok: true, items: adjustedItems })
+    const result = await updateInvoice(PAYMENT_ID, { total: 500 })
+    expect(result.success).toBe(true)
+    expect(mockItemsInsert).toHaveBeenCalledWith([
+      expect.objectContaining({ payment_id: PAYMENT_ID, description: "Service", amount: 500, sort_order: 0 }),
+    ])
+    expect(mockSyncClientExpenseItemsMirror).toHaveBeenCalledWith(
+      PAYMENT_ID,
+      [expect.objectContaining({ description: "Service", amount: 500, sort_order: 0 })],
+    )
   })
 })

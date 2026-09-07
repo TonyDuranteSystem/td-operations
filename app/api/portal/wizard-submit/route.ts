@@ -24,7 +24,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
-import { getSubmissionTable, getJobType } from '@/lib/portal/wizard-map'
+import { getSubmissionTable, getJobType, isBankingInlineType } from '@/lib/portal/wizard-map'
 import { buildSubmissionRecord, preserveReviewedStatus } from '@/lib/portal/submission-record'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
@@ -41,6 +41,8 @@ import {
 } from '@/lib/tax/wizard-eligibility'
 import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-status'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
+import { reportSystemError } from '@/lib/system-errors'
+import { markWizardProgressSubmitted } from '@/lib/portal/wizard-progress-write'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -50,6 +52,7 @@ import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 function extractUploadPaths(data: Record<string, unknown>): string[] {
   return collectUploadPaths(data)
 }
+
 
 // Wizard-map imports moved to lib/portal/wizard-map.ts (P1.7) so the
 // characterization exhaustiveness test can verify every VALID_WIZARD_TYPES
@@ -242,35 +245,49 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 2. MARK WIZARD_PROGRESS AS SUBMITTED ───
-    // For company_info: deferred until AFTER job enqueue succeeds (scoped reorder).
-    // For td_communication: deferred until AFTER the enrollment write succeeds
-    //   (step 4c) — so a transient enrollment failure leaves wizard_progress
-    //   in_progress and the client's retry actually re-runs the work instead of
-    //   short-circuiting at the step-1 dedup.
-    // All other wizard types: mark submitted immediately (existing behavior).
-    if (wizard_type !== 'company_info' && wizard_type !== 'td_communication') {
-      if (progress_id) {
-        await supabaseAdmin
-          .from('wizard_progress')
-          .update({
-            data,
-            status: 'submitted',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', progress_id)
-      } else {
-        await supabaseAdmin
-          .from('wizard_progress')
-          .insert({
-            wizard_type,
-            data,
-            account_id: account_id || null,
-            contact_id: contact_id || null,
-            lead_id: lead_id || null,
-            service_delivery_id: closureServiceDeliveryId,
-            status: 'submitted',
-            current_step: 99,
-          })
+    // ONLY for banking types here — their own block below returns success
+    // immediately afterward and its comment explicitly depends on this
+    // already being done ("data is already persisted in wizard_progress
+    // (step 2)"). company_info and td_communication already defer their own
+    // write until after their real work succeeds (see their own sections).
+    //
+    // Every OTHER type (formation/onboarding/tax/itin/closure) used to mark
+    // this here too — BEFORE the submission-table save (step 4) below,
+    // which can itself fail. That let a step-4 failure leave wizard_progress
+    // already 'submitted', so the client's automatic retry hit step 1's
+    // dedup check and got a false "Already submitted" — silently discarding
+    // the submission a second time (dev job 9a9c5cf5, found by Bug Hunter
+    // re-attacking this exact PR before merge). Those types now defer the
+    // same way company_info always has: marked submitted only after the
+    // submission is durably saved AND the background job is enqueued (see
+    // "5. DEFERRED WIZARD_PROGRESS WRITE" below) — a retry after ANY
+    // failure up to that point finds wizard_progress still NOT 'submitted'
+    // and safely re-runs, converging via the submission table's token
+    // upsert and the job's content-hash dedup (findRecentDuplicateJob).
+    if (isBankingInlineType(wizard_type)) {
+      const wpResult = await markWizardProgressSubmitted({
+        progressId: progress_id || null,
+        wizardType: wizard_type,
+        data,
+        accountId: account_id || null,
+        contactId: contact_id || null,
+        leadId: lead_id || null,
+        serviceDeliveryId: closureServiceDeliveryId,
+      })
+
+      if (wpResult.error) {
+        console.error('[wizard-submit] wizard_progress write failed:', wpResult.error.message)
+        reportSystemError({
+          source: 'server',
+          route: '/api/portal/wizard-submit',
+          method: 'POST',
+          message: `wizard_progress write failed for wizard_type=${wizard_type}: ${wpResult.error.message}`,
+          context: { wizard_type, contact_id, account_id, progress_id: progress_id || null },
+        }).catch(() => {})
+        return NextResponse.json(
+          { error: 'Failed to save your progress. Please try submitting again.' },
+          { status: 500 },
+        )
       }
     }
 
@@ -871,23 +888,26 @@ export async function POST(req: NextRequest) {
         })
 
         // Enrollment write succeeded → now mark wizard_progress submitted.
-        if (progress_id) {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .update({ data, status: 'submitted', updated_at: new Date().toISOString() })
-            .eq('id', progress_id)
-        } else {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .insert({
-              wizard_type,
-              data,
-              account_id: account_id || null,
-              contact_id: contact_id || null,
-              lead_id: lead_id || null,
-              status: 'submitted',
-              current_step: 99,
-            })
+        const tdWpResult = await markWizardProgressSubmitted({
+          progressId: progress_id || null,
+          wizardType: wizard_type,
+          data,
+          accountId: account_id || null,
+          contactId: contact_id || null,
+          leadId: lead_id || null,
+        })
+        if (tdWpResult.error) {
+          // The enrollment itself already succeeded — don't fail the
+          // client's submission over the tracking row, but don't let it
+          // vanish silently either (dev job 9a9c5cf5).
+          console.error('[wizard-submit] TD Comm wizard_progress write failed:', tdWpResult.error.message)
+          reportSystemError({
+            source: 'server',
+            route: '/api/portal/wizard-submit',
+            method: 'POST',
+            message: `wizard_progress write failed for wizard_type=td_communication (enrollment ${enrollmentId} still succeeded): ${tdWpResult.error.message}`,
+            context: { wizard_type, contact_id, account_id, enrollment_id: enrollmentId },
+          }).catch(() => {})
         }
 
         // action_log for the CRM Recent Activity feed (mirror banking).
@@ -996,31 +1016,43 @@ export async function POST(req: NextRequest) {
         console.warn(`[wizard-submit] Enqueued ${jobType} job ${jobId} for ${clientName}`)
       }
 
-      // company_info scoped reorder: mark wizard_progress as submitted AFTER job enqueue succeeds.
-      // If enqueue failed (threw above), this never runs — portal shows company_info wizard for retry.
-      if (wizard_type === 'company_info') {
-        if (progress_id) {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .update({
-              data,
-              status: 'submitted',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', progress_id)
-        } else {
-          await supabaseAdmin
-            .from('wizard_progress')
-            .insert({
-              wizard_type,
-              data,
-              account_id: account_id || null,
-              contact_id: contact_id || null,
-              lead_id: lead_id || null,
-              status: 'submitted',
-              current_step: 99,
-            })
-        }
+      // ─── 5. DEFERRED WIZARD_PROGRESS WRITE ───
+      // Every type that reaches this block (everything except banking,
+      // handled early at step 2, and td_communication, deferred inside its
+      // own branch) marks wizard_progress 'submitted' HERE — after the
+      // submission is durably saved (step 4) AND the background job is
+      // enqueued — never before. If anything above this point failed, the
+      // request already returned (submission save) or threw (enqueue), so
+      // this line is never reached and wizard_progress correctly stays
+      // NOT 'submitted' for a retry to pick up cleanly.
+      //
+      // FAIL LOUD on the write itself: a retry after THIS specific failure
+      // is safe (not a duplicate risk) — the submission-table upsert is
+      // token-keyed (idempotent) and the job enqueue above is deduped by
+      // content hash (findRecentDuplicateJob), so re-running the whole
+      // route just re-attempts this one write and converges.
+      const wpResult = await markWizardProgressSubmitted({
+        progressId: progress_id || null,
+        wizardType: wizard_type,
+        data,
+        accountId: account_id || null,
+        contactId: contact_id || null,
+        leadId: lead_id || null,
+        serviceDeliveryId: closureServiceDeliveryId,
+      })
+      if (wpResult.error) {
+        console.error('[wizard-submit] wizard_progress write failed (post-enqueue):', wpResult.error.message)
+        reportSystemError({
+          source: 'server',
+          route: '/api/portal/wizard-submit',
+          method: 'POST',
+          message: `wizard_progress write failed for wizard_type=${wizard_type} (job ${jobId} already enqueued): ${wpResult.error.message}`,
+          context: { wizard_type, contact_id, account_id, job_id: jobId },
+        }).catch(() => {})
+        return NextResponse.json(
+          { error: 'Your submission was saved, but we could not confirm it. Please submit again to be sure.' },
+          { status: 500 },
+        )
       }
     }
 
