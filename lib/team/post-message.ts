@@ -95,9 +95,19 @@ export interface PostTeamMessageResult {
  * surface (get_team_threads, search, the floating widget, the main Team Chat
  * page's own Direct Messages list all gate visibility on "does dm_key contain
  * MY id") — invisible to them from message one, every single time, while the
- * recipient could see it fine. Falls back to the sentinel only when no acting
- * user is known (a genuinely autonomous Claude-initiated DM, not dictated by
- * anyone specific) — that case is correctly Claude's own conversation.
+ * recipient could see it fine.
+ *
+ * NO SENTINEL FALLBACK for a dm_user_id target (2026-09-07): a null
+ * `actingUserId` here throws instead of silently keying to Claude, which is
+ * exactly the failure above by another name — a "genuinely autonomous
+ * Claude-initiated DM" was never an exercised feature (verified against both
+ * live send paths — the MCP tool and the @claude trigger both resolve a real
+ * caller automatically from the request's own auth context; the one caller
+ * that never did, the Slack surface, has been dead code, retired, since
+ * 2026-07-29), so this can only fire on a genuine identification failure —
+ * exactly when silently misfiling the message is most dangerous. A real
+ * production ghost thread from this exact fallback sat undiscovered for two
+ * months; see docs/systems/team-workspace.md.
  */
 async function resolveTargetThread(
   input: Pick<PostTeamMessageInput, 'channel' | 'thread_id' | 'dm_user_id'>,
@@ -122,7 +132,14 @@ async function resolveTargetThread(
   }
 
   if (input.dm_user_id) {
-    const { thread } = await findOrCreateDm(actingUserId ?? CLAUDE_SENDER_UUID, input.dm_user_id)
+    if (!actingUserId) {
+      throw new Error(
+        'Could not identify who is sending this direct message — refusing to send rather than ' +
+        "filing it under Claude's own identity, which only the recipient could ever find (the exact " +
+        'bug this system used to have). Retry once the sender can be identified.',
+      )
+    }
+    const { thread } = await findOrCreateDm(actingUserId, input.dm_user_id)
     return { thread_id: thread.id, thread_type: 'dm', channel_slug: null, channel_name: null, dm_key: thread.dm_key ?? null }
   }
 
