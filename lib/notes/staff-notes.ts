@@ -204,6 +204,45 @@ export function isLiveFor(note: NoteWithState, userId: string, now: Date): boole
   return !isArchivedFor(note, userId) && !isSnoozedFor(note, userId, now)
 }
 
+/**
+ * Same as isLiveFor, but a note this person marked Done comes back onto the
+ * floating layer if there's been a REPLY since (Antonio: "the sticky note
+ * must reappear red every time there is a reply"). Deliberately narrower
+ * than noteActivityAt (which also counts edits): editing a note after
+ * someone marked it Done stays badge-only on the Notes tab — a separate,
+ * earlier, deliberate decision (2026-07-29) that Antonio confirmed should
+ * stay as-is. Only a reply revives it here.
+ *
+ * Only ever compares against an EXPLICIT per-person state row, never
+ * isArchivedFor's legacy-column fallback — reading the fallback here could
+ * non-deterministically revive a note for someone who never told the system
+ * anything, off one shared old column that belonged to a different person's
+ * original archive action.
+ *
+ * If the LATEST reply is the person's own, it does NOT revive — replying
+ * requires having opened the note and read everything up to that point, so
+ * there is nothing left they haven't seen (mirrors replyNotifyTargets/
+ * computeNoteAlerts, which both exclude the replier from their own reply's
+ * effects).
+ *
+ * Used ONLY by listActiveNotesForUser (the floating layer). The account/
+ * contact-page widgets and the generic per-record filter keep isLiveFor
+ * unchanged — nobody asked for a Done note to reappear there.
+ */
+export function isLiveOrRevivedFor(
+  note: NoteWithState & { staff_note_replies?: NoteReplyRow[] | null },
+  userId: string,
+  now: Date,
+): boolean {
+  if (isSnoozedFor(note, userId, now)) return false
+  if (!isArchivedFor(note, userId)) return true
+  const state = noteStateFor(note, userId)
+  if (!state?.archived_at) return false
+  const latest = latestReplyOf(note)
+  if (!latest || latest.author_user_id === userId) return false
+  return Date.parse(latest.created_at) > Date.parse(state.archived_at)
+}
+
 /** What someone else has done with a shared note — the Notes tab status line. */
 export type OtherState = 'done' | 'snoozed' | 'open'
 
@@ -379,7 +418,7 @@ export async function listActiveNotesForUser(userId: string, nowIso: string) {
   if (res.error) return res
   const now = new Date(nowIso)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const live = (res.data ?? []).filter((n: any) => isLiveFor(n, userId, now)).slice(0, 200)
+  const live = (res.data ?? []).filter((n: any) => isLiveOrRevivedFor(n, userId, now)).slice(0, 200)
   return { ...res, data: live }
 }
 
