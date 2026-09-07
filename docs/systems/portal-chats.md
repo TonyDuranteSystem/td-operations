@@ -1,6 +1,7 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-06 — Claude (**"Addressed to" (and its sibling "who wrote
+_Last verified against code: 2026-09-07 — Claude (**Import path only — zero behavior change.** This page's "create invoice" quick action calls `createInvoice`, which moved from the now-retired Payment Tracker page's own file to the new shared invoice-actions module as part of dev job `ef5da377` ("retire the old Payment Tracker page"). Updated the import here to follow; the function itself, and everything this page does with it, is unchanged.)_
+_Prior: 2026-09-06 — Claude (**"Addressed to" (and its sibling "who wrote
 this" sender badge) stopped silently disappearing on three ordinary navigation paths** — dev
 job e01fe70f, found during a full end-to-end QA pass Antonio requested in PRODUCTION right
 after the whole-company fix shipped (2026-09-05, below), with a Bug Hunter pass building the
