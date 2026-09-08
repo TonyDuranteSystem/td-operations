@@ -7,6 +7,8 @@
  * column on internal_threads. Kept side-effect-free for unit testing (R086).
  */
 
+import { channelSlug } from '@/lib/team/workspace'
+
 export type ClientKind = 'account' | 'contact' | 'lead'
 
 export interface ClientRef {
@@ -55,4 +57,30 @@ export function conversationTitle(clientName: string, topic?: string | null): st
  */
 export function defaultTopicName(now: Date = new Date()): string {
   return `Topic — ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+}
+
+/**
+ * What a rename actually writes, for a `discussion` thread — Antonio,
+ * 2026-09-08: "I want the option to delete/rename a topic or conversation."
+ *
+ * INTERNAL TOPICS keep `topic`/`topic_slug` in lockstep with the new title,
+ * because for a topic `title` IS `topic` by construction (find-conversation.ts)
+ * and the find-or-reuse path matches on `topic_slug` — a rename that only
+ * touched `title` would leave "New chat → Topic → the NEW name" unable to find
+ * the very thread it was just renamed to, forking a duplicate the first time
+ * anyone (including whoever renamed it) tried to reopen it by its new name.
+ *
+ * CLIENT CONVERSATIONS deliberately do NOT touch `topic`/`topic_slug` on
+ * rename — that pair is the client+subject identity a future "New chat" for
+ * the SAME matter should still find, and a rename is a cosmetic relabel, not
+ * a declaration that this is now about a different subject.
+ */
+export function renameDiscussionPatch(
+  isInternal: boolean,
+  newTitle: string,
+): { title: string; topic?: string; topic_slug?: string | null } | { error: string } {
+  const title = (newTitle ?? '').trim()
+  if (!title) return { error: 'A name is required.' }
+  if (!isInternal) return { title }
+  return { title, topic: title, topic_slug: channelSlug(title) || null }
 }

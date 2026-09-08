@@ -509,6 +509,8 @@ function FloatingChatInner() {
           }}
           onError={setMsgError}
           onDismissMention={() => dismissMention(openThreadId)}
+          onRenamed={() => qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })}
+          onDeleted={() => { qc.invalidateQueries({ queryKey: ['floating-chat-threads'] }); setOpenThreadId(null) }}
         />
       )}
 
@@ -596,6 +598,8 @@ function FloatingChatInner() {
           onError={setMsgError}
           onClose={() => setSheetOpen(false)}
           onDismissMention={() => dismissMention(openThreadIdRef.current)}
+          onRenamed={() => qc.invalidateQueries({ queryKey: ['floating-chat-threads'] })}
+          onDeleted={() => { qc.invalidateQueries({ queryKey: ['floating-chat-threads'] }); setOpenThreadId(null) }}
         />
       )}
 
@@ -646,6 +650,8 @@ function DesktopWindow(props: {
   onSent: (m: ChatMessage, threadId: string) => void
   onError: (e: string | null) => void
   onDismissMention: () => void
+  onRenamed: () => void
+  onDeleted: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<FracPos>(CHAT_WINDOW_DEFAULT_POS)
@@ -767,6 +773,9 @@ function DesktopWindow(props: {
                 <Check className="h-4 w-4" />
               </button>
             </FastTooltip>
+          )}
+          {!props.isList && props.openThread?.thread_type === 'discussion' && (
+            <ThreadOptionsMenu key={props.openThread.id} thread={props.openThread} onRenamed={props.onRenamed} onDeleted={props.onDeleted} onError={props.onError} />
           )}
           <FastTooltip label={props.quiet ? 'Pop-ups off — turn on' : 'Pop-ups on — turn off'}>
             <button data-no-drag onClick={props.onToggleQuiet} className="rounded p-1 hover:bg-white/20"
@@ -1504,6 +1513,124 @@ function MenuRow({ icon, label, onClick, danger }: {
   )
 }
 
+/**
+ * Rename / delete for a TOPIC or CLIENT CONVERSATION — Antonio, 2026-09-08:
+ * "I want the option to delete/rename a topic or conversation." Mirrors
+ * MessageActionsMenu's own trigger + dropdown + two-step "tap again to
+ * delete" shape exactly, at the conversation level instead of the message
+ * level.
+ *
+ * "Delete" here is the SAME archive every other thread in this system already
+ * uses — reversible, restorable from the full Team Chat page — never a hard
+ * delete of a shared conversation's history. Said so in the menu itself, not
+ * just in a commit message, since "Delete" is the word Antonio asked for and
+ * the word he'll look for, and the UI owes him the truth about what it does.
+ */
+function ThreadOptionsMenu(props: {
+  thread: ChatThreadRow
+  onRenamed: () => void
+  onDeleted: () => void
+  onError: (e: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const close = () => { setOpen(false); setEditing(false); setConfirmDelete(false) }
+
+  const patch = async (body: Record<string, unknown>, onOk: () => void, fallback: string) => {
+    setBusy(true); props.onError(null)
+    try {
+      const res = await fetch(`/api/team/threads/${props.thread.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || fallback)
+      }
+      close()
+      onOk()
+    } catch (e) {
+      props.onError(e instanceof Error ? e.message : fallback)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rename = () => {
+    const title = draft.trim()
+    if (!title) return
+    patch({ title }, props.onRenamed, 'Could not rename that.')
+  }
+  const remove = () => patch({ archived: true }, props.onDeleted, 'Could not delete that.')
+
+  return (
+    <div className="relative">
+      <FastTooltip label="Rename or delete">
+        <button
+          data-no-drag
+          onClick={() => { setOpen((o) => !o); setEditing(false); setConfirmDelete(false) }}
+          className="rounded p-1 hover:bg-white/20"
+          aria-label="Conversation options"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+      </FastTooltip>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[47]" onClick={close} />
+          <div data-no-drag className="absolute right-0 top-full z-[48] mt-1 w-56 rounded-lg border bg-white py-1 text-zinc-700 shadow-xl">
+            {editing ? (
+              <div className="px-2 py-1.5">
+                <input
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  maxLength={120}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') rename()
+                    if (e.key === 'Escape') setEditing(false)
+                  }}
+                  className="w-full rounded border border-zinc-300 px-2 py-1 text-sm text-zinc-900 outline-none focus:border-emerald-500"
+                />
+                <div className="mt-1 flex justify-end gap-1">
+                  <button onClick={() => setEditing(false)} className="rounded px-2 py-1 text-xs hover:bg-zinc-100">Cancel</button>
+                  <button
+                    onClick={rename}
+                    disabled={busy || !draft.trim()}
+                    className="rounded bg-emerald-500 px-2 py-1 text-xs font-medium text-white disabled:opacity-40"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <MenuRow
+                  icon={<Pencil className="h-4 w-4" />}
+                  label="Rename"
+                  onClick={() => { setDraft(conversationLabel(props.thread)); setEditing(true) }}
+                />
+                <p className="px-3 pb-1 pt-1.5 text-[11px] text-zinc-400">
+                  Delete removes it from your list — it isn&apos;t permanent, and can be restored from Team Chat.
+                </p>
+                {confirmDelete ? (
+                  <MenuRow icon={<Trash2 className="h-4 w-4" />} label="Tap again to delete" danger onClick={remove} />
+                ) : (
+                  <MenuRow icon={<Trash2 className="h-4 w-4" />} label="Delete" danger onClick={() => setConfirmDelete(true)} />
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ─────────────────────────── composer ─────────────────────────── */
 
 /**
@@ -1681,6 +1808,8 @@ function MobileSheet(props: {
   onError: (e: string | null) => void
   onClose: () => void
   onDismissMention: () => void
+  onRenamed: () => void
+  onDeleted: () => void
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[47] flex flex-col justify-end bg-black/30" onClick={props.onClose}>
@@ -1704,6 +1833,9 @@ function MobileSheet(props: {
               <button onClick={props.onDismissMention} className="rounded p-1 hover:bg-white/20" aria-label="Mark done">
                 <Check className="h-4 w-4" />
               </button>
+            )}
+            {!!props.openThreadId && props.openThread?.thread_type === 'discussion' && (
+              <ThreadOptionsMenu key={props.openThread.id} thread={props.openThread} onRenamed={props.onRenamed} onDeleted={props.onDeleted} onError={props.onError} />
             )}
             <button onClick={props.onClose} className="rounded p-1 hover:bg-white/20" aria-label="Close">
               <X className="h-4 w-4" />
