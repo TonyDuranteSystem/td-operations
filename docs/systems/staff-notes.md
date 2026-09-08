@@ -1,5 +1,18 @@
 # Staff Sticky Notes (floating post-its)
-_Last verified against code: 2026-09-08h — Claude (**SHIPPED TO PRODUCTION.** Antonio: "ship it surgically." Before pushing, checked production directly and confirmed the whole Parked-state feature this file has been building on all day (2026-09-08 entry below) had never actually had its own database column applied there — only sandbox had it. Told Antonio plainly rather than pushing code that would have broken every notes screen the moment it went live; he ran the migration himself in the production SQL editor. Re-checked production directly afterward, three ways, not just trusted his word: the new column exists, the mutual-exclusivity rule exists and matches the migration exactly, and the one-time cleanup it depends on actually ran (0 rows left in the state it was built to fix, down from a re-confirmed 40 immediately beforehand). Only once all three were confirmed live did the code go out. Production build finished clean, correctly pointed at the real app domains. Every round from earlier today (2026-09-08 through 2026-09-08g below) is now live — Parked, the horizontal cascade round, the right-edge/Parked-trigger positioning, the drag-tracking fix, and the header-strip redesign that replaced the floating canvas entirely.)_
+_Last verified against code: 2026-09-08i — Claude (**TITLE FIELD, SMALLER PILLS, DRAG-TO-REORDER — three more requests from Antonio's own live use of the just-shipped header strip, all sandbox only, NOT YET PRODUCTION.** Antonio, looking at a live screenshot of the Finance page: "make the note smaller (we already have the description when we pass the pointer on it) and add the option to write a title in the note creation. i want the note to be moveable so i can put one on top of each if I need." The third ask directly conflicted with the header-strip round's own deliberate choice to retire free (x,y) dragging (2026-09-08g above) — asked to choose between full free-positioning (which would have undone that redesign) and reordering within the bounded row, Antonio picked **"Reorder within the row (Recommended)."** All three approved together with "go ahead."
+
+**Title — an optional short label, separate from the note's own text.** New nullable `staff_notes.title` column (migration `20260908-1830-staff-notes-title.sql`), CHECK-capped at 120 chars, enforced identically at both layers exactly like `body` already is: `NOTE_TITLE_MAX` + `validateNoteTitle()` in `lib/notes/staff-notes.ts` (empty/absent title is valid — null, not an error, since forcing a title on every quick note would add friction to the single most frequent action in this whole subsystem, the same regression class closed in the 2026-09-08d round), wired into both the POST insert and the PATCH `edit` action in `app/api/crm/staff-notes/route.ts`, riding the SAME author-only edit gate as the body (`mayEditBody`) since it's the note's own content, not per-person state. `NOTE_COLUMNS` now starts `id, title, body, ...` so every existing reader picks it up automatically — no feed-by-feed wiring needed. **`note-editor.tsx`'s dirty-tracking had to be widened, not just its JSX** — the working `baseline` the stale-edit guard compares against was `{body, updated_at}` only; a title-only edit with no body change would have silently failed to register as dirty and never saved. Now `{body, title, updated_at}`, with `dirty` checking both (null-safe: an empty title normalizes to `null` before comparing). **Deliberately propagated to every surface that already shows a note's body, not just the header pill and the creation form Antonio literally named** — a title visible in exactly one of five places a note appears would be a half-built feature, not a design choice: `active-notes-strip.tsx` (both the inline pills and the "+N" dropdown), `notes-board.tsx`'s `/notes` page Card (active and parked sections both use the same component), `parked-notes-trigger.tsx`'s own dropdown, and `sticky-notes-layer.tsx`'s `NoteCardBody` (the mobile sheet). Every surface uses the same pattern: `title || <today's body-snippet fallback>` for the header pill's single-line label, or a bold title line above the untouched body text everywhere else. Live-verified on all five: created a titled note, confirmed the pill showed the title (not a body slice), edited the title alone and confirmed it saved (proving the widened dirty-tracking), parked it and confirmed the title followed it into both the Parked dropdown and the `/notes` Parked section, and confirmed it in the mobile sheet at a 375px viewport.
+
+**Pills shrunk** (`active-notes-strip.tsx`) — `px-3 py-1.5 text-xs` → `px-2 py-1 text-[11px]`, icon `h-3.5 w-3.5` → `h-3 w-3`, label `max-w-[7rem]` → `max-w-[5rem]`, same shrink applied to the "+N" trigger for visual consistency with the now-smaller pills beside it. The full-body hover tooltip (`FastTooltip`, already existing) is untouched — Antonio's own reasoning for the shrink was that the tooltip already carries "the description," so the pill itself only needs to carry a short label.
+
+**Reordering — a SLOT within the row, not a screen coordinate, so it does not reopen the free-positioning door the 2026-09-08g redesign deliberately closed.** Built with `@dnd-kit` (already a dependency — same library, same sensor/activation-distance pattern, same "drag past a small threshold or it's just a click" behavior as the sidebar's own nav-order drag in `components/dashboard/sidebar.tsx`, reused rather than a new mechanism invented for one more list). A per-device `localStorage` key (`td-active-notes-order`, same storage CATEGORY as the sidebar's own nav order — personal screen arrangement, never synced to other staff or devices) holds an ordered list of note ids; `applyStoredOrder()` layers it on top of the live `notes` feed on every render — an id the user has positioned keeps that slot, anything never touched (a brand-new note, or a first-time device) falls back to arrival order appended after, and a saved id for a note that's since been parked/archived/deleted is silently skipped rather than surfaced as an error. Because the visible 3 pills are a slice of this REORDERED list, not the raw feed, dragging a lower-priority pill to the front can push what was 3rd out to the "+N" overflow — a deliberate consequence of "reorder within the row" doubling as "control what's visible," not a bug. The whole pill itself is both the click target and the drag handle (no separate grip icon fits at this size); `dnd-kit`'s activation-distance sensor is what keeps a plain tap opening the note instead of being swallowed as a drag-start, the same mechanism the 2026-09-08d round already verified precisely for the "+" button's own click-vs-drag threshold. Live-verified: dragged the 2nd pill before the 1st, confirmed the header re-rendered in the new order immediately, reloaded the full page and confirmed the order survived (proving the localStorage round-trip, not just the in-memory drag state), then deleted the dragged note entirely and confirmed its now-stale id in localStorage was silently skipped rather than breaking the row — a real live exercise of `applyStoredOrder`'s stale-id handling, not just a code-review assumption about it.
+
+**Doc bullets fixed in this same pass, both now-actively-wrong because of this round specifically:** the "Key files" list still named `lib/notes/note-position.ts` (deleted in 2026-09-08g) as current and never listed `active-notes-strip.tsx` at all; the "Positions are per-device" bullet described the OLD floating-canvas position system, which is doubly wrong now that a DIFFERENT per-device localStorage mechanism (pill order, not (x,y) position) exists in its place. Both corrected below. **Not fixed, and flagged rather than silently left:** the broader "Gotchas" section (the z-45/`notePosStyle`/cascade paragraphs) and the "How to verify" cascade-positioning bullet still describe the pre-2026-09-08g floating system in detail — that staleness predates this round (introduced when 2026-09-08g replaced the architecture but didn't fully rewrite this doc's reference sections) and is a genuinely separate cleanup job, not something folded silently into tonight's feature work; the cascade verify bullet specifically is corrected below since it references a deleted test file and would fail if actually run, but the historical Gotchas prose is left as accurate history, clearly dated and superseded by the entries above it.
+
+**CRITICAL — sandbox only, exactly the same sequencing discipline as the Parked-state near-miss in 2026-09-08h above:** `20260908-1830-staff-notes-title.sql` is applied to SANDBOX ONLY right now. It MUST be applied to and VERIFIED LIVE in PRODUCTION — by direct query, never by trusting a deploy — before any of this round's code ships to `main`. Every code path in this round assumes the `title` column exists; shipping without it live in production would break every note read the moment it went out, the exact failure mode caught proactively last time.
+
+Full suite green (787 files, 10,720 tests), lint clean on every changed file, clean production build (`next build` — full TypeScript check across the whole repo, not just the changed files). Live-verified in sandbox as described above; no QA test data left behind (the one test note created for this round was deleted afterward and confirmed gone via a direct `?scope=all` query, not just from the UI). Still nothing near production.)_
+_Prior: 2026-09-08h — Claude (**SHIPPED TO PRODUCTION.** Antonio: "ship it surgically." Before pushing, checked production directly and confirmed the whole Parked-state feature this file has been building on all day (2026-09-08 entry below) had never actually had its own database column applied there — only sandbox had it. Told Antonio plainly rather than pushing code that would have broken every notes screen the moment it went live; he ran the migration himself in the production SQL editor. Re-checked production directly afterward, three ways, not just trusted his word: the new column exists, the mutual-exclusivity rule exists and matches the migration exactly, and the one-time cleanup it depends on actually ran (0 rows left in the state it was built to fix, down from a re-confirmed 40 immediately beforehand). Only once all three were confirmed live did the code go out. Production build finished clean, correctly pointed at the real app domains. Every round from earlier today (2026-09-08 through 2026-09-08g below) is now live — Parked, the horizontal cascade round, the right-edge/Parked-trigger positioning, the drag-tracking fix, and the header-strip redesign that replaced the floating canvas entirely.)_
 _Prior: 2026-09-08g — Claude (**THE FLOATING CANVAS IS GONE — active notes now live inline in the desktop header, next to the Parked trigger. A genuinely different architecture from everything above, not another positioning tweak.** Antonio sent a screenshot of note pills he wanted sitting directly in the header row, beside Parked/Alerts/Capture, each truncated to a short label: "I want this kind of order. are you able? ... please call the UX Designer expert to think the right shape and solution for the best user experience." Approved for build after the specialist consult with "build it."
 
 **Why a redesign, not another fix.** Every prior entry in this file, all the way back to 2026-09-05, was fighting the same underlying problem from inside the same architecture: notes are independent, freely-draggable, `fixed`-positioned pills scattered across the page, and the fight was always "where exactly should the scatter land." Antonio's screenshot asked for something the floating architecture cannot do at all — pills that are genuinely PART of the header's own row, not merely positioned near it. That is a different data structure (a bounded list in a fixed-width strip) from what the whole cascade/shift/drag system existed to serve (an unbounded canvas of independently-positioned elements), so this round replaces that system rather than adjusting it again.
@@ -209,25 +222,32 @@ This is the CRM dashboard, not the client portal.
   from the page you were on and changeable via the client picker.
 
 ## How it's built
-- **Table `staff_notes`** (migration `20260721-1400-staff-notes.sql`): `body`, `color`,
-  `author_user_id`/`author_name`, `visibility`, `shared_with_user_id`/`shared_with_name`,
-  `account_id`, `contact_id`, `origin_url`, `snoozed_until`, `archived_at`, timestamps.
-  CHECKs: non-empty body, body ≤ 4000, visibility in the three values, and a **coherence check**
-  — `shared` MUST name a person and non-`shared` must NOT, so un-sharing can never leave a stale
-  recipient that keeps the note visible.
+- **Table `staff_notes`** (migration `20260721-1400-staff-notes.sql`, `title` added by
+  `20260908-1830-staff-notes-title.sql` — 2026-09-08i, SANDBOX ONLY as of that entry): `title`
+  (nullable, optional), `body`, `color`, `author_user_id`/`author_name`, `visibility`,
+  `shared_with_user_id`/`shared_with_name`, `account_id`, `contact_id`, `origin_url`,
+  `snoozed_until`, `archived_at`, timestamps. CHECKs: non-empty body, body ≤ 4000, title ≤ 120 (if
+  present — the coherence rule allows null), visibility in the three values, and a **coherence
+  check** — `shared` MUST name a person and non-`shared` must NOT, so un-sharing can never leave a
+  stale recipient that keeps the note visible.
 - **RLS is ENABLED with NO policy** → a direct anon/authenticated PostgREST read returns ZERO
   rows. The app reads via the service-role client behind `requireStaff()` + the predicate above.
   A client can never reach a staff note.
-- **Key files:** `lib/notes/staff-notes.ts` (the rule + feeds), `lib/notes/note-calendar.ts`
-  (pure calendar maths), `lib/notes/note-position.ts` (per-device fractional positions),
+- **Key files:** `lib/notes/staff-notes.ts` (the rule + feeds + `validateNoteTitle`/`validateNoteBody`),
+  `lib/notes/note-calendar.ts` (pure calendar maths),
   `lib/notes/staff-alerts.ts` (the Staff Alerts feed, computed read-side — see the
   2026-09-04b entry above) + `app/api/crm/staff-alerts/route.ts` + `components/dashboard/staff-alerts-bell.tsx`,
   `app/api/crm/staff-notes/route.ts` (GET/POST/PATCH), `components/dashboard/sticky-notes-layer.tsx`
-  (the global floating layer), `components/dashboard/notes-board.tsx` (Notes tab, List/Calendar
-  switch), `components/dashboard/notes-calendar.tsx`, `app/(dashboard)/notes/page.tsx`,
+  (note editor/composer host + the mobile bottom-sheet list — NOT a floating canvas since
+  2026-09-08g, see that entry), `components/dashboard/active-notes-strip.tsx` (the desktop header
+  strip of active-note pills — 2026-09-08g/i entries), `components/dashboard/note-editor.tsx` (the
+  one shared create/edit modal every surface opens), `components/dashboard/notes-board.tsx` (Notes
+  tab, List/Calendar switch), `components/dashboard/notes-calendar.tsx`, `app/(dashboard)/notes/page.tsx`,
   `components/dashboard/parked-notes-trigger.tsx` (the Parked header control, desktop + mobile —
   2026-09-08 entry above), `components/dashboard/dashboard-header.tsx` (desktop CRM header,
   collapsible search + overflow menu), `components/dashboard/sidebar.tsx` (mobile top bar).
+  **`lib/notes/note-position.ts` no longer exists** — deleted whole in 2026-09-08g along with the
+  floating-canvas architecture it served; do not go looking for it.
 - **Feeds:** `?scope=active` = floating layer (live, not snoozed, not parked, OR
   archived-with-a-newer-reply — `isLiveOrRevivedFor` in `lib/notes/staff-notes.ts`) and also
   returns `me` + the shareable staff `members`; `?scope=parked` = the Parked header control
@@ -237,9 +257,13 @@ This is the CRM dashboard, not the client portal.
 - **Realtime** reuses the existing `ui_events` bus with a `notes` kind. **NO PAYLOAD, ever** —
   the bus re-dispatches to every staff tab, so a note body in the payload would broadcast a
   private note.
-- **Positions are per-device** in localStorage as viewport FRACTIONS (never pixels — a spot set
-  on a 27" iMac is off-screen at 380px), clamped, pruned against live notes, all reads/writes
-  wrapped so a throwing localStorage can't crash the layer.
+- **The header strip's pill ORDER is per-device**, in localStorage (`td-active-notes-order`,
+  2026-09-08i) — an ordered list of note ids, not a screen coordinate (that mechanism was deleted
+  whole in 2026-09-08g; see the "Key files" note above). `applyStoredOrder()` in
+  `active-notes-strip.tsx` merges it against the live feed on every render: a positioned id keeps
+  its slot, an untouched note falls back to arrival order, and a stale id (parked/archived/deleted
+  since) is silently skipped. Never synced to other staff or other devices — same storage category
+  as the sidebar's own nav-order drag.
 
 ## Gotchas, invariants & past bugs
 - **`staff_notes` is NOT in the generated DB types** — access goes through `notesTable()`
@@ -325,10 +349,15 @@ This is the CRM dashboard, not the client portal.
   confirm it reappears floating.
 - Calendar maths: `npx vitest run tests/unit/note-calendar.test.ts` (21 tests) — local-day
   bucketing, Mon-first 42-cell grid, month/year rollover, overdue.
-- Cascade positioning: `npx vitest run tests/unit/note-position.test.ts` (11 tests) — a slot is
-  never handed out twice. Live check: create 3-4 notes in one sitting on desktop and confirm they
-  land at distinct, non-overlapping spots — both starting from zero notes and with others already
-  active.
+- Title + header strip (2026-09-08i): create a note with a title and confirm the header pill shows
+  the title, not a body slice, while the hover tooltip still shows the full body. Edit an existing
+  note's title ALONE (no body change) and confirm it saves — this specifically exercises
+  `note-editor.tsx`'s `dirty` check, which must fire on a title-only change, not just a body one.
+  Confirm the title also appears in the "+N" dropdown, the Parked header dropdown, the `/notes`
+  page cards (both active and parked sections), and the mobile sheet. Drag a pill to reorder the
+  row, reload the page, and confirm the new order survived (localStorage, `td-active-notes-order`
+  — see "How it's built" above). `lib/notes/note-position.ts` and its test file no longer exist
+  (deleted in 2026-09-08g) — do not try to run a `note-position.test.ts` command, it is gone.
 - Live gate: an unauthenticated `GET /api/crm/staff-notes?scope=active` must return 401 and
   create nothing.
 - Privacy end-to-end (sandbox): insert a private note as A and a private note as B, then run the

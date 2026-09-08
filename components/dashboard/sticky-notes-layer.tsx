@@ -36,6 +36,7 @@ import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
 interface Note {
   id: string
+  title: string | null
   body: string
   color: string
   author_user_id: string | null
@@ -462,14 +463,14 @@ function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { n
       <div className="flex items-start justify-between gap-2">
         {/* Tap the text to open the full note (read + edit). Not the whole card — the card is
             the drag handle on desktop, so only the body opens the editor. */}
-        <p
-          data-no-drag
-          onClick={() => onOpen?.(note)}
-          title="Open"
-          className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline"
-        >
-          <LinkifiedText text={note.body} />
-        </p>
+        <div data-no-drag onClick={() => onOpen?.(note)} title="Open" className="min-w-0 flex-1 cursor-pointer">
+          {note.title && (
+            <p className="truncate text-sm font-semibold leading-snug hover:underline">{note.title}</p>
+          )}
+          <p className="whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline">
+            <LinkifiedText text={note.body} />
+          </p>
+        </div>
         <FastTooltip label="Done">
           <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
             className="shrink-0 rounded p-0.5 hover:bg-black/10" aria-label="Mark done">

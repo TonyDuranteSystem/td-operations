@@ -27,6 +27,7 @@ import {
   listNotesForAccount,
   listNotesForContact,
   validateNoteBody,
+  validateNoteTitle,
   safeOriginPath,
   computeSnoozeUntil,
   mayTouchNote,
@@ -180,6 +181,8 @@ export async function POST(req: NextRequest) {
   const payload = await req.json().catch(() => ({}))
   const { body, error: bodyErr } = validateNoteBody(payload.body)
   if (bodyErr || !body) return fail(bodyErr ?? "A note needs some text.")
+  const { title, error: titleErr } = validateNoteTitle(payload.title)
+  if (titleErr) return fail(titleErr)
 
   const origin = payload.origin_url != null ? safeOriginPath(payload.origin_url) : null
   const color = typeof payload.color === "string" && payload.color.trim() ? payload.color.trim() : "yellow"
@@ -225,6 +228,7 @@ export async function POST(req: NextRequest) {
       : ""
 
   const insert = {
+    title,
     body,
     color,
     author_user_id: user.id,
@@ -432,6 +436,10 @@ export async function PATCH(req: NextRequest) {
     }
     const { body, error } = validateNoteBody(p.body)
     if (error || !body) return fail(error ?? "A note needs some text.")
+    // Title rides the SAME author-only edit gate as the body above — it's the
+    // note's own content, not a per-person state (2026-09-08).
+    const { title, error: titleError } = validateNoteTitle(p.title)
+    if (titleError) return fail(titleError)
     // stale-edit guard: only write if the row hasn't changed since the client loaded it
     if (typeof p.expectedUpdatedAt === "string") {
       const { data: fresh } = await notesTable().select("updated_at").eq("id", id).single()
@@ -439,7 +447,7 @@ export async function PATCH(req: NextRequest) {
         return fail("Someone else just edited this note — reopen it to see their change.", 409)
       }
     }
-    patch = { body }
+    patch = { body, title }
     editedBody = body
   } else if (action === "snooze") {
     const { iso, error } = computeSnoozeUntil(p.preset, new Date(), p.custom)

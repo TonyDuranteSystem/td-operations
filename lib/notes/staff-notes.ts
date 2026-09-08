@@ -36,7 +36,7 @@ export interface StaffNoteInput {
  * copy that would go stale when a company is renamed.
  */
 export const NOTE_COLUMNS =
-  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, attachment_url, attachment_name, attachment_mime_type, attachment_size_bytes, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until, parked_at), staff_note_replies(id, author_user_id, author_name, body, created_at)"
+  "id, title, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, attachment_url, attachment_name, attachment_mime_type, attachment_size_bytes, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until, parked_at), staff_note_replies(id, author_user_id, author_name, body, created_at)"
 
 /** Table accessor for replies — same generated-types escape hatch as notesTable(). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -406,6 +406,22 @@ export function validateNoteBody(raw: unknown): { body: string | null; error: st
     return { body: null, error: `That note is too long (max ${NOTE_BODY_MAX} characters). Trim it and try again.` }
   }
   return { body, error: null }
+}
+
+/** Mirrors the DB CHECK on staff_notes.title exactly (staff_notes_title_len,
+ *  2026-09-08). Optional — an empty/absent title is valid (null, not an
+ *  error), unlike the body, which a note can never be without. */
+export const NOTE_TITLE_MAX = 120
+
+export function validateNoteTitle(raw: unknown): { title: string | null; error: string | null } {
+  if (raw == null || raw === "") return { title: null, error: null }
+  if (typeof raw !== "string") return { title: null, error: "That title didn't make sense." }
+  const title = raw.trim()
+  if (!title) return { title: null, error: null }
+  if (title.length > NOTE_TITLE_MAX) {
+    return { title: null, error: `That title is too long (max ${NOTE_TITLE_MAX} characters). Shorten it and try again.` }
+  }
+  return { title, error: null }
 }
 
 /** Snooze presets → a concrete future ISO instant. DST-safe: shifts the date then sets the hour,

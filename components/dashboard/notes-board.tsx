@@ -17,6 +17,7 @@ import { isArchivedFor, isSnoozedFor, isParkedFor, noteStateFor, noteActivityAt,
 
 interface Note {
   id: string
+  title: string | null
   body: string
   color: string
   author_user_id: string | null
@@ -326,11 +327,12 @@ function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, foote
           Updated after you marked it done
         </p>
       )}
-      <p
-        onClick={() => onOpen?.(n)}
-        title="Open"
-        className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
-      ><LinkifiedText text={n.body} /></p>
+      <div onClick={() => onOpen?.(n)} title="Open" className="cursor-pointer">
+        {n.title && <p className="text-sm font-semibold leading-snug hover:underline">{n.title}</p>}
+        <p className="whitespace-pre-wrap break-words text-sm leading-snug hover:underline">
+          <LinkifiedText text={n.body} />
+        </p>
+      </div>
 
       {latest && (
         <p className={`mt-1 truncate rounded px-1.5 py-0.5 text-xs ${

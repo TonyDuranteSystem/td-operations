@@ -13,25 +13,45 @@
  * own dropdown shape verbatim — one mental model across both header note
  * controls, not two to learn.
  *
- * Free dragging and the old "select several and Move them" action do not
- * survive this move, deliberately — a pill in a header row has a slot, not a
- * screen coordinate, so there is nothing left to drag to, and reassigning a
- * "fresh spot" has no meaning once there is no canvas. Bulk PARK survives
- * (checkboxes in the dropdown below) because it is still the real lever here:
- * with only a few pills ever visible at once, parking several at a time is
- * how you control what stays on screen. Parking ONE note still also works
- * from inside the note editor itself (its own Park button), unchanged.
+ * Free (x,y) dragging and the old "select several and Move them" action do
+ * not survive this move, deliberately — a pill in a header row has a slot,
+ * not a screen coordinate, so there is nothing left to drag to. Bulk PARK
+ * survives (checkboxes in the dropdown below) because it is still the real
+ * lever here: with only a few pills ever visible at once, parking several
+ * at a time is how you control what stays on screen. Parking ONE note still
+ * also works from inside the note editor itself (its own Park button),
+ * unchanged.
+ *
+ * Reordering DOES survive, in a narrower shape (Antonio, same day, once he'd
+ * seen the strip live: "I want to be able to put one on top of each other").
+ * A free-position canvas would have undone the whole point of this redesign,
+ * so instead a pill can be dragged to a new SLOT within the visible row —
+ * the priority order, not a coordinate. The result is a per-device ordering
+ * (localStorage, `ORDER_STORAGE_KEY` below) layered on top of the natural
+ * fetch order: notes the user has explicitly placed keep that placement,
+ * anything never touched falls back to arrival order. Nothing is shared
+ * across staff or devices — this is "how I like my own screen arranged,"
+ * the same category as the sidebar's own drag-to-reorder nav.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { StickyNote, Check, Loader2, Pin } from 'lucide-react'
+import {
+  DndContext, closestCenter, useSensor, useSensors, MouseSensor, TouchSensor, KeyboardSensor,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext, arrayMove, useSortable, horizontalListSortingStrategy, sortableKeyboardCoordinates,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { requestOpenNote } from '@/lib/notes/open-note'
 
 interface ActiveNote {
   id: string
+  title: string | null
   body: string
 }
 
@@ -56,10 +76,45 @@ async function fetchStaffAlerts(): Promise<{ alerts: StaffAlertLite[] }> {
  *  actual free space rather than picked blind. */
 const VISIBLE_COUNT = 3
 
+/** Per-device pill order, keyed by note id — same storage category as the
+ *  sidebar's own nav order (components/dashboard/sidebar.tsx), never synced. */
+const ORDER_STORAGE_KEY = 'td-active-notes-order'
+
+/**
+ * Layer a saved priority order on top of the notes actually on screen. IDs the
+ * user has dragged before keep that relative position; anything not in the
+ * saved order (a brand-new note, or a first-time device) falls back to arrival
+ * order, appended after. A saved id for a note that's since been parked/
+ * archived/deleted is silently skipped — never surfaced as an error, since a
+ * stale localStorage entry just means "irrelevant now," not "broken."
+ */
+function applyStoredOrder(notes: ActiveNote[], order: string[]): ActiveNote[] {
+  const remaining = new Map(notes.map((n) => [n.id, n]))
+  const ordered: ActiveNote[] = []
+  for (const id of order) {
+    const n = remaining.get(id)
+    if (n) { ordered.push(n); remaining.delete(id) }
+  }
+  for (const n of notes) {
+    if (remaining.has(n.id)) ordered.push(n)
+  }
+  return ordered
+}
+
 export function ActiveNotesStrip() {
   const [open, setOpen] = useState(false)
+  const [order, setOrder] = useState<string[]>([])
   const qc = useQueryClient()
   const router = useRouter()
+
+  // Loaded once, client-side only — SSR/first paint renders in natural fetch
+  // order, same as before this existed, until this effect hydrates it.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ORDER_STORAGE_KEY)
+      if (saved) setOrder(JSON.parse(saved))
+    } catch { /* per-device convenience only — a bad value just means no custom order yet */ }
+  }, [])
 
   // Same query key sticky-notes-layer.tsx already fetches under — a shared
   // cache hit, not a second network round trip (same pattern ParkedNotesTrigger
@@ -87,8 +142,30 @@ export function ActiveNotesStrip() {
     return ids
   }, [alertsData])
 
-  const visible = notes.slice(0, VISIBLE_COUNT)
-  const overflowCount = Math.max(0, notes.length - VISIBLE_COUNT)
+  const orderedNotes = useMemo(() => applyStoredOrder(notes, order), [notes, order])
+  const visible = orderedNotes.slice(0, VISIBLE_COUNT)
+  const overflowCount = Math.max(0, orderedNotes.length - VISIBLE_COUNT)
+
+  // Distance/delay thresholds so a plain tap-to-open still works — only a real
+  // drag (moved past the threshold) engages reordering. Same sensor shape as
+  // the sidebar's own nav reorder.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const full = orderedNotes.map((n) => n.id)
+    const oldIndex = full.indexOf(active.id as string)
+    const newIndex = full.indexOf(over.id as string)
+    if (oldIndex === -1 || newIndex === -1) return
+    const next = arrayMove(full, oldIndex, newIndex)
+    setOrder(next)
+    try { localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(next)) } catch { /* per-device convenience only */ }
+  }
 
   /** Mirrors sticky-notes-layer.tsx's own dismissNoteAlerts — a separate
    *  component tree now, so it keeps its own copy rather than reaching across
@@ -133,32 +210,19 @@ export function ActiveNotesStrip() {
 
   return (
     <div className="flex items-center gap-1.5">
-      {visible.map((n) => {
-        const unread = unreadNoteIds.has(n.id)
-        const preview = n.body.replace(/\s+/g, ' ').trim().slice(0, 80)
-        return (
-          <FastTooltip key={n.id} label={unread ? `New: ${preview}` : preview} align="left">
-            <button
-              onClick={() => openNote(n.id)}
-              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                unread
-                  ? 'animate-pulse border-red-700 bg-red-600 text-white hover:bg-red-700'
-                  : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
-              }`}
-              aria-label={`${unread ? 'New note' : 'Note'}: ${preview}`}
-            >
-              <StickyNote className="h-3.5 w-3.5 shrink-0" />
-              <span className="max-w-[7rem] truncate">{preview.slice(0, 40)}</span>
-            </button>
-          </FastTooltip>
-        )
-      })}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={visible.map((n) => n.id)} strategy={horizontalListSortingStrategy}>
+          {visible.map((n) => (
+            <ActiveNotePill key={n.id} note={n} unread={unreadNoteIds.has(n.id)} onOpen={openNote} />
+          ))}
+        </SortableContext>
+      </DndContext>
       {overflowCount > 0 && (
         <div className="relative">
           <FastTooltip label="More notes on your screen">
             <button
               onClick={() => setOpen((v) => !v)}
-              className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
               aria-label={`${overflowCount} more note${overflowCount > 1 ? 's' : ''}`}
             >
               +{overflowCount}
@@ -168,13 +232,60 @@ export function ActiveNotesStrip() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
               <div className="absolute right-0 top-full mt-2 z-50 w-96 max-h-[70vh] overflow-y-auto rounded-lg border bg-white shadow-lg">
-                <ActiveList notes={notes} unreadNoteIds={unreadNoteIds} onOpen={openNote} onPark={park} />
+                <ActiveList notes={orderedNotes} unreadNoteIds={unreadNoteIds} onOpen={openNote} onPark={park} />
               </div>
             </>
           )}
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * One draggable pill. The button itself is both the click target (open the
+ * note) AND the drag handle — there's no room in a pill this small for a
+ * separate grip icon, and dnd-kit's activation distance already tells a tap
+ * from a drag apart (a plain click never crosses the threshold, so onClick
+ * still fires normally; a real drag suppresses the trailing click on its
+ * own). Always draggable — unlike the sidebar's nav reorder, there's no
+ * separate "edit mode" here, since a 3-pill row has nothing else a stray
+ * drag could disturb.
+ */
+function ActiveNotePill({ note: n, unread, onOpen }: {
+  note: ActiveNote
+  unread: boolean
+  onOpen: (id: string) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: n.id })
+  // Full body — what hover already reveals (Antonio, 2026-09-08: "we already have
+  // the description when we pass the pointer on it"), unaffected by title.
+  const preview = n.body.replace(/\s+/g, ' ').trim().slice(0, 80)
+  // The pill's own visible text: the deliberate short title when the author wrote
+  // one, else the same body-snippet fallback as before.
+  const label = (n.title?.trim() || preview).slice(0, 40)
+
+  return (
+    <FastTooltip label={unread ? `New: ${preview}` : preview} align="left">
+      <button
+        ref={setNodeRef}
+        {...attributes}
+        {...listeners}
+        onClick={() => onOpen(n.id)}
+        style={{ transform: CSS.Transform.toString(transform), transition, touchAction: 'none' }}
+        className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors select-none ${
+          isDragging ? 'z-10 opacity-60 shadow-md' : ''
+        } ${
+          unread
+            ? 'animate-pulse border-red-700 bg-red-600 text-white hover:bg-red-700'
+            : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+        }`}
+        aria-label={`${unread ? 'New note' : 'Note'}: ${label}`}
+      >
+        <StickyNote className="h-3 w-3 shrink-0" />
+        <span className="max-w-[5rem] truncate">{label}</span>
+      </button>
+    </FastTooltip>
   )
 }
 
@@ -240,6 +351,9 @@ function ActiveList({ notes, unreadNoteIds, onOpen, onPark }: {
                 {selected.has(n.id) && <Check className="h-3 w-3" />}
               </button>
               <button onClick={() => onOpen(n.id)} className="block flex-1 text-left">
+                {n.title && (
+                  <p className={`text-sm font-semibold ${unread ? 'text-red-900' : 'text-zinc-800'}`}>{n.title}</p>
+                )}
                 <p className={`text-sm line-clamp-2 ${unread ? 'font-semibold text-red-900' : 'text-zinc-700'}`}>{n.body}</p>
               </button>
               <button

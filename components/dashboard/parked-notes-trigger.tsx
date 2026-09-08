@@ -28,6 +28,7 @@ import { requestOpenNote } from '@/lib/notes/open-note'
 
 interface ParkedNote {
   id: string
+  title: string | null
   body: string
   color: string
   account_id: string | null
@@ -190,6 +191,9 @@ function ParkedList({ notes, unreadNoteIds, onOpen, onUnpark }: {
         return (
           <div key={n.id} className={`p-3 ${unread ? 'bg-red-50' : ''}`}>
             <button onClick={() => onOpen(n.id)} className="block w-full text-left">
+              {n.title && (
+                <p className={`text-sm font-semibold ${unread ? 'text-red-900' : 'text-zinc-800'}`}>{n.title}</p>
+              )}
               <p className={`text-sm line-clamp-2 ${unread ? 'font-semibold text-red-900' : 'text-zinc-700'}`}>{n.body}</p>
               {client && <p className="mt-0.5 text-xs text-zinc-400 truncate">{client}</p>}
             </button>
