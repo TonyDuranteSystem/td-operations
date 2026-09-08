@@ -162,6 +162,19 @@ async function fetchActive(): Promise<ActiveResponse> {
 }
 
 /**
+ * Same query key ('staff-notes-parked') ParkedNotesTrigger already fetches under —
+ * react-query dedupes identical concurrent queries, so mounting this here is not a
+ * second network round trip, it's a shared cache hit. Needed so the open-note
+ * listener below can ALSO claim a parked note synchronously (see that effect's
+ * own comment for why this can't just be an async fetch at click time).
+ */
+async function fetchParked(): Promise<{ notes: Note[] }> {
+  const res = await fetch(`${API}?scope=parked`)
+  if (!res.ok) return { notes: [] }
+  return res.json().catch(() => ({ notes: [] }))
+}
+
+/**
  * Reuses the Staff Alerts bell's own "have I seen this note" tracking (Antonio,
  * 2026-09-05: red until read, yellow after — same rule for a fresh reply as for a
  * fresh share) rather than a second, parallel read-tracker that could disagree with
@@ -215,6 +228,16 @@ function StickyNotesInner() {
   })
   const notes = useMemo(() => data?.notes ?? [], [data])
   const members = useMemo(() => data?.members ?? [], [data])
+  // Parked notes aren't rendered here (they're off the floating layer by design), but this
+  // layer is still the ONE place that owns the note editor + open-in-place mechanism — see
+  // the open-note listener below.
+  const { data: parkedData } = useQuery({
+    queryKey: ['staff-notes-parked'],
+    queryFn: fetchParked,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  })
+  const parkedNotes = useMemo(() => parkedData?.notes ?? [], [parkedData])
   const meId = data?.me?.id ?? null
 
   /**
@@ -328,25 +351,35 @@ function StickyNotesInner() {
   useEffect(() => { if (data) prunePositions(notes.map((n) => n.id)) }, [data, notes])
 
   /**
-   * External "open this note" — lets another surface (the Staff Alerts bell)
-   * open a specific note here instead of navigating away, the same way
-   * "Discuss this note" opens the floating chat by event (mirrors
-   * FloatingChatInner's OPEN_TEAM_CHAT_EVENT handler exactly).
+   * External "open this note" — lets another surface (the Staff Alerts bell,
+   * the Parked-notes trigger) open a specific note here instead of navigating
+   * away, the same way "Discuss this note" opens the floating chat by event
+   * (mirrors FloatingChatInner's OPEN_TEAM_CHAT_EVENT handler exactly).
    *
    * SYNCHRONOUS ONLY, on purpose: preventDefault only affects the dispatcher's
    * return value if called before dispatchEvent returns, so this can only claim
-   * a note already sitting in the loaded (active) feed. A note that's snoozed
-   * or archived-for-me but still alerting (note_update isn't gated on either)
-   * won't be here — we let the event go unhandled and the caller falls back to
-   * navigating to /notes?note=<id>, which shows every note, not just active
-   * ones. Never a dead click, just an honest degrade for a rare case.
+   * a note already loaded CLIENT-SIDE at the moment of the click — an async
+   * fetch-then-open fallback was considered and rejected for exactly this
+   * reason (preventDefault can't fire late enough to stop a navigation that's
+   * already happened by the time an async fetch resolves).
+   *
+   * Checks BOTH the active feed AND the parked feed (2026-09-08 — found live:
+   * every parked note was silently falling through to a full navigation, 100%
+   * of the time, never just the rare case, since isLiveOrRevivedFor
+   * unconditionally excludes parked notes from `notes`). The parked list is
+   * fetched above under the SAME query key the header's Parked trigger
+   * already uses, so checking it here costs no extra request. A note that's
+   * snoozed or archived-for-me but still alerting (note_update isn't gated on
+   * either) is still a real, accepted gap — we let the event go unhandled and
+   * the caller falls back to navigating to /notes?note=<id>, which shows
+   * every note, not just active/parked ones. Never a dead click either way.
    */
   useEffect(() => {
     const onOpen = (e: Event) => {
       const detail = (e as CustomEvent).detail as OpenNoteDetail | undefined
       const noteId = detail?.noteId
       if (!noteId) return
-      const found = notes.find((n) => n.id === noteId)
+      const found = notes.find((n) => n.id === noteId) ?? parkedNotes.find((n) => n.id === noteId)
       if (!found) return
       e.preventDefault()
       setSheetOpen(false)
@@ -354,7 +387,7 @@ function StickyNotesInner() {
     }
     document.addEventListener(OPEN_NOTE_EVENT, onOpen)
     return () => document.removeEventListener(OPEN_NOTE_EVENT, onOpen)
-  }, [notes])
+  }, [notes, parkedNotes])
 
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
@@ -624,26 +657,30 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     const STEP = 48
     const MAX_STEPS = 20
     const EDGE_MARGIN = 16
-    let dy = 0
-    for (let i = 0; i < MAX_STEPS; i++) {
-      const mine = el.getBoundingClientRect()
-      const test = { top: mine.top + dy, bottom: mine.bottom + dy, left: mine.left, right: mine.right }
-      const others = document.querySelectorAll<HTMLElement>('[data-note-id]')
+    const natural = el.getBoundingClientRect()
+    // The bottom-edge bound folded INTO the search, not applied after — clamping an
+    // already-decided `dy` after the fact (the original version of this fix) picks a
+    // value that was never actually tested for collisions, so on a short viewport with
+    // several notes already clustered near the bottom it could silently reintroduce the
+    // exact overlap this effect exists to prevent (Bug Hunter, 2026-09-08). Every
+    // candidate `dy` this loop settles on has been checked; run out of room and it
+    // stops at the last checked, on-screen value — a real best effort, not a guess.
+    const maxDy = Math.max(0, window.innerHeight - EDGE_MARGIN - natural.bottom)
+    const collidesAt = (dy: number) => {
+      const test = { top: natural.top + dy, bottom: natural.bottom + dy, left: natural.left, right: natural.right }
       let collided = false
-      others.forEach((sib) => {
+      document.querySelectorAll<HTMLElement>('[data-note-id]').forEach((sib) => {
         if (sib === el || sib.dataset.noteId === note.id) return
         const r = sib.getBoundingClientRect()
-        const overlaps = test.left < r.right && test.right > r.left && test.top < r.bottom && test.bottom > r.top
-        if (overlaps) collided = true
+        if (test.left < r.right && test.right > r.left && test.top < r.bottom && test.bottom > r.top) collided = true
       })
-      if (!collided) break
-      dy += STEP
+      return collided
     }
-    if (dy > 0) {
-      // Keep the nudged card on-screen — never push it past the bottom edge.
-      const maxDy = Math.max(0, window.innerHeight - EDGE_MARGIN - el.getBoundingClientRect().bottom)
-      setNudge({ dx: 0, dy: Math.min(dy, maxDy) })
+    let dy = 0
+    for (let i = 0; i < MAX_STEPS && collidesAt(dy) && dy < maxDy; i++) {
+      dy = Math.min(dy + STEP, maxDy)
     }
+    if (dy > 0) setNudge({ dx: 0, dy })
     // Deliberately only on `expanded` toggling on — re-running on every render would
     // fight a manual drag (which sets `pos`, not `nudge`) and re-trigger a nudge search
     // against the card's OWN just-nudged position.
