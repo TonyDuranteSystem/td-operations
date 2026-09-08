@@ -55,18 +55,20 @@ describe("cascadePos — the actual bug: never repeats an occupied slot", () => 
     expect(unique.size).toBe(3)
   })
 
-  it("fills a column top-to-bottom before starting a new column", () => {
+  it("fills a row left-to-right before starting a new row (2026-09-08: horizontal, not vertical)", () => {
     const occupied: FracPos[] = []
     const positions: FracPos[] = []
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 6; i++) {
       const pos = cascadePos(occupied)
       positions.push(pos)
       occupied.push(pos)
     }
-    // perColumn is 8 — the 9th slot (index 8) must start a second column, not
-    // reuse the first column's y sequence at a colliding x.
-    expect(positions[8].x).not.toBe(positions[0].x)
-    expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(9)
+    // perRow is 5 — the first 5 slots share one y (row 0) and step across x;
+    // the 6th (index 5) must start a second row, not collide back into row 0.
+    expect(new Set(positions.slice(0, 5).map((p) => p.y)).size).toBe(1)
+    expect(positions.slice(0, 5).map((p) => p.x)).toEqual([...new Set(positions.slice(0, 5).map((p) => p.x))].sort((a, b) => a - b))
+    expect(positions[5].y).not.toBe(positions[0].y)
+    expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(6)
   })
 
   it("finds a free slot even when earlier slots are occupied out of order", () => {

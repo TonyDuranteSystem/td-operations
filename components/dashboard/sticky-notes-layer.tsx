@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin, CheckSquare } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin, CheckSquare, Move } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { readPositions, writePosition, prunePositions, cascadePos, clampFrac, type FracPos } from '@/lib/notes/note-position'
@@ -256,6 +256,10 @@ function StickyNotesInner() {
    * already-present entries), is what makes a slot assignment durable across re-renders.
    */
   const assignedPositions = useRef<Map<string, FracPos>>(new Map())
+  // Bumped by moveSelected (below) to force this memo to recompute even though `notes`
+  // itself never changes for a pure reposition — a move touches no server state, only
+  // localStorage, so there is no query-invalidation that would otherwise trigger it.
+  const [posEpoch, setPosEpoch] = useState(0)
   const notePositions = useMemo(() => {
     const stored = readPositions()
     const map = assignedPositions.current
@@ -269,7 +273,13 @@ function StickyNotesInner() {
       occupied.push(pos)
     }
     return map
-  }, [notes])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes, posEpoch])
+  // A note's own `pos` state only ever reads its `initialPos` prop on first mount (see
+  // DesktopNote's own comment on this) — so after moveSelected writes a fresh position,
+  // the already-mounted instance needs a genuinely NEW key to remount and pick it up.
+  // Bumped per-note, not globally, so a move never disturbs notes that weren't selected.
+  const moveVersions = useRef<Map<string, number>>(new Map())
 
   // Same query key as staff-alerts-bell.tsx — one shared cache for "have I seen this."
   const { data: alertsData } = useQuery({
@@ -401,6 +411,10 @@ function StickyNotesInner() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [parking, setParking] = useState(false)
+  // The "+" button opens a small menu (New note / Select notes) instead of jumping
+  // straight to composing — Antonio, 2026-09-08: "why don't inglobe the select button
+  // in the '+' icon... instead of creating a noisy [corner] with a lot of icones."
+  const [fabMenuOpen, setFabMenuOpen] = useState(false)
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -430,34 +444,64 @@ function StickyNotesInner() {
     }
   }, [selectedIds, invalidate, exitSelectMode])
 
+  /**
+   * "Move" — Antonio, 2026-09-08: "I dont' want only to park them, I want to move in
+   * the screen changing spot." Unlike Park, this touches no server state at all —
+   * position is purely client-side (note-position.ts) — so it's synchronous, has
+   * nothing to fail over the network, and needs no loading state. Re-cascades every
+   * selected note to a fresh free slot, using the SAME collision-avoiding search a
+   * brand-new note gets, seeded with every note's CURRENT spot except the ones being
+   * moved (so the just-moved notes don't land on top of notes staying put, or on top
+   * of each other — built up incrementally exactly like notePositions' own loop does).
+   */
+  const moveSelected = useCallback(() => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    const map = assignedPositions.current
+    const idSet = new Set(ids)
+    const occupied: FracPos[] = Array.from(map.entries())
+      .filter(([id]) => !idSet.has(id))
+      .map(([, pos]) => pos)
+    for (const id of ids) {
+      const fresh = cascadePos(occupied)
+      writePosition(id, fresh)
+      occupied.push(fresh)
+      map.delete(id) // let notePositions re-derive it from the fresh stored value below
+      moveVersions.current.set(id, (moveVersions.current.get(id) ?? 0) + 1)
+    }
+    setPosEpoch((v) => v + 1)
+    exitSelectMode()
+  }, [selectedIds, exitSelectMode])
+
   if (isError) return null // never block the CRM on a notes failure
 
   return (
     <>
-      {/* DESKTOP: floating draggable notes */}
+      {/* DESKTOP: floating draggable notes. Keyed on id + its own move-version, not just
+          id — moveSelected (above) bumps ONLY the moved notes' version, forcing exactly
+          those to remount and pick up their freshly-written position (a note's own `pos`
+          state only ever reads its initialPos prop once, at first mount). */}
       <div className="hidden lg:block">
         {notes.map((n) => (
-          <DesktopNote key={n.id} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
+          <DesktopNote key={`${n.id}-${moveVersions.current.get(n.id) ?? 0}`} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
             isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)}
             selectMode={selectMode} selected={selectedIds.has(n.id)} onToggleSelect={() => toggleSelected(n.id)} />
         ))}
       </div>
 
-      {/* DESKTOP: tidy-up toolbar — toggle select mode, then park everything checked. */}
-      {!selectMode && notes.length > 1 && (
-        <FastTooltip label="Select notes to park" align="left">
-          <button
-            onClick={() => setSelectMode(true)}
-            className="hidden lg:flex fixed bottom-4 left-[4.25rem] z-[45] h-11 w-11 items-center justify-center rounded-full border bg-white text-zinc-500 shadow-lg hover:bg-zinc-50"
-            aria-label="Select notes to park"
-          >
-            <CheckSquare className="h-5 w-5" />
-          </button>
-        </FastTooltip>
-      )}
+      {/* DESKTOP: select-mode toolbar — Move (reposition together, stay on screen) or
+          Park (send to the shelf), your choice once you've picked which notes. */}
       {selectMode && (
         <div className="hidden lg:flex fixed bottom-4 left-4 z-[46] items-center gap-2 rounded-full bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg">
           <span>{selectedIds.size} selected</span>
+          <button
+            onClick={moveSelected}
+            disabled={selectedIds.size === 0}
+            className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 font-medium hover:bg-white/20 disabled:opacity-40"
+          >
+            <Move className="h-3.5 w-3.5" />
+            Move
+          </button>
           <button
             onClick={parkSelected}
             disabled={selectedIds.size === 0 || parking}
@@ -486,21 +530,47 @@ function StickyNotesInner() {
         />
       )}
 
-      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). Hidden during
-          select mode — the tidy-up toolbar takes this corner instead. */}
+      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets), unchanged —
+          only its click now opens a small menu (New note / Select notes) instead of
+          jumping straight to composing (Antonio, 2026-09-08: fold the select toggle
+          into the "+" instead of a separate icon cluttering the corner). Hidden during
+          select mode — the toolbar above takes this corner instead. */}
       {!selectMode && (
-        <FastTooltip label="New note — drag to move, double-click to reset" align="left">
-          <button
-            ref={deskFab.ref}
-            {...deskFab.dragProps}
-            style={deskFab.style}
-            onClick={() => { if (!deskFab.dragging) setComposing(true) }}
-            className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
-            aria-label="New note"
-          >
-            <Plus className="h-5 w-5" />
-          </button>
-        </FastTooltip>
+        <>
+          {fabMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setFabMenuOpen(false)} />
+              <div className="hidden lg:flex fixed bottom-[4.75rem] left-4 z-50 w-48 flex-col gap-1 rounded-lg border bg-white p-2 shadow-lg">
+                <button
+                  onClick={() => { setFabMenuOpen(false); setComposing(true) }}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                >
+                  <Plus className="h-4 w-4" /> New note
+                </button>
+                {notes.length > 1 && (
+                  <button
+                    onClick={() => { setFabMenuOpen(false); setSelectMode(true) }}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                  >
+                    <CheckSquare className="h-4 w-4" /> Select notes
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          <FastTooltip label="New note, or select several — drag to move, double-click to reset" align="left">
+            <button
+              ref={deskFab.ref}
+              {...deskFab.dragProps}
+              style={deskFab.style}
+              onClick={() => { if (!deskFab.dragging) setFabMenuOpen((v) => !v) }}
+              className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+              aria-label="New note or select notes"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+          </FastTooltip>
+        </>
       )}
 
       {/* MOBILE: a pill that opens a sheet.

@@ -82,14 +82,24 @@ function isSlotTaken(candidate: FracPos, occupied: readonly FracPos[]): boolean 
  * always index 0 — every note ever created with no stored position would compute the
  * identical index-0 slot, because a note already on screen keeps the position it got
  * at ITS OWN first mount and never recomputes just because a sibling was added.
+ *
+ * ROW-major, not column-major (Antonio, 2026-09-08: "they must be ordered orizzontaly
+ * instead of vertically") — fills LEFT-TO-RIGHT along the header-clearance row first,
+ * only wrapping to a second row once the first is full. The earlier column-major
+ * version stacked straight DOWN from the top-left corner, which — on every real CRM
+ * page, not just one — runs straight through the page's own main content instead of
+ * staying in the (comparatively) empty strip under the header. This can't detect
+ * actual "blank space" on an arbitrary page (there is no reliable, generic way to know
+ * what a given page's real content looks like from here); staying in one shallow
+ * horizontal band is the practical alternative that was proposed and approved instead.
  */
 export function cascadePos(occupied: readonly FracPos[]): FracPos {
-  const step = 0.04
-  const perColumn = 8
+  const step = 0.18
+  const perRow = 5
   for (let i = 0; i < 500; i++) {
-    const col = Math.floor(i / perColumn)
-    const row = i % perColumn
-    const candidate = { x: clampFrac(0.04 + col * 0.18), y: clampFrac(0.08 + row * step) }
+    const row = Math.floor(i / perRow)
+    const col = i % perRow
+    const candidate = { x: clampFrac(0.04 + col * step), y: clampFrac(0.08 + row * 0.04) }
     if (!isSlotTaken(candidate, occupied)) return candidate
   }
   // Exhausted 500 slots (500 simultaneous never-moved notes) — reuse the first
