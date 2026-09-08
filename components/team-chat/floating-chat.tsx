@@ -33,7 +33,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare, X, Minus, Send, Loader2, StickyNote, Paperclip,
   Volume2, VolumeX, RotateCcw, Smile, MoreHorizontal, Pencil, Trash2, Copy, Plus, Building2,
-  ChevronLeft, Check, Bot,
+  ChevronLeft, Check, Bot, Hash,
 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -49,8 +49,12 @@ import {
   CHAT_WINDOW_POS_KEY, CHAT_WINDOW_DEFAULT_POS, type FracPos,
 } from '@/lib/team/chat-window-position'
 import {
+  clampChatWindowSize, readStoredChatWindowSize, serializeChatWindowSize,
+  CHAT_WINDOW_SIZE_KEY, CHAT_WINDOW_DEFAULT_SIZE, type PxSize,
+} from '@/lib/team/chat-window-size'
+import {
   selectableChatMembers, myDmThreads, myDmThreadIdSet, otherPartyId,
-  openConversations, conversationLabel, windowUnreadCount,
+  openConversations, openTopics, conversationLabel, windowUnreadCount,
   type ChatMember, type ChatThreadRow,
 } from '@/lib/team/chat-window-threads'
 import {
@@ -151,8 +155,9 @@ function FloatingChatInner() {
 
   const dmThreads = useMemo(() => myDmThreads(threads, myId), [threads, myId])
   const conversations = useMemo(() => openConversations(threads), [threads])
+  const topics = useMemo(() => openTopics(threads), [threads])
   const people = useMemo(() => selectableChatMembers(members, myId), [members, myId])
-  // Counts everything the window can OPEN — DMs and live client conversations.
+  // Counts everything the window can OPEN — DMs, live client conversations, and topics.
   const unread = useMemo(() => windowUnreadCount(threads, myId), [threads, myId])
   const nameFor = useCallback(
     (id: string | null) => (id ? members.find((m) => m.id === id)?.name ?? 'Teammate' : 'Teammate'),
@@ -475,6 +480,7 @@ function FloatingChatInner() {
           isList={!openThreadId}
           dmThreads={dmThreads}
           conversations={conversations}
+          topics={topics}
           myId={myId}
           nameFor={nameFor}
           openThreadId={openThreadId}
@@ -566,6 +572,7 @@ function FloatingChatInner() {
         <MobileSheet
           dmThreads={dmThreads}
           conversations={conversations}
+          topics={topics}
           myId={myId}
           nameFor={nameFor}
           openThreadId={openThreadId}
@@ -615,6 +622,7 @@ function DesktopWindow(props: {
   isList: boolean
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   nameFor: (id: string | null) => string
   openThreadId: string | null
   openThread: ChatThreadRow | null
@@ -641,36 +649,58 @@ function DesktopWindow(props: {
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<FracPos>(CHAT_WINDOW_DEFAULT_POS)
+  const [size, setSize] = useState<PxSize>(CHAT_WINDOW_DEFAULT_SIZE)
   const drag = useRef<{ dx: number; dy: number } | null>(null)
+  const resizeDrag = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null)
 
-  // Read the stored position after mount, then clamp against the MEASURED box.
+  // Read the stored position + size after mount, then clamp against the
+  // MEASURED box (position) / the real viewport (size).
   useEffect(() => {
+    const storedSize = clampChatWindowSize(readStoredChatWindowSize(store.get(CHAT_WINDOW_SIZE_KEY)), {
+      vw: window.innerWidth, vh: window.innerHeight,
+    })
+    setSize(storedSize)
     const stored = readStoredChatWindowPos(store.get(CHAT_WINDOW_POS_KEY))
-    const box = ref.current?.getBoundingClientRect()
     setPos(clampChatWindowPos(stored, {
-      vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
+      vw: window.innerWidth, vh: window.innerHeight, w: storedSize.w, h: storedSize.h,
     }))
   }, [])
 
-  // Keep it on screen when the viewport changes under it.
+  // Keep it on screen when the viewport changes under it — re-clamping SIZE
+  // first (a window sized for a 27" iMac must still fit a smaller laptop
+  // screen the same account opens next), then position against the result.
   useEffect(() => {
     const onResize = () => {
-      const box = ref.current?.getBoundingClientRect()
-      setPos((p) => clampChatWindowPos(p, {
-        vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
-      }))
+      setSize((s) => {
+        const next = clampChatWindowSize(s, { vw: window.innerWidth, vh: window.innerHeight })
+        setPos((p) => clampChatWindowPos(p, { vw: window.innerWidth, vh: window.innerHeight, w: next.w, h: next.h }))
+        return next
+      })
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('[data-resize-handle]')) {
+      resizeDrag.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h }
+      ref.current!.setPointerCapture(e.pointerId)
+      return
+    }
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
     const rect = ref.current!.getBoundingClientRect()
     drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
     ref.current!.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    if (resizeDrag.current) {
+      const { startX, startY, startW, startH } = resizeDrag.current
+      setSize(clampChatWindowSize(
+        { w: startW + (e.clientX - startX), h: startH + (e.clientY - startY) },
+        { vw: window.innerWidth, vh: window.innerHeight },
+      ))
+      return
+    }
     if (!drag.current) return
     const box = ref.current?.getBoundingClientRect()
     setPos(clampChatWindowPos(
@@ -679,11 +709,25 @@ function DesktopWindow(props: {
     ))
   }
   const onPointerUp = () => {
+    if (resizeDrag.current) {
+      resizeDrag.current = null
+      store.set(CHAT_WINDOW_SIZE_KEY, serializeChatWindowSize(size))
+      // Growing from a corner near an edge can push the OPPOSITE edge off
+      // screen — re-clamp position against the box as it now actually
+      // measures, not the state value (which may not have painted yet).
+      const box = ref.current?.getBoundingClientRect()
+      setPos((p) => clampChatWindowPos(p, {
+        vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
+      }))
+      return
+    }
     if (drag.current) { store.set(CHAT_WINDOW_POS_KEY, serializeChatWindowPos(pos)); drag.current = null }
   }
-  const resetPos = () => {
+  const resetGeometry = () => {
     setPos(CHAT_WINDOW_DEFAULT_POS)
+    setSize(CHAT_WINDOW_DEFAULT_SIZE)
     store.set(CHAT_WINDOW_POS_KEY, serializeChatWindowPos(CHAT_WINDOW_DEFAULT_POS))
+    store.set(CHAT_WINDOW_SIZE_KEY, serializeChatWindowSize(CHAT_WINDOW_DEFAULT_SIZE))
   }
 
   return (
@@ -692,8 +736,8 @@ function DesktopWindow(props: {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
-      className="hidden lg:flex fixed z-[46] w-[360px] max-h-[70vh] cursor-grab active:cursor-grabbing flex-col overflow-hidden rounded-lg border border-emerald-300 bg-white shadow-2xl"
+      style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh`, width: `${size.w}px`, height: `${size.h}px` }}
+      className="hidden lg:flex fixed z-[46] cursor-grab active:cursor-grabbing flex-col overflow-hidden rounded-lg border border-emerald-300 bg-white shadow-2xl"
     >
       {/* Header — WHO or WHAT you are in is ALWAYS visible. This is a shared,
           pushed-to-someone's-phone surface sitting beside private post-its;
@@ -730,8 +774,8 @@ function DesktopWindow(props: {
               {props.quiet ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
           </FastTooltip>
-          <FastTooltip label="Reset position">
-            <button data-no-drag onClick={resetPos} className="rounded p-1 hover:bg-white/20" aria-label="Reset position">
+          <FastTooltip label="Reset size & position">
+            <button data-no-drag onClick={resetGeometry} className="rounded p-1 hover:bg-white/20" aria-label="Reset size and position">
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
           </FastTooltip>
@@ -752,6 +796,7 @@ function DesktopWindow(props: {
         <ChatList
           dmThreads={props.dmThreads}
           conversations={props.conversations}
+          topics={props.topics}
           myId={props.myId}
           nameFor={props.nameFor}
           onPick={props.onPickThread}
@@ -783,6 +828,23 @@ function DesktopWindow(props: {
           />
         </>
       )}
+
+      {/* Resize handle — bottom-right corner drag, mirroring the window's own
+          drag-to-move: caught by data-resize-handle in onPointerDown BEFORE
+          the data-no-drag check, so a resize never also starts a reposition.
+          Antonio, 2026-09-08: "I already told you to fix the page. I can't
+          resize it" — the window used to be a single hardcoded size. */}
+      <FastTooltip label="Drag to resize">
+        <div
+          data-resize-handle
+          className="absolute bottom-0 right-0 flex h-4 w-4 cursor-nwse-resize items-end justify-end p-0.5 text-zinc-400 hover:text-zinc-600"
+          aria-hidden="true"
+        >
+          <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none">
+            <path d="M9 1L1 9M9 5L5 9M9 9L9 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+        </div>
+      </FastTooltip>
     </div>
   )
 }
@@ -792,35 +854,51 @@ function DesktopWindow(props: {
 /**
  * "New chat" — Antonio's model, exactly.
  *
- *   pick a client  → it goes under that client's conversation in Team Workspace
- *   pick nobody    → it is a direct message to a teammate
+ *   pick a client   → it goes under that client's conversation in Team Workspace
+ *   pick a teammate → a direct message
+ *   name a topic    → a staff-only conversation about no client, e.g. "Q4 taxes"
  *
- * Nothing new is invented. A client chat IS the client conversation that already
- * exists: the server reuses an open one for the same client and subject rather
- * than forking a duplicate, and a brand-new one already records who started it
- * and when. That is why this feature avoided every problem the reviewers found
- * with nesting chats inside a direct message — each chat here is a real,
- * top-level conversation that Team Workspace already knows how to show.
+ * Nothing here is invented. A client chat IS the client conversation that
+ * already exists, and a topic is the SAME kind of thread (a `discussion`) just
+ * anchored to no client — the server reuses an open one for the same
+ * client/topic rather than forking a duplicate either way. That is why this
+ * feature avoided every problem the reviewers found with nesting chats inside
+ * a direct message — each chat here is a real, top-level conversation Team
+ * Workspace already knows how to show.
+ *
+ * THREE EXPLICIT TABS, not an inferred branch (Erika Hall review, 2026-09-08):
+ * the original two-way version branched on whether the client field was filled
+ * in — fine for two options, but a blank client field can no longer mean both
+ * "message a teammate" AND "start a topic" at once. Making the choice a visible
+ * control rather than a side effect of what happens to be typed is what keeps
+ * a third option from making the first two ambiguous.
  */
+type NewChatKind = 'client' | 'dm' | 'topic'
+
 function NewChatDialog(props: {
   people: ChatMember[]
   onOpenThread: (id: string) => void
   onClose: () => void
 }) {
+  const [kind, setKind] = useState<NewChatKind>('client')
   const [accountId, setAccountId] = useState<string | undefined>()
   const [accountName, setAccountName] = useState<string | undefined>()
   const [subject, setSubject] = useState('')
   const [personId, setPersonId] = useState<string>(props.people[0]?.id ?? '')
+  const [topicName, setTopicName] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   /** Set when the server continued an existing chat instead of starting one. */
   const [reusedThread, setReusedThread] = useState<{ id: string; label: string } | null>(null)
 
+  const pickKind = (k: NewChatKind) => { setKind(k); setErr(null); setReusedThread(null) }
+
   /** `forceNew` is passed in, never read from state — state would lag the click. */
   const start = async (forceNew = false) => {
     setBusy(true); setErr(null)
     try {
-      if (accountId) {
+      if (kind === 'client') {
+        if (!accountId) throw new Error('Pick a client.')
         // Client chat → the existing client-conversation endpoint.
         const res = await fetch('/api/team/conversations', {
           method: 'POST',
@@ -846,9 +924,34 @@ function NewChatDialog(props: {
           return
         }
         props.onOpenThread(d.thread.id)
+      } else if (kind === 'topic') {
+        // A staff-only topic → the SAME endpoint, `internal: true` instead of a
+        // client ref (find-conversation.ts reuses the identical find-or-create
+        // path rather than a second one). A blank name still starts a chat —
+        // the server fills in a dated default ("Topic — Sep 8") rather than
+        // blocking on a name (defaultTopicName, conversations.ts).
+        const res = await fetch('/api/team/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            internal: true,
+            topic: topicName.trim() || undefined,
+            force_new: forceNew,
+          }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not start that topic.')
+        }
+        const d = await res.json()
+        if (d.reused && !forceNew) {
+          setReusedThread({ id: d.thread.id, label: topicName.trim() || 'this topic' })
+          return
+        }
+        props.onOpenThread(d.thread.id)
       } else {
-        // No client → a direct message.
-        if (!personId) throw new Error('Pick a teammate or a client.')
+        // A direct message to a teammate.
+        if (!personId) throw new Error('Pick a teammate.')
         const res = await fetch('/api/team/dms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -868,6 +971,8 @@ function NewChatDialog(props: {
       setBusy(false)
     }
   }
+
+  const TAB_LABEL: Record<NewChatKind, string> = { client: 'Client', dm: 'Teammate', topic: 'Topic' }
 
   return (
     <div className="fixed inset-0 z-[75] flex items-end justify-center bg-black/30 sm:items-center sm:p-4" onClick={props.onClose}>
@@ -905,16 +1010,29 @@ function NewChatDialog(props: {
           </>
         ) : (
         <>
-        <label className="mb-1 block text-xs font-medium text-zinc-600">About a client (optional)</label>
-        <AccountCombobox
-          value={accountId}
-          displayValue={accountName}
-          onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
-          placeholder="Search company or person…"
-        />
+        <div className="mb-3 flex gap-1 rounded-lg bg-zinc-100 p-1">
+          {(['client', 'dm', 'topic'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => pickKind(k)}
+              className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                kind === k ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+            >
+              {TAB_LABEL[k]}
+            </button>
+          ))}
+        </div>
 
-        {accountId ? (
+        {kind === 'client' && (
           <>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Client</label>
+            <AccountCombobox
+              value={accountId}
+              displayValue={accountName}
+              onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
+              placeholder="Search company or person…"
+            />
             <label className="mb-1 mt-3 block text-xs font-medium text-zinc-600">What about? (optional)</label>
             <input
               value={subject}
@@ -928,9 +1046,11 @@ function NewChatDialog(props: {
               open, you&apos;ll land in it rather than starting a duplicate.
             </p>
           </>
-        ) : (
+        )}
+
+        {kind === 'dm' && (
           <>
-            <label className="mb-1 mt-3 block text-xs font-medium text-zinc-600">Or message a teammate</label>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Teammate</label>
             <select
               value={personId}
               onChange={(e) => setPersonId(e.target.value)}
@@ -942,11 +1062,29 @@ function NewChatDialog(props: {
           </>
         )}
 
+        {kind === 'topic' && (
+          <>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Topic name (optional)</label>
+            <input
+              value={topicName}
+              onChange={(e) => setTopicName(e.target.value)}
+              placeholder="e.g. Q4 taxes, Marketing plan"
+              maxLength={120}
+              autoFocus
+              className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
+            />
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Just between staff — not about any client. If a topic with this name is already
+              open, you&apos;ll land in it rather than starting a duplicate.
+            </p>
+          </>
+        )}
+
         {err && <p className="mt-2 text-xs text-red-700">{err}</p>}
 
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={props.onClose} className="rounded px-3 py-1.5 text-sm hover:bg-zinc-100">Cancel</button>
-          <button onClick={() => start()} disabled={busy || (!accountId && !personId)}
+          <button onClick={() => start()} disabled={busy || (kind === 'client' && !accountId) || (kind === 'dm' && !personId)}
             className="flex items-center gap-1 rounded bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-400 disabled:opacity-40">
             {busy && <Loader2 className="h-4 w-4 animate-spin" />} Start
           </button>
@@ -972,6 +1110,7 @@ function NewChatDialog(props: {
 function ChatList(props: {
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   myId: string | null
   nameFor: (id: string | null) => string
   onPick: (id: string) => void
@@ -1001,6 +1140,15 @@ function ChatList(props: {
           icon={<MessageSquare className="h-4 w-4" />} />
       ))}
 
+      {props.topics.length > 0 && (
+        <p className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+          Topics
+        </p>
+      )}
+      {props.topics.map((t) => (
+        <Row key={t.id} t={t} label={conversationLabel(t)} icon={<Hash className="h-4 w-4" />} />
+      ))}
+
       {props.conversations.length > 0 && (
         <p className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
           Clients
@@ -1010,7 +1158,7 @@ function ChatList(props: {
         <Row key={t.id} t={t} label={conversationLabel(t)} icon={<Building2 className="h-4 w-4" />} />
       ))}
 
-      {props.dmThreads.length === 0 && props.conversations.length === 0 && (
+      {props.dmThreads.length === 0 && props.conversations.length === 0 && props.topics.length === 0 && (
         <p className="py-6 text-center text-sm text-zinc-500">No chats yet.</p>
       )}
 
@@ -1511,6 +1659,7 @@ function Composer(props: {
 function MobileSheet(props: {
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   myId: string | null
   nameFor: (id: string | null) => string
   openThreadId: string | null
@@ -1566,6 +1715,7 @@ function MobileSheet(props: {
           <ChatList
             dmThreads={props.dmThreads}
             conversations={props.conversations}
+            topics={props.topics}
             myId={props.myId}
             nameFor={props.nameFor}
             onPick={props.onPickThread}

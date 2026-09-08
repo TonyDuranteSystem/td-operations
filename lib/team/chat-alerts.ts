@@ -68,9 +68,11 @@
  * a plain post) or a new dismissal table (disproportionate for this team's
  * scale, per council review).
  *
- * A muted channel (SILENT_CHANNEL_SLUGS) and a silenced client conversation
- * (conversationNotifiesParticipants() === false) read the SAME predicates the
- * toast and the push routes already use — see lib/team/channel-notify.ts.
+ * A muted channel (SILENT_CHANNEL_SLUGS) and a silenced CLIENT conversation
+ * (conversationNotifiesParticipants(false) === false) read the SAME predicates
+ * the toast and the push routes already use — see lib/team/channel-notify.ts.
+ * An internal TOPIC (client_bucket === 'internal') is the opposite case and
+ * DOES alert here, same as a DM — see the discussion-branch comment below.
  */
 
 import { channelNotifiesStaff } from "./channel-notify"
@@ -100,6 +102,12 @@ export interface ChatThreadForAlerts {
   last_message: string | null
   last_message_at: string | null
   last_sender_name: string | null
+  /** 'internal' = a discussion thread about no client — a staff-only TOPIC.
+   *  See conversation-buckets.ts; same signal the Conversations sidebar uses. */
+  client_bucket: string | null
+  /** The RPC's own resolved display name — for an internal topic this is the
+   *  thread's title (the topic name itself), never a client name. */
+  label: string | null
 }
 
 export interface ChatMemberForAlerts {
@@ -286,6 +294,32 @@ export function computeChatAlerts(
       continue
     }
 
+    // An internal TOPIC (discussion, client_bucket === 'internal') alerts like
+    // a DM — no @mention required. Added 2026-09-08 alongside the toast + push
+    // fix in channel-notify.ts's conversationNotifiesParticipants: a topic
+    // that pinged the toast and the phone but never showed up in the Staff
+    // Alerts bell would be the exact "screen and phone disagree" failure this
+    // file's own predicates elsewhere exist to prevent — this is the third
+    // surface, found by re-reading this file rather than assuming the earlier
+    // two fixes were the whole notification path.
+    // A CLIENT conversation (client_bucket !== 'internal') stays silent here,
+    // unchanged — see the file-level comment: conversationNotifiesParticipants
+    // === false for that case, same as the toast and the push.
+    if (t.thread_type === "discussion" && t.client_bucket === "internal") {
+      const unread = num(t.unread_count)
+      if (unread <= 0) continue
+      out.push({
+        kind: "chat_dm",
+        thread_id: t.id,
+        title: `${t.last_sender_name || "Someone"} posted in ${t.label || "a topic"}`,
+        body: withExtra((t.last_message ?? "").slice(0, 160), unread - 1),
+        url: `/team-chat?thread=${t.id}`,
+        tag: `staff-alert-chat-dm-${t.id}`,
+        created_at: t.last_message_at || new Date(0).toISOString(),
+      })
+      continue
+    }
+
     if (t.thread_type === "channel") {
       if (!channelNotifiesStaff(t.channel_slug ?? t.channel_name)) continue
       const activity = channelActivityByThread.get(t.id)
@@ -317,8 +351,10 @@ export function computeChatAlerts(
     }
     // general, no mention: silent by design — matches app/api/team/notifications
     // /route.ts's own "general is deliberately mention-only" precedent.
-    // discussion (client conversation), no mention: silent by design —
-    // conversationNotifiesParticipants() === false.
+    // discussion (CLIENT conversation — client_bucket !== 'internal'), no
+    // mention: silent by design — conversationNotifiesParticipants(false)
+    // === false. An internal topic was already handled above, before this
+    // point, and never falls through to here.
   }
 
   return out.sort((a, b) => parsedMs(b.created_at) - parsedMs(a.created_at))

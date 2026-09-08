@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseClientRef, clientRefColumn, conversationTitle } from '@/lib/team/conversations'
+import { parseClientRef, clientRefColumn, conversationTitle, defaultTopicName } from '@/lib/team/conversations'
 
 const UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
 
@@ -45,5 +45,26 @@ describe('conversationTitle', () => {
   })
   it('falls back to Client for empty name', () => {
     expect(conversationTitle('', 'Tax')).toBe('Client · Tax')
+  })
+})
+
+// Erika Hall review, 2026-09-08: an internal topic left blank at creation has
+// no other identity to fall back on the way a client conversation falls back
+// on the client's own name — so it gets a dated default rather than either a
+// hard validation error or a truly nameless thread.
+describe('defaultTopicName', () => {
+  it('formats as "Topic — <Mon> <day>"', () => {
+    expect(defaultTopicName(new Date('2026-09-08T12:00:00Z'))).toBe('Topic — Sep 8')
+  })
+
+  it('uses the current date when none is passed', () => {
+    // Not asserting an exact string (that would just re-implement Date.now
+    // flakily) — only that it produces the same shape the explicit-date case
+    // does, so a caller never sees a blank or malformed default.
+    expect(defaultTopicName()).toMatch(/^Topic — [A-Z][a-z]{2} \d{1,2}$/)
+  })
+
+  it('formats the month name correctly at a year boundary', () => {
+    expect(defaultTopicName(new Date('2026-01-01T12:00:00Z'))).toBe('Topic — Jan 1')
   })
 })
