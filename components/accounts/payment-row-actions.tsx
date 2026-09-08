@@ -413,7 +413,16 @@ function EditPaymentDialog({
   // delivered, whichever option staff picked. invoice_status is the single
   // source of truth for "is this actually a settled invoice", matching the
   // server's own check two lines below in updateInvoice.
-  const isPaid = payment.invoice_status === 'Paid'
+  //
+  // Fixed 2026-09-07 (E2E production QA sweep): also matches the ~47 real
+  // legacy/pre-invoice rows in production (invoice_status NULL, coarse
+  // status 'Paid') — the server now requires a correction-path choice for
+  // these too, so this dialog must detect them as Paid, or saving a total
+  // edit on one throws a raw server error with no way to answer it. Same
+  // narrow OR the server uses; does not affect a credit note, whose
+  // invoice_status is always 'Credit', never null.
+  const isPaid = payment.invoice_status === 'Paid' ||
+    (payment.invoice_status == null && payment.status === 'Paid')
 
   const applyUpdate = (
     updates: { total?: number; due_date?: string; notes?: string; message?: string; description?: string },

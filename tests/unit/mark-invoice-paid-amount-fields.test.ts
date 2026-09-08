@@ -22,6 +22,7 @@ const {
   mockSingle,
   mockUpdate,
   mockUpdateIn,
+  mockUpdateSelect,
   mockTriggerActivationIfPending,
   mockSendPaidReceipt,
 } = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ const {
   mockSingle: vi.fn(),
   mockUpdate: vi.fn(),
   mockUpdateIn: vi.fn(),
+  mockUpdateSelect: vi.fn(),
   mockTriggerActivationIfPending: vi.fn(),
   mockSendPaidReceipt: vi.fn(),
 }))
@@ -61,7 +63,14 @@ vi.mock("@/lib/supabase/server", () => ({
       })),
       update: (updates: unknown) => {
         mockUpdate(updates)
-        return { eq: () => ({ in: mockUpdateIn }) }
+        return {
+          eq: () => ({
+            in: (...args: unknown[]) => {
+              mockUpdateIn(...args)
+              return { select: mockUpdateSelect }
+            },
+          }),
+        }
       },
     })),
   })),
@@ -82,7 +91,7 @@ const PAYMENT_ID = "inv-1"
 beforeEach(() => {
   vi.clearAllMocks()
   mockSingle.mockResolvedValue({ data: { total: 1200 }, error: null })
-  mockUpdateIn.mockResolvedValue({ error: null })
+  mockUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
   mockTriggerActivationIfPending.mockResolvedValue(undefined)
   mockSendPaidReceipt.mockResolvedValue(undefined)
 })
@@ -117,6 +126,32 @@ describe("markInvoicePaid", () => {
   it("checks whether a client's setup was waiting on this invoice", async () => {
     const result = await markInvoicePaid(PAYMENT_ID, "2026-01-01T00:00:00Z")
     expect(result.success).toBe(true)
+    expect(mockTriggerActivationIfPending).toHaveBeenCalledWith(PAYMENT_ID)
+  })
+
+  // Regression coverage for the E2E production QA sweep (2026-09-07,
+  // Bug-Hunter): the write had no row-count check at all — a stale page (the
+  // bank-feed matcher settles the invoice Partial in the background before
+  // the click lands) still fired a "Paid in full" receipt email and
+  // activated the client's account even though nothing was actually
+  // written. Mirrors the fix already shipped on Finance's own
+  // markInvoicePaid.
+  it("refuses and skips every side effect when the update matches zero rows (stale page)", async () => {
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null })
+    const result = await markInvoicePaid(PAYMENT_ID, "2026-01-01T00:00:00Z")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/no longer be Sent or Overdue/)
+    expect(mockSendPaidReceipt).not.toHaveBeenCalled()
+    expect(mockTriggerActivationIfPending).not.toHaveBeenCalled()
+  })
+
+  it("still sends the receipt and triggers activation when the update genuinely matches", async () => {
+    const result = await markInvoicePaid(PAYMENT_ID, "2026-01-01T00:00:00Z")
+    expect(result.success).toBe(true)
+    // The receipt send is fire-and-forget (a dynamic import().then(), never
+    // awaited by markInvoicePaid itself) — give its microtask a tick to run
+    // before asserting on it, same as production doesn't wait for it either.
+    await vi.waitFor(() => expect(mockSendPaidReceipt).toHaveBeenCalledWith(PAYMENT_ID))
     expect(mockTriggerActivationIfPending).toHaveBeenCalledWith(PAYMENT_ID)
   })
 })

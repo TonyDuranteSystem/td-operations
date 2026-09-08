@@ -13,6 +13,16 @@
  * everything else (the push-targeting half) is pinned in
  * tests/unit/team-workspace.test.ts's otherDmParty tests.
  *
+ * FOLLOW-UP, 2026-09-07: the 2026-09-05 fix left the sentinel as a fallback
+ * for when no acting user resolves at all — which is exactly the bug above,
+ * one level up: a real production ghost thread from that exact fallback sat
+ * invisible to Antonio for two months before it was found and merged (see
+ * docs/systems/team-workspace.md). Verified (both live send paths always
+ * resolve a real caller from the request's own auth context; the one caller
+ * that didn't is retired, dead code) that nothing genuinely depends on this
+ * fallback, so an unresolvable actor now throws instead of silently sending
+ * under the sentinel.
+ *
  * Mocked at the lib/team/dm + lib/team/directory module boundary rather than
  * the raw Supabase client — the property under test is "which id gets passed
  * to findOrCreateDm", not the full send pipeline (attachments, push, mentions
@@ -61,7 +71,6 @@ vi.mock('@/lib/team/channel-notify', () => ({
 }))
 
 import { postTeamMessage } from '@/lib/team/post-message'
-import { CLAUDE_SENDER_UUID } from '@/lib/team/workspace'
 
 beforeEach(() => {
   findOrCreateDmCalls = []
@@ -78,14 +87,23 @@ describe('postTeamMessage — DM keying', () => {
     expect(findOrCreateDmCalls).toEqual([['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222']])
   })
 
-  it('falls back to the Claude sentinel when no acting user is given — a genuinely autonomous send', async () => {
-    await postTeamMessage({ dm_user_id: '22222222-2222-2222-2222-222222222222', message: 'hi' })
-    expect(findOrCreateDmCalls).toEqual([[CLAUDE_SENDER_UUID, '22222222-2222-2222-2222-222222222222']])
+  it('THE FIX (2026-09-07): refuses to send rather than filing an unidentified DM under the Claude sentinel', async () => {
+    // The old behavior (falling back to CLAUDE_SENDER_UUID here) is exactly the
+    // bug this file exists to regression-pin against — a real production
+    // conversation sat invisible to its real participant for two months this
+    // way. "No acting user known" must now be a loud failure, not a silent
+    // misfile, and it must NEVER reach findOrCreateDm with the sentinel.
+    await expect(
+      postTeamMessage({ dm_user_id: '22222222-2222-2222-2222-222222222222', message: 'hi' }),
+    ).rejects.toThrow(/could not identify who is sending/i)
+    expect(findOrCreateDmCalls).toEqual([])
   })
 
-  it('falls back to the sentinel when on_behalf_of does not resolve to any real staff member — never guesses', async () => {
-    await postTeamMessage({ dm_user_id: '22222222-2222-2222-2222-222222222222', message: 'hi', on_behalf_of: 'nobody@nowhere.com' })
-    expect(findOrCreateDmCalls).toEqual([[CLAUDE_SENDER_UUID, '22222222-2222-2222-2222-222222222222']])
+  it('refuses to send when on_behalf_of does not resolve to any real staff member either — never guesses, never sentinels', async () => {
+    await expect(
+      postTeamMessage({ dm_user_id: '22222222-2222-2222-2222-222222222222', message: 'hi', on_behalf_of: 'nobody@nowhere.com' }),
+    ).rejects.toThrow(/could not identify who is sending/i)
+    expect(findOrCreateDmCalls).toEqual([])
   })
 
   it('a self-dictated DM (on_behalf_of the same person the DM targets) still resolves — the self-DM case', async () => {

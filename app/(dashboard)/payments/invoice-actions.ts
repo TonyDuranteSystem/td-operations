@@ -170,14 +170,24 @@ export async function markInvoicePaid(
     }
     if (paymentMethod) updates.payment_method = paymentMethod
 
+    // Fixed 2026-09-07 (E2E production QA sweep, Bug-Hunter): this had no
+    // row-count check at all — a stale page (the bank-feed matcher settles
+    // the invoice Partial in the background before the click lands) still
+    // fired a "Paid in full" receipt email and activated the client's
+    // account even though nothing was actually written. Mirrors the same
+    // fix already shipped on Finance's own markInvoicePaid.
     // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
-    const { error } = await supabase
+    const { data: markPaidRows, error } = await supabase
       .from('payments')
       .update(updates)
       .eq('id', paymentId)
       .in('invoice_status', ['Sent', 'Overdue'])
+      .select('id')
 
     if (error) throw new Error(error.message)
+    if (!markPaidRows || markPaidRows.length === 0) {
+      throw new Error('This invoice changed before the save landed — it may no longer be Sent or Overdue. Refresh and check its current state before trying again.')
+    }
 
     // Fire-and-forget receipt email — must not block the Paid transition.
     import('@/lib/invoice-auto-send').then(({ sendPaidReceipt }) =>
@@ -214,25 +224,89 @@ export async function voidInvoice(
   paymentId: string,
   _updatedAt: string
 ): Promise<ActionResult> {
+  const { capturePreVoidState, partitionFeedsForUnlink } = await import('@/lib/billing/invoice-reactivate')
+
+  // Fixed 2026-09-07 (E2E production QA sweep, Antonio's explicit call: a
+  // temporary duplicate bridge, given the old page is not being retired
+  // today). Two real gaps closed, mirroring Finance's own voidInvoice: (1)
+  // this write now uses the SAME status vocabulary as the new page
+  // (status/invoice_status='Cancelled', not 'Waived'/'Voided') — the old
+  // labels made a voided-here invoice permanently un-reactivatable, since
+  // Reactivate only recognizes literal 'Cancelled' (confirmed by
+  // Bug-Hunter: two different reviewers independently found this exact
+  // dead end). (2) a matched bank feed used to be left dangling — the money
+  // stayed recorded against a cancelled invoice with no way back into the
+  // review queue. The snapshot/label change here is also why
+  // components/payments/invoice-detail-dialog.tsx's isVoided check (and its
+  // STATUS_STYLES map) were updated in the same change to also recognize
+  // 'Cancelled', not just 'Voided'.
+  const { data: before } = await supabaseAdmin
+    .from('payments')
+    .select('id, qb_invoice_id, status, invoice_status, amount_due, amount_paid, paid_date, credit_remaining')
+    .eq('id', paymentId)
+    .maybeSingle()
+  if (!before) return { success: false, error: 'Payment not found' }
+  const preVoidState = capturePreVoidState(before)
+
   return safeAction(async () => {
-    const supabase = createClient()
+    const now = new Date().toISOString()
+
+    // Fixed 2026-09-07 (E2E QA sweep round 2, Senior Engineer + Bug-Hunter,
+    // independently): this had no row-count check — a stale dialog (the row's
+    // real status moved on between opening it and clicking Void, e.g. the
+    // bank-feed matcher settled it, or a second tab/machine changed it first)
+    // silently matched zero rows here, yet fell straight through into the
+    // bank-feed-release logic below and reported success, undoing a real
+    // match while the payments row itself was never touched. Mirrors the
+    // check this file's own markInvoicePaid already has, a few lines above.
     // eslint-disable-next-line no-restricted-syntax -- legacy raw write; tracked by dev_task 7ebb1e0c
-    const { error } = await supabase
+    const { data: voidedRows, error } = await supabaseAdmin
       .from('payments')
       .update({
-        invoice_status: 'Voided',
-        status: 'Waived',
+        invoice_status: 'Cancelled',
+        status: 'Cancelled',
         // Free the idempotency slot, mirroring the offer-cancel cascade: a voided tranche part
         // must be re-raisable, and a keyed corpse blocks the re-mint (council blocker, 2026-08-11).
         idempotency_key: null,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       })
       .eq('id', paymentId)
       .in('invoice_status', ['Draft', 'Sent', 'Overdue'])
+      .select('id')
 
     if (error) throw new Error(error.message)
+    if (!voidedRows || voidedRows.length === 0) {
+      throw new Error('This invoice changed before the void landed — it may no longer be Draft, Sent, or Overdue. Refresh and check its current state before trying again.')
+    }
 
     // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
+
+    // Unlink bank feeds — same rule as Finance's voidInvoice: a transaction with a CONFIRMED
+    // application to this invoice keeps its link (the money stays attributed to where it
+    // actually went); everything else, only a suggestion, returns to the review queue.
+    const { data: linkedFeeds, error: feedReadErr } = await supabaseAdmin
+      .from('td_bank_feeds')
+      .select('id, status')
+      .eq('matched_payment_id', paymentId)
+    if (feedReadErr) throw new Error(`Failed to read bank feeds: ${feedReadErr.message}`)
+
+    const { listConfirmedApplications } = await import('@/lib/finance/apply-payment')
+    const fundedFeedIds = new Set((await listConfirmedApplications(paymentId)).map((a) => a.feed_id))
+    const releasable = (linkedFeeds ?? []).filter((f) => !fundedFeedIds.has(f.id))
+    const { resetIds, clearIds } = partitionFeedsForUnlink(releasable)
+
+    if (resetIds.length > 0) {
+      const { error: resetErr } = await supabaseAdmin.from('td_bank_feeds').update({
+        matched_payment_id: null, match_confidence: null, status: 'unmatched', updated_at: now,
+      }).in('id', resetIds)
+      if (resetErr) throw new Error(`Failed to unlink bank feeds: ${resetErr.message}`)
+    }
+    if (clearIds.length > 0) {
+      const { error: clearErr } = await supabaseAdmin.from('td_bank_feeds').update({
+        matched_payment_id: null, match_confidence: null, updated_at: now,
+      }).in('id', clearIds)
+      if (clearErr) throw new Error(`Failed to clear bank feed suggestions: ${clearErr.message}`)
+    }
 
     revalidatePath('/payments')
     // Finance reads the same payments table on its own Invoices tab —
@@ -243,7 +317,9 @@ export async function voidInvoice(
     action_type: 'update',
     table_name: 'payments',
     record_id: paymentId,
-    summary: 'Invoice voided',
+    summary: 'Invoice voided/cancelled + bank feeds unlinked',
+    // Read back by reactivateInvoice. Do not rename this key.
+    details: { pre_void_state: preVoidState },
   })
 }
 
