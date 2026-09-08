@@ -12,7 +12,7 @@
  * to the new Parked-notes trigger, next to the Alerts bell it's paired with.
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Search, MoreHorizontal } from 'lucide-react'
 import { GlobalSearch } from '@/components/shared/global-search'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
@@ -37,6 +37,32 @@ function CollapsibleSearch() {
   const [expanded, setExpanded] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
 
+  /**
+   * THE FIX for "clicking the icon opens the box but typing goes nowhere"
+   * (found live, 2026-09-08): GlobalSearch's own Cmd+K/focus-event handlers
+   * call `inputRef.current.focus()` on the SAME synchronous tick that
+   * triggers it — before React has committed the width-expansion re-render,
+   * so the input is still sitting inside its width-0/overflow-hidden wrapper
+   * at the moment focus() runs. That focus attempt was just strong enough to
+   * bubble an onFocus up to THIS wrapper (which is how `expanded` correctly
+   * flips true either way) but not strong enough to actually STICK as the
+   * page's focused element — confirmed live: after clicking the icon, the
+   * box visibly opened but `document.activeElement` was `<body>`, not the
+   * input, and typed characters went nowhere.
+   *
+   * Fix: once `expanded` is confirmed true (by ANY path — icon click, Cmd+K,
+   * or the mobile-style 'focus-global-search' event), re-focus the actual
+   * input here, AFTER React has committed the real (non-clipped) width. This
+   * runs for every path uniformly, so it isn't a second, parallel mechanism
+   * to keep in sync with GlobalSearch's own attempt — it's just the one that
+   * actually lands, every time.
+   */
+  useEffect(() => {
+    if (!expanded) return
+    const input = wrapRef.current?.querySelector('input')
+    if (input && document.activeElement !== input) input.focus()
+  }, [expanded])
+
   return (
     <div
       ref={wrapRef}
@@ -52,7 +78,10 @@ function CollapsibleSearch() {
       {!expanded && (
         <FastTooltip label="Search (⌘K)">
           <button
-            onClick={() => document.dispatchEvent(new CustomEvent('focus-global-search'))}
+            onClick={() => {
+              setExpanded(true) // deterministic for the click path — the effect above does the actual focus once this commits
+              document.dispatchEvent(new CustomEvent('focus-global-search')) // keeps GlobalSearch's own open/query state in sync
+            }}
             className="flex h-9 w-9 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-100"
             aria-label="Search"
           >
