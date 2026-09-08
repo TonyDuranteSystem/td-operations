@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseClientRef, clientRefColumn, conversationTitle, defaultTopicName } from '@/lib/team/conversations'
+import { parseClientRef, clientRefColumn, conversationTitle, defaultTopicName, renameDiscussionPatch } from '@/lib/team/conversations'
 
 const UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
 
@@ -66,5 +66,40 @@ describe('defaultTopicName', () => {
 
   it('formats the month name correctly at a year boundary', () => {
     expect(defaultTopicName(new Date('2026-01-01T12:00:00Z'))).toBe('Topic — Jan 1')
+  })
+})
+
+// Antonio, 2026-09-08: "I want the option to delete/rename a topic or
+// conversation." The two thread kinds rename differently underneath — see
+// renameDiscussionPatch's own doc comment for why.
+describe('renameDiscussionPatch', () => {
+  it('an internal topic keeps topic/topic_slug in lockstep with the new title', () => {
+    expect(renameDiscussionPatch(true, 'Q4 taxes')).toEqual({
+      title: 'Q4 taxes', topic: 'Q4 taxes', topic_slug: 'q4-taxes',
+    })
+  })
+
+  it('a client conversation only changes the display title, never topic/topic_slug', () => {
+    expect(renameDiscussionPatch(false, 'EIN re-send follow-up')).toEqual({ title: 'EIN re-send follow-up' })
+  })
+
+  it('trims whitespace', () => {
+    expect(renameDiscussionPatch(false, '  Renamed  ')).toEqual({ title: 'Renamed' })
+  })
+
+  it('rejects a blank name for either kind', () => {
+    expect(renameDiscussionPatch(true, '   ')).toEqual({ error: 'A name is required.' })
+    expect(renameDiscussionPatch(false, '')).toEqual({ error: 'A name is required.' })
+  })
+
+  it('rejects null/undefined without throwing', () => {
+    // @ts-expect-error — deliberately malformed input, e.g. a body with no title field
+    expect(() => renameDiscussionPatch(true, undefined)).not.toThrow()
+    // @ts-expect-error
+    expect(renameDiscussionPatch(true, null)).toEqual({ error: 'A name is required.' })
+  })
+
+  it('a topic name that slugifies to nothing (all punctuation) still gets a null topic_slug, not a crash', () => {
+    expect(renameDiscussionPatch(true, '!!!')).toEqual({ title: '!!!', topic: '!!!', topic_slug: null })
   })
 })
