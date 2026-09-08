@@ -67,6 +67,20 @@ export function useDraggableFab<T extends HTMLElement = HTMLButtonElement>(
      * always-mounted caller needs to pass it or changes behavior.
      */
     remeasureOn?: unknown
+    /**
+     * Override the 8px platform-default drag threshold (`FAB_DRAG_THRESHOLD_PX`).
+     * Optional, defaults to the shared constant, so neither existing caller (the
+     * chat launcher, the Captures popup handle) changes behavior. Added for the
+     * notes FAB (2026-09-08, Bug Hunter EtoE pass): a plain click now has to clear
+     * TWO steps (open menu, then pick an option, see sticky-notes-layer.tsx) where
+     * it used to be one, so a click silently swallowed by ordinary mouse/trackpad
+     * jitter between press and release is a bigger cost than before — confirmed via
+     * a controlled test that a true zero-movement click always opens the menu but a
+     * click with a few pixels of movement often doesn't. A slightly wider tolerance
+     * makes an accidental real drag no more likely (a deliberate drag clears either
+     * threshold easily) while giving an ordinary click more room.
+     */
+    dragThresholdPx?: number
   },
 ) {
   const ref = useRef<T | null>(null)
@@ -133,14 +147,14 @@ export function useDraggableFab<T extends HTMLElement = HTMLButtonElement>(
   const onPointerMove = useCallback((e: React.PointerEvent<T>) => {
     const d = drag.current
     if (!d) return
-    if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
+    if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY, opts?.dragThresholdPx)) return
     if (!d.moved) { d.moved = true; suppressClick.current = true; forceRender((n) => n + 1) }
     const box = ref.current?.getBoundingClientRect()
     setPos(clampFabPos(
       { x: (e.clientX - d.dx) / window.innerWidth, y: (e.clientY - d.dy) / window.innerHeight },
       { vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height },
     ))
-  }, [])
+  }, [opts?.dragThresholdPx])
 
   const endDrag = useCallback(() => {
     const d = drag.current

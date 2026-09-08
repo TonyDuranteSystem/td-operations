@@ -92,14 +92,30 @@ function isSlotTaken(candidate: FracPos, occupied: readonly FracPos[]): boolean 
  * actual "blank space" on an arbitrary page (there is no reliable, generic way to know
  * what a given page's real content looks like from here); staying in one shallow
  * horizontal band is the practical alternative that was proposed and approved instead.
+ *
+ * `perRow=4` and the 0.08 row step (2026-09-08, Bug Hunter EtoE pass, both against the
+ * FIRST shipped row-major version which used perRow=5/step=0.04) — this function only
+ * ever returns FRACTIONS; the actual pixel math (`notePosStyle` in
+ * sticky-notes-layer.tsx) independently clamps each note's own left edge against the
+ * sidebar-clearance floor and the viewport's right edge, with no awareness of where a
+ * ROW NEIGHBOR already landed. At perRow=5, that per-note-independent clamp compresses
+ * the 4th/5th columns into each other on ordinary laptop widths (confirmed ~20-60px of
+ * real overlap from 1024px up to ~1409px, covering 1366×768 — the single most common
+ * laptop resolution) with only 5 notes on screen, no wrapping required. perRow=4 keeps
+ * every column's raw fraction comfortably clear of that ceiling across the same range.
+ * The old 0.04 vertical row step assumed a viewport tall enough that 4% of its height
+ * cleared a collapsed note's own ~40px height — only true above ~1000px of usable
+ * height, which most laptop screens never reach; a 6th note wrapping to row 2 visibly
+ * overlapped row 1. 0.08 clears a 40px chip with margin down to ~600px of height.
  */
 export function cascadePos(occupied: readonly FracPos[]): FracPos {
   const step = 0.18
-  const perRow = 5
+  const rowStep = 0.08
+  const perRow = 4
   for (let i = 0; i < 500; i++) {
     const row = Math.floor(i / perRow)
     const col = i % perRow
-    const candidate = { x: clampFrac(0.04 + col * step), y: clampFrac(0.08 + row * 0.04) }
+    const candidate = { x: clampFrac(0.04 + col * step), y: clampFrac(0.08 + row * rowStep) }
     if (!isSlotTaken(candidate, occupied)) return candidate
   }
   // Exhausted 500 slots (500 simultaneous never-moved notes) — reuse the first

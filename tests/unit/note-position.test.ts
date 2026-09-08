@@ -58,17 +58,18 @@ describe("cascadePos — the actual bug: never repeats an occupied slot", () => 
   it("fills a row left-to-right before starting a new row (2026-09-08: horizontal, not vertical)", () => {
     const occupied: FracPos[] = []
     const positions: FracPos[] = []
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 5; i++) {
       const pos = cascadePos(occupied)
       positions.push(pos)
       occupied.push(pos)
     }
-    // perRow is 5 — the first 5 slots share one y (row 0) and step across x;
-    // the 6th (index 5) must start a second row, not collide back into row 0.
-    expect(new Set(positions.slice(0, 5).map((p) => p.y)).size).toBe(1)
-    expect(positions.slice(0, 5).map((p) => p.x)).toEqual([...new Set(positions.slice(0, 5).map((p) => p.x))].sort((a, b) => a - b))
-    expect(positions[5].y).not.toBe(positions[0].y)
-    expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(6)
+    // perRow is 4 (2026-09-08, Bug Hunter EtoE pass — 5 overlapped in real pixels on
+    // common laptop widths, see cascadePos's own comment) — the first 4 slots share one
+    // y (row 0) and step across x; the 5th (index 4) must start a second row.
+    expect(new Set(positions.slice(0, 4).map((p) => p.y)).size).toBe(1)
+    expect(positions.slice(0, 4).map((p) => p.x)).toEqual([...new Set(positions.slice(0, 4).map((p) => p.x))].sort((a, b) => a - b))
+    expect(positions[4].y).not.toBe(positions[0].y)
+    expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(5)
   })
 
   it("finds a free slot even when earlier slots are occupied out of order", () => {

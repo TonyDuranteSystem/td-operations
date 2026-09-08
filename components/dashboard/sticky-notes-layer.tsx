@@ -326,7 +326,7 @@ function StickyNotesInner() {
   const [editing, setEditing] = useState<Note | null>(null)
   // Both entry points are draggable (Antonio, 2026-07-23) — separate keys so the
   // desktop + button and the mobile pill remember their own spots per device.
-  const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`)
+  const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`, { dragThresholdPx: 16 })
   const mobileFab = useDraggableFab(FAB_KEYS.notes)
 
   // Re-sync when the tab wakes (sleep/PWA freeze) or the network returns — realtime replays nothing.
@@ -415,6 +415,22 @@ function StickyNotesInner() {
   // straight to composing — Antonio, 2026-09-08: "why don't inglobe the select button
   // in the '+' icon... instead of creating a noisy [corner] with a lot of icones."
   const [fabMenuOpen, setFabMenuOpen] = useState(false)
+  // Where the menu renders when the "+" button has been dragged away from its
+  // default corner — null (→ the plain default-corner CSS) until it has actually
+  // moved. Measured fresh every time the menu opens, via the button's own ref,
+  // rather than re-deriving deskFab's drag math here (Bug Hunter, 2026-09-08).
+  const [menuAnchor, setMenuAnchor] = useState<{ left: string; bottom: string } | null>(null)
+  useLayoutEffect(() => {
+    if (!fabMenuOpen) return
+    if (!deskFab.hasMoved) { setMenuAnchor(null); return }
+    const el = deskFab.ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 200))
+    const bottom = Math.max(8, window.innerHeight - rect.top + 8)
+    setMenuAnchor({ left: `${left}px`, bottom: `${bottom}px` })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fabMenuOpen])
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -540,7 +556,17 @@ function StickyNotesInner() {
           {fabMenuOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setFabMenuOpen(false)} />
-              <div className="hidden lg:flex fixed bottom-[4.75rem] left-4 z-50 w-48 flex-col gap-1 rounded-lg border bg-white p-2 shadow-lg">
+              {/* Anchored to the BUTTON'S OWN measured position, not a fixed corner
+                  (Bug Hunter, 2026-09-08: the button has been draggable since
+                  2026-07-23 — its own tooltip says so below — but this menu used to
+                  render at the untouched default corner regardless, so a dragged
+                  button opened a menu nowhere near it). menuAnchor is null until the
+                  button has actually moved, so the untouched default case keeps using
+                  the plain CSS corner below — unchanged. */}
+              <div
+                className="hidden lg:flex fixed bottom-[4.75rem] left-4 z-50 w-48 flex-col gap-1 rounded-lg border bg-white p-2 shadow-lg"
+                style={menuAnchor ?? undefined}
+              >
                 <button
                   onClick={() => { setFabMenuOpen(false); setComposing(true) }}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
