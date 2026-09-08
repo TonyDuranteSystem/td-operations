@@ -84,14 +84,29 @@ function isSlotTaken(candidate: FracPos, occupied: readonly FracPos[]): boolean 
  * at ITS OWN first mount and never recomputes just because a sibling was added.
  *
  * ROW-major, not column-major (Antonio, 2026-09-08: "they must be ordered orizzontaly
- * instead of vertically") — fills LEFT-TO-RIGHT along the header-clearance row first,
- * only wrapping to a second row once the first is full. The earlier column-major
- * version stacked straight DOWN from the top-left corner, which — on every real CRM
- * page, not just one — runs straight through the page's own main content instead of
- * staying in the (comparatively) empty strip under the header. This can't detect
- * actual "blank space" on an arbitrary page (there is no reliable, generic way to know
- * what a given page's real content looks like from here); staying in one shallow
- * horizontal band is the practical alternative that was proposed and approved instead.
+ * instead of vertically") — fills a row first, only wrapping to a second row once the
+ * first is full. The earlier column-major version stacked straight DOWN from the
+ * top-left corner, which — on every real CRM page, not just one — runs straight
+ * through the page's own main content instead of staying in the (comparatively) empty
+ * strip under the header. This can't detect actual "blank space" on an arbitrary page
+ * (there is no reliable, generic way to know what a given page's real content looks
+ * like from here); staying in one shallow horizontal band is the practical alternative
+ * that was proposed and approved instead.
+ *
+ * RIGHT-TO-LEFT, not left-to-right (Antonio, 2026-09-08, sending a screenshot of the
+ * Parked-notes header trigger: "I want the notes on the screen, next to Parked button,
+ * st[a]cke[d]... orizzontaly") — column 0 starts at the SAME clampFrac ceiling (0.92)
+ * that already pulls a note flush against the right edge in notePosStyle, landing it
+ * right under where the Parked trigger sits in the header; each next column steps
+ * LEFT instead of right. This only changes where a never-moved note's default slot
+ * is — notePosStyle's own left-anchored math (and everything that depends on it,
+ * including a note's OWN dragged position) is untouched, so a manually-dragged note
+ * still tracks the cursor exactly as before; only the cascade's own starting corner
+ * and direction moved. Also narrows the collision this file's own header above
+ * describes for the old left-anchored band: real page titles read left-to-right from
+ * the page's own left margin, so a row that starts at the right edge and grows toward
+ * the sidebar — rather than starting at the sidebar and growing toward the page's own
+ * title — clears more of them by construction, though it cannot guarantee every page.
  *
  * `perRow=4` and the 0.08 row step (2026-09-08, Bug Hunter EtoE pass, both against the
  * FIRST shipped row-major version which used perRow=5/step=0.04) — this function only
@@ -115,10 +130,10 @@ export function cascadePos(occupied: readonly FracPos[]): FracPos {
   for (let i = 0; i < 500; i++) {
     const row = Math.floor(i / perRow)
     const col = i % perRow
-    const candidate = { x: clampFrac(0.04 + col * step), y: clampFrac(0.08 + row * rowStep) }
+    const candidate = { x: clampFrac(0.92 - col * step), y: clampFrac(0.08 + row * rowStep) }
     if (!isSlotTaken(candidate, occupied)) return candidate
   }
   // Exhausted 500 slots (500 simultaneous never-moved notes) — reuse the first
   // rather than loop forever; dragging is still available to separate them.
-  return { x: clampFrac(0.04), y: clampFrac(0.08) }
+  return { x: clampFrac(0.92), y: clampFrac(0.08) }
 }

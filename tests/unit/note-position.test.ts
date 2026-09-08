@@ -31,8 +31,8 @@ describe("clampFrac", () => {
 })
 
 describe("cascadePos — first slot", () => {
-  it("returns the first cascade slot when nothing is occupied yet", () => {
-    expect(cascadePos([])).toEqual({ x: 0.04, y: 0.08 })
+  it("returns the first cascade slot when nothing is occupied yet (2026-09-08: top-right, next to the Parked trigger, not top-left)", () => {
+    expect(cascadePos([])).toEqual({ x: 0.92, y: 0.08 })
   })
 })
 
@@ -55,7 +55,7 @@ describe("cascadePos — the actual bug: never repeats an occupied slot", () => 
     expect(unique.size).toBe(3)
   })
 
-  it("fills a row left-to-right before starting a new row (2026-09-08: horizontal, not vertical)", () => {
+  it("fills a row right-to-left before starting a new row (2026-09-08: starts next to the Parked trigger, steps toward the sidebar)", () => {
     const occupied: FracPos[] = []
     const positions: FracPos[] = []
     for (let i = 0; i < 5; i++) {
@@ -65,9 +65,11 @@ describe("cascadePos — the actual bug: never repeats an occupied slot", () => 
     }
     // perRow is 4 (2026-09-08, Bug Hunter EtoE pass — 5 overlapped in real pixels on
     // common laptop widths, see cascadePos's own comment) — the first 4 slots share one
-    // y (row 0) and step across x; the 5th (index 4) must start a second row.
+    // y (row 0) and step across x, DESCENDING (column 0 is the rightmost, at the same
+    // ceiling notePosStyle already clamps a note flush against the right edge); the 5th
+    // (index 4) must start a second row.
     expect(new Set(positions.slice(0, 4).map((p) => p.y)).size).toBe(1)
-    expect(positions.slice(0, 4).map((p) => p.x)).toEqual([...new Set(positions.slice(0, 4).map((p) => p.x))].sort((a, b) => a - b))
+    expect(positions.slice(0, 4).map((p) => p.x)).toEqual([...new Set(positions.slice(0, 4).map((p) => p.x))].sort((a, b) => b - a))
     expect(positions[4].y).not.toBe(positions[0].y)
     expect(new Set(positions.map((p) => `${p.x},${p.y}`)).size).toBe(5)
   })
