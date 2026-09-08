@@ -10,7 +10,7 @@
  * traps a dialog's buttons. Wrapped in its own error boundary — a throw here must not take the CRM down.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin, CheckSquare } from 'lucide-react'
 import { useRouter } from 'next/navigation'
@@ -320,7 +320,12 @@ function StickyNotesInner() {
     }
   }, [notes, qc])
 
-  useEffect(() => { prunePositions(notes.map((n) => n.id)) }, [notes])
+  // Guarded on `data` (not just `notes`, which defaults to [] before the fetch even
+  // resolves) — pruning against an empty list on the very first render wiped every
+  // stored position on every page load, before the real note list ever arrived
+  // (found live, 2026-09-08: Antonio's notes kept losing their spread-out positions
+  // and re-bunching into the default cascade on every reload).
+  useEffect(() => { if (data) prunePositions(notes.map((n) => n.id)) }, [data, notes])
 
   /**
    * External "open this note" — lets another surface (the Staff Alerts bell)
@@ -546,12 +551,17 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
   // a sibling note is added) must not silently teleport an already-open note.
   const [pos, setPos] = useState<{ x: number; y: number }>(initialPos)
   const [expanded, setExpanded] = useState(false)
+  // Purely a RENDER-time offset on top of `pos` — never persisted, never fed back into
+  // `pos` itself — applied only when expanding lands the card on top of a neighbor
+  // already on screen. See the layout effect below.
+  const [nudge, setNudge] = useState({ dx: 0, dy: 0 })
   const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
   const justDragged = useRef(false)
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (selectMode) return // no dragging while selecting — a click here only toggles the checkbox
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
+    if (nudge.dx || nudge.dy) setNudge({ dx: 0, dy: 0 }) // a manual drag always wins over the auto-nudge
     const rect = ref.current!.getBoundingClientRect()
     drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, moved: false }
     ref.current!.setPointerCapture(e.pointerId)
@@ -581,11 +591,64 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
   const onClickCollapsed = () => {
     if (selectMode) { onToggleSelect(); return }
     if (justDragged.current) return
+    setNudge({ dx: 0, dy: 0 }) // re-measure fresh every time, never carry a stale nudge in
     setExpanded(true)
     // Expanding to the full preview text IS reading it (Antonio, 2026-09-05: red
     // until read, back to normal once it is) — no separate "mark read" action.
     if (isUnread) onRead()
   }
+
+  /**
+   * THE FIX for "when i open one it doesn't move away from the others... one on top the
+   * other" (Antonio, 2026-09-07, re-hit and re-flagged 2026-09-08): expanding a note only
+   * ever positioned itself from its OWN stored fraction — it never checked whether the
+   * much bigger expanded card would land on a NEIGHBOR already sitting on screen (trivial
+   * to hit once several notes are cascaded close together, which position-loss on reload,
+   * fixed above, made the common case rather than a rare one).
+   *
+   * Runs AFTER the browser has laid out the just-expanded card at its natural (un-nudged)
+   * position — `useLayoutEffect` so this resolves before the user sees a flash of the
+   * overlapping frame. Measures real DOM rects (every other on-screen note, collapsed or
+   * expanded, tagged `data-note-id`) rather than re-deriving the CSS clamp() math in JS,
+   * which would be a second copy of notePosStyle's own logic to keep in sync. Pushes
+   * straight down, in fixed steps, until clear of every neighbor it currently overlaps —
+   * simple and bounded rather than a full free-slot search, and always resettable: a
+   * manual drag (onPointerDown, above) or a fresh expand (onClickCollapsed, above) clears
+   * it back to zero, so the offset never compounds across repeated open/close cycles.
+   * Never written to `pos` / localStorage — purely how this ONE open session renders.
+   */
+  useLayoutEffect(() => {
+    if (!expanded || selectMode) return
+    const el = ref.current
+    if (!el) return
+    const STEP = 48
+    const MAX_STEPS = 20
+    const EDGE_MARGIN = 16
+    let dy = 0
+    for (let i = 0; i < MAX_STEPS; i++) {
+      const mine = el.getBoundingClientRect()
+      const test = { top: mine.top + dy, bottom: mine.bottom + dy, left: mine.left, right: mine.right }
+      const others = document.querySelectorAll<HTMLElement>('[data-note-id]')
+      let collided = false
+      others.forEach((sib) => {
+        if (sib === el || sib.dataset.noteId === note.id) return
+        const r = sib.getBoundingClientRect()
+        const overlaps = test.left < r.right && test.right > r.left && test.top < r.bottom && test.bottom > r.top
+        if (overlaps) collided = true
+      })
+      if (!collided) break
+      dy += STEP
+    }
+    if (dy > 0) {
+      // Keep the nudged card on-screen — never push it past the bottom edge.
+      const maxDy = Math.max(0, window.innerHeight - EDGE_MARGIN - el.getBoundingClientRect().bottom)
+      setNudge({ dx: 0, dy: Math.min(dy, maxDy) })
+    }
+    // Deliberately only on `expanded` toggling on — re-running on every render would
+    // fight a manual drag (which sets `pos`, not `nudge`) and re-trigger a nudge search
+    // against the card's OWN just-nudged position.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, selectMode])
 
   // Select mode shows every note as a compact, checkable chip regardless of its own
   // expanded/collapsed state — a clean list to tick, rather than making "which part of
@@ -602,6 +665,7 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
       <FastTooltip label={selectMode ? preview : (isUnread ? `New: ${preview}` : preview)} align="left">
         <button
           ref={ref as React.RefObject<HTMLButtonElement>}
+          data-note-id={note.id}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -625,10 +689,14 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
   return (
     <div
       ref={ref as React.RefObject<HTMLDivElement>}
+      data-note-id={note.id}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      style={notePosStyle(pos, EXPANDED_SIZE_REM)}
+      style={{
+        ...notePosStyle(pos, EXPANDED_SIZE_REM),
+        transform: nudge.dx || nudge.dy ? `translate(${nudge.dx}px, ${nudge.dy}px)` : undefined,
+      }}
       className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${noteBgClasses(note, isUnread)}`}
     >
       <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} onCollapse={() => setExpanded(false)} />
