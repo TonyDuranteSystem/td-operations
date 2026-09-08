@@ -134,6 +134,41 @@ function notePosStyle(pos: FracPos, size: { width: number; height: number }): Re
   }
 }
 
+/** This file assumes the untouched CSS default of 1rem = 16px throughout — already relied
+ *  on implicitly by every other REM constant's own comment above; named here because the
+ *  functions below are the first to actually need it as a real number, not just inside a
+ *  CSS string the browser converts for us. */
+const REM_PX = 16
+
+/**
+ * The exact NUMBER of pixels notePosStyle's own shift adds on the horizontal axis, for a
+ * real drag to correctly invert (2026-09-08, Bug Hunter EtoE pass on THIS SAME cascade
+ * fix: "the hand is always out of the notes" while dragging). `onPointerMove` below turns
+ * a raw mouse position into a STORED FRACTION by dividing by the viewport width — correct
+ * ONLY if the fraction maps 1:1 to a rendered pixel, which stopped being true the moment
+ * notePosStyle started adding leftShift/rightShift on top of `pos.x*100vw`. Left
+ * uncorrected, every drag silently baked an extra `leftShift - rightShift` pixels into the
+ * stored position the instant it started moving — the cursor tracks the mouse exactly (it
+ * IS the mouse), but the note jumps by that fixed offset the moment the drag begins and
+ * never catches back up, which is exactly "the hand is out of the notes." Must mirror
+ * notePosStyle's OWN left/rightShift math exactly, as plain numbers instead of a CSS
+ * string — computed fresh on every call (cheap, and self-corrects if the window is ever
+ * resized mid-drag) rather than cached once at drag-start.
+ */
+function horizontalShiftPx(viewportWidthPx: number, noteWidthRem: number): number {
+  const leftShift = Math.max(0, SIDEBAR_CLEARANCE_REM * REM_PX - (CASCADE_FIRST_COL_VW / 100) * viewportWidthPx)
+  const ceiling = viewportWidthPx - (noteWidthRem + EDGE_MARGIN_REM) * REM_PX
+  const rightShift = Math.max(0, (CASCADE_LAST_COL_VW / 100) * viewportWidthPx + leftShift - ceiling)
+  return leftShift - rightShift
+}
+
+/** Same idea as horizontalShiftPx, for the vertical axis — notePosStyle's `top` only ever
+ *  had the one (left-shift-equivalent) term, never a mirrored ceiling term, so this is
+ *  simpler than the horizontal version, but the same drag-inversion bug applies to it. */
+function verticalShiftPx(viewportHeightPx: number): number {
+  return Math.max(0, HEADER_CLEARANCE_REM * REM_PX - (CASCADE_FIRST_ROW_VH / 100) * viewportHeightPx)
+}
+
 interface Note {
   id: string
   body: string
@@ -729,8 +764,12 @@ function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnre
     if (!d) return
     if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
     d.moved = true
-    const x = clampFrac((e.clientX - d.dx) / window.innerWidth)
-    const y = clampFrac((e.clientY - d.dy) / window.innerHeight)
+    // Invert notePosStyle's OWN render-time shift before storing — see horizontalShiftPx's
+    // own comment. Without this, the note jumps by a fixed offset the instant a drag
+    // starts, and the cursor (which IS the mouse) reads as permanently detached from it.
+    const size = expanded ? EXPANDED_SIZE_REM : COLLAPSED_SIZE_REM
+    const x = clampFrac((e.clientX - d.dx - horizontalShiftPx(window.innerWidth, size.width)) / window.innerWidth)
+    const y = clampFrac((e.clientY - d.dy - verticalShiftPx(window.innerHeight)) / window.innerHeight)
     setPos({ x, y })
   }
   const onPointerUp = () => {
