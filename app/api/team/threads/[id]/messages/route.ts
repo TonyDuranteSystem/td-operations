@@ -74,10 +74,14 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: thread } = await (supabaseAdmin as any)
     .from('internal_threads')
-    .select('id, thread_type, account_id, dm_key, channel_slug, channel_name, title')
+    .select('id, thread_type, account_id, contact_id, lead_id, dm_key, channel_slug, channel_name, title')
     .eq('id', threadId)
     .single()
   if (!thread) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
+  // Same signal the Conversations sidebar buckets on (client_bucket ===
+  // 'internal' in get_team_threads) — a discussion thread anchored to no
+  // client at all is a staff-only TOPIC, not a client conversation.
+  const isInternalTopic = thread.thread_type === 'discussion' && !thread.account_id && !thread.contact_id && !thread.lead_id
 
   // reply_to must belong to this thread. Capture the parent's root so this
   // reply is stamped with the thread's ORIGINAL message (Slack-style 2-level
@@ -245,16 +249,20 @@ export async function POST(
           tag: `team-thread-${rootId}`,
         })
       }
-    } else if (thread.thread_type === 'discussion' && conversationNotifiesParticipants()) {
+    } else if (thread.thread_type === 'discussion' && conversationNotifiesParticipants(isInternalTopic)) {
       // A client conversation: ping its PARTICIPANTS (anyone with a read row —
       // opened / posted / shared into), never the whole team. The CLAUDE
       // sentinel and the sender are excluded. This is the participant model that
       // keeps channel chatter silent while a conversation you're in rings.
       //
-      // SILENT SINCE 2026-08-04 — the predicate returns false, so this branch
-      // does not run. Kept rather than deleted because the participant model is
+      // SILENT FOR A CLIENT CONVERSATION SINCE 2026-08-04 (isInternalTopic is
+      // false, so the predicate returns false there and this branch does not
+      // run for it). Kept rather than deleted because the participant model is
       // still the intended shape; what was wrong is that merely OPENING a
-      // conversation joins you to it. See conversationNotifiesParticipants.
+      // conversation joins you to it. LIVE FOR AN INTERNAL TOPIC (isInternalTopic
+      // true) since 2026-09-08 — a topic's only two participants are exactly
+      // Antonio and Luca, so the same participant list now means "the other
+      // one of the two," same as a DM. See conversationNotifiesParticipants.
       // An @mention in a conversation still pushes — that branch is ABOVE this
       // one and must stay above it.
       const { CLAUDE_SENDER_UUID } = await import('@/lib/team/workspace')

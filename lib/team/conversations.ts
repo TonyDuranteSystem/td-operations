@@ -45,3 +45,14 @@ export function conversationTitle(clientName: string, topic?: string | null): st
   const t = (topic || '').trim()
   return t ? `${name} · ${t}` : name
 }
+
+/**
+ * A default name for a topic left blank at creation — "Topic — Sep 8" rather
+ * than blocking with validation text (Erika Hall review, 2026-09-08: a topic
+ * has no other identity to fall back on the way a client conversation falls
+ * back on the client's own name, so it should never go truly nameless, but
+ * naming it shouldn't be a hard requirement either).
+ */
+export function defaultTopicName(now: Date = new Date()): string {
+  return `Topic — ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+}

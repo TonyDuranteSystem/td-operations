@@ -39,7 +39,8 @@ export function channelNotifiesStaff(slug: string | null | undefined): boolean {
 
 /**
  * Does a message in a CLIENT CONVERSATION (thread_type 'discussion') notify its
- * participants? **No — since 2026-08-04.**
+ * participants? **No for a client conversation — since 2026-08-04. Yes for an
+ * internal TOPIC (not about any client) — since 2026-09-08.**
  *
  * Antonio: "every time Luca do something on his pc I receive the notification.
  * I want to turn them off." He was getting a toast AND a phone push for every
@@ -59,19 +60,31 @@ export function channelNotifiesStaff(slug: string | null | undefined): boolean {
  *       with the real predicate and all three call sites follow.
  *
  * STATED PLAINLY BECAUSE IT IS THE COST: a teammate who writes "Antonio, look
- * at this" inside a conversation WITHOUT @naming him now reaches nobody in real
- * time. The Team Chat unread counter still counts conversations (a quiet
- * number, deliberately left on), and an @mention still pushes — that branch is
- * checked BEFORE this one at every call site and must stay that way.
+ * at this" inside a client conversation WITHOUT @naming him now reaches nobody
+ * in real time. The Team Chat unread counter still counts conversations (a
+ * quiet number, deliberately left on), and an @mention still pushes — that
+ * branch is checked BEFORE this one at every call site and must stay that way.
+ *
+ * INTERNAL TOPICS ARE THE OPPOSITE CASE, not an extension of the same problem.
+ * The silence above exists because the participant rule over-enrolled Antonio
+ * in OTHER people's client conversations. A topic has no "other people" — it is
+ * always exactly Antonio and Luca (council pre-build review, 2026-09-08:
+ * flagged this function's hardcoded `false` as a real blocker for the topic
+ * feature — a message in a topic thread would silently notify nobody, same
+ * shape as the client-conversation bug that made the participant-count fix
+ * necessary in the first place). So a topic notifies like a DM does: every
+ * post reaches the other person, no @mention required.
  *
  * Read by all three sites that could notify for a conversation — the two send
  * paths (a person posting, and Claude posting) and the in-CRM toast listener —
  * for the same reason `channelNotifiesStaff` is: the phone and the screen must
- * not be able to disagree about what is worth interrupting you for.
+ * not be able to disagree about what is worth interrupting you for. All three
+ * now pass `isInternalTopic` (from the thread row's `client_bucket ===
+ * 'internal'`, the same signal the Conversations sidebar already buckets on).
  *
  * NOT the same thing as a deliberate SHARE into a conversation: that is one
  * person addressing another on purpose and still notifies (see the share route).
  */
-export function conversationNotifiesParticipants(): boolean {
-  return false
+export function conversationNotifiesParticipants(isInternalTopic: boolean): boolean {
+  return isInternalTopic
 }

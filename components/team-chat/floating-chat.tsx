@@ -33,7 +33,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare, X, Minus, Send, Loader2, StickyNote, Paperclip,
   Volume2, VolumeX, RotateCcw, Smile, MoreHorizontal, Pencil, Trash2, Copy, Plus, Building2,
-  ChevronLeft, Check, Bot,
+  ChevronLeft, Check, Bot, Hash,
 } from 'lucide-react'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -50,7 +50,7 @@ import {
 } from '@/lib/team/chat-window-position'
 import {
   selectableChatMembers, myDmThreads, myDmThreadIdSet, otherPartyId,
-  openConversations, conversationLabel, windowUnreadCount,
+  openConversations, openTopics, conversationLabel, windowUnreadCount,
   type ChatMember, type ChatThreadRow,
 } from '@/lib/team/chat-window-threads'
 import {
@@ -151,8 +151,9 @@ function FloatingChatInner() {
 
   const dmThreads = useMemo(() => myDmThreads(threads, myId), [threads, myId])
   const conversations = useMemo(() => openConversations(threads), [threads])
+  const topics = useMemo(() => openTopics(threads), [threads])
   const people = useMemo(() => selectableChatMembers(members, myId), [members, myId])
-  // Counts everything the window can OPEN — DMs and live client conversations.
+  // Counts everything the window can OPEN — DMs, live client conversations, and topics.
   const unread = useMemo(() => windowUnreadCount(threads, myId), [threads, myId])
   const nameFor = useCallback(
     (id: string | null) => (id ? members.find((m) => m.id === id)?.name ?? 'Teammate' : 'Teammate'),
@@ -475,6 +476,7 @@ function FloatingChatInner() {
           isList={!openThreadId}
           dmThreads={dmThreads}
           conversations={conversations}
+          topics={topics}
           myId={myId}
           nameFor={nameFor}
           openThreadId={openThreadId}
@@ -566,6 +568,7 @@ function FloatingChatInner() {
         <MobileSheet
           dmThreads={dmThreads}
           conversations={conversations}
+          topics={topics}
           myId={myId}
           nameFor={nameFor}
           openThreadId={openThreadId}
@@ -615,6 +618,7 @@ function DesktopWindow(props: {
   isList: boolean
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   nameFor: (id: string | null) => string
   openThreadId: string | null
   openThread: ChatThreadRow | null
@@ -752,6 +756,7 @@ function DesktopWindow(props: {
         <ChatList
           dmThreads={props.dmThreads}
           conversations={props.conversations}
+          topics={props.topics}
           myId={props.myId}
           nameFor={props.nameFor}
           onPick={props.onPickThread}
@@ -792,35 +797,51 @@ function DesktopWindow(props: {
 /**
  * "New chat" — Antonio's model, exactly.
  *
- *   pick a client  → it goes under that client's conversation in Team Workspace
- *   pick nobody    → it is a direct message to a teammate
+ *   pick a client   → it goes under that client's conversation in Team Workspace
+ *   pick a teammate → a direct message
+ *   name a topic    → a staff-only conversation about no client, e.g. "Q4 taxes"
  *
- * Nothing new is invented. A client chat IS the client conversation that already
- * exists: the server reuses an open one for the same client and subject rather
- * than forking a duplicate, and a brand-new one already records who started it
- * and when. That is why this feature avoided every problem the reviewers found
- * with nesting chats inside a direct message — each chat here is a real,
- * top-level conversation that Team Workspace already knows how to show.
+ * Nothing here is invented. A client chat IS the client conversation that
+ * already exists, and a topic is the SAME kind of thread (a `discussion`) just
+ * anchored to no client — the server reuses an open one for the same
+ * client/topic rather than forking a duplicate either way. That is why this
+ * feature avoided every problem the reviewers found with nesting chats inside
+ * a direct message — each chat here is a real, top-level conversation Team
+ * Workspace already knows how to show.
+ *
+ * THREE EXPLICIT TABS, not an inferred branch (Erika Hall review, 2026-09-08):
+ * the original two-way version branched on whether the client field was filled
+ * in — fine for two options, but a blank client field can no longer mean both
+ * "message a teammate" AND "start a topic" at once. Making the choice a visible
+ * control rather than a side effect of what happens to be typed is what keeps
+ * a third option from making the first two ambiguous.
  */
+type NewChatKind = 'client' | 'dm' | 'topic'
+
 function NewChatDialog(props: {
   people: ChatMember[]
   onOpenThread: (id: string) => void
   onClose: () => void
 }) {
+  const [kind, setKind] = useState<NewChatKind>('client')
   const [accountId, setAccountId] = useState<string | undefined>()
   const [accountName, setAccountName] = useState<string | undefined>()
   const [subject, setSubject] = useState('')
   const [personId, setPersonId] = useState<string>(props.people[0]?.id ?? '')
+  const [topicName, setTopicName] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   /** Set when the server continued an existing chat instead of starting one. */
   const [reusedThread, setReusedThread] = useState<{ id: string; label: string } | null>(null)
 
+  const pickKind = (k: NewChatKind) => { setKind(k); setErr(null); setReusedThread(null) }
+
   /** `forceNew` is passed in, never read from state — state would lag the click. */
   const start = async (forceNew = false) => {
     setBusy(true); setErr(null)
     try {
-      if (accountId) {
+      if (kind === 'client') {
+        if (!accountId) throw new Error('Pick a client.')
         // Client chat → the existing client-conversation endpoint.
         const res = await fetch('/api/team/conversations', {
           method: 'POST',
@@ -846,9 +867,34 @@ function NewChatDialog(props: {
           return
         }
         props.onOpenThread(d.thread.id)
+      } else if (kind === 'topic') {
+        // A staff-only topic → the SAME endpoint, `internal: true` instead of a
+        // client ref (find-conversation.ts reuses the identical find-or-create
+        // path rather than a second one). A blank name still starts a chat —
+        // the server fills in a dated default ("Topic — Sep 8") rather than
+        // blocking on a name (defaultTopicName, conversations.ts).
+        const res = await fetch('/api/team/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            internal: true,
+            topic: topicName.trim() || undefined,
+            force_new: forceNew,
+          }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          throw new Error(d.error || 'Could not start that topic.')
+        }
+        const d = await res.json()
+        if (d.reused && !forceNew) {
+          setReusedThread({ id: d.thread.id, label: topicName.trim() || 'this topic' })
+          return
+        }
+        props.onOpenThread(d.thread.id)
       } else {
-        // No client → a direct message.
-        if (!personId) throw new Error('Pick a teammate or a client.')
+        // A direct message to a teammate.
+        if (!personId) throw new Error('Pick a teammate.')
         const res = await fetch('/api/team/dms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -868,6 +914,8 @@ function NewChatDialog(props: {
       setBusy(false)
     }
   }
+
+  const TAB_LABEL: Record<NewChatKind, string> = { client: 'Client', dm: 'Teammate', topic: 'Topic' }
 
   return (
     <div className="fixed inset-0 z-[75] flex items-end justify-center bg-black/30 sm:items-center sm:p-4" onClick={props.onClose}>
@@ -905,16 +953,29 @@ function NewChatDialog(props: {
           </>
         ) : (
         <>
-        <label className="mb-1 block text-xs font-medium text-zinc-600">About a client (optional)</label>
-        <AccountCombobox
-          value={accountId}
-          displayValue={accountName}
-          onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
-          placeholder="Search company or person…"
-        />
+        <div className="mb-3 flex gap-1 rounded-lg bg-zinc-100 p-1">
+          {(['client', 'dm', 'topic'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => pickKind(k)}
+              className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                kind === k ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+            >
+              {TAB_LABEL[k]}
+            </button>
+          ))}
+        </div>
 
-        {accountId ? (
+        {kind === 'client' && (
           <>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Client</label>
+            <AccountCombobox
+              value={accountId}
+              displayValue={accountName}
+              onChange={(id, name) => { setAccountId(id); setAccountName(name) }}
+              placeholder="Search company or person…"
+            />
             <label className="mb-1 mt-3 block text-xs font-medium text-zinc-600">What about? (optional)</label>
             <input
               value={subject}
@@ -928,9 +989,11 @@ function NewChatDialog(props: {
               open, you&apos;ll land in it rather than starting a duplicate.
             </p>
           </>
-        ) : (
+        )}
+
+        {kind === 'dm' && (
           <>
-            <label className="mb-1 mt-3 block text-xs font-medium text-zinc-600">Or message a teammate</label>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Teammate</label>
             <select
               value={personId}
               onChange={(e) => setPersonId(e.target.value)}
@@ -942,11 +1005,29 @@ function NewChatDialog(props: {
           </>
         )}
 
+        {kind === 'topic' && (
+          <>
+            <label className="mb-1 block text-xs font-medium text-zinc-600">Topic name (optional)</label>
+            <input
+              value={topicName}
+              onChange={(e) => setTopicName(e.target.value)}
+              placeholder="e.g. Q4 taxes, Marketing plan"
+              maxLength={120}
+              autoFocus
+              className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
+            />
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Just between staff — not about any client. If a topic with this name is already
+              open, you&apos;ll land in it rather than starting a duplicate.
+            </p>
+          </>
+        )}
+
         {err && <p className="mt-2 text-xs text-red-700">{err}</p>}
 
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={props.onClose} className="rounded px-3 py-1.5 text-sm hover:bg-zinc-100">Cancel</button>
-          <button onClick={() => start()} disabled={busy || (!accountId && !personId)}
+          <button onClick={() => start()} disabled={busy || (kind === 'client' && !accountId) || (kind === 'dm' && !personId)}
             className="flex items-center gap-1 rounded bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-400 disabled:opacity-40">
             {busy && <Loader2 className="h-4 w-4 animate-spin" />} Start
           </button>
@@ -972,6 +1053,7 @@ function NewChatDialog(props: {
 function ChatList(props: {
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   myId: string | null
   nameFor: (id: string | null) => string
   onPick: (id: string) => void
@@ -1001,6 +1083,15 @@ function ChatList(props: {
           icon={<MessageSquare className="h-4 w-4" />} />
       ))}
 
+      {props.topics.length > 0 && (
+        <p className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+          Topics
+        </p>
+      )}
+      {props.topics.map((t) => (
+        <Row key={t.id} t={t} label={conversationLabel(t)} icon={<Hash className="h-4 w-4" />} />
+      ))}
+
       {props.conversations.length > 0 && (
         <p className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
           Clients
@@ -1010,7 +1101,7 @@ function ChatList(props: {
         <Row key={t.id} t={t} label={conversationLabel(t)} icon={<Building2 className="h-4 w-4" />} />
       ))}
 
-      {props.dmThreads.length === 0 && props.conversations.length === 0 && (
+      {props.dmThreads.length === 0 && props.conversations.length === 0 && props.topics.length === 0 && (
         <p className="py-6 text-center text-sm text-zinc-500">No chats yet.</p>
       )}
 
@@ -1511,6 +1602,7 @@ function Composer(props: {
 function MobileSheet(props: {
   dmThreads: ChatThreadRow[]
   conversations: ChatThreadRow[]
+  topics: ChatThreadRow[]
   myId: string | null
   nameFor: (id: string | null) => string
   openThreadId: string | null
@@ -1566,6 +1658,7 @@ function MobileSheet(props: {
           <ChatList
             dmThreads={props.dmThreads}
             conversations={props.conversations}
+            topics={props.topics}
             myId={props.myId}
             nameFor={props.nameFor}
             onPick={props.onPickThread}

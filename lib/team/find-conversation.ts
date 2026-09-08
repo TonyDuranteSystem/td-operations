@@ -31,7 +31,8 @@ export interface FoundConversation {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   thread: any
   reused: boolean
-  clientName: string
+  /** null for an internal topic — there is no client to name. */
+  clientName: string | null
 }
 
 /** Resolve the display name for a client ref; null if the row doesn't exist. */
@@ -49,8 +50,20 @@ async function resolveClientName(ref: ClientRef): Promise<string | null> {
 }
 
 export interface FindOrCreateConversationInput {
-  ref: ClientRef
-  /** Topic display name (free-typed or a catalog label); null → topic-less. */
+  /**
+   * `null` = an INTERNAL topic between staff, not about any client — no
+   * account/contact/lead column is populated, matching `get_team_threads`'s
+   * own pre-existing `client_bucket = 'internal'` case (it already exists for
+   * exactly this shape; nothing there needed to change). Council review,
+   * 2026-09-08: reusing this one find-or-create path rather than inventing a
+   * second is deliberate — this file's own header already warns against a
+   * third dedup path, and an internal topic needs the identical reuse-by-name
+   * behavior a client conversation already has, nothing more.
+   */
+  ref: ClientRef | null
+  /** Topic display name (free-typed or a catalog label); null → topic-less.
+   *  Required (never null) when `ref` is null — an internal topic has no
+   *  client name to fall back on for its title. */
   topic: string | null
   createdBy: string
   createdByName: string
@@ -77,15 +90,26 @@ export async function findOrCreateConversation(
   input: FindOrCreateConversationInput,
 ): Promise<FoundConversation | { error: string; status: number }> {
   const { ref, createdBy, createdByName, forceNew } = input
+  const isInternal = ref === null
 
-  const clientName = await resolveClientName(ref)
-  if (clientName === null) {
-    return { error: `${ref.kind[0].toUpperCase()}${ref.kind.slice(1)} not found.`, status: 404 }
+  let clientName: string | null = null
+  if (!isInternal) {
+    clientName = await resolveClientName(ref)
+    if (clientName === null) {
+      return { error: `${ref.kind[0].toUpperCase()}${ref.kind.slice(1)} not found.`, status: 404 }
+    }
   }
 
   const topic = (input.topic ?? '').trim() || null
+  if (isInternal && !topic) {
+    // Should never reach here — the caller (POST /api/team/conversations)
+    // fills a default name before this runs — but a topic conversation has no
+    // client name to title itself with, so refuse rather than create an
+    // unlabeled thread nobody could tell apart from another.
+    return { error: 'An internal topic needs a name.', status: 400 }
+  }
   const topicSlug = topic ? channelSlug(topic) || null : null
-  const col = clientRefColumn(ref.kind)
+  const col = isInternal ? null : clientRefColumn(ref.kind)
   const now = new Date().toISOString()
 
   if (!forceNew) {
@@ -94,9 +118,15 @@ export async function findOrCreateConversation(
       .from('internal_threads')
       .select('*')
       .eq('thread_type', 'discussion')
-      .eq(col, ref.id)
       .is('archived_at', null)
       .or('resolution.is.null,resolution.eq.solved') // reuse Open + Solved; skip Closed
+    reuseQuery = col
+      ? reuseQuery.eq(col, (ref as ClientRef).id)
+      // An internal topic is identified by having NONE of the three client
+      // columns set — matching get_team_threads's own 'internal' bucket case
+      // exactly, so this reuse check and that display grouping can never
+      // disagree about which threads are "internal."
+      : reuseQuery.is('account_id', null).is('contact_id', null).is('lead_id', null)
     reuseQuery = topicSlug ? reuseQuery.eq('topic_slug', topicSlug) : reuseQuery.is('topic_slug', null)
     const { data: existing } = await reuseQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
     if (existing) {
@@ -115,15 +145,19 @@ export async function findOrCreateConversation(
     }
   }
 
+  // isInternal was already guaranteed a non-null topic above (the 400 guard);
+  // the client branch already guaranteed a non-null clientName (the 404 guard).
+  const title = isInternal ? (topic as string) : conversationTitle(clientName as string, topic)
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: created, error } = await (supabaseAdmin as any)
     .from('internal_threads')
     .insert({
       thread_type: 'discussion',
-      [col]: ref.id,
+      ...(col ? { [col]: (ref as ClientRef).id } : {}),
       topic,
       topic_slug: topicSlug,
-      title: conversationTitle(clientName, topic),
+      title,
       created_by: createdBy,
       last_activity_at: now,
     })
@@ -136,7 +170,7 @@ export async function findOrCreateConversation(
     thread_id: created.id,
     sender_id: createdBy,
     sender_name: createdByName,
-    message: `🗂️ Conversation started: ${conversationTitle(clientName, topic)}`,
+    message: `🗂️ Conversation started: ${title}`,
     read_at: now,
   })
 

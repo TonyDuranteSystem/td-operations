@@ -28,6 +28,7 @@ import {
   dmUnreadCount,
   otherPartyId,
   openConversations,
+  openTopics,
   conversationLabel,
   windowUnreadCount,
   everMentionedThreadIds,
@@ -236,6 +237,65 @@ describe('openConversations — the client chats the window can open', () => {
       expect(openConversations([autoSeeded])).toEqual([])
     })
   })
+
+  // 2026-09-08: topics (client_bucket === 'internal') are a DIFFERENT list
+  // (openTopics, below) with different visibility rules — even a topic the
+  // viewer was mentioned in must never double up in this one too.
+  it('excludes an internal topic even when ever_mentioned is true', () => {
+    const topic: ChatThreadRow = {
+      id: 'topic-1', thread_type: 'discussion', label: 'Q4 taxes',
+      unread_count: 2, last_activity_at: '2026-09-08T10:00:00Z',
+      ever_mentioned: true, client_bucket: 'internal',
+    }
+    expect(openConversations([topic])).toEqual([])
+  })
+})
+
+describe('openTopics — the internal staff-only topics the window can open', () => {
+  const rows: ChatThreadRow[] = [
+    { id: 'top1', thread_type: 'discussion', label: 'Q4 taxes', unread_count: 2, last_activity_at: '2026-09-08T10:00:00Z', client_bucket: 'internal' },
+    { id: 'top2', thread_type: 'discussion', label: 'Marketing plan', unread_count: 0, last_activity_at: '2026-09-07T10:00:00Z', client_bucket: 'internal' },
+    { id: 'top-done', thread_type: 'discussion', label: 'Closed matter', unread_count: 5, last_activity_at: '2026-09-08T12:00:00Z', resolved_at: '2026-09-08T12:30:00Z', client_bucket: 'internal' },
+    { id: 'top-archived', thread_type: 'discussion', label: 'Old matter', unread_count: 3, last_activity_at: '2026-09-08T13:00:00Z', archived_at: '2026-09-08T13:30:00Z', client_bucket: 'internal' },
+    { id: 'client-1', thread_type: 'discussion', label: 'Rossi LLC', unread_count: 4, last_activity_at: '2026-09-08T14:00:00Z', client_bucket: 'active_client', ever_mentioned: false },
+    { id: 'ch', thread_type: 'channel', unread_count: 40, last_activity_at: '2026-09-08T15:00:00Z' },
+    { id: 'd1', thread_type: 'dm', dm_key: 'antonio:luca', unread_count: 1, last_activity_at: '2026-09-08T09:00:00Z' },
+  ]
+
+  it('returns live internal topics, newest first', () => {
+    expect(openTopics(rows).map((t) => t.id)).toEqual(['top1', 'top2'])
+  })
+
+  it('drops resolved and archived ones — same as client conversations', () => {
+    const ids = openTopics(rows).map((t) => t.id)
+    expect(ids).not.toContain('top-done')
+    expect(ids).not.toContain('top-archived')
+  })
+
+  it('is not a client conversation, a channel, or a DM', () => {
+    const ids = openTopics(rows).map((t) => t.id)
+    expect(ids).not.toContain('client-1')
+    expect(ids).not.toContain('ch')
+    expect(ids).not.toContain('d1')
+  })
+
+  it('is NOT mention-gated — unlike openConversations, a topic the viewer never posted or was mentioned in still shows', () => {
+    const neverMentioned: ChatThreadRow = {
+      id: 'top-quiet', thread_type: 'discussion', label: 'Quiet topic',
+      unread_count: 0, last_activity_at: '2026-09-08T10:00:00Z',
+      client_bucket: 'internal', ever_mentioned: false,
+    }
+    expect(openTopics([neverMentioned]).map((t) => t.id)).toEqual(['top-quiet'])
+  })
+
+  it('respects the limit', () => {
+    expect(openTopics(rows, 1).map((t) => t.id)).toEqual(['top1'])
+  })
+
+  it('tolerates an empty or missing list', () => {
+    expect(openTopics(null)).toEqual([])
+    expect(openTopics([])).toEqual([])
+  })
 })
 
 // Same day, follow-up ask: "in the floating chat, after reading a message I
@@ -377,5 +437,10 @@ describe('windowUnreadCount — the badge counts what the window can open', () =
   it('does not count a conversation the viewer was never mentioned in (2026-09-04)', () => {
     const notMine: ChatThreadRow = { id: 'c-not-mine', thread_type: 'discussion', unread_count: 99, ever_mentioned: false }
     expect(windowUnreadCount([...rows, notMine], ME)).toBe(5) // unchanged — the 99 never counts
+  })
+
+  it('counts an internal topic even though it is never ever_mentioned (2026-09-08)', () => {
+    const topic: ChatThreadRow = { id: 'top1', thread_type: 'discussion', unread_count: 7, client_bucket: 'internal', ever_mentioned: false }
+    expect(windowUnreadCount([...rows, topic], ME)).toBe(12) // 5 + 7 — the window can open it, so it counts
   })
 })
