@@ -15,6 +15,7 @@ import { applyAvailableCreditToInvoice } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
 import { PLAN_TOTAL_TOLERANCE, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { resolveTrancheCardFeeRate } from '@/lib/offers/payment-plan-state'
+import { computeInvoiceItemTotals, type InvoiceLineItemInput } from '@/lib/finance/invoice-totals'
 
 // Moved 2026-09-06 from app/(dashboard)/payments/invoice-actions.ts (dev job
 // ef5da377, Step 1 of retiring the old Payment Tracker page). This is the
@@ -222,6 +223,218 @@ export async function createInvoice(
       ...(invoiceData.tranche ? { tranche: invoiceData.tranche } : {}),
     },
   })
+}
+
+// ── Update Invoice Line Items (Draft only) ──────────────────────────
+//
+// The Draft-only line-item editor (dev job ef5da377), rebuilt from the old
+// Payment Tracker page's version rather than ported as-is — that version had
+// three real money-safety gaps, each fixed here:
+//  (a) its header write checked only `invoice_status = 'Draft'`, never
+//      whether the write actually matched a row, so a status change landing
+//      between the read and the write left the header silently untouched
+//      while the line items below were replaced anyway, under a total that
+//      no longer matched what was actually sent;
+//  (b) its line-item delete result was never checked at all, so a failed
+//      delete would leave BOTH the old and new line items on the invoice;
+//  (c) it never synced the client-portal mirror, so a client billed to an
+//      account could see a stale total/line-items in their own portal after
+//      a staff edit.
+// Also recomputes each item's amount from quantity * unit_price server-side
+// (the client already treats amount as fully derived — see the New Invoice
+// dialog) instead of trusting whatever the client sent, and floors the total
+// at 0 — see lib/finance/invoice-totals.ts.
+
+async function enforceTranchePlanConstraint(
+  trancheOfferToken: string | null,
+  trancheSeq: number | null,
+  discount: number,
+  currency: string,
+  total: number,
+): Promise<void> {
+  // Same guard as createInvoice's tranche block, extracted so a plan
+  // constraint fix lands once — see that block's own comments for why each
+  // check exists (a part's agreed amount is the definitive figure; a
+  // mismatched currency or amount would misstate a referrer's or partner's
+  // commission, computed off the real invoice).
+  if (!trancheOfferToken) return
+  if (discount > 0) {
+    throw new Error(
+      "A part of a payment plan cannot carry a separate discount — the plan's part amount is " +
+      "already the figure owed. To reduce it, edit the plan on the offer, then save again.",
+    )
+  }
+  const planQuery = supabaseAdmin
+    .from('offers')
+    .select('payment_plan' as never)
+    .eq('token', trancheOfferToken) as unknown as {
+      maybeSingle: () => Promise<{ data: { payment_plan?: unknown } | null }>
+    }
+  const { data: offerRow } = await planQuery.maybeSingle()
+  const parsed = validatePaymentPlan(offerRow?.payment_plan)
+  const part = parsed.ok && parsed.plan ? parsed.plan.find((p) => p.seq === trancheSeq) : undefined
+  if (part && part.currency !== currency) {
+    throw new Error(
+      `Part ${part.seq} of this plan is agreed in ${part.currency} — this invoice is in ` +
+      `${currency}. They must match. Fix the currency, or fix the plan on the offer, then save again.`,
+    )
+  }
+  if (part && Math.abs(total - part.amount) > PLAN_TOTAL_TOLERANCE) {
+    throw new Error(
+      `Part ${part.seq} of this plan is agreed at ${part.amount} — this invoice totals ${total}. ` +
+      `They must match. Fix the amount, or fix the plan on the offer, then save again.`,
+    )
+  }
+  // No matching part or an unparsable plan: not this guard's job to invent an
+  // opinion — matches createInvoice's own deliberate degrade.
+}
+
+export interface UpdateInvoiceItemsInput {
+  discount: number
+  items: InvoiceLineItemInput[]
+}
+
+export async function updateInvoiceItems(
+  paymentId: string,
+  expectedUpdatedAt: string,
+  input: UpdateInvoiceItemsInput,
+): Promise<ActionResult> {
+  if (!input.items || input.items.length === 0) {
+    return { success: false, error: 'At least one line item is required.' }
+  }
+
+  // Computed here (not inside safeAction's callback) so both the write below
+  // and the audit-log `details` at the bottom of this call share the same
+  // values — same shape as createInvoice above.
+  const { items, subtotal, total } = computeInvoiceItemTotals(input.items, input.discount || 0)
+
+  return safeAction(async () => {
+    const currentQuery = supabaseAdmin
+      .from('payments')
+      .select('invoice_status, amount_currency, tranche_offer_token, tranche_seq' as never) as unknown as {
+        eq: (c: string, v: unknown) => {
+          single: () => Promise<{
+            data: {
+              invoice_status: string | null
+              amount_currency: string | null
+              tranche_offer_token: string | null
+              tranche_seq: number | null
+            } | null
+            error: { message: string } | null
+          }>
+        }
+      }
+    const { data: current, error: currentErr } = await currentQuery.eq('id', paymentId).single()
+
+    // Surfaces the real cause instead of a misleading "not found" for
+    // anything other than a genuine missing row (e.g. a transient DB
+    // error reads as null data too, and silently reporting that as "not
+    // found" would send someone looking for a deleted invoice that was
+    // never actually missing).
+    if (currentErr) throw new Error(`Could not load this invoice: ${currentErr.message}`)
+    if (!current) throw new Error('Invoice not found')
+    if (current.invoice_status !== 'Draft') {
+      throw new Error('Can only edit line items on a Draft invoice.')
+    }
+
+    await enforceTranchePlanConstraint(
+      current.tranche_offer_token,
+      current.tranche_seq,
+      input.discount || 0,
+      current.amount_currency || 'USD',
+      total,
+    )
+
+    const now = new Date().toISOString()
+
+    // Row-count check + optimistic lock, not just an error check — see this
+    // section's header comment, point (a).
+    // eslint-disable-next-line no-restricted-syntax -- bespoke Draft-only line-item rewrite (row-count check + updated_at lock + tranche guard above); no existing lib/operations/payment.ts helper covers this shape, same as createInvoice's own raw update above
+    const { data: updatedRows, error: updateErr } = await supabaseAdmin
+      .from('payments')
+      .update({
+        subtotal,
+        total,
+        amount: total,
+        discount: input.discount || 0,
+        updated_at: now,
+      })
+      .eq('id', paymentId)
+      .eq('invoice_status', 'Draft')
+      .eq('updated_at', expectedUpdatedAt)
+      .select('id')
+
+    if (updateErr) throw new Error(updateErr.message)
+    if (!updatedRows || updatedRows.length === 0) {
+      throw new Error('This invoice changed since you opened it — reload and try again.')
+    }
+
+    // Checked delete — see this section's header comment, point (b).
+    const { error: deleteErr } = await supabaseAdmin
+      .from('payment_items')
+      .delete()
+      .eq('payment_id', paymentId)
+    if (deleteErr) throw new Error(`Could not clear the old line items — nothing else was changed. ${deleteErr.message}`)
+
+    const { error: insertErr } = await supabaseAdmin
+      .from('payment_items')
+      .insert(items.map((item) => ({
+        payment_id: paymentId,
+        description: item.description,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        amount: item.amount,
+        sort_order: item.sort_order,
+        item_type: item.item_type,
+      })))
+    if (insertErr) throw new Error(`Line items: ${insertErr.message}`)
+
+    // Portal-mirror sync — see this section's header comment, point (c).
+    const { syncClientExpenseItemsMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncClientExpenseItemsMirror(paymentId, items)
+
+    revalidatePath('/payments')
+    // Finance reads the same payments table on its own Invoices tab —
+    // revalidate both while the old Payment Tracker page still exists
+    // (dev job ef5da377).
+    revalidatePath('/finance')
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: 'Invoice line items updated',
+    details: { total, items_count: input.items.length },
+  })
+}
+
+// ── Get Invoice with Items ──────────────────────────────────────────
+// Moved 2026-09-08 from app/(dashboard)/payments/invoice-actions.ts (dev job
+// ef5da377) — Finance's line-item editor needs a fresh read (current items,
+// current discount, current updated_at for the optimistic lock) before it
+// can render, same reason the old page's own dialog called this on open.
+
+export async function getInvoiceWithItems(paymentId: string) {
+  const supabase = createClient()
+
+  const [paymentRes, itemsRes] = await Promise.all([
+    supabase
+      .from('payments')
+      .select('*, accounts:account_id(id, company_name)')
+      .eq('id', paymentId)
+      .single(),
+    supabase
+      .from('payment_items')
+      .select('*')
+      .eq('payment_id', paymentId)
+      .order('sort_order', { ascending: true }),
+  ])
+
+  if (paymentRes.error) throw new Error(paymentRes.error.message)
+
+  return {
+    payment: paymentRes.data,
+    items: itemsRes.data ?? [],
+  }
 }
 
 // ── Create Credit Note ──────────────────────────────────────────────

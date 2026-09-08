@@ -391,28 +391,6 @@ export async function deleteInvoice(
   })
 }
 
-// ── Get Invoice with Items ──────────────────────────────────────────
-
-export async function getInvoiceWithItems(paymentId: string) {
-  const supabase = createClient()
-
-  const [paymentRes, itemsRes] = await Promise.all([
-    supabase
-      .from('payments')
-      .select('*, accounts:account_id(id, company_name)')
-      .eq('id', paymentId)
-      .single(),
-    supabase
-      .from('payment_items')
-      .select('*')
-      .eq('payment_id', paymentId)
-      .order('sort_order', { ascending: true }),
-  ])
-
-  if (paymentRes.error) throw new Error(paymentRes.error.message)
-
-  return {
-    payment: paymentRes.data,
-    items: itemsRes.data ?? [],
-  }
-}
+// getInvoiceWithItems moved to app/(dashboard)/shared/invoice-actions.ts
+// 2026-09-08 (dev job ef5da377) — Finance's own new line-item editor needs
+// it too, same reason createInvoice/createCreditNote/etc. moved earlier.

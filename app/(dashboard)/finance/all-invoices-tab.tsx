@@ -4,7 +4,7 @@ import { useState, useMemo, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
-  Search, FileText, Send, CheckCircle, Edit3, X, Plus,
+  Search, FileText, Send, CheckCircle, Edit3, X, Plus, ListPlus,
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -17,6 +17,7 @@ import { isAccountReminderPaused } from '@/lib/billing/reminder-snooze'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LegacyPaymentsPanel, type LegacyPaymentRecord } from './legacy-payments-panel'
+import { EditInvoiceItemsDialog } from './edit-invoice-items-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -755,6 +756,7 @@ function ActionButton({ onClick, label, icon: Icon, color, hoverBg }: {
 function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
+  const [editingItems, setEditingItems] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
   const [reactivateDialogOpen, setReactivateDialogOpen] = useState(false)
   const router = useRouter()
@@ -887,6 +889,12 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
           <ActionButton onClick={handleRegenerate} label="Regenerate — recalculate and apply any available credit notes" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
         )}
         <ActionButton onClick={() => setEditing(true)} label="Edit — change amount, due date, notes, or payment terms" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        {/* Draft-only (dev job ef5da377): a real invoice document doesn't
+            exist yet, so individual line items are still safe to rewrite
+            outright. The "Edit" button above only ever touches the total. */}
+        {status === 'Draft' && (
+          <ActionButton onClick={() => setEditingItems(true)} label="Edit Items — change individual line items and the discount" icon={ListPlus} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        )}
         {status === 'Paid' && (
           <ActionButton
             onClick={() => {
@@ -919,6 +927,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
       </div>
       {editing && (
         <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
+      )}
+      {editingItems && (
+        <EditInvoiceItemsDialog invoice={invoice} onClose={() => setEditingItems(false)} />
       )}
       <ConfirmDestructiveDialog
         open={voidDialogOpen}
