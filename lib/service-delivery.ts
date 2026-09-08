@@ -501,6 +501,60 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 8b-chat. Sibling to 8b (2026-09-08) — an OPTIONAL portal-chat copy of the
+  // same milestone, gated by pipeline_stages.notify_client_chat. Purely
+  // additive: never replaces the 8b email, and inherits its skip_notify /
+  // actionStageCfg guards so a bulk correction can't spam clients here either.
+  // Topic comes from client_chat_topic (a FIXED label pinned per stage) —
+  // never computed via buildFlowTopic()/deriveFlowYear(), which resolves off
+  // a moving timestamp and was found to split one client's own conversation
+  // across topics as a case ages (docs/systems/flows.md, 2026-09-08). Message
+  // reuses the same stage copy an operator already wrote for the client
+  // (client_notification_message, else client_description) instead of new text.
+  //
+  // Cast for the same reason as 8b above: the columns exist in sandbox only
+  // until Antonio promotes this migration to production.
+  const targetStageWithChat = targetStage as typeof targetStage & {
+    notify_client_chat?: boolean | null
+    client_chat_topic?: string | null
+    client_description?: string | null
+  }
+  {
+    const { resolveStageChatNotification } = await import("@/lib/portal/stage-chat-notification")
+    const chatDecision = resolveStageChatNotification({
+      skip_notify,
+      hasActionStageConfig: !!actionStageCfg,
+      hasRecipient: !!(delivery.account_id || delivery.contact_id),
+      notify_client_chat: targetStageWithChat.notify_client_chat,
+      client_chat_topic: targetStageWithChat.client_chat_topic,
+      client_notification_message: targetStageWithNotify.client_notification_message,
+      client_description: targetStageWithChat.client_description,
+      service_type: delivery.service_type,
+      service_name: delivery.service_name,
+      stage_name: targetStage.stage_name,
+    })
+    if (chatDecision) {
+      try {
+        const ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+        const { error: chatErr } = await supabaseAdmin.from("portal_messages").insert({
+          account_id: delivery.account_id ?? null,
+          contact_id: delivery.contact_id ?? null,
+          sender_type: "admin",
+          sender_id: ADMIN_SENDER_ID,
+          message: chatDecision.message,
+          topic: chatDecision.topic,
+          attachments: [],
+        })
+        if (chatErr) throw new Error(chatErr.message)
+        autoTriggers.push(`Stage-change chat message posted (topic: ${chatDecision.topic})`)
+      } catch (chatErr) {
+        autoTriggers.push(
+          `Stage-change chat message failed: ${chatErr instanceof Error ? chatErr.message : String(chatErr)}`,
+        )
+      }
+    }
+  }
+
   // 8c (RETIRED 2026-07-02, Phase C): the bespoke ITIN "Document Preparation
   // → Client Signing" chat block moved to the shared action-stage rail — the
   // 'ITIN::Client Signing' entry in lib/portal/action-stage-registry.ts,
