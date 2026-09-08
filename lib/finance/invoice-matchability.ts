@@ -122,6 +122,30 @@ export function isMatchableInvoice(inv: InvoiceStatusPair): boolean {
 }
 
 /**
+ * True when an invoice is ALREADY Paid in a way that makes changing its total
+ * an edit to a settled record, not an ordinary Draft/Sent edit — the gate for
+ * showing the 3-way "partial payment / new charge / typo" correction prompt.
+ *
+ * DO NOT use {@link isPaidInvoice} for this. It answers a different question
+ * ("may this money be audit-linked here?") and ORs in the coarse `status`
+ * column unconditionally — a credit note's `status` is ALSO always `"Paid"`
+ * from the moment it's created, so `isPaidInvoice` returns true for every
+ * credit note. Reusing it as the correction-prompt gate has already shipped
+ * as a real regression once (every credit-note edit demanded an answer to a
+ * meaningless "partial payment or typo?" question) and was proposed and
+ * declined a second time in review before this predicate existed. This
+ * function reads `invoice_status` first and only consults the coarse
+ * `status` when `invoice_status` is absent — the same narrowing already
+ * proven correct and shipped at the three sites this replaces — so a credit
+ * note (`invoice_status: "Credit"`) never matches, regardless of `status`.
+ */
+export function wasFullyPaid(inv: InvoiceStatusPair): boolean {
+  const invoiceStatus = inv.invoice_status?.trim()
+  if (invoiceStatus) return invoiceStatus === "Paid"
+  return inv.status?.trim() === "Paid"
+}
+
+/**
  * Why a terminal invoice is closed — for the loud server-side rejection when a
  * human tries to settle one from the bank-feed UI (R099: surface the real
  * reason, never a generic failure).

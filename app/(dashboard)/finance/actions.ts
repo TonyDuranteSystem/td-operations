@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 import type { DryRunResult } from '@/lib/operations/destructive'
+import { wasFullyPaid as wasInvoiceFullyPaid } from '@/lib/finance/invoice-matchability'
 
 /**
  * Create a TD LLC invoice TO a client (writes to payments + client_expenses).
@@ -523,9 +524,17 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
   return safeAction(async () => {
     const now = new Date().toISOString()
 
-    // Update payment
+    // Update payment. The pre-checks above (not-Cancelled, not-Credit) ran on
+    // a read taken before this write — a race (a second tab, the bank-feed
+    // auto-matcher) can settle the invoice in between. Re-asserted here,
+    // atomically with the write itself, and widened to also exclude Paid
+    // (this action's own eligibility hides Void once an invoice is Paid, but
+    // nothing below the UI enforced it — a stale click could still cancel an
+    // already-fully-paid invoice while amount_paid stayed on record). Row
+    // count checked after, mirroring the sibling fix already shipped on the
+    // old Payment Tracker page's own voidInvoice (dev job ef5da377).
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { error: voidErr } = await supabaseAdmin.from('payments').update({
+    const { data: voidedRows, error: voidErr } = await supabaseAdmin.from('payments').update({
       status: 'Cancelled', invoice_status: 'Cancelled', updated_at: now,
       // Free the idempotency slot (gate defect, 2026-08-11 — found by Antonio's real click):
       // this is the THIRD door that marks an invoice dead, and it was the only one still keeping
@@ -534,7 +543,12 @@ export async function voidInvoice(paymentId: string): Promise<ActionResult> {
       // the council fixed it. The cascade and the payments-page void both already release it.
       idempotency_key: null,
     }).eq('id', paymentId)
+      .not('invoice_status', 'in', '("Paid","Cancelled","Credit")')
+      .select('id')
     if (voidErr) throw new Error(`Failed to void payment: ${voidErr.message}`)
+    if (!voidedRows || voidedRows.length === 0) {
+      throw new Error('This invoice changed before the void landed — it may now be Paid, already cancelled, or a credit note. Refresh and check its current state before trying again.')
+    }
 
     // Sync to client_expenses. syncTDInvoiceStatus maps the STATUS only — it
     // left the mirror's `amount_due` at the old balance, so the client's portal
@@ -621,7 +635,7 @@ export async function reactivateInvoicePreview(
 ): Promise<{ success: boolean; preview?: DryRunResult; error?: string }> {
   try {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker } = await import('@/lib/billing/invoice-reactivate')
+    const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker, isCancelledInvoice } = await import('@/lib/billing/invoice-reactivate')
     const { projectedReminderCount, daysPastDue, isAutoSendEnabled } = await import('@/lib/billing/dunning')
     const { isAccountReminderPaused } = await import('@/lib/billing/reminder-snooze')
 
@@ -634,7 +648,11 @@ export async function reactivateInvoicePreview(
 
     const label = payment.invoice_number ?? paymentId
 
-    if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
+    // Widened to also recognize the old Payment Tracker page's former
+    // cancellation labels (status='Waived'/invoice_status='Voided') —
+    // otherwise every invoice voided there before the 2026-09-07 label
+    // unification stays permanently unreactivatable (dev job ef5da377).
+    if (!isCancelledInvoice(payment)) {
       return { success: true, preview: { affected: {}, items: [], blocker: 'This invoice is not cancelled.', record_label: label } }
     }
 
@@ -761,7 +779,7 @@ async function resolveTargetFor(
  */
 export async function reactivateInvoice(paymentId: string): Promise<ActionResult<{ invoice_status: string; source: string }>> {
   const { supabaseAdmin } = await import('@/lib/supabase-admin')
-  const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker } = await import('@/lib/billing/invoice-reactivate')
+  const { parsePreVoidState, resolveReactivateTarget, reactivateBlocker, isCancelledInvoice } = await import('@/lib/billing/invoice-reactivate')
 
   const { data: payment } = await supabaseAdmin
     .from('payments')
@@ -769,7 +787,11 @@ export async function reactivateInvoice(paymentId: string): Promise<ActionResult
     .eq('id', paymentId)
     .maybeSingle()
   if (!payment) return { success: false, error: 'Invoice not found' }
-  if (payment.invoice_status !== 'Cancelled' && payment.status !== 'Cancelled') {
+  // Widened to also recognize the old Payment Tracker page's former
+  // cancellation labels (status='Waived'/invoice_status='Voided') —
+  // otherwise every invoice voided there before the 2026-09-07 label
+  // unification stays permanently unreactivatable (dev job ef5da377).
+  if (!isCancelledInvoice(payment)) {
     return { success: false, error: 'Only a cancelled invoice can be reactivated.' }
   }
 
@@ -797,13 +819,17 @@ export async function reactivateInvoice(paymentId: string): Promise<ActionResult
     // ordinary invoice.
     if (target.credit_remaining !== null) patch.credit_remaining = target.credit_remaining
 
-    // TOCTOU guard: only reactivate if it is STILL cancelled.
+    // TOCTOU guard: only reactivate if it is STILL cancelled. Widened to
+    // 'Voided' alongside 'Cancelled' — nothing in this codebase writes
+    // invoice_status='Voided' going forward (confirmed by search), so this
+    // only ever matches the old page's former cancellation label, never a
+    // fresh write (dev job ef5da377).
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     const { data: updated, error } = await supabaseAdmin
       .from('payments')
       .update(patch)
       .eq('id', paymentId)
-      .eq('invoice_status', 'Cancelled')
+      .in('invoice_status', ['Cancelled', 'Voided'])
       .select('id')
     if (error) throw new Error(`Failed to reactivate invoice: ${error.message}`)
     if (!updated || updated.length === 0) throw new Error('Invoice is no longer cancelled — reload and try again.')
@@ -1074,13 +1100,14 @@ export async function updateInvoice(
       // NULL (never backfilled) while their coarse status is 'Paid' —
       // editing one of those skipped this entire correction-path safety net
       // (the bank-confirmed cross-check, the card/Whop refusal) and fell
-      // into the weaker "ordinary edit" branch below. Added ONLY the
-      // invoice_status-is-null case, not a blanket OR-both-columns check —
+      // into the weaker "ordinary edit" branch below. Reads invoice_status
+      // first, falling back to status ONLY when invoice_status is absent —
       // a credit note's invoice_status is 'Credit' (not null, not 'Paid'),
       // so this can't reopen the exact isCreditNote regression the comment
-      // above already fixed once.
-      const wasFullyPaid = current.invoice_status === 'Paid' ||
-        (current.invoice_status == null && current.status === 'Paid')
+      // above already fixed once. Shared with the Account page's dialog and
+      // Finance's own list view (dev job ef5da377) — see the function's own
+      // doc comment for why this must never be swapped for isPaidInvoice.
+      const wasFullyPaid = wasInvoiceFullyPaid(current)
 
       // Fixed 2026-09-07 (dev job ef5da377, Antonio-approved 3-way prompt):
       // editing the total on an already-Paid invoice is ambiguous — a typo

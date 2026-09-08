@@ -196,6 +196,14 @@ export async function markInvoicePaid(
       ),
     )
 
+    // Sync to client_expenses (portal mirror) — Finance's own markInvoicePaid
+    // already does this; this button didn't, so a client marked Paid here
+    // could still see their old balance in the portal (dev job ef5da377).
+    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(payment.total))
+    const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncTDInvoiceMirror(paymentId)
+
     // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
     // If this invoice is what a client's setup was waiting on, continue it —

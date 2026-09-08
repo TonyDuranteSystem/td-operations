@@ -3220,7 +3220,10 @@ function PaymentSection({
           </div>
           {payments.map(p => {
             const status = p.invoice_status ?? p.status ?? '—'
-            const isOverdue = p.due_date && p.due_date < today && status !== 'Paid' && status !== 'Cancelled' && status !== 'Waived'
+            // Also excludes 'Voided' — the old Payment Tracker page's former
+            // cancellation label; without it, an old-style cancelled invoice
+            // could be highlighted red as overdue here (dev job ef5da377).
+            const isOverdue = p.due_date && p.due_date < today && status !== 'Paid' && status !== 'Cancelled' && status !== 'Waived' && status !== 'Voided'
             return (
               <div key={p.id} className={cn(
                 'grid grid-cols-1 md:grid-cols-[120px,1fr,100px,100px,90px,100px,40px] gap-1 md:gap-3 px-4 py-2.5 border-b last:border-b-0 text-sm items-center',
