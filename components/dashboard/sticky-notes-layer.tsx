@@ -1,173 +1,38 @@
 'use client'
 
 /**
- * Floating staff sticky notes — the always-on-screen layer.
+ * Staff sticky notes — the note editor + creation entry points.
  *
  * Mounted once in the dashboard layout, OUTSIDE <main> (so it never fights pull-to-refresh).
- * Desktop: draggable notes at per-device fractional positions. Mobile (<lg): a bottom-LEFT pill
- * (the toast layer owns bottom-right) that opens a bottom sheet — no dragging at 380px.
+ * Desktop: this layer no longer renders active notes itself — they live inline in the
+ * dashboard header now (components/dashboard/active-notes-strip.tsx), next to the Parked
+ * trigger, per the 2026-09-08 redesign (Antonio wanted them "next to Parked button...
+ * orizzontaly"; the UX Designer specialist's recommendation was a bounded header strip,
+ * not a free-floating draggable canvas — see that file's own header comment for the full
+ * reasoning). This file's remaining desktop job is narrower: own the note editor/composer
+ * modal and the "New note" entry point, and answer "open this note" requests from
+ * anywhere (the header strip, the Parked trigger, the Alerts bell) via the same
+ * open-in-place mechanism as before. Mobile (<lg) is UNCHANGED — a bottom-LEFT pill (the
+ * toast layer owns bottom-right) that opens a bottom sheet listing every active note.
  * z-index 45: above the mobile top bar (40), below every modal/drawer (50+), so a note never
  * traps a dialog's buttons. Wrapped in its own error boundary — a throw here must not take the CRM down.
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin, CheckSquare, Move } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { readPositions, writePosition, prunePositions, cascadePos, clampFrac, type FracPos } from '@/lib/notes/note-position'
 import { NoteEditor } from '@/components/dashboard/note-editor'
 // AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
-import { FAB_KEYS, isDragGesture } from '@/lib/ui/draggable-fab'
+import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { OPEN_NOTE_EVENT, type OpenNoteDetail } from '@/lib/notes/open-note'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
-
-// cascadePos's own starting row/column (note-position.ts: y=0.08, x=0.04) — plain
-// constants kept in sync here, not re-derived, since note-position.ts is deliberately
-// pixel-agnostic (fractions only) and has no reason to know about the fixed-size chrome
-// (header, sidebar) it now has to clear.
-const CASCADE_FIRST_ROW_VH = 8
-const CASCADE_FIRST_COL_VW = 4
-// cascadePos's own HIGHEST column fraction (2026-09-08: the cascade now starts at the
-// right edge, next to the Parked trigger, and steps left — see note-position.ts). Feeds
-// the CEILING-side mirror of the shift below.
-const CASCADE_LAST_COL_VW = 92
-// Must clear the sticky desktop header (h-14 = 3.5rem) with a visible margin — measured
-// live, not assumed: on sandbox specifically, the dashboard layout also adds `mt-10`
-// (2.5rem) above the whole app to make room for the fixed orange sandbox banner
-// (`app/(dashboard)/layout.tsx`, `isSandbox ? '... mt-10' : 'h-screen'`), so the header
-// there actually sits at 2.5rem+3.5rem=6rem from the true top, not 3.5rem. Production has
-// no banner and no mt-10, so its header genuinely does start at the top — but this one
-// constant has no way to know which environment it's rendering in, so it's calibrated to
-// the taller (sandbox) case; production ends up with a bit of harmless extra headroom
-// rather than sandbox ending up under-cleared. A first version of this constant (4.5rem)
-// was calibrated against production's header alone and looked fine there, but still
-// visibly overlapped the header in sandbox — caught by measuring the actual rendered
-// element positions with getBoundingClientRect, not by eyeballing a screenshot.
-const HEADER_CLEARANCE_REM = 7
-// Must clear the desktop sidebar (aside is w-64 = 16rem at the lg breakpoint this
-// component only ever renders at) with a visible margin. Antonio, 2026-09-07 (second
-// screenshot, on Team Workspace): notes were still landing on the sidebar's own nav
-// links — the sidebar goes `static` (in normal document flow) at this same breakpoint,
-// which also drops its z-index to `auto`, so it can no longer rely on stacking order to
-// stay above a `fixed` note at z-45; only keeping the note out of that space at all works.
-const SIDEBAR_CLEARANCE_REM = 17
-// The two sizes notePosStyle is ever called with — the collapsed pill (fixed h-10,
-// max-w-[180px]) and the expanded card (fixed w-60; height is content-driven, so this
-// is a reasonable reserve for a typical note, not a hard cap — see notePosStyle's
-// own comment on the right/bottom edge below).
-const COLLAPSED_SIZE_REM = { width: 11.25, height: 2.5 }
-const EXPANDED_SIZE_REM = { width: 15, height: 14 }
-const EDGE_MARGIN_REM = 1
-
-/**
- * Desktop note position as a CSS style — shifts the WHOLE cascade down-and-right
- * together on a small screen, rather than flooring one note independently, so notes
- * never bunch up against each other. An earlier version floored only `${pos.y*100}vh`
- * per note: correct for row 0, but it compressed the gap to row 1 on any viewport short
- * enough to need the floor at all — found by creating real notes and looking, not by
- * reasoning about the CSS. Each inner `calc()`'s shared `max(0px, ...)` term is
- * identical for every note on that axis, so relative spacing between rows/columns is
- * preserved exactly — a shifted column 0 and a shifted column 1 both move by the same
- * amount, so the 0.18-viewport-width gap between them survives untouched.
- *
- * The floor (the `clamp()`'s low end) is a second, independent fix (Antonio,
- * 2026-09-07, third screenshot on Team Workspace: four OLD notes, each with its own
- * stored/dragged position from before this clearance logic existed, still sitting on
- * the sidebar). The inner shift is calibrated against cascadePos's OWN starting
- * fraction (x=0.04 / y=0.08) — correct for anything the cascade itself ever generates,
- * but a note can also carry a STORED position (drag-and-drop, or from before this fix
- * shipped) anywhere down to 0, and the shift alone under-corrects any position closer to
- * the edge than the cascade's own minimum. The floor is a hard backstop on top of that: a
- * no-op for every position at or beyond the cascade minimum (the inner shift already
- * lands those at-or-past the floor), and a genuine minimum for anything closer in — so
- * both a fresh cascade note AND an old dragged one always clear the same chrome.
- *
- * The CEILING (the `clamp()`'s high end) exists because the shift above is a REGRESSION
- * on the opposite edge if left unbounded — caught by an end-to-end review, not by any of
- * this session's own live tests (which only ever pushed a note toward the LOW corner).
- * `writePosition`'s own `clampFrac(v, 0.92)` reserves 8% of the viewport as margin so a
- * dragged note can never go fully off-screen — a contract that held when position was
- * rendered as a bare fraction, but the shift above is ADDED on top of that fraction with
- * nothing capping the total, so a note dragged toward the right/bottom edge (a completely
- * ordinary "tuck it out of the way" action) could render partly or fully past the
- * viewport, with no visible trace and no way to drag it back. `width`/`height` let each
- * call site (collapsed pill vs. expanded card) reserve exactly its own footprint at the
- * high end; the expanded card's real height is content-driven, so `EXPANDED_SIZE_REM` is
- * a reasonable typical-note reserve, not a hard cap — a note with an unusually long reply
- * thread can still extend further, same as it always could before any of this session's
- * changes (that risk is pre-existing and unrelated to the shift this fix adds).
- *
- * SECOND, MIRRORED shift on the horizontal axis only (2026-09-08, Antonio: "I want the
- * notes on the screen, next to Parked button... orizzontaly" — cascadePos now starts its
- * highest column at the right edge instead of its lowest at the left). The LEFT shift
- * above is an ALWAYS-ON exact-position mechanism, not a rare-narrow-screen rescue: for
- * any realistic viewport it makes fraction `CASCADE_FIRST_COL_VW%` land at EXACTLY
- * `SIDEBAR_CLEARANCE_REM` from the left, full stop. Reusing it unmodified for the new
- * high-fraction columns does the opposite of what's wanted — it pushes an already-far-
- * right column even FURTHER right, past the true edge, so two-plus columns collapse onto
- * the same clamped ceiling value instead of rendering as a proper row (caught live: 5
- * fresh notes, two of them landing pixel-identical). `rightShift` is the same mechanism
- * mirrored for the opposite edge — it makes fraction `CASCADE_LAST_COL_VW%` (cascadePos's
- * own highest column) land at EXACTLY `size.width + EDGE_MARGIN_REM` from the right, for
- * any realistic viewport, by computing how far that column would overshoot the ceiling
- * (itself already shifted left) and pulling the WHOLE row back by exactly that amount —
- * same "shift the group, don't floor one note independently" principle as the original,
- * just solved for the other edge. Verified algebraically to land the top column flush at
- * the ceiling at both 1024px (the narrowest width this layer ever renders at) and 1920px+,
- * not just eyeballed at one size — a flat, unshifted fraction looked fine narrow and
- * drifted hundreds of pixels short of the edge wide, since the true ceiling itself moves
- * with viewport width in a way no single fraction can track alone.
- */
-function notePosStyle(pos: FracPos, size: { width: number; height: number }): React.CSSProperties {
-  const leftShift = `max(0px, ${SIDEBAR_CLEARANCE_REM}rem - ${CASCADE_FIRST_COL_VW}vw)`
-  const ceiling = `100vw - ${size.width + EDGE_MARGIN_REM}rem`
-  const rightShift = `max(0px, calc(${CASCADE_LAST_COL_VW}vw + ${leftShift} - (${ceiling})))`
-  return {
-    left: `clamp(${SIDEBAR_CLEARANCE_REM}rem, calc(${pos.x * 100}vw + ${leftShift} - ${rightShift}), calc(${ceiling}))`,
-    top: `clamp(${HEADER_CLEARANCE_REM}rem, calc(${pos.y * 100}vh + max(0px, ${HEADER_CLEARANCE_REM}rem - ${CASCADE_FIRST_ROW_VH}vh)), calc(100vh - ${size.height + EDGE_MARGIN_REM}rem))`,
-  }
-}
-
-/** This file assumes the untouched CSS default of 1rem = 16px throughout — already relied
- *  on implicitly by every other REM constant's own comment above; named here because the
- *  functions below are the first to actually need it as a real number, not just inside a
- *  CSS string the browser converts for us. */
-const REM_PX = 16
-
-/**
- * The exact NUMBER of pixels notePosStyle's own shift adds on the horizontal axis, for a
- * real drag to correctly invert (2026-09-08, Bug Hunter EtoE pass on THIS SAME cascade
- * fix: "the hand is always out of the notes" while dragging). `onPointerMove` below turns
- * a raw mouse position into a STORED FRACTION by dividing by the viewport width — correct
- * ONLY if the fraction maps 1:1 to a rendered pixel, which stopped being true the moment
- * notePosStyle started adding leftShift/rightShift on top of `pos.x*100vw`. Left
- * uncorrected, every drag silently baked an extra `leftShift - rightShift` pixels into the
- * stored position the instant it started moving — the cursor tracks the mouse exactly (it
- * IS the mouse), but the note jumps by that fixed offset the moment the drag begins and
- * never catches back up, which is exactly "the hand is out of the notes." Must mirror
- * notePosStyle's OWN left/rightShift math exactly, as plain numbers instead of a CSS
- * string — computed fresh on every call (cheap, and self-corrects if the window is ever
- * resized mid-drag) rather than cached once at drag-start.
- */
-function horizontalShiftPx(viewportWidthPx: number, noteWidthRem: number): number {
-  const leftShift = Math.max(0, SIDEBAR_CLEARANCE_REM * REM_PX - (CASCADE_FIRST_COL_VW / 100) * viewportWidthPx)
-  const ceiling = viewportWidthPx - (noteWidthRem + EDGE_MARGIN_REM) * REM_PX
-  const rightShift = Math.max(0, (CASCADE_LAST_COL_VW / 100) * viewportWidthPx + leftShift - ceiling)
-  return leftShift - rightShift
-}
-
-/** Same idea as horizontalShiftPx, for the vertical axis — notePosStyle's `top` only ever
- *  had the one (left-shift-equivalent) term, never a mirrored ceiling term, so this is
- *  simpler than the horizontal version, but the same drag-inversion bug applies to it. */
-function verticalShiftPx(viewportHeightPx: number): number {
-  return Math.max(0, HEADER_CLEARANCE_REM * REM_PX - (CASCADE_FIRST_ROW_VH / 100) * viewportHeightPx)
-}
 
 interface Note {
   id: string
@@ -303,47 +168,6 @@ function StickyNotesInner() {
   const parkedNotes = useMemo(() => parkedData?.notes ?? [], [parkedData])
   const meId = data?.me?.id ?? null
 
-  /**
-   * Every note's starting position — decided ONCE per note, ever, and remembered here
-   * for as long as this layer stays mounted. A `useMemo` alone is not enough: it would
-   * recompute from scratch whenever `notes` changes (a note added or removed), but a
-   * note ALREADY on screen ignores a freshly-recomputed value — its own useState only
-   * reads its initial prop once, at ITS first mount, exactly like this ref only decides
-   * a slot once. Recomputing on every change and expecting already-mounted notes to
-   * "pick up" a new value was the actual bug: two never-moved notes both computed the
-   * identical fresh slot, because the feed sorts newest-first so a brand-new note is
-   * always first, and computing all slots from empty every time gave the EXISTING note
-   * a value its own component then silently ignored (Antonio, 2026-09-05: "they go one
-   * on top of the other and I can't see them unless i move them"). A ref, mutated
-   * idempotently here during render (safe: re-running with the same `notes` re-adds only
-   * already-present entries), is what makes a slot assignment durable across re-renders.
-   */
-  const assignedPositions = useRef<Map<string, FracPos>>(new Map())
-  // Bumped by moveSelected (below) to force this memo to recompute even though `notes`
-  // itself never changes for a pure reposition — a move touches no server state, only
-  // localStorage, so there is no query-invalidation that would otherwise trigger it.
-  const [posEpoch, setPosEpoch] = useState(0)
-  const notePositions = useMemo(() => {
-    const stored = readPositions()
-    const map = assignedPositions.current
-    const liveIds = new Set(notes.map((n) => n.id))
-    for (const id of Array.from(map.keys())) if (!liveIds.has(id)) map.delete(id)
-    const occupied: FracPos[] = Array.from(map.values())
-    for (const n of notes) {
-      if (map.has(n.id)) continue // already decided — never reassign a note that's already on screen
-      const pos = stored[n.id] ?? cascadePos(occupied)
-      map.set(n.id, pos)
-      occupied.push(pos)
-    }
-    return map
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notes, posEpoch])
-  // A note's own `pos` state only ever reads its `initialPos` prop on first mount (see
-  // DesktopNote's own comment on this) — so after moveSelected writes a fresh position,
-  // the already-mounted instance needs a genuinely NEW key to remount and pick it up.
-  // Bumped per-note, not globally, so a move never disturbs notes that weren't selected.
-  const moveVersions = useRef<Map<string, number>>(new Map())
-
   // Same query key as staff-alerts-bell.tsx — one shared cache for "have I seen this."
   const { data: alertsData } = useQuery({
     queryKey: ['staff-alerts'],
@@ -416,13 +240,6 @@ function StickyNotesInner() {
     }
   }, [notes, qc])
 
-  // Guarded on `data` (not just `notes`, which defaults to [] before the fetch even
-  // resolves) — pruning against an empty list on the very first render wiped every
-  // stored position on every page load, before the real note list ever arrived
-  // (found live, 2026-09-08: Antonio's notes kept losing their spread-out positions
-  // and re-bunching into the default cascade on every reload).
-  useEffect(() => { if (data) prunePositions(notes.map((n) => n.id)) }, [data, notes])
-
   /**
    * External "open this note" — lets another surface (the Staff Alerts bell,
    * the Parked-notes trigger) open a specific note here instead of navigating
@@ -464,135 +281,10 @@ function StickyNotesInner() {
 
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
-  /**
-   * Select-and-park: Antonio, 2026-09-07 (Finance-page screenshot, notes scattered
-   * over real content): "I want a solution to select of them an move all together
-   * in another place." Desktop only — the mobile sheet is already a plain scrollable
-   * list, so the on-screen-clutter problem this solves doesn't exist there; a mobile
-   * note still parks fine one at a time via NoteCardBody's own Park button.
-   */
-  const [selectMode, setSelectMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [parking, setParking] = useState(false)
-  // The "+" button opens a small menu (New note / Select notes) instead of jumping
-  // straight to composing — Antonio, 2026-09-08: "why don't inglobe the select button
-  // in the '+' icon... instead of creating a noisy [corner] with a lot of icones."
-  const [fabMenuOpen, setFabMenuOpen] = useState(false)
-  // Where the menu renders when the "+" button has been dragged away from its
-  // default corner — null (→ the plain default-corner CSS) until it has actually
-  // moved. Measured fresh every time the menu opens, via the button's own ref,
-  // rather than re-deriving deskFab's drag math here (Bug Hunter, 2026-09-08).
-  const [menuAnchor, setMenuAnchor] = useState<{ left: string; bottom: string } | null>(null)
-  useLayoutEffect(() => {
-    if (!fabMenuOpen) return
-    if (!deskFab.hasMoved) { setMenuAnchor(null); return }
-    const el = deskFab.ref.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 200))
-    const bottom = Math.max(8, window.innerHeight - rect.top + 8)
-    setMenuAnchor({ left: `${left}px`, bottom: `${bottom}px` })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fabMenuOpen])
-  const toggleSelected = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }, [])
-  const exitSelectMode = useCallback(() => { setSelectMode(false); setSelectedIds(new Set()) }, [])
-  const parkSelected = useCallback(async () => {
-    const ids = Array.from(selectedIds)
-    if (ids.length === 0) return
-    setParking(true)
-    try {
-      const results = await Promise.all(ids.map((id) =>
-        fetch(API, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, action: 'park' }),
-        }).then((r) => r.ok).catch(() => false),
-      ))
-      const failed = results.filter((ok) => !ok).length
-      if (failed > 0) toast.error(`${failed} note${failed > 1 ? 's' : ''} couldn't be parked — try again.`)
-      invalidate()
-    } finally {
-      setParking(false)
-      exitSelectMode()
-    }
-  }, [selectedIds, invalidate, exitSelectMode])
-
-  /**
-   * "Move" — Antonio, 2026-09-08: "I dont' want only to park them, I want to move in
-   * the screen changing spot." Unlike Park, this touches no server state at all —
-   * position is purely client-side (note-position.ts) — so it's synchronous, has
-   * nothing to fail over the network, and needs no loading state. Re-cascades every
-   * selected note to a fresh free slot, using the SAME collision-avoiding search a
-   * brand-new note gets, seeded with every note's CURRENT spot except the ones being
-   * moved (so the just-moved notes don't land on top of notes staying put, or on top
-   * of each other — built up incrementally exactly like notePositions' own loop does).
-   */
-  const moveSelected = useCallback(() => {
-    const ids = Array.from(selectedIds)
-    if (ids.length === 0) return
-    const map = assignedPositions.current
-    const idSet = new Set(ids)
-    const occupied: FracPos[] = Array.from(map.entries())
-      .filter(([id]) => !idSet.has(id))
-      .map(([, pos]) => pos)
-    for (const id of ids) {
-      const fresh = cascadePos(occupied)
-      writePosition(id, fresh)
-      occupied.push(fresh)
-      map.delete(id) // let notePositions re-derive it from the fresh stored value below
-      moveVersions.current.set(id, (moveVersions.current.get(id) ?? 0) + 1)
-    }
-    setPosEpoch((v) => v + 1)
-    exitSelectMode()
-  }, [selectedIds, exitSelectMode])
-
   if (isError) return null // never block the CRM on a notes failure
 
   return (
     <>
-      {/* DESKTOP: floating draggable notes. Keyed on id + its own move-version, not just
-          id — moveSelected (above) bumps ONLY the moved notes' version, forcing exactly
-          those to remount and pick up their freshly-written position (a note's own `pos`
-          state only ever reads its initialPos prop once, at first mount). */}
-      <div className="hidden lg:block">
-        {notes.map((n) => (
-          <DesktopNote key={`${n.id}-${moveVersions.current.get(n.id) ?? 0}`} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
-            isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)}
-            selectMode={selectMode} selected={selectedIds.has(n.id)} onToggleSelect={() => toggleSelected(n.id)} />
-        ))}
-      </div>
-
-      {/* DESKTOP: select-mode toolbar — Move (reposition together, stay on screen) or
-          Park (send to the shelf), your choice once you've picked which notes. */}
-      {selectMode && (
-        <div className="hidden lg:flex fixed bottom-4 left-4 z-[46] items-center gap-2 rounded-full bg-zinc-900 px-4 py-2 text-sm text-white shadow-lg">
-          <span>{selectedIds.size} selected</span>
-          <button
-            onClick={moveSelected}
-            disabled={selectedIds.size === 0}
-            className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 font-medium hover:bg-white/20 disabled:opacity-40"
-          >
-            <Move className="h-3.5 w-3.5" />
-            Move
-          </button>
-          <button
-            onClick={parkSelected}
-            disabled={selectedIds.size === 0 || parking}
-            className="flex items-center gap-1 rounded-full bg-amber-400 px-3 py-1 font-medium text-amber-950 disabled:opacity-40"
-          >
-            {parking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pin className="h-3.5 w-3.5" />}
-            Park
-          </button>
-          <button onClick={exitSelectMode} disabled={parking} className="rounded-full bg-white/10 px-3 py-1 hover:bg-white/20 disabled:opacity-40">Cancel</button>
-        </div>
-      )}
-
       {/* New note = the FULL editor (text, client, come-back date, who's it for) — not a
           mini popup (Antonio, 2026-07-29). Pre-fills the client from the page you're on. */}
       {composing && (
@@ -609,58 +301,24 @@ function StickyNotesInner() {
         />
       )}
 
-      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets), unchanged —
-          only its click now opens a small menu (New note / Select notes) instead of
-          jumping straight to composing (Antonio, 2026-09-08: fold the select toggle
-          into the "+" instead of a separate icon cluttering the corner). Hidden during
-          select mode — the toolbar above takes this corner instead. */}
-      {!selectMode && (
-        <>
-          {fabMenuOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setFabMenuOpen(false)} />
-              {/* Anchored to the BUTTON'S OWN measured position, not a fixed corner
-                  (Bug Hunter, 2026-09-08: the button has been draggable since
-                  2026-07-23 — its own tooltip says so below — but this menu used to
-                  render at the untouched default corner regardless, so a dragged
-                  button opened a menu nowhere near it). menuAnchor is null until the
-                  button has actually moved, so the untouched default case keeps using
-                  the plain CSS corner below — unchanged. */}
-              <div
-                className="hidden lg:flex fixed bottom-[4.75rem] left-4 z-50 w-48 flex-col gap-1 rounded-lg border bg-white p-2 shadow-lg"
-                style={menuAnchor ?? undefined}
-              >
-                <button
-                  onClick={() => { setFabMenuOpen(false); setComposing(true) }}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
-                >
-                  <Plus className="h-4 w-4" /> New note
-                </button>
-                {notes.length > 1 && (
-                  <button
-                    onClick={() => { setFabMenuOpen(false); setSelectMode(true) }}
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
-                  >
-                    <CheckSquare className="h-4 w-4" /> Select notes
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-          <FastTooltip label="New note, or select several — drag to move, double-click to reset" align="left">
-            <button
-              ref={deskFab.ref}
-              {...deskFab.dragProps}
-              style={deskFab.style}
-              onClick={() => { if (!deskFab.dragging) setFabMenuOpen((v) => !v) }}
-              className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
-              aria-label="New note or select notes"
-            >
-              <Plus className="h-5 w-5" />
-            </button>
-          </FastTooltip>
-        </>
-      )}
+      {/* DESKTOP: + button, bottom-left, draggable (double-click resets) — opens the
+          composer directly. Simplified back to a single action (2026-09-08: active
+          notes moved into the header strip, next to Parked — see
+          active-notes-strip.tsx — so there is no more floating canvas for a
+          "select notes" menu item to send you to; bulk-selecting for Park now happens
+          inside that header strip's own dropdown instead). */}
+      <FastTooltip label="New note — drag to move, double-click to reset" align="left">
+        <button
+          ref={deskFab.ref}
+          {...deskFab.dragProps}
+          style={deskFab.style}
+          onClick={() => { if (!deskFab.dragging) setComposing(true) }}
+          className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+          aria-label="New note"
+        >
+          <Plus className="h-5 w-5" />
+        </button>
+      </FastTooltip>
 
       {/* MOBILE: a pill that opens a sheet.
           RAISED above the composer band (bottom-24). At bottom-4 it sat exactly
@@ -712,197 +370,6 @@ function StickyNotesInner() {
   )
 }
 
-/* ─────────────────────────── desktop draggable note ─────────────────────────── */
-
-/**
- * Collapsed by default — a small icon, always on screen, draggable anywhere out of the
- * way. Click expands it in place to the full card; a Minimize button on the card
- * collapses it back (Antonio, 2026-09-05: "reduce it in icon but always visible to open
- * when we need" — full cards were landing on top of the sidebar nav, see note-position.ts
- * cascadePos starting near the top-left corner).
- *
- * Click vs. drag uses the same measured-distance threshold as the draggable FAB buttons
- * (isDragGesture) and the same ref-based (not state-based) click suppression — a past bug
- * here let a drag also OPEN the thing being dragged because suppression was React state,
- * captured stale at click time. A ref reads current at call time.
- *
- * Position comes from notePosStyle(pos, size), which clears the sticky desktop header
- * (h-14 = 3.5rem, z-30) and the sidebar, AND keeps the note on-screen on the opposite
- * (right/bottom) edge too — see notePosStyle's own comment for the full history. It's
- * CSS-only — the stored/dragged fraction itself is untouched, so a manually-dragged note
- * still tracks the cursor exactly; only where it's allowed to visually render is bounded.
- */
-function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead, selectMode, selected, onToggleSelect }: {
-  note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void
-  selectMode: boolean; selected: boolean; onToggleSelect: () => void
-}) {
-  const ref = useRef<HTMLElement>(null)
-  // initialPos was already resolved once, for every note together (stored spot, or the
-  // first free cascade slot) — see notePositions in the parent. Only the FIRST value
-  // React sees here matters; later re-renders (including notePositions recomputing when
-  // a sibling note is added) must not silently teleport an already-open note.
-  const [pos, setPos] = useState<{ x: number; y: number }>(initialPos)
-  const [expanded, setExpanded] = useState(false)
-  // Purely a RENDER-time offset on top of `pos` — never persisted, never fed back into
-  // `pos` itself — applied only when expanding lands the card on top of a neighbor
-  // already on screen. See the layout effect below.
-  const [nudge, setNudge] = useState({ dx: 0, dy: 0 })
-  const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
-  const justDragged = useRef(false)
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (selectMode) return // no dragging while selecting — a click here only toggles the checkbox
-    if ((e.target as HTMLElement).closest('[data-no-drag]')) return
-    if (nudge.dx || nudge.dy) setNudge({ dx: 0, dy: 0 }) // a manual drag always wins over the auto-nudge
-    const rect = ref.current!.getBoundingClientRect()
-    drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, moved: false }
-    ref.current!.setPointerCapture(e.pointerId)
-  }
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (selectMode) return
-    const d = drag.current
-    if (!d) return
-    if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
-    d.moved = true
-    // Invert notePosStyle's OWN render-time shift before storing — see horizontalShiftPx's
-    // own comment. Without this, the note jumps by a fixed offset the instant a drag
-    // starts, and the cursor (which IS the mouse) reads as permanently detached from it.
-    const size = expanded ? EXPANDED_SIZE_REM : COLLAPSED_SIZE_REM
-    const x = clampFrac((e.clientX - d.dx - horizontalShiftPx(window.innerWidth, size.width)) / window.innerWidth)
-    const y = clampFrac((e.clientY - d.dy - verticalShiftPx(window.innerHeight)) / window.innerHeight)
-    setPos({ x, y })
-  }
-  const onPointerUp = () => {
-    if (selectMode) return
-    const d = drag.current
-    drag.current = null
-    if (d?.moved) {
-      writePosition(note.id, pos)
-      justDragged.current = true
-      // Swallow the click that fires right after releasing a drag — otherwise
-      // dropping the icon also opens it.
-      setTimeout(() => { justDragged.current = false }, 0)
-    }
-  }
-  const onClickCollapsed = () => {
-    if (selectMode) { onToggleSelect(); return }
-    if (justDragged.current) return
-    setNudge({ dx: 0, dy: 0 }) // re-measure fresh every time, never carry a stale nudge in
-    setExpanded(true)
-    // Expanding to the full preview text IS reading it (Antonio, 2026-09-05: red
-    // until read, back to normal once it is) — no separate "mark read" action.
-    if (isUnread) onRead()
-  }
-
-  /**
-   * THE FIX for "when i open one it doesn't move away from the others... one on top the
-   * other" (Antonio, 2026-09-07, re-hit and re-flagged 2026-09-08): expanding a note only
-   * ever positioned itself from its OWN stored fraction — it never checked whether the
-   * much bigger expanded card would land on a NEIGHBOR already sitting on screen (trivial
-   * to hit once several notes are cascaded close together, which position-loss on reload,
-   * fixed above, made the common case rather than a rare one).
-   *
-   * Runs AFTER the browser has laid out the just-expanded card at its natural (un-nudged)
-   * position — `useLayoutEffect` so this resolves before the user sees a flash of the
-   * overlapping frame. Measures real DOM rects (every other on-screen note, collapsed or
-   * expanded, tagged `data-note-id`) rather than re-deriving the CSS clamp() math in JS,
-   * which would be a second copy of notePosStyle's own logic to keep in sync. Pushes
-   * straight down, in fixed steps, until clear of every neighbor it currently overlaps —
-   * simple and bounded rather than a full free-slot search, and always resettable: a
-   * manual drag (onPointerDown, above) or a fresh expand (onClickCollapsed, above) clears
-   * it back to zero, so the offset never compounds across repeated open/close cycles.
-   * Never written to `pos` / localStorage — purely how this ONE open session renders.
-   */
-  useLayoutEffect(() => {
-    if (!expanded || selectMode) return
-    const el = ref.current
-    if (!el) return
-    const STEP = 48
-    const MAX_STEPS = 20
-    const EDGE_MARGIN = 16
-    const natural = el.getBoundingClientRect()
-    // The bottom-edge bound folded INTO the search, not applied after — clamping an
-    // already-decided `dy` after the fact (the original version of this fix) picks a
-    // value that was never actually tested for collisions, so on a short viewport with
-    // several notes already clustered near the bottom it could silently reintroduce the
-    // exact overlap this effect exists to prevent (Bug Hunter, 2026-09-08). Every
-    // candidate `dy` this loop settles on has been checked; run out of room and it
-    // stops at the last checked, on-screen value — a real best effort, not a guess.
-    const maxDy = Math.max(0, window.innerHeight - EDGE_MARGIN - natural.bottom)
-    const collidesAt = (dy: number) => {
-      const test = { top: natural.top + dy, bottom: natural.bottom + dy, left: natural.left, right: natural.right }
-      let collided = false
-      document.querySelectorAll<HTMLElement>('[data-note-id]').forEach((sib) => {
-        if (sib === el || sib.dataset.noteId === note.id) return
-        const r = sib.getBoundingClientRect()
-        if (test.left < r.right && test.right > r.left && test.top < r.bottom && test.bottom > r.top) collided = true
-      })
-      return collided
-    }
-    let dy = 0
-    for (let i = 0; i < MAX_STEPS && collidesAt(dy) && dy < maxDy; i++) {
-      dy = Math.min(dy + STEP, maxDy)
-    }
-    if (dy > 0) setNudge({ dx: 0, dy })
-    // Deliberately only on `expanded` toggling on — re-running on every render would
-    // fight a manual drag (which sets `pos`, not `nudge`) and re-trigger a nudge search
-    // against the card's OWN just-nudged position.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expanded, selectMode])
-
-  // Select mode shows every note as a compact, checkable chip regardless of its own
-  // expanded/collapsed state — a clean list to tick, rather than making "which part of
-  // an open card selects vs. opens it" a judgment call for every note shape.
-  if (!expanded || selectMode) {
-    const preview = note.body.replace(/\s+/g, ' ').trim().slice(0, 80)
-    // A short, always-visible snippet next to the icon (Antonio, 2026-09-05: "a short
-    // description at the button what it is about") — shorter than the tooltip's preview,
-    // and truncated with CSS rather than pre-cut so it never clips a whole word for no
-    // reason on a wider snippet. The tooltip (full 80-char preview) still covers anything
-    // this snippet itself truncates.
-    const snippet = preview.slice(0, 40)
-    return (
-      <FastTooltip label={selectMode ? preview : (isUnread ? `New: ${preview}` : preview)} align="left">
-        <button
-          ref={ref as React.RefObject<HTMLButtonElement>}
-          data-note-id={note.id}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onClick={onClickCollapsed}
-          style={notePosStyle(pos, COLLAPSED_SIZE_REM)}
-          className={`fixed z-[45] flex h-10 max-w-[180px] items-center gap-1.5 rounded-full border px-3 shadow-lg ${selectMode ? 'cursor-pointer' : 'touch-none cursor-grab active:cursor-grabbing'} ${selectMode && selected ? 'ring-2 ring-offset-1 ring-blue-500' : ''} ${noteBgClasses(note, isUnread)}`}
-          aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}${selectMode ? (selected ? ', selected' : ', not selected') : ''}`}
-        >
-          {selectMode && (
-            <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-current bg-white/40'}`}>
-              {selected && <Check className="h-3 w-3" />}
-            </span>
-          )}
-          <StickyNote className="h-4 w-4 shrink-0" />
-          <span className="truncate text-xs font-medium">{snippet}</span>
-        </button>
-      </FastTooltip>
-    )
-  }
-
-  return (
-    <div
-      ref={ref as React.RefObject<HTMLDivElement>}
-      data-note-id={note.id}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      style={{
-        ...notePosStyle(pos, EXPANDED_SIZE_REM),
-        transform: nudge.dx || nudge.dy ? `translate(${nudge.dx}px, ${nudge.dy}px)` : undefined,
-      }}
-      className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${noteBgClasses(note, isUnread)}`}
-    >
-      <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} onCollapse={() => setExpanded(false)} />
-    </div>
-  )
-}
 
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 

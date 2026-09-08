@@ -18,6 +18,7 @@ import { GlobalSearch } from '@/components/shared/global-search'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
 import { ParkedNotesTrigger } from '@/components/dashboard/parked-notes-trigger'
+import { ActiveNotesStrip } from '@/components/dashboard/active-notes-strip'
 import { HelpToggle } from '@/components/help/help-toggle'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { CaptureButton } from '@/components/captures/capture-button'
@@ -133,6 +134,7 @@ export function DashboardHeader() {
       <GlobalBackButton className="-ml-2" />
       <CollapsibleSearch />
       <div className="flex-1" />
+      <ActiveNotesStrip />
       <ParkedNotesTrigger />
       <StaffAlertsBell />
       <CaptureButton />
