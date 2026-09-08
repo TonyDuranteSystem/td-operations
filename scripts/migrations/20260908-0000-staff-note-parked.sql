@@ -25,8 +25,31 @@
 -- MUST be applied and VERIFIED LIVE in production — by querying the column,
 -- not by trusting the deploy succeeded — before any code referencing
 -- parked_at ships to production.
+--
+-- ⛔ THE BACKFILL BELOW IS NOT OPTIONAL — checked live in production 2026-09-08
+-- and confirmed, not just suspected: 38 real rows already have BOTH
+-- archived_at and snoozed_until set (the pre-existing gap the header comment
+-- above describes was actually live, repeatedly, for at least six weeks).
+-- Adding the CHECK constraint without cleaning these up first does not
+-- degrade gracefully — a CHECK on an ALTER TABLE validates every existing
+-- row by default, so it would fail outright the moment it's run, blocking
+-- the whole migration (and this whole feature) from ever reaching production.
+-- The backfill is behavior-PRESERVING, not a judgment call: every read path
+-- in this file already checks archived_at before snoozed_until (see
+-- isArchivedFor / isLiveFor / otherPersonState in lib/notes/staff-notes.ts),
+-- so on any row where both were set, snoozed_until was ALREADY being
+-- silently ignored — the note has behaved as Done, in practice, this whole
+-- time. Clearing snoozed_until on those rows changes zero observed behavior;
+-- it just makes the stored data match what every reader already treated as
+-- true. (Sandbox needed no backfill — applied before this was discovered,
+-- and confirmed to have had zero violating rows at the time, so its
+-- end-state already matches what this file produces on a fresh apply.)
 
 ALTER TABLE staff_note_state ADD COLUMN parked_at TIMESTAMPTZ NULL;
+
+UPDATE staff_note_state
+  SET snoozed_until = NULL
+  WHERE archived_at IS NOT NULL AND snoozed_until IS NOT NULL;
 
 ALTER TABLE staff_note_state ADD CONSTRAINT staff_note_state_one_status_check
   CHECK (
