@@ -33,6 +33,10 @@ import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 // (header, sidebar) it now has to clear.
 const CASCADE_FIRST_ROW_VH = 8
 const CASCADE_FIRST_COL_VW = 4
+// cascadePos's own HIGHEST column fraction (2026-09-08: the cascade now starts at the
+// right edge, next to the Parked trigger, and steps left — see note-position.ts). Feeds
+// the CEILING-side mirror of the shift below.
+const CASCADE_LAST_COL_VW = 92
 // Must clear the sticky desktop header (h-14 = 3.5rem) with a visible margin — measured
 // live, not assumed: on sandbox specifically, the dashboard layout also adds `mt-10`
 // (2.5rem) above the whole app to make room for the fixed orange sandbox banner
@@ -98,10 +102,34 @@ const EDGE_MARGIN_REM = 1
  * a reasonable typical-note reserve, not a hard cap — a note with an unusually long reply
  * thread can still extend further, same as it always could before any of this session's
  * changes (that risk is pre-existing and unrelated to the shift this fix adds).
+ *
+ * SECOND, MIRRORED shift on the horizontal axis only (2026-09-08, Antonio: "I want the
+ * notes on the screen, next to Parked button... orizzontaly" — cascadePos now starts its
+ * highest column at the right edge instead of its lowest at the left). The LEFT shift
+ * above is an ALWAYS-ON exact-position mechanism, not a rare-narrow-screen rescue: for
+ * any realistic viewport it makes fraction `CASCADE_FIRST_COL_VW%` land at EXACTLY
+ * `SIDEBAR_CLEARANCE_REM` from the left, full stop. Reusing it unmodified for the new
+ * high-fraction columns does the opposite of what's wanted — it pushes an already-far-
+ * right column even FURTHER right, past the true edge, so two-plus columns collapse onto
+ * the same clamped ceiling value instead of rendering as a proper row (caught live: 5
+ * fresh notes, two of them landing pixel-identical). `rightShift` is the same mechanism
+ * mirrored for the opposite edge — it makes fraction `CASCADE_LAST_COL_VW%` (cascadePos's
+ * own highest column) land at EXACTLY `size.width + EDGE_MARGIN_REM` from the right, for
+ * any realistic viewport, by computing how far that column would overshoot the ceiling
+ * (itself already shifted left) and pulling the WHOLE row back by exactly that amount —
+ * same "shift the group, don't floor one note independently" principle as the original,
+ * just solved for the other edge. Verified algebraically to land the top column flush at
+ * the ceiling at both 1024px (the narrowest width this layer ever renders at) and 1920px+,
+ * not just eyeballed at one size — a flat, unshifted fraction looked fine narrow and
+ * drifted hundreds of pixels short of the edge wide, since the true ceiling itself moves
+ * with viewport width in a way no single fraction can track alone.
  */
 function notePosStyle(pos: FracPos, size: { width: number; height: number }): React.CSSProperties {
+  const leftShift = `max(0px, ${SIDEBAR_CLEARANCE_REM}rem - ${CASCADE_FIRST_COL_VW}vw)`
+  const ceiling = `100vw - ${size.width + EDGE_MARGIN_REM}rem`
+  const rightShift = `max(0px, calc(${CASCADE_LAST_COL_VW}vw + ${leftShift} - (${ceiling})))`
   return {
-    left: `clamp(${SIDEBAR_CLEARANCE_REM}rem, calc(${pos.x * 100}vw + max(0px, ${SIDEBAR_CLEARANCE_REM}rem - ${CASCADE_FIRST_COL_VW}vw)), calc(100vw - ${size.width + EDGE_MARGIN_REM}rem))`,
+    left: `clamp(${SIDEBAR_CLEARANCE_REM}rem, calc(${pos.x * 100}vw + ${leftShift} - ${rightShift}), calc(${ceiling}))`,
     top: `clamp(${HEADER_CLEARANCE_REM}rem, calc(${pos.y * 100}vh + max(0px, ${HEADER_CLEARANCE_REM}rem - ${CASCADE_FIRST_ROW_VH}vh)), calc(100vh - ${size.height + EDGE_MARGIN_REM}rem))`,
   }
 }
