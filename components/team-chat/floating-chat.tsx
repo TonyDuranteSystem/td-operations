@@ -49,6 +49,10 @@ import {
   CHAT_WINDOW_POS_KEY, CHAT_WINDOW_DEFAULT_POS, type FracPos,
 } from '@/lib/team/chat-window-position'
 import {
+  clampChatWindowSize, readStoredChatWindowSize, serializeChatWindowSize,
+  CHAT_WINDOW_SIZE_KEY, CHAT_WINDOW_DEFAULT_SIZE, type PxSize,
+} from '@/lib/team/chat-window-size'
+import {
   selectableChatMembers, myDmThreads, myDmThreadIdSet, otherPartyId,
   openConversations, openTopics, conversationLabel, windowUnreadCount,
   type ChatMember, type ChatThreadRow,
@@ -645,36 +649,58 @@ function DesktopWindow(props: {
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<FracPos>(CHAT_WINDOW_DEFAULT_POS)
+  const [size, setSize] = useState<PxSize>(CHAT_WINDOW_DEFAULT_SIZE)
   const drag = useRef<{ dx: number; dy: number } | null>(null)
+  const resizeDrag = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null)
 
-  // Read the stored position after mount, then clamp against the MEASURED box.
+  // Read the stored position + size after mount, then clamp against the
+  // MEASURED box (position) / the real viewport (size).
   useEffect(() => {
+    const storedSize = clampChatWindowSize(readStoredChatWindowSize(store.get(CHAT_WINDOW_SIZE_KEY)), {
+      vw: window.innerWidth, vh: window.innerHeight,
+    })
+    setSize(storedSize)
     const stored = readStoredChatWindowPos(store.get(CHAT_WINDOW_POS_KEY))
-    const box = ref.current?.getBoundingClientRect()
     setPos(clampChatWindowPos(stored, {
-      vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
+      vw: window.innerWidth, vh: window.innerHeight, w: storedSize.w, h: storedSize.h,
     }))
   }, [])
 
-  // Keep it on screen when the viewport changes under it.
+  // Keep it on screen when the viewport changes under it — re-clamping SIZE
+  // first (a window sized for a 27" iMac must still fit a smaller laptop
+  // screen the same account opens next), then position against the result.
   useEffect(() => {
     const onResize = () => {
-      const box = ref.current?.getBoundingClientRect()
-      setPos((p) => clampChatWindowPos(p, {
-        vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
-      }))
+      setSize((s) => {
+        const next = clampChatWindowSize(s, { vw: window.innerWidth, vh: window.innerHeight })
+        setPos((p) => clampChatWindowPos(p, { vw: window.innerWidth, vh: window.innerHeight, w: next.w, h: next.h }))
+        return next
+      })
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
   const onPointerDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('[data-resize-handle]')) {
+      resizeDrag.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h }
+      ref.current!.setPointerCapture(e.pointerId)
+      return
+    }
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return
     const rect = ref.current!.getBoundingClientRect()
     drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top }
     ref.current!.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    if (resizeDrag.current) {
+      const { startX, startY, startW, startH } = resizeDrag.current
+      setSize(clampChatWindowSize(
+        { w: startW + (e.clientX - startX), h: startH + (e.clientY - startY) },
+        { vw: window.innerWidth, vh: window.innerHeight },
+      ))
+      return
+    }
     if (!drag.current) return
     const box = ref.current?.getBoundingClientRect()
     setPos(clampChatWindowPos(
@@ -683,11 +709,25 @@ function DesktopWindow(props: {
     ))
   }
   const onPointerUp = () => {
+    if (resizeDrag.current) {
+      resizeDrag.current = null
+      store.set(CHAT_WINDOW_SIZE_KEY, serializeChatWindowSize(size))
+      // Growing from a corner near an edge can push the OPPOSITE edge off
+      // screen — re-clamp position against the box as it now actually
+      // measures, not the state value (which may not have painted yet).
+      const box = ref.current?.getBoundingClientRect()
+      setPos((p) => clampChatWindowPos(p, {
+        vw: window.innerWidth, vh: window.innerHeight, w: box?.width, h: box?.height,
+      }))
+      return
+    }
     if (drag.current) { store.set(CHAT_WINDOW_POS_KEY, serializeChatWindowPos(pos)); drag.current = null }
   }
-  const resetPos = () => {
+  const resetGeometry = () => {
     setPos(CHAT_WINDOW_DEFAULT_POS)
+    setSize(CHAT_WINDOW_DEFAULT_SIZE)
     store.set(CHAT_WINDOW_POS_KEY, serializeChatWindowPos(CHAT_WINDOW_DEFAULT_POS))
+    store.set(CHAT_WINDOW_SIZE_KEY, serializeChatWindowSize(CHAT_WINDOW_DEFAULT_SIZE))
   }
 
   return (
@@ -696,8 +736,8 @@ function DesktopWindow(props: {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh` }}
-      className="hidden lg:flex fixed z-[46] w-[360px] max-h-[70vh] cursor-grab active:cursor-grabbing flex-col overflow-hidden rounded-lg border border-emerald-300 bg-white shadow-2xl"
+      style={{ left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh`, width: `${size.w}px`, height: `${size.h}px` }}
+      className="hidden lg:flex fixed z-[46] cursor-grab active:cursor-grabbing flex-col overflow-hidden rounded-lg border border-emerald-300 bg-white shadow-2xl"
     >
       {/* Header — WHO or WHAT you are in is ALWAYS visible. This is a shared,
           pushed-to-someone's-phone surface sitting beside private post-its;
@@ -734,8 +774,8 @@ function DesktopWindow(props: {
               {props.quiet ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
           </FastTooltip>
-          <FastTooltip label="Reset position">
-            <button data-no-drag onClick={resetPos} className="rounded p-1 hover:bg-white/20" aria-label="Reset position">
+          <FastTooltip label="Reset size & position">
+            <button data-no-drag onClick={resetGeometry} className="rounded p-1 hover:bg-white/20" aria-label="Reset size and position">
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
           </FastTooltip>
@@ -788,6 +828,23 @@ function DesktopWindow(props: {
           />
         </>
       )}
+
+      {/* Resize handle — bottom-right corner drag, mirroring the window's own
+          drag-to-move: caught by data-resize-handle in onPointerDown BEFORE
+          the data-no-drag check, so a resize never also starts a reposition.
+          Antonio, 2026-09-08: "I already told you to fix the page. I can't
+          resize it" — the window used to be a single hardcoded size. */}
+      <FastTooltip label="Drag to resize">
+        <div
+          data-resize-handle
+          className="absolute bottom-0 right-0 flex h-4 w-4 cursor-nwse-resize items-end justify-end p-0.5 text-zinc-400 hover:text-zinc-600"
+          aria-hidden="true"
+        >
+          <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" fill="none">
+            <path d="M9 1L1 9M9 5L5 9M9 9L9 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+        </div>
+      </FastTooltip>
     </div>
   )
 }
