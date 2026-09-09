@@ -15,29 +15,30 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getOrInitNameChecks, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names']
 
-async function requireStaff() {
+/** Same identity resolution requireStaffRoute() just validated — used here only to attribute the action (actor/actorId), not to gate access. */
+async function currentUser() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { user: null, error: 'Unauthorized', status: 401 }
-  const role = (user.app_metadata as Record<string, unknown> | undefined)?.role
-  if (role === 'client') return { user: null, error: 'Staff access required', status: 403 }
-  return { user, error: null, status: 200 }
+  return user
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff()
-  if (!auth.user) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  const denied = await requireStaffRoute()
+  if (denied) return denied
 
   const name_checks = await getOrInitNameChecks(params.id)
   return NextResponse.json({ success: true, name_checks })
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireStaff()
-  if (!auth.user) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  const denied = await requireStaffRoute()
+  if (denied) return denied
+  const user = await currentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const body = await req.json().catch(() => ({}))
   const action = body.action as NameAction
@@ -52,11 +53,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   const idx = Number.isInteger(nameIndex) && nameIndex >= 0 ? nameIndex : 0
 
-  const who = (auth.user.user_metadata?.full_name as string | undefined)
-    || (auth.user.email as string | undefined)
+  const who = (user.user_metadata?.full_name as string | undefined)
+    || (user.email as string | undefined)
     || 'staff'
 
-  const result = await handleNameAction({ sdId: params.id, action, nameIndex: idx, actor: who, actorId: auth.user.id })
+  const result = await handleNameAction({ sdId: params.id, action, nameIndex: idx, actor: who, actorId: user.id })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, name_checks: result.name_checks })
 }

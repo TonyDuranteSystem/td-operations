@@ -19,8 +19,11 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { moveServiceDeliveryToStage } from '@/lib/operations/move-stage'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json().catch(() => ({}))
     const targetStage: string | undefined =

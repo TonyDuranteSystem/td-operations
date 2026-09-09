@@ -29,6 +29,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -37,6 +38,8 @@ type UntypedInsert = {
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const adminUntyped = supabaseAdmin as unknown as UntypedInsert
     const serviceDeliveryId = params.id

@@ -17,8 +17,11 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { revertServiceDelivery } from '@/lib/operations/service-delivery'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const result = await revertServiceDelivery({
       delivery_id: params.id,

@@ -99,6 +99,14 @@ vi.mock("@/lib/service-delivery", () => ({
 
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: vi.fn() }))
 
+// This route is staff-only (requireStaffRoute) — the route E2E drives real auth,
+// so it needs a real staff identity mocked in, same as require-staff-route.test.ts.
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: () => ({
+    auth: { getUser: () => Promise.resolve({ data: { user: { id: "staff-1", app_metadata: { role: "admin" }, user_metadata: {}, email: "staff@tonydurante.us" } } }) },
+  }),
+}))
+
 import { POST } from "@/app/api/flows/[id]/upload-document/route"
 
 function makeReq(body: unknown): Request {

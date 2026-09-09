@@ -21,8 +21,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { harborCompliance } from '@/lib/harbor-compliance'
 import { logAction } from '@/lib/mcp/action-log'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
 
