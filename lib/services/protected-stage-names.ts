@@ -74,6 +74,10 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     name: "Awaiting 2nd Payment",
     because: "the second-installment invoice is only offered to a client sitting on it",
   },
+  {
+    name: "Submitted to IRS",
+    because: "advancing off it is refused if there is no IRS mailing tracking number on file",
+  },
 ]
 
 const BY_NAME = new Map(PROTECTED_STAGE_NAMES.map(p => [p.name.toLowerCase(), p]))

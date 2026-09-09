@@ -192,5 +192,12 @@ export function useDraggableFab<T extends HTMLElement = HTMLButtonElement>(
     style: pos ? { left: `${pos.x * 100}vw`, top: `${pos.y * 100}vh`, right: 'auto', bottom: 'auto' } : undefined,
     reset,
     hasMoved: pos !== null,
+    /** The raw stored fraction, read-only — null until moved. Exposed so a
+     *  caller can layer independent, read-only logic on top (e.g. useEdgeDock
+     *  deciding which screen edge a dragged bubble is nearer to) WITHOUT that
+     *  logic writing into this hook's own state/storage. Never derive this from
+     *  `style` instead — parsing a CSS string back into a fraction is exactly
+     *  the kind of fragile coupling this field exists to avoid. */
+    pos,
   }
 }

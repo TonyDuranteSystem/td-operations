@@ -148,7 +148,7 @@ export async function GET() {
 
   const [notesRes, dismissalsRes, chatAlerts] = await Promise.all([
     notesTable().select(NOTE_COLUMNS).or(visibleToOrClause(user.id)).order("created_at", { ascending: false }).limit(500),
-    alertStateTable().select("note_id, reply_id, dismissed_at").eq("user_id", user.id),
+    alertStateTable().select("note_id, reply_id, kind, dismissed_at").eq("user_id", user.id),
     loadChatAlerts(user.id).catch((err) => {
       console.error("staff-alerts: chat half failed", err)
       return []
@@ -172,13 +172,23 @@ export async function GET() {
  *  per-note) sit behind two separate PARTIAL unique indexes, and supabase-js's upsert
  *  has no way to target a partial index's WHERE clause. A lost race on rapid double-
  *  dismiss is fine — the insert's own unique-violation (23505) is treated as success,
- *  since "already dismissed" is exactly the outcome wanted. */
-async function dismissAlert(userId: string, noteId: string, replyId: string | null): Promise<string | null> {
+ *  since "already dismissed" is exactly the outcome wanted.
+ *
+ *  `kind` is only used to match/write when replyId is null — a reply row is already
+ *  uniquely identified by its own reply_id (see the 2026-09-09 migration header for why
+ *  note-level dismissals specifically needed a kind to tell note_update and
+ *  note_snooze_due apart once both can exist for the same note). */
+async function dismissAlert(
+  userId: string,
+  noteId: string,
+  replyId: string | null,
+  kind: "note_reply" | "note_update" | "note_snooze_due",
+): Promise<string | null> {
   const nowIso = new Date().toISOString()
   const table = alertStateTable()
 
   let updateQuery = table.update({ dismissed_at: nowIso }).eq("user_id", userId).eq("note_id", noteId)
-  updateQuery = replyId ? updateQuery.eq("reply_id", replyId) : updateQuery.is("reply_id", null)
+  updateQuery = replyId ? updateQuery.eq("reply_id", replyId) : updateQuery.eq("kind", kind).is("reply_id", null)
   const { data: updated, error: updateErr } = await updateQuery.select("id")
   if (updateErr) return updateErr.message
   if (updated && updated.length > 0) return null
@@ -187,6 +197,7 @@ async function dismissAlert(userId: string, noteId: string, replyId: string | nu
     user_id: userId,
     note_id: noteId,
     reply_id: replyId,
+    kind,
     dismissed_at: nowIso,
   })
   if (insertErr && (insertErr as { code?: string }).code !== "23505") return insertErr.message
@@ -200,12 +211,12 @@ export async function PATCH(req: NextRequest) {
   const p = await req.json().catch(() => ({}))
   const kind = typeof p.kind === "string" ? p.kind : ""
 
-  if (kind === "note_reply" || kind === "note_update") {
+  if (kind === "note_reply" || kind === "note_update" || kind === "note_snooze_due") {
     const noteId = typeof p.note_id === "string" ? p.note_id : ""
     const replyId = typeof p.reply_id === "string" ? p.reply_id : null
     if (!noteId) return fail("Which note?")
     if (kind === "note_reply" && !replyId) return fail("Which reply?")
-    const err = await dismissAlert(user.id, noteId, kind === "note_reply" ? replyId : null)
+    const err = await dismissAlert(user.id, noteId, kind === "note_reply" ? replyId : null, kind)
     if (err) return fail(err, 500)
     return NextResponse.json({ ok: true })
   }

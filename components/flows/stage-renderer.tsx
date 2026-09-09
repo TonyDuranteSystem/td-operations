@@ -18,6 +18,7 @@ import { FormationNames } from './formation-names'
 import { FlowChat } from './flow-chat'
 import { ShippingInfo } from './shipping-info'
 import { MembersPanel } from './members-panel'
+import { IrsTrackingEntry } from './irs-tracking-entry'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -105,6 +106,8 @@ function renderComponent(
       return <ShippingInfo key={key} serviceDelivery={serviceDelivery} />
     case 'members_panel':
       return <MembersPanel key={key} serviceDeliveryId={serviceDelivery.id} />
+    case 'irs_tracking_entry':
+      return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':

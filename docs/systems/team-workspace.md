@@ -1,6 +1,12 @@
 # Team Workspace (internal Slack-replacement chat)
 
-_Last verified against code: 2026-09-08c — Claude (**The floating widget can now rename or delete a topic or client conversation — Antonio: "I want the option to delete/rename a topic or conversation."** Neither existed anywhere before this: `PATCH /api/team/threads/[id]` could already rename a CHANNEL (`channel_name`) and archive/resolve a discussion, but had no way to touch a discussion's own `title`/`topic` at all; the full Team Chat page's own rename/archive/delete trio (`renameThread`/`setThreadArchived`/`deleteThread`, `.../thread-remove`) turned out on inspection to operate one level down — Slack-style reply-threads INSIDE a channel, not a whole discussion thread.
+_Last verified against code: 2026-09-09b — Claude (**The floating launcher moved to the LEFT edge, stacked with the notes pill, and hides to a thin sliver until pointed at or tapped — part of the same "hidden bubbles" round documented in full in `docs/systems/staff-notes.md`'s 2026-09-09b entry (that doc owns the design and the incident history; this is the launcher-specific summary).** Antonio, after using both launchers live on opposite corners: "put the bubbles on the same side... put them even more hidden... when I point on them with the pointer they will come out of the edge." The launcher's default corner changed from bottom-right to bottom-left (`components/team-chat/floating-chat.tsx`), sharing `lib/ui/edge-dock.ts` + `components/ui/use-edge-dock.tsx` with the notes pill — a module that only READS the existing drag system's stored position, never writes to it (see the staff-notes entry for why a shared module, not a fold-in, was necessary). The true bottom-right corner still belongs to toasts alone, untouched.
+
+**The hover-reveal shipped, froze/strobed Antonio's real phone within the hour, and was rebuilt the same day** — full incident and the geometric fix are documented once, in `staff-notes.md`; the launcher uses the exact same `hoverRevealClass` helper and the same proof, not a separate implementation. Live-verified with genuine pointer hover on the deployed sandbox build; not independently confirmed on an actual touchscreen this round.
+
+Full suite green, lint clean, deployed to sandbox.)_
+
+_Prior: 2026-09-08c — Claude (**The floating widget can now rename or delete a topic or client conversation — Antonio: "I want the option to delete/rename a topic or conversation."** Neither existed anywhere before this: `PATCH /api/team/threads/[id]` could already rename a CHANNEL (`channel_name`) and archive/resolve a discussion, but had no way to touch a discussion's own `title`/`topic` at all; the full Team Chat page's own rename/archive/delete trio (`renameThread`/`setThreadArchived`/`deleteThread`, `.../thread-remove`) turned out on inspection to operate one level down — Slack-style reply-threads INSIDE a channel, not a whole discussion thread.
 
 **"Delete" is the archive every other thread in this system already uses — reversible, restorable from the full Team Chat page — never a hard delete of a shared conversation's history.** Chosen deliberately over the channel-reply-thread layer's own real permanent delete (which exists, but is gated to "only while you're still the only person who's posted in it") — a whole conversation has no equivalent same-poster protection to fall back on, and R100's own reasoning (never let one click destroy shared multi-person history) applies here even though a topic isn't client-visible. Said so in the menu itself (a caption under Rename/Delete), not just in code, since "Delete" is the word Antonio asked for and the UI owes him the truth about what it actually does.
 
@@ -413,6 +419,11 @@ Antonio's request: from a specific email in the CRM **Inbox**, or a specific cli
 - Confirm realtime: `SELECT tablename FROM pg_publication_tables WHERE pubname='supabase_realtime' AND tablename LIKE 'internal_%'` → all three.
 - @claude needs `ANTHROPIC_API_KEY` + `CRON_SECRET` on the environment; push needs VAPID keys. Sandbox blocks outbound email but push/worker work.
 - Migrations: `scripts/migrations/20260707-1900-team-workspace-phase1.sql` (schema) + `20260707-2000-team-workspace-read-rpcs.sql` (RPCs). Applied to sandbox; NOT promoted to prod.
+- Launcher edge-dock/hover-reveal (2026-09-09b): `npx vitest run tests/unit/edge-dock.test.ts` (14
+  tests, shared with the notes pill — see `docs/systems/staff-notes.md`). Live check: load the page
+  at a fixed width, confirm the launcher sits on the LEFT edge stacked above the notes pill and
+  hides to a thin sliver; hover/tap the sliver and confirm it reveals flush at the true edge, then
+  releases back to docked.
 
 ## Not yet built (later phases)
 Slack ingestion/mirror + post-from-CRM (behind kill-switch), colored Send-to-Team cards from account/invoice/doc/task pages, client-message → discuss/task/Slack bridges, PWA mobile hardening, Slack history import + decommission. See dev_task "Team Workspace — replace Slack".

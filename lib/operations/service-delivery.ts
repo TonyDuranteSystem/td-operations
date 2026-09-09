@@ -1435,6 +1435,15 @@ export async function revertServiceDelivery(
   )
   if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
 
+  // 3b. Clear any IRS shipment-tracking record for this case (2026-09-09). A revert is
+  // exactly the "this needs to be re-entered" correction — deleting the row means a
+  // stale tracking number (or a cached "delivered" stamp from a wrong match) can never
+  // silently keep being checked, or worse, keep being treated as confirmed, after the
+  // real package is re-mailed under a new number. Unconditional (not scoped to a
+  // specific stage): harmless no-op for any service_delivery with no tracking row.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- not in generated types
+  await dbWriteSafe((supabaseAdmin as any).from("irs_shipment_tracking").delete().eq("service_delivery_id", sd.id), "irs_shipment_tracking.delete.flow-revert")
+
   // 4. Move the SD back. Append a stage_history entry mirroring the forward
   // shape so the audit trail reads symmetrically.
   const historyEntry = {

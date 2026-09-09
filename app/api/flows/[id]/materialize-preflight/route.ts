@@ -21,8 +21,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { preflightFormationMaterialization } from '@/lib/operations/formation-materialize'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
     const { data: sd } = await (supabaseAdmin as any)

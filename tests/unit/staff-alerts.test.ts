@@ -3,7 +3,7 @@
  * No content is stored anywhere for this feature; these tests pin the derivation rules.
  */
 import { describe, it, expect } from "vitest"
-import { computeNoteAlerts, type NoteAlertSourceNote, type DismissalRow } from "@/lib/notes/staff-alerts"
+import { computeNoteAlerts, noteUrgencyColors, type NoteAlertSourceNote, type DismissalRow } from "@/lib/notes/staff-alerts"
 
 const ANTONIO = "11111111-1111-4111-8111-111111111111"
 const LUCA = "22222222-2222-4222-8222-222222222222"
@@ -62,7 +62,7 @@ describe("computeNoteAlerts — note_reply", () => {
         { id: "r2", author_user_id: LUCA, author_name: "Luca", body: "second", created_at: "2026-09-03T10:00:00.000Z" },
       ],
     })
-    const dismissals: DismissalRow[] = [{ note_id: "note-1", reply_id: "r1", dismissed_at: "2026-09-02T11:00:00.000Z" }]
+    const dismissals: DismissalRow[] = [{ note_id: "note-1", reply_id: "r1", kind: "note_reply", dismissed_at: "2026-09-02T11:00:00.000Z" }]
     const alerts = computeNoteAlerts([note], dismissals, ANTONIO, NOW)
     expect(alerts).toHaveLength(1)
     expect(alerts[0].reply_id).toBe("r2")
@@ -130,7 +130,7 @@ describe("computeNoteAlerts — note_update", () => {
 
   it("a dismissal hides it; a LATER change resurfaces it (timestamp-compared, not existence)", () => {
     const note = baseNote({ updated_at: "2026-09-02T10:00:00.000Z" })
-    const dismissedBefore: DismissalRow[] = [{ note_id: "note-1", reply_id: null, dismissed_at: "2026-09-02T11:00:00.000Z" }]
+    const dismissedBefore: DismissalRow[] = [{ note_id: "note-1", reply_id: null, kind: "note_update", dismissed_at: "2026-09-02T11:00:00.000Z" }]
     expect(computeNoteAlerts([note], dismissedBefore, LUCA, NOW)).toHaveLength(0)
 
     const editedAgain = baseNote({ updated_at: "2026-09-03T10:00:00.000Z" })
@@ -174,5 +174,105 @@ describe("computeNoteAlerts — ordering and shape", () => {
   it("carries a client name through from the nested account/contact select", () => {
     const note = baseNote({ accounts: { company_name: "Aumianna LLC" }, updated_at: "2026-09-02T10:00:00.000Z" })
     expect(computeNoteAlerts([note], [], LUCA, NOW)[0].client_name).toBe("Aumianna LLC")
+  })
+})
+
+describe("computeNoteAlerts — note_snooze_due", () => {
+  it("fires for the person who snoozed it, once their own snooze has elapsed", () => {
+    const note = baseNote({
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-09-04T10:00:00.000Z", parked_at: null }],
+    })
+    const alerts = computeNoteAlerts([note], [], ANTONIO, NOW) // NOW = 2026-09-04T12:00 — past the 10:00 snooze
+    expect(alerts.filter((a) => a.kind === "note_snooze_due")).toHaveLength(1)
+  })
+
+  it("does NOT exclude the note's own author — the opposite of note_reply/note_update, deliberately: " +
+     "a snooze is self-triggered, so the actor IS the intended recipient (a council review caught that " +
+     "copying the author-exclusion convention here would silently never fire on a private, self-snoozed " +
+     "note — the single most common real case)", () => {
+    const note = baseNote({
+      visibility: "private",
+      shared_with_user_id: null,
+      author_user_id: ANTONIO,
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-09-04T10:00:00.000Z", parked_at: null }],
+    })
+    const alerts = computeNoteAlerts([note], [], ANTONIO, NOW)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].kind).toBe("note_snooze_due")
+  })
+
+  it("does not fire while the snooze is still in the future", () => {
+    const note = baseNote({
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-12-01T00:00:00.000Z", parked_at: null }],
+    })
+    expect(computeNoteAlerts([note], [], ANTONIO, NOW).filter((a) => a.kind === "note_snooze_due")).toHaveLength(0)
+  })
+
+  it("does not fire for someone who never snoozed it themselves", () => {
+    const note = baseNote({
+      staff_note_state: [{ user_id: LUCA, archived_at: null, snoozed_until: "2026-09-04T10:00:00.000Z", parked_at: null }],
+    })
+    expect(computeNoteAlerts([note], [], ANTONIO, NOW).filter((a) => a.kind === "note_snooze_due")).toHaveLength(0)
+  })
+
+  it("a dismissal hides it; a LATER re-snooze that also elapses resurfaces it (timestamp-compared, " +
+     "same shape as note_update — never a plain existence check)", () => {
+    const note = baseNote({
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-09-04T10:00:00.000Z", parked_at: null }],
+    })
+    const dismissedAfterFirstDue: DismissalRow[] = [
+      { note_id: "note-1", reply_id: null, kind: "note_snooze_due", dismissed_at: "2026-09-04T10:30:00.000Z" },
+    ]
+    expect(computeNoteAlerts([note], dismissedAfterFirstDue, ANTONIO, NOW).filter((a) => a.kind === "note_snooze_due")).toHaveLength(0)
+
+    const reSnoozed = baseNote({
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-09-04T11:00:00.000Z", parked_at: null }],
+    })
+    expect(computeNoteAlerts([reSnoozed], dismissedAfterFirstDue, ANTONIO, NOW).filter((a) => a.kind === "note_snooze_due")).toHaveLength(1)
+  })
+
+  it("does not collide with a separate, undismissed note_update dismissal slot on the same note " +
+     "(the exact bug a shared dismissal row would have caused, per the 2026-09-09 migration)", () => {
+    const note = baseNote({
+      updated_at: "2026-09-04T09:00:00.000Z", // fires note_update for a non-author viewer
+      staff_note_state: [{ user_id: LUCA, archived_at: null, snoozed_until: "2026-09-04T10:00:00.000Z", parked_at: null }],
+    })
+    const dismissedDueOnly: DismissalRow[] = [
+      { note_id: "note-1", reply_id: null, kind: "note_snooze_due", dismissed_at: "2026-09-04T10:30:00.000Z" },
+    ]
+    const alerts = computeNoteAlerts([note], dismissedDueOnly, LUCA, NOW)
+    // note_snooze_due dismissed and gone, but note_update — a different kind, different slot — still fires.
+    expect(alerts.map((a) => a.kind)).toEqual(["note_update"])
+  })
+})
+
+describe("noteUrgencyColors", () => {
+  it("maps a note_reply or note_update alert to red", () => {
+    const colors = noteUrgencyColors([{ kind: "note_update", note_id: "n1" }])
+    expect(colors.get("n1")).toBe("red")
+  })
+
+  it("maps a note_snooze_due alert, alone, to teal", () => {
+    const colors = noteUrgencyColors([{ kind: "note_snooze_due", note_id: "n1" }])
+    expect(colors.get("n1")).toBe("teal")
+  })
+
+  it("red wins when a note has both a reply/update alert AND a snooze-due alert — regardless of " +
+     "which order they appear in the alerts list", () => {
+    const redFirst = noteUrgencyColors([
+      { kind: "note_update", note_id: "n1" },
+      { kind: "note_snooze_due", note_id: "n1" },
+    ])
+    expect(redFirst.get("n1")).toBe("red")
+
+    const tealFirst = noteUrgencyColors([
+      { kind: "note_snooze_due", note_id: "n1" },
+      { kind: "note_reply", note_id: "n1" },
+    ])
+    expect(tealFirst.get("n1")).toBe("red")
+  })
+
+  it("a note with no alerts at all has no entry in the map", () => {
+    expect(noteUrgencyColors([]).has("n1")).toBe(false)
   })
 })

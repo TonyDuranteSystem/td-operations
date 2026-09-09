@@ -18,8 +18,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ocrRawContent } from '@/lib/docai'
 import { parseFormationDate } from '@/lib/articles-parse'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function GET(req: NextRequest, { params: _params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const storagePath = req.nextUrl.searchParams.get('storage_path')
     if (!storagePath) {

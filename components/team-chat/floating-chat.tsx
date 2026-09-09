@@ -23,8 +23,10 @@
  * Placement: z-46 — one step above the notes layer so a dragged note cannot
  * cover the composer, still below the AI panel (55), command palette (60) and
  * the note dialogs (70/80) so it can never trap a modal's buttons. Anchored
- * bottom-RIGHT-of-centre: bottom-left belongs to the notes pill, the very
- * bottom-right to toasts.
+ * bottom-LEFT, same edge as the notes launcher and stacked directly above it
+ * (2026-09-09: both bubbles used to sit on opposite edges — Antonio, after
+ * trying that live: "put the bubbles on the same side") — the true bottom-
+ * right corner still belongs to toasts alone, untouched by this move.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -65,6 +67,8 @@ import { msgTime } from '@/lib/team/chat-time'
 import { CLAUDE_SENDER_UUID } from '@/lib/team/workspace'
 import { ChatErrorBoundary } from '@/components/team-chat/chat-error-boundary'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
+import { useEdgeDock } from '@/components/ui/use-edge-dock'
+import { hoverRevealClass } from '@/lib/ui/edge-dock'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 import { OPEN_TEAM_CHAT_EVENT } from '@/lib/team/open-team-chat'
@@ -176,6 +180,13 @@ function FloatingChatInner() {
   const [quiet, setQuiet] = useState(false)
   // Antonio moves this himself — desktop and phone. Double-click resets it.
   const launcher = useDraggableFab(FAB_KEYS.chat)
+  // Docks toward the LEFT edge — SAME side as the notes launcher (Antonio,
+  // after trying both on opposite edges live: "put the bubbles on the same
+  // side"). Left, not right, so neither bubble ever sits in the bottom-right
+  // corner this codebase already reserves for toast notifications (see this
+  // file's own launcher comment below). Stacked vertically above the notes
+  // launcher, not on top of it — see the className below for the exact offset.
+  const launcherDock = useEdgeDock(launcher.ref, { defaultEdge: 'left', pos: launcher.pos })
   // Read after mount, never during render — reading storage while rendering
   // desyncs hydration.
   useEffect(() => { setQuiet(store.get(QUIET_KEY) === '1') }, [])
@@ -520,7 +531,8 @@ function FloatingChatInner() {
         <button
           ref={launcher.ref}
           {...launcher.dragProps}
-          style={launcher.style}
+          style={{ ...launcher.style, ...launcherDock.dockStyle }}
+          onDoubleClick={() => { launcher.reset(); launcherDock.revealPermanently() }}
           onClick={() => {
             // A drag that ends on the button must not also open it.
             if (launcher.dragging) return
@@ -546,17 +558,40 @@ function FloatingChatInner() {
              a bottom corner, with the unread count as a badge rather than as the
              label (a bare number in a pill looked like a counter, not a door).
 
-             PLACEMENT, corrected 2026-07-23. The first version sat at the very
-             bottom-right — the corner the codebase already reserves for toasts,
-             which is WHY the notes pill went bottom-LEFT. On a phone that put it
-             exactly on top of the composer's Send button, and on Portal Chats
-             that Send is how you answer a real client. So: raised above the
-             composer band by default on mobile (bottom-24), back in the corner on
-             desktop where there is no composer to fight. Antonio can also DRAG it
-             anywhere — double-click/tap resets it here.
-             `touch-none` is required: without it the browser hands a drag to the
-             page scroller instead of the button. */
-          className="group fixed bottom-24 right-4 z-[46] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:right-6"
+             PLACEMENT. Originally the very bottom-right (the corner the
+             codebase reserves for toasts) — corrected 2026-07-23 to raised-
+             above-the-composer on mobile / back-in-the-corner on desktop, and
+             moved from the right edge to the LEFT edge entirely on 2026-09-09
+             (Antonio, after using both edges live: "put the bubbles on the
+             same side") — same side as the notes launcher now, stacked ABOVE
+             it (notes moved up to bottom-40/lg:bottom-24; this button's own
+             bottom-24/lg:bottom-6 is UNCHANGED) rather than overlapping it.
+             Still not the true bottom-right corner even now, on purpose —
+             toasts still land there. Antonio can also DRAG it anywhere —
+             double-click/tap resets it here.
+             `touch-none` is required: without it the browser hands a drag to
+             the page scroller instead of the button.
+
+             A FIRST pointer-hover peek (hover:!left-4 / lg:hover:!left-6,
+             reverting to this button's own natural fully-visible position,
+             the same `!important` override trick described above) was tried
+             the same round and REVERTED within the hour — live on Antonio's
+             own phone it froze/strobed the screen. Root cause: revealing to
+             the natural resting spot MOVES the button's edge out from under
+             the pointer; once moved, the pointer is no longer over it, which
+             drops the hover, which docks it again, which puts the button
+             BACK under the pointer, which re-triggers the reveal — an
+             oscillation loop, many times a second, not a rare edge case. The
+             reasoning that touch "has no sustained hover to trigger this"
+             was asserted, not verified, and was simply wrong — touch
+             reproduced it directly. REBUILT (2026-09-09) using
+             hoverRevealClass from lib/ui/edge-dock.ts: it reveals flush at
+             the true edge (x=0) instead of the natural resting spot — the
+             module's own HOVER_REVEAL_PX comment proves the docked-visible
+             range is always a subset of the revealed range at that edge, so
+             the pointer can never be swept out from under itself and the
+             loop above cannot recur. */
+          className={`group fixed bottom-24 left-4 z-[46] flex h-14 w-14 touch-none items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl ring-4 ring-emerald-500/20 transition-transform hover:scale-105 hover:bg-emerald-400 lg:bottom-6 lg:left-6 ${hoverRevealClass('left')}`}
           aria-label={unread > 0 ? `Team chat, ${unread} unread messages` : 'Team chat'}
         >
           <MessageSquare className="h-6 w-6" />

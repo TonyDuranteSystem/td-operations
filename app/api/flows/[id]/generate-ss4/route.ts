@@ -23,6 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createSS4 } from '@/lib/operations/ss4'
 import { refreshSS4 } from '@/lib/operations/ss4-refresh'
 import { APP_BASE_URL } from '@/lib/config'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 async function resolveAccountId(serviceDeliveryId: string): Promise<{ account_id: string | null; service_type: string | null } | null> {
   const { data: sd } = await supabaseAdmin
@@ -34,6 +35,8 @@ async function resolveAccountId(serviceDeliveryId: string): Promise<{ account_id
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const sd = await resolveAccountId(params.id)
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
@@ -87,6 +90,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const sd = await resolveAccountId(params.id)
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })

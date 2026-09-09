@@ -75,6 +75,11 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/airwallex-sync": "*/15 * * * *",
   "/api/cron/stripe-sync": "0 */6 * * *",
   "/api/cron/itin-processing-check": "0 9 * * 1",
+  // ITIN IRS-shipment tracking daily check (dev job 7c3ef909) — asks ShipStation
+  // for real delivery status on packages mailed to the IRS, tells the client
+  // automatically once confirmed. Daily, same time-of-day as the weekly ITIN
+  // reminder above for a coherent ITIN-cron schedule.
+  "/api/cron/irs-tracking-check": "0 9 * * *",
   "/api/cron/workflow-sla-check": "0 * * * *",
   // Team-chat @claude rescue scan (ccf1a0ec) — self-auths via CRON_SECRET.
   "/api/team/claude/process": "*/2 * * * *",

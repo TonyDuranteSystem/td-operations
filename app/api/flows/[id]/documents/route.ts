@@ -13,6 +13,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 // service_delivery_id / flow_stage were added by the S0 migration but the
 // generated DB types aren't regenerated yet — query via an untyped surface
@@ -31,6 +32,8 @@ type UntypedSelect = {
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
     const adminUntyped = supabaseAdmin as unknown as UntypedSelect
