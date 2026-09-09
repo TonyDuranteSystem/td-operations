@@ -22,7 +22,7 @@ import { requestOpenNote } from '@/lib/notes/open-note'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 
 interface NoteStaffAlert {
-  kind: 'note_reply' | 'note_update'
+  kind: 'note_reply' | 'note_update' | 'note_snooze_due'
   note_id: string
   reply_id: string | null
   author_name: string | null
@@ -50,7 +50,7 @@ interface ChatStaffAlert {
 type StaffAlert = NoteStaffAlert | ChatStaffAlert
 
 function isNoteAlert(a: StaffAlert): a is NoteStaffAlert {
-  return a.kind === 'note_reply' || a.kind === 'note_update'
+  return a.kind === 'note_reply' || a.kind === 'note_update' || a.kind === 'note_snooze_due'
 }
 
 function alertKey(a: StaffAlert): string {

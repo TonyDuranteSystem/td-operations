@@ -14,6 +14,7 @@ import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 import { isArchivedFor, isSnoozedFor, isParkedFor, noteStateFor, noteActivityAt, latestReplyOf, otherPersonState, otherViewersOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { noteUrgencyColors, type NoteAlertKind, type NoteUrgencyColor } from '@/lib/notes/staff-alerts'
 
 interface Note {
   id: string
@@ -55,6 +56,16 @@ async function fetchAll(): Promise<{ notes: Note[]; members?: Member[]; me?: { i
     throw new Error(d.error || 'Could not load your notes.')
   }
   return res.json()
+}
+
+/** Matches sticky-notes-layer.tsx's own StaffAlertLite shape exactly — a separate
+ *  component tree, so it keeps its own copy rather than reaching across into that
+ *  file's local state (same reasoning active-notes-strip.tsx already applies). */
+interface StaffAlertLite { kind: NoteAlertKind; note_id: string; reply_id: string | null }
+async function fetchStaffAlerts(): Promise<{ alerts: StaffAlertLite[] }> {
+  const res = await fetch('/api/crm/staff-alerts')
+  if (!res.ok) return { alerts: [] }
+  return res.json().catch(() => ({ alerts: [] }))
 }
 
 /** When THIS person's snooze ends (null = they have not snoozed it themselves). */
@@ -106,6 +117,39 @@ export function NotesBoard() {
   const me: string | null = data?.me?.id ?? null
   const now = Date.now()
 
+  // Same query key as sticky-notes-layer.tsx / active-notes-strip.tsx / the bell — one
+  // shared cache for "have I seen this," so dismissing here clears it everywhere too.
+  const { data: alertsData } = useQuery({ queryKey: ['staff-alerts'], queryFn: fetchStaffAlerts })
+  // THE ONE red-vs-teal decision (lib/notes/staff-alerts.ts) — never re-derive this
+  // independently; this page had NO alert-color logic before today, so there is no
+  // legacy copy to reconcile, just the one shared source of truth to adopt directly.
+  const noteColors = useMemo(() => noteUrgencyColors(alertsData?.alerts ?? []), [alertsData])
+
+  /** Mirrors sticky-notes-layer.tsx's own dismissNoteAlerts. */
+  const dismissAlerts = async (noteId: string) => {
+    const mine = (alertsData?.alerts ?? []).filter((a) => a.note_id === noteId)
+    if (mine.length === 0) return
+    qc.setQueryData<{ alerts: StaffAlertLite[] }>(['staff-alerts'], (old) =>
+      old ? { alerts: old.alerts.filter((a) => a.note_id !== noteId) } : old,
+    )
+    await Promise.all(mine.map((a) =>
+      fetch('/api/crm/staff-alerts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: a.kind, note_id: a.note_id, reply_id: a.reply_id }),
+      }).catch(() => null),
+    ))
+    qc.invalidateQueries({ queryKey: ['staff-alerts'] })
+  }
+
+  /** The one place a note actually gets opened from this page — dismissing here,
+   *  not on mere list-render, matches "opening IS reading" everywhere else in this
+   *  feature without falsely marking a note read just because it scrolled into view. */
+  const openNote = (n: Note) => {
+    if (noteColors.has(n.id)) dismissAlerts(n.id)
+    setEditing(n)
+  }
+
   // Deep link from a push: /notes?note=<id> opens that exact note, whatever state it's in
   // here (this feed includes snoozed + done). A note that was deleted or made private in
   // the meantime simply isn't in the feed — say so instead of silently doing nothing.
@@ -115,9 +159,10 @@ export function NotesBoard() {
     if (!deepLinkId || consumedDeepLink.current || !data) return
     consumedDeepLink.current = true
     const hit = notes.find((n) => n.id === deepLinkId)
-    if (hit) setEditing(hit)
+    if (hit) openNote(hit)
     else setGone(true)
     router.replace('/notes', { scroll: false })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkId, data, notes, router])
 
   /** Refresh BOTH note feeds — the tab and the floating layer must never disagree. */
@@ -218,7 +263,7 @@ export function NotesBoard() {
         {header}
         {/* The calendar only declares the fields it renders, but it is handed the FULL note
             objects from the feed — so the value coming back is a complete Note. */}
-        <NotesCalendar notes={notes} onOpen={(n) => setEditing(n as unknown as Note)} />
+        <NotesCalendar notes={notes} onOpen={(n) => openNote(n as unknown as Note)} />
         {overlays}
       </div>
     )
@@ -229,22 +274,22 @@ export function NotesBoard() {
       {header}
 
       <Section title="On your screen" count={active.length} empty="Nothing on screen right now.">
-        {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone onOpen={setEditing} me={me} members={members} />)}
+        {active.map((n) => <Card key={n.id} n={n} onAct={act} showDone onOpen={openNote} me={me} members={members} urgency={noteColors.get(n.id)} />)}
       </Section>
 
       <Section title="Snoozed" count={snoozed.length} empty="Nothing snoozed.">
         {snoozed.map((n) => (
-          <Card key={n.id} n={n} onAct={act} showUnsnooze onOpen={setEditing} me={me} members={members}
+          <Card key={n.id} n={n} onAct={act} showUnsnooze onOpen={openNote} me={me} members={members} urgency={noteColors.get(n.id)}
             footer={<span className="flex items-center gap-1 text-xs opacity-70"><Clock className="h-3 w-3" />Back {whenText(myWake(n, me) ?? n.snoozed_until!)}</span>} />
         ))}
       </Section>
 
       <Section title="Parked" count={parked.length} empty="Nothing parked.">
-        {parked.map((n) => <Card key={n.id} n={n} onAct={act} showUnpark onOpen={setEditing} me={me} members={members} />)}
+        {parked.map((n) => <Card key={n.id} n={n} onAct={act} showUnpark onOpen={openNote} me={me} members={members} urgency={noteColors.get(n.id)} />)}
       </Section>
 
       <Section title="Done" count={done.length} empty="Nothing cleared yet.">
-        {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore onOpen={setEditing} me={me} members={members} />)}
+        {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore onOpen={openNote} me={me} members={members} urgency={noteColors.get(n.id)} />)}
       </Section>
 
       {overlays}
@@ -299,7 +344,7 @@ function Section({ title, count, empty, children }: { title: string; count: numb
   )
 }
 
-function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, footer, onOpen, me, members }: {
+function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, footer, onOpen, me, members, urgency }: {
   n: Note
   onAct: (id: string, payload: Record<string, unknown>) => void
   showDone?: boolean
@@ -310,6 +355,9 @@ function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, foote
   onOpen?: (n: Note) => void
   me?: string | null
   members?: Member[]
+  /** From the shared noteUrgencyColors() map — undefined when the note has no
+   *  pending alert, in which case its own chosen paper color renders as before. */
+  urgency?: NoteUrgencyColor
 }) {
   const client = noteClientName(n as never)
   // Someone changed the note AFTER this person cleared it — the only screen-side signal
@@ -320,8 +368,15 @@ function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, foote
   const updatedSinceDone =
     showRestore && myState?.archived_at != null && Date.parse(noteActivityAt(n)) > Date.parse(myState.archived_at)
   const latest = latestReplyOf(n)
+  // Same solid-blinking treatment as every other surface this note can appear on
+  // (the mobile sheet, the desktop header pills) — see noteUrgencyColors' own header
+  // for why this decision is never re-derived independently per surface.
+  const urgencyClasses =
+    urgency === 'red' ? 'animate-pulse bg-red-600 border-red-700 text-white'
+    : urgency === 'teal' ? 'animate-pulse bg-teal-600 border-teal-700 text-white'
+    : COLORS[n.color] || COLORS.yellow
   return (
-    <div className={`rounded-md border p-3 ${COLORS[n.color] || COLORS.yellow}`}>
+    <div className={`rounded-md border p-3 ${urgencyClasses}`}>
       {updatedSinceDone && (
         <p className="mb-1 inline-flex rounded bg-amber-400/60 px-1.5 py-0.5 text-[11px] font-medium text-amber-950">
           Updated after you marked it done

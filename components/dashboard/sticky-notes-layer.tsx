@@ -12,8 +12,11 @@
  * reasoning). This file's remaining desktop job is narrower: own the note editor/composer
  * modal and the "New note" entry point, and answer "open this note" requests from
  * anywhere (the header strip, the Parked trigger, the Alerts bell) via the same
- * open-in-place mechanism as before. Mobile (<lg) is UNCHANGED — a bottom-LEFT pill (the
- * toast layer owns bottom-right) that opens a bottom sheet listing every active note.
+ * open-in-place mechanism as before. Mobile (<lg) — a bottom-LEFT pill (the toast layer
+ * owns bottom-right) that opens a bottom sheet listing every active note. Since 2026-09-09
+ * the team-chat launcher docks on this SAME left edge too (Antonio: "put the bubbles on
+ * the same side"), stacked directly below this pill — see floating-chat.tsx's own comment
+ * for the exact vertical math.
  * z-index 45: above the mobile top bar (40), below every modal/drawer (50+), so a note never
  * traps a dialog's buttons. Wrapped in its own error boundary — a throw here must not take the CRM down.
  */
@@ -26,11 +29,14 @@ import { toast } from 'sonner'
 import { NoteEditor } from '@/components/dashboard/note-editor'
 // AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
+import { useEdgeDock } from '@/components/ui/use-edge-dock'
+import { hoverRevealClass } from '@/lib/ui/edge-dock'
 import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { OPEN_NOTE_EVENT, type OpenNoteDetail } from '@/lib/notes/open-note'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
 import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { noteUrgencyColors, type NoteAlertKind, type NoteUrgencyColor } from '@/lib/notes/staff-alerts'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
@@ -74,11 +80,22 @@ const COLORS: Record<string, string> = {
 }
 /** A solid, saturated red — deliberately NOT one of the pastel COLORS above, so "unread"
  *  can never be confused with a deliberately-chosen pink note. Matches the same red
- *  already used for the destructive "Delete forever?" bar in this file. */
-const UNREAD_CLASSES = 'bg-red-600 border-red-700 text-white'
+ *  already used for the destructive "Delete forever?" bar in this file. Blinks
+ *  (`animate-pulse`) to match the same solid-blinking-red convention already used by the
+ *  desktop header pills, the Parked-notes trigger, and the Staff Alerts bell — this was
+ *  the one surface still missing the blink (2026-09-09). */
+const UNREAD_CLASSES = 'animate-pulse bg-red-600 border-red-700 text-white'
+/** A snoozed note whose time has come back up — solid, blinking, and deliberately NOT a
+ *  shade of amber/yellow: this feature's own brand color (the "+" buttons) and its
+ *  existing "parked, nothing urgent" indicator are both already amber, so a third amber-
+ *  family meaning here would be the one thing Antonio explicitly asked to avoid (Council
+ *  review, dev job b85fe89e). Teal has no existing meaning anywhere in this feature. */
+const DUE_CLASSES = 'animate-pulse bg-teal-600 border-teal-700 text-white'
 
-function noteBgClasses(note: Note, unread: boolean): string {
-  return unread ? UNREAD_CLASSES : COLORS[note.color] || COLORS.yellow
+function noteBgClasses(note: Note, urgency: NoteUrgencyColor | null | undefined): string {
+  if (urgency === 'red') return UNREAD_CLASSES
+  if (urgency === 'teal') return DUE_CLASSES
+  return COLORS[note.color] || COLORS.yellow
 }
 
 async function fetchActive(): Promise<ActiveResponse> {
@@ -111,7 +128,7 @@ async function fetchParked(): Promise<{ notes: Note[] }> {
  * staff-alerts-bell.tsx on purpose — one shared cache, so dismissing here also
  * clears the bell's badge for this note, and vice versa.
  */
-interface StaffAlertLite { kind: string; note_id: string; reply_id: string | null }
+interface StaffAlertLite { kind: NoteAlertKind; note_id: string; reply_id: string | null }
 async function fetchStaffAlerts(): Promise<{ alerts: StaffAlertLite[] }> {
   const res = await fetch('/api/crm/staff-alerts')
   if (!res.ok) return { alerts: [] }
@@ -176,10 +193,15 @@ function StickyNotesInner() {
     refetchInterval: 60_000,
   })
   const noteAlerts = useMemo(
-    () => (alertsData?.alerts ?? []).filter((a) => a.kind === 'note_update' || a.kind === 'note_reply'),
+    () =>
+      (alertsData?.alerts ?? []).filter(
+        (a) => a.kind === 'note_update' || a.kind === 'note_reply' || a.kind === 'note_snooze_due',
+      ),
     [alertsData],
   )
-  const unreadNoteIds = useMemo(() => new Set(noteAlerts.map((a) => a.note_id)), [noteAlerts])
+  // THE ONE red-vs-teal decision — see noteUrgencyColors' own header for why this must
+  // never be re-derived independently per surface.
+  const noteColors = useMemo(() => noteUrgencyColors(noteAlerts), [noteAlerts])
 
   /** Mark one note read: dismiss every pending alert on it (the share/edit alert AND
    *  any pending replies), same optimistic-then-invalidate pattern as the bell's own
@@ -216,6 +238,15 @@ function StickyNotesInner() {
   // desktop + button and the mobile pill remember their own spots per device.
   const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`, { dragThresholdPx: 16 })
   const mobileFab = useDraggableFab(FAB_KEYS.notes)
+  // Both launchers dock toward the LEFT edge by default — their own existing home
+  // corner (Antonio: "hidden for 3/4 on the side of the screen and recall them
+  // when needed," 2026-09-09, dev job b85fe89e).
+  const deskDock = useEdgeDock(deskFab.ref, { defaultEdge: 'left', pos: deskFab.pos })
+  // remeasureOn: notes.length — this pill's own label switches from the wider
+  // "Notes" loading placeholder to a narrower real count once the query
+  // resolves; see useEdgeDock's own remeasureOn comment for why a plain
+  // ResizeObserver did not reliably catch that specific change on its own.
+  const mobileDock = useEdgeDock(mobileFab.ref, { defaultEdge: 'left', pos: mobileFab.pos, remeasureOn: notes.length })
 
   // Re-sync when the tab wakes (sleep/PWA freeze) or the network returns — realtime replays nothing.
   useEffect(() => {
@@ -307,14 +338,38 @@ function StickyNotesInner() {
           notes moved into the header strip, next to Parked — see
           active-notes-strip.tsx — so there is no more floating canvas for a
           "select notes" menu item to send you to; bulk-selecting for Park now happens
-          inside that header strip's own dropdown instead). */}
-      <FastTooltip label="New note — drag to move, double-click to reset" align="left">
+          inside that header strip's own dropdown instead).
+
+          bottom-24, not the old bottom-4 (2026-09-09: Antonio, having used both
+          launchers live, "put the bubbles on the same side" — the chat launcher
+          moved from the right edge onto this same left edge, so this button
+          moved UP to stack above it with a clear gap, rather than the two
+          landing on top of each other; chat's own bottom-6 desktop position is
+          unchanged, see floating-chat.tsx).
+
+          A FIRST hover-to-reveal attempt was tried the same round and
+          REVERTED within the hour — live on a real phone it froze/strobed the
+          screen. Root cause: it revealed to the button's own natural inset
+          resting spot, which is PAST wherever the pointer already sat in the
+          docked sliver — sweeping the button's edge past the pointer drops
+          the hover, which docks it again, which puts the sliver BACK under
+          the pointer, re-triggering — a loop, many times a second. The claim
+          this would be "harmless on touch, which has no sustained hover" was
+          asserted, not verified, and was wrong — touch reproduced it too.
+          REBUILT (2026-09-09) using hoverRevealClass from lib/ui/edge-dock.ts:
+          it reveals flush at the true edge (x=0) instead of the inset resting
+          spot, which the module's own HOVER_REVEAL_PX comment proves cannot
+          reopen the loop — the docked-visible range is always a subset of
+          the revealed range, so the pointer can never be swept out from
+          under itself. */}
+      <FastTooltip label="New note — drag to move, double-click to reset & reveal" align="left">
         <button
           ref={deskFab.ref}
           {...deskFab.dragProps}
-          style={deskFab.style}
+          style={{ ...deskFab.style, ...deskDock.dockStyle }}
           onClick={() => { if (!deskFab.dragging) setComposing(true) }}
-          className="hidden lg:flex fixed bottom-4 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300"
+          onDoubleClick={() => { deskFab.reset(); deskDock.revealPermanently() }}
+          className={`hidden lg:flex fixed bottom-24 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300 ${hoverRevealClass('left')}`}
           aria-label="New note"
         >
           <Plus className="h-5 w-5" />
@@ -322,24 +377,39 @@ function StickyNotesInner() {
       </FastTooltip>
 
       {/* MOBILE: a pill that opens a sheet.
-          RAISED above the composer band (bottom-24). At bottom-4 it sat exactly
-          on the Attach button of every chat composer — on Portal Chats that is
-          how a client gets an attachment, so the phone could not do the job.
-          Draggable too (Antonio, 2026-07-23); double-tap resets.
-          `touch-none` is required or the browser gives the drag to the scroller. */}
+          RAISED above the composer band (bottom-24 was the floor — at bottom-4 it
+          sat exactly on the Attach button of every chat composer, and on Portal
+          Chats that is how a client gets an attachment, so the phone could not do
+          the job). Now bottom-40, one more step up (2026-09-09: the chat launcher
+          moved onto this same left edge at its own unchanged bottom-24, so this
+          pill moved UP to stack above it rather than overlap — see
+          floating-chat.tsx). Draggable too (Antonio, 2026-07-23); double-tap
+          resets. `touch-none` is required or the browser gives the drag to the
+          scroller.
+
+          A pointer-hover reveal was tried here too, same round, same revert —
+          see the desktop button's own comment above for the full incident
+          (root cause was the same on both: revealing to the natural inset
+          spot moves the button's edge out from under the pointer, which
+          un-triggers the reveal, oscillating). On THIS button it was touch
+          itself that reproduced it live, on Antonio's own phone — direct
+          proof the "touch has no sustained hover" assumption was wrong, not
+          just an assumption. REBUILT (2026-09-09) with the same
+          hoverRevealClass flush-edge fix as the desktop button above. */}
       <button
         ref={mobileFab.ref}
         {...mobileFab.dragProps}
-        style={mobileFab.style}
+        style={{ ...mobileFab.style, ...mobileDock.dockStyle }}
+        onDoubleClick={() => { mobileFab.reset(); mobileDock.revealPermanently() }}
         onClick={() => {
           if (mobileFab.dragging) return
           setSheetOpen(true)
           // Opening the sheet already reveals every note's full preview text — the phone
           // has no separate collapsed-icon step to click through, so opening IS reading
           // (Antonio, 2026-09-05: the phone should behave the same as the desktop icons).
-          for (const n of notes) if (unreadNoteIds.has(n.id)) dismissNoteAlerts(n.id)
+          for (const n of notes) if (noteColors.has(n.id)) dismissNoteAlerts(n.id)
         }}
-        className="lg:hidden fixed bottom-24 left-4 z-[45] flex touch-none items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-sm font-medium text-amber-950 shadow-lg"
+        className={`lg:hidden fixed bottom-40 left-4 z-[45] flex touch-none items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-sm font-medium text-amber-950 shadow-lg ${hoverRevealClass('left')}`}
       >
         <StickyNote className="h-4 w-4" />
         {notes.length > 0 ? notes.length : 'Notes'}
@@ -354,7 +424,7 @@ function StickyNotesInner() {
           onNew={() => { setSheetOpen(false); setComposing(true) }}
           onChange={invalidate}
           onOpen={(n) => { setSheetOpen(false); setEditing(n) }}
-          unreadNoteIds={unreadNoteIds}
+          noteColors={noteColors}
         />
       )}
 
@@ -631,9 +701,9 @@ function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { n
 /* ─────────────────────────── mobile bottom sheet ─────────────────────────── */
 // (The old mini Composer lived here — creation now opens the FULL NoteEditor instead.)
 
-function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen, unreadNoteIds }: {
+function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen, noteColors }: {
   notes: Note[]; members: Member[]; meId: string | null; onClose: () => void; onNew: () => void; onChange: () => void; onOpen: (n: Note) => void
-  unreadNoteIds: Set<string>
+  noteColors: Map<string, NoteUrgencyColor>
 }) {
   return (
     <div className="lg:hidden fixed inset-0 z-[46] flex flex-col justify-end bg-black/30" onClick={onClose}>
@@ -647,7 +717,7 @@ function MobileSheet({ notes, members, meId, onClose, onNew, onChange, onOpen, u
         {notes.length === 0 && <p className="py-6 text-center text-sm text-zinc-500">No notes right now.</p>}
         <div className="flex flex-col gap-2">
           {notes.map((n) => (
-            <div key={n.id} className={`rounded-md border ${noteBgClasses(n, unreadNoteIds.has(n.id))}`}>
+            <div key={n.id} className={`rounded-md border ${noteBgClasses(n, noteColors.get(n.id))}`}>
               <NoteCardBody note={n} members={members} meId={meId} onChange={onChange} onOpen={onOpen} />
             </div>
           ))}
