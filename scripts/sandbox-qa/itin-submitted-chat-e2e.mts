@@ -81,7 +81,7 @@ async function makeContact(label: string): Promise<string> {
 async function chatRows(contactId: string) {
   const { data } = await sb
     .from("portal_messages")
-    .select("id, topic, message, sender_type")
+    .select("id, topic, message, sender_type, service_delivery_id")
     .eq("contact_id", contactId)
     .order("created_at", { ascending: true })
   return data ?? []
@@ -122,6 +122,11 @@ async function run() {
     itinRows1[0]?.message,
   )
   check("1d. Sender is admin (staff-authored system message)", itinRows1[0]?.sender_type === "admin", itinRows1[0]?.sender_type)
+  check(
+    "1d2. Message is stamped with this service_delivery_id (so the staff Workspace room can find it — this SD has no account_id, so the room's query has no other way to match it)",
+    itinRows1[0]?.service_delivery_id === sd1.id,
+    `expected ${sd1.id}, got ${itinRows1[0]?.service_delivery_id}`,
+  )
   check(
     "1e. auto_triggers records the chat post",
     adv1.auto_triggers.some((t) => t.includes("Stage-change chat message posted")),
