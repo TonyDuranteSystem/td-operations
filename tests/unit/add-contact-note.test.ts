@@ -80,6 +80,17 @@ describe("addContactNote — locks against the fresh read, not the stale page-lo
     expect((updates as { notes: string }).notes).toContain("existing note")
   })
 
+  it("propagates a genuine conflict from updateWithLock as a failure, never as a silent success (third bug-hunter pass, dev job e7352aa6)", async () => {
+    mockSingle.mockResolvedValue({ data: { notes: "existing note", updated_at: "T1" } })
+    mockUpdateWithLock.mockResolvedValue({
+      success: false,
+      error: "This record changed since it was loaded — reload and try again.",
+    })
+    const result = await addContactNote(CONTACT_ID, "a note", "T0")
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed since it was loaded/)
+  })
+
   it("refuses an empty note without reading the contact or calling the lock at all", async () => {
     const result = await addContactNote(CONTACT_ID, "   ", "T0")
     expect(result.success).toBe(false)

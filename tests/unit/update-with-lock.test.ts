@@ -193,7 +193,7 @@ describe("updateWithLock — retry write itself races (second bug-hunter pass, d
     mockAdminUpdateSelect.mockResolvedValue({ data: [], error: null })
     const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/changed since it was loaded/)
+    expect(result.error).toMatch(/changed or was removed since it was loaded/)
   })
 
   it("also refuses when the retry write's select comes back null rather than an empty array", async () => {
@@ -202,6 +202,6 @@ describe("updateWithLock — retry write itself races (second bug-hunter pass, d
     mockAdminUpdateSelect.mockResolvedValue({ data: null, error: null })
     const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/changed since it was loaded/)
+    expect(result.error).toMatch(/changed or was removed since it was loaded/)
   })
 })

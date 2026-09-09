@@ -697,8 +697,7 @@ export async function changeAccountStatus(
   newStatus: string,
   options: StatusChangeOptions,
   note: string,
-  // No longer used for the lock below — see the comment at that call.
-  _updatedAt: string,
+  updatedAt: string,
 ): Promise<StatusChangeResult> {
   const cascadesApplied: string[] = []
   const cascadesFailed: { name: string; error: string }[] = []
@@ -722,16 +721,25 @@ export async function changeAccountStatus(
   const existingNotes = (account.notes ?? '').trim()
   const combinedNotes = existingNotes ? `${autoNoteLine}\n${existingNotes}` : autoNoteLine
 
-  // Locked against THIS read's own updated_at (fetched just above), not the
-  // page-load value — oldStatus and the note text are already computed from
-  // this same fresh read, so the lock's job is only to catch a write racing
-  // this read-modify-write, not to re-litigate page-load staleness
-  // (bug-hunter pass, dev job e7352aa6).
+  // Locked against the PAGE-LOAD updatedAt, not this function's own fresh
+  // read above — deliberately different from addAccountNote/addContactNote
+  // (third bug-hunter pass, dev job e7352aa6). A note append is commutative:
+  // whatever the row's real current state, the freshly-read combinedNotes
+  // is already correct, so locking against a fresh read only guards the
+  // write itself. A status change is not commutative — newStatus and
+  // options are a DECISION staff made while looking at oldStatus on their
+  // screen, with real cascades attached (cancelling deliveries, voiding
+  // payments, revoking portal access). If the account's real status moved
+  // since the page loaded, that decision may already be wrong, and the
+  // right answer is to refuse and make staff look again before any cascade
+  // fires — exactly what locking against the page-load value does.
+  // updateWithLock's own internal recheck (added in the prior two rounds)
+  // still absorbs a genuinely stale cache read that changed nothing real.
   const lockResult = await updateWithLock(
     'accounts',
     accountId,
     { status: newStatus, notes: combinedNotes },
-    account.updated_at,
+    updatedAt,
   )
   if (!lockResult.success) {
     return { success: false, error: lockResult.error || 'Failed to update account status' }
@@ -1131,7 +1139,12 @@ export async function updateDBADetails(
         .select('id, updated_at')
       if (retryRes.error) throw new Error(retryRes.error.message)
       if (!retryRes.data || retryRes.data.length === 0) {
-        throw new Error('This record changed since it was loaded — reload and try again.')
+        // Distinct from the recheck's own message above (third bug-hunter
+        // pass): this specific miss means something wrote to (or deleted)
+        // the row in the narrow gap between the recheck read just above and
+        // this write — could be either, unlike the recheck's own refusal,
+        // which always means a genuine change.
+        throw new Error('This record changed or was removed since it was loaded — reload and try again.')
       }
       resolvedUpdatedAt = retryRes.data[0].updated_at
     }

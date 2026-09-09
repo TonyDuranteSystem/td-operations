@@ -224,7 +224,7 @@ describe('updateDBADetails', () => {
     dbaCurrentUpdatedAt = 'OLD-TS'
     const result = await updateDBADetails('dba-1', { notes: 'updated' }, 'OLD-TS')
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/changed since it was loaded/)
+    expect(result.error).toMatch(/changed or was removed since it was loaded/)
   })
 
   it('revalidates the parent account path on success', async () => {

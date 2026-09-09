@@ -144,7 +144,12 @@ export async function updateWithLock(
       return { success: false, error: retryError.message }
     }
     if (!retryData || (retryData as unknown[]).length === 0) {
-      return { success: false, error: "This record changed since it was loaded — reload and try again." }
+      // Distinct from the recheck's own message above (third bug-hunter
+      // pass): this specific miss means something wrote to (or deleted) the
+      // row in the narrow gap between the recheck read and this write —
+      // could be either, unlike the recheck's own refusal, which always
+      // means a genuine change.
+      return { success: false, error: "This record changed or was removed since it was loaded — reload and try again." }
     }
   }
 
