@@ -40,6 +40,16 @@ describe('isDragGesture — a tap must never become a drag', () => {
     expect(isDragGesture(5, 5)).toBe(false) // ~7.07
   })
 
+  it('accepts a wider caller-supplied threshold (2026-09-08: the notes FAB opts into a', () => {
+    // 16px tolerance so an ordinary click isn't misread as a drag now that a
+    // single click has to clear a menu step first).
+    expect(isDragGesture(10, 0, 16)).toBe(false)
+    expect(isDragGesture(20, 0, 16)).toBe(true)
+    // The default (no third argument) is untouched by this — every other caller
+    // of isDragGesture/useDraggableFab keeps the original 8px behavior.
+    expect(isDragGesture(10, 0)).toBe(true)
+  })
+
   it('sits below a touch target so it cannot swallow a press', () => {
     expect(FAB_DRAG_THRESHOLD_PX).toBeLessThan(44)
   })

@@ -3,10 +3,11 @@
  * visibility rule in lib/notes/staff-notes.ts. A client can never reach this (isDashboardUser
  * gate + RLS deny-all on the table).
  *
- * GET  ?scope=active           — the floating feed: notes visible to ME, live, not snoozed
+ * GET  ?scope=active           — the floating feed: notes visible to ME, live, not snoozed, not parked
+ * GET  ?scope=parked           — the header shelf's own feed: notes visible to ME that I've parked
  * GET  ?account_id=... | ?contact_id=... — notes visible to ME on that record (page widget)
  * POST { body, color?, account_id?, contact_id?, origin_url? } — create (mine, private)
- * PATCH { id, action, ... }    — edit | snooze | share | team | private | archive | unarchive
+ * PATCH { id, action, ... }    — edit | snooze | share | team | private | archive | unarchive | park | unpark
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -22,9 +23,11 @@ import {
   listAllNotesForUser,
   listMyNotesForUser,
   listActiveNotesForUser,
+  listParkedNotesForUser,
   listNotesForAccount,
   listNotesForContact,
   validateNoteBody,
+  validateNoteTitle,
   safeOriginPath,
   computeSnoozeUntil,
   mayTouchNote,
@@ -48,26 +51,50 @@ async function currentStaff(): Promise<User | null> {
 }
 
 /**
- * Record MY done/snooze for a note, leaving everyone else's alone.
+ * Record MY status for a note — Done, Snoozed, or Parked — leaving everyone
+ * else's alone.
  *
  * A note is one thing; "I have dealt with it" is per person. Writing this to the
  * note's own columns is what made Antonio's Done clear the note off Luca's
  * screen too (2026-07-23).
  *
- * Upsert on the (note, person) pair, and pass ONLY the field being changed —
- * an upsert writes exactly the columns in the payload, so including both would
- * let "snooze" silently wipe an existing "done" and vice versa.
+ * The three statuses are MUTUALLY EXCLUSIVE (2026-09-08): setting any one of
+ * archived_at/snoozed_until/parked_at to a real value explicitly nulls the
+ * OTHER two in this same upsert. An earlier version of this function only
+ * ever wrote the single field named in its argument — the bug-hunter's plan
+ * review for Parked found this already let a note end up Done AND Snoozed at
+ * once (a revived Done note's card still offers an unconditional Snooze
+ * button; clicking it left archived_at set alongside the new
+ * snoozed_until). A DB CHECK constraint (staff_note_state_one_status_check)
+ * backstops this at the schema level for anything that bypasses this
+ * function; it should never actually fire in normal use now that this
+ * function is the one place all three statuses are written.
+ *
+ * CLEARING a status (unarchive/unsnooze/unpark, i.e. patch value is null)
+ * does NOT touch the other two fields — "put it back to open" only ever
+ * clears the one status being cleared.
  */
 async function setMyNoteState(
   noteId: string,
   userId: string,
-  patch: { archived_at?: string | null; snoozed_until?: string | null },
+  patch: { archived_at?: string | null; snoozed_until?: string | null; parked_at?: string | null },
 ): Promise<string | null> {
+  const full: typeof patch = { ...patch }
+  if (patch.archived_at != null) {
+    full.snoozed_until = null
+    full.parked_at = null
+  } else if (patch.snoozed_until != null) {
+    full.archived_at = null
+    full.parked_at = null
+  } else if (patch.parked_at != null) {
+    full.archived_at = null
+    full.snoozed_until = null
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabaseAdmin as any)
     .from("staff_note_state")
     .upsert(
-      { note_id: noteId, user_id: userId, ...patch, updated_at: new Date().toISOString() },
+      { note_id: noteId, user_id: userId, ...full, updated_at: new Date().toISOString() },
       { onConflict: "note_id,user_id" },
     )
   return error ? error.message : null
@@ -113,6 +140,21 @@ export async function GET(req: NextRequest) {
       if (res.error) return fail(res.error.message || "Could not load notes.", 500)
       return NextResponse.json({ notes: res.data ?? [] })
     }
+    // scope=parked → the header shelf's own feed (2026-09-08) — same me/members
+    // shape as the default branch below, since the shelf is a primary
+    // always-mounted-in-the-header surface the same way the floating layer is.
+    if (sp.get("scope") === "parked") {
+      const res = await listParkedNotesForUser(user.id)
+      if (res.error) return fail(res.error.message || "Could not load notes.", 500)
+      const members = (await listTeamMembers())
+        .filter((m) => (m.role === "admin" || m.role === "team") && m.id !== user.id)
+        .map((m) => ({ id: m.id, name: m.name }))
+      return NextResponse.json({
+        notes: res.data ?? [],
+        me: { id: user.id, name: getUserDisplayName(user) },
+        members,
+      })
+    }
     // scope=all → the Notes page (everything visible to me, incl. snoozed + done)
     // otherwise → the floating feed (live, not snoozed)
     const res = sp.get("scope") === "all"
@@ -139,6 +181,8 @@ export async function POST(req: NextRequest) {
   const payload = await req.json().catch(() => ({}))
   const { body, error: bodyErr } = validateNoteBody(payload.body)
   if (bodyErr || !body) return fail(bodyErr ?? "A note needs some text.")
+  const { title, error: titleErr } = validateNoteTitle(payload.title)
+  if (titleErr) return fail(titleErr)
 
   const origin = payload.origin_url != null ? safeOriginPath(payload.origin_url) : null
   const color = typeof payload.color === "string" && payload.color.trim() ? payload.color.trim() : "yellow"
@@ -184,6 +228,7 @@ export async function POST(req: NextRequest) {
       : ""
 
   const insert = {
+    title,
     body,
     color,
     author_user_id: user.id,
@@ -391,6 +436,10 @@ export async function PATCH(req: NextRequest) {
     }
     const { body, error } = validateNoteBody(p.body)
     if (error || !body) return fail(error ?? "A note needs some text.")
+    // Title rides the SAME author-only edit gate as the body above — it's the
+    // note's own content, not a per-person state (2026-09-08).
+    const { title, error: titleError } = validateNoteTitle(p.title)
+    if (titleError) return fail(titleError)
     // stale-edit guard: only write if the row hasn't changed since the client loaded it
     if (typeof p.expectedUpdatedAt === "string") {
       const { data: fresh } = await notesTable().select("updated_at").eq("id", id).single()
@@ -398,7 +447,7 @@ export async function PATCH(req: NextRequest) {
         return fail("Someone else just edited this note — reopen it to see their change.", 409)
       }
     }
-    patch = { body }
+    patch = { body, title }
     editedBody = body
   } else if (action === "snooze") {
     const { iso, error } = computeSnoozeUntil(p.preset, new Date(), p.custom)
@@ -455,6 +504,19 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: true })
   } else if (action === "unarchive") {
     const err = await setMyNoteState(id, user.id, { archived_at: null })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
+  } else if (action === "park") {
+    // Parked is MINE, same per-person shape as Done/Snooze (2026-09-08).
+    // setMyNoteState clears my own archived_at/snoozed_until in this same
+    // write — parking always wins over whatever status I had before.
+    const err = await setMyNoteState(id, user.id, { parked_at: new Date().toISOString() })
+    if (err) return fail(err, 500)
+    await emitUiEvent("notes")
+    return NextResponse.json({ ok: true })
+  } else if (action === "unpark") {
+    const err = await setMyNoteState(id, user.id, { parked_at: null })
     if (err) return fail(err, 500)
     await emitUiEvent("notes")
     return NextResponse.json({ ok: true })

@@ -25,12 +25,14 @@ import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
   todo: ['open-message-actions', 'action-board-columns', 'portal-chat-whats-new-counts'],
   tasks: ['portal-chat-thread-tasks'],
-  // BOTH note feeds, plus Staff Alerts (a read computed FROM the same notes/replies —
+  // ALL THREE note feeds, plus Staff Alerts (a read computed FROM the same notes/replies —
   // no separate emit needed, it rides the existing 'notes' kind for free).
   // 'staff-notes-active' alone left the Notes page (which reads 'staff-notes-all')
   // stale on a change made in another tab or by a teammate — local mutations
-  // invalidated both by hand, the bus only the first.
-  notes: ['staff-notes-active', 'staff-notes-all', 'staff-alerts'],
+  // invalidated both by hand, the bus only the first. 'staff-notes-parked' added
+  // 2026-09-08 alongside the Parked state — the header shelf trigger is exactly
+  // this same "another tab / another teammate" staleness risk as the other two.
+  notes: ['staff-notes-active', 'staff-notes-all', 'staff-notes-parked', 'staff-alerts'],
 }
 
 /** kinds that also refresh server-rendered pages (throttled) */
@@ -84,9 +86,10 @@ const WAKE_QUERY_KEYS = [
   'entity-summary-whatsnew',
   'entity-summary-workflow',
   'thread-whats-new',
-  // Staff sticky notes (both feeds — see the note on UI_EVENT_QUERY_KEYS) + Staff Alerts.
+  // Staff sticky notes (all three feeds — see the note on UI_EVENT_QUERY_KEYS) + Staff Alerts.
   'staff-notes-active',
   'staff-notes-all',
+  'staff-notes-parked',
   'staff-alerts',
   // WhatsApp thread messages (stored in our DB, not fetched live).
   'whatsapp-messages',

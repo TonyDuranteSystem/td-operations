@@ -112,7 +112,7 @@ export interface PostTeamMessageResult {
 async function resolveTargetThread(
   input: Pick<PostTeamMessageInput, 'channel' | 'thread_id' | 'dm_user_id'>,
   actingUserId: string | null,
-): Promise<{ thread_id: string; thread_type: string; channel_slug: string | null; channel_name: string | null; dm_key: string | null } | null> {
+): Promise<{ thread_id: string; thread_type: string; channel_slug: string | null; channel_name: string | null; dm_key: string | null; account_id: string | null; contact_id: string | null; lead_id: string | null } | null> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = supabaseAdmin as any
 
@@ -123,8 +123,11 @@ async function resolveTargetThread(
     channel_slug: (d.channel_slug ?? null) as string | null,
     channel_name: (d.channel_name ?? null) as string | null,
     dm_key: (d.dm_key ?? null) as string | null,
+    account_id: (d.account_id ?? null) as string | null,
+    contact_id: (d.contact_id ?? null) as string | null,
+    lead_id: (d.lead_id ?? null) as string | null,
   })
-  const COLS = 'id, thread_type, channel_slug, channel_name, dm_key'
+  const COLS = 'id, thread_type, channel_slug, channel_name, dm_key, account_id, contact_id, lead_id'
 
   if (input.thread_id) {
     const { data } = await admin.from('internal_threads').select(COLS).eq('id', input.thread_id).maybeSingle()
@@ -140,7 +143,7 @@ async function resolveTargetThread(
       )
     }
     const { thread } = await findOrCreateDm(actingUserId, input.dm_user_id)
-    return { thread_id: thread.id, thread_type: 'dm', channel_slug: null, channel_name: null, dm_key: thread.dm_key ?? null }
+    return { thread_id: thread.id, thread_type: 'dm', channel_slug: null, channel_name: null, dm_key: thread.dm_key ?? null, account_id: null, contact_id: null, lead_id: null }
   }
 
   // channel: slug first, then name, then the special "general" room.
@@ -337,14 +340,16 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       if (channelNotifiesStaff(target.channel_slug ?? target.channel_name ?? null)) {
         await sendPushToStaffExcept(CLAUDE_SENDER_UUID, { title: CLAUDE_SENDER_NAME, body: preview, url, tag }, actingUserId ? [actingUserId] : undefined)
       }
-    } else if (conversationNotifiesParticipants()) {
+    } else if (conversationNotifiesParticipants(target.thread_type === 'discussion' && !target.account_id && !target.contact_id && !target.lead_id)) {
       // A client discussion: participants only, never every staff device.
       //
-      // SILENT SINCE 2026-08-04 — the predicate returns false, so this branch
-      // does not run. This is the path that produced the "Conversation · Claude"
-      // pop-ups in Antonio's screenshot: Luca instructs the worker inside a
-      // client conversation, the worker answers, and the answer pushed every
-      // participant. An @mention by Claude still pushes (branch ABOVE).
+      // SILENT FOR A CLIENT DISCUSSION SINCE 2026-08-04. This is the path that
+      // produced the "Conversation · Claude" pop-ups in Antonio's screenshot:
+      // Luca instructs the worker inside a client conversation, the worker
+      // answers, and the answer pushed every participant. An @mention by Claude
+      // still pushes (branch ABOVE). LIVE FOR AN INTERNAL TOPIC (a discussion
+      // thread anchored to no client) since 2026-09-08 — see
+      // conversationNotifiesParticipants.
       const { data: participants } = await admin
         .from('internal_thread_reads')
         .select('user_id')

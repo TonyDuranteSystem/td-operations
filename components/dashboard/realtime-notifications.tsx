@@ -55,19 +55,28 @@ export function RealtimeNotifications() {
   // pinging within a minute.
   const myDmThreadIdsRef = useRef<Set<string>>(new Set())
   const myConversationThreadIdsRef = useRef<Set<string>>(new Set())
+  // Internal TOPICS (a discussion thread about no client — client_bucket ===
+  // 'internal') tracked separately from client conversations: they notify
+  // like a DM (see conversationNotifiesParticipants), so this set must never
+  // merge with myConversationThreadIdsRef, which stays scoped to threads that
+  // predicate keeps silent.
+  const myTopicThreadIdsRef = useRef<Set<string>>(new Set())
   const myChannelThreadIdsRef = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     let cancelled = false
     const load = () => {
       fetch('/api/team/threads')
         .then(r => r.json())
-        .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean; channel_slug?: string | null; channel_name?: string | null; label?: string | null }> }) => {
+        .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean; channel_slug?: string | null; channel_name?: string | null; label?: string | null; client_bucket?: string | null }> }) => {
           if (cancelled || !Array.isArray(d.threads)) return
           myDmThreadIdsRef.current = new Set(
             d.threads.filter(t => t.thread_type === 'dm').map(t => t.id),
           )
           myConversationThreadIdsRef.current = new Set(
-            d.threads.filter(t => t.thread_type === 'discussion' && t.is_participant).map(t => t.id),
+            d.threads.filter(t => t.thread_type === 'discussion' && t.is_participant && t.client_bucket !== 'internal').map(t => t.id),
+          )
+          myTopicThreadIdsRef.current = new Set(
+            d.threads.filter(t => t.thread_type === 'discussion' && t.client_bucket === 'internal').map(t => t.id),
           )
           myChannelThreadIdsRef.current = new Map(
             d.threads
@@ -241,10 +250,15 @@ export function RealtimeNotifications() {
       // the phone cannot drift apart. An @mention inside a conversation is
       // checked ABOVE and still pops up: that is the deliberate way to reach
       // someone in a thread that no longer rings on its own.
-      const isMyConversation = conversationNotifiesParticipants()
+      const isMyConversation = conversationNotifiesParticipants(false)
         && !!threadId && myConversationThreadIdsRef.current.has(threadId)
+      // An internal TOPIC notifies like a DM (conversationNotifiesParticipants
+      // returns true for it) — see channel-notify.ts for why a topic is the
+      // opposite case from a client conversation, not an extension of it.
+      const isMyTopic = conversationNotifiesParticipants(true)
+        && !!threadId && myTopicThreadIdsRef.current.has(threadId)
       const channelLabel = threadId ? myChannelThreadIdsRef.current.get(threadId) : undefined
-      if (!mentionsMe && !isMyDm && !isMyConversation && !channelLabel) return
+      if (!mentionsMe && !isMyDm && !isMyConversation && !isMyTopic && !channelLabel) return
 
       const senderName = row?.sender_name || 'Team member'
       // Deep-link INTO the thread when the message belongs to one, so the click
@@ -259,6 +273,7 @@ export function RealtimeNotifications() {
       toast(
         mentionsMe ? `@mention · ${senderName}`
           : isMyDm ? `DM · ${senderName}`
+          : isMyTopic ? `Topic · ${senderName}`
           : channelLabel ? `#${channelLabel} · ${senderName}`
           : `Conversation · ${senderName}`,
         {

@@ -100,7 +100,7 @@ describe("computeNoteAlerts — note_reply", () => {
 
   it("suppresses a reply alert while the note is snoozed for this viewer — matches replyNotifyTargets", () => {
     const note = baseNote({
-      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-12-01T00:00:00.000Z" }],
+      staff_note_state: [{ user_id: ANTONIO, archived_at: null, snoozed_until: "2026-12-01T00:00:00.000Z", parked_at: null }],
       staff_note_replies: [
         { id: "r1", author_user_id: LUCA, author_name: "Luca", body: "on it", created_at: "2026-09-02T10:00:00.000Z" },
       ],
@@ -140,7 +140,7 @@ describe("computeNoteAlerts — note_update", () => {
   it("is NOT suppressed by snooze — editNotifyTargets never checked snooze either, carried over on purpose", () => {
     const note = baseNote({
       updated_at: "2026-09-02T10:00:00.000Z",
-      staff_note_state: [{ user_id: LUCA, archived_at: null, snoozed_until: "2026-12-01T00:00:00.000Z" }],
+      staff_note_state: [{ user_id: LUCA, archived_at: null, snoozed_until: "2026-12-01T00:00:00.000Z", parked_at: null }],
     })
     expect(computeNoteAlerts([note], [], LUCA, NOW)).toHaveLength(1)
   })

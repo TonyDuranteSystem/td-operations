@@ -13,10 +13,11 @@ import { noteClientName } from '@/components/dashboard/sticky-notes-layer'
 import { NotesCalendar } from '@/components/dashboard/notes-calendar'
 import { NoteEditor, type EditableNote, type Member } from '@/components/dashboard/note-editor'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
-import { isArchivedFor, isSnoozedFor, noteStateFor, noteActivityAt, latestReplyOf, otherPersonState, otherViewersOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { isArchivedFor, isSnoozedFor, isParkedFor, noteStateFor, noteActivityAt, latestReplyOf, otherPersonState, otherViewersOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 
 interface Note {
   id: string
+  title: string | null
   body: string
   color: string
   author_user_id: string | null
@@ -29,8 +30,8 @@ interface Note {
   origin_url: string | null
   snoozed_until: string | null
   archived_at: string | null
-  /** One row per person who has marked this done / snoozed it. */
-  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null }> | null
+  /** One row per person who has marked this done / snoozed / parked it. */
+  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null; parked_at: string | null }> | null
   staff_note_replies?: NoteReplyRow[] | null
   created_at: string
   updated_at: string
@@ -125,15 +126,16 @@ export function NotesBoard() {
     qc.invalidateQueries({ queryKey: ['staff-notes-active'] })
   }
 
-  // Grouped by MY state, not the note's. Done and Snooze belong to the person
+  // Grouped by MY state, not the note's. Done, Snooze, and Park belong to the person
   // who pressed them — Antonio clearing a shared note leaves Luca's copy alone.
-  const { active, snoozed, done } = useMemo(() => {
-    const a: Note[] = [], s: Note[] = [], d: Note[] = []
+  const { active, snoozed, parked, done } = useMemo(() => {
+    const a: Note[] = [], s: Note[] = [], p: Note[] = [], d: Note[] = []
     const nowDate = new Date(now)
     for (const n of notes) {
       if (!me) { a.push(n); continue }
       if (isArchivedFor(n, me)) d.push(n)
       else if (isSnoozedFor(n, me, nowDate)) s.push(n)
+      else if (isParkedFor(n, me)) p.push(n)
       else a.push(n)
     }
     const wake = (n: Note) => {
@@ -141,7 +143,7 @@ export function NotesBoard() {
       return new Date(mine?.snoozed_until ?? n.snoozed_until ?? 0).getTime()
     }
     s.sort((x, y) => wake(x) - wake(y))
-    return { active: a, snoozed: s, done: d }
+    return { active: a, snoozed: s, parked: p, done: d }
   }, [notes, now, me])
 
   const act = async (id: string, payload: Record<string, unknown>) => {
@@ -237,6 +239,10 @@ export function NotesBoard() {
         ))}
       </Section>
 
+      <Section title="Parked" count={parked.length} empty="Nothing parked.">
+        {parked.map((n) => <Card key={n.id} n={n} onAct={act} showUnpark onOpen={setEditing} me={me} members={members} />)}
+      </Section>
+
       <Section title="Done" count={done.length} empty="Nothing cleared yet.">
         {done.map((n) => <Card key={n.id} n={n} onAct={act} showRestore onOpen={setEditing} me={me} members={members} />)}
       </Section>
@@ -268,7 +274,7 @@ function OtherStatus({ n, me, members }: { n: Note; me?: string | null; members?
   const now = new Date()
   const nameOf = (id: string) => (members ?? []).find((m) => m.id === id)?.name ?? 'Teammate'
   const label = (st: ReturnType<typeof otherPersonState>) =>
-    st === 'done' ? 'done' : st === 'snoozed' ? 'snoozed' : 'still open'
+    st === 'done' ? 'done' : st === 'snoozed' ? 'snoozed' : st === 'parked' ? 'parked' : 'still open'
 
   if (others.length === 1) {
     const st = otherPersonState(n, others[0], now)
@@ -293,11 +299,12 @@ function Section({ title, count, empty, children }: { title: string; count: numb
   )
 }
 
-function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, me, members }: {
+function Card({ n, onAct, showDone, showUnsnooze, showUnpark, showRestore, footer, onOpen, me, members }: {
   n: Note
   onAct: (id: string, payload: Record<string, unknown>) => void
   showDone?: boolean
   showUnsnooze?: boolean
+  showUnpark?: boolean
   showRestore?: boolean
   footer?: React.ReactNode
   onOpen?: (n: Note) => void
@@ -320,11 +327,12 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
           Updated after you marked it done
         </p>
       )}
-      <p
-        onClick={() => onOpen?.(n)}
-        title="Open"
-        className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug hover:underline"
-      ><LinkifiedText text={n.body} /></p>
+      <div onClick={() => onOpen?.(n)} title="Open" className="cursor-pointer">
+        {n.title && <p className="text-sm font-semibold leading-snug hover:underline">{n.title}</p>}
+        <p className="whitespace-pre-wrap break-words text-sm leading-snug hover:underline">
+          <LinkifiedText text={n.body} />
+        </p>
+      </div>
 
       {latest && (
         <p className={`mt-1 truncate rounded px-1.5 py-0.5 text-xs ${
@@ -358,6 +366,10 @@ function Card({ n, onAct, showDone, showUnsnooze, showRestore, footer, onOpen, m
         {showUnsnooze && (
           <button onClick={() => onAct(n.id, { action: 'unsnooze' })}
             className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs"><RotateCcw className="h-3 w-3" />Bring back now</button>
+        )}
+        {showUnpark && (
+          <button onClick={() => onAct(n.id, { action: 'unpark' })}
+            className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs"><RotateCcw className="h-3 w-3" />Send back to screen</button>
         )}
         {showRestore && (
           <button onClick={() => onAct(n.id, { action: 'unarchive' })}

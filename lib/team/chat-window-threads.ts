@@ -83,6 +83,12 @@ export interface ChatThreadRow {
   client_label?: string | null
   resolved_at?: string | null
   archived_at?: string | null
+  /** Server-computed by get_team_threads (see conversation-buckets.ts). A
+   *  discussion thread with none of account_id/contact_id/lead_id set — a
+   *  staff-only TOPIC, not about any client — comes back 'internal'. This is
+   *  the ONE existing signal that already distinguishes a topic from a client
+   *  conversation; nothing new was added to produce it. */
+  client_bucket?: string | null
   /** Does a row exist in internal_thread_reads for the viewer? TRUE almost
    *  always for a live discussion thread — see the file header before using
    *  this for "is this genuinely mine." Kept only because the RPC still
@@ -179,13 +185,44 @@ export function dmUnreadCount(
  * for the two other, wrong things this was before): this list is a quick
  * "what's mine" glance, not a company-wide directory of every open client
  * conversation regardless of who is actually in it.
+ *
+ * EXCLUDES internal topics (`client_bucket === 'internal'`) — those are a
+ * different, fixed-2-person surface with none of the noise problem
+ * `ever_mentioned` exists to solve (see `openTopics` below). Keeping them out
+ * of this list is what makes them exempt from the mention gate: an internal
+ * topic Antonio never posts in must still show up for him, unlike a client
+ * conversation he was never drawn into.
  */
 export function openConversations(
   threads: readonly ChatThreadRow[] | null | undefined,
   limit = 20,
 ): ChatThreadRow[] {
   return (threads ?? [])
-    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_mentioned)
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && !!t.ever_mentioned && t.client_bucket !== 'internal')
+    .slice()
+    .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
+    .slice(0, limit)
+}
+
+/**
+ * The internal TOPIC conversations the window can open — staff-only threads
+ * not about any client (Antonio, 2026-09-07: "open new conversation on
+ * specific matters that we will define while working" — a named topic he and
+ * Luca can click into and continue, same shape client conversations already
+ * have, just not anchored to a client).
+ *
+ * Deliberately NOT mention-gated like `openConversations`: a fixed 2-person
+ * (Antonio + Luca) topic has no "someone else's conversation" noise problem —
+ * every internal topic IS one of theirs by construction. Filtering it by
+ * `ever_mentioned` would hide a topic from the person who started it and
+ * never happened to be @mentioned in their own thread.
+ */
+export function openTopics(
+  threads: readonly ChatThreadRow[] | null | undefined,
+  limit = 20,
+): ChatThreadRow[] {
+  return (threads ?? [])
+    .filter((t) => t?.thread_type === 'discussion' && !t.resolved_at && !t.archived_at && t.client_bucket === 'internal')
     .slice()
     .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
     .slice(0, limit)
@@ -274,6 +311,10 @@ export function conversationLabel(t: ChatThreadRow | null | undefined): string {
  *
  * Still never derived from a message's own read flag: the send route stamps
  * that at insert, so any such count is permanently zero.
+ *
+ * Includes internal topics (`openTopics`) alongside DMs and mentioned client
+ * conversations — the window can open all three, so the badge counts all
+ * three.
  */
 export function windowUnreadCount(
   threads: readonly ChatThreadRow[] | null | undefined,
@@ -281,6 +322,7 @@ export function windowUnreadCount(
 ): number {
   let n = dmUnreadCount(threads, myId)
   for (const t of openConversations(threads, Number.MAX_SAFE_INTEGER)) n += Number(t.unread_count) || 0
+  for (const t of openTopics(threads, Number.MAX_SAFE_INTEGER)) n += Number(t.unread_count) || 0
   return n
 }
 

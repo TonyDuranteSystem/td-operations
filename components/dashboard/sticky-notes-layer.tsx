@@ -1,25 +1,32 @@
 'use client'
 
 /**
- * Floating staff sticky notes — the always-on-screen layer.
+ * Staff sticky notes — the note editor + creation entry points.
  *
  * Mounted once in the dashboard layout, OUTSIDE <main> (so it never fights pull-to-refresh).
- * Desktop: draggable notes at per-device fractional positions. Mobile (<lg): a bottom-LEFT pill
- * (the toast layer owns bottom-right) that opens a bottom sheet — no dragging at 380px.
+ * Desktop: this layer no longer renders active notes itself — they live inline in the
+ * dashboard header now (components/dashboard/active-notes-strip.tsx), next to the Parked
+ * trigger, per the 2026-09-08 redesign (Antonio wanted them "next to Parked button...
+ * orizzontaly"; the UX Designer specialist's recommendation was a bounded header strip,
+ * not a free-floating draggable canvas — see that file's own header comment for the full
+ * reasoning). This file's remaining desktop job is narrower: own the note editor/composer
+ * modal and the "New note" entry point, and answer "open this note" requests from
+ * anywhere (the header strip, the Parked trigger, the Alerts bell) via the same
+ * open-in-place mechanism as before. Mobile (<lg) is UNCHANGED — a bottom-LEFT pill (the
+ * toast layer owns bottom-right) that opens a bottom sheet listing every active note.
  * z-index 45: above the mobile top bar (40), below every modal/drawer (50+), so a note never
  * traps a dialog's buttons. Wrapped in its own error boundary — a throw here must not take the CRM down.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2 } from 'lucide-react'
+import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { readPositions, writePosition, prunePositions, cascadePos, clampFrac, type FracPos } from '@/lib/notes/note-position'
 import { NoteEditor } from '@/components/dashboard/note-editor'
 // AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
-import { FAB_KEYS, isDragGesture } from '@/lib/ui/draggable-fab'
+import { FAB_KEYS } from '@/lib/ui/draggable-fab'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { OPEN_NOTE_EVENT, type OpenNoteDetail } from '@/lib/notes/open-note'
 import { safeOriginPath, describeOrigin } from '@/lib/notes/note-origin'
@@ -27,87 +34,9 @@ import { latestReplyOf, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
-// cascadePos's own starting row/column (note-position.ts: y=0.08, x=0.04) — plain
-// constants kept in sync here, not re-derived, since note-position.ts is deliberately
-// pixel-agnostic (fractions only) and has no reason to know about the fixed-size chrome
-// (header, sidebar) it now has to clear.
-const CASCADE_FIRST_ROW_VH = 8
-const CASCADE_FIRST_COL_VW = 4
-// Must clear the sticky desktop header (h-14 = 3.5rem) with a visible margin — measured
-// live, not assumed: on sandbox specifically, the dashboard layout also adds `mt-10`
-// (2.5rem) above the whole app to make room for the fixed orange sandbox banner
-// (`app/(dashboard)/layout.tsx`, `isSandbox ? '... mt-10' : 'h-screen'`), so the header
-// there actually sits at 2.5rem+3.5rem=6rem from the true top, not 3.5rem. Production has
-// no banner and no mt-10, so its header genuinely does start at the top — but this one
-// constant has no way to know which environment it's rendering in, so it's calibrated to
-// the taller (sandbox) case; production ends up with a bit of harmless extra headroom
-// rather than sandbox ending up under-cleared. A first version of this constant (4.5rem)
-// was calibrated against production's header alone and looked fine there, but still
-// visibly overlapped the header in sandbox — caught by measuring the actual rendered
-// element positions with getBoundingClientRect, not by eyeballing a screenshot.
-const HEADER_CLEARANCE_REM = 7
-// Must clear the desktop sidebar (aside is w-64 = 16rem at the lg breakpoint this
-// component only ever renders at) with a visible margin. Antonio, 2026-09-07 (second
-// screenshot, on Team Workspace): notes were still landing on the sidebar's own nav
-// links — the sidebar goes `static` (in normal document flow) at this same breakpoint,
-// which also drops its z-index to `auto`, so it can no longer rely on stacking order to
-// stay above a `fixed` note at z-45; only keeping the note out of that space at all works.
-const SIDEBAR_CLEARANCE_REM = 17
-// The two sizes notePosStyle is ever called with — the collapsed pill (fixed h-10,
-// max-w-[180px]) and the expanded card (fixed w-60; height is content-driven, so this
-// is a reasonable reserve for a typical note, not a hard cap — see notePosStyle's
-// own comment on the right/bottom edge below).
-const COLLAPSED_SIZE_REM = { width: 11.25, height: 2.5 }
-const EXPANDED_SIZE_REM = { width: 15, height: 14 }
-const EDGE_MARGIN_REM = 1
-
-/**
- * Desktop note position as a CSS style — shifts the WHOLE cascade down-and-right
- * together on a small screen, rather than flooring one note independently, so notes
- * never bunch up against each other. An earlier version floored only `${pos.y*100}vh`
- * per note: correct for row 0, but it compressed the gap to row 1 on any viewport short
- * enough to need the floor at all — found by creating real notes and looking, not by
- * reasoning about the CSS. Each inner `calc()`'s shared `max(0px, ...)` term is
- * identical for every note on that axis, so relative spacing between rows/columns is
- * preserved exactly — a shifted column 0 and a shifted column 1 both move by the same
- * amount, so the 0.18-viewport-width gap between them survives untouched.
- *
- * The floor (the `clamp()`'s low end) is a second, independent fix (Antonio,
- * 2026-09-07, third screenshot on Team Workspace: four OLD notes, each with its own
- * stored/dragged position from before this clearance logic existed, still sitting on
- * the sidebar). The inner shift is calibrated against cascadePos's OWN starting
- * fraction (x=0.04 / y=0.08) — correct for anything the cascade itself ever generates,
- * but a note can also carry a STORED position (drag-and-drop, or from before this fix
- * shipped) anywhere down to 0, and the shift alone under-corrects any position closer to
- * the edge than the cascade's own minimum. The floor is a hard backstop on top of that: a
- * no-op for every position at or beyond the cascade minimum (the inner shift already
- * lands those at-or-past the floor), and a genuine minimum for anything closer in — so
- * both a fresh cascade note AND an old dragged one always clear the same chrome.
- *
- * The CEILING (the `clamp()`'s high end) exists because the shift above is a REGRESSION
- * on the opposite edge if left unbounded — caught by an end-to-end review, not by any of
- * this session's own live tests (which only ever pushed a note toward the LOW corner).
- * `writePosition`'s own `clampFrac(v, 0.92)` reserves 8% of the viewport as margin so a
- * dragged note can never go fully off-screen — a contract that held when position was
- * rendered as a bare fraction, but the shift above is ADDED on top of that fraction with
- * nothing capping the total, so a note dragged toward the right/bottom edge (a completely
- * ordinary "tuck it out of the way" action) could render partly or fully past the
- * viewport, with no visible trace and no way to drag it back. `width`/`height` let each
- * call site (collapsed pill vs. expanded card) reserve exactly its own footprint at the
- * high end; the expanded card's real height is content-driven, so `EXPANDED_SIZE_REM` is
- * a reasonable typical-note reserve, not a hard cap — a note with an unusually long reply
- * thread can still extend further, same as it always could before any of this session's
- * changes (that risk is pre-existing and unrelated to the shift this fix adds).
- */
-function notePosStyle(pos: FracPos, size: { width: number; height: number }): React.CSSProperties {
-  return {
-    left: `clamp(${SIDEBAR_CLEARANCE_REM}rem, calc(${pos.x * 100}vw + max(0px, ${SIDEBAR_CLEARANCE_REM}rem - ${CASCADE_FIRST_COL_VW}vw)), calc(100vw - ${size.width + EDGE_MARGIN_REM}rem))`,
-    top: `clamp(${HEADER_CLEARANCE_REM}rem, calc(${pos.y * 100}vh + max(0px, ${HEADER_CLEARANCE_REM}rem - ${CASCADE_FIRST_ROW_VH}vh)), calc(100vh - ${size.height + EDGE_MARGIN_REM}rem))`,
-  }
-}
-
 interface Note {
   id: string
+  title: string | null
   body: string
   color: string
   author_user_id: string | null
@@ -159,6 +88,19 @@ async function fetchActive(): Promise<ActiveResponse> {
     throw new Error(d.error || 'Could not load your notes.')
   }
   return res.json()
+}
+
+/**
+ * Same query key ('staff-notes-parked') ParkedNotesTrigger already fetches under —
+ * react-query dedupes identical concurrent queries, so mounting this here is not a
+ * second network round trip, it's a shared cache hit. Needed so the open-note
+ * listener below can ALSO claim a parked note synchronously (see that effect's
+ * own comment for why this can't just be an async fetch at click time).
+ */
+async function fetchParked(): Promise<{ notes: Note[] }> {
+  const res = await fetch(`${API}?scope=parked`)
+  if (!res.ok) return { notes: [] }
+  return res.json().catch(() => ({ notes: [] }))
 }
 
 /**
@@ -215,38 +157,17 @@ function StickyNotesInner() {
   })
   const notes = useMemo(() => data?.notes ?? [], [data])
   const members = useMemo(() => data?.members ?? [], [data])
+  // Parked notes aren't rendered here (they're off the floating layer by design), but this
+  // layer is still the ONE place that owns the note editor + open-in-place mechanism — see
+  // the open-note listener below.
+  const { data: parkedData } = useQuery({
+    queryKey: ['staff-notes-parked'],
+    queryFn: fetchParked,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  })
+  const parkedNotes = useMemo(() => parkedData?.notes ?? [], [parkedData])
   const meId = data?.me?.id ?? null
-
-  /**
-   * Every note's starting position — decided ONCE per note, ever, and remembered here
-   * for as long as this layer stays mounted. A `useMemo` alone is not enough: it would
-   * recompute from scratch whenever `notes` changes (a note added or removed), but a
-   * note ALREADY on screen ignores a freshly-recomputed value — its own useState only
-   * reads its initial prop once, at ITS first mount, exactly like this ref only decides
-   * a slot once. Recomputing on every change and expecting already-mounted notes to
-   * "pick up" a new value was the actual bug: two never-moved notes both computed the
-   * identical fresh slot, because the feed sorts newest-first so a brand-new note is
-   * always first, and computing all slots from empty every time gave the EXISTING note
-   * a value its own component then silently ignored (Antonio, 2026-09-05: "they go one
-   * on top of the other and I can't see them unless i move them"). A ref, mutated
-   * idempotently here during render (safe: re-running with the same `notes` re-adds only
-   * already-present entries), is what makes a slot assignment durable across re-renders.
-   */
-  const assignedPositions = useRef<Map<string, FracPos>>(new Map())
-  const notePositions = useMemo(() => {
-    const stored = readPositions()
-    const map = assignedPositions.current
-    const liveIds = new Set(notes.map((n) => n.id))
-    for (const id of Array.from(map.keys())) if (!liveIds.has(id)) map.delete(id)
-    const occupied: FracPos[] = Array.from(map.values())
-    for (const n of notes) {
-      if (map.has(n.id)) continue // already decided — never reassign a note that's already on screen
-      const pos = stored[n.id] ?? cascadePos(occupied)
-      map.set(n.id, pos)
-      occupied.push(pos)
-    }
-    return map
-  }, [notes])
 
   // Same query key as staff-alerts-bell.tsx — one shared cache for "have I seen this."
   const { data: alertsData } = useQuery({
@@ -293,7 +214,7 @@ function StickyNotesInner() {
   const [editing, setEditing] = useState<Note | null>(null)
   // Both entry points are draggable (Antonio, 2026-07-23) — separate keys so the
   // desktop + button and the mobile pill remember their own spots per device.
-  const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`)
+  const deskFab = useDraggableFab(`${FAB_KEYS.notes}-desktop`, { dragThresholdPx: 16 })
   const mobileFab = useDraggableFab(FAB_KEYS.notes)
 
   // Re-sync when the tab wakes (sleep/PWA freeze) or the network returns — realtime replays nothing.
@@ -320,28 +241,36 @@ function StickyNotesInner() {
     }
   }, [notes, qc])
 
-  useEffect(() => { prunePositions(notes.map((n) => n.id)) }, [notes])
-
   /**
-   * External "open this note" — lets another surface (the Staff Alerts bell)
-   * open a specific note here instead of navigating away, the same way
-   * "Discuss this note" opens the floating chat by event (mirrors
-   * FloatingChatInner's OPEN_TEAM_CHAT_EVENT handler exactly).
+   * External "open this note" — lets another surface (the Staff Alerts bell,
+   * the Parked-notes trigger) open a specific note here instead of navigating
+   * away, the same way "Discuss this note" opens the floating chat by event
+   * (mirrors FloatingChatInner's OPEN_TEAM_CHAT_EVENT handler exactly).
    *
    * SYNCHRONOUS ONLY, on purpose: preventDefault only affects the dispatcher's
    * return value if called before dispatchEvent returns, so this can only claim
-   * a note already sitting in the loaded (active) feed. A note that's snoozed
-   * or archived-for-me but still alerting (note_update isn't gated on either)
-   * won't be here — we let the event go unhandled and the caller falls back to
-   * navigating to /notes?note=<id>, which shows every note, not just active
-   * ones. Never a dead click, just an honest degrade for a rare case.
+   * a note already loaded CLIENT-SIDE at the moment of the click — an async
+   * fetch-then-open fallback was considered and rejected for exactly this
+   * reason (preventDefault can't fire late enough to stop a navigation that's
+   * already happened by the time an async fetch resolves).
+   *
+   * Checks BOTH the active feed AND the parked feed (2026-09-08 — found live:
+   * every parked note was silently falling through to a full navigation, 100%
+   * of the time, never just the rare case, since isLiveOrRevivedFor
+   * unconditionally excludes parked notes from `notes`). The parked list is
+   * fetched above under the SAME query key the header's Parked trigger
+   * already uses, so checking it here costs no extra request. A note that's
+   * snoozed or archived-for-me but still alerting (note_update isn't gated on
+   * either) is still a real, accepted gap — we let the event go unhandled and
+   * the caller falls back to navigating to /notes?note=<id>, which shows
+   * every note, not just active/parked ones. Never a dead click either way.
    */
   useEffect(() => {
     const onOpen = (e: Event) => {
       const detail = (e as CustomEvent).detail as OpenNoteDetail | undefined
       const noteId = detail?.noteId
       if (!noteId) return
-      const found = notes.find((n) => n.id === noteId)
+      const found = notes.find((n) => n.id === noteId) ?? parkedNotes.find((n) => n.id === noteId)
       if (!found) return
       e.preventDefault()
       setSheetOpen(false)
@@ -349,7 +278,7 @@ function StickyNotesInner() {
     }
     document.addEventListener(OPEN_NOTE_EVENT, onOpen)
     return () => document.removeEventListener(OPEN_NOTE_EVENT, onOpen)
-  }, [notes])
+  }, [notes, parkedNotes])
 
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
@@ -357,14 +286,6 @@ function StickyNotesInner() {
 
   return (
     <>
-      {/* DESKTOP: floating draggable notes */}
-      <div className="hidden lg:block">
-        {notes.map((n) => (
-          <DesktopNote key={n.id} note={n} initialPos={notePositions.get(n.id)!} members={members} meId={meId} onChange={invalidate} onOpen={setEditing}
-            isUnread={unreadNoteIds.has(n.id)} onRead={() => dismissNoteAlerts(n.id)} />
-        ))}
-      </div>
-
       {/* New note = the FULL editor (text, client, come-back date, who's it for) — not a
           mini popup (Antonio, 2026-07-29). Pre-fills the client from the page you're on. */}
       {composing && (
@@ -381,7 +302,12 @@ function StickyNotesInner() {
         />
       )}
 
-      {/* DESKTOP: + button, bottom-left. Draggable (double-click resets). */}
+      {/* DESKTOP: + button, bottom-left, draggable (double-click resets) — opens the
+          composer directly. Simplified back to a single action (2026-09-08: active
+          notes moved into the header strip, next to Parked — see
+          active-notes-strip.tsx — so there is no more floating canvas for a
+          "select notes" menu item to send you to; bulk-selecting for Park now happens
+          inside that header strip's own dropdown instead). */}
       <FastTooltip label="New note — drag to move, double-click to reset" align="left">
         <button
           ref={deskFab.ref}
@@ -445,111 +371,6 @@ function StickyNotesInner() {
   )
 }
 
-/* ─────────────────────────── desktop draggable note ─────────────────────────── */
-
-/**
- * Collapsed by default — a small icon, always on screen, draggable anywhere out of the
- * way. Click expands it in place to the full card; a Minimize button on the card
- * collapses it back (Antonio, 2026-09-05: "reduce it in icon but always visible to open
- * when we need" — full cards were landing on top of the sidebar nav, see note-position.ts
- * cascadePos starting near the top-left corner).
- *
- * Click vs. drag uses the same measured-distance threshold as the draggable FAB buttons
- * (isDragGesture) and the same ref-based (not state-based) click suppression — a past bug
- * here let a drag also OPEN the thing being dragged because suppression was React state,
- * captured stale at click time. A ref reads current at call time.
- *
- * Position comes from notePosStyle(pos, size), which clears the sticky desktop header
- * (h-14 = 3.5rem, z-30) and the sidebar, AND keeps the note on-screen on the opposite
- * (right/bottom) edge too — see notePosStyle's own comment for the full history. It's
- * CSS-only — the stored/dragged fraction itself is untouched, so a manually-dragged note
- * still tracks the cursor exactly; only where it's allowed to visually render is bounded.
- */
-function DesktopNote({ note, initialPos, members, meId, onChange, onOpen, isUnread, onRead }: { note: Note; initialPos: FracPos; members: Member[]; meId: string | null; onChange: () => void; onOpen: (n: Note) => void; isUnread: boolean; onRead: () => void }) {
-  const ref = useRef<HTMLElement>(null)
-  // initialPos was already resolved once, for every note together (stored spot, or the
-  // first free cascade slot) — see notePositions in the parent. Only the FIRST value
-  // React sees here matters; later re-renders (including notePositions recomputing when
-  // a sibling note is added) must not silently teleport an already-open note.
-  const [pos, setPos] = useState<{ x: number; y: number }>(initialPos)
-  const [expanded, setExpanded] = useState(false)
-  const drag = useRef<{ dx: number; dy: number; startX: number; startY: number; moved: boolean } | null>(null)
-  const justDragged = useRef(false)
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    if ((e.target as HTMLElement).closest('[data-no-drag]')) return
-    const rect = ref.current!.getBoundingClientRect()
-    drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, startX: e.clientX, startY: e.clientY, moved: false }
-    ref.current!.setPointerCapture(e.pointerId)
-  }
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = drag.current
-    if (!d) return
-    if (!d.moved && !isDragGesture(e.clientX - d.startX, e.clientY - d.startY)) return
-    d.moved = true
-    const x = clampFrac((e.clientX - d.dx) / window.innerWidth)
-    const y = clampFrac((e.clientY - d.dy) / window.innerHeight)
-    setPos({ x, y })
-  }
-  const onPointerUp = () => {
-    const d = drag.current
-    drag.current = null
-    if (d?.moved) {
-      writePosition(note.id, pos)
-      justDragged.current = true
-      // Swallow the click that fires right after releasing a drag — otherwise
-      // dropping the icon also opens it.
-      setTimeout(() => { justDragged.current = false }, 0)
-    }
-  }
-  const onClickCollapsed = () => {
-    if (justDragged.current) return
-    setExpanded(true)
-    // Expanding to the full preview text IS reading it (Antonio, 2026-09-05: red
-    // until read, back to normal once it is) — no separate "mark read" action.
-    if (isUnread) onRead()
-  }
-
-  if (!expanded) {
-    const preview = note.body.replace(/\s+/g, ' ').trim().slice(0, 80)
-    // A short, always-visible snippet next to the icon (Antonio, 2026-09-05: "a short
-    // description at the button what it is about") — shorter than the tooltip's preview,
-    // and truncated with CSS rather than pre-cut so it never clips a whole word for no
-    // reason on a wider snippet. The tooltip (full 80-char preview) still covers anything
-    // this snippet itself truncates.
-    const snippet = preview.slice(0, 40)
-    return (
-      <FastTooltip label={isUnread ? `New: ${preview}` : preview} align="left">
-        <button
-          ref={ref as React.RefObject<HTMLButtonElement>}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onClick={onClickCollapsed}
-          style={notePosStyle(pos, COLLAPSED_SIZE_REM)}
-          className={`fixed z-[45] flex h-10 max-w-[180px] touch-none cursor-grab items-center gap-1.5 rounded-full border px-3 shadow-lg active:cursor-grabbing ${noteBgClasses(note, isUnread)}`}
-          aria-label={`${isUnread ? 'New note' : 'Note'}: ${preview}`}
-        >
-          <StickyNote className="h-4 w-4 shrink-0" />
-          <span className="truncate text-xs font-medium">{snippet}</span>
-        </button>
-      </FastTooltip>
-    )
-  }
-
-  return (
-    <div
-      ref={ref as React.RefObject<HTMLDivElement>}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      style={notePosStyle(pos, EXPANDED_SIZE_REM)}
-      className={`fixed z-[45] w-60 cursor-grab active:cursor-grabbing rounded-md border shadow-lg ${noteBgClasses(note, isUnread)}`}
-    >
-      <NoteCardBody note={note} members={members} meId={meId} onChange={onChange} onOpen={onOpen} onCollapse={() => setExpanded(false)} />
-    </div>
-  )
-}
 
 /* ─────────────────────────── shared card body + actions ─────────────────────────── */
 
@@ -642,14 +463,14 @@ function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { n
       <div className="flex items-start justify-between gap-2">
         {/* Tap the text to open the full note (read + edit). Not the whole card — the card is
             the drag handle on desktop, so only the body opens the editor. */}
-        <p
-          data-no-drag
-          onClick={() => onOpen?.(note)}
-          title="Open"
-          className="cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline"
-        >
-          <LinkifiedText text={note.body} />
-        </p>
+        <div data-no-drag onClick={() => onOpen?.(note)} title="Open" className="min-w-0 flex-1 cursor-pointer">
+          {note.title && (
+            <p className="truncate text-sm font-semibold leading-snug hover:underline">{note.title}</p>
+          )}
+          <p className="whitespace-pre-wrap break-words text-sm leading-snug line-clamp-6 hover:underline">
+            <LinkifiedText text={note.body} />
+          </p>
+        </div>
         <FastTooltip label="Done">
           <button data-no-drag onClick={() => act({ action: 'archive' })} disabled={busy}
             className="shrink-0 rounded p-0.5 hover:bg-black/10" aria-label="Mark done">
@@ -708,6 +529,12 @@ function NoteCardBody({ note, members, meId, onChange, onOpen, onCollapse }: { n
           <FastTooltip label="Snooze">
             <button data-no-drag onClick={() => setMenu(menu === 'snooze' ? 'none' : 'snooze')}
               className="rounded p-0.5 hover:bg-black/10" aria-label="Snooze"><Clock className="h-3.5 w-3.5" /></button>
+          </FastTooltip>
+          <FastTooltip label="Park — move it to the notes shelf, out of the way">
+            <button data-no-drag onClick={() => act({ action: 'park' })} disabled={busy}
+              className="rounded p-0.5 hover:bg-black/10 disabled:opacity-40" aria-label="Park this note">
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pin className="h-3.5 w-3.5" />}
+            </button>
           </FastTooltip>
           {isAuthor && (
             <FastTooltip label="Share">

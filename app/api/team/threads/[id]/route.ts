@@ -301,7 +301,14 @@ export async function GET(
 /**
  * PATCH /api/team/threads/[id]
  * Update a channel/discussion: rename, recolor, resolve/unresolve, archive.
- * Body: { channel_name?, description?, color?, resolved?: boolean, archived?: boolean }
+ * Body: { channel_name?, description?, color?, resolved?: boolean, archived?: boolean, title? }
+ *
+ * `title` renames a DISCUSSION (a topic or a client conversation) — distinct
+ * from `channel_name`, which renames a channel. Antonio, 2026-09-08: "I want
+ * the option to delete/rename a topic or conversation." "Delete" is `archived:
+ * true` above — the same reversible hide-from-view every other thread in this
+ * system already uses (R100-adjacent: nothing about a shared, multi-message
+ * conversation's history should vanish on one click) — not a new capability.
  */
 export async function PATCH(
   request: NextRequest,
@@ -322,6 +329,27 @@ export async function PATCH(
   if (typeof body.color === 'string') patch.color = body.color.trim() || null
   if (typeof body.resolved === 'boolean') patch.resolved_at = body.resolved ? new Date().toISOString() : null
   if (typeof body.archived === 'boolean') patch.archived_at = body.archived ? new Date().toISOString() : null
+  // Renaming a discussion needs to know whether it's a client conversation or
+  // an internal topic FIRST (renameDiscussionPatch keeps topic/topic_slug in
+  // lockstep for a topic, untouched for a client conversation — see its own
+  // doc comment) — a narrow pre-fetch, only paid for on an actual rename.
+  if (typeof body.title === 'string') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: current } = await (supabaseAdmin as any)
+      .from('internal_threads')
+      .select('account_id, contact_id, lead_id, thread_type')
+      .eq('id', threadId)
+      .single()
+    if (!current) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
+    if (current.thread_type !== 'discussion') {
+      return NextResponse.json({ error: 'Only a topic or client conversation can be renamed here — use channel_name for a channel.' }, { status: 400 })
+    }
+    const isInternal = !current.account_id && !current.contact_id && !current.lead_id
+    const { renameDiscussionPatch } = await import('@/lib/team/conversations')
+    const renamed = renameDiscussionPatch(isInternal, body.title)
+    if ('error' in renamed) return NextResponse.json({ error: renamed.error }, { status: 400 })
+    Object.assign(patch, renamed)
+  }
   // Move to (or out of) a channel folder.
   if ('channel_id' in body) patch.parent_channel_id = body.channel_id || null
   // Kanban status. 'handled' IS the done state → keep resolved_at in sync so

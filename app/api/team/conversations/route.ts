@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
-import { parseClientRef } from '@/lib/team/conversations'
+import { parseClientRef, defaultTopicName } from '@/lib/team/conversations'
 import { findOrCreateConversation } from '@/lib/team/find-conversation'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -12,6 +12,11 @@ import { NextRequest, NextResponse } from 'next/server'
  * Body: { client: "account:<uuid>"|"contact:<uuid>"|"lead:<uuid>", topic?, channel_id? }
  *   - reuses an OPEN discussion for the same client+topic if one exists
  *   - optionally drops a "new conversation" card into the chosen channel
+ *
+ * `internal: true` (no `client`) creates/reuses a TOPIC conversation between
+ * staff only — not about any client. Same find-or-create identity, just with
+ * `ref: null`; see find-conversation.ts for why this is the same path rather
+ * than a second one.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -21,10 +26,11 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}))
-  const ref = parseClientRef((body.client ?? '').toString())
-  if (!ref) return NextResponse.json({ error: 'A valid client is required.' }, { status: 400 })
+  const isInternal = body.internal === true
+  const ref = isInternal ? null : parseClientRef((body.client ?? '').toString())
+  if (!isInternal && !ref) return NextResponse.json({ error: 'A valid client is required.' }, { status: 400 })
 
-  const topic: string | null = (body.topic ?? '').toString().trim() || null
+  const topic: string | null = (body.topic ?? '').toString().trim() || (isInternal ? defaultTopicName() : null)
   const channelId: string | null = (body.channel_id ?? '').toString().trim() || null
 
   const now = new Date().toISOString()
@@ -100,8 +106,8 @@ export async function POST(request: NextRequest) {
       read_at: now,
       card: {
         kind: 'client_message',
-        title: `New conversation: ${clientName}`,
-        subtitle: topic ? `Topic: ${topic}` : 'Client discussion',
+        title: clientName ? `New conversation: ${clientName}` : `New topic: ${topic}`,
+        subtitle: clientName ? (topic ? `Topic: ${topic}` : 'Client discussion') : 'Internal topic',
         url: `/team-chat?thread=${thread.id}`,
         color: channelRow.color ?? undefined,
       },

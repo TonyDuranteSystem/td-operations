@@ -65,6 +65,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
+import { ParkedNotesTrigger } from '@/components/dashboard/parked-notes-trigger'
 import { CaptureButton } from '@/components/captures/capture-button'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
@@ -613,6 +614,7 @@ export function Sidebar({
         </button>
         <GlobalBackButton className="ml-1" />
         <span className="ml-2 font-semibold flex-1">TD Operations</span>
+        <ParkedNotesTrigger compact />
         <StaffAlertsBell compact />
         <CaptureButton compact />
         <DashboardPushToggle compact refreshOnMount />

@@ -36,7 +36,7 @@ export interface StaffNoteInput {
  * copy that would go stale when a company is renamed.
  */
 export const NOTE_COLUMNS =
-  "id, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, attachment_url, attachment_name, attachment_mime_type, attachment_size_bytes, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until), staff_note_replies(id, author_user_id, author_name, body, created_at)"
+  "id, title, body, color, author_user_id, author_name, visibility, shared_with_user_id, shared_with_name, account_id, contact_id, origin_url, snoozed_until, archived_at, created_at, updated_at, attachment_url, attachment_name, attachment_mime_type, attachment_size_bytes, accounts(company_name), contacts(full_name), staff_note_state(user_id, archived_at, snoozed_until, parked_at), staff_note_replies(id, author_user_id, author_name, body, created_at)"
 
 /** Table accessor for replies — same generated-types escape hatch as notesTable(). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -147,6 +147,17 @@ export function replyNotifyTargets(
  * Done/Snooze now live in `staff_note_state`, one row per person per note.
  * NO ROW = live for that person. The note's own columns are legacy: still read
  * as a fallback for anything created before the change, never written.
+ *
+ * A THIRD per-person field, `parked_at` (2026-09-08), adds a fourth state:
+ * Parked — moved to the header shelf, still visible/grouped, not hidden
+ * (Done) and not scheduled (Snoozed). It has NO legacy-column fallback (it
+ * postdates the single-shared-column era entirely, so there is nothing to
+ * fall back to) and — unlike archived_at/snoozed_until, which have always
+ * been independently settable — is kept mutually exclusive with the other
+ * two AT THE WRITE SITE (`setMyNoteState` in the API route nulls the other
+ * two fields whenever it sets one), not just by convention. A DB CHECK
+ * constraint (`staff_note_state_one_status_check`,
+ * `scripts/migrations/20260908-0000-staff-note-parked.sql`) backstops that.
  */
 
 /** One person's state for one note. */
@@ -154,6 +165,7 @@ export interface NoteStateRow {
   user_id: string
   archived_at: string | null
   snoozed_until: string | null
+  parked_at: string | null
 }
 
 interface NoteWithState {
@@ -199,9 +211,22 @@ export function isSnoozedFor(note: NoteWithState, userId: string, now: Date): bo
   return Number.isFinite(t) && t > now.getTime()
 }
 
+/**
+ * Has THIS person parked it (moved it to the header shelf)?
+ *
+ * Deliberately EXPLICIT-ROW-ONLY, no legacy-column fallback — parked_at
+ * postdates the single-shared-column era entirely (staff_notes.parked_at
+ * has never existed), so there is nothing to fall back to. This also means
+ * it can never trip the "first per-person row flips the fallback for
+ * everyone else" hazard the other two predicates have to guard against.
+ */
+export function isParkedFor(note: NoteWithState, userId: string): boolean {
+  return noteStateFor(note, userId)?.parked_at != null
+}
+
 /** On the floating layer right now, for this person. */
 export function isLiveFor(note: NoteWithState, userId: string, now: Date): boolean {
-  return !isArchivedFor(note, userId) && !isSnoozedFor(note, userId, now)
+  return !isArchivedFor(note, userId) && !isSnoozedFor(note, userId, now) && !isParkedFor(note, userId)
 }
 
 /**
@@ -228,6 +253,14 @@ export function isLiveFor(note: NoteWithState, userId: string, now: Date): boole
  * Used ONLY by listActiveNotesForUser (the floating layer). The account/
  * contact-page widgets and the generic per-record filter keep isLiveFor
  * unchanged — nobody asked for a Done note to reappear there.
+ *
+ * A PARKED note never revives through this path (2026-09-08) — parking is a
+ * deliberate, ongoing placement choice, not an assumption the topic is
+ * finished the way Done is, so a fresh reply doesn't eject it back onto the
+ * scattered floating layer (that would defeat the point of parking it and
+ * reopen the "same note rendered in two places at once" hazard). It stays
+ * grouped in the Parked shelf and shows red there instead, via the existing,
+ * unmodified alerts feed (computeNoteAlerts) — not this function.
  */
 export function isLiveOrRevivedFor(
   note: NoteWithState & { staff_note_replies?: NoteReplyRow[] | null },
@@ -235,6 +268,7 @@ export function isLiveOrRevivedFor(
   now: Date,
 ): boolean {
   if (isSnoozedFor(note, userId, now)) return false
+  if (isParkedFor(note, userId)) return false
   if (!isArchivedFor(note, userId)) return true
   const state = noteStateFor(note, userId)
   if (!state?.archived_at) return false
@@ -244,11 +278,12 @@ export function isLiveOrRevivedFor(
 }
 
 /** What someone else has done with a shared note — the Notes tab status line. */
-export type OtherState = 'done' | 'snoozed' | 'open'
+export type OtherState = 'done' | 'snoozed' | 'parked' | 'open'
 
 export function otherPersonState(note: NoteWithState, otherUserId: string, now: Date): OtherState {
   if (isArchivedFor(note, otherUserId)) return 'done'
   if (isSnoozedFor(note, otherUserId, now)) return 'snoozed'
+  if (isParkedFor(note, otherUserId)) return 'parked'
   return 'open'
 }
 
@@ -373,6 +408,22 @@ export function validateNoteBody(raw: unknown): { body: string | null; error: st
   return { body, error: null }
 }
 
+/** Mirrors the DB CHECK on staff_notes.title exactly (staff_notes_title_len,
+ *  2026-09-08). Optional — an empty/absent title is valid (null, not an
+ *  error), unlike the body, which a note can never be without. */
+export const NOTE_TITLE_MAX = 120
+
+export function validateNoteTitle(raw: unknown): { title: string | null; error: string | null } {
+  if (raw == null || raw === "") return { title: null, error: null }
+  if (typeof raw !== "string") return { title: null, error: "That title didn't make sense." }
+  const title = raw.trim()
+  if (!title) return { title: null, error: null }
+  if (title.length > NOTE_TITLE_MAX) {
+    return { title: null, error: `That title is too long (max ${NOTE_TITLE_MAX} characters). Shorten it and try again.` }
+  }
+  return { title, error: null }
+}
+
 /** Snooze presets → a concrete future ISO instant. DST-safe: shifts the date then sets the hour,
  *  never "now + N ms" (which lands an hour off across a clock change). `now` is injected for tests. */
 export function computeSnoozeUntil(
@@ -420,6 +471,24 @@ export async function listActiveNotesForUser(userId: string, nowIso: string) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const live = (res.data ?? []).filter((n: any) => isLiveOrRevivedFor(n, userId, now)).slice(0, 200)
   return { ...res, data: live }
+}
+
+/**
+ * Notes visible to U that U has PARKED — the header shelf's own feed
+ * (`?scope=parked`, 2026-09-08). Same shape as listActiveNotesForUser
+ * deliberately: the header needs this on every page, the same way the
+ * floating layer needs the active feed on every page.
+ */
+export async function listParkedNotesForUser(userId: string) {
+  const res = await notesTable()
+    .select(NOTE_COLUMNS)
+    .or(visibleToOrClause(userId))
+    .order("created_at", { ascending: false })
+    .limit(500)
+  if (res.error) return res
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parked = (res.data ?? []).filter((n: any) => isParkedFor(n, userId)).slice(0, 200)
+  return { ...res, data: parked }
 }
 
 /**

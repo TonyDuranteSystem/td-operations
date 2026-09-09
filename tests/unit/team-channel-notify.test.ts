@@ -131,10 +131,20 @@ describe('validateTeamPostTarget — answering inside a bug', () => {
  * already guards against for channels. The source assertions below exist because
  * two of the three sites are inside route handlers with no pure seam: without
  * them, deleting the guard from one send path would break nothing and ship.
+ *
+ * 2026-09-08: the predicate grew a parameter. A CLIENT conversation is still
+ * silent; an internal TOPIC (isInternalTopic=true) now notifies like a DM — see
+ * channel-notify.ts for why that is the opposite case, not an extension of the
+ * silence. The source assertions below were loosened to match a call with an
+ * argument rather than requiring the old bare `()`.
  */
-describe('conversationNotifiesParticipants — client conversations are silent', () => {
-  it('does not notify (both the pop-up and the phone push are off)', () => {
-    expect(conversationNotifiesParticipants()).toBe(false)
+describe('conversationNotifiesParticipants — client conversations silent, topics notify', () => {
+  it('does not notify a client conversation (both the pop-up and the phone push are off)', () => {
+    expect(conversationNotifiesParticipants(false)).toBe(false)
+  })
+
+  it('notifies an internal topic — same as a DM, per Antonio 2026-09-07', () => {
+    expect(conversationNotifiesParticipants(true)).toBe(true)
   })
 
   it('is consulted by ALL THREE sites that could notify for a conversation', () => {
@@ -148,8 +158,9 @@ describe('conversationNotifiesParticipants — client conversations are silent',
       expect(src, `${site} must import the shared rule`)
         .toContain('conversationNotifiesParticipants')
       // Imported but never called would typecheck and silently notify again.
+      // Matches a call with an argument (isInternalTopic) — not just `()`.
       expect(src, `${site} must actually CALL the rule, not just import it`)
-        .toMatch(/conversationNotifiesParticipants\(\)/)
+        .toMatch(/conversationNotifiesParticipants\(/)
     }
   })
 
@@ -161,7 +172,7 @@ describe('conversationNotifiesParticipants — client conversations are silent',
     for (const site of ['app/api/team/threads/[id]/messages/route.ts', 'lib/team/post-message.ts']) {
       const src = readFileSync(join(process.cwd(), site), 'utf8')
       const mentionAt = src.indexOf('mentions.userIds')
-      const conversationAt = src.indexOf('conversationNotifiesParticipants()')
+      const conversationAt = src.indexOf('conversationNotifiesParticipants(')
       expect(mentionAt, `${site}: mention push not found`).toBeGreaterThan(-1)
       expect(conversationAt, `${site}: conversation guard not found`).toBeGreaterThan(-1)
       expect(mentionAt, `${site}: @mention must be handled BEFORE the conversation branch`)

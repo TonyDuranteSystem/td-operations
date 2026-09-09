@@ -22,13 +22,13 @@
  */
 
 import { useRef, useState } from 'react'
-import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send } from 'lucide-react'
+import { X, Loader2, Check, Lock, Share2, Users, RotateCcw, MessageSquare, Trash2, ExternalLink, Send, Pin } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { AccountCombobox } from '@/components/shared/account-combobox'
 import { requestOpenTeamChat } from '@/lib/team/open-team-chat'
 import { isDragGesture } from '@/lib/ui/draggable-fab'
 import { safeOriginPath, describeOrigin, splitLinkSegments } from '@/lib/notes/note-origin'
-import { isArchivedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
+import { isArchivedFor, isParkedFor, sortReplies, type NoteReplyRow } from '@/lib/notes/staff-notes'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LinkifiedText } from '@/components/dashboard/note-linkified-text'
 
@@ -62,6 +62,7 @@ const API = '/api/crm/staff-notes'
 
 export interface EditableNote {
   id: string
+  title: string | null
   body: string
   color: string
   author_user_id: string | null
@@ -75,7 +76,7 @@ export interface EditableNote {
   snoozed_until: string | null
   archived_at: string | null
   updated_at: string
-  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null }> | null
+  staff_note_state?: Array<{ user_id: string; archived_at: string | null; snoozed_until: string | null; parked_at: string | null }> | null
   staff_note_replies?: NoteReplyRow[] | null
   accounts?: { company_name: string | null } | null
   contacts?: { full_name: string | null } | null
@@ -127,6 +128,11 @@ export function NoteEditor({
   const myStateRow = note && meId ? (note.staff_note_state ?? []).find((r) => r.user_id === meId) ?? null : null
   const myWhenIso = note ? (myStateRow ? myStateRow.snoozed_until : note.snoozed_until) : null
   const [body, setBody] = useState(note?.body ?? createDefaults?.body ?? '')
+  // Optional short label, separate from the note's own text (2026-09-08) — falls
+  // back to a slice of the body wherever a note is shown compactly (see
+  // active-notes-strip.tsx's own titleOrPreview), so leaving this blank costs
+  // nothing.
+  const [title, setTitle] = useState(note?.title ?? '')
   const [when, setWhen] = useState(toLocalInputValue(myWhenIso))
   const [accountId, setAccountId] = useState<string | undefined>(note?.account_id ?? createDefaults?.accountId)
   const [accountName, setAccountName] = useState<string | undefined>(
@@ -135,8 +141,8 @@ export function NoteEditor({
   const [recipient, setRecipient] = useState<string>(createDefaults?.recipient ?? 'me')
   // EDIT mode working baseline: what the server currently has, refreshed after every save we
   // make — the stale-edit guard compares against THIS, so it must move with our own writes.
-  const [baseline, setBaseline] = useState<{ body: string; updated_at: string }>(
-    () => ({ body: note?.body ?? '', updated_at: note?.updated_at ?? '' }),
+  const [baseline, setBaseline] = useState<{ body: string; title: string | null; updated_at: string }>(
+    () => ({ body: note?.body ?? '', title: note?.title ?? null, updated_at: note?.updated_at ?? '' }),
   )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -151,9 +157,11 @@ export function NoteEditor({
 
   const isAuthor = !isCreate && meId != null && meId === note.author_user_id
   const canEditBody = isCreate || isAuthor
-  const dirty = !isCreate && canEditBody && body.trim() !== baseline.body
+  const titleTrimmed = title.trim() || null
+  const dirty = !isCreate && canEditBody && (body.trim() !== baseline.body || titleTrimmed !== baseline.title)
   const replyDirty = !isCreate && replyDraft.trim().length > 0
   const archivedForMe = !isCreate && (meId ? isArchivedFor(note, meId) : note.archived_at != null)
+  const parkedForMe = !isCreate && meId != null && isParkedFor(note, meId)
   const origin = !isCreate && note.origin_url ? safeOriginPath(note.origin_url) : null
 
   /** Open the chat about this note — the client's conversation, or the teammate DM. */
@@ -216,12 +224,12 @@ export function NoteEditor({
   const saveBodyIfDirty = async (suppressNotify: boolean): Promise<boolean> => {
     if (!dirty) return true
     const d = await call({
-      action: 'edit', body,
+      action: 'edit', body, title,
       expectedUpdatedAt: baseline.updated_at,
       ...(suppressNotify ? { suppress_notify: true } : {}),
     })
     const fresh = d?.note
-    setBaseline({ body: body.trim(), updated_at: fresh?.updated_at ?? baseline.updated_at })
+    setBaseline({ body: body.trim(), title: titleTrimmed, updated_at: fresh?.updated_at ?? baseline.updated_at })
     return true
   }
 
@@ -255,6 +263,7 @@ export function NoteEditor({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             body,
+            title,
             recipient,
             origin_url: createDefaults?.originUrl
               ?? (typeof window !== 'undefined' ? window.location.pathname + window.location.search : undefined),
@@ -390,6 +399,24 @@ export function NoteEditor({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {/* Optional short label, separate from the note's own text — the header strip shows
+            this (falling back to a body slice) so a note stands out in the row without a
+            hover. Same author-only editability as the body itself. */}
+        {canEditBody ? (
+          <>
+            <label className="mb-1 block text-xs font-medium text-amber-900">
+              Title <span className="font-normal text-amber-700">(optional)</span>
+            </label>
+            <input
+              type="text" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120}
+              placeholder="Short label"
+              className="mb-3 w-full rounded border border-amber-300 bg-white p-2 text-sm text-amber-950 outline-none focus:border-amber-500"
+            />
+          </>
+        ) : title ? (
+          <p className="mb-2 text-sm font-semibold text-amber-950">{title}</p>
+        ) : null}
 
         {/* The note's TEXT belongs to its author; everyone else answers below in replies.
             (Recipients used to co-edit this box — that's how a reply got lost on 2026-07-28.) */}
@@ -581,10 +608,21 @@ export function NoteEditor({
                     className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
                     <RotateCcw className="h-3 w-3" />Put it back
                   </button>
-                : <button onClick={() => quick({ action: 'archive' })} disabled={busy}
+                : parkedForMe
+                ? <button onClick={() => quick({ action: 'unpark' })} disabled={busy}
                     className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
-                    <Check className="h-3 w-3" />Mark done
-                  </button>}
+                    <RotateCcw className="h-3 w-3" />Send back to screen
+                  </button>
+                : <>
+                    <button onClick={() => quick({ action: 'archive' })} disabled={busy}
+                      className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                      <Check className="h-3 w-3" />Mark done
+                    </button>
+                    <button onClick={() => quick({ action: 'park' })} disabled={busy}
+                      className="flex items-center gap-1 rounded bg-black/10 px-2 py-1 text-xs">
+                      <Pin className="h-3 w-3" />Park
+                    </button>
+                  </>}
 
               <button onClick={discuss} disabled={discussing || busy}
                 className="flex items-center gap-1 rounded bg-emerald-100 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-200 disabled:opacity-50">
