@@ -30,7 +30,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { getOfficeDateString } from "@/lib/portal/office-hours"
 import { isCardAutopayEnabled } from "@/lib/payments/card-autopay-config"
-import { claimPaymentForCharge, releasePaymentClaim, CRON_CLAIM_TTL_MS } from "@/lib/operations/autopay-claim"
+import { claimPaymentForCharge, releasePaymentClaim, holdPaymentClaim, CRON_CLAIM_TTL_MS, AUTOPAY_HOLD_TTL_MS } from "@/lib/operations/autopay-claim"
 import { resolveChargeRate } from "@/lib/payments/card-fee-config"
 import { computeCardTotal } from "@/lib/payments/card-fee"
 import { confirmPayment } from "@/lib/operations/payment"
@@ -68,17 +68,40 @@ interface Candidate {
   }
 }
 
-async function raiseAutopayChargeFailure(payment: Candidate, reason: string) {
+async function raiseAutopayChargeFailure(
+  payment: Candidate,
+  reason: string,
+  options: { chargeSucceeded?: boolean } = {},
+) {
+  // dev job 4ca2c691 (full council review 2026-09-09): a card that Stripe
+  // already charged successfully needs an ENTIRELY different message than a
+  // genuine decline — reusing this task/notification's old wording verbatim
+  // for that case would tell staff "charge failed" and "client notified to
+  // pay manually" when BOTH are false, which is exactly how a staff member
+  // could tell a client to pay twice for something already charged once.
+  const chargeSucceeded = options.chargeSucceeded ?? false
+
   // eslint-disable-next-line no-restricted-syntax -- no consolidated createTask() helper yet (same gap as the pre-existing stripe webhook's task inserts, dev_task 7ebb1e0c); tasks-table writes here follow that established pattern
   await supabaseAdmin.from("tasks").insert({
-    task_title: `Autopay charge failed — invoice ${payment.invoice_number || payment.id}`,
-    description: `Card autopay could not charge this invoice automatically.\nPayment: ${payment.id}\nReason: ${reason}\n\nThe client has been notified in the portal. If this keeps happening, consider turning off autopay for this account.`,
+    task_title: chargeSucceeded
+      ? `Autopay charged the card but could NOT be recorded — invoice ${payment.invoice_number || payment.id}`
+      : `Autopay charge failed — invoice ${payment.invoice_number || payment.id}`,
+    description: chargeSucceeded
+      ? `Card autopay successfully charged the client's card, but recording it against the invoice failed or conflicted.\nPayment: ${payment.id}\nReason: ${reason}\n\nThe client's card WAS ALREADY CHARGED — do NOT ask them to pay again. This needs manual reconciliation: confirm the charge against the invoice, or refund it if this turns out to be a genuine duplicate. The client has deliberately NOT been notified about this.`
+      : `Card autopay could not charge this invoice automatically.\nPayment: ${payment.id}\nReason: ${reason}\n\nThe client has been notified in the portal. If this keeps happening, consider turning off autopay for this account.`,
     assigned_to: defaultTaskAssignee(),
     priority: "High",
     category: "Payment",
     status: "To Do",
     account_id: payment.account_id,
   })
+
+  if (chargeSucceeded) {
+    // The card WAS charged — telling the client to "pay manually" here would
+    // risk a real duplicate charge. Silence toward the client is deliberate;
+    // the task above is where this gets resolved.
+    return
+  }
 
   try {
     await createPortalNotification({
@@ -154,6 +177,15 @@ export async function GET(req: NextRequest) {
         continue
       }
 
+      // Tracks whether Stripe actually charged the card in THIS attempt, for
+      // the catch block below (dev job 4ca2c691, full council review
+      // 2026-09-09): an exception thrown AFTER a successful charge — e.g. in
+      // bookCardFee, or inside confirmPayment's own installment-handler
+      // calls — must never be treated like a genuine decline. Scoped per
+      // candidate, reset every loop iteration.
+      let chargeSucceeded = false
+      let chargedPaymentIntentId: string | undefined
+
       try {
         // Close the 30-minute-minimum gap: if the client has a live Checkout
         // Session open for this exact invoice, kill it before charging —
@@ -209,6 +241,9 @@ export async function GET(req: NextRequest) {
         )
 
         if (paymentIntent.status === "succeeded") {
+          chargeSucceeded = true
+          chargedPaymentIntentId = paymentIntent.id
+
           // Book the fee (if any) onto the invoice from the ACTUAL charge
           // BEFORE settling — same sequence the client-paid Checkout path
           // uses (app/api/webhooks/stripe/route.ts).
@@ -224,9 +259,52 @@ export async function GET(req: NextRequest) {
             })
           }
 
-          await confirmPayment({ payment_id: payment.id, amount_paid: cardTotal, paid_date: today })
-          await releasePaymentClaim(payment.id)
-          results.push({ payment_id: payment.id, invoice_number: payment.invoice_number, outcome: `charged — ${paymentIntent.id}` })
+          // dev job 4ca2c691 (full council review 2026-09-09): the result
+          // used to be discarded entirely — confirmPayment can legitimately
+          // return success:false WITHOUT throwing (a real, non-exceptional
+          // write failure or a lost compare-and-swap), which the cron then
+          // logged as a plain "charged" success with no record anywhere
+          // that the write never landed.
+          const confirmResult = await confirmPayment({ payment_id: payment.id, amount_paid: cardTotal, paid_date: today })
+
+          if (confirmResult.success && confirmResult.outcome === "paid") {
+            // Clean, verified success — the only case that gets to claim
+            // "charged" without qualification.
+            await releasePaymentClaim(payment.id)
+            results.push({ payment_id: payment.id, invoice_number: payment.invoice_number, outcome: `charged — ${paymentIntent.id}` })
+          } else if (confirmResult.outcome === "partial") {
+            // Real money moved and was correctly recorded, but didn't cover
+            // the full balance (e.g. the invoice total moved between
+            // candidate selection and charging). invoice_status flips away
+            // from 'Sent' on any partial settlement, so this row naturally
+            // stops being a candidate on the next run — safe to release
+            // normally, same as any other partial payment in this system.
+            await releasePaymentClaim(payment.id)
+            results.push({
+              payment_id: payment.id,
+              invoice_number: payment.invoice_number,
+              outcome: `charged-partial — ${paymentIntent.id}`,
+            })
+          } else {
+            // Stripe took the money; our own record of it either failed
+            // outright, or the invoice turned out to already be settled
+            // through another channel in the exact same window
+            // (outcome: already_paid). Either way the card was genuinely
+            // charged, so: hold the claim (releasing it would leave the
+            // client's own "Pay Invoice" button, or tomorrow's cron run,
+            // free to attempt a charge that already succeeded), and raise
+            // an accurate internal-only alert — never the client-facing
+            // "please pay manually" message this branch's old code path
+            // would have sent.
+            await holdPaymentClaim(payment.id, AUTOPAY_HOLD_TTL_MS)
+            const detail = `Stripe charged ${paymentIntent.id} successfully but recording it failed or conflicted (confirmPayment outcome: ${confirmResult.outcome}${confirmResult.error ? `: ${confirmResult.error}` : ""}).`
+            await raiseAutopayChargeFailure(payment, detail, { chargeSucceeded: true })
+            results.push({
+              payment_id: payment.id,
+              invoice_number: payment.invoice_number,
+              outcome: `charged-but-unrecorded — ${paymentIntent.id} (${confirmResult.outcome})`,
+            })
+          }
         } else {
           await releasePaymentClaim(payment.id)
           await raiseAutopayChargeFailure(payment, `PaymentIntent status: ${paymentIntent.status}`)
@@ -237,21 +315,42 @@ export async function GET(req: NextRequest) {
           })
         }
       } catch (chargeErr) {
-        await releasePaymentClaim(payment.id)
         const message = chargeErr instanceof Error ? chargeErr.message : String(chargeErr)
-        await raiseAutopayChargeFailure(payment, message)
-        results.push({ payment_id: payment.id, invoice_number: payment.invoice_number, outcome: `error: ${message}` })
+        if (chargeSucceeded) {
+          // Stripe already took the money before this exception fired —
+          // same "already charged" treatment as the confirmPayment-failure
+          // branch above: hold the claim, never tell the client to pay
+          // again (dev job 4ca2c691, full council review 2026-09-09).
+          await holdPaymentClaim(payment.id, AUTOPAY_HOLD_TTL_MS)
+          const detail = `Stripe charged ${chargedPaymentIntentId ?? "(id unknown)"} successfully but a later step failed: ${message}`
+          await raiseAutopayChargeFailure(payment, detail, { chargeSucceeded: true })
+          results.push({
+            payment_id: payment.id,
+            invoice_number: payment.invoice_number,
+            outcome: `charged-but-unrecorded — error after charge: ${message}`,
+          })
+        } else {
+          await releasePaymentClaim(payment.id)
+          await raiseAutopayChargeFailure(payment, message)
+          results.push({ payment_id: payment.id, invoice_number: payment.invoice_number, outcome: `error: ${message}` })
+        }
       }
     }
 
-    const charged = results.filter((r) => r.outcome.startsWith("charged"))
+    // "charged-but-unrecorded" is its own bucket, distinct from a clean
+    // charge (dev job 4ca2c691, full council review 2026-09-09) — Stripe
+    // genuinely took the money in both, but this one needs a human, and
+    // folding it into a plain "charged" count would understate exactly the
+    // thing this fix exists to stop hiding.
+    const unrecorded = results.filter((r) => r.outcome.startsWith("charged-but-unrecorded"))
+    const charged = results.filter((r) => r.outcome.startsWith("charged") && !r.outcome.startsWith("charged-but-unrecorded"))
     const failed = results.filter((r) => r.outcome.startsWith("failed") || r.outcome.startsWith("error"))
 
     if (results.length > 0) {
       await supabaseAdmin.from("action_log").insert({
         action_type: "card_autopay_charge_cron",
         table_name: "payments",
-        summary: `Card autopay: ${charged.length} charged, ${failed.length} failed, ${results.length} candidates checked`,
+        summary: `Card autopay: ${charged.length} charged, ${unrecorded.length} charged-but-unrecorded (needs manual review), ${failed.length} failed, ${results.length} candidates checked`,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         details: { today, results } as any,
       })
@@ -261,10 +360,10 @@ export async function GET(req: NextRequest) {
       endpoint: "/api/cron/card-autopay-charge",
       status: "success",
       duration_ms: Date.now() - startTime,
-      details: { checked: results.length, charged: charged.length, failed: failed.length, results },
+      details: { checked: results.length, charged: charged.length, unrecorded: unrecorded.length, failed: failed.length, results },
     })
 
-    return NextResponse.json({ ok: true, checked: results.length, charged: charged.length, failed: failed.length, results })
+    return NextResponse.json({ ok: true, checked: results.length, charged: charged.length, unrecorded: unrecorded.length, failed: failed.length, results })
   } catch (err) {
     logCron({
       endpoint: "/api/cron/card-autopay-charge",

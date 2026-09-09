@@ -157,18 +157,10 @@ export async function markInvoicePaid(
 
     const { data: payment } = await supabaseAdmin
       .from('payments')
-      .select('id, invoice_number, total, amount, amount_paid, invoice_status, account_id')
+      .select('id, invoice_number, amount_paid, invoice_status, account_id')
       .eq('id', paymentId)
       .single()
     if (!payment) throw new Error('Payment not found')
-
-    // Fixed 2026-09-06 (dev job ef5da377): this is also the "Mark as Paid"
-    // action reachable from an Account page's older, un-invoiced charges
-    // (rows with no formal invoice yet) — those never have `total` set, only
-    // `amount`. Reading `total` alone silently recorded a null/zero paid
-    // amount on them. A real invoice always has `total` (via createTDInvoice),
-    // so this only changes behavior for the un-invoiced case.
-    const paidAmount = payment.total ?? payment.amount
 
     // Fixed 2026-09-07 (full second-round council review): a credit note is
     // never "marked Paid" through this button — it's already settled by
@@ -189,12 +181,12 @@ export async function markInvoicePaid(
 
     // Fixed 2026-09-07 (full council review, blocker #1): a genuinely
     // Partial invoice (real money already recorded) reaches this same
-    // button. Writing `paidAmount` unconditionally overwrote that real,
-    // already-recorded amount with the full total — fabricating the
-    // difference as paid. The old Payment Tracker page never had this hole
-    // because its own eligibility gate excluded Partial rows outright; this
-    // one didn't carry that restriction forward. Money that's already on
-    // file is exactly what must never be silently overwritten.
+    // button. Kept as an explicit refusal rather than letting the writer
+    // below net it out (dev job 41e33dc5, 2026-09-09 review) — that would be
+    // safe (a real compare-and-swap, correct remaining-balance math) but is
+    // a silent behavior change from today's hard stop, and Antonio hasn't
+    // picked between keeping the refusal, auto-completing, or a one-click
+    // confirm. Revisit once he does.
     const alreadyPaid = Number(payment.amount_paid ?? 0)
     if (alreadyPaid > 0) {
       throw new Error(
@@ -204,31 +196,36 @@ export async function markInvoicePaid(
 
     const today = new Date().toISOString().split('T')[0]
 
-    // Update payment record. Excludes rows already Paid (found live 2026-09-07,
-    // second bug-hunter pass): unlike the old page's version, this had no
-    // status precondition at all, so a stale-rendered page — the bank-feed
-    // matcher settled it after the page loaded, before a refresh — could
-    // re-fire this and clobber the real historical paid_date with today.
-    // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data: markPaidRows, error: markPaidErr } = await supabaseAdmin.from('payments').update({
-      status: 'Paid',
-      invoice_status: 'Paid',
-      amount_paid: paidAmount,
-      amount_due: 0,
-      paid_date: today,
-      payment_method: paymentMethod || null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', paymentId).neq('status', 'Paid').select('id')
-    if (markPaidErr) throw new Error(`Failed to mark payment as paid: ${markPaidErr.message}`)
-    // Fixed 2026-09-07 (full second-round council review, Senior Engineer +
-    // Bug-Hunter, independently): the `.neq('status','Paid')` guard matching
-    // zero rows is not an error — supabase-js reports success either way —
-    // so without checking what actually matched, a stale double-click or a
-    // row that was already Paid by a different path (a credit note whose
-    // coarse status settles at creation, for one) would still run every
-    // side effect below and report success, even though nothing was written.
-    if (!markPaidRows || markPaidRows.length === 0) {
-      throw new Error('This invoice changed before the save landed — it may already be Paid. Refresh and check its current state before trying again.')
+    // Routed through the one shared, CAS-protected money writer (dev job
+    // 41e33dc5, full council review 2026-09-09) instead of a hand-rolled
+    // update. The old inline update's only concurrency guard —
+    // `.neq('status','Paid')` — shared the same stale read as `paidAmount`
+    // above: a bank-feed partial payment landing in between (which only
+    // ever moves `invoice_status`, never the coarse `status` column) was
+    // invisible to it, so the stale full total could silently overwrite a
+    // real partial. applyMoneyToInvoice re-reads the row itself and its own
+    // write only lands if `amount_paid` still matches that fresh read —
+    // same fallback math as before (`total ?? amount`), plus the guard this
+    // button was missing.
+    const { applyMoneyToInvoice } = await import('@/lib/finance/apply-payment')
+    const apply = await applyMoneyToInvoice({
+      paymentId,
+      mode: 'settle_full',
+      paidDate: today,
+      paymentMethod,
+      actor: 'finance:mark-paid',
+    })
+    // Mirrors confirmPayment's own identical check (lib/operations/payment.ts) —
+    // applyMoneyToInvoice reports a refusal (terminal invoice, zero-total,
+    // lost the compare-and-swap) by RETURNING applied:false, not by
+    // throwing. Skipping this check would let every side effect below fire
+    // on a no-op: a false "paid" receipt, a false "client paid" note, and —
+    // since this button also triggers service activation below — a service
+    // switched on for a payment that was never actually recorded.
+    if (!apply.applied) {
+      throw new Error(
+        apply.detail || 'Nothing was applied — this invoice may already be closed, or it changed since it loaded. Refresh and check its current state before trying again.'
+      )
     }
 
     // Fire-and-forget receipt email (E2E production QA sweep, Antonio's
@@ -241,13 +238,10 @@ export async function markInvoicePaid(
       ),
     )
 
-    // Sync to client_expenses (portal mirror). BOTH calls, status first: syncTDInvoiceStatus
-    // maps only the STATUS (and is the sole emitter of the staff "Client paid" note), which is
-    // how a mirror ended up reading Paid while still recording the full amount as unpaid —
-    // exactly what happened to the Aces invoice on 2026-07-22. syncTDInvoiceMirror is the
-    // authoritative projection of the balances.
-    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
-    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(paidAmount))
+    // Sync to client_expenses (portal mirror). applyMoneyToInvoice already
+    // synced the STATUS half (syncTDInvoiceStatus — also the sole emitter of
+    // the staff "Client paid" note); syncTDInvoiceMirror is the separate,
+    // authoritative projection of the balances and isn't called internally.
     const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
     await syncTDInvoiceMirror(paymentId)
 
@@ -1505,9 +1499,16 @@ export async function updateInvoice(
         if (inv?.invoice_status === 'Overdue') {
           const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
           const backTo = Number(inv.amount_paid ?? 0) > 0 ? 'Partial' : 'Sent'
-          await syncInvoiceStatus('payment', paymentId, backTo)
-          // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset alongside the status flip
-          await supabaseAdmin.from('payments').update({ reminder_count: 0 }).eq('id', paymentId)
+          // Locked to the 'Overdue' just read above (dev job 6aebd8c0, full
+          // council review 2026-09-09) — if a payment landed on this exact
+          // invoice in the moment between that read and this write, the
+          // flip is skipped rather than reverting a status a different
+          // process just correctly set.
+          const { synced } = await syncInvoiceStatus('payment', paymentId, backTo, undefined, undefined, 'Overdue')
+          if (synced) {
+            // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset alongside the status flip
+            await supabaseAdmin.from('payments').update({ reminder_count: 0 }).eq('id', paymentId)
+          }
         }
       }
     }
