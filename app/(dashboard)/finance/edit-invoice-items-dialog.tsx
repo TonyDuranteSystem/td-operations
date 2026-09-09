@@ -66,7 +66,12 @@ export function EditInvoiceItemsDialog({ invoice, onClose }: { invoice: InvoiceR
 
   const currencySymbol = invoice.currency === 'EUR' ? '€' : '$'
   const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0)
-  const discountNum = Number(discount) || 0
+  // Floored at 0 same as the server (lib/finance/invoice-totals.ts) — found
+  // live during EtoE QA (dev job ef5da377): a negative discount here used to
+  // show a preview total ABOVE the subtotal (e.g. "$501" on a $1 invoice for
+  // a -500 "discount"), then silently save the correctly-floored $1 anyway.
+  // Server was never at risk, but the preview lied about what would happen.
+  const discountNum = Math.max(0, Number(discount) || 0)
   const total = Math.max(0, subtotal - discountNum)
 
   const updateItem = (index: number, field: 'description' | 'quantity' | 'unit_price', value: string) => {
