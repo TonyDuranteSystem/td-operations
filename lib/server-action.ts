@@ -88,16 +88,47 @@ export async function updateWithLock(
     return { success: false, error: error.message }
   }
 
-  // .select("id") returns matched rows — if 0, timestamp didn't match
+  // .select("id") returns matched rows — if 0, timestamp didn't match.
+  //
+  // Bug-hunter pass, 2026-09-08 (dev job e7352aa6): this used to auto-retry
+  // via the admin client with NO updated_at condition at all — an
+  // unconditional overwrite that silently discarded whatever the
+  // conflicting write had just recorded, directly contradicting this
+  // function's own contract (stated above: "we return an error"). The
+  // retry's original justification — a stale Next.js RSC cache serving an
+  // old updated_at even though nothing else actually changed the row — is
+  // real, but the fix for a stale READ is to refresh and re-check, not to
+  // blindly overwrite regardless of what changed. So: retry the match ONCE
+  // against the row's CURRENT actual updated_at (bypassing RLS, in case an
+  // RLS-scoped client legitimately can't see a value the admin client can);
+  // if that also misses, someone genuinely changed this row since it was
+  // read, and the caller must be told, not silently overridden.
   if (!data || data.length === 0) {
-    // Auto-retry once using admin client (bypasses RLS + stale cache).
-    // This handles the common case where MCP or another machine updated
-    // the record but the Next.js RSC cache served a stale updated_at.
+    const { data: current, error: currentErr } = await supabaseAdmin
+      .from(table as never)
+      .select("updated_at" as never)
+      .eq("id", id)
+      .maybeSingle<{ updated_at: string }>()
+
+    if (currentErr) {
+      return { success: false, error: currentErr.message }
+    }
+    if (!current) {
+      return { success: false, error: "Record not found — it may have been deleted." }
+    }
+    if (current.updated_at !== originalUpdatedAt) {
+      return { success: false, error: "This record changed since it was loaded — reload and try again." }
+    }
+
+    // The row's real current updated_at DOES match what the caller read —
+    // the first attempt's miss really was a stale cache read on an
+    // otherwise-unchanged row, not a conflicting write. Safe to apply.
     const retryNow = new Date().toISOString()
     const { error: retryError } = await supabaseAdmin
       .from(table as never)
       .update({ ...updates, updated_at: retryNow } as never)
       .eq("id", id)
+      .eq("updated_at", originalUpdatedAt)
 
     if (retryError) {
       return { success: false, error: retryError.message }
