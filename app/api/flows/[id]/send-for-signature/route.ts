@@ -22,8 +22,11 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { createSignatureRequest, fetchFlowDocumentPdf } from "@/lib/operations/signature"
 import { createPortalNotification } from "@/lib/portal/notifications"
+import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
     // service_delivery_id (signature_requests) / flow columns (documents) were

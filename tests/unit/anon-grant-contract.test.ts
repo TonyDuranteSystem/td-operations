@@ -122,7 +122,7 @@ describe("anon grant contract", () => {
       unresolved,
       `Unreadable anon call site(s). A site this tool cannot classify must NOT be treated as "no usage" — that is exactly how the 2026-07-21 break happened. Teach lib/security/anon-usage.ts to read it:\n${unresolved.join("\n")}`,
     ).toEqual([])
-  })
+  }, 20000) // full-repo AST scan (500+ files) — the default 5s budget is marginal under full-suite parallel load, not a correctness issue
 
   it("the privileges the browser needs match the recorded contract", () => {
     const summary = summariseAnonUsage(files)
@@ -149,7 +149,7 @@ describe("anon grant contract", () => {
       drift,
       `The browser's anon privilege needs changed.\n\n${drift.join("\n\n")}\n\nBefore changing any GRANT/REVOKE: a privilege ADDED must exist in the database or that page breaks SILENTLY (these pages do not check errors). Only a privilege REMOVED here is safe to revoke. Then update REQUIRED_ANON_PRIVILEGES deliberately.`,
     ).toEqual([])
-  })
+  }, 20000) // full-repo AST scan again — see timeout note above
 
   it("the storage buckets reachable with the anon key match the recorded list", () => {
     const found = new Set<string>()
@@ -160,7 +160,7 @@ describe("anon grant contract", () => {
       Array.from(found).sort(),
       "Anon-reachable storage buckets changed. These hold signed PDFs and client uploads — locking a table while its bucket stays open is half a fix.",
     ).toEqual([...ANON_REACHABLE_BUCKETS].sort())
-  })
+  }, 20000) // full-repo AST scan again — see timeout note above
 })
 
 describe("the detector sees through the pattern that caused the incident", () => {

@@ -27,6 +27,7 @@ import { updateAccount } from '@/lib/operations/account'
 import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
 import type { HandlerContext } from '@/lib/tasks/types'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 /** Normalize an EIN to XX-XXXXXXX, or null when it isn't 9 digits. */
 function normalizeEin(raw: string): string | null {
@@ -45,6 +46,8 @@ async function resolveSd(serviceDeliveryId: string) {
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const sd = await resolveSd(params.id)
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
@@ -63,6 +66,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const sd = await resolveSd(params.id)
     if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })

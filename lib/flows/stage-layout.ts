@@ -40,6 +40,7 @@ export const STAGE_COMPONENT_TYPES = [
   'formation_names',
   'members_panel',
   'notes',
+  'irs_tracking_entry',
 ] as const
 
 export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]

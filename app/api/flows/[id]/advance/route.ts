@@ -20,8 +20,11 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { syncTaxRevisionRequest } from '@/lib/tax/sync-flow-revision'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const serviceDeliveryId = params.id
     const body = await req.json().catch(() => ({}))

@@ -234,6 +234,44 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4c. ITIN — REQUIRE an IRS mailing tracking number on file before leaving
+  // "Submitted to IRS" forward (Antonio's explicit decision, 2026-09-09). Same
+  // deterministic, up-front shape as the 4b gate above: refuse before the stage
+  // move commits, don't silently advance with nothing to track. Placed here
+  // (not just in the UI) because this is the SINGLE SOURCE OF TRUTH both the
+  // action button AND the flow Workspace stepper (moveServiceDeliveryToStage)
+  // call for a forward move — a UI-only check would leave the stepper's
+  // shortcut path unenforced.
+  if (
+    delivery.service_type === "ITIN" &&
+    currentOrder > 0 &&
+    stages.find(s => s.stage_order === currentOrder)?.stage_name === "Submitted to IRS" &&
+    targetStage.stage_order > currentOrder
+  ) {
+    // irs_shipment_tracking isn't in the generated types until Antonio promotes
+    // the migration to production (sandbox-only until then).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: tracking } = await (supabaseAdmin as any)
+      .from("irs_shipment_tracking")
+      .select("tracking_number")
+      .eq("service_delivery_id", delivery_id)
+      .maybeSingle()
+    if (!tracking?.tracking_number) {
+      return {
+        success: false,
+        error: `Enter the IRS mailing tracking number before moving this case to "${targetStage.stage_name}".`,
+        from_stage: delivery.stage || "New",
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [],
+      }
+    }
+  }
+
   // 5. Build stage history entry
   const historyEntry = {
     from_stage: delivery.stage || "New",
