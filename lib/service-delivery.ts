@@ -511,6 +511,11 @@ export async function advanceServiceDelivery(
   // across topics as a case ages (docs/systems/flows.md, 2026-09-08). Message
   // reuses the same stage copy an operator already wrote for the client
   // (client_notification_message, else client_description) instead of new text.
+  // The insert stamps service_delivery_id — for a contact-scoped SD (ITIN has
+  // no account_id) the Workspace chat route's query has no topic/contact
+  // fallback and matches ONLY that column, so a message without it is
+  // invisible in the room even though the client receives it fine (caught by
+  // a live production test, 2026-09-09 — see docs/systems/flows.md).
   //
   // Cast for the same reason as 8b above: the columns exist in sandbox only
   // until Antonio promotes this migration to production.
@@ -539,6 +544,7 @@ export async function advanceServiceDelivery(
         const { error: chatErr } = await supabaseAdmin.from("portal_messages").insert({
           account_id: delivery.account_id ?? null,
           contact_id: delivery.contact_id ?? null,
+          service_delivery_id: delivery.id,
           sender_type: "admin",
           sender_id: ADMIN_SENDER_ID,
           message: chatDecision.message,
