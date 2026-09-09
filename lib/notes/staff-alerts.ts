@@ -9,9 +9,9 @@
  * recording "dismissed, as of when."
  */
 
-import { isNoteVisibleTo, isSnoozedFor, type NoteVisibility, type NoteStateRow } from "./staff-notes"
+import { isNoteVisibleTo, isSnoozedFor, noteStateFor, type NoteVisibility, type NoteStateRow } from "./staff-notes"
 
-export type NoteAlertKind = "note_reply" | "note_update"
+export type NoteAlertKind = "note_reply" | "note_update" | "note_snooze_due"
 
 export interface NoteAlertReply {
   id: string
@@ -45,6 +45,7 @@ export interface NoteAlertSourceNote {
 export interface DismissalRow {
   note_id: string
   reply_id: string | null
+  kind: NoteAlertKind
   dismissed_at: string
 }
 
@@ -74,13 +75,49 @@ export function parsedMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0
 }
 
+/**
+ * `kind` only matters when `replyId` is null: a reply dismissal is already uniquely
+ * identified by its reply_id, but a note-level dismissal (reply_id null) now has TWO
+ * possible kinds sharing that shape (note_update, note_snooze_due) since the
+ * 2026-09-09 migration gave each its own dismissal slot — see that migration's own
+ * header for why reusing one slot for both was a real bug, not a style choice.
+ */
 function dismissedAtMsFor(
   dismissals: readonly DismissalRow[],
   noteId: string,
   replyId: string | null,
+  kind?: NoteAlertKind,
 ): number | null {
-  const row = dismissals.find((d) => d.note_id === noteId && d.reply_id === replyId)
+  const row = dismissals.find(
+    (d) => d.note_id === noteId && d.reply_id === replyId && (replyId != null || d.kind === kind),
+  )
   return row ? parsedMs(row.dismissed_at) : null
+}
+
+/**
+ * THE ONE place a note's alerts resolve to a display color — every surface that colors
+ * a note by its alerts (the mobile sheet, the desktop header pills, the Notes page, the
+ * Staff Alerts bell) must call this rather than re-deriving the priority independently,
+ * so no two surfaces can ever disagree about which color the same note gets (this is
+ * exactly the class of bug two independent Council reviewers flagged against building it
+ * as four separate copies, dev job b85fe89e).
+ *
+ * Red always wins: a human reply or share outranks a self-set reminder coming due,
+ * regardless of which alert this note's list happens to contain first.
+ */
+export type NoteUrgencyColor = "red" | "teal"
+export function noteUrgencyColors(
+  alerts: readonly { kind: NoteAlertKind; note_id: string }[],
+): Map<string, NoteUrgencyColor> {
+  const map = new Map<string, NoteUrgencyColor>()
+  for (const a of alerts) {
+    if (a.kind === "note_reply" || a.kind === "note_update") {
+      map.set(a.note_id, "red")
+    } else if (a.kind === "note_snooze_due" && map.get(a.note_id) !== "red") {
+      map.set(a.note_id, "teal")
+    }
+  }
+  return map
 }
 
 /**
@@ -139,7 +176,7 @@ export function computeNoteAlerts(
     // own note would only ever be about my own action — skip it for the author entirely.
     if (note.author_user_id !== userId) {
       const updatedMs = parsedMs(note.updated_at)
-      const dismissedMs = dismissedAtMsFor(dismissals, note.id, null)
+      const dismissedMs = dismissedAtMsFor(dismissals, note.id, null, "note_update")
       if (dismissedMs == null || dismissedMs < updatedMs) {
         // Wording only, never a gate: a note whose updated_at never moved past created_at
         // was shared with this person at birth and never touched since; one that did move
@@ -157,6 +194,36 @@ export function computeNoteAlerts(
           client_name: clientName,
           created_at: note.updated_at,
         })
+      }
+    }
+
+    // note_snooze_due: THIS person's own snooze on this note has elapsed. Self-triggered —
+    // deliberately the OPPOSITE of note_reply/note_update's author-exclusion above: those
+    // are about what someone ELSE did, so the actor is excluded; a snooze is something you
+    // set for yourself, so the actor (the person who snoozed it) is the only person this
+    // can ever be for, and must NOT be excluded (a council review caught that copying the
+    // author-exclusion convention here would silently never fire on a private, self-snoozed
+    // note — the single most common real case, dev job b85fe89e).
+    const myState = noteStateFor(note, userId)
+    const mySnoozedUntil = myState?.snoozed_until ?? null
+    if (mySnoozedUntil != null) {
+      const dueMs = parsedMs(mySnoozedUntil)
+      if (dueMs <= now.getTime()) {
+        const dismissedMs = dismissedAtMsFor(dismissals, note.id, null, "note_snooze_due")
+        if (dismissedMs == null || dismissedMs < dueMs) {
+          out.push({
+            kind: "note_snooze_due",
+            note_id: note.id,
+            reply_id: null,
+            author_name: note.author_name,
+            title: "A snoozed note is back",
+            body: note.body.slice(0, 160),
+            url: `/notes?note=${note.id}`,
+            tag: `staff-alert-due-${note.id}`,
+            client_name: clientName,
+            created_at: mySnoozedUntil,
+          })
+        }
       }
     }
   }

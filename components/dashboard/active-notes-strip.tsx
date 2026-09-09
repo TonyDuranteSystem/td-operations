@@ -48,6 +48,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { requestOpenNote } from '@/lib/notes/open-note'
+import { noteUrgencyColors, type NoteAlertKind, type NoteUrgencyColor } from '@/lib/notes/staff-alerts'
 
 interface ActiveNote {
   id: string
@@ -57,7 +58,7 @@ interface ActiveNote {
 
 /** Matches sticky-notes-layer.tsx's own StaffAlertLite shape exactly — reply_id
  *  is required to dismiss a reply-specific alert, not just a note-level one. */
-interface StaffAlertLite { kind: string; note_id: string; reply_id: string | null }
+interface StaffAlertLite { kind: NoteAlertKind; note_id: string; reply_id: string | null }
 
 async function fetchActive(): Promise<{ notes: ActiveNote[] }> {
   const res = await fetch('/api/crm/staff-notes?scope=active')
@@ -134,13 +135,10 @@ export function ActiveNotesStrip() {
     queryFn: fetchStaffAlerts,
     refetchInterval: 60_000,
   })
-  const unreadNoteIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const a of alertsData?.alerts ?? []) {
-      if ((a.kind === 'note_reply' || a.kind === 'note_update') && a.note_id) ids.add(a.note_id)
-    }
-    return ids
-  }, [alertsData])
+  // THE ONE red-vs-teal decision (lib/notes/staff-alerts.ts) — never re-derive this
+  // independently here; that's exactly how this surface and the mobile sheet could end
+  // up disagreeing about the same note's color.
+  const noteColors = useMemo(() => noteUrgencyColors(alertsData?.alerts ?? []), [alertsData])
 
   const orderedNotes = useMemo(() => applyStoredOrder(notes, order), [notes, order])
   const visible = orderedNotes.slice(0, VISIBLE_COUNT)
@@ -189,7 +187,7 @@ export function ActiveNotesStrip() {
 
   const openNote = (noteId: string) => {
     setOpen(false)
-    if (unreadNoteIds.has(noteId)) dismissAlerts(noteId)
+    if (noteColors.has(noteId)) dismissAlerts(noteId)
     const handled = requestOpenNote({ noteId })
     if (handled) return
     router.push(`/notes?note=${noteId}`)
@@ -213,7 +211,7 @@ export function ActiveNotesStrip() {
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={visible.map((n) => n.id)} strategy={horizontalListSortingStrategy}>
           {visible.map((n) => (
-            <ActiveNotePill key={n.id} note={n} unread={unreadNoteIds.has(n.id)} onOpen={openNote} />
+            <ActiveNotePill key={n.id} note={n} urgency={noteColors.get(n.id)} onOpen={openNote} />
           ))}
         </SortableContext>
       </DndContext>
@@ -232,7 +230,7 @@ export function ActiveNotesStrip() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
               <div className="absolute right-0 top-full mt-2 z-50 w-96 max-h-[70vh] overflow-y-auto rounded-lg border bg-white shadow-lg">
-                <ActiveList notes={orderedNotes} unreadNoteIds={unreadNoteIds} onOpen={openNote} onPark={park} />
+                <ActiveList notes={orderedNotes} noteColors={noteColors} onOpen={openNote} onPark={park} />
               </div>
             </>
           )}
@@ -252,9 +250,9 @@ export function ActiveNotesStrip() {
  * separate "edit mode" here, since a 3-pill row has nothing else a stray
  * drag could disturb.
  */
-function ActiveNotePill({ note: n, unread, onOpen }: {
+function ActiveNotePill({ note: n, urgency, onOpen }: {
   note: ActiveNote
-  unread: boolean
+  urgency: NoteUrgencyColor | undefined
   onOpen: (id: string) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: n.id })
@@ -264,9 +262,10 @@ function ActiveNotePill({ note: n, unread, onOpen }: {
   // The pill's own visible text: the deliberate short title when the author wrote
   // one, else the same body-snippet fallback as before.
   const label = (n.title?.trim() || preview).slice(0, 40)
+  const tooltipPrefix = urgency === 'red' ? 'New: ' : urgency === 'teal' ? 'Back from snooze: ' : ''
 
   return (
-    <FastTooltip label={unread ? `New: ${preview}` : preview} align="left">
+    <FastTooltip label={`${tooltipPrefix}${preview}`} align="left">
       <button
         ref={setNodeRef}
         {...attributes}
@@ -276,11 +275,13 @@ function ActiveNotePill({ note: n, unread, onOpen }: {
         className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors select-none ${
           isDragging ? 'z-10 opacity-60 shadow-md' : ''
         } ${
-          unread
+          urgency === 'red'
             ? 'animate-pulse border-red-700 bg-red-600 text-white hover:bg-red-700'
-            : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+            : urgency === 'teal'
+              ? 'animate-pulse border-teal-700 bg-teal-600 text-white hover:bg-teal-700'
+              : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
         }`}
-        aria-label={`${unread ? 'New note' : 'Note'}: ${label}`}
+        aria-label={`${urgency === 'red' ? 'New note' : urgency === 'teal' ? 'Snoozed note back' : 'Note'}: ${label}`}
       >
         <StickyNote className="h-3 w-3 shrink-0" />
         <span className="max-w-[5rem] truncate">{label}</span>
@@ -293,9 +294,9 @@ function ActiveNotePill({ note: n, unread, onOpen }: {
  *  just the overflow, so there is one authoritative place to see and act on
  *  all of them (the inline pills above are a quick-glance/quick-open
  *  convenience for the newest few, not a second source of truth). */
-function ActiveList({ notes, unreadNoteIds, onOpen, onPark }: {
+function ActiveList({ notes, noteColors, onOpen, onPark }: {
   notes: ActiveNote[]
-  unreadNoteIds: Set<string>
+  noteColors: Map<string, NoteUrgencyColor>
   onOpen: (id: string) => void
   onPark: (id: string) => Promise<void>
 }) {
@@ -338,9 +339,9 @@ function ActiveList({ notes, unreadNoteIds, onOpen, onPark }: {
       </div>
       <div className="divide-y">
         {notes.map((n) => {
-          const unread = unreadNoteIds.has(n.id)
+          const urgency = noteColors.get(n.id)
           return (
-            <div key={n.id} className={`flex items-start gap-2 p-3 ${unread ? 'bg-red-50' : ''}`}>
+            <div key={n.id} className={`flex items-start gap-2 p-3 ${urgency === 'red' ? 'bg-red-50' : urgency === 'teal' ? 'bg-teal-50' : ''}`}>
               <button
                 onClick={() => toggle(n.id)}
                 className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
@@ -352,9 +353,9 @@ function ActiveList({ notes, unreadNoteIds, onOpen, onPark }: {
               </button>
               <button onClick={() => onOpen(n.id)} className="block flex-1 text-left">
                 {n.title && (
-                  <p className={`text-sm font-semibold ${unread ? 'text-red-900' : 'text-zinc-800'}`}>{n.title}</p>
+                  <p className={`text-sm font-semibold ${urgency === 'red' ? 'text-red-900' : urgency === 'teal' ? 'text-teal-900' : 'text-zinc-800'}`}>{n.title}</p>
                 )}
-                <p className={`text-sm line-clamp-2 ${unread ? 'font-semibold text-red-900' : 'text-zinc-700'}`}>{n.body}</p>
+                <p className={`text-sm line-clamp-2 ${urgency === 'red' ? 'font-semibold text-red-900' : urgency === 'teal' ? 'font-semibold text-teal-900' : 'text-zinc-700'}`}>{n.body}</p>
               </button>
               <button
                 onClick={async () => { setBusyId(n.id); await onPark(n.id); setBusyId(null) }}
