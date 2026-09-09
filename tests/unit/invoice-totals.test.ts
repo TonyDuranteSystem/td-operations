@@ -49,6 +49,31 @@ describe("computeInvoiceItemTotals", () => {
     expect(result.total).toBe(80)
   })
 
+  it("floors a negative discount at 0 instead of letting it inflate the total above the subtotal (bug-hunter pass, dev job ef5da377)", () => {
+    const result = computeInvoiceItemTotals(
+      [{ description: "Service", quantity: 1, unit_price: 100 }],
+      -50,
+    )
+    expect(result.total).toBe(100)
+    expect(result.discount).toBe(0)
+  })
+
+  it("returns the floored discount actually applied, not the raw caller value, so callers never persist a negative discount", () => {
+    const result = computeInvoiceItemTotals(
+      [{ description: "Service", quantity: 1, unit_price: 100 }],
+      -1,
+    )
+    expect(result.discount).toBe(0)
+  })
+
+  it("returns the ordinary discount unchanged when it's already non-negative", () => {
+    const result = computeInvoiceItemTotals(
+      [{ description: "Service", quantity: 1, unit_price: 100 }],
+      20,
+    )
+    expect(result.discount).toBe(20)
+  })
+
   it("defaults sort_order to array index when not supplied", () => {
     const result = computeInvoiceItemTotals(
       [

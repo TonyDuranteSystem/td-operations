@@ -187,9 +187,15 @@ export async function syncClientExpenseItemsMirror(
     .maybeSingle()
   if (!expense) return { synced: false }
 
-  await db.from('client_expense_items').delete().eq('expense_id', expense.id)
+  // Both steps now check their result (bug-hunter pass, dev job ef5da377):
+  // neither was checked before, so a failure here left the client-visible
+  // line-item detail stale or empty while every caller reported success —
+  // including this diff's own new editor, whose whole point is keeping this
+  // in sync.
+  const { error: deleteErr } = await db.from('client_expense_items').delete().eq('expense_id', expense.id)
+  if (deleteErr) throw new Error(`Could not update the client-portal line items: ${deleteErr.message}`)
   if (items.length > 0) {
-    await db.from('client_expense_items').insert(
+    const { error: insertErr } = await db.from('client_expense_items').insert(
       items.map((item, i) => ({
         expense_id: expense.id,
         description: item.description,
@@ -199,6 +205,7 @@ export async function syncClientExpenseItemsMirror(
         sort_order: item.sort_order ?? i,
       })),
     )
+    if (insertErr) throw new Error(`Could not update the client-portal line items: ${insertErr.message}`)
   }
   return { synced: true }
 }

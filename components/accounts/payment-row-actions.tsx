@@ -47,6 +47,7 @@ import {
 import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { PaidInvoiceCorrectionPrompt, type CorrectionPath } from '@/components/shared/paid-invoice-correction-prompt'
 import { wasFullyPaid } from '@/lib/finance/invoice-matchability'
+import { isCancelledInvoice } from '@/lib/billing/invoice-reactivate'
 
 export interface PaymentRowLike {
   id: string
@@ -174,12 +175,16 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const isCreditNote = statusValue === 'Credit'
   // Only a true Cancelled invoice can be brought back. Waived/Voided are
   // different lifecycle ends and have no reactivate path.
-  // Was 'Cancelled' only — every OTHER action on this row already hides
-  // itself via the wider isCancelled (which also recognizes the old page's
-  // former Waived/Voided pair), but Reactivate alone still used the narrow
-  // check, so it never appeared for exactly the rows that need it (dev job
-  // ef5da377).
-  const canReactivate = isCancelled
+  // Uses the shared isCancelledInvoice — the same predicate the reactivate
+  // action itself checks — rather than this row's own looser isCancelled
+  // (which collapses both status columns into one value first). A real
+  // legacy row can carry status='Waived' with no invoice_status at all;
+  // isCancelled reads that as cancelled from the 'Waived' alone, but
+  // isCancelledInvoice correctly requires the OLD page's specific
+  // Waived+Voided PAIR — so the looser check showed Reactivate on rows the
+  // actual action then refused with "not cancelled" (bug-hunter pass, dev
+  // job ef5da377).
+  const canReactivate = isCancelledInvoice({ status: payment.status, invoice_status: payment.invoice_status ?? null })
   const isInvoiced = !!payment.invoice_number && payment.invoice_number !== '1.0' && payment.invoice_number !== '2.0'
 
   const label = isInvoiced ? `invoice ${payment.invoice_number}` : 'payment placeholder'

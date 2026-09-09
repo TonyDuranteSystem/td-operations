@@ -162,12 +162,36 @@ describe("updateInvoiceItems — row-count check + optimistic lock (dev job ef5d
 })
 
 describe("updateInvoiceItems — checked delete (dev job ef5da377)", () => {
-  it("refuses and never inserts when the old line items fail to delete", async () => {
+  it("refuses and never inserts when the old line items fail to delete, and says the total already saved", async () => {
     mockItemsDelete.mockResolvedValue({ error: { message: "boom" } })
     const result = await updateInvoiceItems(PAYMENT_ID, "x", { discount: 0, items: ONE_ITEM })
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/Could not clear the old line items/)
+    // The header write already committed by this point — the message must
+    // say so honestly rather than claim nothing changed (bug-hunter pass).
+    expect(result.error).toMatch(/total saved/)
+    expect(result.error).toMatch(/no longer match/)
     expect(mockItemsInsert).not.toHaveBeenCalled()
+  })
+
+  it("says the invoice now has no line items at all when the insert fails after a successful delete", async () => {
+    mockItemsInsert.mockResolvedValue({ error: { message: "boom" } })
+    const result = await updateInvoiceItems(PAYMENT_ID, "x", { discount: 0, items: ONE_ITEM })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/no line items at all/)
+  })
+})
+
+describe("updateInvoiceItems — negative discount (dev job ef5da377, bug-hunter pass)", () => {
+  it("floors a negative discount at 0 instead of letting it inflate the total past the line-item sum", async () => {
+    const result = await updateInvoiceItems(PAYMENT_ID, "x", { discount: -50, items: ONE_ITEM })
+    expect(result.success).toBe(true)
+    // ONE_ITEM recomputes to 100 — a -50 "discount" must never push total to 150.
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ total: 100, discount: 0 }))
+  })
+
+  it("persists the floored discount, not the raw negative input", async () => {
+    await updateInvoiceItems(PAYMENT_ID, "x", { discount: -1, items: ONE_ITEM })
+    expect(mockUpdate).toHaveBeenCalledWith(expect.objectContaining({ discount: 0 }))
   })
 })
 

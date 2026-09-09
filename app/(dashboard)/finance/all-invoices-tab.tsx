@@ -313,6 +313,20 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
     return list
   }, [invoices, statusFilter, search, sortField, sortDir])
 
+  // The search box above renders unconditionally, but until now it only ever
+  // filtered `invoices` — switching to the Legacy tab and typing a client's
+  // name visibly did nothing, since LegacyPaymentsPanel was always handed
+  // the full, unfiltered list (bug-hunter pass, dev job ef5da377).
+  const filteredLegacyPayments = useMemo(() => {
+    if (!search.trim()) return legacyPayments
+    const q = search.toLowerCase()
+    return legacyPayments.filter(p =>
+      (p.description ?? '').toLowerCase().includes(q) ||
+      (p.accounts?.company_name ?? '').toLowerCase().includes(q) ||
+      (p.contacts?.full_name ?? '').toLowerCase().includes(q)
+    )
+  }, [legacyPayments, search])
+
   function toggleSort(field: SortField) {
     if (sortField === field) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -437,7 +451,7 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
           panel (dev job ef5da377); see legacy-payments-panel.tsx for why
           these are deliberately never rendered through the invoice table
           below. */}
-      {statusFilter === 'Legacy' && <LegacyPaymentsPanel payments={legacyPayments} />}
+      {statusFilter === 'Legacy' && <LegacyPaymentsPanel payments={filteredLegacyPayments} totalCount={legacyPayments.length} />}
 
       {statusFilter !== 'Legacy' && <>
 

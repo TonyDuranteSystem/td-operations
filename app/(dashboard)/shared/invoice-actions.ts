@@ -305,8 +305,12 @@ export async function updateInvoiceItems(
 
   // Computed here (not inside safeAction's callback) so both the write below
   // and the audit-log `details` at the bottom of this call share the same
-  // values — same shape as createInvoice above.
-  const { items, subtotal, total } = computeInvoiceItemTotals(input.items, input.discount || 0)
+  // values — same shape as createInvoice above. `discount` here is the
+  // ALREADY-FLOORED value (never the raw input) — a negative discount would
+  // otherwise inflate the total past its own line-item sum and silently
+  // defeat the tranche guard's discount check below (bug-hunter pass, dev
+  // job ef5da377) — see computeInvoiceItemTotals's own doc comment.
+  const { items, subtotal, discount, total } = computeInvoiceItemTotals(input.items, input.discount || 0)
 
   return safeAction(async () => {
     const currentQuery = supabaseAdmin
@@ -340,7 +344,7 @@ export async function updateInvoiceItems(
     await enforceTranchePlanConstraint(
       current.tranche_offer_token,
       current.tranche_seq,
-      input.discount || 0,
+      discount,
       current.amount_currency || 'USD',
       total,
     )
@@ -356,7 +360,7 @@ export async function updateInvoiceItems(
         subtotal,
         total,
         amount: total,
-        discount: input.discount || 0,
+        discount,
         updated_at: now,
       })
       .eq('id', paymentId)
@@ -369,12 +373,23 @@ export async function updateInvoiceItems(
       throw new Error('This invoice changed since you opened it — reload and try again.')
     }
 
-    // Checked delete — see this section's header comment, point (b).
+    // Checked delete — see this section's header comment, point (b). Not a
+    // single transaction with the header write above (separate REST calls;
+    // no cross-table transaction available here) — if either step below
+    // fails, the header total already committed no longer matches this
+    // invoice's own line items. Rare (needs a DB/network fault between two
+    // back-to-back calls that already passed the lock check above), but the
+    // error text says so honestly instead of claiming nothing changed
+    // (bug-hunter pass, dev job ef5da377).
     const { error: deleteErr } = await supabaseAdmin
       .from('payment_items')
       .delete()
       .eq('payment_id', paymentId)
-    if (deleteErr) throw new Error(`Could not clear the old line items — nothing else was changed. ${deleteErr.message}`)
+    if (deleteErr) {
+      throw new Error(
+        `The total saved (${total}), but the old line items could not be cleared — this invoice's total and its line items no longer match. Reload and try again, or contact support. ${deleteErr.message}`,
+      )
+    }
 
     const { error: insertErr } = await supabaseAdmin
       .from('payment_items')
@@ -387,7 +402,11 @@ export async function updateInvoiceItems(
         sort_order: item.sort_order,
         item_type: item.item_type,
       })))
-    if (insertErr) throw new Error(`Line items: ${insertErr.message}`)
+    if (insertErr) {
+      throw new Error(
+        `The total saved (${total}), but the new line items failed to save — this invoice now has no line items at all. Reload and try again, or contact support. ${insertErr.message}`,
+      )
+    }
 
     // Portal-mirror sync — see this section's header comment, point (c).
     const { syncClientExpenseItemsMirror } = await import('@/lib/portal/td-invoice-mirror')

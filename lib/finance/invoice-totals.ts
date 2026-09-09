@@ -28,6 +28,8 @@ export interface InvoiceLineItemComputed {
 export interface InvoiceTotals {
   items: InvoiceLineItemComputed[]
   subtotal: number
+  /** The discount actually applied — floored at 0, never the raw caller value. Persist this, not the input. */
+  discount: number
   /** subtotal - discount, floored at 0 — a discount can zero an invoice, never invert it. */
   total: number
 }
@@ -57,6 +59,14 @@ export function computeInvoiceItemTotals(
       : "service",
   }))
   const subtotal = round2(computed.reduce((sum, item) => sum + item.amount, 0))
-  const total = Math.max(0, round2(subtotal - (discount || 0)))
-  return { items: computed, subtotal, total }
+  // Floored at 0 same as the total below: a negative discount would otherwise
+  // ADD to the subtotal instead of reducing it, inflating the total past its
+  // own line-item sum — and, for a payment-plan part, silently defeat the
+  // "no discount on a plan part" guard, which only rejects discount > 0
+  // (bug-hunter pass, dev job ef5da377). createInvoice's caller-side schema
+  // already rejects a negative discount before it reaches here; this is the
+  // matching floor for updateInvoiceItems, which has no schema of its own.
+  const safeDiscount = Math.max(0, discount || 0)
+  const total = Math.max(0, round2(subtotal - safeDiscount))
+  return { items: computed, subtotal, discount: safeDiscount, total }
 }

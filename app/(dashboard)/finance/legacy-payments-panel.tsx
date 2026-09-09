@@ -60,7 +60,7 @@ function formatDate(dateStr: string | null) {
   }
 }
 
-export function LegacyPaymentsPanel({ payments }: { payments: LegacyPaymentRecord[] }) {
+export function LegacyPaymentsPanel({ payments, totalCount }: { payments: LegacyPaymentRecord[]; totalCount: number }) {
   return (
     <div className="space-y-3">
       <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-900">
@@ -69,7 +69,17 @@ export function LegacyPaymentsPanel({ payments }: { payments: LegacyPaymentRecor
       </div>
 
       {payments.length === 0 && (
-        <p className="text-sm text-muted-foreground text-center py-8">No legacy pre-invoice records.</p>
+        <p className="text-sm text-muted-foreground text-center py-8">
+          {totalCount === 0 ? 'No legacy pre-invoice records.' : 'No legacy records match your search.'}
+        </p>
+      )}
+
+      {/* The server query caps at 200 rows with no pagination — surfaced
+          here so it reads as "there's more, narrow your search" rather than
+          silently missing an older record (bug-hunter pass, dev job
+          ef5da377). */}
+      {totalCount >= 200 && (
+        <p className="text-xs text-muted-foreground">Showing the most recent {totalCount} — search by client or description to narrow further.</p>
       )}
 
       <div className="space-y-2">
