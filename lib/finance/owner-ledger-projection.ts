@@ -51,6 +51,7 @@ import { looksLikeStripePayoutDeposit, matchPayoutForDeposit, type StripePayoutR
 
 import { reportSystemError } from "@/lib/system-errors"
 import { validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { DEAD_INVOICE_STATUSES } from "@/lib/offers/payment-plan-state"
 
 import { TD_ENTITY_ID } from "@/lib/owner-finance"
 
@@ -868,7 +869,7 @@ async function fetchExpectedPlanPayments(): Promise<ExpectedPayment[]> {
     const { data: trancheRows } = await tranchesQuery
     const raisedLive = new Set(
       (trancheRows ?? [])
-        .filter((r) => !["Cancelled", "Voided", "Credit"].includes(r.invoice_status ?? ""))
+        .filter((r) => !(DEAD_INVOICE_STATUSES as readonly string[]).includes(r.invoice_status ?? ""))
         .map((r) => `${r.tranche_offer_token}:${r.tranche_seq}`),
     )
 

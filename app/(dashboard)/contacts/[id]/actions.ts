@@ -36,7 +36,10 @@ export async function updateContactField(
 export async function addContactNote(
   contactId: string,
   note: string,
-  updatedAt: string
+  // No longer used for the lock below — see the comment at that call.
+  // Kept so existing callers don't need to change; safe to remove once
+  // nothing passes it.
+  _updatedAt: string
 ): Promise<ActionResult> {
   if (!note.trim()) {
     return { success: false, error: 'Note cannot be empty' }
@@ -57,7 +60,14 @@ export async function addContactNote(
     const existing = contact.notes?.trim() ?? ''
     const combined = existing ? `${newEntry}\n${existing}` : newEntry
 
-    const result = await updateWithLock('contacts', contactId, { notes: combined }, updatedAt)
+    // Locked against THIS read's own updated_at, not the page-load value the
+    // caller passed in — an append only needs to catch a write racing this
+    // read-modify-write, not an unrelated field changed since page load
+    // (bug-hunter pass, dev job e7352aa6: the page-load value goes stale
+    // after a first note add with no reload, wrongly refusing an immediate
+    // second one whose `combined` was already computed correctly from a
+    // fresh read).
+    const result = await updateWithLock('contacts', contactId, { notes: combined }, contact.updated_at)
     if (!result.success) throw new Error(result.error)
     revalidatePath(`/contacts/${contactId}`)
   }, {

@@ -65,6 +65,23 @@ function money(n: number): number {
 }
 
 /**
+ * True for a row cancelled under either vocabulary this codebase has ever
+ * written: the current `status='Cancelled'`/`invoice_status='Cancelled'`
+ * pair, or the OLD Payment Tracker page's former pair
+ * (`status='Waived'`/`invoice_status='Voided'`) it wrote before the
+ * 2026-09-07 fix unified the two pages onto one label. Existing rows voided
+ * under the old pair were never backfilled — rewriting them would destroy
+ * the only surviving record of how they got that way, and risks corrupting
+ * a still-open invoice that happens to carry a dead `status` next to a live
+ * `invoice_status` (dev job ef5da377) — so Reactivate widens to recognize
+ * both instead.
+ */
+export function isCancelledInvoice(row: { status: string | null; invoice_status: string | null }): boolean {
+  if (row.status === 'Cancelled' || row.invoice_status === 'Cancelled') return true
+  return row.status === 'Waived' && row.invoice_status === 'Voided'
+}
+
+/**
  * Snapshot an invoice's live state, immediately before it is cancelled.
  * Stored verbatim in `action_log.details.pre_void_state`.
  */
@@ -104,7 +121,10 @@ export function parsePreVoidState(details: unknown): PreVoidState | null {
 
   if (typeof status !== "string" || !PAYMENT_STATUSES.includes(status)) return null
   if (typeof invoiceStatus !== "string" || !invoiceStatus) return null
-  if (status === "Cancelled" || invoiceStatus === "Cancelled") return null
+  // Same no-op/strand guard as "Cancelled", widened to the old page's former
+  // cancellation pair — a snapshot recorded while the row already read this
+  // way would otherwise restore it right back into an unreactivatable state.
+  if (isCancelledInvoice({ status, invoice_status: invoiceStatus })) return null
 
   const amountDue = Number(d.amount_due)
   const amountPaid = Number(d.amount_paid)

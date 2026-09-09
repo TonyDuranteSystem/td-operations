@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isMatchableInvoice, isTerminalInvoice, isPaidInvoice, terminalReason } from "@/lib/finance/invoice-matchability"
+import { isMatchableInvoice, isTerminalInvoice, isPaidInvoice, terminalReason, wasFullyPaid } from "@/lib/finance/invoice-matchability"
 
 /**
  * These cases are taken from REAL production rows (2026-07-14). The old predicate read
@@ -115,6 +115,57 @@ describe("isPaidInvoice — who may be audit-linked", () => {
   it("is FALSE for a cancelled or voided invoice — never audit-link money to it", () => {
     expect(isPaidInvoice({ invoice_status: "Cancelled", status: "Cancelled" })).toBe(false)
     expect(isPaidInvoice({ invoice_status: "Voided", status: "Waived" })).toBe(false)
+  })
+
+  // Regression tripwire (QA finding, dev job ef5da377): this is exactly why
+  // isPaidInvoice must never be reused as the "already Paid" correction-prompt
+  // gate — a credit note's coarse `status` is always 'Paid' too, so this
+  // returns true for one. That substitution has already shipped as a real
+  // regression once (see wasFullyPaid below) and was proposed and declined a
+  // second time in review. Left TRUE here deliberately: this function is
+  // correct for ITS OWN purpose (audit-linking); the danger is only in using
+  // it for a different question.
+  it("is true for a credit note too — correct for audit-linking, NOT safe to reuse as an already-Paid gate", () => {
+    expect(isPaidInvoice({ invoice_status: "Credit", status: "Paid" })).toBe(true)
+  })
+})
+
+describe("wasFullyPaid — the already-Paid correction-prompt gate", () => {
+  it("is true for an ordinary fully-paid invoice", () => {
+    expect(wasFullyPaid({ invoice_status: "Paid", status: "Paid" })).toBe(true)
+  })
+
+  it("is true for a legacy row Paid via `status` with no invoice_status", () => {
+    expect(wasFullyPaid({ invoice_status: null, status: "Paid" })).toBe(true)
+  })
+
+  // THE case this function exists to get right where isPaidInvoice doesn't:
+  // a credit note's invoice_status is always 'Credit', never null and never
+  // 'Paid' — so it must never match here, regardless of what the coarse
+  // `status` column says.
+  it("is FALSE for a credit note, even though its coarse status is Paid", () => {
+    expect(wasFullyPaid({ invoice_status: "Credit", status: "Paid" })).toBe(false)
+  })
+
+  // invoice_status wins when present — a half-closed row (Sent but somehow
+  // status=Paid) is NOT treated as fully paid by this gate. Matches the
+  // already-shipped, already-correct behavior this function was extracted
+  // from verbatim.
+  it("is FALSE when invoice_status is present and says Sent, even if status says Paid", () => {
+    expect(wasFullyPaid({ invoice_status: "Sent", status: "Paid" })).toBe(false)
+  })
+
+  it("is FALSE for a cancelled invoice", () => {
+    expect(wasFullyPaid({ invoice_status: "Cancelled", status: "Cancelled" })).toBe(false)
+  })
+
+  it("is FALSE for an ordinary open Draft invoice", () => {
+    expect(wasFullyPaid({ invoice_status: "Draft", status: "Pending" })).toBe(false)
+  })
+
+  it("treats an empty-string invoice_status as absent and falls back to status", () => {
+    expect(wasFullyPaid({ invoice_status: "  ", status: "Paid" })).toBe(true)
+    expect(wasFullyPaid({ invoice_status: "  ", status: "Overdue" })).toBe(false)
   })
 })
 

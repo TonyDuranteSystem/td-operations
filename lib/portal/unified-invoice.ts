@@ -254,7 +254,19 @@ export async function syncInvoiceStatus(
   id: string,
   newStatus: string,
   paidDate?: string,
-  amountPaid?: number
+  amountPaid?: number,
+  /**
+   * Optional compare-and-swap for the 'payment' branch's status-only flip
+   * (dev job 6aebd8c0, full council review 2026-09-09): pass the
+   * invoice_status the caller's own read just saw, and the write below only
+   * lands if nothing changed it in between. Every real money writer always
+   * moves invoice_status in the same statement as amount_paid
+   * (lib/finance/apply-payment.ts), so this single-column precondition is
+   * sufficient — a concurrent payment landing on the same invoice can't
+   * slip past it. Omit to keep today's unconditional write (every existing
+   * caller that doesn't pass this is unaffected).
+   */
+  expectedInvoiceStatus?: string
 ): Promise<{ synced: boolean; linkedId?: string }> {
 
   // For source='payment', this is a legacy call from CRM actions that still
@@ -300,12 +312,23 @@ export async function syncInvoiceStatus(
       payUpdates.amount_paid = amountPaid
     }
     // eslint-disable-next-line no-restricted-syntax -- legacy syncInvoiceStatus payment update; tracked by dev_task 7ebb1e0c
-    const { error: payStatusErr } = await supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
+    let updateQuery = supabaseAdmin.from('payments').update(payUpdates).eq('id', id)
+    if (expectedInvoiceStatus !== undefined) {
+      updateQuery = updateQuery.eq('invoice_status', expectedInvoiceStatus)
+    }
+    const { data: updatedRows, error: payStatusErr } = await updateQuery.select('id')
     // A write you did not verify is not a write (the feed-write lesson, relearned here):
     // supabase-js RETURNS errors, and this exact update was being rejected for months of
     // one-way Overdue marking history without anyone knowing a failure was even possible.
     if (payStatusErr) {
       throw new Error(`Invoice status update rejected by the database: ${payStatusErr.message}`)
+    }
+    // The compare-and-swap missed — something else changed invoice_status
+    // since the caller's own read (a payment landed, another edit fired).
+    // Report honestly instead of running the mirror sync below on a flip
+    // that never actually happened.
+    if (expectedInvoiceStatus !== undefined && (!updatedRows || updatedRows.length === 0)) {
+      return { synced: false }
     }
 
     // Also sync to client_expenses (TD invoice → expense mirror)

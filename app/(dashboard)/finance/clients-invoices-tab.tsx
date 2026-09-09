@@ -51,6 +51,9 @@ function statusBadge(status: string) {
     Partial: 'bg-orange-100 text-orange-800',
     Draft: 'bg-gray-100 text-gray-600',
     Split: 'bg-purple-100 text-purple-800',
+    // Missing meant a genuinely-cancelled invoice (this view's query does not
+    // filter Cancelled out) fell back to the generic badge (dev job ef5da377).
+    Cancelled: 'bg-gray-100 text-gray-500 line-through',
     Voided: 'bg-gray-100 text-gray-500 line-through',
     Credit: 'bg-emerald-100 text-emerald-800',
     Available: 'bg-emerald-100 text-emerald-800',
@@ -435,7 +438,11 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
                                   </button>
                                 </FastTooltip>
                               )}
-                              {status === 'Cancelled' && (
+                              {/* Also 'Voided' — the old Payment Tracker page's former
+                                  cancellation label; nothing writes it going forward,
+                                  so this only ever matches a genuinely old-style row
+                                  (dev job ef5da377). */}
+                              {(status === 'Cancelled' || status === 'Voided') && (
                                 <FastTooltip label="Reactivate — bring this cancelled invoice back to life">
                                   <button onClick={() => setReactivateTarget({ id, number: inv.invoice_number as string })} aria-label="Reactivate — bring this cancelled invoice back to life" className="p-1 rounded hover:bg-emerald-100 text-emerald-600">
                                     <Undo2 className="w-3.5 h-3.5" />

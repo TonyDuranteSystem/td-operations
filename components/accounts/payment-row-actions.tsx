@@ -46,6 +46,8 @@ import {
 } from '@/app/(dashboard)/finance/actions'
 import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
 import { PaidInvoiceCorrectionPrompt, type CorrectionPath } from '@/components/shared/paid-invoice-correction-prompt'
+import { wasFullyPaid } from '@/lib/finance/invoice-matchability'
+import { isCancelledInvoice } from '@/lib/billing/invoice-reactivate'
 
 export interface PaymentRowLike {
   id: string
@@ -173,7 +175,16 @@ export function PaymentRowActions({ payment, reminderPaused }: Props) {
   const isCreditNote = statusValue === 'Credit'
   // Only a true Cancelled invoice can be brought back. Waived/Voided are
   // different lifecycle ends and have no reactivate path.
-  const canReactivate = statusValue === 'Cancelled'
+  // Uses the shared isCancelledInvoice — the same predicate the reactivate
+  // action itself checks — rather than this row's own looser isCancelled
+  // (which collapses both status columns into one value first). A real
+  // legacy row can carry status='Waived' with no invoice_status at all;
+  // isCancelled reads that as cancelled from the 'Waived' alone, but
+  // isCancelledInvoice correctly requires the OLD page's specific
+  // Waived+Voided PAIR — so the looser check showed Reactivate on rows the
+  // actual action then refused with "not cancelled" (bug-hunter pass, dev
+  // job ef5da377).
+  const canReactivate = isCancelledInvoice({ status: payment.status, invoice_status: payment.invoice_status ?? null })
   const isInvoiced = !!payment.invoice_number && payment.invoice_number !== '1.0' && payment.invoice_number !== '2.0'
 
   const label = isInvoiced ? `invoice ${payment.invoice_number}` : 'payment placeholder'
@@ -418,11 +429,11 @@ function EditPaymentDialog({
   // legacy/pre-invoice rows in production (invoice_status NULL, coarse
   // status 'Paid') — the server now requires a correction-path choice for
   // these too, so this dialog must detect them as Paid, or saving a total
-  // edit on one throws a raw server error with no way to answer it. Same
-  // narrow OR the server uses; does not affect a credit note, whose
-  // invoice_status is always 'Credit', never null.
-  const isPaid = payment.invoice_status === 'Paid' ||
-    (payment.invoice_status == null && payment.status === 'Paid')
+  // edit on one throws a raw server error with no way to answer it. Shared
+  // with the server's own check and Finance's list view (dev job ef5da377) —
+  // see wasFullyPaid's own doc comment for why isPaidInvoice must never be
+  // substituted here (it would match every credit note too).
+  const isPaid = wasFullyPaid(payment)
 
   const applyUpdate = (
     updates: { total?: number; due_date?: string; notes?: string; message?: string; description?: string },

@@ -196,6 +196,14 @@ export async function markInvoicePaid(
       ),
     )
 
+    // Sync to client_expenses (portal mirror) — Finance's own markInvoicePaid
+    // already does this; this button didn't, so a client marked Paid here
+    // could still see their old balance in the portal (dev job ef5da377).
+    const { syncTDInvoiceStatus } = await import('@/lib/portal/td-invoice')
+    await syncTDInvoiceStatus(paymentId, 'Paid', today, Number(payment.total))
+    const { syncTDInvoiceMirror } = await import('@/lib/portal/td-invoice-mirror')
+    await syncTDInvoiceMirror(paymentId)
+
     // QB sync removed — QB is now one-way manual via the CRM finance "Push to QuickBooks" button.
 
     // If this invoice is what a client's setup was waiting on, continue it —
@@ -383,28 +391,6 @@ export async function deleteInvoice(
   })
 }
 
-// ── Get Invoice with Items ──────────────────────────────────────────
-
-export async function getInvoiceWithItems(paymentId: string) {
-  const supabase = createClient()
-
-  const [paymentRes, itemsRes] = await Promise.all([
-    supabase
-      .from('payments')
-      .select('*, accounts:account_id(id, company_name)')
-      .eq('id', paymentId)
-      .single(),
-    supabase
-      .from('payment_items')
-      .select('*')
-      .eq('payment_id', paymentId)
-      .order('sort_order', { ascending: true }),
-  ])
-
-  if (paymentRes.error) throw new Error(paymentRes.error.message)
-
-  return {
-    payment: paymentRes.data,
-    items: itemsRes.data ?? [],
-  }
-}
+// getInvoiceWithItems moved to app/(dashboard)/shared/invoice-actions.ts
+// 2026-09-08 (dev job ef5da377) — Finance's own new line-item editor needs
+// it too, same reason createInvoice/createCreditNote/etc. moved earlier.

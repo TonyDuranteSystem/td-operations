@@ -14,6 +14,16 @@ const updateCallLog: Array<{ patch: Record<string, unknown>; eqs: Array<{ col: s
 
 let updateRows: Array<{ id: string; updated_at: string }> | null = [{ id: 'dba-1', updated_at: 'NEW-TS' }]
 let updateError: { message: string } | null = null
+// The re-check read the retry path now does before writing (second
+// bug-hunter pass, dev job e7352aa6) — defaults to matching what every
+// existing test already passes as the lock timestamp, so only the tests
+// that specifically exercise the new conflict-detection change it.
+let dbaCurrentUpdatedAt: string | null = 'OLD-TS'
+// Per-call override queue: shift()ed on each update().eq().eq().select()
+// resolution, falling back to `updateRows` once exhausted. Lets a test
+// distinguish the first (locked) attempt from the retry, which the flat
+// `updateRows` variable can't do on its own.
+let updateRowsQueue: Array<Array<{ id: string; updated_at: string }>> = []
 
 vi.mock('next/cache', () => ({
   revalidatePath: (path: string) => {
@@ -37,15 +47,26 @@ vi.mock('@/lib/supabase-admin', () => ({
       }
       if (table === 'dba_details') {
         return {
+          // Serves two different callers: the delivery_id lookup (terminal
+          // .single()) and the retry path's re-check read (terminal
+          // .maybeSingle(), added in the second bug-hunter pass) — both
+          // reach this same shape, differentiated only by which terminal
+          // method they call.
           select: () => ({
             eq: () => ({
               single: () => Promise.resolve({ data: { delivery_id: 'sd-1' } }),
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: dbaCurrentUpdatedAt === null ? null : { updated_at: dbaCurrentUpdatedAt },
+                  error: null,
+                }),
             }),
           }),
           update: (patch: Record<string, unknown>) => {
             const eqs: Array<{ col: string; val: string }> = []
             // First call returns the optimistic-lock path (.eq -> .eq -> .select)
-            // Second call returns the retry path (.eq -> .select)
+            // Second call is the retry path, now ALSO .eq -> .eq -> .select
+            // (id + updated_at, same as the first attempt) rather than id alone.
             const lockChain = {
               eq: (col: string, val: string) => {
                 eqs.push({ col, val })
@@ -56,7 +77,8 @@ vi.mock('@/lib/supabase-admin', () => ({
                       select: () => {
                         updateCallLog.push({ patch, eqs: [...eqs] })
                         if (updateError) return Promise.resolve({ data: null, error: updateError })
-                        return Promise.resolve({ data: updateRows, error: null })
+                        const rows = updateRowsQueue.length > 0 ? updateRowsQueue.shift()! : updateRows
+                        return Promise.resolve({ data: rows, error: null })
                       },
                     }
                   },
@@ -107,6 +129,8 @@ beforeEach(() => {
   updateCallLog.length = 0
   updateRows = [{ id: 'dba-1', updated_at: 'NEW-TS' }]
   updateError = null
+  dbaCurrentUpdatedAt = 'OLD-TS'
+  updateRowsQueue = []
 })
 
 describe('updateDBADetails', () => {
@@ -154,16 +178,53 @@ describe('updateDBADetails', () => {
     ])
   })
 
-  it('falls back to admin retry when optimistic lock returns no rows', async () => {
-    updateRows = []
+  it('retries locked by id + updated_at (not id alone) when the row genuinely still matches (bug-hunter pass, dev job e7352aa6)', async () => {
+    // First attempt "misses" (stale cache read); the re-check confirms the
+    // row's real current updated_at still matches what was read; the retry
+    // write then succeeds. Queue: call 1 (locked attempt) misses, call 2
+    // (retry) matches.
+    updateRowsQueue = [[], [{ id: 'dba-1', updated_at: 'NEW-TS' }]]
+    dbaCurrentUpdatedAt = 'OLD-TS'
     const result = await updateDBADetails('dba-1', { notes: 'updated' }, 'OLD-TS')
-    // First call (lock attempt) then second call (retry without updated_at eq).
-    expect(updateCallLog.length).toBeGreaterThanOrEqual(2)
-    // Retry path only matches by id, not by updated_at.
-    expect(updateCallLog[1].eqs).toEqual([{ col: 'id', val: 'dba-1' }])
-    // Both attempts in the mock return `updateRows`, so the retry will
-    // return empty too — the action then throws. Validate that case:
+    expect(result.success).toBe(true)
+    expect(updateCallLog.length).toBe(2)
+    // Both attempts — including the retry — are locked by id + updated_at,
+    // never by id alone.
+    expect(updateCallLog[0].eqs).toEqual([
+      { col: 'id', val: 'dba-1' },
+      { col: 'updated_at', val: 'OLD-TS' },
+    ])
+    expect(updateCallLog[1].eqs).toEqual([
+      { col: 'id', val: 'dba-1' },
+      { col: 'updated_at', val: 'OLD-TS' },
+    ])
+  })
+
+  it('refuses instead of silently overwriting when the row genuinely changed (bug-hunter pass, dev job e7352aa6)', async () => {
+    updateRows = []
+    dbaCurrentUpdatedAt = 'SOMEONE-ELSE-CHANGED-THIS'
+    const result = await updateDBADetails('dba-1', { notes: 'updated' }, 'OLD-TS')
     expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed since it was loaded/)
+    // The whole point: only the first (failed) attempt happens, never an
+    // unconditional retry write.
+    expect(updateCallLog.length).toBe(1)
+  })
+
+  it('refuses when the row no longer exists at all', async () => {
+    updateRows = []
+    dbaCurrentUpdatedAt = null
+    const result = await updateDBADetails('dba-1', { notes: 'updated' }, 'OLD-TS')
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/not found/)
+  })
+
+  it('refuses when the retry write itself matches zero rows (something else raced the re-check)', async () => {
+    updateRows = []
+    dbaCurrentUpdatedAt = 'OLD-TS'
+    const result = await updateDBADetails('dba-1', { notes: 'updated' }, 'OLD-TS')
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed or was removed since it was loaded/)
   })
 
   it('revalidates the parent account path on success', async () => {
