@@ -1,86 +1,22 @@
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
-import { PaymentBoard } from '@/components/payments/payment-board'
+import { redirect } from 'next/navigation'
 
-export default async function PaymentsPage({
-  searchParams,
-}: {
-  searchParams: { tab?: string }
-}) {
+// Retired (dev job ef5da377) — Finance (/finance) replaced this page. Every capability
+// that was ever exclusive here has a home there now (see docs/systems/billing-invoicing.md's
+// changelog), except creating a brand-new placeholder payment from scratch, which real usage
+// showed had gone unused for months before this redirect shipped. Kept as a thin redirect
+// rather than deleted outright so an old bookmark or muscle memory lands on Finance's
+// default view instead of a dead end — this does NOT preserve any ?tab= a bookmark carried,
+// since the old page's tab vocabulary doesn't map onto Finance's (senior-engineer review,
+// same job). The old page's own server actions (actions.ts, invoice-actions.ts) are
+// neutered, not just unlinked — a Server Action stays independently callable by reference
+// regardless of whether a page still renders a trigger for it, so the redirect alone
+// doesn't retire them.
+export default async function PaymentsPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  const admin = isDashboardUser(user)
-  const today = new Date().toISOString().split('T')[0]
-  const activeTab = searchParams.tab ?? 'overdue'
+  if (!user || !isDashboardUser(user)) redirect('/login')
 
-  // Fetch all non-paid payments with account names
-  const { data: rawPayments } = await supabase
-    .from('payments')
-    .select('id, account_id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, amount_paid, amount_due, followup_stage, delay_approved_until, notes, updated_at, invoice_status, issue_date, total, sent_at, qb_sync_status')
-    .order('due_date', { ascending: true, nullsFirst: false })
-
-  // Get account names
-  const accountIds = Array.from(new Set((rawPayments ?? []).filter(p => p.account_id).map(p => p.account_id)))
-  let accountMap: Record<string, string> = {}
-  if (accountIds.length > 0) {
-    const { data: accounts } = await supabase
-      .from('accounts')
-      .select('id, company_name')
-      .in('id', accountIds)
-    if (accounts) {
-      accountMap = Object.fromEntries(accounts.map(a => [a.id, a.company_name]))
-    }
-  }
-
-  const payments = (rawPayments ?? []).map(p => ({
-    ...p,
-    company_name: p.account_id ? accountMap[p.account_id] ?? null : null,
-  }))
-
-  // Categorize
-  const overdue = payments.filter(p =>
-    !p.invoice_status &&
-    ((p.status === 'Overdue') ||
-    ((p.status === 'Pending') && p.due_date && p.due_date < today))
-  )
-  const upcoming = payments.filter(p =>
-    !p.invoice_status &&
-    (p.status === 'Pending') && (!p.due_date || p.due_date >= today)
-  )
-  const paid = payments.filter(p => !p.invoice_status && p.status === 'Paid')
-  const invoices = payments.filter(p => p.invoice_status != null)
-
-  const totalOverdue = overdue.reduce((sum, p) => sum + Number(p.amount_due ?? p.amount ?? 0), 0)
-  const totalUpcoming = upcoming.reduce((sum, p) => sum + Number(p.amount_due ?? p.amount ?? 0), 0)
-
-  const stats = {
-    overdueCount: overdue.length,
-    overdueTotal: totalOverdue,
-    upcomingCount: upcoming.length,
-    upcomingTotal: totalUpcoming,
-    paidCount: paid.length,
-    paidTotal: paid.reduce((sum, p) => sum + Number(p.amount_paid ?? p.amount ?? 0), 0),
-    invoiceCount: invoices.length,
-  }
-
-  return (
-    <div className="p-6 lg:p-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Payment Tracker</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          {stats.overdueCount} overdue{admin && ` ($${stats.overdueTotal.toLocaleString()})`} · {stats.upcomingCount} upcoming
-        </p>
-      </div>
-      <PaymentBoard
-        overdue={overdue}
-        upcoming={upcoming}
-        paid={admin ? paid : []}
-        invoices={invoices}
-        stats={stats}
-        activeTab={activeTab}
-        today={today}
-        isAdmin={admin}
-      />
-    </div>
-  )
+  redirect('/finance')
 }
