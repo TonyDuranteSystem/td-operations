@@ -29,6 +29,7 @@ const {
   mockAdminUpdate,
   mockAdminUpdateEq,
   mockAdminUpdateEq2,
+  mockAdminUpdateSelect,
 } = vi.hoisted(() => ({
   mockUpdate: vi.fn(),
   mockUpdateEq: vi.fn(),
@@ -40,6 +41,7 @@ const {
   mockAdminUpdate: vi.fn(),
   mockAdminUpdateEq: vi.fn(),
   mockAdminUpdateEq2: vi.fn(),
+  mockAdminUpdateSelect: vi.fn(),
 }))
 
 // Request-scoped client — real chain:
@@ -85,7 +87,12 @@ vi.mock("@/lib/supabase-admin", () => ({
         return {
           eq: (...args: unknown[]) => {
             mockAdminUpdateEq(...args)
-            return { eq: (...args2: unknown[]) => mockAdminUpdateEq2(...args2) }
+            return {
+              eq: (...args2: unknown[]) => {
+                mockAdminUpdateEq2(...args2)
+                return { select: (...args3: unknown[]) => mockAdminUpdateSelect(...args3) }
+              },
+            }
           },
         }
       },
@@ -156,7 +163,7 @@ describe("updateWithLock — stale read, not a real conflict (the retry's legiti
   it("applies the write when the row's real updated_at still matches what the caller read", async () => {
     mockUpdateSelect.mockResolvedValue({ data: [], error: null })
     mockAdminMaybeSingle.mockResolvedValue({ data: { updated_at: ORIGINAL_UPDATED_AT }, error: null })
-    mockAdminUpdateEq2.mockResolvedValue({ error: null })
+    mockAdminUpdateSelect.mockResolvedValue({ data: [{ id: ID }], error: null })
     const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
     expect(result.success).toBe(true)
     expect(mockAdminUpdate).toHaveBeenCalledWith(expect.objectContaining({ full_name: "New Name" }))
@@ -169,9 +176,32 @@ describe("updateWithLock — stale read, not a real conflict (the retry's legiti
   it("propagates an error from the retry write itself", async () => {
     mockUpdateSelect.mockResolvedValue({ data: [], error: null })
     mockAdminMaybeSingle.mockResolvedValue({ data: { updated_at: ORIGINAL_UPDATED_AT }, error: null })
-    mockAdminUpdateEq2.mockResolvedValue({ error: { message: "write failed" } })
+    mockAdminUpdateSelect.mockResolvedValue({ data: null, error: { message: "write failed" } })
     const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
     expect(result.success).toBe(false)
     expect(result.error).toBe("write failed")
+  })
+})
+
+describe("updateWithLock — retry write itself races (second bug-hunter pass, dev job e7352aa6)", () => {
+  it("refuses instead of reporting success when the retry write matches zero rows", async () => {
+    // The re-check confirms nothing had changed a moment ago, but something
+    // else wrote to this exact row in the gap between that re-check and this
+    // retry write — the retry's own WHERE clause then matches nothing.
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null })
+    mockAdminMaybeSingle.mockResolvedValue({ data: { updated_at: ORIGINAL_UPDATED_AT }, error: null })
+    mockAdminUpdateSelect.mockResolvedValue({ data: [], error: null })
+    const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed since it was loaded/)
+  })
+
+  it("also refuses when the retry write's select comes back null rather than an empty array", async () => {
+    mockUpdateSelect.mockResolvedValue({ data: [], error: null })
+    mockAdminMaybeSingle.mockResolvedValue({ data: { updated_at: ORIGINAL_UPDATED_AT }, error: null })
+    mockAdminUpdateSelect.mockResolvedValue({ data: null, error: null })
+    const result = await updateWithLock(TABLE, ID, { full_name: "New Name" }, ORIGINAL_UPDATED_AT)
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/changed since it was loaded/)
   })
 })

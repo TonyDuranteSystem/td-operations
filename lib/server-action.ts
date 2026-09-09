@@ -123,15 +123,28 @@ export async function updateWithLock(
     // The row's real current updated_at DOES match what the caller read —
     // the first attempt's miss really was a stale cache read on an
     // otherwise-unchanged row, not a conflicting write. Safe to apply.
+    //
+    // Second bug-hunter pass, 2026-09-08: this retry write itself needs the
+    // SAME row-count check the first attempt has — the re-check read above
+    // and this write are two separate calls, so something else can still
+    // land in between (any other write to this row, from any origin, not
+    // just another updateWithLock call). Without `.select("id")` a 0-row
+    // match returns no error at all — the exact fact this function's own
+    // comment already establishes about the first attempt — and this was
+    // falling through to a false "success" while writing nothing.
     const retryNow = new Date().toISOString()
-    const { error: retryError } = await supabaseAdmin
+    const { data: retryData, error: retryError } = await supabaseAdmin
       .from(table as never)
       .update({ ...updates, updated_at: retryNow } as never)
       .eq("id", id)
       .eq("updated_at", originalUpdatedAt)
+      .select("id" as never)
 
     if (retryError) {
       return { success: false, error: retryError.message }
+    }
+    if (!retryData || (retryData as unknown[]).length === 0) {
+      return { success: false, error: "This record changed since it was loaded — reload and try again." }
     }
   }
 
