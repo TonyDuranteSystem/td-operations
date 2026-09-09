@@ -366,6 +366,41 @@ export default async function FinancePage({
   //    rate change like the card-fee switch). ──
   const recurringTemplates = await listRecurringInvoiceTemplates()
 
+  // ── Legacy pre-invoice payments — DELIBERATELY a separate, isolated query
+  // (dev job ef5da377). These rows have no invoice_status at all (older/manual
+  // charges that predate this system's formal invoicing), which is exactly
+  // why every query above filters them out. They were never wired into the
+  // action-enabled invoice list: their money lives in `amount`, not `total`
+  // (which every other query above reads), and the generic Send/Void/Mark-Paid
+  // actions have no guard for a row with no invoice_number at all — one review
+  // found a fully-paid one of these would render as an actionable "Draft" and
+  // could be emailed to the client a second time. Kept in their own query and
+  // rendered by their own component (LegacyPaymentsPanel) so they can never be
+  // swept into that shared, action-enabled code path. Read-only here: editing
+  // and marking paid stays on the Account page's existing "Legacy" section,
+  // which already has correct, tested guards for this exact row shape.
+  const { data: legacyPaymentsRaw } = await supabaseAdmin
+    .from('payments')
+    .select('id, description, amount, amount_currency, status, due_date, paid_date, account_id, contact_id, accounts:account_id(company_name), contacts:contact_id(full_name)')
+    .is('invoice_status', null)
+    .not('is_test', 'is', true)
+    .order('due_date', { ascending: true, nullsFirst: false })
+    .limit(200)
+
+  const legacyPayments = (legacyPaymentsRaw ?? []).map(p => ({
+    id: p.id,
+    description: p.description,
+    amount: Number(p.amount ?? 0),
+    currency: p.amount_currency ?? 'USD',
+    status: p.status ?? 'Pending',
+    due_date: p.due_date,
+    paid_date: p.paid_date,
+    account_id: p.account_id,
+    contact_id: p.contact_id,
+    accounts: p.accounts as unknown as { company_name: string } | null,
+    contacts: p.contacts as unknown as { full_name: string } | null,
+  }))
+
   // ── Overview stats ──
   const allInvoices = invoiceSummary ?? []
   const totalOutstanding = allInvoices
@@ -395,6 +430,7 @@ export default async function FinancePage({
         bankOpenInvoices={bankOpenInvoices}
         bankFeedTotalCount={bankFeedTotalCount}
         allInvoicesFlat={allInvoicesFlat}
+        legacyPayments={legacyPayments}
         tdExpenses={tdExpenses}
         isAdmin={userIsAdmin}
         isOwner={userIsOwner}

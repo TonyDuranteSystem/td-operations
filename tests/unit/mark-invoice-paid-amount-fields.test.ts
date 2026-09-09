@@ -25,6 +25,8 @@ const {
   mockUpdateSelect,
   mockTriggerActivationIfPending,
   mockSendPaidReceipt,
+  mockSyncTDInvoiceStatus,
+  mockSyncTDInvoiceMirror,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockSingle: vi.fn(),
@@ -33,6 +35,8 @@ const {
   mockUpdateSelect: vi.fn(),
   mockTriggerActivationIfPending: vi.fn(),
   mockSendPaidReceipt: vi.fn(),
+  mockSyncTDInvoiceStatus: vi.fn(),
+  mockSyncTDInvoiceMirror: vi.fn(),
 }))
 
 vi.mock("@/lib/server-action", () => ({
@@ -84,6 +88,14 @@ vi.mock("@/lib/invoice-auto-send", () => ({
   sendPaidReceipt: (...args: unknown[]) => mockSendPaidReceipt(...args),
 }))
 
+vi.mock("@/lib/portal/td-invoice", () => ({
+  syncTDInvoiceStatus: (...args: unknown[]) => mockSyncTDInvoiceStatus(...args),
+}))
+
+vi.mock("@/lib/portal/td-invoice-mirror", () => ({
+  syncTDInvoiceMirror: (...args: unknown[]) => mockSyncTDInvoiceMirror(...args),
+}))
+
 import { markInvoicePaid } from "@/app/(dashboard)/payments/invoice-actions"
 
 const PAYMENT_ID = "inv-1"
@@ -94,6 +106,8 @@ beforeEach(() => {
   mockUpdateSelect.mockResolvedValue({ data: [{ id: PAYMENT_ID }], error: null })
   mockTriggerActivationIfPending.mockResolvedValue(undefined)
   mockSendPaidReceipt.mockResolvedValue(undefined)
+  mockSyncTDInvoiceStatus.mockResolvedValue(undefined)
+  mockSyncTDInvoiceMirror.mockResolvedValue({ changed: false })
 })
 
 describe("markInvoicePaid", () => {
@@ -143,6 +157,8 @@ describe("markInvoicePaid", () => {
     expect(result.error).toMatch(/no longer be Sent or Overdue/)
     expect(mockSendPaidReceipt).not.toHaveBeenCalled()
     expect(mockTriggerActivationIfPending).not.toHaveBeenCalled()
+    expect(mockSyncTDInvoiceStatus).not.toHaveBeenCalled()
+    expect(mockSyncTDInvoiceMirror).not.toHaveBeenCalled()
   })
 
   it("still sends the receipt and triggers activation when the update genuinely matches", async () => {
@@ -153,5 +169,15 @@ describe("markInvoicePaid", () => {
     // before asserting on it, same as production doesn't wait for it either.
     await vi.waitFor(() => expect(mockSendPaidReceipt).toHaveBeenCalledWith(PAYMENT_ID))
     expect(mockTriggerActivationIfPending).toHaveBeenCalledWith(PAYMENT_ID)
+  })
+
+  // Regression coverage: this button used to never touch the client-portal
+  // mirror at all, so a client marked Paid here could still see their old
+  // balance after logging in (dev job ef5da377).
+  it("syncs the client-portal mirror (status then balances) on a genuine Paid transition", async () => {
+    const result = await markInvoicePaid(PAYMENT_ID, "2026-01-01T00:00:00Z")
+    expect(result.success).toBe(true)
+    expect(mockSyncTDInvoiceStatus).toHaveBeenCalledWith(PAYMENT_ID, "Paid", expect.any(String), 1200)
+    expect(mockSyncTDInvoiceMirror).toHaveBeenCalledWith(PAYMENT_ID)
   })
 })

@@ -82,6 +82,10 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
   Overdue: 'bg-red-100 text-red-700',
   Voided: 'bg-zinc-200 text-zinc-500 line-through',
+  // Same styling as Voided — the new page's cancellation label, unified
+  // 2026-09-07. Missing here meant a freshly-cancelled invoice rendered
+  // with no status styling at all (dev job ef5da377).
+  Cancelled: 'bg-zinc-200 text-zinc-500 line-through',
   Credit: 'bg-purple-100 text-purple-700',
 }
 
@@ -137,7 +141,7 @@ function getOverdueBucket(dueDate: string | null, today: string): { label: strin
   return { label: `${days}d`, color: 'bg-red-200 text-red-900' }
 }
 
-function MarkPaidButton({ paymentId, description }: { paymentId: string; description: string }) {
+function MarkPaidButton({ paymentId, description, updatedAt }: { paymentId: string; description: string; updatedAt: string }) {
   const [isPending, startTransition] = useTransition()
 
   return (
@@ -148,10 +152,16 @@ function MarkPaidButton({ paymentId, description }: { paymentId: string; descrip
           e.stopPropagation()
           startTransition(async () => {
             try {
-              await markPaymentPaid(paymentId)
+              // Pass updatedAt so this goes through the row-locked write path
+              // (markPaymentPaid's unlocked fallback branch was the only path
+              // this button ever took otherwise — a background bank-feed
+              // match settling the row between page-load and click could
+              // silently overstate what the client had actually paid; dev
+              // job ef5da377).
+              await markPaymentPaid(paymentId, updatedAt)
               toast.success('Payment marked as paid', { description })
-            } catch {
-              toast.error('Failed to mark payment as paid')
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Failed to mark payment as paid')
             }
           })
         }}
@@ -461,7 +471,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                         {statusLabel}
                       </span>
                       {activeTab !== 'paid' && (
-                        <MarkPaidButton paymentId={p.id} description={String(desc)} />
+                        <MarkPaidButton paymentId={p.id} description={String(desc)} updatedAt={p.updated_at} />
                       )}
                     </div>
                   </div>
@@ -510,7 +520,7 @@ export function PaymentBoard({ overdue, upcoming, paid, invoices, stats, activeT
                 </div>
                 <div className="hidden lg:flex justify-end">
                   {activeTab !== 'paid' && (
-                    <MarkPaidButton paymentId={p.id} description={String(desc)} />
+                    <MarkPaidButton paymentId={p.id} description={String(desc)} updatedAt={p.updated_at} />
                   )}
                 </div>
               </div>

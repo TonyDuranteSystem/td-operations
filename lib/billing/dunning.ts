@@ -187,7 +187,7 @@ async function markOverdueInvoices(errors: string[]): Promise<number> {
 
   let candidateQuery = supabaseAdmin
     .from("payments")
-    .select("id, invoice_number, account_id")
+    .select("id, invoice_number, account_id, invoice_status")
     .in("invoice_status", ["Sent", "Partial"])
     .lt("due_date", today)
   if (pausedIds.length > 0) {
@@ -203,8 +203,17 @@ async function markOverdueInvoices(errors: string[]): Promise<number> {
   let marked = 0
   for (const inv of candidates ?? []) {
     try {
-      await syncInvoiceStatus("payment", inv.id, "Overdue")
-      marked++
+      // Locked to whichever of 'Sent'/'Partial' this row actually had at read
+      // time (dev job 6aebd8c0's sibling gap, found 2026-09-09 during
+      // production EtoE QA, Bug-Hunter): this loop's read and its write are
+      // separated by real elapsed time across every other row in the batch,
+      // so a payment landing on THIS invoice mid-sweep — fully settling it —
+      // no longer gets silently overwritten back to 'Overdue' with the real
+      // paid amount left standing. Unlike the reverse step below, candidates
+      // here start from TWO different statuses, not one, so each row must
+      // lock against its own value, not a shared constant.
+      const { synced } = await syncInvoiceStatus("payment", inv.id, "Overdue", undefined, undefined, inv.invoice_status ?? undefined)
+      if (synced) marked++
     } catch (err) {
       errors.push(`Mark overdue ${inv.invoice_number}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -244,10 +253,17 @@ async function unmarkFutureDatedInvoices(errors: string[]): Promise<number> {
   for (const inv of candidates ?? []) {
     try {
       const backTo = Number(inv.amount_paid ?? 0) > 0 ? "Partial" : "Sent"
-      await syncInvoiceStatus("payment", inv.id, backTo)
-      // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset, same table the dunning pass owns
-      await supabaseAdmin.from("payments").update({ reminder_count: 0 }).eq("id", inv.id)
-      unmarked++
+      // Locked to the 'Overdue' the batch read above just saw (dev job
+      // 6aebd8c0, full council review 2026-09-09): this loop's read and its
+      // write are separated by real elapsed time across every other row in
+      // the batch, so a payment landing on THIS invoice mid-sweep no longer
+      // gets silently reverted back to open.
+      const { synced } = await syncInvoiceStatus("payment", inv.id, backTo, undefined, undefined, "Overdue")
+      if (synced) {
+        // eslint-disable-next-line no-restricted-syntax -- reminder pacing reset, same table the dunning pass owns
+        await supabaseAdmin.from("payments").update({ reminder_count: 0 }).eq("id", inv.id)
+        unmarked++
+      }
     } catch (err) {
       errors.push(`Un-mark ${inv.invoice_number}: ${err instanceof Error ? err.message : String(err)}`)
     }

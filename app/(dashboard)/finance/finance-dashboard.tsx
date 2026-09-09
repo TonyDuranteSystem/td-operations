@@ -7,6 +7,7 @@ import { ClientsInvoicesTab } from './clients-invoices-tab'
 import { OverviewTab } from './overview-tab'
 import { BankFeedTab, type BankFeedRecord, type OpenInvoice } from './bank-feed-tab'
 import { AllInvoicesTab, type InvoiceRecord } from './all-invoices-tab'
+import type { LegacyPaymentRecord } from './legacy-payments-panel'
 import { ExpensesTab, type TDExpenseRecord } from './expenses-tab'
 import { RecurringTab } from './recurring-tab'
 import type { RecurringTemplateListRow } from '@/app/(dashboard)/shared/recurring-invoice-actions'
@@ -39,6 +40,7 @@ interface Props {
   bankOpenInvoices: OpenInvoice[]
   bankFeedTotalCount: number
   allInvoicesFlat: InvoiceRecord[]
+  legacyPayments: LegacyPaymentRecord[]
   tdExpenses: TDExpenseRecord[]
   isAdmin: boolean
   /**
@@ -66,7 +68,7 @@ export function FinanceDashboard({
   activeTab, clientList, selectedClientId,
   clientInvoices, clientCreditNotes, clientAuditLog, clientPaymentHistory,
   stats, agingBuckets, recentAuditLog, bankFeeds, bankOpenInvoices, bankFeedTotalCount,
-  allInvoicesFlat, tdExpenses, isAdmin, isOwner, cardFee, recurringTemplates,
+  allInvoicesFlat, legacyPayments, tdExpenses, isAdmin, isOwner, cardFee, recurringTemplates,
 }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -146,7 +148,7 @@ export function FinanceDashboard({
             </div>
             <div className="flex-1 overflow-hidden">
               {clientsView === 'all' ? (
-                <AllInvoicesTab invoices={allInvoicesFlat} isAdmin={isAdmin} />
+                <AllInvoicesTab invoices={allInvoicesFlat} legacyPayments={legacyPayments} isAdmin={isAdmin} />
               ) : (
                 <ClientsInvoicesTab
                   clientList={clientList}

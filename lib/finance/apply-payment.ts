@@ -73,7 +73,7 @@ export interface ApplyMoneyParams {
 
 export interface ApplyMoneyResult {
   applied: boolean
-  /** Why nothing was applied — 'terminal' | 'already_applied' | 'not_found' | 'zero_amount' */
+  /** Why nothing was applied — 'terminal' | 'already_applied' | 'not_found' | 'zero_amount' | 'currency_mismatch' */
   reason?: string
   detail?: string
   invoiceNumber?: string
@@ -124,7 +124,7 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
 
   const { data: payment } = await supabaseAdmin
     .from("payments")
-    .select("id, invoice_number, invoice_status, status, total, amount, amount_paid, portal_invoice_id, account_id, contact_id")
+    .select("id, invoice_number, invoice_status, status, total, amount, amount_paid, amount_currency, portal_invoice_id, account_id, contact_id")
     .eq("id", paymentId)
     .maybeSingle()
 
@@ -142,6 +142,39 @@ export async function applyMoneyToInvoice(params: ApplyMoneyParams): Promise<App
       reason: "terminal",
       detail: terminalReason(payment) ?? "Invoice is closed.",
       invoiceNumber: payment.invoice_number ?? undefined,
+    }
+  }
+
+  // ── Guard 2: a bank transaction can only settle an invoice in its OWN
+  // currency (dev job b43aba4c, full council review 2026-09-09) ───────────
+  // The automatic matcher has always filtered candidates by currency before
+  // ever reaching this writer; every OTHER caller — manual single-invoice
+  // match, and manual multi-invoice matching's own waterfall loop, which
+  // calls this function once per allocation — had no equivalent check
+  // anywhere, so a EUR wire could be credited 1:1 against a USD invoice (a
+  // real 2026-07-20 production incident, INV-002191) with the exchange-rate
+  // gap silently absorbed as an invisible loss. One guard here, gated on
+  // `feedId` (only a bank-feed-sourced application carries a currency to
+  // compare), covers every current and future caller for free — the same
+  // "one function owns the decision" principle this whole module exists for.
+  // Read fresh rather than trusting a caller-supplied value: the feed's
+  // currency is a fact about the transaction, not something a caller should
+  // restate.
+  if (feedId) {
+    const { data: feed } = await supabaseAdmin
+      .from("td_bank_feeds")
+      .select("currency")
+      .eq("id", feedId)
+      .maybeSingle()
+    const feedCurrency = feed?.currency ? String(feed.currency) : null
+    const invoiceCurrency = String(payment.amount_currency ?? "USD")
+    if (feedCurrency && feedCurrency !== invoiceCurrency) {
+      return {
+        applied: false,
+        reason: "currency_mismatch",
+        detail: `This transaction is in ${feedCurrency} but the invoice is in ${invoiceCurrency} — apply it to a ${feedCurrency} invoice instead, or edit this invoice directly to record a manually-calculated amount if this is a genuine cross-currency payment.`,
+        invoiceNumber: payment.invoice_number ?? undefined,
+      }
     }
   }
 

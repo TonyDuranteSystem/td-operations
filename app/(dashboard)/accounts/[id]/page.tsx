@@ -78,7 +78,11 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Payments
     supabase
       .from('payments')
-      .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, payment_category, amount_paid, amount_due, followup_stage, notes, updated_at, invoice_status, portal_invoice_id, total')
+      // message + contact_id added (dev job ef5da377): the row-actions edit dialog's
+    // Payment-terms textarea reads payment.message, but this column was never
+    // fetched — the field always rendered empty and silently overwrote whatever
+    // was actually on the invoice the moment staff saved any other edit to it.
+    .select('id, description, amount, amount_currency, period, year, due_date, paid_date, status, payment_method, invoice_number, installment, payment_category, amount_paid, amount_due, followup_stage, notes, updated_at, invoice_status, portal_invoice_id, total, message, contact_id')
       .eq('account_id', params.id)
       .order('due_date', { ascending: false }),
     // Deals

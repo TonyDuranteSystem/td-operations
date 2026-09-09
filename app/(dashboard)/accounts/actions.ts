@@ -99,8 +99,11 @@ export async function updateAccountField(
   // here in code rather than rely on the rule alone (dev job 8bd0e51a).
   // setAccountRenewalDate also keeps the deadlines-table mirror the client
   // portal reads in sync, and on a stale optimistic-lock miss it reports the
-  // conflict instead of silently force-overwriting (unlike updateWithLock's
-  // admin-client retry, which drops the lock filter entirely).
+  // conflict instead of silently force-overwriting — updateWithLock's own
+  // admin-client retry used to drop the lock filter entirely, but that was
+  // fixed at the source 2026-09-08 (dev job e7352aa6); this route through
+  // setAccountRenewalDate stays regardless, for the deadlines-mirror sync
+  // reason above, not because updateWithLock is still unsafe.
   if (RENEWAL_DATE_FIELDS.has(field)) {
     const column = field as RenewalDateColumn
     const result = await setAccountRenewalDate(accountId, column, coercedValue as string | null, {
@@ -398,7 +401,8 @@ export async function createAccount(
 export async function addAccountNote(
   accountId: string,
   note: string,
-  updatedAt: string
+  // No longer used for the lock below — see the comment at that call.
+  _updatedAt: string
 ): Promise<ActionResult> {
   if (!note.trim()) {
     return { success: false, error: 'Note cannot be empty' }
@@ -421,7 +425,11 @@ export async function addAccountNote(
     const existingNotes = account.notes?.trim() ?? ''
     const combined = existingNotes ? `${newEntry}\n${existingNotes}` : newEntry
 
-    const result = await updateWithLock('accounts', accountId, { notes: combined }, updatedAt)
+    // Locked against THIS read's own updated_at, not the page-load value —
+    // see addContactNote's identical comment (bug-hunter pass, dev job
+    // e7352aa6): an append only needs to catch a write racing this
+    // read-modify-write, not an unrelated field changed since page load.
+    const result = await updateWithLock('accounts', accountId, { notes: combined }, account.updated_at)
     if (!result.success) throw new Error(result.error)
     revalidatePath(`/accounts/${accountId}`)
   }, {
@@ -697,7 +705,7 @@ export async function changeAccountStatus(
   // 1. Fetch current row — we need company_name + state for the RA task
   const { data: account, error: fetchErr } = await supabaseAdmin
     .from('accounts')
-    .select('id, company_name, state_of_formation, status, notes')
+    .select('id, company_name, state_of_formation, status, notes, updated_at')
     .eq('id', accountId)
     .single()
 
@@ -713,6 +721,20 @@ export async function changeAccountStatus(
   const existingNotes = (account.notes ?? '').trim()
   const combinedNotes = existingNotes ? `${autoNoteLine}\n${existingNotes}` : autoNoteLine
 
+  // Locked against the PAGE-LOAD updatedAt, not this function's own fresh
+  // read above — deliberately different from addAccountNote/addContactNote
+  // (third bug-hunter pass, dev job e7352aa6). A note append is commutative:
+  // whatever the row's real current state, the freshly-read combinedNotes
+  // is already correct, so locking against a fresh read only guards the
+  // write itself. A status change is not commutative — newStatus and
+  // options are a DECISION staff made while looking at oldStatus on their
+  // screen, with real cascades attached (cancelling deliveries, voiding
+  // payments, revoking portal access). If the account's real status moved
+  // since the page loaded, that decision may already be wrong, and the
+  // right answer is to refuse and make staff look again before any cascade
+  // fires — exactly what locking against the page-load value does.
+  // updateWithLock's own internal recheck (added in the prior two rounds)
+  // still absorbs a genuinely stale cache read that changed nothing real.
   const lockResult = await updateWithLock(
     'accounts',
     accountId,
@@ -1080,17 +1102,49 @@ export async function updateDBADetails(
 
     let resolvedUpdatedAt = data?.[0]?.updated_at ?? null
     if (!resolvedUpdatedAt) {
-      // Stale updated_at — retry once with admin (bypasses cache).
+      // Stale updated_at — retry once with admin (bypasses cache). Re-verify
+      // the row's REAL current updated_at first (second bug-hunter pass, dev
+      // job e7352aa6): the retry used to have no updated_at condition at
+      // all, so it would happily overwrite a row someone else had genuinely
+      // just changed, not just a stale-cache re-read of an unchanged one —
+      // the identical bug already fixed in updateWithLock, in this
+      // function's own separate, bespoke copy of the same pattern.
+      const untypedRead = supabaseAdmin as unknown as {
+        from: (table: string) => {
+          select: (sel: string) => {
+            eq: (col: string, val: string) => {
+              maybeSingle: () => Promise<{ data: { updated_at: string } | null; error: { message: string } | null }>
+            }
+          }
+        }
+      }
+      const { data: current, error: currentErr } = await untypedRead
+        .from('dba_details')
+        .select('updated_at')
+        .eq('id', dbaId)
+        .maybeSingle()
+      if (currentErr) throw new Error(currentErr.message)
+      if (!current) throw new Error('DBA row not found')
+      if (current.updated_at !== updatedAt) {
+        throw new Error('This record changed since it was loaded — reload and try again.')
+      }
+
       const retryNow = new Date().toISOString()
       const retryPatch = { ...sanitized, updated_at: retryNow }
       const retryRes = await untyped
         .from('dba_details')
         .update(retryPatch)
         .eq('id', dbaId)
+        .eq('updated_at', updatedAt)
         .select('id, updated_at')
       if (retryRes.error) throw new Error(retryRes.error.message)
       if (!retryRes.data || retryRes.data.length === 0) {
-        throw new Error('DBA row not found')
+        // Distinct from the recheck's own message above (third bug-hunter
+        // pass): this specific miss means something wrote to (or deleted)
+        // the row in the narrow gap between the recheck read just above and
+        // this write — could be either, unlike the recheck's own refusal,
+        // which always means a genuine change.
+        throw new Error('This record changed or was removed since it was loaded — reload and try again.')
       }
       resolvedUpdatedAt = retryRes.data[0].updated_at
     }

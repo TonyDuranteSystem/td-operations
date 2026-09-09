@@ -223,7 +223,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
 
     const newErrors: Record<string, string> = {}
     if (!accountId) newErrors.account_id = 'Account required'
-    if (!description.trim()) newErrors.description = 'Description required'
+    if (!description.trim()) newErrors.description = isCredit ? 'Description required' : 'Service required'
     if (items.some(i => !i.description.trim())) newErrors.items = 'All items need a description'
     if (items.some(i => i.amount === 0)) newErrors.items = 'All items need an amount'
 

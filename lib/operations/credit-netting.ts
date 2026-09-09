@@ -593,6 +593,11 @@ export async function applyAvailableCreditToInvoice(
     subtotal: calc.newTotal,
     total: calc.newTotal,
     amount_due: calc.newDue,
+    // Every other money-write in this codebase stamps this — omitting it here
+    // let an already-open Edit Items dialog's optimistic lock miss this write
+    // entirely and silently overwrite the credit-applied line back out
+    // (bug-hunter pass, dev job ef5da377).
+    updated_at: new Date().toISOString(),
     ...(calc.settled ? { status: "Paid", invoice_status: "Paid" } : {}),
   }).eq("id", paymentId)
 

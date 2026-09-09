@@ -4,7 +4,7 @@ import { useState, useMemo, useTransition, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import {
-  Search, FileText, Send, CheckCircle, Edit3, X, Plus,
+  Search, FileText, Send, CheckCircle, Edit3, X, Plus, ListPlus,
   ChevronDown, ChevronUp, Building2, User, Ban, Loader2, Unlink, RefreshCw, Bell, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -16,6 +16,8 @@ import { PaidInvoiceCorrectionPrompt, type CorrectionPath } from '@/components/s
 import { isAccountReminderPaused } from '@/lib/billing/reminder-snooze'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { LegacyPaymentsPanel, type LegacyPaymentRecord } from './legacy-payments-panel'
+import { EditInvoiceItemsDialog } from './edit-invoice-items-dialog'
 
 const STATUS_COLORS: Record<string, string> = {
   Paid: 'bg-emerald-100 text-emerald-700',
@@ -23,9 +25,16 @@ const STATUS_COLORS: Record<string, string> = {
   Sent: 'bg-blue-100 text-blue-700',
   Draft: 'bg-zinc-100 text-zinc-600',
   Partial: 'bg-orange-100 text-orange-700',
+  // Missing here meant every credit note, and every cancelled invoice once
+  // reachable in this view, fell back to the same generic grey badge as an
+  // unstyled status (dev job ef5da377). Matches the styling already used on
+  // the old page for the same status words.
+  Cancelled: 'bg-zinc-200 text-zinc-500 line-through',
+  Voided: 'bg-zinc-200 text-zinc-500 line-through',
+  Credit: 'bg-purple-100 text-purple-700',
 }
 
-const STATUS_FILTERS = ['All', 'Overdue', 'Sent', 'Paid', 'Partial', 'Draft'] as const
+const STATUS_FILTERS = ['All', 'Overdue', 'Sent', 'Paid', 'Partial', 'Draft', 'Legacy'] as const
 
 type SortField = 'invoice_number' | 'client' | 'total' | 'status' | 'issue_date' | 'due_date'
 type SortDir = 'asc' | 'desc'
@@ -92,7 +101,7 @@ function reminderTooltip(inv: InvoiceRecord): string {
 /** Statuses for which a reminder can be sent (and thus bulk-selected). */
 const REMINDABLE_STATUSES = new Set(['Sent', 'Overdue', 'Partial'])
 
-export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: InvoiceRecord[]; isAdmin?: boolean }) {
+export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false }: { invoices: InvoiceRecord[]; legacyPayments?: LegacyPaymentRecord[]; isAdmin?: boolean }) {
   const [search, setSearch] = useState('')
   const [showNewInvoice, setShowNewInvoice] = useState(false)
   const [dialogMode, setDialogMode] = useState<'invoice' | 'credit'>('invoice')
@@ -304,6 +313,20 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
     return list
   }, [invoices, statusFilter, search, sortField, sortDir])
 
+  // The search box above renders unconditionally, but until now it only ever
+  // filtered `invoices` — switching to the Legacy tab and typing a client's
+  // name visibly did nothing, since LegacyPaymentsPanel was always handed
+  // the full, unfiltered list (bug-hunter pass, dev job ef5da377).
+  const filteredLegacyPayments = useMemo(() => {
+    if (!search.trim()) return legacyPayments
+    const q = search.toLowerCase()
+    return legacyPayments.filter(p =>
+      (p.description ?? '').toLowerCase().includes(q) ||
+      (p.accounts?.company_name ?? '').toLowerCase().includes(q) ||
+      (p.contacts?.full_name ?? '').toLowerCase().includes(q)
+    )
+  }, [legacyPayments, search])
+
   function toggleSort(field: SortField) {
     if (sortField === field) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -418,11 +441,19 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
                   : 'bg-muted text-muted-foreground hover:bg-muted/80'
               }`}
             >
-              {s} {statusCounts[s] != null ? `(${statusCounts[s]})` : '(0)'}
+              {s} {s === 'Legacy' ? `(${legacyPayments.length})` : statusCounts[s] != null ? `(${statusCounts[s]})` : '(0)'}
             </button>
           ))}
         </div>
       </div>
+
+      {/* Legacy pre-invoice records — a completely separate, read-only
+          panel (dev job ef5da377); see legacy-payments-panel.tsx for why
+          these are deliberately never rendered through the invoice table
+          below. */}
+      {statusFilter === 'Legacy' && <LegacyPaymentsPanel payments={filteredLegacyPayments} totalCount={legacyPayments.length} />}
+
+      {statusFilter !== 'Legacy' && <>
 
       {/* Bulk reminder toolbar — appears when invoices are selected */}
       {selected.size > 0 && (
@@ -677,6 +708,8 @@ export function AllInvoicesTab({ invoices, isAdmin = false }: { invoices: Invoic
         Showing {filtered.length} of {invoices.length} invoices
       </div>
 
+      </>}
+
       {/* New Invoice / Credit Note Dialog */}
       <InvoiceDialog
         open={showNewInvoice}
@@ -737,6 +770,7 @@ function ActionButton({ onClick, label, icon: Icon, color, hoverBg }: {
 function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
+  const [editingItems, setEditingItems] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
   const [reactivateDialogOpen, setReactivateDialogOpen] = useState(false)
   const router = useRouter()
@@ -841,7 +875,12 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {status === 'Draft' && (
           <ActionButton onClick={handleSendDraft} label="Send Invoice — email the invoice with PDF to the client (Draft → Sent)" icon={Send} color="text-blue-600" hoverBg="hover:bg-blue-100" />
         )}
-        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && Number(invoice.amount_paid ?? 0) <= 0 && (
+        {/* Also excludes 'Voided' — the old Payment Tracker page's former
+            cancellation label; nothing writes it going forward, so this only
+            ever matches a genuinely old-style cancelled row (dev job
+            ef5da377). Without it, an old-style row showed Mark-as-Paid
+            despite already being cancelled. */}
+        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && status !== 'Voided' && Number(invoice.amount_paid ?? 0) <= 0 && (
           <ActionButton onClick={handleMarkPaid} label="Mark as Paid — record this invoice as paid manually" icon={CheckCircle} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}
         {['Sent', 'Overdue', 'Partial'].includes(status) && (
@@ -850,16 +889,26 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {['Sent', 'Overdue', 'Partial'].includes(status) && (
           <ActionButton onClick={handleSendReminder} label="Send Reminder — send a short payment reminder email (no PDF)" icon={Send} color="text-sky-600" hoverBg="hover:bg-sky-100" />
         )}
-        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && (
+        {/* Also excludes 'Voided' — same old-page-label reasoning as
+            Mark-as-Paid above (dev job ef5da377). */}
+        {status !== 'Paid' && status !== 'Cancelled' && status !== 'Credit' && status !== 'Voided' && (
           <ActionButton onClick={handleVoid} label="Void Invoice — cancel this invoice and reverse any applied credits" icon={Ban} color="text-red-500" hoverBg="hover:bg-red-100" />
         )}
-        {status === 'Cancelled' && (
+        {/* Also 'Voided' — without it, an old-style cancelled row could never
+            show Reactivate here at all (dev job ef5da377). */}
+        {(status === 'Cancelled' || status === 'Voided') && (
           <ActionButton onClick={() => setReactivateDialogOpen(true)} label="Reactivate — bring this cancelled invoice back to life" icon={Undo2} color="text-emerald-600" hoverBg="hover:bg-emerald-100" />
         )}
         {['Draft', 'Sent', 'Overdue', 'Partial'].includes(status) && (
           <ActionButton onClick={handleRegenerate} label="Regenerate — recalculate and apply any available credit notes" icon={RefreshCw} color="text-indigo-600" hoverBg="hover:bg-indigo-100" />
         )}
         <ActionButton onClick={() => setEditing(true)} label="Edit — change amount, due date, notes, or payment terms" icon={Edit3} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        {/* Draft-only (dev job ef5da377): a real invoice document doesn't
+            exist yet, so individual line items are still safe to rewrite
+            outright. The "Edit" button above only ever touches the total. */}
+        {status === 'Draft' && (
+          <ActionButton onClick={() => setEditingItems(true)} label="Edit Items — change individual line items and the discount" icon={ListPlus} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        )}
         {status === 'Paid' && (
           <ActionButton
             onClick={() => {
@@ -892,6 +941,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
       </div>
       {editing && (
         <EditInvoiceDialog invoice={invoice} onClose={() => setEditing(false)} />
+      )}
+      {editingItems && (
+        <EditInvoiceItemsDialog invoice={invoice} onClose={() => setEditingItems(false)} />
       )}
       <ConfirmDestructiveDialog
         open={voidDialogOpen}

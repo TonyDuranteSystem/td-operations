@@ -60,7 +60,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { claimPaymentForCharge, releasePaymentClaim, recordCheckoutSessionId } from "@/lib/operations/autopay-claim"
+import { claimPaymentForCharge, releasePaymentClaim, holdPaymentClaim, recordCheckoutSessionId } from "@/lib/operations/autopay-claim"
 
 beforeEach(() => {
   updateResult = { data: null, error: null }
@@ -111,6 +111,28 @@ describe("releasePaymentClaim", () => {
   it("does not throw when the update errors", async () => {
     bareUpdateError = { message: "connection reset" }
     await expect(releasePaymentClaim("p1")).resolves.toBeUndefined()
+  })
+})
+
+// dev job 4ca2c691, full council review 2026-09-09: used instead of
+// releasePaymentClaim when Stripe already charged the card but recording it
+// didn't land cleanly — extends the claim far into the future rather than
+// clearing it, so neither the next cron run nor the client's own "Pay
+// Invoice" button can retry a charge that already succeeded.
+describe("holdPaymentClaim", () => {
+  it("extends charge_claimed_until to a future timestamp instead of clearing it", async () => {
+    const before = Date.now()
+    await holdPaymentClaim("p1", 24 * 60 * 60 * 1000)
+    expect(bareUpdateCalls).toHaveLength(1)
+    expect(bareUpdateCalls[0].eq).toContainEqual(["id", "p1"])
+    const claimedUntil = bareUpdateCalls[0].payload.charge_claimed_until as string
+    expect(claimedUntil).toBeTruthy()
+    expect(new Date(claimedUntil).getTime()).toBeGreaterThan(before + 23 * 60 * 60 * 1000)
+  })
+
+  it("does not throw when the update errors", async () => {
+    bareUpdateError = { message: "connection reset" }
+    await expect(holdPaymentClaim("p1", 60_000)).resolves.toBeUndefined()
   })
 })
 

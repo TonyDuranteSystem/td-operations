@@ -5,9 +5,38 @@ import {
   resolveReactivateTarget,
   partitionFeedsForUnlink,
   reactivateBlocker,
+  isCancelledInvoice,
   type PreVoidState,
 } from "@/lib/billing/invoice-reactivate"
 import { projectedReminderCount, daysPastDue } from "@/lib/billing/dunning"
+
+// dev job ef5da377: invoices voided under the old Payment Tracker page's
+// former labels (status='Waived'/invoice_status='Voided') were permanently
+// unreactivatable — Reactivate only ever recognized the current
+// status/invoice_status='Cancelled' pair.
+describe("isCancelledInvoice", () => {
+  it("recognizes the current cancellation pair", () => {
+    expect(isCancelledInvoice({ status: "Cancelled", invoice_status: "Cancelled" })).toBe(true)
+  })
+
+  it("recognizes either column alone reading Cancelled", () => {
+    expect(isCancelledInvoice({ status: "Cancelled", invoice_status: "Overdue" })).toBe(true)
+    expect(isCancelledInvoice({ status: "Pending", invoice_status: "Cancelled" })).toBe(true)
+  })
+
+  it("recognizes the OLD page's former pair", () => {
+    expect(isCancelledInvoice({ status: "Waived", invoice_status: "Voided" })).toBe(true)
+  })
+
+  it("does not match Waived or Voided alone — only the exact old pair", () => {
+    expect(isCancelledInvoice({ status: "Waived", invoice_status: "Overdue" })).toBe(false)
+    expect(isCancelledInvoice({ status: "Pending", invoice_status: "Voided" })).toBe(false)
+  })
+
+  it("is false for an ordinary live invoice", () => {
+    expect(isCancelledInvoice({ status: "Pending", invoice_status: "Sent" })).toBe(false)
+  })
+})
 
 describe("capturePreVoidState", () => {
   it("snapshots the live invoice state", () => {
@@ -64,6 +93,12 @@ describe("parsePreVoidState", () => {
   it("refuses a snapshot that itself says Cancelled — that would strand the invoice", () => {
     expect(parsePreVoidState({ pre_void_state: { ...good, status: "Cancelled" } })).toBeNull()
     expect(parsePreVoidState({ pre_void_state: { ...good, invoice_status: "Cancelled" } })).toBeNull()
+  })
+
+  it("refuses a snapshot recorded in the old page's former cancellation pair — same strand risk", () => {
+    expect(
+      parsePreVoidState({ pre_void_state: { ...good, status: "Waived", invoice_status: "Voided" } }),
+    ).toBeNull()
   })
 
   it("refuses a status that is not a real payments enum member", () => {
