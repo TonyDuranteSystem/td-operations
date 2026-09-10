@@ -29,6 +29,15 @@ export async function createUnifiedInvoiceDraft(input: {
    * duplicate check below (2026-08-31, ShoppyVerse LLC investigation).
    */
   installment?: string
+  /**
+   * Threaded through to createTDInvoice, which applies it before account
+   * credit is computed (dev job 06fb1ad2). This wrapper's own input type
+   * didn't declare the field at all — so even after createTDInvoice learned
+   * to accept a real discount, both callers of this function (Finance's
+   * two New Invoice tabs) had no way to pass one through, and staff-typed
+   * discounts on the Finance page kept doing nothing.
+   */
+  discount?: number
 }): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
@@ -93,6 +102,7 @@ export async function createUnifiedInvoiceDraft(input: {
       bank_preference: bankPref,
       mark_as_paid: input.mark_as_paid || false,
       installment: input.installment || undefined,
+      discount: input.discount,
       // Derived from the issue date — this dialog has no separate year field.
       // Falls back to the office's own "today" (not the server's UTC clock) to
       // match createTDInvoice's own issue_date default exactly.
