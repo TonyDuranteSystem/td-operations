@@ -14,6 +14,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { verifyInternalWebhookSecret } from "@/lib/webhook-internal-auth"
+import { PORTAL_INSTALLMENT_PAYMENT_INSTRUCTION } from "@/lib/billing/installment-message"
+import { PORTAL_AUDIENCE_TIERS } from "@/lib/portal/pay-token"
 
 export async function POST(req: NextRequest) {
   // Fail CLOSED: this webhook flips an annual agreement to signed and auto-sends
@@ -103,13 +105,18 @@ export async function POST(req: NextRequest) {
     // Get installment amounts from account
     const { data: account } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, installment_1_amount, entity_type")
+      .select("id, company_name, installment_1_amount, entity_type, portal_tier")
       .eq("id", agreement.account_id as string)
       .single()
 
     if (!account) {
       return NextResponse.json({ error: "Account not found" }, { status: 404 })
     }
+
+    const isPortalAudience = !!(account.portal_tier && PORTAL_AUDIENCE_TIERS.has(account.portal_tier))
+    const paymentInstruction = isPortalAudience
+      ? PORTAL_INSTALLMENT_PAYMENT_INSTRUCTION
+      : "Please remit payment by wire transfer."
 
     const entityUpper = (account.entity_type || "").toUpperCase()
     const amount: number =
@@ -136,7 +143,7 @@ export async function POST(req: NextRequest) {
       ],
       currency: "USD",
       due_date: `${year}-01-31`,
-      message: `First installment ${year} — LLC Annual Management.\nPlease remit payment by wire transfer.`,
+      message: `First installment ${year} — LLC Annual Management.\n${paymentInstruction}`,
       idempotency_key: idempotencyKey,
       installment: "Installment 1 (Jan)",
       payment_category: "installment_1",

@@ -90,7 +90,10 @@ export type InvoiceAudience = "portal" | "no_portal"
  * For contact-only payments (account_id null, contact_id set — the
  * ITIN / standalone flow), we look at contacts.portal_tier instead.
  */
-const PORTAL_AUDIENCE_TIERS = new Set(["active", "onboarding", "formation"])
+// Exported so a caller that already has the account/contact row in hand
+// (e.g. a batch cron loop) can check the tier locally instead of paying for
+// a second DB round-trip through resolveInvoiceAudience() below.
+export const PORTAL_AUDIENCE_TIERS = new Set(["active", "onboarding", "formation"])
 
 export async function resolveInvoiceAudience(
   opts: { account_id: string | null; contact_id: string | null },
