@@ -2,6 +2,7 @@
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { formatOwnerCurrency, type OwnerPnL, type PnLBlock, type CashPosition } from '@/lib/owner-finance'
+import { ConnectBankPanel } from './connect-bank-panel'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -58,6 +59,8 @@ export function DashboardTab({ pnl, cash, uncategorizedCount, year, onTabSwitch 
 
   return (
     <div className="space-y-6">
+      <ConnectBankPanel />
+
       {/* KPI Cards (USD) */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KpiCard

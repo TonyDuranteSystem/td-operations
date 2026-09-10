@@ -925,6 +925,28 @@ async function fetchLivePayouts(): Promise<StripePayoutRow[]> {
 }
 
 /**
+ * Assemble the same evidence context the sweep uses, for a READ-ONLY caller that needs to
+ * classify feeds as owner money without performing the sweep's writes — e.g. hiding
+ * owner-shaped rows on a staff screen (Reconciliation, Finance) before the async sweep has
+ * had a chance to reclassify them. Mirrors sweepFeedsToOwnerLedger's own context-loading
+ * exactly (same five loaders, same payout-confirmation step) so a read-time check and the
+ * sweep's real decision can never quietly disagree.
+ */
+export async function buildOwnerLedgerEvidenceContext(
+  feeds: ProjectableFeed[],
+): Promise<{ openInvoices: OpenInvoiceRef[]; evidence: ClientEvidenceContext }> {
+  const [openInvoices, roster, taught, expected, payouts] = await Promise.all([
+    fetchOpenInvoices(),
+    fetchClientRoster(),
+    fetchTaughtPayerIndex(),
+    fetchExpectedPlanPayments(),
+    fetchLivePayouts(),
+  ])
+  const confirmedTdPayoutFeedIds = resolveConfirmedPayoutFeedIds(feeds, payouts)
+  return { openInvoices, evidence: { roster, expected, taught, confirmedTdPayoutFeedIds } }
+}
+
+/**
  * The scheduled sweep: anything that is not positively a client invoice payment is copied to
  * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
  *
