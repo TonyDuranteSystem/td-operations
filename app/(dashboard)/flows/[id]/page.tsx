@@ -316,7 +316,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
             contactId={sd.contact_id}
             label="Leave a note"
             prefill={`${serviceDelivery.service_type} — ${account.company_name || contactName || 'Client'} — ${serviceDelivery.stage ?? ''}: `}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-amber-50"
+            className="flex shrink-0 animate-pulse items-center gap-1.5 rounded-lg border border-yellow-500 bg-yellow-400 px-3 py-1.5 text-sm font-medium text-zinc-900 hover:bg-yellow-500"
           />
         )}
       </div>
