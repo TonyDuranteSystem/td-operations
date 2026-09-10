@@ -684,6 +684,7 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             items: input.items,
             mark_as_paid: input.mark_as_paid,
             installment: input.installment,
+            discount: input.discount,
           })
           // duplicate_warning is toasted once, centrally, by InvoiceDialog's own
           // handleSubmit — toasting it here too produced a stacked double warning
