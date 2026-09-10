@@ -13,10 +13,11 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // `as never`: owner_scoped isn't in the generated types yet — see accounts/route.ts's sibling comment.
+  // `as never`: owner_scoped/sync_from_date aren't in the generated types yet — see
+  // app/api/plaid/accounts/route.ts's sibling comment.
   const { data, error } = await supabaseAdmin
     .from('plaid_connections' as never)
-    .select('id, bank_name, institution_name, accounts, status, last_synced_at, created_at')
+    .select('id, bank_name, institution_name, accounts, status, last_synced_at, created_at, sync_from_date')
     .eq('status', 'active')
     .eq('owner_scoped', true)
     .order('created_at', { ascending: true })

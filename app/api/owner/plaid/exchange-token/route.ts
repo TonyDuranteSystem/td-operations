@@ -17,10 +17,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const { public_token, bank_name } = await req.json()
+  const { public_token, bank_name, sync_from_date } = await req.json()
 
   if (!public_token || !bank_name) {
     return NextResponse.json({ error: 'Missing public_token or bank_name' }, { status: 400 })
+  }
+  // Optional. When set, syncPlaidTransactions never pulls anything on or before this date —
+  // Antonio's own confirmation that "everything up to here is already in my books by hand."
+  if (sync_from_date !== undefined && sync_from_date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(sync_from_date)) {
+    return NextResponse.json({ error: 'sync_from_date must be YYYY-MM-DD' }, { status: 400 })
   }
 
   const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token })
@@ -61,6 +66,7 @@ export async function POST(req: NextRequest) {
       status: 'active',
       last_synced_at: null,
       owner_scoped: true,
+      sync_from_date: sync_from_date ?? null,
     } as never, { onConflict: 'item_id' })
 
   if (error) {

@@ -24,6 +24,7 @@ interface PlaidConnection {
   status: string
   last_synced_at: string | null
   created_at: string
+  sync_from_date: string | null
 }
 
 function fmt(n: number, currency: string | null) {
@@ -36,10 +37,57 @@ function fmt(n: number, currency: string | null) {
  * uses), so a bank connected here is stamped owner_scoped and never surfaces on the staff
  * Finance page's Connected Banks list.
  */
+interface ExistingAccount {
+  bank_name: string
+  last_date: string
+}
+
+/**
+ * Reference list of every hand-entered account, always visible next to Connect Bank — never
+ * matched automatically against what's typed there. A name-matching version of this was built
+ * and then removed in the same job: automatic sync labels a bank by bare institution ("Chase")
+ * while hand-entered statements label the specific account, sometimes with no space where a
+ * person would type one ("Firstcitizenbank checking 5820", not "First Citizens") — a fuzzy
+ * match between them can silently miss the very account it exists to catch. Showing the real
+ * list means Antonio sets the cutover date from what he can actually see, not from a guess that
+ * could be wrong without ever appearing to fail.
+ */
+function ExistingAccountsReference() {
+  const [accounts, setAccounts] = useState<ExistingAccount[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/owner/plaid/existing-accounts')
+      .then(res => res.json())
+      .then(data => setAccounts(data.accounts ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading || accounts.length === 0) return null
+
+  return (
+    <details className="mb-2 text-xs text-zinc-500">
+      <summary className="cursor-pointer select-none hover:text-zinc-700">
+        Your hand-entered accounts ({accounts.length}) — check before setting a sync-from date
+      </summary>
+      <div className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-zinc-200 divide-y divide-zinc-100">
+        {accounts.map(a => (
+          <div key={a.bank_name} className="flex justify-between px-2.5 py-1.5">
+            <span className="text-zinc-700">{a.bank_name}</span>
+            <span className="text-zinc-400">through {a.last_date}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [bankName, setBankName] = useState('')
   const [loading, setLoading] = useState(false)
+  const [cutoverDate, setCutoverDate] = useState('')
 
   const fetchLinkToken = useCallback(async () => {
     setLoading(true)
@@ -64,13 +112,22 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
       const res = await fetch('/api/owner/plaid/exchange-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ public_token: publicToken, bank_name: bankName }),
+        body: JSON.stringify({
+          public_token: publicToken,
+          bank_name: bankName,
+          sync_from_date: cutoverDate.trim() || null,
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        toast.success('Bank connected')
+        toast.success(
+          cutoverDate.trim()
+            ? `Bank connected — will only sync transactions from ${cutoverDate} onward`
+            : 'Bank connected'
+        )
         setBankName('')
         setLinkToken(null)
+        setCutoverDate('')
         onSuccess()
       } else {
         toast.error(data.error || 'Failed to connect bank')
@@ -79,32 +136,49 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   })
 
   return (
-    <div className="flex items-center gap-2">
-      <input
-        type="text"
-        placeholder="Bank name (e.g. Chase)"
-        value={bankName}
-        onChange={e => setBankName(e.target.value)}
-        className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm w-40 sm:w-48"
-      />
-      {!linkToken ? (
-        <button
-          onClick={fetchLinkToken}
-          disabled={loading || !bankName.trim()}
-          className="flex items-center gap-1.5 bg-zinc-900 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {loading ? 'Loading…' : 'Connect Bank'}
-        </button>
-      ) : (
-        <button
-          onClick={() => open()}
-          disabled={!ready}
-          className="bg-green-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-        >
-          Open Plaid
-        </button>
-      )}
+    <div className="flex flex-col gap-2">
+      <ExistingAccountsReference />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          placeholder="Bank name (e.g. Chase)"
+          value={bankName}
+          onChange={e => setBankName(e.target.value)}
+          className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm w-40 sm:w-48"
+        />
+        <label className="flex items-center gap-1.5 text-xs text-zinc-600">
+          <span>Sync from (optional):</span>
+          <input
+            type="date"
+            value={cutoverDate}
+            onChange={e => setCutoverDate(e.target.value)}
+            className="rounded-md border border-zinc-200 px-2 py-1.5 text-xs"
+          />
+        </label>
+        {!linkToken ? (
+          <button
+            onClick={fetchLinkToken}
+            disabled={loading || !bankName.trim()}
+            className="flex items-center gap-1.5 bg-zinc-900 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-zinc-800 disabled:opacity-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {loading ? 'Loading…' : 'Connect Bank'}
+          </button>
+        ) : (
+          <button
+            onClick={() => open()}
+            disabled={!ready}
+            className="bg-green-600 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+          >
+            Open Plaid
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-zinc-400 max-w-md">
+        If this bank is already in the list above under hand-entered records, set Sync from to
+        the day after its latest date — otherwise leave it blank.
+      </p>
     </div>
   )
 }
@@ -142,7 +216,12 @@ export function ConnectBankPanel() {
       const added = (data.results ?? []).reduce(
         (sum: number, r: { added?: number }) => sum + (r.added ?? 0), 0
       )
-      toast.success(added > 0 ? `Synced — ${added} new transaction${added !== 1 ? 's' : ''}` : 'Synced — up to date')
+      const skipped = (data.results ?? []).reduce(
+        (sum: number, r: { skippedBeforeCutover?: number }) => sum + (r.skippedBeforeCutover ?? 0), 0
+      )
+      const parts = [added > 0 ? `${added} new transaction${added !== 1 ? 's' : ''}` : 'up to date']
+      if (skipped > 0) parts.push(`${skipped} skipped (before your sync-from date)`)
+      toast.success(`Synced — ${parts.join(', ')}`)
       await fetchConnections()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Sync failed')
@@ -207,6 +286,11 @@ export function ConnectBankPanel() {
               <p className="text-[10px] text-zinc-400 mt-2">
                 Last synced: {conn.last_synced_at ? format(parseISO(conn.last_synced_at), 'MMM d, h:mm a') : 'Never'}
               </p>
+              {conn.sync_from_date && (
+                <p className="text-[10px] text-amber-600 mt-0.5">
+                  Only syncing from {conn.sync_from_date} onward
+                </p>
+              )}
             </div>
           ))}
         </div>

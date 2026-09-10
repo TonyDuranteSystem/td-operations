@@ -12,7 +12,7 @@ export const maxDuration = 60
 // Now" already use, scoped to only the connections made through this page. Does not touch
 // Revolut/Relay/Mercury — those are Finance's concern and already covered by the existing
 // cron and admin sync action.
-type PlaidConnectionResult = { bank: string; added: number; modified: number } | { bank: string; error: string }
+type PlaidConnectionResult = { bank: string; added: number; modified: number; skippedBeforeCutover: number } | { bank: string; error: string }
 
 export async function POST() {
   const supabase = createClient()
@@ -40,7 +40,7 @@ export async function POST() {
   for (const conn of connections) {
     try {
       const r = await syncPlaidTransactions(conn.access_token, conn.bank_name)
-      results.push({ bank: conn.bank_name, added: r.added, modified: r.modified })
+      results.push({ bank: conn.bank_name, added: r.added, modified: r.modified, skippedBeforeCutover: r.skippedBeforeCutover })
     } catch (err) {
       results.push({ bank: conn.bank_name, error: err instanceof Error ? err.message : String(err) })
     }
