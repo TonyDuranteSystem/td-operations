@@ -61,6 +61,18 @@ export interface TDInvoiceInput {
    * invoice matters more than a static label (dev job 4a854806).
    */
   description?: string
+  /**
+   * Flat dollar amount to subtract from the invoice's subtotal+tax before
+   * anything else is billed. Applied BEFORE any account credit is computed —
+   * a discount reduces what's actually owed first, so a client's stored
+   * credit balance is never wasted covering a price they no longer owe
+   * (dev job 06fb1ad2). Floored at 0 and capped internally at the
+   * pre-discount total; never persisted larger than the invoice could
+   * actually absorb. Rejected outright (throws) if combined with a
+   * payment-plan part (tranche_offer_token) — a plan part's agreed amount
+   * is already the figure owed.
+   */
+  discount?: number
   notes?: string
   message?: string
   mark_as_paid?: boolean
@@ -129,6 +141,29 @@ export interface TDInvoiceInput {
 }
 
 /**
+ * Pure discount-capping math, split out from createTDInvoice for the same
+ * reason buildDuplicateInstallmentWarning below is — unit-testable without
+ * mocking Supabase (dev job 06fb1ad2).
+ *
+ * `discount` is floored at 0, then capped at the pre-discount gross so a
+ * mistyped discount larger than the bill can never persist a value the
+ * invoice couldn't actually absorb. `creditEligibleAmount` is what account
+ * credit gets checked/capped against — discount reduces what's owed BEFORE
+ * credit is computed, so a client's stored credit is never wasted covering a
+ * price they no longer owe (worked example: $500 gross, $400 discount, $300
+ * available credit → only $100 of credit is consumed, not the full $300).
+ */
+export function capDiscountForInvoice(
+  discount: number | undefined,
+  grossTotal: number,
+): { safeDiscount: number; cappedDiscount: number; creditEligibleAmount: number } {
+  const safeDiscount = Math.max(0, discount || 0)
+  const cappedDiscount = Math.min(safeDiscount, Math.max(0, grossTotal))
+  const creditEligibleAmount = Math.max(0, grossTotal - cappedDiscount)
+  return { safeDiscount, cappedDiscount, creditEligibleAmount }
+}
+
+/**
  * Pure message builder for the soft duplicate-installment warning — split out
  * from createTDInvoice so the wording/pluralization is unit-testable without
  * mocking Supabase. `matches` is the set of OTHER live invoices already found
@@ -194,6 +229,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     card_fee_rate,
     tranche_offer_token,
     tranche_seq,
+    discount,
   } = input
 
   // Pin the card fee rate onto this invoice — the source offer's pin when created
@@ -211,6 +247,17 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
 
   if (!account_id && !contact_id) {
     throw new Error('createTDInvoice: at least one of account_id or contact_id required')
+  }
+
+  // Defense-in-depth (bug-hunter + finance-auditor council finding, dev job
+  // 06fb1ad2): the "no discount on a payment-plan part" rule was previously
+  // enforced only by callers (app/(dashboard)/shared/invoice-actions.ts). A
+  // part's agreed amount is already the definitive figure owed — a discount
+  // on top of it is a second, conflicting way of stating what's owed.
+  if (discount && discount > 0 && tranche_offer_token) {
+    throw new Error(
+      "createTDInvoice: a payment-plan part cannot carry a separate discount — the plan's part amount is already the figure owed.",
+    )
   }
 
   // 0. Idempotency check — if a payments row already exists with this key,
@@ -305,6 +352,14 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // leftover carries forward.
   const grossTotal =
     items.reduce((s, i) => s + i.amount, 0) + items.reduce((s, i) => s + i.tax_amount, 0)
+
+  // `creditEligibleAmount` — NOT `grossTotal` itself — feeds the credit-
+  // application call below: `grossTotal` keeps its original meaning
+  // everywhere else it's used (credit-note numbering, the netting gate, the
+  // stranded-currency report) so discounting a heavily-reduced invoice can
+  // never misfile it as a credit note (ai-architect blocker).
+  const { cappedDiscount, creditEligibleAmount } = capDiscountForInvoice(discount, grossTotal)
+
   let appliedCredit: Awaited<ReturnType<typeof computeCreditApplication>> | null = null
   // WS-A: THE GATE. Widened from account-only to (account OR contact) — the
   // signing invoice is contact-only until the company exists, so a paid-call
@@ -323,7 +378,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       console.warn('[td-invoice] stale-claim release failed (non-fatal):', err instanceof Error ? err.message : String(err))
     }
     const candidate = await computeCreditApplication(
-      { ...scope, amount: grossTotal, currency },
+      { ...scope, amount: creditEligibleAmount, currency },
       supabaseAdmin,
     )
     // ATOMIC ORDER (uniform, both scopes): claim → create → confirm. Two
@@ -387,11 +442,27 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
 
   const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
   const taxTotal = items.reduce((sum, i) => sum + i.tax_amount, 0)
-  const total = subtotal + taxTotal
+  // Discount subtracted exactly once here — `subtotal` already nets out any
+  // applied credit (the negative "Credit applied" line item above), so this
+  // is not a double-subtraction. No added rounding here: subtotal/taxTotal
+  // are unrounded today and this stays consistent with them rather than
+  // introducing a new precision mismatch between sibling columns
+  // (senior-engineer + finance-auditor finding).
+  const total = subtotal + taxTotal - cappedDiscount
 
   // A bill fully covered by credit is settled (nothing owed) → mark Paid.
+  // Kept narrow (requires credit specifically) because the $0-due
+  // explanation text below depends on knowing WHY it's $0.
   const fullyCoveredByCredit = !!appliedCredit && appliedCredit.appliedTotal > 0 && total <= 0
-  const paid = mark_as_paid || fullyCoveredByCredit
+  // A real bill (grossTotal > 0) reduced to $0-or-less by discount and/or
+  // credit together is equally settled — this used to only fire for the
+  // credit-only case, leaving a discount-only $0 invoice stuck un-Paid
+  // (senior-engineer + finance-auditor finding, dev job 06fb1ad2). Strictly
+  // wider than the old check: everything that satisfied it before still
+  // does (fullyCoveredByCredit implies grossTotal > 0 by construction —
+  // credit is only ever computed when grossTotal > 0).
+  const zeroedOut = grossTotal > 0 && total <= 0
+  const paid = mark_as_paid || zeroedOut
   const amountPaid = mark_as_paid ? total : 0
   const amountDue = paid ? 0 : Math.max(total, 0)
 
@@ -453,7 +524,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         amount_due: amountDue,
         amount_currency: currency,
         subtotal,
-        discount: 0,
+        discount: cappedDiscount,
         total,
         status: paymentStatus,
         invoice_status: invoiceStatus,
@@ -631,7 +702,12 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
         internal_ref: internalRef,
         description: invoiceDescription,
         currency,
-        subtotal,
+        // Net of discount (unlike payments.subtotal, which pairs with its own
+        // discount column) — client_expenses has no discount column of its
+        // own, so subtotal must already reflect it or subtotal+tax_amount
+        // would permanently disagree with total the moment a real discount
+        // ships (finance-auditor finding, dev job 06fb1ad2).
+        subtotal: subtotal - cappedDiscount,
         tax_amount: taxTotal,
         total,
         amount_paid: amountPaid,

@@ -177,6 +177,11 @@ export async function createInvoice(
       mark_as_paid: invoiceData.mark_as_paid || undefined,
       payment_method: invoiceData.payment_method || undefined,
       bank_preference: invoiceData.bank_preference || undefined,
+      // Real discount math now lives inside createTDInvoice itself — see its
+      // own doc comment. The tranche branch above already throws if a
+      // discount is attempted on a plan part, so this is safe to pass
+      // unconditionally (dev job 06fb1ad2).
+      discount: invoiceData.discount || undefined,
       ...(invoiceData.tranche
         ? {
             tranche_offer_token: invoiceData.tranche.offer_token,
@@ -191,15 +196,18 @@ export async function createInvoice(
     })
 
     // Override description + billing_entity_id (createTDInvoice sets description
-    // from first line item; staff form lets them set both explicitly).
+    // from first line item; staff form lets them set both explicitly). Discount
+    // is NOT patched here anymore — createTDInvoice now takes it as a real input
+    // and persists the correct (capped) value itself (dev job 06fb1ad2). Patching
+    // it here too would silently overwrite that correct value with the raw,
+    // uncapped one.
     const supabase = createClient()
-    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice field override; createTDInvoice doesn't accept description/billing_entity_id/discount as inputs. Acceptable shape until those flow into the helper signature.
+    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice field override; createTDInvoice doesn't accept description/billing_entity_id as inputs. Acceptable shape until those flow into the helper signature.
     await supabase
       .from('payments')
       .update({
         description: invoiceData.description,
         billing_entity_id: invoiceData.billing_entity_id || null,
-        discount: invoiceData.discount || 0,
       })
       .eq('id', result.paymentId)
 
