@@ -84,6 +84,18 @@ describe('parseStageLayout', () => {
     expect(layout!.components[0].actions).toEqual(['approve', { key: 'advance_next', target: 'X' }])
   })
 
+  it('carries the document_viewer collapsible flag through the parser', () => {
+    const layout = parseStageLayout({
+      components: [{ type: 'document_viewer', collapsible: true }],
+    })
+    expect(layout!.components[0]).toMatchObject({ type: 'document_viewer', collapsible: true })
+  })
+
+  it('leaves collapsible undefined when absent (no regression to other document_viewer uses)', () => {
+    const layout = parseStageLayout({ components: [{ type: 'document_viewer' }] })
+    expect(layout!.components[0].collapsible).toBeUndefined()
+  })
+
   it('parses the waiting_notice component type with its label', () => {
     const layout = parseStageLayout({
       components: [{ type: 'waiting_notice', label: 'Waiting for the client to submit data.' }],

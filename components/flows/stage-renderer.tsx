@@ -46,7 +46,12 @@ function renderComponent(
   account: WorkspaceAccount,
   secondInstallment?: WorkspaceInvoice | null,
 ) {
-  const key = `${component.type}-${index}`
+  // Keyed by stage too, not just type+index: a stage advance is a server-side
+  // soft refresh (router.refresh()), not a full page reload, so same-position
+  // components across two different stages would otherwise reconcile as the
+  // SAME instance and carry stale local state (e.g. a collapsed panel) across
+  // the stage boundary instead of resetting fresh.
+  const key = `${serviceDelivery.stage ?? 'no-stage'}-${component.type}-${index}`
   switch (component.type) {
     case 'info_panel':
       return <InfoPanel key={key} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
@@ -74,7 +79,14 @@ function renderComponent(
         />
       )
     case 'document_viewer':
-      return <DocumentViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
+      return (
+        <DocumentViewer
+          key={key}
+          serviceDeliveryId={serviceDelivery.id}
+          label={component.label}
+          collapsible={component.collapsible}
+        />
+      )
     case 'data_viewer':
       return <DataViewer key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'signature_send':

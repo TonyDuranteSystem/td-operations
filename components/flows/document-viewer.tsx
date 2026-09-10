@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { FileText, ExternalLink as ExternalLinkIcon, Loader2 } from 'lucide-react'
+import { FileText, ExternalLink as ExternalLinkIcon, Loader2, ChevronDown, ChevronRight } from 'lucide-react'
 import { formatBytes, formatUploadDate } from '@/lib/flows/workspace-format'
 import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from './document-upload'
 
@@ -19,6 +19,9 @@ interface DocumentViewerProps {
   serviceDeliveryId: string
   /** Optional heading override from stage_layout. */
   label?: string
+  /** Render with a collapse/expand toggle, starting collapsed. Absent/false =
+   *  always-open, no toggle (original behavior, unchanged). */
+  collapsible?: boolean
 }
 
 /**
@@ -28,9 +31,10 @@ interface DocumentViewerProps {
  * state shows "No documents uploaded yet". Surfaces the server's real error on
  * failure (R099) rather than a generic message.
  */
-export function DocumentViewer({ serviceDeliveryId, label }: DocumentViewerProps) {
+export function DocumentViewer({ serviceDeliveryId, label, collapsible }: DocumentViewerProps) {
   const [documents, setDocuments] = useState<FlowDocument[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [collapsed, setCollapsed] = useState(!!collapsible)
 
   const load = useCallback(async () => {
     try {
@@ -66,27 +70,50 @@ export function DocumentViewer({ serviceDeliveryId, label }: DocumentViewerProps
     return () => window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
   }, [serviceDeliveryId, load])
 
+  const count = documents?.length ?? 0
+
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
-      <div className="flex items-center gap-2 mb-3">
+      <div
+        className={`flex items-center gap-2 ${collapsed ? '' : 'mb-3'} ${collapsible ? 'cursor-pointer select-none' : ''}`}
+        onClick={collapsible ? () => setCollapsed((c) => !c) : undefined}
+      >
         <FileText className="h-4 w-4 text-zinc-400" />
         <h3 className="text-sm font-semibold text-zinc-900">{label || 'Documents'}</h3>
+        {collapsible && (
+          <>
+            {collapsed && documents !== null && (
+              <span className="text-xs text-zinc-400">
+                ({count} document{count === 1 ? '' : 's'})
+              </span>
+            )}
+            <button
+              type="button"
+              aria-label={collapsed ? 'Expand documents' : 'Collapse documents'}
+              className="ml-auto text-zinc-400 hover:text-zinc-600"
+            >
+              {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </>
+        )}
       </div>
 
+      {/* Shown even while collapsed — a load failure must stay visible, not hide
+       *  behind a chevron that looks identical to "nothing to see here". */}
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {!error && documents === null && (
+      {!collapsed && !error && documents === null && (
         <p className="flex items-center gap-1.5 text-sm text-zinc-400">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading documents…
         </p>
       )}
 
-      {!error && documents !== null && documents.length === 0 && (
+      {!collapsed && !error && documents !== null && documents.length === 0 && (
         <p className="text-sm text-zinc-500">No documents uploaded yet</p>
       )}
 
-      {!error && documents !== null && documents.length > 0 && (
+      {!collapsed && !error && documents !== null && documents.length > 0 && (
         <ul className="space-y-2">
           {documents.map((doc) => {
             const size = formatBytes(doc.file_size)

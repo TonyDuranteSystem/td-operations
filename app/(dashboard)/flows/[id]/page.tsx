@@ -10,6 +10,7 @@ import { StageStepper, type StepperStage } from '@/components/flows/stage-steppe
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
+import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
 import { APP_BASE_URL } from '@/lib/config'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
@@ -289,19 +290,35 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       )}
 
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-zinc-900">
-          {serviceDelivery.service_type}
-          {year ? <span className="text-zinc-400"> {year}</span> : null}
-        </h1>
-        <p className="text-sm text-zinc-500 mt-0.5">
-          {account.company_name ?? '—'}
-          {serviceDelivery.status && (
-            <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600">
-              {serviceDelivery.status}
-            </span>
-          )}
-        </p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-900">
+            {serviceDelivery.service_type}
+            {year ? <span className="text-zinc-400"> {year}</span> : null}
+          </h1>
+          <p className="text-sm text-zinc-500 mt-0.5">
+            {account.company_name ?? '—'}
+            {serviceDelivery.status && (
+              <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600">
+                {serviceDelivery.status}
+              </span>
+            )}
+          </p>
+        </div>
+        {/* Always available regardless of stage — so staff can record why a case
+         * is left pending without it depending on that stage's own layout.
+         * Hidden when the SD has neither an account nor a contact linked (a
+         * known, rare data-integrity gap elsewhere) — with nothing to tag the
+         * note to, saving one would silently orphan it. */}
+        {(sd.account_id || sd.contact_id) && (
+          <NoteQuickCreate
+            accountId={sd.account_id}
+            contactId={sd.contact_id}
+            label="Leave a note"
+            prefill={`${serviceDelivery.service_type} — ${account.company_name || contactName || 'Client'} — ${serviceDelivery.stage ?? ''}: `}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-700 hover:bg-amber-50"
+          />
+        )}
       </div>
 
       {/* Purchase Origin — ITIN only, above the stepper */}
