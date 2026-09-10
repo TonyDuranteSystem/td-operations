@@ -101,7 +101,7 @@ function settingsBankToDetails(bank: SettingsBank, currency: "USD" | "EUR"): Non
  *
  * Fallback for auto when Invoice Settings has no matching bank: Mercury (USD) or Airwallex (EUR).
  */
-async function resolveBankDetails(
+export async function resolveBankDetails(
   preference: string | null | undefined,
   currency: "USD" | "EUR",
 ): Promise<NonNullable<InvoicePdfInput["bankDetails"]>> {
@@ -148,6 +148,35 @@ async function resolveBankDetails(
     accountNumber: bd.account_number ?? null,
     routingNumber: bd.routing_number ?? null,
   }
+}
+
+/**
+ * Build the free-text payment-instructions block appended to an invoice's
+ * message field. Pure (no I/O) — takes the ALREADY-RESOLVED bank details for
+ * the specific bank the invoice actually uses (see resolveBankDetails
+ * above), never a hardcoded default, so the printed instructions always name
+ * the same bank as the rest of the invoice. Previously the caller (Finance's
+ * New Invoice dialog) built this text from a hardcoded default regardless of
+ * which bank was actually selected — confirmed live on 29/29 real invoices
+ * using a specific configured bank, 15 already paid by wire (dev job
+ * 1834af40) — this is the single, shared, correct builder going forward.
+ */
+export function buildPaymentInstructions(
+  bankDetails: NonNullable<InvoicePdfInput["bankDetails"]>,
+  paymentMethod: "bank_transfer" | "card" | "both",
+): string {
+  let instructions = ""
+  if (paymentMethod === "bank_transfer" || paymentMethod === "both") {
+    if (bankDetails.iban) {
+      instructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.accountHolder}\nIBAN: ${bankDetails.iban}\nBIC: ${bankDetails.swiftBic}\nBank: ${bankDetails.bankName}`
+    } else if (bankDetails.accountNumber) {
+      instructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.accountHolder}\nAccount: ${bankDetails.accountNumber}\nRouting: ${bankDetails.routingNumber}\nBank: ${bankDetails.bankName}`
+    }
+  }
+  if (paymentMethod === "card" || paymentMethod === "both") {
+    instructions += "\n\nCard payment available upon request."
+  }
+  return instructions
 }
 
 interface AutoSendResult {

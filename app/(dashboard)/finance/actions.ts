@@ -41,17 +41,20 @@ export async function createUnifiedInvoiceDraft(input: {
 }): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
-    const { getBankDetailsByPreference } = await import('@/app/offer/[token]/contract/bank-defaults')
-    const { fetchSettingsBanks, selectSettingsBank } = await import('@/lib/invoice-auto-send')
+    const { fetchSettingsBanks, selectSettingsBank, resolveBankDetails, buildPaymentInstructions } = await import('@/lib/invoice-auto-send')
 
-    // Resolve bank details from preference. For settings_bank:<id> values (from the
-    // dynamic Invoice Settings dropdown), fall back to 'auto' for the inline payment
-    // instructions — the PDF/email bank details are resolved correctly by
-    // resolveBankDetails() in invoice-auto-send.ts when the invoice is sent.
+    // Resolve bank details via the SAME resolver the emailed PDF/email use
+    // (resolveBankDetails) — this used to collapse any settings_bank:<id>
+    // preference down to a hardcoded 'auto' default before building the
+    // inline payment instructions, so the free-text paragraph named a
+    // completely different bank than the one actually selected (confirmed
+    // live on 29/29 real invoices, 15 already paid by wire — dev job
+    // 1834af40). resolveBankDetails() resolves the real selected bank
+    // instead, matching what the structured Bank Details block and the
+    // stored bank_preference already show.
     const bankPref = input.bank_preference || 'auto'
     const legacyPrefs = new Set(['auto', 'relay', 'mercury', 'revolut', 'airwallex'])
-    const legacyPref = (legacyPrefs.has(bankPref) ? bankPref : 'auto') as 'auto' | 'relay' | 'mercury' | 'revolut' | 'airwallex'
-    const bankDetails = getBankDetailsByPreference(legacyPref, input.currency)
+    const bankDetails = await resolveBankDetails(bankPref, input.currency)
 
     // The label stamped on the invoice (payments.payment_method, e.g. "Wire
     // Transfer (Chase JP Morgan)") must name the SPECIFIC bank picked, not a
@@ -73,17 +76,7 @@ export async function createUnifiedInvoiceDraft(input: {
 
     // Build payment instructions for the message field
     const paymentMethod = input.payment_method || 'both'
-    let paymentInstructions = ''
-    if (paymentMethod === 'bank_transfer' || paymentMethod === 'both') {
-      if (bankDetails.iban) {
-        paymentInstructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.beneficiary}\nIBAN: ${bankDetails.iban}\nBIC: ${bankDetails.bic}\nBank: ${bankDetails.bank_name}`
-      } else if (bankDetails.account_number) {
-        paymentInstructions += `\n\nBank Transfer:\nBeneficiary: ${bankDetails.beneficiary}\nAccount: ${bankDetails.account_number}\nRouting: ${bankDetails.routing_number}\nBank: ${bankDetails.bank_name}`
-      }
-    }
-    if (paymentMethod === 'card' || paymentMethod === 'both') {
-      paymentInstructions += '\n\nCard payment available upon request.'
-    }
+    const paymentInstructions = buildPaymentInstructions(bankDetails, paymentMethod)
 
     const fullMessage = (input.message || '').trim() + paymentInstructions
 
