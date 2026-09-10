@@ -1477,7 +1477,7 @@ export async function getPortalActionItems(
   const FLEXIBLE_SDS_TO_CHECK = ['Company Closure', 'ITIN', 'ITIN Renewal']
   const SD_TYPES_TO_SURFACE = Object.keys(SD_WIZARD_TYPE_BY_SERVICE_TYPE)
 
-  const [accountSdsRes, contactFlexibleSdsRes, submittedWizardRes] = await Promise.all([
+  const [accountSdsRes, contactFlexibleSdsRes, submittedWizardRes, submittedWizardByContactRes] = await Promise.all([
     supabaseAdmin
       .from('service_deliveries')
       .select('service_type, created_at')
@@ -1503,9 +1503,33 @@ export async function getPortalActionItems(
       .select('wizard_type')
       .eq('status', 'submitted')
       .eq('account_id', accountId),
+    // Submitted wizards SCOPED TO THE CONTACT — deliberately narrow, used ONLY
+    // for bare 'ITIN' below, NOT for the whole FLEXIBLE_SDS_TO_CHECK list.
+    // A plain ITIN wizard submission always carries account_id=null (ITIN
+    // belongs to the person, not the company), so the account-scoped query
+    // above can never find it — the card never cleared even long after a
+    // client genuinely submitted (found live, affecting 9 real active
+    // clients). ITIN Renewal and Company Closure are NOT included here even
+    // though they're in FLEXIBLE_SDS_TO_CHECK: a bare wizard_type-per-contact
+    // check can't tell one submission instance apart from another, which
+    // would wrongly suppress a NEW ITIN Renewal using an old original
+    // application's submission, or one company's Closure using a different
+    // company's (adversarial review caught both before this shipped — see
+    // docs/systems/portal.md). Bare ITIN is uniquely safe to check this way:
+    // a contact can hold at most one ITIN instance in their lifetime
+    // (uq_itin_sd_active_per_contact), so there is no second instance for a
+    // submission to be confused with.
+    contactId
+      ? supabaseAdmin
+          .from('wizard_progress')
+          .select('wizard_type')
+          .eq('status', 'submitted')
+          .eq('contact_id', contactId)
+      : Promise.resolve({ data: [] as Array<{ wizard_type: string }> }),
   ])
 
   const submittedWizardTypes = new Set((submittedWizardRes.data ?? []).map(w => w.wizard_type))
+  const submittedWizardTypesByContact = new Set((submittedWizardByContactRes.data ?? []).map(w => w.wizard_type))
   const sdSurfacedWizards = new Set<string>()
   const candidateSds: Array<{ service_type: string; created_at: string }> = [
     ...(accountSdsRes.data ?? []),
@@ -1517,7 +1541,12 @@ export async function getPortalActionItems(
     if (!wt) continue
     if (wt === 'tax' && !taxWizardActionable) continue
     if (inProgressWizardTypes.has(wt)) continue
-    if (submittedWizardTypes.has(wt)) continue
+    // Bare ITIN only: check the contact-scoped submission (see the query
+    // comment above for why ITIN Renewal/Company Closure deliberately stay
+    // on the account-scoped check below, unchanged).
+    const alreadySubmitted =
+      sd.service_type === 'ITIN' ? submittedWizardTypesByContact.has(wt) : submittedWizardTypes.has(wt)
+    if (alreadySubmitted) continue
     if (sdSurfacedWizards.has(wt)) continue
     sdSurfacedWizards.add(wt)
 
