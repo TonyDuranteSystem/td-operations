@@ -74,6 +74,9 @@ export interface StageComponent {
    *  extension is preserved. If any token is missing the original filename is
    *  kept. Absent = keep the uploaded filename. */
   rename?: string
+  /** document_viewer: render with a collapse/expand toggle, starting collapsed.
+   *  Absent/false = always-open list (original behavior, unchanged). */
+  collapsible?: boolean
 }
 
 /** Narrow one raw action entry into a StageAction, or null if unusable. */
@@ -107,7 +110,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
     const comp = c as { type?: unknown; label?: unknown; url?: unknown; actions?: unknown }
     if (typeof comp.type !== 'string') continue
     if (!(STAGE_COMPONENT_TYPES as readonly string[]).includes(comp.type)) continue
-    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown }
+    const rawComp = comp as { autoAdvance?: unknown; folder?: unknown; rename?: unknown; collapsible?: unknown }
     components.push({
       type: comp.type as StageComponentType,
       label: typeof comp.label === 'string' ? resolveTokens(comp.label) : undefined,
@@ -118,6 +121,7 @@ export function parseStageLayout(value: unknown): StageLayout | null {
       autoAdvance: typeof rawComp.autoAdvance === 'boolean' ? rawComp.autoAdvance : undefined,
       folder: typeof rawComp.folder === 'string' ? rawComp.folder : undefined,
       rename: typeof rawComp.rename === 'string' ? rawComp.rename : undefined,
+      collapsible: typeof rawComp.collapsible === 'boolean' ? rawComp.collapsible : undefined,
     })
   }
   return {
