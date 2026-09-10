@@ -12,6 +12,7 @@ import { formationStateForClient } from '@/lib/formation/state-lookup'
 import {
   initNameChecksFromWizard,
   parseProposedNames,
+  allNamesDead,
   type NameCheck,
   type NameCheckStatus,
 } from '@/lib/flows/name-checks'
@@ -216,19 +217,27 @@ const SIMPLE_STATUS: Partial<Record<NameAction, NameCheckStatus>> = {
 }
 
 /**
- * Supersede any still-pending "new names" (text_input) request for this SD before
- * creating a fresh one, so the client never sees TWO name-request windows at once
- * (e.g. an unanswered "all names unavailable" request plus a later SOS-rejection
- * request). Only the latest request stays pending.
+ * Cancel any still-pending "new names" (text_input) request for this SD —
+ * called both before creating a fresh one (so the client never sees TWO
+ * name-request windows at once) and the moment a candidate is sent back to
+ * the client for approval (so a stale "none of your names work" ask is never
+ * left showing once one of them actually did). Exported for the one-time
+ * production backfill script (scripts/backfill-stale-name-request-cancellations.ts).
  */
-async function cancelPendingNewNamesRequests(sdId: string): Promise<void> {
+export async function cancelPendingNewNamesRequests(sdId: string): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
-  await (supabaseAdmin as any)
+  const { error } = await (supabaseAdmin as any)
     .from('client_decision_requests')
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('service_delivery_id', sdId)
     .eq('status', 'pending')
     .eq('request_type', 'text_input')
+  if (error) {
+    // A failed cancel leaves a stale client-facing request live with zero
+    // signal — exactly the 2026-09-10 Lead Lift LLC incident. Surface it
+    // instead of swallowing it a second time.
+    console.error(`cancelPendingNewNamesRequests failed for SD ${sdId}:`, error)
+  }
 }
 
 /** Apply a staff name action; creates decision requests for send/sos-reject. */
@@ -250,6 +259,14 @@ export async function handleNameAction(params: {
   // for a fresh set when none of the current names are viable. Handle before the
   // per-name entry lookup (no nameIndex required).
   if (params.action === 'request_new_names') {
+    // Server-side enforcement of the same rule the staff panel's button
+    // visibility already follows — previously the API accepted this action
+    // unconditionally, which is exactly how the 2026-09-10 Lead Lift LLC
+    // incident's stray request got created (fired while a candidate was
+    // still unchecked).
+    if (!allNamesDead(checks)) {
+      return { ok: false, error: 'Not every name has been checked yet — mark the rest available or not available before asking the client for new names.' }
+    }
     await cancelPendingNewNamesRequests(params.sdId)
     const created = await createDecisionRequest({
       service_delivery_id: params.sdId,
@@ -298,6 +315,12 @@ export async function handleNameAction(params: {
       created_by: params.actor,
     })
     if (!created.ok) return { ok: false, error: created.error }
+    // A candidate just went back in front of the client for approval — any
+    // earlier "none of your names work, propose new ones" ask for this SD is
+    // now stale. Cancel it in the SAME step the replacement is created, so
+    // the client is never shown both at once, and (unlike gating this on the
+    // earlier mark_available step) never shown neither in between.
+    await cancelPendingNewNamesRequests(params.sdId)
     entry.status = 'sent_to_client'
     entry.decision_request_id = created.id ?? null
     entry.updated_at = now
@@ -305,22 +328,28 @@ export async function handleNameAction(params: {
   } else if (params.action === 'mark_sos_rejected') {
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
-    await cancelPendingNewNamesRequests(params.sdId)
-    const created = await createDecisionRequest({
-      service_delivery_id: params.sdId,
-      request_type: 'text_input',
-      title: 'New LLC Names Needed',
-      message: `Unfortunately "${entry.name}" was rejected by the Secretary of State. Please propose 3 new LLC names so we can check their availability.`,
-      message_it: `Purtroppo "${entry.name}" è stato rifiutato dal Secretary of State. Proponi 3 nuovi nomi per la tua LLC così possiamo verificarne la disponibilità.`,
-      options: {
-        prompt: 'Please propose 3 new LLC names',
-        placeholder: 'NameOne LLC, NameTwo LLC, NameThree LLC',
-        required: true,
-        name_check: { kind: 'new_names' },
-      },
-      created_by: params.actor,
-    })
-    if (!created.ok) return { ok: false, error: created.error }
+    // Only ask the client for a fresh set once every candidate is actually
+    // dead — a rejected filing with an untried sibling still sitting at
+    // 'pending' (the normal in-between state; SOS checks happen one name at a
+    // time) must send staff back to that sibling first, not the client.
+    if (allNamesDead(checks)) {
+      await cancelPendingNewNamesRequests(params.sdId)
+      const created = await createDecisionRequest({
+        service_delivery_id: params.sdId,
+        request_type: 'text_input',
+        title: 'New LLC Names Needed',
+        message: `Unfortunately "${entry.name}" was rejected by the Secretary of State. Please propose 3 new LLC names so we can check their availability.`,
+        message_it: `Purtroppo "${entry.name}" è stato rifiutato dal Secretary of State. Proponi 3 nuovi nomi per la tua LLC così possiamo verificarne la disponibilità.`,
+        options: {
+          prompt: 'Please propose 3 new LLC names',
+          placeholder: 'NameOne LLC, NameTwo LLC, NameThree LLC',
+          required: true,
+          name_check: { kind: 'new_names' },
+        },
+        created_by: params.actor,
+      })
+      if (!created.ok) return { ok: false, error: created.error }
+    }
   } else {
     return { ok: false, error: `Unknown action: ${params.action}` }
   }

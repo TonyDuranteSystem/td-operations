@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, type NameCheck } from '@/lib/flows/name-checks'
+import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, allNamesDead, type NameCheck } from '@/lib/flows/name-checks'
 
 describe('initNameChecksFromWizard', () => {
   it('builds entries from the numbered candidates, skipping empties', () => {
@@ -64,5 +64,35 @@ describe('filedName', () => {
   })
   it('returns null for a filed entry with a blank name', () => {
     expect(filedName([{ ...base, name: '   ', status: 'filed' }])).toBeNull()
+  })
+})
+
+describe('allNamesDead', () => {
+  const base: NameCheck = { name: 'X', source: 'wizard', status: 'pending', updated_at: null }
+
+  it('false on an empty list — nothing has died yet, not vacuously true (2026-09-10 fix)', () => {
+    expect(allNamesDead([])).toBe(false)
+    expect(allNamesDead(null)).toBe(false)
+    expect(allNamesDead(undefined)).toBe(false)
+  })
+
+  it('false while any candidate is still in play (pending, available, sent_to_client, accepted, or filed)', () => {
+    expect(allNamesDead([{ ...base, status: 'pending' }])).toBe(false)
+    expect(allNamesDead([{ ...base, status: 'not_available' }, { ...base, status: 'pending' }])).toBe(false)
+    expect(allNamesDead([{ ...base, status: 'not_available' }, { ...base, status: 'available' }])).toBe(false)
+    expect(allNamesDead([{ ...base, status: 'not_available' }, { ...base, status: 'sent_to_client' }])).toBe(false)
+    expect(allNamesDead([{ ...base, status: 'not_available' }, { ...base, status: 'accepted' }])).toBe(false)
+    expect(allNamesDead([{ ...base, status: 'not_available' }, { ...base, status: 'filed' }])).toBe(false)
+  })
+
+  it('true only when every candidate is a dead end', () => {
+    expect(allNamesDead([{ ...base, status: 'not_available' }])).toBe(true)
+    expect(
+      allNamesDead([
+        { ...base, status: 'not_available' },
+        { ...base, status: 'rejected_by_client' },
+        { ...base, status: 'rejected_by_sos' },
+      ]),
+    ).toBe(true)
   })
 })

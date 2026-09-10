@@ -13,6 +13,12 @@
  *   filed → rejected_by_sos (SOS rejects; a text_input request for new names fires)
  * New names the client proposes append as fresh `pending` entries (source
  * 'client_resubmit').
+ *
+ * Invariant (2026-09-10, Lead Lift LLC incident): a client-facing "propose new
+ * names" (text_input) request may only be created while `allNamesDead()` is
+ * true, and is retracted the instant `send_to_client` puts a candidate back in
+ * front of the client — never left pending after the underlying ask is moot.
+ * See lib/operations/formation-name-checks.ts.
  */
 
 export type NameCheckStatus =
@@ -103,6 +109,22 @@ export function parseProposedNames(text: unknown): string[] {
 /** True when at least one name has been filed with the SOS (advance gate). */
 export function hasFiledName(checks: NameCheck[] | null | undefined): boolean {
   return Array.isArray(checks) && checks.some((c) => c.status === 'filed')
+}
+
+/**
+ * True only when every candidate is in a dead-end status (not_available /
+ * rejected_by_client / rejected_by_sos) — the sole precondition for asking the
+ * client for a fresh set of names. An empty list is deliberately NOT "all
+ * dead": there is nothing to have died yet (a bare `.every()` on `[]` is
+ * vacuously true in JS, which would wrongly let the ask through for a client
+ * who hasn't even submitted names). The single source of truth for this
+ * check — consumed by the staff panel's button visibility AND the server-side
+ * guard on both request_new_names and mark_sos_rejected, so the three can
+ * never drift apart the way they did before the 2026-09-10 fix.
+ */
+export function allNamesDead(checks: NameCheck[] | null | undefined): boolean {
+  if (!Array.isArray(checks) || checks.length === 0) return false
+  return checks.every((c) => c.status === 'not_available' || c.status === 'rejected_by_client' || c.status === 'rejected_by_sos')
 }
 
 /**
