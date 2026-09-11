@@ -223,11 +223,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           ])
           if (dateRes?.formation_date) setFormationDate(dateRes.formation_date)
           if (preRes?.applicable && preRes.ok === false) {
-            if (preRes.failure === 'missing_entity_type') {
-              setEntityTypeNeeded(true)
-            } else if (preRes.failure === 'invalid_state') {
-              setFormationStateNeeded(true)
-            } else if (preRes.error) {
+            // needs_state and needs_entity_type are independent — a formation
+            // can need both at once, and both fields must show together so
+            // fixing one doesn't just reveal the other on the next attempt
+            // (2026-09-11 bug-hunter catch).
+            if (preRes.needs_entity_type) setEntityTypeNeeded(true)
+            if (preRes.needs_state) setFormationStateNeeded(true)
+            if (!preRes.needs_entity_type && !preRes.needs_state && preRes.error) {
               setPreflightBlocked(preRes.error)
             }
           }

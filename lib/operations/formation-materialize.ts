@@ -230,9 +230,22 @@ export type FormationPreflightFailure =
 
 export interface FormationMaterializePreflightResult {
   ok: boolean
+  /** The primary/first blocking reason, for callers that only need one (e.g.
+   *  the advance-gate refusal). When BOTH state and entity type are
+   *  unresolved, this is "invalid_state" — check needs_state/needs_entity_type
+   *  below for the full picture, since a caller that only reacts to `failure`
+   *  would otherwise never surface the second blocker (2026-09-11 bug-hunter
+   *  catch: fixing one and retrying used to reveal the other one stage later,
+   *  looping forever with no visible way out). */
   failure?: FormationPreflightFailure
   error?: string
   chosen_name?: string | null
+  /** True when the formation state could not be resolved automatically —
+   *  independent of whether entity type also failed. */
+  needs_state?: boolean
+  /** True when the entity type could not be resolved automatically —
+   *  independent of whether state also failed. */
+  needs_entity_type?: boolean
   state_code?: FormationStateCode
   state_source?: "wizard" | "submission" | "offer" | "admin"
   entity_code?: "SMLLC" | "MMLLC"
@@ -294,8 +307,16 @@ export async function preflightFormationMaterialization(input: {
     }
   }
 
-  let stateCode: FormationStateCode
-  let stateSource: "wizard" | "submission" | "offer" | "admin"
+  // State and entity-type are checked INDEPENDENTLY — neither short-circuits
+  // the other — so a formation missing BOTH is reported as needing both at
+  // once. Returning early on state alone used to hide the entity-type gap
+  // until a SECOND round trip (fix the state, retry, only then discover
+  // entity type is also missing), which could loop indefinitely since each
+  // retry re-ran the same sequential check from scratch (2026-09-11
+  // bug-hunter catch).
+  let stateCode: FormationStateCode | null = null
+  let stateSource: "wizard" | "submission" | "offer" | "admin" | null = null
+  let stateError: string | null = null
   if (input.formation_state) {
     stateCode = input.formation_state
     stateSource = "admin"
@@ -307,16 +328,12 @@ export async function preflightFormationMaterialization(input: {
       offerState,
     })
     if (stateResolution.source === "default") {
-      return {
-        ok: false,
-        failure: "invalid_state",
-        error:
-          "No formation state captured anywhere — not the client's questionnaire, the submitted form, or a signed contract. Pick the state manually to continue.",
-        chosen_name: chosenName,
-      }
+      stateError =
+        "No formation state captured anywhere — not the client's questionnaire, the submitted form, or a signed contract. Pick the state manually to continue."
+    } else {
+      stateCode = stateResolution.code
+      stateSource = stateResolution.source
     }
-    stateCode = stateResolution.code
-    stateSource = stateResolution.source
   }
 
   const { resolveEntityTypeForFormation } = await import("@/lib/portal/entity-type-from-contract")
@@ -327,20 +344,27 @@ export async function preflightFormationMaterialization(input: {
     submissionEntityType: src.submissionEntityType,
     wizardEntityType: (src.wizardData.entity_type as string | undefined) ?? null,
   })
-  if (resolution.source === "corporation_manual" || !resolution.wizardCode || !resolution.accountLabel) {
+  const entityUnresolved = resolution.source === "corporation_manual" || !resolution.wizardCode || !resolution.accountLabel
+
+  if (stateError || entityUnresolved) {
     return {
       ok: false,
-      failure: "missing_entity_type",
-      error: resolution.detail,
+      // State reported as the primary reason when both are missing, matching
+      // the order these checks have always run in — unchanged for callers
+      // that only look at `failure`.
+      failure: stateError ? "invalid_state" : "missing_entity_type",
+      error: stateError ? (entityUnresolved ? `${stateError} Also: ${resolution.detail}` : stateError) : resolution.detail,
       chosen_name: chosenName,
+      needs_state: !!stateError,
+      needs_entity_type: entityUnresolved,
     }
   }
 
   return {
     ok: true,
     chosen_name: chosenName,
-    state_code: stateCode,
-    state_source: stateSource,
+    state_code: stateCode ?? undefined,
+    state_source: stateSource ?? undefined,
     entity_code: resolution.wizardCode,
     entity_source: resolution.source,
     entity_detail: resolution.detail,

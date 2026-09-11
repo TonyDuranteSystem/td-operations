@@ -203,6 +203,8 @@ describe('preflightFormationMaterialization', () => {
     expect(r.ok).toBe(false)
     expect(r.failure).toBe('missing_entity_type')
     expect(r.error).toContain('No signed contract')
+    expect(r.needs_entity_type).toBe(true)
+    expect(r.needs_state).toBeFalsy()
   })
 
   it('passes the REVIEWED submission entity_type into the resolver (the starved-resolver fix)', async () => {
@@ -236,12 +238,34 @@ describe('preflightFormationMaterialization', () => {
   it('fails with invalid_state when nothing captured it anywhere — wizard, submission, or a signed offer', async () => {
     installFrom({ sub: SUB({ state: null }), wp: WP({ data: {} }) })
     vi.mocked(formationStateForClient).mockResolvedValue(null)
+    // Entity type resolves fine here — this test isolates the STATE failure.
+    // (2026-09-11: the two checks no longer short-circuit each other — see
+    // the "both missing at once" test below for why.)
+    vi.mocked(resolveEntityTypeForFormation).mockResolvedValue({
+      wizardCode: 'SMLLC', accountLabel: 'Single Member LLC', source: 'wizard', detail: 'from wizard',
+    })
     const r = await preflightFormationMaterialization({ contact_id: 'c-1', chosen_name: 'DoctorGut LLC' })
     expect(r.ok).toBe(false)
     expect(r.failure).toBe('invalid_state')
     expect(r.error).toContain('No formation state captured')
-    // Must fail on state BEFORE ever consulting the entity-type resolver.
-    expect(resolveEntityTypeForFormation).not.toHaveBeenCalled()
+    expect(r.needs_state).toBe(true)
+    expect(r.needs_entity_type).toBeFalsy()
+  })
+
+  it('BOTH-MISSING CASE (2026-09-11 bug-hunter catch, dev job cb771564): reports state AND entity type together in one pass, not one-at-a-time across retries', async () => {
+    installFrom({ sub: SUB({ state: null, entity_type: null }), wp: WP({ data: {} }) })
+    vi.mocked(formationStateForClient).mockResolvedValue(null)
+    vi.mocked(resolveEntityTypeForFormation).mockResolvedValue({
+      wizardCode: null, accountLabel: null, source: 'unresolved', detail: 'No signed contract with llc_type…',
+    })
+    const r = await preflightFormationMaterialization({ contact_id: 'c-1', chosen_name: 'DoctorGut LLC' })
+    expect(r.ok).toBe(false)
+    expect(r.needs_state).toBe(true)
+    expect(r.needs_entity_type).toBe(true)
+    expect(r.error).toContain('No formation state captured')
+    expect(r.error).toContain('No signed contract with llc_type')
+    // Both resolvers must actually run — neither short-circuits the other.
+    expect(resolveEntityTypeForFormation).toHaveBeenCalledTimes(1)
   })
 
   it('resolves the state from the wizard when the submission has none', async () => {

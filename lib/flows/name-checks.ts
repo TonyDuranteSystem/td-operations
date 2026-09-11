@@ -138,3 +138,41 @@ export function filedName(checks: NameCheck[] | null | undefined): string | null
   const filed = checks.find((c) => c.status === 'filed')
   return filed ? str(filed.name) : null
 }
+
+const CONFIRMED_ENOUGH_RANK: Partial<Record<NameCheckStatus, number>> = {
+  sent_to_client: 1,
+  accepted: 2,
+  filed: 3,
+}
+
+/**
+ * The name to show the CLIENT on their own portal before the company is
+ * materialized — real enough to display once staff has put it in front of
+ * them (sent_to_client), not while it's still just one of several candidates
+ * being checked (pending/available/not_available) or a dead one
+ * (rejected_by_client/rejected_by_sos). Prefers the most-advanced qualifying
+ * candidate (filed > accepted > sent_to_client); only one is ever actively
+ * progressing in practice, but ties are broken deterministically rather than
+ * left to array order.
+ *
+ * Added 2026-09-11 (dev job cb771564, bug-hunter catch during the old
+ * name-picker retirement): the retired contact-page tool was the only writer
+ * of `wizard_progress.data.chosen_name_final` — the field
+ * `getInProgressFormations()` (lib/portal/queries.ts) used to show this same
+ * name pre-materialization. Removing that writer without adding this
+ * replacement would have silently regressed every in-progress formation's
+ * client-facing label to a generic placeholder — confirmed live: it already
+ * had, for one real production client, before this fix.
+ */
+export function confirmedClientFacingName(checks: NameCheck[] | null | undefined): string | null {
+  if (!Array.isArray(checks)) return null
+  let best: { name: string; rank: number } | null = null
+  for (const c of checks) {
+    const rank = CONFIRMED_ENOUGH_RANK[c.status]
+    if (!rank) continue
+    const name = str(c.name)
+    if (!name) continue
+    if (!best || rank > best.rank) best = { name, rank }
+  }
+  return best?.name ?? null
+}

@@ -89,6 +89,7 @@ describe('advanceServiceDelivery §4b — deterministic materialization refusal 
       ok: false,
       failure: 'missing_entity_type',
       error: 'No signed contract with llc_type, no formation-form entity_type, and no wizard entity_type.',
+      needs_entity_type: true,
     })
 
     const r = await advanceServiceDelivery({
@@ -132,6 +133,7 @@ describe('advanceServiceDelivery §4b — deterministic materialization refusal 
       ok: false,
       failure: 'invalid_state',
       error: 'No formation state captured anywhere.',
+      needs_state: true,
     })
 
     const r = await advanceServiceDelivery({
@@ -143,6 +145,28 @@ describe('advanceServiceDelivery §4b — deterministic materialization refusal 
     expect(r.success).toBe(false)
     expect(r.error).toContain('Cannot create the company record')
     expect(r.error).toContain('Choose the formation state')
+    expect(writes.filter((w) => w.table === 'service_deliveries')).toEqual([])
+  })
+
+  it('REFUSES the advance and names BOTH blockers when state and entity type are missing at once — 2026-09-11 bug-hunter catch (job cb771564)', async () => {
+    const writes = installFrom()
+    vi.mocked(preflightFormationMaterialization).mockResolvedValue({
+      ok: false,
+      failure: 'invalid_state',
+      error: 'No formation state captured anywhere. Also: No signed contract with llc_type.',
+      needs_state: true,
+      needs_entity_type: true,
+    })
+
+    const r = await advanceServiceDelivery({
+      delivery_id: 'sd-1',
+      target_stage: 'Articles Received',
+      actor: 'test',
+    })
+
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('the formation state')
+    expect(r.error).toContain('the LLC type')
     expect(writes.filter((w) => w.table === 'service_deliveries')).toEqual([])
   })
 

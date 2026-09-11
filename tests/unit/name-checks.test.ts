@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, allNamesDead, type NameCheck } from '@/lib/flows/name-checks'
+import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, allNamesDead, confirmedClientFacingName, type NameCheck } from '@/lib/flows/name-checks'
 
 describe('initNameChecksFromWizard', () => {
   it('builds entries from the numbered candidates, skipping empties', () => {
@@ -94,5 +94,49 @@ describe('allNamesDead', () => {
         { ...base, status: 'rejected_by_sos' },
       ]),
     ).toBe(true)
+  })
+})
+
+describe('confirmedClientFacingName (2026-09-11, dev job cb771564)', () => {
+  const base: NameCheck = { name: 'X', source: 'wizard', status: 'pending', updated_at: null }
+
+  it('null when nothing is real enough yet — pending/available/not_available/rejected are not shown to the client', () => {
+    expect(confirmedClientFacingName([])).toBeNull()
+    expect(confirmedClientFacingName(null)).toBeNull()
+    expect(confirmedClientFacingName([{ ...base, status: 'pending' }])).toBeNull()
+    expect(confirmedClientFacingName([{ ...base, status: 'available' }])).toBeNull()
+    expect(confirmedClientFacingName([{ ...base, status: 'not_available' }])).toBeNull()
+    expect(confirmedClientFacingName([{ ...base, status: 'rejected_by_client' }])).toBeNull()
+    expect(confirmedClientFacingName([{ ...base, status: 'rejected_by_sos' }])).toBeNull()
+  })
+
+  it('shows a name the instant it is sent to the client for approval — the earliest real commitment', () => {
+    expect(confirmedClientFacingName([{ ...base, name: 'Lead Lift LLC', status: 'sent_to_client' }])).toBe('Lead Lift LLC')
+  })
+
+  it('shows an accepted name', () => {
+    expect(confirmedClientFacingName([{ ...base, name: 'Lead Lift LLC', status: 'accepted' }])).toBe('Lead Lift LLC')
+  })
+
+  it('shows a filed name', () => {
+    expect(confirmedClientFacingName([{ ...base, name: 'Lead Lift LLC', status: 'filed' }])).toBe('Lead Lift LLC')
+  })
+
+  it('prefers the most-advanced qualifying candidate when somehow more than one qualifies', () => {
+    const checks: NameCheck[] = [
+      { ...base, name: 'First Choice LLC', status: 'sent_to_client' },
+      { ...base, name: 'Actually Filed LLC', status: 'filed' },
+    ]
+    expect(confirmedClientFacingName(checks)).toBe('Actually Filed LLC')
+  })
+
+  it('skips a blank name and falls through to a qualifying one', () => {
+    expect(confirmedClientFacingName([{ ...base, name: '   ', status: 'filed' }])).toBeNull()
+    expect(
+      confirmedClientFacingName([
+        { ...base, name: '   ', status: 'filed' },
+        { ...base, name: 'Real Name LLC', status: 'accepted' },
+      ]),
+    ).toBe('Real Name LLC')
   })
 })

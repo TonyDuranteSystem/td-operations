@@ -218,14 +218,19 @@ export async function advanceServiceDelivery(
         entity_type: params.entity_type ?? null,
       })
       if (!pre.ok) {
+        // needs_state / needs_entity_type are independent (2026-09-11
+        // bug-hunter catch) — name both in the hint when both are missing, so
+        // staff fix them together instead of discovering the second one only
+        // after retrying past the first.
+        const asks: string[] = []
+        if (pre.needs_state) asks.push("the formation state")
+        if (pre.needs_entity_type) asks.push("the LLC type (single- or multi-member)")
         const hint =
-          pre.failure === "missing_entity_type"
-            ? " Choose the LLC type (single- or multi-member) in the Articles upload dialog, or record it on the signed contract, then retry."
-            : pre.failure === "invalid_state"
-              ? " Choose the formation state in the Articles upload dialog, then retry."
-              : pre.failure === "missing_chosen_name"
-                ? " Mark the state-approved name as filed in Name Checks first, then retry."
-                : ""
+          asks.length > 0
+            ? ` Choose ${asks.join(" and ")} in the Articles upload dialog, then retry.`
+            : pre.failure === "missing_chosen_name"
+              ? " Mark the state-approved name as filed in Name Checks first, then retry."
+              : ""
         return {
           success: false,
           error: `Cannot create the company record: ${pre.error ?? "unknown reason"}${hint}`,
