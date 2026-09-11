@@ -1,14 +1,15 @@
 'use client'
 
-import { useState, useEffect, useTransition, useMemo } from 'react'
+import { useState, useCallback, useEffect, useTransition, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { usePlaidLink } from 'react-plaid-link'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { readContestedCandidates, readContestedTotal, type ContestedCandidate } from '@/lib/finance/feed-vocabulary'
 import { evaluateNameEvidence } from '@/lib/finance/feed-signals'
 import { toast } from 'sonner'
 import {
-  Landmark, RefreshCw, Link2, Ban, X,
+  Landmark, RefreshCw, Plus, Link2, Ban, X,
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
   Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2,
 } from 'lucide-react'
@@ -19,6 +20,25 @@ import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ── Types ──
+
+interface PlaidAccount {
+  account_id: string
+  name: string
+  mask: string | null
+  type: string
+  subtype: string | null
+  balances: { current: number | null; available: number | null; iso_currency_code: string | null }
+}
+
+interface PlaidConnection {
+  id: string
+  bank_name: string
+  institution_name: string
+  accounts: PlaidAccount[]
+  status: string
+  last_synced_at: string | null
+  created_at: string
+}
 
 export interface BankFeedRecord {
   id: string
@@ -90,6 +110,13 @@ const SOURCE_COLORS: Record<string, string> = {
   manual: 'bg-zinc-100 text-zinc-700',
   stripe: 'bg-violet-100 text-violet-700',
   revolut: 'bg-sky-100 text-sky-700',
+}
+
+// Map bank institution names to source filter values
+const BANK_SOURCE_MAP: Record<string, string[]> = {
+  relay: ['relay'],
+  mercury: ['mercury'],
+  airwallex: ['airwallex_email', 'airwallex_api'],
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -177,21 +204,111 @@ function getCompanyName(accounts: any): string {
 }
 
 
-// ── Bank sync trigger ──
-//
-// Bank CONNECTIONS (Chase, Relay, Revolut, First Citizens, etc.) are managed exclusively from
-// My Finances now — Finance never connects, views, or manages a Plaid connection, so a private
-// bank's name and balance can never reach this staff-facing page. This bar keeps only what
-// staff actually need day to day: an on-demand refresh of the two payment-processor feeds
-// (Mercury, Airwallex) already used for client-payment matching, unrelated to any bank
-// connection.
+// ── Connected Banks Summary ──
 
-function SyncAllBanksButton() {
+function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
+  const [linkToken, setLinkToken] = useState<string | null>(null)
+  const [bankName, setBankName] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const fetchLinkToken = useCallback(async () => {
+    setLoading(true)
+    const res = await fetch('/api/plaid/create-link-token', { method: 'POST' })
+    const data = await res.json()
+    setLinkToken(data.link_token)
+    setLoading(false)
+  }, [])
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken ?? '',
+    onSuccess: async (publicToken) => {
+      if (!bankName.trim()) {
+        toast.error('Enter a bank name before connecting')
+        return
+      }
+      const res = await fetch('/api/plaid/exchange-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ public_token: publicToken, bank_name: bankName }),
+      })
+      if (res.ok) {
+        toast.success('Bank connected successfully')
+        setBankName('')
+        setLinkToken(null)
+        onSuccess()
+      } else {
+        toast.error('Failed to connect bank')
+      }
+    },
+  })
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="text"
+        placeholder="Bank name (e.g. Chase)"
+        value={bankName}
+        onChange={e => setBankName(e.target.value)}
+        className="border rounded px-3 py-2 text-sm w-48"
+      />
+      {!linkToken ? (
+        <button
+          onClick={fetchLinkToken}
+          disabled={loading || !bankName.trim()}
+          className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {loading ? 'Loading...' : 'Connect Bank'}
+        </button>
+      ) : (
+        <button
+          onClick={() => open()}
+          disabled={!ready}
+          className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+        >
+          Open Plaid
+        </button>
+      )}
+    </div>
+  )
+}
+
+function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean }) {
   const router = useRouter()
+  const [connections, setConnections] = useState<PlaidConnection[]>([])
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
   const [syncingAllBanks, setSyncingAllBanks] = useState(false)
 
-  // Triggers the same sync + match + activate chain that runs automatically via cron. Used
-  // when staff don't want to wait for the next tick.
+  const fetchConnections = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/plaid/accounts')
+      const data = await res.json()
+      setConnections(data.connections ?? [])
+    } catch {
+      // Plaid may not be configured yet
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    fetchConnections()
+  }, [fetchConnections])
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      await fetchConnections()
+      toast.success('Bank data refreshed')
+    } catch {
+      toast.error('Sync failed')
+    }
+    setSyncing(false)
+  }
+
+  // PR C: triggers the same sync + match + activate chain that runs every
+  // 15 min via cron. Used when staff don't want to wait for the next tick.
   const handleSyncAllBanks = async () => {
     setSyncingAllBanks(true)
     try {
@@ -217,29 +334,110 @@ function SyncAllBanksButton() {
     }
   }
 
+  // Relay and Revolut are hidden from the Connected Banks UI per Antonio's request —
+  // both still sync transactions in the background; we just don't surface their account
+  // summary cards or balances on this screen.
+  const HIDDEN_BANKS = ['relay', 'revolut']
+  const visibleConnections = connections.filter(
+    conn => !HIDDEN_BANKS.some(b => (conn.institution_name ?? conn.bank_name ?? '').toLowerCase().includes(b))
+  )
+  const totalBalance = visibleConnections.reduce((sum, conn) =>
+    sum + (conn.accounts ?? []).reduce((s, a) => s + (a.balances.current ?? 0), 0), 0
+  )
+  const totalAccounts = visibleConnections.reduce((sum, conn) => sum + (conn.accounts ?? []).length, 0)
+
   return (
     <div className="border-b pb-4 mb-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           <Landmark className="h-5 w-5 text-blue-600" />
           <div>
-            <h3 className="text-sm font-semibold">Payment feeds</h3>
+            <h3 className="text-sm font-semibold">Connected Banks</h3>
+            {!loading && visibleConnections.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {visibleConnections.length} bank{visibleConnections.length !== 1 ? 's' : ''} &middot; {totalAccounts} account{totalAccounts !== 1 ? 's' : ''}{isAdmin ? ` \u00B7 ${formatCurrency(totalBalance)}` : ''}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <FastTooltip label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs automatically every 15 min.">
+          <FastTooltip label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min.">
             <button
               onClick={handleSyncAllBanks}
               disabled={syncingAllBanks}
-              aria-label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs automatically every 15 min."
+              aria-label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
               className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
             >
               {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Sync Now
+              Sync All Banks Now
             </button>
           </FastTooltip>
+          <button
+            onClick={handleSync}
+            disabled={syncing || loading}
+            className="flex items-center gap-1.5 border rounded px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
+            Refresh
+          </button>
+          <ConnectBankButton onSuccess={fetchConnections} />
         </div>
       </div>
+
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Loading bank connections...</p>
+      ) : visibleConnections.length === 0 ? (
+        <div className="border-2 border-dashed rounded-lg p-6 text-center">
+          <p className="text-sm text-muted-foreground font-medium">No bank accounts connected</p>
+          <p className="text-xs text-muted-foreground mt-1">Connect Chase, Relay, Mercury, or First Citizens above</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {visibleConnections.map(conn => {
+            const bankKey = (conn.institution_name ?? conn.bank_name ?? '').toLowerCase()
+            const matchedSources = Object.entries(BANK_SOURCE_MAP).find(([key]) => bankKey.includes(key))?.[1] ?? null
+            const isActive = activeSource && matchedSources && activeSource.join() === matchedSources.join()
+
+            return (
+            <div
+              key={conn.id}
+              onClick={() => {
+                if (isActive) {
+                  onSourceFilter(null)
+                } else if (matchedSources) {
+                  onSourceFilter(matchedSources)
+                }
+              }}
+              className={cn(
+                'border rounded-lg p-3 transition-colors',
+                matchedSources ? 'cursor-pointer hover:border-blue-400' : '',
+                isActive ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-200' : ''
+              )}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium">{conn.institution_name ?? conn.bank_name}</span>
+                <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Active</span>
+              </div>
+              <div className="space-y-1">
+                {(conn.accounts ?? []).map(acc => (
+                  <div key={acc.account_id} className="flex justify-between items-center text-xs">
+                    <span className="text-muted-foreground">{acc.name} •••• {acc.mask}</span>
+                    <span className="font-medium">
+                      {isAdmin
+                        ? (acc.balances.current != null ? formatCurrency(acc.balances.current, acc.balances.iso_currency_code) : '—')
+                        : '••••'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2">
+                Last synced: {conn.last_synced_at ? format(parseISO(conn.last_synced_at), 'MMM d, h:mm a') : 'Never'}
+              </p>
+            </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -1581,7 +1779,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Connected banks summary */}
-      <SyncAllBanksButton />
+      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} isAdmin={isAdmin} />
 
       {/* Stats cards */}
       <div className="flex gap-3">
