@@ -542,7 +542,11 @@ export function buildOwnerLedgerRow(
 
   const registryEntry = feed.owner_account_number && feed.owner_account_type
     ? findRegistryEntryForAccount(
-        { accountNumber: feed.owner_account_number, accountType: feed.owner_account_type as OwnerAccountType },
+        {
+          accountNumber: feed.owner_account_number,
+          accountType: feed.owner_account_type as OwnerAccountType,
+          currency: (feed.currency || "USD").toUpperCase(),
+        },
         registry,
       )
     : null

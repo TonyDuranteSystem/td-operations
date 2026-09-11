@@ -200,7 +200,7 @@ export async function syncPlaidTransactions(accessToken: string, bankName: strin
       continue
     }
 
-    const identity = resolvePlaidTransactionAccount(txn.account_id, connectionAccounts)
+    const identity = resolvePlaidTransactionAccount(txn.account_id, connectionAccounts, txn.iso_currency_code ?? 'USD')
     const registryEntry = identity ? findRegistryEntryForAccount(identity, registry) : null
 
     if (identity && registryEntry) {

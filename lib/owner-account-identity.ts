@@ -57,6 +57,15 @@ export interface PlaidSubAccount {
 export interface ResolvedAccountIdentity {
   accountNumber: string
   accountType: OwnerAccountType
+  /** ISO currency code, e.g. "USD"/"EUR". REQUIRED because Plaid mask uniqueness is only
+   *  per-currency, not per-connection: a real Revolut Business item exposes a USD checking
+   *  pocket and a EUR checking pocket sharing the IDENTICAL mask (two different Plaid
+   *  account_ids, same last-4). Without this field, findRegistryEntryForAccount below would
+   *  match both pockets to whichever single registry row was added first — silently filing a
+   *  currency's real money under the other currency's books account the moment that second
+   *  pocket got any activity (found by council review, 2026-09-11, before any row existed for
+   *  either pocket — not a hypothetical). */
+  currency: string
 }
 
 /**
@@ -65,16 +74,21 @@ export interface ResolvedAccountIdentity {
  * resolve which physical account it belongs to. Returns null when the sub-account can't be
  * found or its type doesn't map cleanly — the caller's fallback is today's coarse
  * institution-only label, never a guess.
+ *
+ * `currency` is the TRANSACTION's own iso_currency_code (Plaid always sets this), not derived
+ * from the sub-account — passed in by the caller, which already reads it for other purposes
+ * (see lib/plaid-sync.ts).
  */
 export function resolvePlaidTransactionAccount(
   plaidAccountId: string,
   connectionAccounts: PlaidSubAccount[],
+  currency: string,
 ): ResolvedAccountIdentity | null {
   const sub = connectionAccounts.find(a => a.account_id === plaidAccountId)
   if (!sub || !sub.mask) return null
   const accountType = mapPlaidAccountType(sub.type, sub.subtype)
   if (!accountType) return null
-  return { accountNumber: sub.mask, accountType }
+  return { accountNumber: sub.mask, accountType, currency: (currency || "USD").toUpperCase() }
 }
 
 export interface OwnerAccountRegistryEntry {
@@ -82,13 +96,14 @@ export interface OwnerAccountRegistryEntry {
   account_number: string
   account_type: OwnerAccountType
   sign_convention: "normal" | "inverted"
+  currency: string
 }
 
 /**
- * Find the registry row for a resolved Plaid account, by NUMBER — never by any name. A
- * registry miss (a genuinely new account, not yet in td_books_accounts) returns null; the
- * caller falls back to the coarse institution label with the normal (unflipped) sign, exactly
- * today's behavior for an account nobody has described yet.
+ * Find the registry row for a resolved Plaid account, by NUMBER (and currency) — never by any
+ * name. A registry miss (a genuinely new account, or a currency pocket not yet described) is
+ * null; the caller falls back to the coarse institution label with the normal (unflipped) sign,
+ * exactly today's behavior for an account nobody has described yet.
  */
 /**
  * Fetch the account registry once per caller — a small, per-entity table, cheap to read
@@ -99,7 +114,7 @@ export interface OwnerAccountRegistryEntry {
 export async function fetchOwnerAccountRegistry(): Promise<OwnerAccountRegistryEntry[]> {
   const { data, error } = await supabaseAdmin
     .from('td_books_accounts' as never)
-    .select('bank_name, account_number, account_type, sign_convention')
+    .select('bank_name, account_number, account_type, sign_convention, currency')
     .eq('entity_id', TD_ENTITY_ID)
     .eq('is_active', true)
   if (error) throw new Error(`account registry read failed: ${error.message}`)
@@ -111,7 +126,9 @@ export function findRegistryEntryForAccount(
   registry: OwnerAccountRegistryEntry[],
 ): OwnerAccountRegistryEntry | null {
   return registry.find(
-    r => r.account_type === identity.accountType && accountNumbersMatch(r.account_number, identity.accountNumber)
+    r => r.account_type === identity.accountType
+      && accountNumbersMatch(r.account_number, identity.accountNumber)
+      && (r.currency || "USD").toUpperCase() === identity.currency
   ) ?? null
 }
 
