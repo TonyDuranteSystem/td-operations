@@ -216,6 +216,16 @@ const SIMPLE_STATUS: Partial<Record<NameAction, NameCheckStatus>> = {
   mark_filed: 'filed',
 }
 
+async function cancelPendingNewNamesRequestsOnce(sdId: string): Promise<{ error: { message: string } | null }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
+  return (supabaseAdmin as any)
+    .from('client_decision_requests')
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    .eq('service_delivery_id', sdId)
+    .eq('status', 'pending')
+    .eq('request_type', 'text_input')
+}
+
 /**
  * Cancel any still-pending "new names" (text_input) request for this SD —
  * called both before creating a fresh one (so the client never sees TWO
@@ -223,20 +233,34 @@ const SIMPLE_STATUS: Partial<Record<NameAction, NameCheckStatus>> = {
  * the client for approval (so a stale "none of your names work" ask is never
  * left showing once one of them actually did). Exported for the one-time
  * production backfill script (scripts/backfill-stale-name-request-cancellations.ts).
+ *
+ * Retries once on failure, then reports to the system-error dashboard rather
+ * than only logging (2026-09-11, senior-engineer council catch): a swallowed
+ * failure here leaves the stale request live with zero signal — silently
+ * reproducing the exact 2026-09-10 Lead Lift LLC incident this file exists to
+ * close, just triggered by a transient write failure instead of a missing
+ * guard. Mirrors the retry-then-report pattern already used for the same
+ * failure class in app/api/flows/[id]/upload-document/route.ts.
  */
 export async function cancelPendingNewNamesRequests(sdId: string): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_decision_requests not in generated types
-  const { error } = await (supabaseAdmin as any)
-    .from('client_decision_requests')
-    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-    .eq('service_delivery_id', sdId)
-    .eq('status', 'pending')
-    .eq('request_type', 'text_input')
+  let { error } = await cancelPendingNewNamesRequestsOnce(sdId)
   if (error) {
-    // A failed cancel leaves a stale client-facing request live with zero
-    // signal — exactly the 2026-09-10 Lead Lift LLC incident. Surface it
-    // instead of swallowing it a second time.
-    console.error(`cancelPendingNewNamesRequests failed for SD ${sdId}:`, error)
+    console.error(`cancelPendingNewNamesRequests failed for SD ${sdId}, retrying once:`, error.message)
+    ;({ error } = await cancelPendingNewNamesRequestsOnce(sdId))
+  }
+  if (error) {
+    console.error(`cancelPendingNewNamesRequests failed twice for SD ${sdId}:`, error.message)
+    try {
+      const { reportSystemError } = await import('@/lib/system-errors')
+      await reportSystemError({
+        source: 'server',
+        route: 'lib/operations/formation-name-checks.ts:cancelPendingNewNamesRequests',
+        message: `Failed to cancel a stale "New LLC Names Needed" request twice for SD ${sdId}: ${error.message}`,
+        context: { service_delivery_id: sdId },
+      })
+    } catch {
+      /* best-effort — never let error reporting mask the original failure */
+    }
   }
 }
 

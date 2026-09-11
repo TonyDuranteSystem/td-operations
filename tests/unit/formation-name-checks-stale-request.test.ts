@@ -20,15 +20,21 @@ import type { NameCheck } from '@/lib/flows/name-checks'
 
 let sdFixture: Record<string, unknown> | null = null
 let writtenChecks: unknown = null
+// Static fallback (every call returns this) — used by the existing
+// always-succeeds / always-fails tests. When cancelUpdateErrorSequence is set
+// instead, each successive call pulls the next entry (for the retry tests,
+// where the 1st and 2nd attempt need to return DIFFERENT results).
 let cancelUpdateError: { message: string } | null = null
+let cancelUpdateErrorSequence: Array<{ message: string } | null> | null = null
 let cancelUpdateCalls = 0
 
 function makeCancelChain() {
-  const chain: PromiseLike<{ data: null; error: typeof cancelUpdateError }> & { eq: () => typeof chain } = {
+  const chain: PromiseLike<{ data: null; error: { message: string } | null }> & { eq: () => typeof chain } = {
     eq: () => chain,
-    then: (resolve: (v: { data: null; error: typeof cancelUpdateError }) => void, reject?: (e: unknown) => void) => {
+    then: (resolve: (v: { data: null; error: { message: string } | null }) => void, reject?: (e: unknown) => void) => {
+      const error = cancelUpdateErrorSequence ? (cancelUpdateErrorSequence[cancelUpdateCalls] ?? null) : cancelUpdateError
       cancelUpdateCalls++
-      return Promise.resolve({ data: null, error: cancelUpdateError }).then(resolve, reject)
+      return Promise.resolve({ data: null, error }).then(resolve, reject)
     },
   }
   return chain
@@ -75,6 +81,11 @@ vi.mock('@/lib/service-delivery', () => ({
   advanceServiceDelivery: (...args: unknown[]) => advanceServiceDeliveryMock(...args),
 }))
 
+const reportSystemErrorMock = vi.fn().mockResolvedValue(null)
+vi.mock('@/lib/system-errors', () => ({
+  reportSystemError: (...args: unknown[]) => reportSystemErrorMock(...args),
+}))
+
 import { handleNameAction, cancelPendingNewNamesRequests } from '@/lib/operations/formation-name-checks'
 
 const SD_ID = 'sd-lead-lift'
@@ -98,7 +109,9 @@ function baseSd(name_checks: NameCheck[]) {
 beforeEach(() => {
   writtenChecks = null
   cancelUpdateError = null
+  cancelUpdateErrorSequence = null
   cancelUpdateCalls = 0
+  reportSystemErrorMock.mockClear()
   createDecisionRequestMock.mockReset()
   createDecisionRequestMock.mockResolvedValue({ ok: true, id: 'decision-req-1' })
   advanceServiceDeliveryMock.mockClear()
@@ -190,12 +203,32 @@ describe('mark_sos_rejected guard', () => {
   })
 })
 
-describe('cancelPendingNewNamesRequests error handling', () => {
-  it('logs instead of throwing when the cancel write fails', async () => {
+describe('cancelPendingNewNamesRequests error handling (2026-09-11, senior-engineer council catch)', () => {
+  it('never throws even when the write fails on every attempt', async () => {
+    cancelUpdateError = { message: 'db down' }
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(cancelPendingNewNamesRequests(SD_ID)).resolves.toBeUndefined()
+  })
+
+  it('retries once, and reports to the system-error dashboard when it fails twice — a swallowed failure here silently reproduces the exact Lead Lift LLC incident', async () => {
     cancelUpdateError = { message: 'db down' }
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await expect(cancelPendingNewNamesRequests(SD_ID)).resolves.toBeUndefined()
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0]).toMatch(new RegExp(SD_ID))
+    await cancelPendingNewNamesRequests(SD_ID)
+    expect(cancelUpdateCalls).toBe(2) // 1st attempt + 1 retry, both failed
+    expect(spy).toHaveBeenCalledTimes(2) // "retrying once" + "failed twice"
+    expect(spy.mock.calls[1][0]).toMatch(new RegExp(SD_ID))
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
+    expect(reportSystemErrorMock.mock.calls[0][0]).toMatchObject({
+      context: { service_delivery_id: SD_ID },
+    })
+  })
+
+  it('recovers silently on a transient failure — succeeds on the retry, no dashboard report needed', async () => {
+    cancelUpdateErrorSequence = [{ message: 'transient blip' }, null]
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await cancelPendingNewNamesRequests(SD_ID)
+    expect(cancelUpdateCalls).toBe(2)
+    expect(spy).toHaveBeenCalledTimes(1) // only the "retrying once" log — the retry succeeded
+    expect(reportSystemErrorMock).not.toHaveBeenCalled()
   })
 })

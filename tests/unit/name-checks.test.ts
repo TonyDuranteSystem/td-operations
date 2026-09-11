@@ -139,4 +139,36 @@ describe('confirmedClientFacingName (2026-09-11, dev job cb771564)', () => {
       ]),
     ).toBe('Real Name LLC')
   })
+
+  it('AMBIGUITY GUARD (2026-09-11, senior-engineer council catch): returns null on a genuine tie between two DIFFERENT names at the same rank, rather than guessing', () => {
+    // Nothing server-side stops staff from sending two different candidates
+    // to the client before either is answered — if that happens, showing
+    // either name confidently would be a coin flip against what the client's
+    // actual decision card is asking about. The generic placeholder is safer.
+    expect(
+      confirmedClientFacingName([
+        { ...base, name: 'First Sent LLC', status: 'sent_to_client' },
+        { ...base, name: 'Second Sent LLC', status: 'sent_to_client' },
+      ]),
+    ).toBeNull()
+  })
+
+  it('is NOT fooled into false ambiguity by the exact same name appearing twice at the same rank', () => {
+    expect(
+      confirmedClientFacingName([
+        { ...base, name: 'Lead Lift LLC', status: 'sent_to_client' },
+        { ...base, name: 'Lead Lift LLC', status: 'sent_to_client' },
+      ]),
+    ).toBe('Lead Lift LLC')
+  })
+
+  it('a higher-rank candidate still wins outright over a lower-rank tie', () => {
+    expect(
+      confirmedClientFacingName([
+        { ...base, name: 'Sent One LLC', status: 'sent_to_client' },
+        { ...base, name: 'Sent Two LLC', status: 'sent_to_client' },
+        { ...base, name: 'Actually Filed LLC', status: 'filed' },
+      ]),
+    ).toBe('Actually Filed LLC')
+  })
 })

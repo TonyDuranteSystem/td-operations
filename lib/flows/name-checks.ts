@@ -151,9 +151,13 @@ const CONFIRMED_ENOUGH_RANK: Partial<Record<NameCheckStatus, number>> = {
  * them (sent_to_client), not while it's still just one of several candidates
  * being checked (pending/available/not_available) or a dead one
  * (rejected_by_client/rejected_by_sos). Prefers the most-advanced qualifying
- * candidate (filed > accepted > sent_to_client); only one is ever actively
- * progressing in practice, but ties are broken deterministically rather than
- * left to array order.
+ * candidate (filed > accepted > sent_to_client); only one is ever meant to be
+ * actively progressing at a time, but nothing server-side currently stops
+ * staff from sending TWO different candidates to the client before either is
+ * answered. Returns null on a genuine tie (two DIFFERENT names at the same
+ * top rank) rather than guessing which one the client is actually being
+ * asked about — a wrong confident label is worse than the generic
+ * placeholder (2026-09-11, senior-engineer council catch).
  *
  * Added 2026-09-11 (dev job cb771564, bug-hunter catch during the old
  * name-picker retirement): the retired contact-page tool was the only writer
@@ -166,13 +170,23 @@ const CONFIRMED_ENOUGH_RANK: Partial<Record<NameCheckStatus, number>> = {
  */
 export function confirmedClientFacingName(checks: NameCheck[] | null | undefined): string | null {
   if (!Array.isArray(checks)) return null
-  let best: { name: string; rank: number } | null = null
+  let maxRank = 0
+  const namesAtMaxRank = new Set<string>()
   for (const c of checks) {
     const rank = CONFIRMED_ENOUGH_RANK[c.status]
     if (!rank) continue
     const name = str(c.name)
     if (!name) continue
-    if (!best || rank > best.rank) best = { name, rank }
+    if (rank > maxRank) {
+      maxRank = rank
+      namesAtMaxRank.clear()
+      namesAtMaxRank.add(name)
+    } else if (rank === maxRank) {
+      namesAtMaxRank.add(name)
+    }
   }
-  return best?.name ?? null
+  // Array.from(), not a spread/for-of over the Set directly — this project's
+  // TS target rejects iterating a Set without downlevelIteration (the exact
+  // same trap team-workspace's 2026-09-05 entry already hit once).
+  return namesAtMaxRank.size === 1 ? Array.from(namesAtMaxRank)[0] : null
 }
