@@ -120,3 +120,37 @@ export async function resolveInvoiceAudience(
 
   return "no_portal"
 }
+
+/**
+ * Historical invoices created before this fix may carry a machine-generated
+ * "Bank Transfer: ..." / "Card payment available upon request." paragraph
+ * baked directly into their stored message (dev jobs 1834af40 / 96e56d06 —
+ * every render site used to just echo payment.message verbatim, so a portal
+ * client saw bank details anyway despite the invoice PDF/email otherwise
+ * correctly hiding them). New invoices no longer generate this paragraph at
+ * all, but old rows still have it — so portal-audience recipients get it
+ * stripped here, at every display site, rather than trusting every future
+ * render site to remember. No-portal audiences see the message unchanged;
+ * bank details are their real payment path.
+ *
+ * The two markers below are the exact, stable literal prefixes the old
+ * generator always used — never legitimate staff-typed prose — so finding
+ * the earliest one and cutting there reliably recovers just the staff's own
+ * note.
+ */
+const GENERATED_PAYMENT_TEXT_MARKERS = ["\n\nBank Transfer:", "\n\nCard payment available upon request."]
+
+export function sanitizeInvoiceMessage(
+  message: string | null | undefined,
+  audience: InvoiceAudience,
+): string {
+  if (!message) return ""
+  if (audience === "no_portal") return message
+
+  let cutIndex = message.length
+  for (const marker of GENERATED_PAYMENT_TEXT_MARKERS) {
+    const idx = message.indexOf(marker)
+    if (idx !== -1 && idx < cutIndex) cutIndex = idx
+  }
+  return message.slice(0, cutIndex).trim()
+}

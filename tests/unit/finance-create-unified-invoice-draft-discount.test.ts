@@ -30,13 +30,6 @@ vi.mock("@/lib/portal/td-invoice", () => ({
 vi.mock("@/lib/invoice-auto-send", () => ({
   fetchSettingsBanks: vi.fn(async () => []),
   selectSettingsBank: vi.fn(() => null),
-  resolveBankDetails: vi.fn(async () => ({
-    accountHolder: "Tony Durante LLC",
-    accountNumber: "123",
-    routingNumber: "456",
-    bankName: "Test Bank",
-  })),
-  buildPaymentInstructions: vi.fn(() => "\n\nBank Transfer:\nBeneficiary: Tony Durante LLC\nAccount: 123\nRouting: 456\nBank: Test Bank"),
 }))
 
 vi.mock("next/cache", () => ({

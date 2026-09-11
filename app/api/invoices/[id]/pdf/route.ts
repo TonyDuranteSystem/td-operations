@@ -3,26 +3,10 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { resolveMailingAddress } from '@/lib/addresses'
+import { resolveBankDetails } from '@/lib/invoice-auto-send'
+import { resolveInvoiceAudience, sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 
 import { TD_COMPANY } from '@/lib/config'
-
-// Bank details by currency
-const BANK_DETAILS: Record<string, InvoicePdfInput['bankDetails']> = {
-  USD: {
-    label: 'Relay — USD',
-    accountHolder: 'Tony Durante LLC',
-    bankName: 'Thread Bank',
-    accountNumber: '200000306770',
-    routingNumber: '064209588',
-  },
-  EUR: {
-    label: 'Banking Circle — EUR',
-    bankName: 'Banking Circle S.A.',
-    iban: 'DK8989000023658198',
-    swiftBic: 'SXPYDKKK',
-    accountHolder: 'Tony Durante LLC',
-  },
-}
 
 /**
  * GET /api/invoices/[id]/pdf — Generate TD LLC invoice PDF (dashboard auth)
@@ -55,7 +39,7 @@ export async function GET(
 
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, physical_address, ein_number, portal_tier, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('company_name, physical_address, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', payment.account_id)
     .single()
 
@@ -83,8 +67,21 @@ export async function GET(
     ?? (directContactResult.data as { first_name: string; last_name: string; email: string } | null)
 
   const isCredit = payment.invoice_status === 'Credit'
-  const isPortalClient = account?.portal_tier === 'active'
-  const currency = payment.amount_currency ?? 'USD'
+  const currency: 'USD' | 'EUR' = payment.amount_currency === 'EUR' ? 'EUR' : 'USD'
+
+  // Audience-gate bank details and the free-text message exactly like the
+  // client's own emailed invoice does — this route used to gate only on
+  // account.portal_tier === 'active' (missing onboarding/formation) and
+  // showed a hardcoded default bank instead of the invoice's real selected
+  // one; both fixed by reusing the same canonical helpers the send path
+  // already uses (dev jobs 1834af40 / 96e56d06).
+  const audience = await resolveInvoiceAudience(
+    { account_id: payment.account_id, contact_id: payment.contact_id },
+    supabaseAdmin,
+  )
+  const bankDetails = audience === 'no_portal'
+    ? await resolveBankDetails(payment.bank_preference, currency)
+    : null
 
   const billToName = account?.company_name
     ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null)
@@ -113,8 +110,8 @@ export async function GET(
     discount: Number(payment.discount ?? 0),
     total: Number(payment.total ?? payment.amount ?? 0),
 
-    message: payment.message,
-    bankDetails: isPortalClient ? null : (BANK_DETAILS[currency] ?? BANK_DETAILS.USD),
+    message: sanitizeInvoiceMessage(payment.message, audience),
+    bankDetails,
   }
 
   const pdfBytes = await generateInvoicePdf(pdfInput)

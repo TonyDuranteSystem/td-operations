@@ -41,20 +41,10 @@ export async function createUnifiedInvoiceDraft(input: {
 }): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
   return safeAction(async () => {
     const { createTDInvoice } = await import('@/lib/portal/td-invoice')
-    const { fetchSettingsBanks, selectSettingsBank, resolveBankDetails, buildPaymentInstructions } = await import('@/lib/invoice-auto-send')
+    const { fetchSettingsBanks, selectSettingsBank } = await import('@/lib/invoice-auto-send')
 
-    // Resolve bank details via the SAME resolver the emailed PDF/email use
-    // (resolveBankDetails) — this used to collapse any settings_bank:<id>
-    // preference down to a hardcoded 'auto' default before building the
-    // inline payment instructions, so the free-text paragraph named a
-    // completely different bank than the one actually selected (confirmed
-    // live on 29/29 real invoices, 15 already paid by wire — dev job
-    // 1834af40). resolveBankDetails() resolves the real selected bank
-    // instead, matching what the structured Bank Details block and the
-    // stored bank_preference already show.
     const bankPref = input.bank_preference || 'auto'
     const legacyPrefs = new Set(['auto', 'relay', 'mercury', 'revolut', 'airwallex'])
-    const bankDetails = await resolveBankDetails(bankPref, input.currency)
 
     // The label stamped on the invoice (payments.payment_method, e.g. "Wire
     // Transfer (Chase JP Morgan)") must name the SPECIFIC bank picked, not a
@@ -74,11 +64,16 @@ export async function createUnifiedInvoiceDraft(input: {
         : (input.currency === 'EUR' ? 'Airwallex (EUR)' : 'Mercury (USD)')
     }
 
-    // Build payment instructions for the message field
+    // The message field stores ONLY the staff-typed note going forward —
+    // it used to also carry a machine-generated "Bank Transfer: ..."
+    // paragraph baked in at creation time, which every downstream renderer
+    // (PDF, email) then echoed verbatim with no way to hide it from
+    // portal-audience clients who should never see bank details at all
+    // (dev jobs 1834af40 / 96e56d06). Bank details are now resolved fresh,
+    // and gated by audience, at send/render time instead — see
+    // resolveBankDetails()/sanitizeInvoiceMessage() in lib/invoice-auto-send.ts
+    // and lib/portal/pay-token.ts.
     const paymentMethod = input.payment_method || 'both'
-    const paymentInstructions = buildPaymentInstructions(bankDetails, paymentMethod)
-
-    const fullMessage = (input.message || '').trim() + paymentInstructions
 
     const result = await createTDInvoice({
       account_id: input.account_id,
@@ -90,7 +85,7 @@ export async function createUnifiedInvoiceDraft(input: {
       currency: input.currency,
       due_date: input.due_date || undefined,
       issue_date: input.issue_date,
-      message: fullMessage.trim() || undefined,
+      message: (input.message || '').trim() || undefined,
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
       bank_preference: bankPref,
       mark_as_paid: input.mark_as_paid || false,
