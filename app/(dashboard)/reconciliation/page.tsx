@@ -36,8 +36,8 @@ export default async function ReconciliationPage() {
       .order('created_at', { ascending: false }),
   ])
 
-  // PRIVACY, ENFORCED ON THE SERVER (same doctrine as finance/page.tsx's PRIVATE_TO_OWNER
-  // filter, applied differently here on purpose): this page's own queries already exclude the
+  // PRIVACY, ENFORCED ON THE SERVER (same doctrine as finance/page.tsx's privacy filter,
+  // applied differently here on purpose): this page's own queries already exclude the
   // 'outgoing'/'owner_ledger' statuses by construction (they only ever select 'unmatched' and
   // 'matched'), so a status-based filter mirrored from Finance would remove nothing — the real
   // exposure is a genuinely-owner transaction sitting at 'unmatched' BEFORE the periodic sweep
@@ -54,6 +54,21 @@ export default async function ReconciliationPage() {
     )
   }
 
+  // The check above only ever runs on 'unmatched' rows — isClientInvoicePayment (which
+  // isOwnerLedgerFeed is built on) treats a 'matched' feed as an unconditional client
+  // settlement, on purpose (reversing a completed match automatically is a separate, bigger
+  // decision this codebase does not make here). That means a genuinely-owner deposit that got
+  // WRONGLY matched to a client's invoice by a content coincidence — the same class of mistake
+  // this file's own money-routing rules document happening for real — would pass the check
+  // above and stay permanently visible. Rather than reverse the match, hide it from non-owners
+  // on the one signal that's certain regardless of match status: Plaid resolving the transaction
+  // to one of Antonio's own registered accounts (owner_account_number, set only by
+  // lib/plaid-sync.ts). A matched row with no such identity is unaffected.
+  let matchedRows = matchedRes.data ?? []
+  if (!viewerIsOwner) {
+    matchedRows = matchedRows.filter((feed) => !(feed as { owner_account_number?: unknown }).owner_account_number)
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -65,7 +80,7 @@ export default async function ReconciliationPage() {
 
       <ReconciliationBoard
         unmatched={unmatchedRows}
-        matched={matchedRes.data ?? []}
+        matched={matchedRows}
         openInvoices={(openInvoicesRes.data ?? []) as unknown as OpenInvoice[]}
       />
     </div>

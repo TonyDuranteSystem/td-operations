@@ -7,7 +7,7 @@ import {
   partitionAgainstManualBooks,
   type PlaidSubAccount,
   type OwnerAccountRegistryEntry,
-  type BookTransactionContent,
+  type ExistingManualRow,
 } from "@/lib/owner-account-identity"
 
 describe("mapPlaidAccountType", () => {
@@ -102,17 +102,24 @@ describe("findRegistryEntryForAccount", () => {
 })
 
 describe("partitionAgainstManualBooks", () => {
-  const existing = (o: Partial<BookTransactionContent>): BookTransactionContent => ({
+  let nextId = 0
+  // A fresh, unique id per call — real manual rows are always distinct database rows, and the
+  // function now tracks WHICH specific row a duplicate consumed, so two calls must never
+  // collide on id the way two calls with identical content otherwise would.
+  const existing = (o: Partial<ExistingManualRow>): ExistingManualRow => ({
+    id: `manual-${nextId++}`,
     transaction_date: "2026-09-01", amount: 100, currency: "USD", bank_name: "Chase checking 3920", ...o,
   })
 
   it("skips a Plaid transaction that exactly matches a hand-entered one", () => {
+    const manualRow = existing({})
     const { toSync, skippedAsDuplicate } = partitionAgainstManualBooks(
       [existing({})],
-      [existing({})],
+      [manualRow],
     )
     expect(toSync).toHaveLength(0)
     expect(skippedAsDuplicate).toHaveLength(1)
+    expect(skippedAsDuplicate[0].consumedManualRowId).toBe(manualRow.id)
   })
 
   it("keeps a transaction on a DIFFERENT account even with the same date/amount/currency", () => {
@@ -143,5 +150,17 @@ describe("partitionAgainstManualBooks", () => {
       [existing({ amount: 100 })],
     )
     expect(toSync).toHaveLength(1)
+  })
+
+  it("two identical-content candidates against two identical-content manual rows: both consume a distinct row, neither collides", () => {
+    const manualA = existing({})
+    const manualB = existing({})
+    const { toSync, skippedAsDuplicate } = partitionAgainstManualBooks(
+      [existing({}), existing({})],
+      [manualA, manualB],
+    )
+    expect(toSync).toHaveLength(0)
+    expect(skippedAsDuplicate).toHaveLength(2)
+    expect(new Set(skippedAsDuplicate.map(m => m.consumedManualRowId))).toEqual(new Set([manualA.id, manualB.id]))
   })
 })

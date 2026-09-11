@@ -97,11 +97,12 @@ export interface OwnerAccountRegistryEntry {
  * exact same live data, never two independent reads that could disagree.
  */
 export async function fetchOwnerAccountRegistry(): Promise<OwnerAccountRegistryEntry[]> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('td_books_accounts' as never)
     .select('bank_name, account_number, account_type, sign_convention')
     .eq('entity_id', TD_ENTITY_ID)
     .eq('is_active', true)
+  if (error) throw new Error(`account registry read failed: ${error.message}`)
   return (data ?? []) as unknown as OwnerAccountRegistryEntry[]
 }
 
@@ -121,8 +122,21 @@ export interface BookTransactionContent {
   bank_name: string
 }
 
+/**
+ * A hand-entered manual row, identified by its own id so a match against it can be recorded
+ * and never repeated in a later, separate sync call (see partitionAgainstManualBooks below).
+ */
+export interface ExistingManualRow extends BookTransactionContent {
+  id: string
+}
+
 function contentKey(t: BookTransactionContent): string {
   return `${t.transaction_date}|${Number(t.amount).toFixed(2)}|${(t.currency || "USD").toUpperCase()}|${t.bank_name}`
+}
+
+export interface DuplicateMatch<T> {
+  candidate: T
+  consumedManualRowId: string
 }
 
 /**
@@ -134,6 +148,12 @@ function contentKey(t: BookTransactionContent): string {
  * registry-canonical bank_name) doesn't naturally fit that function's shape — the ALGORITHM
  * is deliberately identical, not a second, different rule.
  *
+ * Unlike a single-batch check, this only decides WHICH manual row a candidate would consume —
+ * it does not by itself guarantee that row hasn't already been consumed by an earlier, separate
+ * sync call. The caller (lib/plaid-sync.ts) persists the consumption via plaid_match_consumption
+ * and must exclude already-consumed rows from `existingManual` on every call, so the same
+ * manual row can never absorb two different real transactions across the connection's lifetime.
+ *
  * Callers must pass `existingManual` already filtered to hand-entered rows only
  * (transaction_ref not starting 'feed:') — comparing against the sweep's own prior output
  * would let a real transaction arriving in a later sync cycle be wrongly matched against
@@ -141,22 +161,27 @@ function contentKey(t: BookTransactionContent): string {
  */
 export function partitionAgainstManualBooks<T extends BookTransactionContent>(
   candidates: T[],
-  existingManual: BookTransactionContent[],
-): { toSync: T[]; skippedAsDuplicate: T[] } {
-  const available = new Map<string, number>()
+  existingManual: ExistingManualRow[],
+): { toSync: T[]; skippedAsDuplicate: DuplicateMatch<T>[] } {
+  const available = new Map<string, string[]>()
   for (const row of existingManual) {
     const key = contentKey(row)
-    available.set(key, (available.get(key) ?? 0) + 1)
+    const ids = available.get(key) ?? []
+    ids.push(row.id)
+    available.set(key, ids)
   }
 
   const toSync: T[] = []
-  const skippedAsDuplicate: T[] = []
+  const skippedAsDuplicate: DuplicateMatch<T>[] = []
   for (const candidate of candidates) {
     const key = contentKey(candidate)
-    const remaining = available.get(key) ?? 0
-    if (remaining > 0) {
-      available.set(key, remaining - 1)
-      skippedAsDuplicate.push(candidate)
+    const ids = available.get(key)
+    // Checked by presence in the list, never by truthiness of the id itself — an id is always
+    // a real database uuid in production, but a check like `if (id)` would wrongly treat a
+    // falsy-but-valid id as "no match" if that ever stopped being true.
+    if (ids && ids.length > 0) {
+      const consumedManualRowId = ids.shift() as string
+      skippedAsDuplicate.push({ candidate, consumedManualRowId })
     } else {
       toSync.push(candidate)
     }

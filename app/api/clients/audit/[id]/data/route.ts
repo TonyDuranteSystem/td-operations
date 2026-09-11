@@ -250,11 +250,20 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   // flips a feed to status='matched' (e.g. via Step 14 create-service-from-feed)
   // the supabaseAdmin singleton can return the stale 'unmatched' row, leaving
   // the orphan visible in the audit panel until the next cold restart.
+  // owner_account_number excluded via .is(...) below: this pool feeds a fuzzy NAME-matching
+  // cascade (findFeedsForAccount) with no client/account scoping of its own, and Antonio's own
+  // transactions carry no more protection here than a client's would. A feed Plaid has resolved
+  // to one of Antonio's own registered accounts (owner_account_number, set only by
+  // lib/plaid-sync.ts — a certain identity fact) must never enter this candidate pool at all,
+  // regardless of status: a coincidental name/memo match could otherwise show his private
+  // transaction to staff auditing an unrelated client, and one click ("Create service +
+  // invoice") would permanently misfile his money as that client's payment.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: feedRows } = await (freshAdminClient() as any)
     .from('td_bank_feeds')
     .select('id, source, transaction_date, amount, currency, sender_name, sender_reference, memo, status, matched_payment_id, raw_data')
     .or('status.eq.unmatched,source.eq.mercury,source.eq.mercury_api')
+    .is('owner_account_number', null)
     .order('transaction_date', { ascending: false })
     .limit(500)
 
