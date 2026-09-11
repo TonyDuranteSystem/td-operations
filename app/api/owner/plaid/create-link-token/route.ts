@@ -15,14 +15,22 @@ export async function POST() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const response = await plaidClient.linkTokenCreate({
-    user: { client_user_id: 'td-owner' },
-    client_name: 'Tony Durante LLC — My Finances',
-    products: PLAID_PRODUCTS as unknown as Products[],
-    country_codes: PLAID_COUNTRY_CODES as unknown as CountryCode[],
-    language: 'en',
-    webhook: `${INTERNAL_BASE_URL}/api/plaid/webhook`,
-  })
-
-  return NextResponse.json({ link_token: response.data.link_token })
+  try {
+    const response = await plaidClient.linkTokenCreate({
+      user: { client_user_id: 'td-owner' },
+      client_name: 'Tony Durante LLC — My Finances',
+      products: PLAID_PRODUCTS as unknown as Products[],
+      country_codes: PLAID_COUNTRY_CODES as unknown as CountryCode[],
+      language: 'en',
+      webhook: `${INTERNAL_BASE_URL}/api/plaid/webhook`,
+    })
+    return NextResponse.json({ link_token: response.data.link_token })
+  } catch (err) {
+    // An unhandled throw here (e.g. Plaid credentials missing/invalid, Plaid API unreachable)
+    // previously crashed into Next.js's default error response, which has no JSON body — the
+    // client's res.json() then threw its own opaque "Unexpected end of JSON input", hiding the
+    // real cause. Always return a real JSON error instead.
+    console.error('[owner/plaid/create-link-token] Failed to create link token:', err)
+    return NextResponse.json({ error: 'Could not start the bank connection — Plaid is not reachable right now.' }, { status: 502 })
+  }
 }

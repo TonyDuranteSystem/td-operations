@@ -28,30 +28,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'sync_from_date must be YYYY-MM-DD' }, { status: 400 })
   }
 
-  const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token })
-  const { access_token, item_id } = exchangeResponse.data
-
-  const itemResponse = await plaidClient.itemGet({ access_token })
-  const institutionId = itemResponse.data.item.institution_id
-
+  let access_token: string
+  let item_id: string
+  let institutionId: string | null | undefined
   let institutionName = bank_name
-  if (institutionId) {
-    const instResponse = await plaidClient.institutionsGetById({
-      institution_id: institutionId,
-      country_codes: [CountryCode.Us],
-    })
-    institutionName = instResponse.data.institution.name
-  }
+  let accounts: { account_id: string; name: string; mask: string | null; type: string; subtype: string | null; balances: unknown }[]
 
-  const accountsResponse = await plaidClient.accountsGet({ access_token })
-  const accounts = accountsResponse.data.accounts.map(a => ({
-    account_id: a.account_id,
-    name: a.name,
-    mask: a.mask,
-    type: a.type,
-    subtype: a.subtype,
-    balances: a.balances,
-  }))
+  try {
+    const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token })
+    ;({ access_token, item_id } = exchangeResponse.data)
+
+    const itemResponse = await plaidClient.itemGet({ access_token })
+    institutionId = itemResponse.data.item.institution_id
+
+    if (institutionId) {
+      const instResponse = await plaidClient.institutionsGetById({
+        institution_id: institutionId,
+        country_codes: [CountryCode.Us],
+      })
+      institutionName = instResponse.data.institution.name
+    }
+
+    const accountsResponse = await plaidClient.accountsGet({ access_token })
+    accounts = accountsResponse.data.accounts.map(a => ({
+      account_id: a.account_id,
+      name: a.name,
+      mask: a.mask,
+      type: a.type,
+      subtype: a.subtype,
+      balances: a.balances,
+    }))
+  } catch (err) {
+    // Same failure shape as create-link-token: an unhandled throw here previously crashed into
+    // a body-less error response, which the client's res.json() turned into an opaque
+    // "Unexpected end of JSON input" instead of a real message.
+    console.error('[owner/plaid/exchange-token] Failed to exchange/read Plaid item:', err)
+    return NextResponse.json({ error: 'Could not finish connecting that bank — Plaid is not reachable right now.' }, { status: 502 })
+  }
 
   // `as never`: owner_scoped isn't in the generated types yet — see accounts/route.ts's sibling comment.
   const { error } = await supabaseAdmin
