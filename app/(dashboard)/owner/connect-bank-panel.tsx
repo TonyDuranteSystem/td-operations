@@ -69,7 +69,7 @@ function ExistingAccountsReference() {
   return (
     <details className="mb-2 text-xs text-zinc-500">
       <summary className="cursor-pointer select-none hover:text-zinc-700">
-        Your hand-entered accounts ({accounts.length}) — check before setting a sync-from date
+        Your hand-entered accounts ({accounts.length})
       </summary>
       <div className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-zinc-200 divide-y divide-zinc-100">
         {accounts.map(a => (
@@ -147,15 +147,18 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
           onChange={e => setBankName(e.target.value)}
           className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm w-40 sm:w-48"
         />
-        <label className="flex items-center gap-1.5 text-xs text-zinc-600">
-          <span>Sync from (optional):</span>
-          <input
-            type="date"
-            value={cutoverDate}
-            onChange={e => setCutoverDate(e.target.value)}
-            className="rounded-md border border-zinc-200 px-2 py-1.5 text-xs"
-          />
-        </label>
+        <details className="text-xs text-zinc-500">
+          <summary className="cursor-pointer select-none hover:text-zinc-700">Advanced: also set a start date</summary>
+          <label className="mt-1.5 flex items-center gap-1.5">
+            <span>Sync from:</span>
+            <input
+              type="date"
+              value={cutoverDate}
+              onChange={e => setCutoverDate(e.target.value)}
+              className="rounded-md border border-zinc-200 px-2 py-1.5 text-xs"
+            />
+          </label>
+        </details>
         {!linkToken ? (
           <button
             onClick={fetchLinkToken}
@@ -176,8 +179,9 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
         )}
       </div>
       <p className="text-xs text-zinc-400 max-w-md">
-        If this bank is already in the list above under hand-entered records, set Sync from to
-        the day after its latest date — otherwise leave it blank.
+        Transactions already entered by hand are recognized automatically by account number, so
+        connecting a bank already being tracked manually will not double them up. The date above
+        is only an extra option, not something that needs to be set.
       </p>
     </div>
   )
