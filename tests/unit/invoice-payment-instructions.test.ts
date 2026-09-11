@@ -6,7 +6,7 @@ describe('sanitizeInvoiceMessage', () => {
   // buildPaymentInstructions() — a staff note followed by a machine-generated
   // "Bank Transfer: ..." paragraph naming the account's actual selected bank
   // (Marcury - Choice Financial Group). Historical invoices still carry this
-  // exact shape (dev jobs 1834af40 / 96e56d06) even though new invoices no
+  // exact shape (dev job 1834af40) even though new invoices no
   // longer generate it — sanitizeInvoiceMessage is what protects them at
   // display time.
   const staffNote = 'First installment 2026 — LLC Annual Management.'
@@ -47,9 +47,45 @@ describe('sanitizeInvoiceMessage', () => {
     expect(sanitizeInvoiceMessage(undefined, 'no_portal')).toBe('')
     expect(sanitizeInvoiceMessage('', 'portal')).toBe('')
   })
+
+  // QA follow-up (dev job 1834af40, post-ship sweep): a SECOND, differently-
+  // worded generator — unrelated to buildPaymentInstructions — hardcodes its
+  // own "Please remit payment by wire transfer" sentence directly into the
+  // message at two live creation sites (the annual-agreement-signed webhook
+  // and the June annual-installments cron). Confirmed live: a real
+  // onboarding-tier account's installment invoice (INV-002393) rendered this
+  // sentence untouched, telling the portal client to look "below" for bank
+  // details this fix correctly no longer shows. These two exact shapes are
+  // the real literal templates from those two call sites.
+  it('strips the agreement-signed webhook\'s 1st-installment sentence for a portal audience', () => {
+    const note = 'First installment 2026 — LLC Annual Management.'
+    const message = `${note}\nPlease remit payment by wire transfer.`
+    const result = sanitizeInvoiceMessage(message, 'portal')
+    expect(result).toBe(note)
+    expect(result).not.toContain('wire transfer')
+  })
+
+  it('leaves the agreement-signed webhook\'s sentence untouched for a no_portal audience', () => {
+    const message = 'First installment 2026 — LLC Annual Management.\nPlease remit payment by wire transfer.'
+    expect(sanitizeInvoiceMessage(message, 'no_portal')).toBe(message)
+  })
+
+  it('strips the annual-installments cron\'s longer 2nd-installment sentence for a portal audience', () => {
+    const note = 'Payment for 2nd Installment 2026 — LLC Annual Management fee.'
+    const message = `${note}\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.`
+    const result = sanitizeInvoiceMessage(message, 'portal')
+    expect(result).toBe(note)
+    expect(result).not.toContain('bank details below')
+    expect(result).not.toContain('card')
+  })
+
+  it('leaves the annual-installments cron\'s sentence untouched for a no_portal audience', () => {
+    const message = 'Payment for 2nd Installment 2026 — LLC Annual Management fee.\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.'
+    expect(sanitizeInvoiceMessage(message, 'no_portal')).toBe(message)
+  })
 })
 
-describe('createUnifiedInvoiceDraft — no longer bakes payment instructions into the stored message (dev jobs 1834af40 / 96e56d06)', () => {
+describe('createUnifiedInvoiceDraft — no longer bakes payment instructions into the stored message (dev job 1834af40)', () => {
   // The invoice PDF/email used to show bank details TWICE — once as a
   // free-text paragraph baked into payments.message at creation time, once
   // again in the PDF's own structured Bank Details block — and the baked-in

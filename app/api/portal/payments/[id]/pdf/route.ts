@@ -116,7 +116,7 @@ export async function GET(
     // portal user with access to this payment (the check above) — always
     // "portal" audience, so bank details stay unconditionally hidden and
     // any machine-generated bank paragraph baked into an older message gets
-    // stripped rather than trusted to be absent (dev jobs 1834af40 / 96e56d06).
+    // stripped rather than trusted to be absent (dev job 1834af40).
     message: sanitizeInvoiceMessage(payment.message, 'portal'),
     bankDetails: null,
   }

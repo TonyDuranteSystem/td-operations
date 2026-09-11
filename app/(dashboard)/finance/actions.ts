@@ -69,7 +69,7 @@ export async function createUnifiedInvoiceDraft(input: {
     // paragraph baked in at creation time, which every downstream renderer
     // (PDF, email) then echoed verbatim with no way to hide it from
     // portal-audience clients who should never see bank details at all
-    // (dev jobs 1834af40 / 96e56d06). Bank details are now resolved fresh,
+    // (dev job 1834af40). Bank details are now resolved fresh,
     // and gated by audience, at send/render time instead — see
     // resolveBankDetails()/sanitizeInvoiceMessage() in lib/invoice-auto-send.ts
     // and lib/portal/pay-token.ts.

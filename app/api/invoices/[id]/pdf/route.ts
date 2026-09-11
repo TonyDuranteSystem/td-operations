@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { resolveBankDetails } from '@/lib/invoice-auto-send'
-import { resolveInvoiceAudience, sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
+import { resolveInvoiceAudience, sanitizeInvoiceMessage, gateBankDetailsForAudience } from '@/lib/portal/pay-token'
 
 import { TD_COMPANY } from '@/lib/config'
 
@@ -74,14 +74,20 @@ export async function GET(
   // account.portal_tier === 'active' (missing onboarding/formation) and
   // showed a hardcoded default bank instead of the invoice's real selected
   // one; both fixed by reusing the same canonical helpers the send path
-  // already uses (dev jobs 1834af40 / 96e56d06).
+  // already uses (dev job 1834af40).
   const audience = await resolveInvoiceAudience(
     { account_id: payment.account_id, contact_id: payment.contact_id },
     supabaseAdmin,
   )
-  const bankDetails = audience === 'no_portal'
+  // The ternary below only decides whether to spend a DB read (skip it for
+  // portal audience) — it is not the safety boundary. gateBankDetailsForAudience
+  // is: even if this condition were ever flipped by mistake, the shared gate
+  // still nulls the value for a portal audience (bug-hunter finding, dev job
+  // 1834af40, 2nd QA round — this was the one call site not routed through it).
+  const rawBankDetails = audience === 'no_portal'
     ? await resolveBankDetails(payment.bank_preference, currency)
     : null
+  const bankDetails = gateBankDetailsForAudience(rawBankDetails, audience)
 
   const billToName = account?.company_name
     ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null)
