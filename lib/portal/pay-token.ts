@@ -98,25 +98,106 @@ export async function resolveInvoiceAudience(
 ): Promise<InvoiceAudience> {
   // Prefer account portal_tier when we have an account.
   if (opts.account_id) {
-    const { data: acct } = await supabase
+    const { data: acct, error } = await supabase
       .from("accounts")
       .select("portal_tier, account_type")
       .eq("id", opts.account_id)
       .single()
+    // Fail SAFE toward "portal" (no bank details shown) on a genuine lookup
+    // failure — we don't actually know this recipient isn't a portal client,
+    // and the two possible wrong defaults are not symmetric: silently
+    // showing a no-portal client a "log in to pay" message instead of bank
+    // details is a recoverable annoyance; silently showing a portal client
+    // real bank details is a live money/compliance leak. Previously this
+    // discarded `error` entirely and fell through to "no_portal" — the
+    // leaking side — on any read failure (dev job 96e56d06, QA follow-up).
+    if (error) {
+      console.error(`resolveInvoiceAudience: account lookup failed for ${opts.account_id}, failing safe to "portal": ${error.message}`)
+      return "portal"
+    }
     if (acct?.portal_tier && PORTAL_AUDIENCE_TIERS.has(acct.portal_tier)) return "portal"
     return "no_portal"
   }
 
   // Contact-only payments: check contact.portal_tier.
   if (opts.contact_id) {
-    const { data: c } = await supabase
+    const { data: c, error } = await supabase
       .from("contacts")
       .select("portal_tier")
       .eq("id", opts.contact_id)
       .single()
+    if (error) {
+      console.error(`resolveInvoiceAudience: contact lookup failed for ${opts.contact_id}, failing safe to "portal": ${error.message}`)
+      return "portal"
+    }
     if (c?.portal_tier && PORTAL_AUDIENCE_TIERS.has(c.portal_tier)) return "portal"
     return "no_portal"
   }
 
   return "no_portal"
+}
+
+/**
+ * Bank details must never reach a portal-audience recipient. This is the
+ * single gate every already-resolved bankDetails value passes through
+ * before reaching a PDF or email, so a future edit can't silently invert
+ * or drop the check at just one of several call sites (dev job 96e56d06,
+ * QA follow-up — the repeated inline ternary this replaces had zero direct
+ * test coverage of its own).
+ */
+export function gateBankDetailsForAudience<T>(
+  bankDetails: T,
+  audience: InvoiceAudience,
+): T | null {
+  return audience === "no_portal" ? bankDetails : null
+}
+
+/**
+ * Historical invoices created before this fix may carry a machine-generated
+ * "Bank Transfer: ..." / "Card payment available upon request." paragraph
+ * baked directly into their stored message (dev jobs 1834af40 / 96e56d06 —
+ * every render site used to just echo payment.message verbatim, so a portal
+ * client saw bank details anyway despite the invoice PDF/email otherwise
+ * correctly hiding them). New invoices no longer generate this paragraph at
+ * all, but old rows still have it — so portal-audience recipients get it
+ * stripped here, at every display site, rather than trusting every future
+ * render site to remember. No-portal audiences see the message unchanged;
+ * bank details are their real payment path.
+ *
+ * The markers below are the exact, stable literal prefixes every known
+ * generated-text source has always used — never legitimate staff-typed
+ * prose — so finding the earliest one and cutting there reliably recovers
+ * just the staff's own note.
+ *
+ * The first two markers are the old createUnifiedInvoiceDraft generator's
+ * shape (dev jobs 1834af40 / 96e56d06). The third is a DIFFERENT, still-live generator
+ * with its own wording — the annual-installment webhook and cron
+ * (app/api/webhooks/agreement-signed/route.ts, app/api/cron/annual-
+ * installments/route.ts) each hardcode a "\nPlease remit payment by wire
+ * transfer[...]" sentence directly into the invoice message at creation
+ * time, independently of createUnifiedInvoiceDraft. Confirmed live on a
+ * real portal-tier account's installment invoice: the sentence survived
+ * untouched and told the client to look "below" for bank details that this
+ * fix correctly no longer shows — an actively misleading document, not
+ * just an incomplete one (dev job 96e56d06, QA follow-up).
+ */
+const GENERATED_PAYMENT_TEXT_MARKERS = [
+  "\n\nBank Transfer:",
+  "\n\nCard payment available upon request.",
+  "\nPlease remit payment by wire transfer",
+]
+
+export function sanitizeInvoiceMessage(
+  message: string | null | undefined,
+  audience: InvoiceAudience,
+): string {
+  if (!message) return ""
+  if (audience === "no_portal") return message
+
+  let cutIndex = message.length
+  for (const marker of GENERATED_PAYMENT_TEXT_MARKERS) {
+    const idx = message.indexOf(marker)
+    if (idx !== -1 && idx < cutIndex) cutIndex = idx
+  }
+  return message.slice(0, cutIndex).trim()
 }

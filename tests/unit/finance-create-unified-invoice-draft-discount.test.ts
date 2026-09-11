@@ -27,15 +27,6 @@ vi.mock("@/lib/portal/td-invoice", () => ({
   createTDInvoice: mockCreateTDInvoice,
 }))
 
-vi.mock("@/app/offer/[token]/contract/bank-defaults", () => ({
-  getBankDetailsByPreference: vi.fn(() => ({
-    beneficiary: "Tony Durante LLC",
-    account_number: "123",
-    routing_number: "456",
-    bank_name: "Test Bank",
-  })),
-}))
-
 vi.mock("@/lib/invoice-auto-send", () => ({
   fetchSettingsBanks: vi.fn(async () => []),
   selectSettingsBank: vi.fn(() => null),
