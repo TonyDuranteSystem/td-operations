@@ -17,7 +17,7 @@ import { resolveMailingAddress } from "@/lib/addresses"
 import { syncInvoiceToQB } from "@/lib/qb-sync"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { buildInvoiceEmail } from "@/lib/email/invoice-email"
-import { ensurePayToken, resolveInvoiceAudience } from "@/lib/portal/pay-token"
+import { ensurePayToken, resolveInvoiceAudience, sanitizeInvoiceMessage, gateBankDetailsForAudience } from "@/lib/portal/pay-token"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { TD_COMPANY } from "@/lib/config"
 
@@ -101,7 +101,7 @@ function settingsBankToDetails(bank: SettingsBank, currency: "USD" | "EUR"): Non
  *
  * Fallback for auto when Invoice Settings has no matching bank: Mercury (USD) or Airwallex (EUR).
  */
-async function resolveBankDetails(
+export async function resolveBankDetails(
   preference: string | null | undefined,
   currency: "USD" | "EUR",
 ): Promise<NonNullable<InvoicePdfInput["bankDetails"]>> {
@@ -256,6 +256,22 @@ export async function sendTDInvoice(
   const invoiceNumber = payment.invoice_number ?? "DRAFT"
   const total = Number(payment.total ?? payment.amount ?? 0)
 
+  // Resolve audience (portal vs no_portal) BEFORE building the PDF or the
+  // email — both must hide bank details from portal-audience recipients per
+  // R092, and (dev jobs 1834af40 / 96e56d06) the PDF's own structured
+  // bankDetails field and the free-text message it shares with the email
+  // used to be built audience-BLIND, so a portal client's PDF attachment
+  // showed real bank details even though the email body correctly hid them.
+  // Portal-audience recipients get a "log in to your portal to pay" CTA and
+  // NO bank details anywhere. No-portal recipients (One-Time customers +
+  // closed-portal Clients) get a Pay-with-Card button (via /pay/<token>
+  // redirect) plus inline bank details — that's their whole payment path.
+  const audience = await resolveInvoiceAudience(
+    { account_id: payment.account_id, contact_id: payment.contact_id },
+    supabaseAdmin,
+  )
+  const sanitizedMessage = sanitizeInvoiceMessage(payment.message, audience)
+
   // Generate PDF
   const pdfInput: InvoicePdfInput = {
     companyName: TD_COMPANY.name,
@@ -276,22 +292,12 @@ export async function sendTDInvoice(
     subtotal: Number(payment.subtotal ?? 0),
     discount: Number(payment.discount ?? 0),
     total,
-    message: payment.message,
-    bankDetails,
+    message: sanitizedMessage,
+    bankDetails: gateBankDetailsForAudience(bankDetails, audience),
   }
 
   const pdfBytes = await generateInvoicePdf(pdfInput)
   const pdfBase64 = Buffer.from(pdfBytes).toString("base64")
-
-  // Resolve audience (portal vs no_portal). Portal-audience recipients get
-  // a "log in to your portal to pay" CTA and NO bank details in the body,
-  // per R092. No-portal recipients (One-Time customers + closed-portal
-  // Clients) get a Pay-with-Card button (via /pay/<token> redirect) plus
-  // inline bank details — that's their whole payment path.
-  const audience = await resolveInvoiceAudience(
-    { account_id: payment.account_id, contact_id: payment.contact_id },
-    supabaseAdmin,
-  )
 
   // Generate / reuse pay token only for no-portal audiences (no email link
   // = no token needed). Token lives on payments.pay_token so reminders and
@@ -311,8 +317,8 @@ export async function sendTDInvoice(
     currencySymbol: csym,
     currency,
     payToken,
-    bankDetails: audience === "no_portal" ? bankDetails : null,
-    message: payment.message,
+    bankDetails: gateBankDetailsForAudience(bankDetails, audience),
+    message: sanitizedMessage,
   })
 
   const boundary = `boundary_${Date.now()}`
@@ -464,6 +470,15 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
   const total = Number(payment.total ?? payment.amount ?? 0)
   const bankDetails = await resolveBankDetails(payment.bank_preference, currency)
 
+  // Resolve audience BEFORE building the PDF — the paid PDF used to carry
+  // bank details unconditionally, leaking to portal-audience recipients the
+  // same way the initial send did (dev jobs 1834af40 / 96e56d06).
+  const audience = await resolveInvoiceAudience(
+    { account_id: payment.account_id, contact_id: payment.contact_id },
+    supabaseAdmin,
+  )
+  const sanitizedMessage = sanitizeInvoiceMessage(payment.message, audience)
+
   // Generate the PAID PDF (reuses the same template; the document is
   // marked Paid in the payment record by now so the PDF's status line
   // reflects it).
@@ -486,16 +501,11 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     subtotal: Number(payment.subtotal ?? 0),
     discount: Number(payment.discount ?? 0),
     total,
-    message: payment.message,
-    bankDetails,
+    message: sanitizedMessage,
+    bankDetails: gateBankDetailsForAudience(bankDetails, audience),
   }
   const pdfBytes = await generateInvoicePdf(pdfInput)
   const pdfBase64 = Buffer.from(pdfBytes).toString("base64")
-
-  const audience = await resolveInvoiceAudience(
-    { account_id: payment.account_id, contact_id: payment.contact_id },
-    supabaseAdmin,
-  )
 
   const paidDate = payment.paid_date ?? new Date().toISOString().split("T")[0]
   const { subject, html } = buildInvoiceEmail({
@@ -507,7 +517,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     total,
     currencySymbol: csym,
     currency,
-    message: payment.message,
+    message: sanitizedMessage,
   })
 
   const boundary = `boundary_${Date.now()}`
