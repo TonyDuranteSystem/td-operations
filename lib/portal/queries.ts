@@ -10,6 +10,7 @@ import type { FormationStageRow } from '@/lib/portal/formation-progress'
 import { normalizeStageHistory } from '@/lib/stage-history-helpers'
 import { resolveTaxWizardEligibility } from '@/lib/tax/wizard-eligibility'
 import { completeWizardFormTitle, startWizardFormTitle } from '@/lib/portal/wizard-labels'
+import { confirmedClientFacingName, type NameCheck } from '@/lib/flows/name-checks'
 
 /**
  * Portal data queries. All use supabaseAdmin (service role, bypasses RLS)
@@ -362,9 +363,10 @@ export function extractOfferTokenFromNotes(notes: string | null | undefined): st
 }
 
 export async function getInProgressFormations(contactId: string): Promise<InProgressFormation[]> {
-  const { data: sds } = await supabaseAdmin
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- name_checks not in generated types
+  const { data: sds } = await (supabaseAdmin as any)
     .from('service_deliveries')
-    .select('id, service_name, notes, source_offer_token')
+    .select('id, service_name, notes, source_offer_token, name_checks')
     .eq('contact_id', contactId)
     .eq('service_type', 'Company Formation')
     .is('account_id', null)
@@ -420,21 +422,31 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
     return sds.length === 1 ? soleFormationLeadId : null
   }
 
-  // Chosen LLC name from the formation wizard, when submitted. Applied only when
-  // there is exactly one in-progress formation (the name→SD mapping is otherwise
-  // ambiguous); multiple in-progress formations fall back to the SD label.
+  // Chosen LLC name, when one has been put in front of the client. Applied only
+  // when there is exactly one in-progress formation (the name→SD mapping is
+  // otherwise ambiguous); multiple in-progress formations fall back to the SD
+  // label. Primary source: service_deliveries.name_checks (the Formation
+  // Workspace's Name Command Center — sent_to_client/accepted/filed only, never
+  // a still-pending or dead candidate). Falls back to the older
+  // wizard_progress.chosen_name_final/chosen_name field for any formation that
+  // was named through the now-retired contact-page tool before it existed
+  // (2026-09-11, dev job cb771564 — that tool was this field's only writer;
+  // dropping it without this fallback would blank the label for those clients).
   let chosenName = ''
   if (sds.length === 1) {
-    const { data: wp } = await supabaseAdmin
-      .from('wizard_progress')
-      .select('data')
-      .eq('contact_id', contactId)
-      .eq('wizard_type', 'formation')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    const wd = (wp?.data ?? {}) as Record<string, unknown>
-    chosenName = String(wd.chosen_name_final || wd.chosen_name || '').trim()
+    chosenName = confirmedClientFacingName((sds[0] as { name_checks?: NameCheck[] | null }).name_checks ?? null) ?? ''
+    if (!chosenName) {
+      const { data: wp } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('data')
+        .eq('contact_id', contactId)
+        .eq('wizard_type', 'formation')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const wd = (wp?.data ?? {}) as Record<string, unknown>
+      chosenName = String(wd.chosen_name_final || wd.chosen_name || '').trim()
+    }
   }
 
   return sds.map(sd => ({

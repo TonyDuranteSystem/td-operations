@@ -53,10 +53,6 @@
       "schedule": "0 */1 * * *"
     },
     {
-      "path": "/api/cron/articles-detector",
-      "schedule": "0 */1 * * *"
-    },
-    {
       "path": "/api/cron/email-monitor",
       "schedule": "*/5 * * * *"
     },
