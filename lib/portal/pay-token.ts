@@ -110,7 +110,7 @@ export async function resolveInvoiceAudience(
     // details is a recoverable annoyance; silently showing a portal client
     // real bank details is a live money/compliance leak. Previously this
     // discarded `error` entirely and fell through to "no_portal" — the
-    // leaking side — on any read failure (dev job 1834af40, QA follow-up).
+    // leaking side — on any read failure (dev job 96e56d06, QA follow-up).
     if (error) {
       console.error(`resolveInvoiceAudience: account lookup failed for ${opts.account_id}, failing safe to "portal": ${error.message}`)
       return "portal"
@@ -141,7 +141,7 @@ export async function resolveInvoiceAudience(
  * Bank details must never reach a portal-audience recipient. This is the
  * single gate every already-resolved bankDetails value passes through
  * before reaching a PDF or email, so a future edit can't silently invert
- * or drop the check at just one of several call sites (dev job 1834af40,
+ * or drop the check at just one of several call sites (dev job 96e56d06,
  * QA follow-up — the repeated inline ternary this replaces had zero direct
  * test coverage of its own).
  */
@@ -155,7 +155,7 @@ export function gateBankDetailsForAudience<T>(
 /**
  * Historical invoices created before this fix may carry a machine-generated
  * "Bank Transfer: ..." / "Card payment available upon request." paragraph
- * baked directly into their stored message (dev job 1834af40 —
+ * baked directly into their stored message (dev jobs 1834af40 / 96e56d06 —
  * every render site used to just echo payment.message verbatim, so a portal
  * client saw bank details anyway despite the invoice PDF/email otherwise
  * correctly hiding them). New invoices no longer generate this paragraph at
@@ -170,7 +170,7 @@ export function gateBankDetailsForAudience<T>(
  * just the staff's own note.
  *
  * The first two markers are the old createUnifiedInvoiceDraft generator's
- * shape (dev job 1834af40). The third is a DIFFERENT, still-live generator
+ * shape (dev jobs 1834af40 / 96e56d06). The third is a DIFFERENT, still-live generator
  * with its own wording — the annual-installment webhook and cron
  * (app/api/webhooks/agreement-signed/route.ts, app/api/cron/annual-
  * installments/route.ts) each hardcode a "\nPlease remit payment by wire
@@ -179,7 +179,7 @@ export function gateBankDetailsForAudience<T>(
  * real portal-tier account's installment invoice: the sentence survived
  * untouched and told the client to look "below" for bank details that this
  * fix correctly no longer shows — an actively misleading document, not
- * just an incomplete one (dev job 1834af40, QA follow-up).
+ * just an incomplete one (dev job 96e56d06, QA follow-up).
  */
 const GENERATED_PAYMENT_TEXT_MARKERS = [
   "\n\nBank Transfer:",

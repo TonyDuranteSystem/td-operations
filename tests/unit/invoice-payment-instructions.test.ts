@@ -6,7 +6,7 @@ describe('sanitizeInvoiceMessage', () => {
   // buildPaymentInstructions() — a staff note followed by a machine-generated
   // "Bank Transfer: ..." paragraph naming the account's actual selected bank
   // (Marcury - Choice Financial Group). Historical invoices still carry this
-  // exact shape (dev job 1834af40) even though new invoices no
+  // exact shape (dev jobs 1834af40 / 96e56d06) even though new invoices no
   // longer generate it — sanitizeInvoiceMessage is what protects them at
   // display time.
   const staffNote = 'First installment 2026 — LLC Annual Management.'
@@ -48,7 +48,7 @@ describe('sanitizeInvoiceMessage', () => {
     expect(sanitizeInvoiceMessage('', 'portal')).toBe('')
   })
 
-  // QA follow-up (dev job 1834af40, post-ship sweep): a SECOND, differently-
+  // QA follow-up (dev job 96e56d06, post-ship sweep): a SECOND, differently-
   // worded generator — unrelated to buildPaymentInstructions — hardcodes its
   // own "Please remit payment by wire transfer" sentence directly into the
   // message at two live creation sites (the annual-agreement-signed webhook
@@ -85,7 +85,7 @@ describe('sanitizeInvoiceMessage', () => {
   })
 })
 
-describe('createUnifiedInvoiceDraft — no longer bakes payment instructions into the stored message (dev job 1834af40)', () => {
+describe('createUnifiedInvoiceDraft — no longer bakes payment instructions into the stored message (dev jobs 1834af40 / 96e56d06)', () => {
   // The invoice PDF/email used to show bank details TWICE — once as a
   // free-text paragraph baked into payments.message at creation time, once
   // again in the PDF's own structured Bank Details block — and the baked-in

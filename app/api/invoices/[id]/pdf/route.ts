@@ -74,7 +74,7 @@ export async function GET(
   // account.portal_tier === 'active' (missing onboarding/formation) and
   // showed a hardcoded default bank instead of the invoice's real selected
   // one; both fixed by reusing the same canonical helpers the send path
-  // already uses (dev job 1834af40).
+  // already uses (dev jobs 1834af40 / 96e56d06).
   const audience = await resolveInvoiceAudience(
     { account_id: payment.account_id, contact_id: payment.contact_id },
     supabaseAdmin,
@@ -83,7 +83,7 @@ export async function GET(
   // portal audience) — it is not the safety boundary. gateBankDetailsForAudience
   // is: even if this condition were ever flipped by mistake, the shared gate
   // still nulls the value for a portal audience (bug-hunter finding, dev job
-  // 1834af40, 2nd QA round — this was the one call site not routed through it).
+  // 96e56d06, 2nd QA round — this was the one call site not routed through it).
   const rawBankDetails = audience === 'no_portal'
     ? await resolveBankDetails(payment.bank_preference, currency)
     : null

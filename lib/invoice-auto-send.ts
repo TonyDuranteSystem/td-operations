@@ -258,7 +258,7 @@ export async function sendTDInvoice(
 
   // Resolve audience (portal vs no_portal) BEFORE building the PDF or the
   // email — both must hide bank details from portal-audience recipients per
-  // R092, and (dev job 1834af40) the PDF's own structured
+  // R092, and (dev jobs 1834af40 / 96e56d06) the PDF's own structured
   // bankDetails field and the free-text message it shares with the email
   // used to be built audience-BLIND, so a portal client's PDF attachment
   // showed real bank details even though the email body correctly hid them.
@@ -472,7 +472,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
 
   // Resolve audience BEFORE building the PDF — the paid PDF used to carry
   // bank details unconditionally, leaking to portal-audience recipients the
-  // same way the initial send did (dev job 1834af40).
+  // same way the initial send did (dev jobs 1834af40 / 96e56d06).
   const audience = await resolveInvoiceAudience(
     { account_id: payment.account_id, contact_id: payment.contact_id },
     supabaseAdmin,

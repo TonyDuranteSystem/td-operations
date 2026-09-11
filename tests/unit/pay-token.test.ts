@@ -36,7 +36,7 @@ describe("resolveInvoiceAudience", () => {
     expect(result).toBe("no_portal")
   })
 
-  // QA follow-up (dev job 1834af40, post-ship sweep, bug-hunter finding): a
+  // QA follow-up (dev job 96e56d06, post-ship sweep, bug-hunter finding): a
   // genuine lookup failure used to be discarded silently and fall through to
   // "no_portal" — the audience allowed to see real bank details. A DB error
   // tells us NOTHING about the recipient; failing toward "portal" (no bank
