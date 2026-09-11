@@ -1727,21 +1727,6 @@ export async function deleteDuplicateBankFeed(feedId: string): Promise<ActionRes
   })
 }
 
-export async function syncBankFeeds(): Promise<ActionResult> {
-  return safeAction(async () => {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/plaid/accounts`, {
-      method: 'GET',
-      cache: 'no-store',
-    })
-    if (!res.ok) throw new Error('Plaid sync failed')
-    revalidatePath('/finance')
-  }, {
-    action_type: 'update',
-    table_name: 'td_bank_feeds',
-    summary: 'Triggered bank feed sync via Plaid',
-  })
-}
-
 // ── Relink payment ──
 
 /**

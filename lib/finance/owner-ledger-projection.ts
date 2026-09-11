@@ -27,6 +27,12 @@ import {
   extractStripePaymentIntent,
   type FeedSignalSource,
 } from "@/lib/finance/feed-signals"
+import {
+  findRegistryEntryForAccount,
+  fetchOwnerAccountRegistry,
+  type OwnerAccountRegistryEntry,
+} from "@/lib/owner-account-identity"
+import type { OwnerAccountType } from "@/lib/owner-statement-filename"
 import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
 import { updateFeed, updateFeeds } from "@/lib/finance/feed-write"
 import {
@@ -72,6 +78,14 @@ export interface ProjectableFeed extends FeedSignalSource {
   /** Carries the human-triage record (rejected pairs, contested set). Read as EVIDENCE that a
    *  person has already considered this money against a client invoice. */
   review_metadata?: unknown
+  /** Set only by lib/plaid-sync.ts, when it resolved this transaction to a specific physical
+   *  account (by Plaid's own account mask, matched against td_books_accounts by NUMBER — see
+   *  lib/owner-account-identity.ts). Lets buildOwnerLedgerRow give the row the SAME precise
+   *  label ("Chase checking 3920") the hand-entered books already use, instead of the coarse
+   *  bare-institution guess. Absent for every other source and for any Plaid transaction whose
+   *  sub-account couldn't be resolved. */
+  owner_account_number?: string | null
+  owner_account_type?: string | null
 }
 
 /** A row as My Finances stores it (td_books_transactions — the books' OWN table since
@@ -498,8 +512,19 @@ export function resolveConfirmedPayoutFeedIds(
 /**
  * Pure: feed row → owner-ledger row. Returns null if the feed cannot be projected safely
  * (unparseable date or amount) — a dropped row is better than a corrupt one.
+ *
+ * `registry` is optional and, when supplied, takes priority over the coarse institution-only
+ * `BANK_LABELS` map whenever the feed carries a resolved account number+type (set only by
+ * lib/plaid-sync.ts, by Plaid's own account mask matched against td_books_accounts BY NUMBER —
+ * never by name text, per Antonio's own instruction, 2026-09-11). This is what lets a
+ * Plaid-synced row land under the SAME precise label ("Chase checking 3920") the hand-entered
+ * books already use, instead of a generic "Chase". A registry miss (or no caller-supplied
+ * registry at all) falls back to today's coarse label — no worse than before this existed.
  */
-export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | null {
+export function buildOwnerLedgerRow(
+  feed: ProjectableFeed,
+  registry: OwnerAccountRegistryEntry[] = [],
+): OwnerLedgerRow | null {
   const rawAmount = typeof feed.amount === "string" ? Number(feed.amount) : feed.amount
   if (!Number.isFinite(rawAmount)) return null
 
@@ -507,10 +532,24 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
 
   // Feeds carry an absolute amount; direction lives in `status`. The owner ledger is signed.
+  // (For a feed already resolved+signed at sync time against the registry's sign_convention,
+  // `status` already carries that final sign — see lib/plaid-sync.ts — so this one rule
+  // reconstructs it correctly either way, with no special case needed here.)
   const magnitude = Math.abs(rawAmount)
   const signed = feed.status === "outgoing" ? -magnitude : magnitude
 
   const description = (feed.memo || feed.sender_name || "Bank transaction").trim()
+
+  const registryEntry = feed.owner_account_number && feed.owner_account_type
+    ? findRegistryEntryForAccount(
+        {
+          accountNumber: feed.owner_account_number,
+          accountType: feed.owner_account_type as OwnerAccountType,
+          currency: (feed.currency || "USD").toUpperCase(),
+        },
+        registry,
+      )
+    : null
 
   return {
     entity_id: TD_ENTITY_ID, // HARD-PINNED — never derived from the feed.
@@ -520,7 +559,7 @@ export function buildOwnerLedgerRow(feed: ProjectableFeed): OwnerLedgerRow | nul
     counterparty: feed.sender_name?.trim() || null,
     amount: Math.round(signed * 100) / 100,
     currency: (feed.currency || "USD").toUpperCase(),
-    bank_name: BANK_LABELS[feed.source ?? ""] ?? "Other",
+    bank_name: registryEntry?.bank_name ?? BANK_LABELS[feed.source ?? ""] ?? "Other",
     transaction_ref: `feed:${feed.id}`, // deterministic + never blank
     category: "uncategorized", // Antonio categorizes; nothing is auto-booked
     notes: null,
@@ -925,6 +964,28 @@ async function fetchLivePayouts(): Promise<StripePayoutRow[]> {
 }
 
 /**
+ * Assemble the same evidence context the sweep uses, for a READ-ONLY caller that needs to
+ * classify feeds as owner money without performing the sweep's writes — e.g. hiding
+ * owner-shaped rows on a staff screen (Reconciliation, Finance) before the async sweep has
+ * had a chance to reclassify them. Mirrors sweepFeedsToOwnerLedger's own context-loading
+ * exactly (same five loaders, same payout-confirmation step) so a read-time check and the
+ * sweep's real decision can never quietly disagree.
+ */
+export async function buildOwnerLedgerEvidenceContext(
+  feeds: ProjectableFeed[],
+): Promise<{ openInvoices: OpenInvoiceRef[]; evidence: ClientEvidenceContext }> {
+  const [openInvoices, roster, taught, expected, payouts] = await Promise.all([
+    fetchOpenInvoices(),
+    fetchClientRoster(),
+    fetchTaughtPayerIndex(),
+    fetchExpectedPlanPayments(),
+    fetchLivePayouts(),
+  ])
+  const confirmedTdPayoutFeedIds = resolveConfirmedPayoutFeedIds(feeds, payouts)
+  return { openInvoices, evidence: { roster, expected, taught, confirmedTdPayoutFeedIds } }
+}
+
+/**
  * The scheduled sweep: anything that is not positively a client invoice payment is copied to
  * My Finances and taken out of the Bank Feed. Runs each cycle before the invoice matcher.
  *
@@ -938,10 +999,15 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
   const taught = await fetchTaughtPayerIndex()
   const expected = await fetchExpectedPlanPayments()
   const payouts = await fetchLivePayouts()
+  // For labeling a Plaid-synced row with the SAME precise account name ("Chase checking
+  // 3920") the hand-entered books already use — see buildOwnerLedgerRow.
+  const registry = await fetchOwnerAccountRegistry()
 
+  // `as never`: owner_account_number/owner_account_type aren't in the generated types yet —
+  // see app/api/plaid/accounts/route.ts's sibling comment for the same pattern.
   const { data, error } = await supabaseAdmin
-    .from("td_bank_feeds")
-    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id, review_metadata")
+    .from("td_bank_feeds" as never)
+    .select("id, transaction_date, amount, currency, source, sender_name, memo, sender_reference, raw_data, status, external_id, matched_payment_id, review_metadata, owner_account_number, owner_account_type")
     .not("status", "in", '("owner_ledger")')
     .order("transaction_date", { ascending: false })
     .limit(2000)
@@ -956,6 +1022,7 @@ export async function sweepFeedsToOwnerLedger(): Promise<ProjectionResult> {
     taught,
     expected,
     payouts,
+    registry,
   })
 }
 
@@ -984,6 +1051,7 @@ export async function projectFeedsToOwnerLedger(
     expected?: ExpectedPayment[]
     taught?: TaughtPayerIndex
     payouts?: StripePayoutRow[]
+    registry?: OwnerAccountRegistryEntry[]
   } = {},
 ): Promise<ProjectionResult> {
   const confirmedTdPayoutFeedIds = resolveConfirmedPayoutFeedIds(feeds, opts.payouts ?? [])
@@ -1006,7 +1074,7 @@ export async function projectFeedsToOwnerLedger(
     // not rest on a caller remembering to filter. Enforced here so it holds for every caller.
     if (feed.status === "owner_ledger") continue
     if (!isOwnerLedgerFeed(feed, opts.openInvoices ?? [], evidence)) continue
-    const row = buildOwnerLedgerRow(feed)
+    const row = buildOwnerLedgerRow(feed, opts.registry ?? [])
     if (!row) continue
     rows.push(row)
     const concern = describeOwnerLedgerConcern(feed, opts.openInvoices ?? [], evidence)

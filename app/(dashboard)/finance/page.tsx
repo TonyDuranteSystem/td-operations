@@ -2,6 +2,11 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
 import { isDashboardUser, isAdmin, isOwnerOnly } from '@/lib/auth'
+import {
+  buildOwnerLedgerEvidenceContext,
+  isOwnerLedgerFeed,
+  type ProjectableFeed,
+} from '@/lib/finance/owner-ledger-projection'
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
@@ -254,16 +259,46 @@ export default async function FinancePage({
   // PRIVACY, ENFORCED ON THE SERVER — not by hiding rows in the browser.
   // TD's own money (money out, and anything routed to My Finances) is Antonio's business, not
   // the staff's. Filtering it client-side still SENDS it to every staff browser, where it is
-  // one dev-tools tab away; the only real gate is never putting it in the response. Admins get
-  // everything, so nothing is lost to the person who owns the books.
+  // one dev-tools tab away; the only real gate is never putting it in the response.
+  //
+  // Gated on isOwnerOnly, not isAdmin: isAdmin is role-based (lib/auth.ts) and includes any
+  // account ever granted admin for other admin-area work (e.g. a QA/staff account), which is
+  // NOT the same as "is Antonio." This exact gate previously used isAdmin here — the third time
+  // this codebase has made that mistake in this feature area (2026-07-27, 2026-08-29) — fixed
+  // 2026-09-11, same rule this page already applies correctly to the Expenses tab below.
+  //
+  // A persisted status alone also isn't enough: a freshly-synced private transaction lands
+  // 'unmatched' and isn't reclassified to 'owner_ledger' until the periodic sweep runs (up to
+  // 6h later) — during that window a status check alone would show it to every viewer. Run the
+  // SAME live classification the sweep and Reconciliation already use for 'unmatched' rows, and
+  // separately hide any row Plaid resolved to one of Antonio's own registered accounts
+  // (owner_account_number/type — a certain identity fact, set only by lib/plaid-sync.ts)
+  // regardless of match status, since a wrongly-matched owner deposit must never become
+  // permanently visible just because it carries a settled invoice link.
   const allBankFeeds = bankFeedsRes.data ?? []
-  const PRIVATE_TO_OWNER = new Set(['outgoing', 'owner_ledger'])
-  const bankFeeds = userIsAdmin
+  const unmatchedForCheck = allBankFeeds.filter(
+    (f) => String((f as { status?: unknown }).status ?? '') === 'unmatched'
+  ) as unknown as ProjectableFeed[]
+  const ownerLedgerUnmatchedIds = new Set<string>()
+  if (!userIsOwner && unmatchedForCheck.length > 0) {
+    const { openInvoices, evidence } = await buildOwnerLedgerEvidenceContext(unmatchedForCheck)
+    for (const feed of unmatchedForCheck) {
+      if (isOwnerLedgerFeed(feed, openInvoices, evidence)) ownerLedgerUnmatchedIds.add(feed.id)
+    }
+  }
+  const isPrivateToOwner = (f: (typeof allBankFeeds)[number]): boolean => {
+    const status = String((f as { status?: unknown }).status ?? '')
+    if (status === 'outgoing' || status === 'owner_ledger') return true
+    if ((f as { owner_account_number?: unknown }).owner_account_number) return true
+    if (status === 'unmatched' && ownerLedgerUnmatchedIds.has((f as { id: string }).id)) return true
+    return false
+  }
+  const bankFeeds = userIsOwner
     ? allBankFeeds
-    : allBankFeeds.filter(f => !PRIVATE_TO_OWNER.has(String((f as { status?: unknown }).status ?? '')))
+    : allBankFeeds.filter(f => !isPrivateToOwner(f))
   // The count must match what the viewer can actually see, or the header claims rows they
   // will never find.
-  const bankFeedTotalCount = userIsAdmin
+  const bankFeedTotalCount = userIsOwner
     ? (bankFeedCountRes.count ?? allBankFeeds.length)
     : bankFeeds.length
   // Cast: the contacts:payments_contact_id_fkey(full_name) embed is correct at
