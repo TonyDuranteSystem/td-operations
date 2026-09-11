@@ -213,10 +213,17 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
 
   const fetchLinkToken = useCallback(async () => {
     setLoading(true)
-    const res = await fetch('/api/plaid/create-link-token', { method: 'POST' })
-    const data = await res.json()
-    setLinkToken(data.link_token)
-    setLoading(false)
+    try {
+      const res = await fetch('/api/plaid/create-link-token', { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Could not start the bank connection.')
+        return
+      }
+      setLinkToken(data.link_token)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   const { open, ready } = usePlaidLink({
@@ -279,17 +286,25 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncingAllBanks, setSyncingAllBanks] = useState(false)
+  const [forbidden, setForbidden] = useState(false)
 
   const fetchConnections = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch('/api/plaid/accounts')
-      const data = await res.json()
+      if (res.status === 401 || res.status === 403) {
+        setForbidden(true)
+        setConnections([])
+        return
+      }
+      setForbidden(false)
+      const data = await res.json().catch(() => ({}))
       setConnections(data.connections ?? [])
     } catch {
       // Plaid may not be configured yet
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -386,6 +401,11 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
 
       {loading ? (
         <p className="text-xs text-muted-foreground">Loading bank connections...</p>
+      ) : forbidden ? (
+        <div className="border-2 border-dashed rounded-lg p-6 text-center">
+          <p className="text-sm text-muted-foreground font-medium">Bank accounts are connected, but you don&apos;t have permission to view their status here.</p>
+          <p className="text-xs text-muted-foreground mt-1">Ask Antonio for access if you need to manage bank connections.</p>
+        </div>
       ) : visibleConnections.length === 0 ? (
         <div className="border-2 border-dashed rounded-lg p-6 text-center">
           <p className="text-sm text-muted-foreground font-medium">No bank accounts connected</p>
