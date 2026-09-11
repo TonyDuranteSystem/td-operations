@@ -6,8 +6,7 @@
  * Until the state has formed the LLC, there is no account. The contact carries
  * the wizard data, the service delivery, the contact-level Drive folder, and
  * the offer-signing invoice. This helper is invoked at the moment the
- * Articles of Organization land in Drive (Upload Articles button or the
- * detection cron) and:
+ * Articles of Organization are uploaded in the Formation Workspace and:
  *
  *   1. Reads the latest completed formation_submissions for the contact.
  *   2. Reads wizard_progress.data.chosen_name_final for the picked LLC name.
@@ -36,6 +35,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { formationStateForClient } from "@/lib/formation/state-lookup"
+import { resolveFormationStateCode, formationStateFromWizardData, type FormationStateCode } from "@/lib/formation/states"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { logAction } from "@/lib/mcp/action-log"
 import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder-utils"
@@ -225,6 +225,7 @@ export async function fetchFormationSourceData(contactId: string): Promise<Forma
 export type FormationPreflightFailure =
   | "missing_submission"
   | "missing_chosen_name"
+  | "invalid_state"
   | "missing_entity_type"
 
 export interface FormationMaterializePreflightResult {
@@ -232,6 +233,8 @@ export interface FormationMaterializePreflightResult {
   failure?: FormationPreflightFailure
   error?: string
   chosen_name?: string | null
+  state_code?: FormationStateCode
+  state_source?: "wizard" | "submission" | "offer" | "admin"
   entity_code?: "SMLLC" | "MMLLC"
   entity_source?: string
   entity_detail?: string
@@ -239,19 +242,32 @@ export interface FormationMaterializePreflightResult {
 
 /**
  * Read-only dry-run of the DETERMINISTIC gates materializeFormationCompany
- * applies: formation data present, a chosen company name, and a resolvable
- * entity type. Used (a) by advanceServiceDelivery to REFUSE the advance into
- * "Articles Received" BEFORE the stage move commits — a deterministic
- * materialization failure must never be a silent success (Covelli/DoctorGut,
- * council 2026-07-28) — and (b) by the workspace Articles-upload modal to
- * decide whether to require the staff LLC-type field. Mutates nothing. Must
- * stay in lockstep with the materializer's own resolution (same source
+ * applies: formation data present, a chosen company name, a resolvable
+ * formation state, and a resolvable entity type. Used (a) by
+ * advanceServiceDelivery to REFUSE the advance into "Articles Received"
+ * BEFORE the stage move commits — a deterministic materialization failure
+ * must never be a silent success (Covelli/DoctorGut, council 2026-07-28) —
+ * and (b) by the workspace Articles-upload modal to decide whether to
+ * require the staff LLC-type and/or formation-state fields. Mutates nothing.
+ * Must stay in lockstep with the materializer's own resolution (same source
  * selection via fetchFormationSourceData, same resolver inputs).
+ *
+ * State check added 2026-09-11 (dev job cb771564): closes the one real gap
+ * found when retiring the old contact-page name/Articles tool — that tool's
+ * upload dialog was the only UI with a manual "pick the state" field. Every
+ * historical case that ever needed it (2 in production, both traced) had a
+ * formation with no state captured anywhere automatic (wizard, submission,
+ * or signed offer) — the same condition this check now surfaces up front,
+ * mirroring the wizard→submission→offer chain advanceServiceDelivery already
+ * uses (lib/formation/states.ts::resolveFormationStateCode), so the two can
+ * never resolve a different answer for the same formation.
  */
 export async function preflightFormationMaterialization(input: {
   contact_id: string
   /** The confirmed/filed company name when the caller has one (name_checks). */
   chosen_name?: string | null
+  /** Staff-supplied formation-state override (wins over every other source). */
+  formation_state?: FormationStateCode | null
   /** Staff-supplied LLC-type override (wins over every other source). */
   entity_type?: "SMLLC" | "MMLLC" | null
 }): Promise<FormationMaterializePreflightResult> {
@@ -278,6 +294,31 @@ export async function preflightFormationMaterialization(input: {
     }
   }
 
+  let stateCode: FormationStateCode
+  let stateSource: "wizard" | "submission" | "offer" | "admin"
+  if (input.formation_state) {
+    stateCode = input.formation_state
+    stateSource = "admin"
+  } else {
+    const offerState = await formationStateForClient({ contactId: input.contact_id })
+    const stateResolution = resolveFormationStateCode({
+      wizardState: formationStateFromWizardData(src.wizardData),
+      submissionState: src.submissionState,
+      offerState,
+    })
+    if (stateResolution.source === "default") {
+      return {
+        ok: false,
+        failure: "invalid_state",
+        error:
+          "No formation state captured anywhere — not the client's questionnaire, the submitted form, or a signed contract. Pick the state manually to continue.",
+        chosen_name: chosenName,
+      }
+    }
+    stateCode = stateResolution.code
+    stateSource = stateResolution.source
+  }
+
   const { resolveEntityTypeForFormation } = await import("@/lib/portal/entity-type-from-contract")
   const resolution = await resolveEntityTypeForFormation({
     contactId: input.contact_id,
@@ -298,6 +339,8 @@ export async function preflightFormationMaterialization(input: {
   return {
     ok: true,
     chosen_name: chosenName,
+    state_code: stateCode,
+    state_source: stateSource,
     entity_code: resolution.wizardCode,
     entity_source: resolution.source,
     entity_detail: resolution.detail,
@@ -413,10 +456,12 @@ export async function materializeFormationCompany(
     // 4. State + entity_type.
     // Admin-supplied state wins. When no admin value was provided the internal
     // chain is: submission row's state → the contact's SIGNED offer's pinned
-    // state (WS-B scope amendment — before it, callers with no param, e.g. the
-    // articles-detector cron, could only see the submission) → error. NM never
-    // silently self-applies here: materialization records a LEGAL filing fact,
-    // so with nothing decided anywhere a human must supply the state.
+    // state (WS-B scope amendment — before it, a caller with no param could
+    // only ever see the submission) → error. NM never silently self-applies
+    // here: materialization records a LEGAL filing fact, so with nothing
+    // decided anywhere a human must supply the state (the Workspace upload
+    // dialog's own manual override, added 2026-09-11, is the normal way that
+    // now happens — see preflightFormationMaterialization above).
     let resolvedStateRaw = params.formation_state
       ? params.formation_state
       : String(submissionState || "").toUpperCase().trim()
@@ -1277,10 +1322,10 @@ export async function materializeFormationCompany(
 
     // 10c. Orphan documents cleanup. When materialize was retried after one or
     // more failed attempts, each attempt created a "Articles of Organization"
-    // documents row with account_id=null (see upload-articles route). Link the
-    // most recent one to the new account and remove the duplicate documents
-    // rows (Drive files stay — admin can clean those up manually if needed;
-    // we only own the CRM-side documents record here).
+    // documents row with account_id=null. Link the most recent one to the new
+    // account and remove the duplicate documents rows (Drive files stay —
+    // admin can clean those up manually if needed; we only own the CRM-side
+    // documents record here).
     try {
       const { data: orphanDocs } = await supabaseAdmin
         .from("documents")

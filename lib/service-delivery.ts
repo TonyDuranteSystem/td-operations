@@ -62,6 +62,16 @@ export interface AdvanceStageParams {
    */
   entity_type?: "SMLLC" | "MMLLC"
   /**
+   * Staff-supplied formation state (NM/WY/FL/DE) for the Company Formation
+   * advance into "Articles Received" — the materializer's highest-priority
+   * state source, same rank as entity_type above. Sent by the workspace
+   * Articles-upload modal when the automatic chain (wizard → submitted form
+   * → signed offer) resolves to nothing. Added 2026-09-11 (dev job cb771564)
+   * so the workspace has the same manual fallback the retired contact-page
+   * tool used to be the only place with. Ignored for other transitions.
+   */
+  formation_state?: "NM" | "WY" | "FL" | "DE"
+  /**
    * The cycle year a renewal filing is FOR (Mark Filed dialog). Drives the
    * completion roll: the record moves to the anniversary in year+1
    * (computeRollForward). Absent → defaults to the current year. Ignored for
@@ -204,15 +214,18 @@ export async function advanceServiceDelivery(
       const pre = await preflightFormationMaterialization({
         contact_id: delivery.contact_id,
         chosen_name: preConfirmedName,
+        formation_state: params.formation_state ?? null,
         entity_type: params.entity_type ?? null,
       })
       if (!pre.ok) {
         const hint =
           pre.failure === "missing_entity_type"
             ? " Choose the LLC type (single- or multi-member) in the Articles upload dialog, or record it on the signed contract, then retry."
-            : pre.failure === "missing_chosen_name"
-              ? " Mark the state-approved name as filed in Name Checks first, then retry."
-              : ""
+            : pre.failure === "invalid_state"
+              ? " Choose the formation state in the Articles upload dialog, then retry."
+              : pre.failure === "missing_chosen_name"
+                ? " Mark the state-approved name as filed in Name Checks first, then retry."
+                : ""
         return {
           success: false,
           error: `Cannot create the company record: ${pre.error ?? "unknown reason"}${hint}`,
@@ -771,9 +784,11 @@ export async function advanceServiceDelivery(
   // "Articles Received" for an in-flight (contact-scoped, account_id NULL)
   // formation. All the heavy lifting — account insert, owner/member links, Drive
   // folder, SD account_id link, portal-tier sync — lives in
-  // materializeFormationCompany (the single account-creation path, shared with
-  // the Upload Articles admin action + articles-detector cron). We DON'T
-  // duplicate it; we just call it with the right params, bridging two v2 gaps:
+  // materializeFormationCompany (the single account-creation path — the old
+  // contact-page tool and the Drive-detection cron that used to also call it
+  // were both retired 2026-09-11, dev job cb771564; this is the only caller
+  // now). We DON'T duplicate it; we just call it with the right params,
+  // bridging two v2 gaps:
   //   • the confirmed name lives in service_deliveries.name_checks (status
   //     'filed'), not wizard_progress.chosen_name_final → pass it as chosen_name;
   //   • materialize needs a state CODE → resolve from wizard data, default NM.
@@ -845,12 +860,14 @@ export async function advanceServiceDelivery(
         const mat = await materializeFormationCompany({
           contact_id: delivery.contact_id,
           chosen_name: confirmedName ?? undefined,
-          // WS-B amendment (hunter re-attack finding 2): pass a state only when
-          // some tier actually DECIDED it. Passing the NM fallback here would
-          // masquerade as admin input and defeat materialize's "a human must
-          // supply an undecided legal filing state" gate — undecided deals now
-          // error loudly at Articles-Received instead of silently filing NM.
-          formation_state: stateResolution.source !== "default" ? stateCode : undefined,
+          // A staff-supplied override (2026-09-11, dev job cb771564) always wins
+          // — same rank as entity_type below. Otherwise: WS-B amendment (hunter
+          // re-attack finding 2) — pass a state only when some tier actually
+          // DECIDED it. Passing the NM fallback here would masquerade as admin
+          // input and defeat materialize's "a human must supply an undecided
+          // legal filing state" gate — undecided deals now error loudly at
+          // Articles-Received instead of silently filing NM.
+          formation_state: params.formation_state ?? (stateResolution.source !== "default" ? stateCode : undefined),
           // Staff-confirmed filing date (OCR-prefilled in the workspace). When
           // omitted the materializer still falls back to today — but the
           // workspace requires it before this transition, so that's a safety net

@@ -8,7 +8,8 @@
  * Used by:
  * - formation-setup.ts (Phase 1)
  * - onboarding-setup.ts (Phase 2 directly)
- * - select_llc_name API action (Phase 2 migration)
+ * - formation-materialize.ts::materializeFormationCompany (Phase 2 migration,
+ *   triggered by the Formation Workspace's Articles-upload flow)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'

@@ -125,4 +125,46 @@ describe('advanceServiceDelivery §4b — deterministic materialization refusal 
       entity_type: 'MMLLC',
     })
   })
+
+  it('REFUSES the advance on invalid_state (no state captured anywhere), with an actionable hint — 2026-09-11, dev job cb771564', async () => {
+    const writes = installFrom()
+    vi.mocked(preflightFormationMaterialization).mockResolvedValue({
+      ok: false,
+      failure: 'invalid_state',
+      error: 'No formation state captured anywhere.',
+    })
+
+    const r = await advanceServiceDelivery({
+      delivery_id: 'sd-1',
+      target_stage: 'Articles Received',
+      actor: 'test',
+    })
+
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('Cannot create the company record')
+    expect(r.error).toContain('Choose the formation state')
+    expect(writes.filter((w) => w.table === 'service_deliveries')).toEqual([])
+  })
+
+  it('passes the staff formation_state override into the preflight', async () => {
+    installFrom()
+    vi.mocked(preflightFormationMaterialization).mockResolvedValue({
+      ok: false,
+      failure: 'missing_chosen_name',
+      error: 'No confirmed company name yet.',
+    })
+
+    const r = await advanceServiceDelivery({
+      delivery_id: 'sd-1',
+      target_stage: 'Articles Received',
+      formation_state: 'WY',
+      actor: 'test',
+    })
+
+    expect(r.success).toBe(false)
+    expect(vi.mocked(preflightFormationMaterialization).mock.calls[0][0]).toMatchObject({
+      contact_id: 'contact-1',
+      formation_state: 'WY',
+    })
+  })
 })

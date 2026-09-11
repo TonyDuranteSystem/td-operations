@@ -6,14 +6,17 @@
  * Actions:
  *   wizard_reminder    — Send wizard reminder notification (3-day dedup)
  *   advance_stage      — Advance a service delivery stage (full auto-chain)
- *   add_llc_name       — Append an admin-typed name candidate to the formation pool (verbatim, no LLC auto-append)
- *   remove_llc_name    — Remove an admin-added name candidate (wizard 3 are not removable)
- *   select_llc_name    — Pick a name (from wizard 3 OR admin-added) as the official LLC name; triggers account create/rename + Drive folder + SD rename + audit
  *   mark_fax_sent      — Mark SS-4 fax as sent to IRS (SD stays at SS-4 Signed)
  *   enter_ein          — Set EIN on account + advance pipeline to EIN Received
  *   process_documents  — Re-run Drive folder creation + passport processing for a contact
  *   cancel_service     — Cancel a service delivery (set status to cancelled)
  *   ocr_document       — Run OCR on an existing document (passport→MRZ, ITIN→number extraction)
+ *
+ * The LLC name actions (add/remove/select) and the Drive-detection cron were
+ * retired 2026-09-11 (dev job cb771564) — the Formation Workspace's Name
+ * Command Center + Articles-upload flow is now the only path, with parity
+ * (including a manual formation-state override) the old tools didn't add
+ * until this same change. See docs/systems/formation.md.
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -23,15 +26,7 @@ import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { parseItinIssueDateFromOcr } from "@/lib/ocr-helpers"
 import { buildFormUrl } from "@/lib/forms/smart-url"
-import type { Json } from "@/lib/database.types"
 import { enqueueJob } from "@/lib/jobs/queue"
-import {
-  type AdminAddedName,
-  classifyNameSource,
-  companyNameForAccount,
-  isDuplicateName,
-  validateAdminAddedName,
-} from "@/lib/llc-name-helpers"
 
 export async function POST(req: NextRequest) {
   try {
@@ -276,239 +271,6 @@ export async function POST(req: NextRequest) {
         result = {
           success: true,
           detail: `Advanced to ${targetStage.stage_name}`,
-          side_effects: sideEffects,
-        }
-        break
-      }
-
-      // ─── ADD LLC NAME (admin-added candidate, stored verbatim) ───
-      case "add_llc_name": {
-        const rawName = (params?.name as string) ?? ""
-        const wizardProgressId = params?.wizard_progress_id as string
-        if (!wizardProgressId) {
-          result = { success: false, detail: "Missing wizard_progress_id" }
-          break
-        }
-        const validation = validateAdminAddedName(rawName)
-        if (!validation.valid || !validation.trimmed) {
-          result = { success: false, detail: validation.error || "Invalid name" }
-          break
-        }
-        const newName = validation.trimmed
-
-        const { data: wp, error: wpErr } = await supabaseAdmin
-          .from("wizard_progress")
-          .select("id, data, wizard_type")
-          .eq("id", wizardProgressId)
-          .single()
-        if (wpErr || !wp) {
-          result = { success: false, detail: "Wizard progress record not found" }
-          break
-        }
-        if (wp.wizard_type !== "formation") {
-          result = { success: false, detail: "Wizard is not a formation type" }
-          break
-        }
-
-        const wd = (wp.data || {}) as Record<string, unknown>
-        const existing: AdminAddedName[] = Array.isArray(wd.additional_names)
-          ? (wd.additional_names as AdminAddedName[])
-          : []
-        const allCurrent = [
-          (wd.llc_name_1 as string) || "",
-          (wd.llc_name_2 as string) || "",
-          (wd.llc_name_3 as string) || "",
-          ...existing.map((e) => e.name),
-        ]
-        if (isDuplicateName(newName, allCurrent)) {
-          result = { success: false, detail: "That name is already in the list." }
-          break
-        }
-
-        const nowIso = new Date().toISOString()
-        const updatedAdditional: AdminAddedName[] = [
-          ...existing,
-          { name: newName, added_at: nowIso, added_by: "crm-admin" },
-        ]
-
-        await supabaseAdmin
-          .from("wizard_progress")
-          .update({
-            data: { ...wd, additional_names: updatedAdditional } as unknown as Json,
-            updated_at: nowIso,
-          })
-          .eq("id", wizardProgressId)
-
-        await supabaseAdmin.from("action_log").insert({
-          actor: "crm-admin",
-          action_type: "add_llc_name",
-          table_name: "wizard_progress",
-          record_id: wizardProgressId,
-          summary: `LLC name candidate added: "${newName}"`,
-          details: { name: newName, wizard_progress_id: wizardProgressId } as unknown as Json,
-        })
-
-        result = { success: true, detail: `Added "${newName}" to the name list.` }
-        break
-      }
-
-      // ─── REMOVE LLC NAME (admin-added only — wizard 3 are not removable) ───
-      case "remove_llc_name": {
-        const rawName = (params?.name as string) ?? ""
-        const wizardProgressId = params?.wizard_progress_id as string
-        if (!wizardProgressId || !rawName.trim()) {
-          result = { success: false, detail: "Missing wizard_progress_id or name" }
-          break
-        }
-        const toRemove = rawName.trim()
-
-        const { data: wp, error: wpErr } = await supabaseAdmin
-          .from("wizard_progress")
-          .select("id, data, wizard_type")
-          .eq("id", wizardProgressId)
-          .single()
-        if (wpErr || !wp) {
-          result = { success: false, detail: "Wizard progress record not found" }
-          break
-        }
-
-        const wd = (wp.data || {}) as Record<string, unknown>
-        const existing: AdminAddedName[] = Array.isArray(wd.additional_names)
-          ? (wd.additional_names as AdminAddedName[])
-          : []
-        const filtered = existing.filter((e) => e.name !== toRemove)
-        if (filtered.length === existing.length) {
-          result = { success: false, detail: "Name not found in the admin-added list." }
-          break
-        }
-
-        await supabaseAdmin
-          .from("wizard_progress")
-          .update({
-            data: { ...wd, additional_names: filtered } as unknown as Json,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", wizardProgressId)
-
-        await supabaseAdmin.from("action_log").insert({
-          actor: "crm-admin",
-          action_type: "remove_llc_name",
-          table_name: "wizard_progress",
-          record_id: wizardProgressId,
-          summary: `LLC name candidate removed: "${toRemove}"`,
-          details: { name: toRemove, wizard_progress_id: wizardProgressId } as unknown as Json,
-        })
-
-        result = { success: true, detail: `Removed "${toRemove}".` }
-        break
-      }
-
-      // ─── SELECT LLC NAME (pick from wizard 3 + admin-added; triggers the activation pipeline) ───
-      case "select_llc_name": {
-        // Antonio's architectural model (2026-05-03/04): name selection is a
-        // marker only. NO account is created here, NO Drive folder, NO
-        // account_contacts link. The chosen name is recorded on
-        // wizard_progress.data.chosen_name and the active Company Formation
-        // SD's service_name is updated for CRM display.
-        //
-        // The account is created later when Articles of Organization are
-        // uploaded — either via the Upload Articles button on the LLC Name
-        // Selection card (PR 3) or by the Drive detection cron. The
-        // materialization helper reads wizard_progress.data.chosen_name and
-        // formation_submissions.state to create the real account.
-        const selectedName = (params?.selected_name as string ?? "").trim()
-        const wizardProgressId = params?.wizard_progress_id as string
-
-        if (!selectedName || !wizardProgressId) {
-          result = { success: false, detail: "Missing selected_name or wizard_progress_id" }
-          break
-        }
-
-        const { data: wp, error: wpErr } = await supabaseAdmin
-          .from("wizard_progress")
-          .select("id, data, wizard_type, status, contact_id")
-          .eq("id", wizardProgressId)
-          .single()
-        if (wpErr || !wp) {
-          result = { success: false, detail: "Wizard progress record not found" }
-          break
-        }
-        if (wp.wizard_type !== "formation") {
-          result = { success: false, detail: "Wizard is not a formation type" }
-          break
-        }
-
-        const sideEffects: string[] = []
-        const wizardData = (wp.data || {}) as Record<string, unknown>
-
-        const additionalNamesRaw: AdminAddedName[] = Array.isArray(wizardData.additional_names)
-          ? (wizardData.additional_names as AdminAddedName[])
-          : []
-        const nameSource = classifyNameSource(
-          selectedName,
-          {
-            name1: wizardData.llc_name_1 as string | undefined,
-            name2: wizardData.llc_name_2 as string | undefined,
-            name3: wizardData.llc_name_3 as string | undefined,
-          },
-          additionalNamesRaw,
-        )
-        const finalCompanyName = companyNameForAccount(selectedName, nameSource)
-
-        // Record the chosen name on wizard_progress.data — this is the source
-        // of truth that the materialization helper reads at Articles upload.
-        await supabaseAdmin
-          .from("wizard_progress")
-          .update({
-            data: { ...wizardData, chosen_name: selectedName, chosen_name_final: finalCompanyName },
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", wizardProgressId)
-        sideEffects.push(`Chosen name recorded: ${finalCompanyName}`)
-
-        // Update the active Company Formation SD's service_name so the CRM
-        // displays the chosen name. The SD lives on the contact (post-PR1)
-        // or on a legacy placeholder account — either way contact_id matches.
-        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-        const { data: updatedSds } = await supabaseAdmin
-          .from("service_deliveries")
-          .update({
-            service_name: `Company Formation - ${finalCompanyName}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("contact_id", contact_id)
-          .eq("service_type", "Company Formation")
-          .eq("status", "active")
-          .select("id")
-
-        if (updatedSds && updatedSds.length > 0) {
-          sideEffects.push("Service delivery name updated")
-        }
-
-        await supabaseAdmin.from("action_log").insert({
-          actor: "crm-admin",
-          action_type: "select_llc_name",
-          table_name: "wizard_progress",
-          record_id: wizardProgressId,
-          contact_id,
-          summary: `LLC name selected: ${finalCompanyName} (source: ${nameSource}). Account will be created when Articles of Organization are uploaded.`,
-          details: {
-            selected_name: selectedName,
-            final_company_name: finalCompanyName,
-            source: nameSource,
-            wizard_progress_id: wizardProgressId,
-            all_names: [
-              wizardData.llc_name_1,
-              wizardData.llc_name_2,
-              wizardData.llc_name_3,
-              ...additionalNamesRaw.map((a) => a.name),
-            ].filter(Boolean),
-          } as unknown as Json,
-        })
-
-        result = {
-          success: true,
-          detail: `LLC name set to "${finalCompanyName}". The company will be created when you upload the Articles of Organization.`,
           side_effects: sideEffects,
         }
         break

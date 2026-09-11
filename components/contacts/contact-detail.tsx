@@ -31,7 +31,6 @@ import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import type { OfferPackageOption } from '@/lib/types/offer'
-import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
@@ -800,13 +799,6 @@ function OverviewTab({
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactHasDriveFolder={!!contact.gdrive_folder_url} />
-
-      {/* LLC Name Selection Card */}
-      <LlcNameSelectionCard
-        wizardProgress={wizardProgress}
-        accounts={accounts}
-        contactId={contact.id}
-      />
 
     </div>
   )

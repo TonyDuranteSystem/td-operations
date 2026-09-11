@@ -5,6 +5,13 @@ vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/portal/entity-type-from-contract', () => ({
   resolveEntityTypeForFormation: vi.fn(),
 }))
+// Mocked at the same function boundary as resolveEntityTypeForFormation above
+// (not by simulating its internal supabase queries) — it makes its own
+// .or()-chained "offers" lookup that the generic installFrom() mock below
+// does not model.
+vi.mock('@/lib/formation/state-lookup', () => ({
+  formationStateForClient: vi.fn(),
+}))
 
 import {
   selectFormationSource,
@@ -12,6 +19,7 @@ import {
   type FormationSourceRows,
 } from '@/lib/operations/formation-materialize'
 import { resolveEntityTypeForFormation } from '@/lib/portal/entity-type-from-contract'
+import { formationStateForClient } from '@/lib/formation/state-lookup'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { AdvanceStageParams, AdvanceStageResult } from '@/lib/service-delivery'
 
@@ -150,6 +158,12 @@ describe('preflightFormationMaterialization', () => {
   beforeEach(() => {
     vi.mocked(resolveEntityTypeForFormation).mockReset()
     vi.mocked(supabaseAdmin.from).mockReset()
+    // Safe default so tests that aren't about state resolution aren't tripped
+    // up by the new gate (2026-09-11, dev job cb771564) — most fixtures below
+    // resolve state from the submission tier (SUB()'s default state:'NM')
+    // before this offer-tier value would ever matter; the one that doesn't
+    // relies on this default explicitly.
+    vi.mocked(formationStateForClient).mockReset().mockResolvedValue('NM')
   })
 
   it('reads submissions in BOTH lifecycle statuses (completed + reviewed) — the Covelli regression pin', async () => {
@@ -214,6 +228,55 @@ describe('preflightFormationMaterialization', () => {
     expect(vi.mocked(resolveEntityTypeForFormation).mock.calls[0][0]).toMatchObject({
       adminOverride: 'MMLLC',
     })
+  })
+
+  // ── formation-state gate (2026-09-11, dev job cb771564 — the one manual
+  // fallback the retired contact-page tool used to be the only place with) ──
+
+  it('fails with invalid_state when nothing captured it anywhere — wizard, submission, or a signed offer', async () => {
+    installFrom({ sub: SUB({ state: null }), wp: WP({ data: {} }) })
+    vi.mocked(formationStateForClient).mockResolvedValue(null)
+    const r = await preflightFormationMaterialization({ contact_id: 'c-1', chosen_name: 'DoctorGut LLC' })
+    expect(r.ok).toBe(false)
+    expect(r.failure).toBe('invalid_state')
+    expect(r.error).toContain('No formation state captured')
+    // Must fail on state BEFORE ever consulting the entity-type resolver.
+    expect(resolveEntityTypeForFormation).not.toHaveBeenCalled()
+  })
+
+  it('resolves the state from the wizard when the submission has none', async () => {
+    installFrom({ sub: null, wp: WP({ data: { chosen_name_final: 'X LLC', formation_state: 'WY' } }) })
+    vi.mocked(resolveEntityTypeForFormation).mockResolvedValue({
+      wizardCode: 'SMLLC', accountLabel: 'Single Member LLC', source: 'wizard', detail: 'from wizard',
+    })
+    const r = await preflightFormationMaterialization({ contact_id: 'c-1' })
+    expect(r.ok).toBe(true)
+    expect(r.state_code).toBe('WY')
+    expect(r.state_source).toBe('wizard')
+  })
+
+  it('falls back to the signed offer state when neither wizard nor submission has one', async () => {
+    installFrom({ sub: null, wp: WP({ data: { chosen_name_final: 'X LLC' } }) })
+    vi.mocked(formationStateForClient).mockResolvedValue('FL')
+    vi.mocked(resolveEntityTypeForFormation).mockResolvedValue({
+      wizardCode: 'SMLLC', accountLabel: 'Single Member LLC', source: 'wizard', detail: 'from wizard',
+    })
+    const r = await preflightFormationMaterialization({ contact_id: 'c-1' })
+    expect(r.ok).toBe(true)
+    expect(r.state_code).toBe('FL')
+    expect(r.state_source).toBe('offer')
+  })
+
+  it('a staff formation_state override wins outright and never touches the automatic chain', async () => {
+    installFrom({ sub: null, wp: WP({ data: { chosen_name_final: 'X LLC' } }) })
+    vi.mocked(resolveEntityTypeForFormation).mockResolvedValue({
+      wizardCode: 'SMLLC', accountLabel: 'Single Member LLC', source: 'wizard', detail: 'from wizard',
+    })
+    const r = await preflightFormationMaterialization({ contact_id: 'c-1', formation_state: 'DE' })
+    expect(r.ok).toBe(true)
+    expect(r.state_code).toBe('DE')
+    expect(r.state_source).toBe('admin')
+    expect(formationStateForClient).not.toHaveBeenCalled()
   })
 })
 
