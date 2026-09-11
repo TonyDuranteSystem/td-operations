@@ -108,7 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // silent).
     const mat = result.materialization
     if (mat && mat.error) {
-      warning = `The stage moved, but the company record was NOT created: ${mat.error} Fix the cause, go back one stage, and advance again — or use Upload Articles on the contact page.`
+      warning = `The stage moved, but the company record was NOT created: ${mat.error} Fix the cause, go back one stage, and advance again.`
     }
 
     return NextResponse.json({
