@@ -270,6 +270,33 @@ export function isRejectedPair(reviewMetadata: unknown, paymentId: string): bool
   return readRejectedPairs(reviewMetadata).some((p) => p.payment_id === paymentId)
 }
 
+/**
+ * A HUMAN HAS ALREADY CONFIRMED THIS IS A CLIENT PAYMENT — the affirmative
+ * counterpart to a rejected pair, not a candidate the automatic rule
+ * proposed and a human accepted or declined, but a transaction the owner
+ * moved from My Finances into Finance specifically BECAUSE it is a client's
+ * money (see lib/finance/owner-transaction-link.ts). Without this stamp the
+ * row would sit `status='unmatched'` with none of the automatic evidence
+ * (no invoice number in the wording, no payer email) `isClientInvoicePayment`
+ * looks for, and the owner-ledger sweep — which runs before the matcher on
+ * every cycle — would silently re-file it back into the owner's own books
+ * before a human ever gets to pick which invoice it settles.
+ */
+export interface ClientPaymentClaim {
+  by: string
+  at: string
+}
+
+export function clientPaymentClaimMetadata(by: string, at: string): { client_payment_claim: ClientPaymentClaim } {
+  return { client_payment_claim: { by, at } }
+}
+
+export function isConfirmedClientPayment(reviewMetadata: unknown): boolean {
+  if (!reviewMetadata || typeof reviewMetadata !== "object" || Array.isArray(reviewMetadata)) return false
+  const raw = (reviewMetadata as Record<string, unknown>).client_payment_claim
+  return !!raw && typeof raw === "object" && typeof (raw as ClientPaymentClaim).by === "string"
+}
+
 // ────────────────────────────────────────────────────────────────────────────────────────
 // WHO decided this row belongs in the owner's books — `owner_routing`.
 //

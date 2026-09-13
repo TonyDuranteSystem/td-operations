@@ -66,6 +66,15 @@ export interface OwnerTransaction {
   notes: string | null
   tax_year: number
   created_at: string
+  /** Set once this transaction has been sent to Finance (a td_bank_feeds row
+   *  now exists for it) and, later, once that row is actually matched to an
+   *  invoice — see lib/finance/owner-transaction-link.ts. Both exclude the
+   *  row from P&L (computeOwnerPnL) so the money isn't counted twice. Never
+   *  cleared by a normal flow. */
+  moved_to_feed_id: string | null
+  linked_payment_id: string | null
+  linked_at: string | null
+  linked_note: string | null
 }
 
 /**
@@ -451,6 +460,13 @@ export function computeOwnerPnL(
   }
 
   for (const tx of txs) {
+    // Money already sent to Finance and linked to a client invoice is counted
+    // there instead (via invoiceIncome) — counting it again here from its own
+    // still-uncategorized row would double it, exactly the failure mode
+    // sendOwnerLedgerRowToFinance's DELETE exists to prevent for the other
+    // direction (dev job pending, "Ambition Holding" case).
+    if (tx.moved_to_feed_id || tx.linked_payment_id) continue
+
     const amt = Number(tx.amount)
     const b = blockFor(tx.currency || 'USD')
     const month = monthOf(tx.transaction_date) - 1
@@ -763,6 +779,13 @@ export async function getUncategorizedCount(year: number): Promise<number> {
     .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
     .eq('category', 'uncategorized')
+    // Sent to Finance and/or linked to a client invoice — resolved, not
+    // actually needing categorization. Same exclusion as computeOwnerPnL's
+    // loop, applied here so this KPI doesn't nag about a row forever just
+    // because sendOwnerTransactionToFinance/linkFeedTransactionToInvoice
+    // never touch `category` (lib/finance/owner-transaction-link.ts).
+    .is('moved_to_feed_id', null)
+    .is('linked_payment_id', null)
 
   if (error) throw new Error(`getUncategorizedCount: ${error.message}`)
   return count ?? 0

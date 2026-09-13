@@ -36,6 +36,7 @@ import type { OwnerAccountType } from "@/lib/owner-statement-filename"
 import { isMatchableInvoice } from "@/lib/finance/invoice-matchability"
 import { updateFeed, updateFeeds } from "@/lib/finance/feed-write"
 import {
+  isConfirmedClientPayment,
   isHumanOwnerClaim,
   ownerRoutingMetadata,
   readOwnerRouting,
@@ -184,6 +185,12 @@ export function isClientInvoicePayment(
   // (verified 2026-08-22: no production row has ever had status "matched" while also matching
   // a confirmed real payout, so this protection is not currently masking a live contradiction).
   if (feed.status === "matched") return true
+
+  // THE OWNER HIMSELF ALREADY SAID SO — stronger evidence than any inference below, same tier
+  // as the true-settlement check above. See lib/finance/feed-vocabulary.ts::isConfirmedClientPayment
+  // for why this exists: a transaction moved into Finance specifically because it's a client's
+  // money would otherwise sit unmatched with no automatic evidence and get swept right back out.
+  if (isConfirmedClientPayment(feed.review_metadata)) return true
 
   // A Stripe card charge carries its own payment reference — the certain link.
   if (extractStripePaymentIntent(feed)) return true
