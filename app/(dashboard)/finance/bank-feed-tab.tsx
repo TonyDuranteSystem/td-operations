@@ -2181,7 +2181,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               }
             }
 
-            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' ? (
+            // Bug-hunter, 2026-09-13 (second pass): disabling "Sync All Banks
+            // Now" only blocks ONE of several doors to the same failure — five
+            // other actions on this page (Ignore/Match/Claim/Restore/Delete-
+            // duplicate on any OTHER row) refresh the whole page's data too,
+            // and the 15-min background cron can settle this exact feed with
+            // no button click at all. Guarding at the render decision instead
+            // of at every trigger closes all of them at once: a row whose
+            // note-link box is open keeps rendering as UnmatchedRow no matter
+            // what its freshly-fetched status says, until the box itself is
+            // closed. The server still re-checks the feed's real status at
+            // submit time and refuses if something else already settled it
+            // (lib/finance/owner-transaction-link.ts) — this only protects the
+            // in-progress typing from disappearing, not the money.
+            const keepShowingAsUnmatched = feedsWithNoteLinkOpen.has(feed.id)
+            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' || keepShowingAsUnmatched ? (
               <UnmatchedRow
                 feed={feed}
                 openInvoices={openInvoices}
