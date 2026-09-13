@@ -11805,6 +11805,11 @@ export type Database = {
           entity_id: string
           id: string
           is_related_party: boolean
+          linked_at: string | null
+          linked_by: string | null
+          linked_note: string | null
+          linked_payment_id: string | null
+          moved_to_feed_id: string | null
           notes: string | null
           source_file_id: string | null
           subcategory: string | null
@@ -11826,6 +11831,11 @@ export type Database = {
           entity_id?: string
           id?: string
           is_related_party?: boolean
+          linked_at?: string | null
+          linked_by?: string | null
+          linked_note?: string | null
+          linked_payment_id?: string | null
+          moved_to_feed_id?: string | null
           notes?: string | null
           source_file_id?: string | null
           subcategory?: string | null
@@ -11847,6 +11857,11 @@ export type Database = {
           entity_id?: string
           id?: string
           is_related_party?: boolean
+          linked_at?: string | null
+          linked_by?: string | null
+          linked_note?: string | null
+          linked_payment_id?: string | null
+          moved_to_feed_id?: string | null
           notes?: string | null
           source_file_id?: string | null
           subcategory?: string | null
@@ -11855,7 +11870,22 @@ export type Database = {
           transaction_ref?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "td_books_transactions_linked_payment_id_fkey"
+            columns: ["linked_payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "td_books_transactions_moved_to_feed_id_fkey"
+            columns: ["moved_to_feed_id"]
+            isOneToOne: false
+            referencedRelation: "td_bank_feeds"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       stripe_payouts: {
         Row: {
