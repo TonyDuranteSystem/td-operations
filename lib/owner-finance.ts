@@ -268,6 +268,18 @@ export async function getOwnerTransactionsPaginated(
     .select('*', { count: 'exact' })
     .eq('entity_id', TD_ENTITY_ID)
     .eq('tax_year', year)
+    // Sent to Finance and/or linked to a client invoice — resolved, and moved
+    // to live in Finance instead. Excluded here unconditionally (not only
+    // when filtering by the 'uncategorized' category) because `category` on
+    // these rows is never touched (sendOwnerTransactionToFinance /
+    // linkFeedTransactionToInvoice, lib/finance/owner-transaction-link.ts) —
+    // without this they'd keep surfacing in My Finances forever, looking
+    // unresolved, when the real, current state of the money lives in Finance.
+    // Same exclusion as getUncategorizedCount and computeOwnerPnL's loop.
+    // The row itself is never deleted (still backs account balances and
+    // duplicate-statement detection) — only hidden from this list.
+    .is('moved_to_feed_id', null)
+    .is('linked_payment_id', null)
     // (date, id) — a tie-break is required, not cosmetic. Many rows share a date on
     // a real statement, and Postgres gives no stable order for ties across separate
     // queries, so date-only paging shows some rows on two pages and NEVER shows an

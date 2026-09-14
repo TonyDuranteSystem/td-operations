@@ -135,7 +135,11 @@ export default async function FinancePage({
     invoice_number: p.invoice_number ?? '',
     status: p.invoice_status ?? 'Draft',
     total: Number(p.total ?? 0),
-    amount_paid: Number(p.amount_paid ?? 0),
+    // NOT coerced to 0 — a genuinely NULL amount_paid (a handful of old
+    // invoices never had it populated) must stay distinguishable from a real
+    // $0 collected, or the "Written Off" tag (Paid + amount_paid < total)
+    // wrongly fires on every one of them. Caught live in production 2026-09-14.
+    amount_paid: p.amount_paid === null ? null : Number(p.amount_paid),
     amount_due: Number(p.amount_due ?? 0),
     currency: p.amount_currency ?? 'USD',
     issue_date: p.issue_date,

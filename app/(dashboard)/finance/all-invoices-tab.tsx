@@ -44,7 +44,7 @@ export interface InvoiceRecord {
   invoice_number: string
   status: string
   total: number
-  amount_paid: number
+  amount_paid: number | null
   amount_due: number
   currency: string
   issue_date: string | null
@@ -92,9 +92,15 @@ function getClientName(inv: InvoiceRecord): string {
  * not an ordinary full payment. Derived from existing fields (no new column):
  * confirmed on 2026-09-14 that no other flow in this codebase ever leaves a
  * Paid invoice short of its own total, so this comparison alone is a safe,
- * unambiguous signal. */
+ * unambiguous signal.
+ *
+ * `amount_paid != null` is required, not cosmetic: a handful of old invoices
+ * carry a NULL amount_paid rather than 0 (never had the field populated).
+ * `Number(null)` coerces to `0` in JS, which made this same-day fix wrongly
+ * flag one of them ("LLC Formation", amount_paid NULL, total $3,250) as a
+ * write-off the moment it shipped — caught by Antonio live in production. */
 function isWrittenOff(inv: InvoiceRecord): boolean {
-  return inv.status === 'Paid' && Number(inv.total) > 0 && Number(inv.amount_paid) < Number(inv.total)
+  return inv.status === 'Paid' && inv.amount_paid != null && Number(inv.total) > 0 && Number(inv.amount_paid) < Number(inv.total)
 }
 
 /** Hover detail for the reminder badge: auto vs manual breakdown + last sent. */

@@ -40,6 +40,15 @@ describe("paginated transaction list has a stable order", () => {
     // shown at all, so they stay uncategorized forever.
     expect(fn).toContain(".order('id', { ascending: false })")
   })
+
+  it("excludes rows sent to Finance or linked to a client invoice — real bug, live 2026-09-14", () => {
+    // getUncategorizedCount already excluded these; this list did not. category
+    // is never touched by sendOwnerTransactionToFinance/linkFeedTransactionToInvoice,
+    // so an unexcluded row kept surfacing in My Finances forever after being fully
+    // resolved in Finance — caught by Antonio live in production.
+    expect(fn).toContain(".is('moved_to_feed_id', null)")
+    expect(fn).toContain(".is('linked_payment_id', null)")
+  })
 })
 
 describe("statement balances survive the import", () => {
