@@ -858,7 +858,11 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
                           Sent to Finance
                         </span>
                       </FastTooltip>
-                    ) : (tx.amount > 0 || tx.transaction_ref?.startsWith('feed:')) && (
+                    // Money in only — a feed-linked ref alone is not enough on its own
+                    // (this used to be `||`, letting an outgoing feed-linked transaction
+                    // show a button meant for a client paying an invoice; every other
+                    // check of this exact pair in this file already required both).
+                    ) : tx.amount > 0 && (
                       <FastTooltip label="Send this to Finance — it is a client paying an invoice">
                         <button
                           onClick={() => sendToFinance(tx)}
