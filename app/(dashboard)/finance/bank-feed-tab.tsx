@@ -75,7 +75,10 @@ export interface BankFeedRecord {
  * of its own total, so this comparison alone is an unambiguous signal). */
 function isWrittenOffPayment(payment: BankFeedRecord['payments']): boolean {
   if (!payment) return false
-  return payment.invoice_status === 'Paid' && Number(payment.total) > 0 && Number(payment.amount_paid) < Number(payment.total)
+  // amount_paid != null matters: Number(null) is 0 in JS, which would wrongly
+  // flag an old invoice that never had amount_paid populated at all as a
+  // write-off. Caught live in production the day this shipped.
+  return payment.invoice_status === 'Paid' && payment.amount_paid != null && Number(payment.total) > 0 && Number(payment.amount_paid) < Number(payment.total)
 }
 
 export interface OpenInvoice {
