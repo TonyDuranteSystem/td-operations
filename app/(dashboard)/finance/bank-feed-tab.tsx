@@ -282,7 +282,7 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   )
 }
 
-function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean }) {
+function BanksSummary({ activeSource, onSourceFilter, isAdmin = false, syncBlocked = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean; syncBlocked?: boolean }) {
   const router = useRouter()
   const [connections, setConnections] = useState<PlaidConnection[]>([])
   const [loading, setLoading] = useState(true)
@@ -378,11 +378,21 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <FastTooltip label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min.">
+          <FastTooltip
+            label={
+              syncBlocked
+                ? "Blocked while a \"Link with a note\" box is open on this page — finish or cancel it first."
+                : "Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+            }
+          >
             <button
               onClick={handleSyncAllBanks}
-              disabled={syncingAllBanks}
-              aria-label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+              disabled={syncingAllBanks || syncBlocked}
+              aria-label={
+                syncBlocked
+                  ? "Blocked while a \"Link with a note\" box is open on this page — finish or cancel it first."
+                  : "Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+              }
               className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
             >
               {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -530,6 +540,7 @@ function ClaimForOwnerButton({ feedId }: { feedId: string }) {
 
 function UnmatchedRow({
   feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false,
+  onNoteLinkOpenChange,
 }: {
   feed: BankFeedRecord
   openInvoices: OpenInvoice[]
@@ -538,6 +549,7 @@ function UnmatchedRow({
   onCancelMatch: () => void
   candidateInfo?: CandidateInfo | null
   isAdmin?: boolean
+  onNoteLinkOpenChange?: (feedId: string, open: boolean) => void
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -844,6 +856,16 @@ function UnmatchedRow({
     setNoteLinkNote('')
     setNoteLinkWriteOff(false)
   }
+
+  // Reports open/closed to the parent so it can disable "Sync All Banks Now"
+  // while this box is open. The cleanup fires on every change AND on real
+  // unmount, so if this row disappears out from under an open box (the exact
+  // failure being guarded against) the parent still hears "closed" and never
+  // gets stuck with the sync button disabled forever.
+  useEffect(() => {
+    onNoteLinkOpenChange?.(feed.id, noteLinkOpen)
+    return () => onNoteLinkOpenChange?.(feed.id, false)
+  }, [noteLinkOpen, feed.id, onNoteLinkOpenChange])
 
   const noteLinkQueryLower = noteLinkQuery.trim().toLowerCase()
   // Unlike `suggestions` below (amount-tolerance gated), this searches ALL open
@@ -1898,6 +1920,25 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
 
+  // Bug-hunter, 2026-09-13: "Sync All Banks Now" reruns matching over every
+  // pre-existing unmatched feed and can settle the exact one a staffer has a
+  // "Link with a note" box open on, unmounting UnmatchedRow and silently
+  // wiping the typed note. Tracked here (not in UnmatchedRow alone) so the
+  // sync button can be disabled while any row's box is open. Uses a Set
+  // (not a single feed id) because more than one row's box could in theory
+  // be open at once.
+  const [feedsWithNoteLinkOpen, setFeedsWithNoteLinkOpen] = useState<Set<string>>(new Set())
+  const handleNoteLinkOpenChange = useCallback((feedId: string, open: boolean) => {
+    setFeedsWithNoteLinkOpen(prev => {
+      const alreadySet = prev.has(feedId)
+      if (open === alreadySet) return prev
+      const next = new Set(prev)
+      if (open) next.add(feedId)
+      else next.delete(feedId)
+      return next
+    })
+  }, [])
+
   // Plaid-Mercury duplicate eligibility — set of Plaid (mercury) feed IDs that
   // have a matched mercury_api twin pointing at the same payment. Used by
   // MatchedRow to surface a one-click "Delete Plaid duplicate" cleanup.
@@ -2009,7 +2050,12 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Connected banks summary */}
-      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} isAdmin={isAdmin} />
+      <BanksSummary
+        activeSource={sourceFilter}
+        onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }}
+        isAdmin={isAdmin}
+        syncBlocked={feedsWithNoteLinkOpen.size > 0}
+      />
 
       {/* Stats cards */}
       <div className="flex gap-3">
@@ -2135,7 +2181,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               }
             }
 
-            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' ? (
+            // Bug-hunter, 2026-09-13 (second pass): disabling "Sync All Banks
+            // Now" only blocks ONE of several doors to the same failure — five
+            // other actions on this page (Ignore/Match/Claim/Restore/Delete-
+            // duplicate on any OTHER row) refresh the whole page's data too,
+            // and the 15-min background cron can settle this exact feed with
+            // no button click at all. Guarding at the render decision instead
+            // of at every trigger closes all of them at once: a row whose
+            // note-link box is open keeps rendering as UnmatchedRow no matter
+            // what its freshly-fetched status says, until the box itself is
+            // closed. The server still re-checks the feed's real status at
+            // submit time and refuses if something else already settled it
+            // (lib/finance/owner-transaction-link.ts) — this only protects the
+            // in-progress typing from disappearing, not the money.
+            const keepShowingAsUnmatched = feedsWithNoteLinkOpen.has(feed.id)
+            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' || keepShowingAsUnmatched ? (
               <UnmatchedRow
                 feed={feed}
                 openInvoices={openInvoices}
@@ -2144,6 +2204,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 onCancelMatch={() => setMatchingFeed(null)}
                 candidateInfo={candidateInfo}
                 isAdmin={isAdmin}
+                onNoteLinkOpenChange={handleNoteLinkOpenChange}
               />
             ) : feed.status === 'activation_crashed' ? (
               <CrashedRow feed={feed} />
