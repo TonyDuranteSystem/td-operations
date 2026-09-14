@@ -18,6 +18,7 @@ import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 
 // ── Types ──
 
@@ -60,8 +61,21 @@ export interface BankFeedRecord {
     invoice_number: string | null
     description: string | null
     account_id: string
+    total: number | null
+    amount_paid: number | null
+    invoice_status: string | null
+    notes: string | null
     accounts: { company_name: string } | null
   } | null
+}
+
+/** Closed Paid while collecting less than the invoiced total — a write-off,
+ * not an ordinary full payment. Mirrors the identical, live-verified-safe
+ * check in all-invoices-tab.tsx (no other flow leaves a Paid invoice short
+ * of its own total, so this comparison alone is an unambiguous signal). */
+function isWrittenOffPayment(payment: BankFeedRecord['payments']): boolean {
+  if (!payment) return false
+  return payment.invoice_status === 'Paid' && Number(payment.total) > 0 && Number(payment.amount_paid) < Number(payment.total)
 }
 
 export interface OpenInvoice {
@@ -1719,6 +1733,12 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       )}>
         {feed.match_confidence ?? 'matched'}
       </span>
+      {isWrittenOffPayment(payment) && (
+        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 bg-amber-100 text-amber-700">
+          Written Off
+        </span>
+      )}
+      <InvoiceNoteDot note={payment?.notes} />
       {/* An audit link is NOT a payment. The invoice was already settled through another
           channel (its own Stripe webhook, or a human marking it paid), and this transaction
           is attached purely for the record — no money was applied. Without this, a matched
