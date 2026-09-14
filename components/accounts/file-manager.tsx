@@ -221,7 +221,7 @@ function FileRow({
           // Invalidate cache so docMap reflects new state on next page visit
           onRefresh()
         } else {
-          toast.error('Failed to toggle visibility')
+          toast.error(result.error || 'Failed to toggle visibility')
         }
       } else {
         // Not processed yet — process + share in one call
@@ -230,13 +230,15 @@ function FileRow({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fileId: file.id }),
         })
-        const data = await res.json()
+        // A server-side timeout/crash can return a non-JSON body — don't let
+        // that throw and fall through to the generic catch-all below (R099).
+        const data = await res.json().catch(() => ({}) as { success?: boolean; error?: string })
         if (res.ok && data.success) {
           setPortalVisible(true)
           toast.success('Document processed and shared with client')
           onRefresh()
         } else {
-          toast.error(data.error || 'Failed to process document')
+          toast.error(data.error || `Failed to process document (server error ${res.status})`)
         }
       }
     } catch {

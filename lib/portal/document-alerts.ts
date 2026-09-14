@@ -33,7 +33,7 @@ import { createPortalNotification } from '@/lib/portal/notifications'
 const db = supabaseAdmin as any
 
 const COMPANY_CATEGORIES = [1, 3, 4, 5] // Company, Tax, Banking, Correspondence (shared)
-const PERSONAL_CATEGORY = 2 // Contacts (personal)
+export const PERSONAL_CATEGORY = 2 // Contacts (personal)
 
 const COPY = {
   en: {
