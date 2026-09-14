@@ -455,6 +455,25 @@ export async function toggleDocumentPortalVisibility(
     const { data: { user } } = await supabase.auth.getUser()
     const actor = `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
 
+    // Turning ON visibility for an already-indexed document is a THIRD path
+    // that can flip a document visible (alongside process-and-share's two
+    // branches) — a real, ordinary click on any document already sitting in
+    // the file list, not a rare case. Must carry the same guard: a personal
+    // document (passport/ID/etc.) with no resolved single owner stays hidden.
+    if (visible) {
+      const { data: doc } = await supabaseAdmin
+        .from('documents')
+        .select('category, contact_id')
+        .eq('id', documentId)
+        .maybeSingle()
+      if (doc) {
+        const { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } = await import('@/lib/documents/visibility-guard')
+        if (isUnresolvedPersonalDocument(doc)) {
+          throw new Error(UNRESOLVED_PERSONAL_DOC_MESSAGE)
+        }
+      }
+    }
+
     const { updateDocument } = await import('@/lib/operations/document')
     const result = await updateDocument({
       id: documentId,

@@ -13,8 +13,14 @@
  * path, since the client-alert "already notified" guard then blocks the correct
  * notification once a human later resolves the real owner. Extracted as its own
  * pure predicate (matching lib/documents/list-visibility.ts's convention) so
- * both call sites in that route share one implementation instead of two copies
- * of the same condition drifting apart.
+ * every place that can flip a document visible shares one implementation
+ * instead of copies drifting apart. THREE call sites depend on it today: both
+ * branches of that route, and toggleDocumentPortalVisibility
+ * (app/(dashboard)/accounts/actions.ts) — the direct per-document toggle used
+ * by both the file manager and a contact's own document list, which a live
+ * E2E pass (not code review alone) caught still being unguarded on the first
+ * pass at this fix. Any new caller that can set portal_visible on a
+ * documents row must check this first.
  */
 
 import { PERSONAL_CATEGORY } from "@/lib/portal/document-alerts"
