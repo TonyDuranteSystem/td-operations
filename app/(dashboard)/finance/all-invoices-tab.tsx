@@ -34,7 +34,7 @@ const STATUS_COLORS: Record<string, string> = {
   Credit: 'bg-purple-100 text-purple-700',
 }
 
-const STATUS_FILTERS = ['All', 'Overdue', 'Sent', 'Paid', 'Partial', 'Draft', 'Legacy'] as const
+const STATUS_FILTERS = ['All', 'Overdue', 'Sent', 'Paid', 'Partial', 'Draft', 'Written Off', 'Legacy'] as const
 
 type SortField = 'invoice_number' | 'client' | 'total' | 'status' | 'issue_date' | 'due_date'
 type SortDir = 'asc' | 'desc'
@@ -86,6 +86,15 @@ function formatDate(dateStr: string | null) {
 
 function getClientName(inv: InvoiceRecord): string {
   return inv.accounts?.company_name ?? inv.contacts?.full_name ?? '—'
+}
+
+/** Closed Paid while collecting less than the invoiced total — a write-off,
+ * not an ordinary full payment. Derived from existing fields (no new column):
+ * confirmed on 2026-09-14 that no other flow in this codebase ever leaves a
+ * Paid invoice short of its own total, so this comparison alone is a safe,
+ * unambiguous signal. */
+function isWrittenOff(inv: InvoiceRecord): boolean {
+  return inv.status === 'Paid' && Number(inv.total) > 0 && Number(inv.amount_paid) < Number(inv.total)
 }
 
 /** Hover detail for the reminder badge: auto vs manual breakdown + last sent. */
@@ -234,9 +243,12 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
 
   // Counts per status
   const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = { All: invoices.length }
+    const counts: Record<string, number> = { All: invoices.length, 'Written Off': 0 }
     for (const inv of invoices) {
       counts[inv.status] = (counts[inv.status] ?? 0) + 1
+      // Written Off is derived, not a real status value, so it's counted
+      // separately rather than overwriting the invoice's real Paid count.
+      if (isWrittenOff(inv)) counts['Written Off']++
     }
     return counts
   }, [invoices])
@@ -263,7 +275,9 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
     let list = invoices
 
     // Status filter
-    if (statusFilter !== 'All') {
+    if (statusFilter === 'Written Off') {
+      list = list.filter(inv => isWrittenOff(inv))
+    } else if (statusFilter !== 'All') {
       list = list.filter(inv => inv.status === statusFilter)
     }
 
@@ -511,6 +525,11 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                 <span className={`ml-auto inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                   {inv.status}
                 </span>
+                {isWrittenOff(inv) && (
+                  <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                    Written Off
+                  </span>
+                )}
                 <InvoiceNoteDot note={inv.notes} />
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -666,6 +685,11 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status] ?? 'bg-zinc-100 text-zinc-600'}`}>
                       {inv.status}
                     </span>
+                    {isWrittenOff(inv) && (
+                      <span className="ml-1 inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                        Written Off
+                      </span>
+                    )}
                     <InvoiceNoteDot note={inv.notes} className="ml-1" />
                     {isPaused(inv) && (
                       <div
