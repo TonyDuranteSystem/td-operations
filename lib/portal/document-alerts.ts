@@ -24,6 +24,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getAppSetting } from '@/lib/settings'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
 import { createPortalNotification } from '@/lib/portal/notifications'
+import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 
 // The new `documents.notify_client` / `documents.client_notified_at` columns and
 // the `portal_document_views` table aren't in the generated database.types.ts yet
@@ -33,7 +34,7 @@ import { createPortalNotification } from '@/lib/portal/notifications'
 const db = supabaseAdmin as any
 
 const COMPANY_CATEGORIES = [1, 3, 4, 5] // Company, Tax, Banking, Correspondence (shared)
-export const PERSONAL_CATEGORY = 2 // Contacts (personal)
+export { PERSONAL_CATEGORY }
 
 const COPY = {
   en: {

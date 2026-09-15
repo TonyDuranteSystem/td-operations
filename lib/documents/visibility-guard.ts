@@ -21,9 +21,20 @@
  * E2E pass (not code review alone) caught still being unguarded on the first
  * pass at this fix. Any new caller that can set portal_visible on a
  * documents row must check this first.
+ *
+ * Deliberately zero imports: components/accounts/file-manager.tsx and
+ * components/contacts/contact-detail.tsx ('use client') both need this same
+ * predicate to decide when to show the inline owner-resolution picker
+ * (components/documents/resolve-personal-document.tsx) instead of letting the
+ * guard just throw. PERSONAL_CATEGORY used to live in
+ * lib/portal/document-alerts.ts, which pulls in supabaseAdmin and other
+ * server-only code — importing it here would have dragged that into the
+ * client bundle. It's defined here instead and re-exported from
+ * document-alerts.ts, so this module is safe for a 'use client' file to
+ * import directly and there's still exactly one definition.
  */
 
-import { PERSONAL_CATEGORY } from "@/lib/portal/document-alerts"
+export const PERSONAL_CATEGORY = 2 // Contacts (personal)
 
 export interface DocumentOwnership {
   category: number | null
