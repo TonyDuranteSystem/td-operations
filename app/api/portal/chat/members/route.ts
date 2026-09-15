@@ -57,7 +57,11 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       members: options,
-      guessContactId: guess?.contactId ?? null,
+      // Keyed by the roster row's own id, not its resolved contact — two
+      // rows (an individual member and a company member they represent) can
+      // share one contact, and only memberId tells them apart (dev job
+      // 34bd9009).
+      guessMemberId: guess?.memberId ?? null,
     })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })

@@ -193,27 +193,32 @@ export async function GET(request: NextRequest) {
     // inside `rest` untyped, same as `sender_name` above. Named here via a cast
     // (not destructured by name — that fails typecheck) only so they can be
     // omitted from the client-facing projection below.
-    const restTyped = rest as typeof rest & { addressed_to_contact_id?: string | null; addressed_to_company?: boolean }
-    const { addressed_to_contact_id: _omit1, addressed_to_company: _omit2, ...restWithoutAddressedTo } = restTyped
+    const restTyped = rest as typeof rest & { addressed_to_contact_id?: string | null; addressed_to_company?: boolean; addressed_to_label?: string | null }
+    const { addressed_to_contact_id: _omit1, addressed_to_company: _omit2, addressed_to_label: _omit3, ...restWithoutAddressedTo } = restTyped
     return {
       // Staff-only projection (dev job e01fe70f) — every design comment on this
       // feature already says "staff-side only" / "not sent to the client", but
-      // addressed_to_contact_id / addressed_to_company were reaching every
-      // client caller anyway via this wildcard select (nothing downstream
-      // renders them — grep of app/portal/** confirms zero references — so
-      // this was over-exposure in the payload, not an on-screen leak, but
-      // real all the same).
+      // addressed_to_contact_id / addressed_to_company / addressed_to_label were
+      // reaching every client caller anyway via this wildcard select (nothing
+      // downstream renders them — grep of app/portal/** confirms zero
+      // references — so this was over-exposure in the payload, not an
+      // on-screen leak, but real all the same).
       ...(isClientUser ? restWithoutAddressedTo : rest),
       // Contact name for client/owner messages; stored sender_name (the teammate's
       // display name) when there's no contact; null → UI shows its generic label.
       sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
-      // "Addressed to" label (dev job 08a8be62) — staff-facing display of who a
-      // company-scoped message was addressed to. Resolved here (not client-side)
-      // so it survives even if the addressed member later drops out of
-      // selectedThreadMembers (e.g. removed from the roster) — the historical
-      // record still shows who it was FOR at send time. Staff-only, same reason
-      // as above.
-      ...(isClientUser ? {} : { addressed_to_name: addressedToContact?.full_name ?? null }),
+      // "Addressed to" label (dev job 08a8be62; frozen-snapshot column added
+      // dev job 34bd9009) — staff-facing display of who a company-scoped
+      // message was addressed to. Prefers the frozen addressed_to_label
+      // (the roster row's own name at send time — survives the member's
+      // internal id being wiped and recreated by a later member-info
+      // resubmission, and correctly distinguishes a person from a company
+      // they merely represent, which the contact join alone cannot). Falls
+      // back to the live contact-name join for every message sent before
+      // this column existed. Resolved here (not client-side) so it's stable
+      // regardless of the account's CURRENT roster shape. Staff-only, same
+      // reason as above.
+      ...(isClientUser ? {} : { addressed_to_name: restTyped.addressed_to_label ?? addressedToContact?.full_name ?? null }),
     }
   }).reverse()
 
@@ -230,7 +235,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json()
-  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_contact_id: rawAddressedToContactId, addressed_to_company: rawAddressedToCompany } = body
+  const { account_id, contact_id: bodyContactId, sender_context: rawSenderContext, topic: rawTopic, message, attachment_url, attachment_name, attachments, reply_to_id, addressed_to_member_id: rawAddressedToMemberId, addressed_to_company: rawAddressedToCompany } = body
 
   if (!account_id && !bodyContactId && !getClientContactId(user)) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -403,24 +408,36 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-  // "Addressed to" member label (dev job 08a8be62) — display metadata only,
+  // "Addressed to" member label (dev job 08a8be62; keyed by member id and
+  // given a frozen name snapshot, dev job 34bd9009) — display metadata only,
   // deliberately NOT part of decideAdminSendScope's contract above. Only
   // meaningful for a staff send into an account-level (multi-member) thread.
-  // Validated against the account's REAL member roster (lib/portal/addressed-to.ts,
-  // the `members` table, not account_contacts) so a stale/wrong value never
-  // reaches storage — but an invalid value is dropped, never blocks the send:
+  //
+  // The client sends the ROSTER ROW'S OWN id, never a contact id or a name
+  // string — two roster rows (an individual member and a company member they
+  // represent) can resolve to the identical contact, so only the member id
+  // says unambiguously which one was actually picked. Both the stored contact
+  // reference and the display name are then resolved HERE, server-side, from
+  // a fresh read of the account's REAL member roster (lib/portal/addressed-to.ts,
+  // the `members` table, not account_contacts) — never trusted as client-
+  // supplied text. An id that doesn't resolve (stale, or the account's
+  // roster was rebuilt by a member-info resubmission between the picker
+  // loading and this request) is dropped silently, never blocks the send:
   // this is a label, not a gate.
   let addressedToContactId: string | null = null
-  if (typeof rawAddressedToContactId === 'string' && rawAddressedToContactId && senderType === 'admin' && account_id) {
+  let addressedToLabel: string | null = null
+  if (typeof rawAddressedToMemberId === 'string' && rawAddressedToMemberId && senderType === 'admin' && account_id) {
     try {
       const roster = await resolveAccountMembersForChat(account_id)
-      if (roster.some(o => o.resolvable && o.contactId === rawAddressedToContactId)) {
-        addressedToContactId = rawAddressedToContactId
+      const match = roster.find(o => o.resolvable && o.memberId === rawAddressedToMemberId)
+      if (match) {
+        addressedToContactId = match.contactId
+        addressedToLabel = match.name
       } else {
-        console.warn('[portal/chat] addressed_to_contact_id not in the account\'s resolved member roster, dropped:', rawAddressedToContactId, account_id)
+        console.warn('[portal/chat] addressed_to_member_id not in the account\'s resolved member roster, dropped:', rawAddressedToMemberId, account_id)
       }
     } catch (err) {
-      console.error('[portal/chat] addressed_to_contact_id validation failed, dropped (non-fatal):', err)
+      console.error('[portal/chat] addressed_to_member_id validation failed, dropped (non-fatal):', err)
     }
   }
   // "Addressed to the whole company" (dev job 08a8be62, 2026-09-05) — a
@@ -433,7 +450,10 @@ export async function POST(request: NextRequest) {
   // member label is dropped, since a client that sent both is confused
   // about its own state and this is the safer of the two to keep silent.
   const addressedToCompany = rawAddressedToCompany === true && senderType === 'admin' && !!account_id
-  if (addressedToCompany) addressedToContactId = null
+  if (addressedToCompany) {
+    addressedToContactId = null
+    addressedToLabel = null
+  }
 
   const { data, error } = await insertSurface
     .from('portal_messages')
@@ -452,6 +472,7 @@ export async function POST(request: NextRequest) {
       reply_to_id: reply_to_id || null,
       addressed_to_contact_id: addressedToContactId,
       addressed_to_company: addressedToCompany,
+      addressed_to_label: addressedToLabel,
       ...(inheritedServiceDeliveryId ? { service_delivery_id: inheritedServiceDeliveryId } : {}),
     })
     .select('*, contacts:contact_id(full_name)')

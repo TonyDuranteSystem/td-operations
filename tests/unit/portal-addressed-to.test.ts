@@ -150,4 +150,67 @@ describe('pickAddressedToGuess (pure)', () => {
     const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: null })
     expect(result?.contactId).toBe('c2')
   })
+
+  // Dev job 34bd9009 — a person can be both an individual member AND the
+  // declared representative of a company member on the same account (e.g.
+  // AI Venture Labs LLC: Michele Cotti / Whalecot Consulting LLC), so two
+  // roster rows resolve to the identical contactId. Every cascade stage
+  // must prefer the individual entry in that case, not whichever comes
+  // first in array order.
+  describe('member-vs-representative tie-break (dev job 34bd9009)', () => {
+    it('prefers the individual entry when the reply-to author is shared by two roster rows', () => {
+      const options = [
+        opt({ memberId: 'm-company', contactId: 'shared', isCompanyMember: true, name: 'Whalecot Consulting LLC' }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false, name: 'Michele Cotti' }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: 'shared', lastClientContactId: null })
+      expect(result?.memberId).toBe('m-individual')
+    })
+
+    it('prefers the individual entry when the last client sender is shared by two roster rows', () => {
+      const options = [
+        opt({ memberId: 'm-company', contactId: 'shared', isCompanyMember: true }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: 'shared' })
+      expect(result?.memberId).toBe('m-individual')
+    })
+
+    it('prefers the individual entry when the tie is at the primary stage', () => {
+      const options = [
+        opt({ memberId: 'm-company', contactId: 'shared', isCompanyMember: true, isPrimary: true }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false, isPrimary: true }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: null })
+      expect(result?.memberId).toBe('m-individual')
+    })
+
+    it('prefers the individual entry when the tie is only reached at the final stable-sort fallback', () => {
+      const options = [
+        opt({ memberId: 'm-company', contactId: 'shared', isCompanyMember: true, isPrimary: false }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false, isPrimary: false }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: null })
+      expect(result?.memberId).toBe('m-individual')
+    })
+
+    it('falls back to the existing stable order when a tie has no individual side at all', () => {
+      const options = [
+        opt({ memberId: 'm-company-a', contactId: 'shared', isCompanyMember: true }),
+        opt({ memberId: 'm-company-b', contactId: 'shared', isCompanyMember: true }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: 'shared', lastClientContactId: null })
+      expect(result?.memberId).toBe('m-company-a')
+    })
+
+    it('does not let a shared contact between two rows affect an UNrelated third member', () => {
+      const options = [
+        opt({ memberId: 'm-company', contactId: 'shared', isCompanyMember: true }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false }),
+        opt({ memberId: 'm-other', contactId: 'other', isCompanyMember: false, isPrimary: true }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: null })
+      expect(result?.memberId).toBe('m-other')
+    })
+  })
 })
