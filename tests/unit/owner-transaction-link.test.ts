@@ -365,13 +365,77 @@ describe("linkFeedTransactionToInvoice", () => {
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
   })
 
-  it("refuses a terminal (already closed) invoice", async () => {
+  // Paid is no longer a flat refusal (2026-09-15, Antonio hit this live: an
+  // invoice marked paid manually, no bank transaction ever linked, had no way
+  // back once its one prior audit-link was undone) — see the two audit-link
+  // tests below. Voided/Cancelled/Credit/Split still refuse outright.
+  it.each(["Voided", "Cancelled", "Credit", "Split"])(
+    "refuses a terminal (already closed, non-Paid) invoice — %s",
+    async (terminalStatus) => {
+      paymentFixture = { ...basePayment, invoice_status: terminalStatus, status: terminalStatus }
+      const result = await linkFeedTransactionToInvoice(baseParams)
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(new RegExp(`already ${terminalStatus}`))
+      expect(result.invoiceNumber).toBe("INV-002181")
+      expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+      expect(updateFeedMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it("audit-links (does not refuse) an already-Paid invoice — no money applied, the record-only case Antonio hit live", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid", amount_paid: 1200 }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.invoiceNumber).toBe("INV-002181")
+    expect(result.newAmountDue).toBe(0)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+    expect(updateFeedMock).toHaveBeenCalledWith(
+      "feed-1",
+      expect.objectContaining({
+        matched_payment_id: "pay-1",
+        match_confidence: "manual",
+        status: "matched",
+        review_metadata: expect.objectContaining({ audit_link: true, money_applied: false }),
+      }),
+      "link-feed-transaction-to-invoice:audit-link",
+    )
+    // Mirrored onto the source My Finances row too, same as the money-applying path.
+    expect(txUpdateLog).toContainEqual(
+      expect.objectContaining({ linked_payment_id: "pay-1", linked_note: baseParams.note, linked_by: "dashboard:antonio" }),
+    )
+  })
+
+  it("audit-links via the coarse `status` column when invoice_status is absent — the 48-row production case", async () => {
+    paymentFixture = { ...basePayment, invoice_status: null, status: "Paid" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  it("still returns ok:true (audit-linked) when the My Finances mirror write fails, but reports it", async () => {
     paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid" }
+    txMarkError = { message: "row lock timeout" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  // The landmine this whole design had to route around: a credit note's
+  // `status` is UNCONDITIONALLY "Paid" from the moment it's created,
+  // regardless of its real invoice_status="Credit" (see
+  // lib/finance/invoice-matchability.ts's wasFullyPaid doc comment — the same
+  // fact already caused one real regression elsewhere in this codebase).
+  // isPaidInvoice ORs in that coarse column unconditionally and would have
+  // audit-linked this as "money already received", which is backwards — a
+  // credit note is money owed BACK to the client. wasFullyPaid reads
+  // invoice_status first, so Credit never matches.
+  it("does NOT audit-link a credit note even though its `status` column also reads Paid", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Credit", status: "Paid" }
     const result = await linkFeedTransactionToInvoice(baseParams)
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/already Paid/)
-    expect(result.invoiceNumber).toBe("INV-002181")
+    expect(result.error).toMatch(/already Credit/)
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+    expect(updateFeedMock).not.toHaveBeenCalled()
   })
 
   it("applies money through a REAL feedId — inheriting applyMoneyToInvoice's own double-credit lock instead of a bespoke one", async () => {

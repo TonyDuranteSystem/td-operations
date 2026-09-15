@@ -65,7 +65,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
-import { isTerminalInvoice, terminalReason } from "@/lib/finance/invoice-matchability"
+import { isTerminalInvoice, terminalReason, wasFullyPaid } from "@/lib/finance/invoice-matchability"
 import { clientPaymentClaimMetadata } from "@/lib/finance/feed-vocabulary"
 import { updateFeed } from "@/lib/finance/feed-write"
 import { closePaymentWithWriteOff } from "@/lib/operations/payment"
@@ -217,6 +217,82 @@ export async function linkFeedTransactionToInvoice(
   if (payErr) return { ok: false, error: `Could not read the invoice: ${payErr.message}` }
   if (!payment) return { ok: false, error: "Invoice not found." }
   if (isTerminalInvoice(payment)) {
+    // Paid is the ONE terminal reason it's still legitimate to connect a
+    // transaction here — the audit-trail link, no money applied, because the
+    // money was already received some other way. Everything else terminal
+    // (Voided, Cancelled, Credit, Split) keeps refusing outright below —
+    // connecting money to those is never legitimate.
+    //
+    // wasFullyPaid, NOT isPaidInvoice — deliberately. isPaidInvoice ORs in the
+    // coarse `status` column unconditionally, and a credit note's `status` is
+    // ALSO always "Paid" from the moment it's created (see that predicate's
+    // own doc comment, and wasFullyPaid's — a real, already-shipped-once
+    // regression elsewhere in this file's neighborhood). Without this,
+    // isTerminalInvoice(payment) is already true for a credit note via its
+    // invoice_status="Credit", and isPaidInvoice(payment) would ALSO read
+    // true off the same row's status="Paid" — silently audit-linking a
+    // transaction to a credit note as "money already received", which is
+    // backwards: a credit note is money owed back TO the client, not money
+    // TD received. wasFullyPaid reads invoice_status first and only falls
+    // back to `status` when invoice_status is absent, so a credit note
+    // (invoice_status="Credit") never matches — it falls through to the
+    // terminalReason refusal below instead, exactly like Voided/Cancelled/Split.
+    //
+    // Until 2026-09-15 the ONLY thing that could ever make this connection
+    // was the automatic matcher's own retroactive pass (lib/bank-feed-matcher.ts)
+    // guessing its way to it. A human choosing the invoice deliberately had
+    // no equivalent and could only be told no — including, absurdly, a human
+    // trying to manually redo a connection the machine had already made once
+    // and someone had since undone. Found live: Antonio hit exactly that.
+    if (wasFullyPaid(payment)) {
+      const auditNote = `Invoice was already paid — linked for the audit trail; no money applied. ${note}`
+      const auditClaim = await updateFeed(feedId, {
+        matched_payment_id: paymentId,
+        match_confidence: "manual",
+        matched_at: new Date().toISOString(),
+        matched_by: actor,
+        status: "matched",
+        review_metadata: {
+          note: auditNote,
+          link_kind: "manual",
+          audit_link: true,
+          money_applied: false,
+        },
+      }, "link-feed-transaction-to-invoice:audit-link")
+      if (!auditClaim.ok) {
+        return {
+          ok: false,
+          error: auditClaim.error ?? "Could not link this transaction.",
+          invoiceNumber: payment.invoice_number ?? undefined,
+        }
+      }
+
+      // Same mirror as the money-applying path below, so My Finances shows
+      // "Linked" instead of being stuck on "Sent to Finance" — non-fatal,
+      // reported rather than silently dropped (same reasoning as the
+      // money-applying path's own mirror write, a few lines down).
+      const { error: auditMirrorErr } = await supabaseAdmin
+        .from("td_books_transactions")
+        .update({ linked_payment_id: paymentId, linked_at: new Date().toISOString(), linked_note: note, linked_by: actor })
+        .eq("moved_to_feed_id", feedId)
+      if (auditMirrorErr) {
+        console.error(`[owner-transaction-link] My Finances mirror write failed for feed ${feedId}: ${auditMirrorErr.message}`)
+        await reportSystemError({
+          source: "server",
+          route: "lib/finance/owner-transaction-link#linkFeedTransactionToInvoice",
+          message: `Audit-linked ${payment.invoice_number ?? paymentId} via feed ${feedId} (already paid elsewhere, no money applied), but mirroring the outcome back onto the My Finances row failed.`,
+          context: { feedId, paymentId, error: auditMirrorErr.message },
+        }).catch(() => {})
+      }
+
+      return {
+        ok: true,
+        invoiceNumber: payment.invoice_number ?? undefined,
+        newStatus: payment.invoice_status ?? payment.status ?? "Paid",
+        newAmountPaid: payment.amount_paid ?? undefined,
+        newAmountDue: 0,
+      }
+    }
     return {
       ok: false,
       error: terminalReason(payment) ?? "This invoice is already closed.",
