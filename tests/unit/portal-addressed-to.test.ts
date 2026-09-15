@@ -212,5 +212,15 @@ describe('pickAddressedToGuess (pure)', () => {
       const result = pickAddressedToGuess({ options, replyToContactId: null, lastClientContactId: null })
       expect(result?.memberId).toBe('m-other')
     })
+
+    it('prefers the individual entry even with THREE rows sharing one contact (real production shape: AI Venture Labs LLC has 2 today, confirmed not capped at 2)', () => {
+      const options = [
+        opt({ memberId: 'm-company-a', contactId: 'shared', isCompanyMember: true }),
+        opt({ memberId: 'm-individual', contactId: 'shared', isCompanyMember: false }),
+        opt({ memberId: 'm-company-b', contactId: 'shared', isCompanyMember: true }),
+      ]
+      const result = pickAddressedToGuess({ options, replyToContactId: 'shared', lastClientContactId: null })
+      expect(result?.memberId).toBe('m-individual')
+    })
   })
 })
