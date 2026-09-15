@@ -276,6 +276,29 @@ export async function linkFeedTransactionToInvoice(
         }).catch(() => {})
       }
 
+      // Also save the note onto the INVOICE itself, not just the feed's own
+      // review_metadata — same dated-append format as the money-applying
+      // path below (never overwrites an earlier note). Without this, the
+      // note dot on the invoice (all-invoices-tab.tsx, bank-feed-tab.tsx)
+      // has nothing to show for an audit-link, even though it already works
+      // for a money-applying link — found live: Antonio wrote a note for an
+      // audit-linked Beril invoice and it never appeared next to it, unlike
+      // an equivalent write-off note on Ambition Holding's invoice.
+      const auditDated = `${new Date().toISOString().slice(0, 10)}: ${note}`
+      const auditExistingNotes = (payment as { notes?: string | null }).notes ?? null
+      const auditCombinedNotes = auditExistingNotes ? `${auditExistingNotes}\n${auditDated}` : auditDated
+      const { updateInvoice } = await import("@/app/(dashboard)/finance/actions")
+      const auditNoteResult = await updateInvoice(paymentId, { notes: auditCombinedNotes })
+      if (!auditNoteResult.success) {
+        console.error(`[owner-transaction-link] audit-link note write failed for ${paymentId}: ${auditNoteResult.error}`)
+        await reportSystemError({
+          source: "server",
+          route: "lib/finance/owner-transaction-link#linkFeedTransactionToInvoice",
+          message: `Audit-linked ${payment.invoice_number ?? paymentId} via feed ${feedId}, but the explanatory note failed to save onto the invoice itself.`,
+          context: { feedId, paymentId, error: auditNoteResult.error },
+        }).catch(() => {})
+      }
+
       return {
         ok: true,
         invoiceNumber: payment.invoice_number ?? undefined,
