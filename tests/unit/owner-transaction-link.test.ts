@@ -388,6 +388,7 @@ describe("linkFeedTransactionToInvoice", () => {
     expect(result.ok).toBe(true)
     expect(result.invoiceNumber).toBe("INV-002181")
     expect(result.newAmountDue).toBe(0)
+    expect(result.auditLink).toBe(true)
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
     expect(updateFeedMock).toHaveBeenCalledWith(
       "feed-1",
@@ -409,6 +410,23 @@ describe("linkFeedTransactionToInvoice", () => {
     paymentFixture = { ...basePayment, invoice_status: null, status: "Paid" }
     const result = await linkFeedTransactionToInvoice(baseParams)
     expect(result.ok).toBe(true)
+    expect(result.auditLink).toBe(true)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  // Senior-engineer finding, 2026-09-15: isPaidInvoice's first draft (this
+  // same day) reused wasFullyPaid, whose "trust invoice_status completely
+  // whenever present" rule reads "Overdue" as NOT paid and never falls
+  // through to check `status` at all — reproducing the exact dead-end this
+  // feature exists to fix, for any invoice whose document was never updated
+  // to Paid even though the ledger already shows it. Fixed by matching
+  // isTerminalInvoice's own precedence instead: an open-looking invoice_status
+  // falls back to the coarse status rather than vetoing it.
+  it("audit-links an invoice whose invoice_status is stale (Overdue) but whose ledger status already reads Paid", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Overdue", status: "Paid" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.auditLink).toBe(true)
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
   })
 
@@ -420,15 +438,16 @@ describe("linkFeedTransactionToInvoice", () => {
     expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
   })
 
-  // The landmine this whole design had to route around: a credit note's
-  // `status` is UNCONDITIONALLY "Paid" from the moment it's created,
-  // regardless of its real invoice_status="Credit" (see
-  // lib/finance/invoice-matchability.ts's wasFullyPaid doc comment — the same
-  // fact already caused one real regression elsewhere in this codebase).
-  // isPaidInvoice ORs in that coarse column unconditionally and would have
-  // audit-linked this as "money already received", which is backwards — a
-  // credit note is money owed BACK to the client. wasFullyPaid reads
-  // invoice_status first, so Credit never matches.
+  // The landmine this whole design had to route around, closed at its root
+  // (lib/finance/invoice-matchability.ts's isPaidInvoice itself, 2026-09-15,
+  // not by avoiding it here) rather than by picking a different predicate: a
+  // credit note's coarse `status` column often also reads "Paid" — an
+  // artifact of that column's default for the document type, not a signal
+  // that TD received money (confirmed against real production Credit rows,
+  // every one a negative-amount referral reward, refund, or paid-call
+  // credit — see isPaidInvoice's own doc comment). The OLD, unfixed
+  // isPaidInvoice ORed that coarse column in unconditionally and would have
+  // audit-linked this as "money already received", exactly backwards.
   it("does NOT audit-link a credit note even though its `status` column also reads Paid", async () => {
     paymentFixture = { ...basePayment, invoice_status: "Credit", status: "Paid" }
     const result = await linkFeedTransactionToInvoice(baseParams)

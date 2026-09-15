@@ -103,12 +103,25 @@ describe("isMatchableInvoice — the two-column terminal rule", () => {
 describe("isPaidInvoice — who may be audit-linked", () => {
   // Linking a payment to a closed invoice is legitimate in exactly ONE case: the money
   // was already received through another channel (a card charge tied to the invoice its
-  // own webhook settled). Linking money to a CANCELLED invoice is never legitimate — the
-  // manual path must reject it loudly instead of recording a cheerful "linked" with
-  // nothing applied, which is the silent-success failure this work exists to kill.
+  // own webhook settled, or a human doing the same thing by hand). Linking money to a
+  // CANCELLED invoice is never legitimate — the manual path must reject it loudly instead
+  // of recording a cheerful "linked" with nothing applied, which is the silent-success
+  // failure this work exists to kill.
   it("is true for an invoice already paid (either column)", () => {
     expect(isPaidInvoice({ invoice_status: "Paid", status: "Paid" })).toBe(true)
     expect(isPaidInvoice({ invoice_status: null, status: "Paid" })).toBe(true)
+  })
+
+  // FIXED 2026-09-15: a live-shaped case (the document was never updated to Paid, but
+  // the coarse ledger status already is) must still be audit-linkable — the OLD
+  // definition's flat `invoice_status === "Paid" || status === "Paid"` OR read this as
+  // FALSE, since "Overdue" !== "Paid" short-circuited the check before `status` was ever
+  // consulted, reproducing the exact "no way to audit-link my own already-paid invoice"
+  // dead-end this predicate exists to prevent. The fixed version defers to
+  // isTerminalInvoice's own precedence: an open-looking invoice_status falls back to
+  // the coarse status instead of vetoing it.
+  it("is true when invoice_status is stale (still Overdue/Sent) but the ledger status already reads Paid", () => {
+    expect(isPaidInvoice({ invoice_status: "Overdue", status: "Paid" })).toBe(true)
     expect(isPaidInvoice({ invoice_status: "Sent", status: "Paid" })).toBe(true)
   })
 
@@ -117,16 +130,20 @@ describe("isPaidInvoice — who may be audit-linked", () => {
     expect(isPaidInvoice({ invoice_status: "Voided", status: "Waived" })).toBe(false)
   })
 
-  // Regression tripwire (QA finding, dev job ef5da377): this is exactly why
-  // isPaidInvoice must never be reused as the "already Paid" correction-prompt
-  // gate — a credit note's coarse `status` is always 'Paid' too, so this
-  // returns true for one. That substitution has already shipped as a real
-  // regression once (see wasFullyPaid below) and was proposed and declined a
-  // second time in review. Left TRUE here deliberately: this function is
-  // correct for ITS OWN purpose (audit-linking); the danger is only in using
-  // it for a different question.
-  it("is true for a credit note too — correct for audit-linking, NOT safe to reuse as an already-Paid gate", () => {
-    expect(isPaidInvoice({ invoice_status: "Credit", status: "Paid" })).toBe(true)
+  // FIXED 2026-09-15 (bug-hunter + senior-engineer + ai-architect, independently — a
+  // credit note is money owed BACK to the client, never money TD received; confirmed
+  // against 15 real production Credit rows, every one a negative-amount referral
+  // reward, overpayment refund, or paid-call credit, none of them TD receiving money).
+  // A prior version of this test asserted `true` here, with a comment claiming this was
+  // a deliberate, already-reviewed decision (dev job ef5da377) — checked directly
+  // against that job's own record: it decided a DIFFERENT question (this predicate must
+  // never gate the "already Paid" correction prompt, see wasFullyPaid below) and never
+  // actually audited whether "Paid" was correct for the audit-link case. It wasn't —
+  // the old, flat `status === "Paid"` OR read every credit note as already-paid money,
+  // which would have silently audit-linked a real transaction to one as "money already
+  // received," exactly backwards.
+  it("is FALSE for a credit note, even though its coarse status also reads Paid", () => {
+    expect(isPaidInvoice({ invoice_status: "Credit", status: "Paid" })).toBe(false)
   })
 })
 

@@ -108,12 +108,49 @@ export function isTerminalInvoice(inv: InvoiceStatusPair): boolean {
  *
  * This is the ONLY case where linking a payment to a closed invoice is legitimate:
  * the audit-trail link (a Stripe charge tied to the invoice its own webhook already
- * settled). Linking money to a Cancelled or Voided invoice is never legitimate —
- * the manual-match path must reject that loudly rather than record a cheerful
- * "linked" with nothing applied.
+ * settled, or a human doing the same thing by hand). Linking money to a Cancelled,
+ * Voided, Credit, or Split invoice is never legitimate — the manual-match path must
+ * reject that loudly rather than record a cheerful "linked" with nothing applied.
+ *
+ * FIXED 2026-09-15 (bug-hunter + senior-engineer + ai-architect, independently, on a
+ * new manual audit-link feature; confirmed against 15 real production Credit rows by
+ * the system counselor before changing this). The OLD definition (`invoice_status ===
+ * "Paid" || status === "Paid"`) was a flat, unordered OR with two real gaps, both now
+ * closed by deferring to {@link isTerminalInvoice}'s own precedence instead of
+ * re-deriving it:
+ *
+ *  1. A credit note's coarse `status` column is ALSO always "Paid" — an artifact of
+ *     how that column defaults for the document type, not a signal that TD received
+ *     money. Every real production Credit row (CN-000004 through CN-000018 checked)
+ *     is a NEGATIVE amount — a referral reward, an overpayment refund, or a paid-call
+ *     credit — money TD paid OUT, never money TD received. The old definition read
+ *     `true` for every one of them. A previous test comment claimed this was a
+ *     deliberate, reviewed decision (dev job `ef5da377`); checked directly against
+ *     that job's own record — it decided a DIFFERENT question (this predicate must
+ *     never gate the "already Paid" correction prompt) and never actually audited
+ *     whether "Paid" was correct for THIS predicate's own purpose. It wasn't.
+ *  2. `invoice_status` values other than the five terminal ones (e.g. "Overdue",
+ *     "Sent") short-circuited the OR's first branch as false and never reached the
+ *     second — so a real, live-shaped row like `{invoice_status:"Overdue",
+ *     status:"Paid"}` (the document was never updated, but the payment ledger already
+ *     shows Paid) read as NOT paid, reproducing the exact "no way to audit-link my own
+ *     already-paid invoice" dead-end this predicate exists to prevent.
+ *
+ * Both are closed by matching {@link isTerminalInvoice}'s own precedence exactly:
+ * `invoice_status` decides first when it names one of the five closed states: only
+ * "Paid" is TRUE there. Otherwise (no `invoice_status`, or an open-looking one like
+ * "Overdue") fall back to the coarse `status`, where only "Paid" counts — "Refunded"
+ * is also money-settled per {@link isTerminalInvoice} but means the money went BACK,
+ * not that it's still held.
  */
 export function isPaidInvoice(inv: InvoiceStatusPair): boolean {
-  return inv.invoice_status?.trim() === "Paid" || inv.status?.trim() === "Paid"
+  const invoiceStatus = inv.invoice_status?.trim()
+  const paymentStatus = inv.status?.trim()
+
+  if (invoiceStatus && TERMINAL_INVOICE_STATUSES.has(invoiceStatus)) {
+    return invoiceStatus === "Paid"
+  }
+  return paymentStatus === "Paid"
 }
 
 /** True when incoming money can still be applied to this invoice. */
@@ -126,18 +163,23 @@ export function isMatchableInvoice(inv: InvoiceStatusPair): boolean {
  * an edit to a settled record, not an ordinary Draft/Sent edit — the gate for
  * showing the 3-way "partial payment / new charge / typo" correction prompt.
  *
- * DO NOT use {@link isPaidInvoice} for this. It answers a different question
- * ("may this money be audit-linked here?") and ORs in the coarse `status`
- * column unconditionally — a credit note's `status` is ALSO always `"Paid"`
- * from the moment it's created, so `isPaidInvoice` returns true for every
- * credit note. Reusing it as the correction-prompt gate has already shipped
- * as a real regression once (every credit-note edit demanded an answer to a
- * meaningless "partial payment or typo?" question) and was proposed and
- * declined a second time in review before this predicate existed. This
- * function reads `invoice_status` first and only consults the coarse
- * `status` when `invoice_status` is absent — the same narrowing already
- * proven correct and shipped at the three sites this replaces — so a credit
- * note (`invoice_status: "Credit"`) never matches, regardless of `status`.
+ * DO NOT use {@link isPaidInvoice} for this — it answers a different question
+ * ("may this money be audit-linked here?") and, as of its 2026-09-15 fix,
+ * treats a NON-terminal `invoice_status` (e.g. "Overdue", "Sent") as
+ * secondary to the coarse `status` column: `{invoice_status:"Overdue",
+ * status:"Paid"}` reads as paid there (the document was never updated, but
+ * the ledger already shows Paid — audit-linking should still be possible).
+ * For the correction-prompt gate, an invoice still DISPLAYED as "Overdue" is
+ * not being edited as a settled record just because some other column
+ * disagrees, so this function reads `invoice_status` first and trusts it
+ * completely whenever present — the same narrowing already proven correct
+ * and shipped at the three sites this replaces. Reusing `isPaidInvoice`
+ * (its OLDER, unfixed definition) as the correction-prompt gate has already
+ * shipped as a real regression once (every credit-note edit demanded an
+ * answer to a meaningless "partial payment or typo?" question) and was
+ * proposed and declined a second time in review before this predicate
+ * existed — a credit note (`invoice_status: "Credit"`) never matches here,
+ * regardless of `status`.
  */
 export function wasFullyPaid(inv: InvoiceStatusPair): boolean {
   const invoiceStatus = inv.invoice_status?.trim()

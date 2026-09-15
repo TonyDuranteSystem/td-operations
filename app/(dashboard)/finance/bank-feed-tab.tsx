@@ -867,11 +867,12 @@ function UnmatchedRow({
   // Already-paid invoices, searched separately from `openInvoices` (which
   // deliberately excludes them) — for connecting a transaction to an invoice
   // that was already marked paid some other way. See
-  // lib/finance/owner-transaction-link.ts's wasFullyPaid branch: picking one
+  // lib/finance/owner-transaction-link.ts's isPaidInvoice branch: picking one
   // of these creates an audit-trail link, not a real payment. On-demand only
   // (Antonio: "no limit at all" on reach, but never loaded until searched).
   const [noteLinkPaidResults, setNoteLinkPaidResults] = useState<OpenInvoice[]>([])
   const [noteLinkPaidLoading, setNoteLinkPaidLoading] = useState(false)
+  const [noteLinkPaidError, setNoteLinkPaidError] = useState<string | null>(null)
 
   const closeNoteLink = () => {
     if (noteLinkSubmitting) return
@@ -881,6 +882,7 @@ function UnmatchedRow({
     setNoteLinkNote('')
     setNoteLinkWriteOff(false)
     setNoteLinkPaidResults([])
+    setNoteLinkPaidError(null)
   }
 
   // Reports open/closed to the parent so it can disable "Sync All Banks Now"
@@ -913,15 +915,24 @@ function UnmatchedRow({
   useEffect(() => {
     if (!noteLinkOpen || noteLinkQueryLower.length < 2) {
       setNoteLinkPaidResults([])
+      setNoteLinkPaidError(null)
       return
     }
     let cancelled = false
     setNoteLinkPaidLoading(true)
     const timer = setTimeout(() => {
       fetch(`/api/finance/search-paid-invoices?q=${encodeURIComponent(noteLinkQueryLower)}`)
-        .then(res => res.json())
-        .then(d => { if (!cancelled) setNoteLinkPaidResults(d.invoices ?? []) })
-        .catch(() => { if (!cancelled) setNoteLinkPaidResults([]) })
+        .then(async res => {
+          const d = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(d.error || `Search failed (${res.status})`)
+          if (!cancelled) { setNoteLinkPaidResults(d.invoices ?? []); setNoteLinkPaidError(null) }
+        })
+        .catch(err => {
+          if (!cancelled) {
+            setNoteLinkPaidResults([])
+            setNoteLinkPaidError(err instanceof Error && err.message ? err.message : 'Search failed — try again.')
+          }
+        })
         .finally(() => { if (!cancelled) setNoteLinkPaidLoading(false) })
     }, 300)
     return () => { cancelled = true; clearTimeout(timer) }
@@ -955,8 +966,13 @@ function UnmatchedRow({
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || d.ok === false) throw new Error(d.error || `Request failed (${res.status})`)
+      // Read the server's own auditLink flag, not this component's pre-submit guess
+      // (noteLinkSelectedIsPaidPick) — that guess is derived from props that can go
+      // stale between opening this popup and submitting it (the invoice's real status
+      // may have changed elsewhere in the meantime), and the server always re-reads
+      // the invoice fresh at the moment it decides which branch actually ran.
       toast.success(
-        noteLinkSelectedIsPaidPick
+        d.auditLink === true
           ? `Linked to ${d.invoiceNumber ?? 'the invoice'} for the record — it was already paid, no money applied.`
           : d.newStatus === 'Paid'
             ? `Linked to ${d.invoiceNumber ?? 'the invoice'} — closed as paid.`
@@ -1635,7 +1651,7 @@ function UnmatchedRow({
                     />
                   </div>
                   <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto">
-                    {noteLinkCandidates.length === 0 && noteLinkPaidResults.length === 0 && !noteLinkPaidLoading ? (
+                    {noteLinkCandidates.length === 0 && noteLinkPaidResults.length === 0 && !noteLinkPaidLoading && !noteLinkPaidError ? (
                       <p className="text-xs text-muted-foreground px-1 py-1">No invoices match.</p>
                     ) : (
                       <>
@@ -1657,7 +1673,7 @@ function UnmatchedRow({
                             </button>
                           )
                         })}
-                        {noteLinkQueryLower.length >= 2 && (noteLinkPaidResults.length > 0 || noteLinkPaidLoading) && (
+                        {noteLinkQueryLower.length >= 2 && (noteLinkPaidResults.length > 0 || noteLinkPaidLoading || noteLinkPaidError) && (
                           <>
                             <p className="text-[10px] text-muted-foreground px-1 pt-1.5 uppercase tracking-wide">
                               Already paid — link for the record only
@@ -1666,6 +1682,9 @@ function UnmatchedRow({
                               <p className="text-xs text-muted-foreground px-1 py-1 flex items-center gap-1.5">
                                 <Loader2 className="h-3 w-3 animate-spin" /> Searching…
                               </p>
+                            )}
+                            {noteLinkPaidError && !noteLinkPaidLoading && (
+                              <p className="text-xs text-red-600 px-1 py-1">{noteLinkPaidError}</p>
                             )}
                             {noteLinkPaidResults.map(inv => (
                               <button

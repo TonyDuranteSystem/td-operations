@@ -65,8 +65,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
-import { isTerminalInvoice, terminalReason, wasFullyPaid } from "@/lib/finance/invoice-matchability"
-import { clientPaymentClaimMetadata } from "@/lib/finance/feed-vocabulary"
+import { isTerminalInvoice, terminalReason, isPaidInvoice } from "@/lib/finance/invoice-matchability"
+import { clientPaymentClaimMetadata, auditLinkMetadata } from "@/lib/finance/feed-vocabulary"
 import { updateFeed } from "@/lib/finance/feed-write"
 import { closePaymentWithWriteOff } from "@/lib/operations/payment"
 import { reportSystemError } from "@/lib/system-errors"
@@ -191,6 +191,11 @@ export interface LinkFeedToInvoiceResult {
   newStatus?: string
   newAmountPaid?: number
   newAmountDue?: number
+  /** True only for the audit-trail branch below (invoice already paid, no
+   *  money applied) — the caller's success message must read this, not infer
+   *  it from its own possibly-stale copy of the invoice, or it can tell the
+   *  user money moved when it didn't (or vice versa). */
+  auditLink?: boolean
 }
 
 export async function linkFeedTransactionToInvoice(
@@ -221,22 +226,13 @@ export async function linkFeedTransactionToInvoice(
     // transaction here — the audit-trail link, no money applied, because the
     // money was already received some other way. Everything else terminal
     // (Voided, Cancelled, Credit, Split) keeps refusing outright below —
-    // connecting money to those is never legitimate.
-    //
-    // wasFullyPaid, NOT isPaidInvoice — deliberately. isPaidInvoice ORs in the
-    // coarse `status` column unconditionally, and a credit note's `status` is
-    // ALSO always "Paid" from the moment it's created (see that predicate's
-    // own doc comment, and wasFullyPaid's — a real, already-shipped-once
-    // regression elsewhere in this file's neighborhood). Without this,
-    // isTerminalInvoice(payment) is already true for a credit note via its
-    // invoice_status="Credit", and isPaidInvoice(payment) would ALSO read
-    // true off the same row's status="Paid" — silently audit-linking a
-    // transaction to a credit note as "money already received", which is
-    // backwards: a credit note is money owed back TO the client, not money
-    // TD received. wasFullyPaid reads invoice_status first and only falls
-    // back to `status` when invoice_status is absent, so a credit note
-    // (invoice_status="Credit") never matches — it falls through to the
-    // terminalReason refusal below instead, exactly like Voided/Cancelled/Split.
+    // connecting money to those is never legitimate. isPaidInvoice was itself
+    // fixed 2026-09-15 (see its own doc comment in invoice-matchability.ts) to
+    // correctly exclude credit notes AND to correctly include an invoice whose
+    // invoice_status is stale (still "Overdue") but whose ledger status
+    // already reads Paid — the same predicate manualMatch (bank-feed-matcher.ts)
+    // already uses for this identical decision, so fixing it here fixed both
+    // call sites at once.
     //
     // Until 2026-09-15 the ONLY thing that could ever make this connection
     // was the automatic matcher's own retroactive pass (lib/bank-feed-matcher.ts)
@@ -244,7 +240,7 @@ export async function linkFeedTransactionToInvoice(
     // no equivalent and could only be told no — including, absurdly, a human
     // trying to manually redo a connection the machine had already made once
     // and someone had since undone. Found live: Antonio hit exactly that.
-    if (wasFullyPaid(payment)) {
+    if (isPaidInvoice(payment)) {
       const auditNote = `Invoice was already paid — linked for the audit trail; no money applied. ${note}`
       const auditClaim = await updateFeed(feedId, {
         matched_payment_id: paymentId,
@@ -252,12 +248,7 @@ export async function linkFeedTransactionToInvoice(
         matched_at: new Date().toISOString(),
         matched_by: actor,
         status: "matched",
-        review_metadata: {
-          note: auditNote,
-          link_kind: "manual",
-          audit_link: true,
-          money_applied: false,
-        },
+        review_metadata: auditLinkMetadata("manual", auditNote),
       }, "link-feed-transaction-to-invoice:audit-link")
       if (!auditClaim.ok) {
         return {
@@ -291,6 +282,7 @@ export async function linkFeedTransactionToInvoice(
         newStatus: payment.invoice_status ?? payment.status ?? "Paid",
         newAmountPaid: payment.amount_paid ?? undefined,
         newAmountDue: 0,
+        auditLink: true,
       }
     }
     return {
