@@ -3,10 +3,15 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { processFile } from '@/lib/mcp/tools/doc'
 import { updateDocument } from '@/lib/operations/document'
+import { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } from '@/lib/documents/visibility-guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 30
+// 60s matches the sibling bulk OCR+classify route (app/api/portal/admin/transition),
+// the proven working budget for this class of operation on this plan. 30s was too
+// tight for an outsized first-time scan (see dev job f1dc4048) and 300s is reserved
+// elsewhere in this codebase for background/cron jobs, not a foreground admin action.
+export const maxDuration = 60
 
 /**
  * POST /api/accounts/[id]/files/process-and-share
@@ -57,11 +62,19 @@ export async function POST(
     // the reprocess job heal classification in the background.
     const { data: existingDoc } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, status, account_id, contact_id')
+      .select('id, file_name, status, account_id, contact_id, category')
       .eq('drive_file_id', fileId)
       .maybeSingle()
 
     if (existingDoc) {
+      // A personal document (passport/ID/etc.) with no resolved owner must stay
+      // hidden — sharing it here would notify every co-owner on the account,
+      // and that notice can never be recalled once sent. Mirrors the guard
+      // processFile() already applies at classification time (lib/mcp/tools/doc.ts).
+      if (isUnresolvedPersonalDocument(existingDoc)) {
+        return NextResponse.json({ error: UNRESOLVED_PERSONAL_DOC_MESSAGE }, { status: 409 })
+      }
+
       const patch: Record<string, unknown> = { portal_visible: true }
       if (!existingDoc.account_id) {
         patch.account_id = accountId
@@ -103,16 +116,22 @@ export async function POST(
       return NextResponse.json({ error: result.error || 'Failed to process file' }, { status: 500 })
     }
 
-    // Step 3: Find the document record and set portal_visible = true.
+    // Step 3: Find the document record and set portal_visible = true — unless
+    // processFile() just decided (lib/mcp/tools/doc.ts) that this is a personal
+    // document with no resolved owner, in which case it must stay hidden.
     // updateDocument fires the client alert on the hidden→visible transition.
     const { data: doc } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name')
+      .select('id, file_name, category, contact_id')
       .eq('drive_file_id', fileId)
       .single()
 
     if (!doc) {
       return NextResponse.json({ error: 'Document record not found after processing' }, { status: 500 })
+    }
+
+    if (isUnresolvedPersonalDocument(doc)) {
+      return NextResponse.json({ error: UNRESOLVED_PERSONAL_DOC_MESSAGE }, { status: 409 })
     }
 
     await updateDocument({
