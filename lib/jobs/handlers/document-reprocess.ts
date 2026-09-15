@@ -20,6 +20,7 @@
  */
 
 import { processFile } from "@/lib/mcp/tools/doc"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { Job, JobResult } from "@/lib/jobs/queue"
 
 interface DocumentReprocessPayload {
@@ -42,10 +43,30 @@ export async function handleDocumentReprocess(job: Job): Promise<JobResult> {
     }
   }
 
+  // Preserve a human-resolved owner across reprocessing. processFile()'s own
+  // auto-resolve only succeeds when the account has exactly one linked contact
+  // (lib/mcp/tools/doc.ts) — for any other case it writes contact_id straight
+  // from whatever was passed in, unconditionally (unlike portal_visible, which
+  // it omits to preserve on conflict). Re-running it blind on a document a
+  // human has since assigned to someone would silently null that assignment
+  // back out, and — for a personal document — force portal_visible back to
+  // false in the same write, with no error and no one told. Look up the
+  // current value first and pass it through so a resolved owner survives.
+  const { data: existingDoc } = await supabaseAdmin
+    .from("documents")
+    .select("contact_id")
+    .eq("drive_file_id", drive_file_id)
+    .maybeSingle()
+
   // account_id is passed through so processFile's upsert re-links the account
   // (its upsert writes account_id from the argument — omitting it would null
   // the link on a previously linked document).
-  const result = await processFile(drive_file_id, account_id || undefined)
+  const result = await processFile(
+    drive_file_id,
+    account_id || undefined,
+    undefined,
+    existingDoc?.contact_id ?? undefined
+  )
 
   if (!result.success) {
     // Throw → cron failJob() → re-queued until max_attempts (OCR may still
