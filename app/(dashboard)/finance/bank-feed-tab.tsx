@@ -57,6 +57,12 @@ export interface BankFeedRecord {
   created_at: string
   matched_at: string | null
   review_metadata?: unknown
+  /** The real bank name from the source My Finances row, for a feed created by
+   *  "send to Finance" (sendOwnerTransactionToFinance) — these always carry
+   *  source:'manual' (guessFeedSource only recognizes 5 specific banks by
+   *  name), which otherwise loses which bank it actually was. Null for a feed
+   *  that never came from My Finances, or a genuinely bank-unknown manual entry. */
+  source_bank_name?: string | null
   payments?: {
     invoice_number: string | null
     description: string | null
@@ -129,6 +135,15 @@ const SOURCE_COLORS: Record<string, string> = {
   stripe: 'bg-violet-100 text-violet-700',
   revolut: 'bg-sky-100 text-sky-700',
   chase: 'bg-cyan-100 text-cyan-700',
+}
+
+/** The badge text for a feed row — the real bank name when we have one
+ *  (a transaction sent over from My Finances), otherwise the generic
+ *  source label ("Manual", "Mercury", etc). Single source of truth for
+ *  all 5 row-render sites below, so a future source type only needs
+ *  updating here. */
+function sourceLabel(feed: Pick<BankFeedRecord, 'source' | 'source_bank_name'>): string {
+  return feed.source_bank_name?.trim() || SOURCE_LABELS[feed.source] || feed.source
 }
 
 // Map bank institution names to source filter values
@@ -1032,7 +1047,7 @@ function UnmatchedRow({
     <div className="border-b last:border-b-0">
       <div className="flex items-center gap-3 px-4 py-3 text-sm">
         <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-          {SOURCE_LABELS[feed.source] ?? feed.source}
+          {sourceLabel(feed)}
         </span>
         <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
         <span className="font-semibold w-24 shrink-0">{formatCurrency(amount, feed.currency)}</span>
@@ -1775,7 +1790,7 @@ function UnmatchedRow({
           affected: { bank_feed: 1 },
           items: [
             {
-              label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+              label: `${sourceLabel(feed)} — ${formatCurrency(feed.amount, feed.currency)}`,
               details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
             },
           ],
@@ -1809,7 +1824,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1881,7 +1896,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
               affected: { bank_feed: 1 },
               items: [
                 {
-                  label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+                  label: `${sourceLabel(feed)} — ${formatCurrency(feed.amount, feed.currency)}`,
                   details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
                 },
               ],
@@ -1931,7 +1946,7 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
     <div className="border-b last:border-b-0">
       <div className="flex items-center gap-3 px-4 py-3 text-sm">
         <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-          {SOURCE_LABELS[feed.source] ?? feed.source}
+          {sourceLabel(feed)}
         </span>
         <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
         <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1994,7 +2009,7 @@ function DuplicateRow({ feed }: { feed: BankFeedRecord }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -2022,7 +2037,7 @@ function IgnoredRow({ feed, isAdmin = false }: { feed: BankFeedRecord; isAdmin?:
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0 opacity-60">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>

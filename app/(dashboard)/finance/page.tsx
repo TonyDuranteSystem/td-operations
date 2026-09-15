@@ -239,7 +239,7 @@ export default async function FinancePage({
   }
 
   // ── Fetch bank feeds + open invoices for Bank Feed tab ──
-  const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes] = await Promise.all([
+  const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes, movedFromMyFinancesRes] = await Promise.all([
     supabaseAdmin
       .from('td_bank_feeds')
       .select('*, payments:matched_payment_id(invoice_number, description, account_id, total, amount_paid, invoice_status, notes, accounts:account_id(company_name))')
@@ -258,6 +258,17 @@ export default async function FinancePage({
       .from('payments')
       .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, status, is_test, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
       .order('created_at', { ascending: false }),
+    // Real bank name for a feed sent over from My Finances — sendOwnerTransactionToFinance
+    // (lib/finance/owner-transaction-link.ts) only uses this to pick a source BUCKET
+    // (guessFeedSource recognizes 5 specific banks by name), never copies the actual string
+    // onto the new td_bank_feeds row, so every other bank falls back to a bare "Manual" badge
+    // with no way to tell which one. Antonio: "I need to know the bank transaction instead of
+    // only 'manual'." No unique constraint on moved_to_feed_id, but sendOwnerTransactionToFinance
+    // refuses a transaction that already has one — one feed, one source row, in practice.
+    supabaseAdmin
+      .from('td_books_transactions')
+      .select('moved_to_feed_id, bank_name')
+      .not('moved_to_feed_id', 'is', null),
   ])
 
   // PRIVACY, ENFORCED ON THE SERVER — not by hiding rows in the browser.
@@ -297,9 +308,15 @@ export default async function FinancePage({
     if (status === 'unmatched' && ownerLedgerUnmatchedIds.has((f as { id: string }).id)) return true
     return false
   }
-  const bankFeeds = userIsOwner
+  const bankNameByFeedId = new Map(
+    (movedFromMyFinancesRes.data ?? [])
+      .filter((r): r is { moved_to_feed_id: string; bank_name: string | null } => r.moved_to_feed_id != null)
+      .map(r => [r.moved_to_feed_id, r.bank_name]),
+  )
+  const bankFeeds = (userIsOwner
     ? allBankFeeds
     : allBankFeeds.filter(f => !isPrivateToOwner(f))
+  ).map(f => ({ ...f, source_bank_name: bankNameByFeedId.get((f as { id: string }).id) ?? null }))
   // The count must match what the viewer can actually see, or the header claims rows they
   // will never find.
   const bankFeedTotalCount = userIsOwner

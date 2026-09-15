@@ -404,6 +404,27 @@ describe("linkFeedTransactionToInvoice", () => {
     expect(txUpdateLog).toContainEqual(
       expect.objectContaining({ linked_payment_id: "pay-1", linked_note: baseParams.note, linked_by: "dashboard:antonio" }),
     )
+    // Also saved onto the invoice itself (not just the feed's own review_metadata) — the
+    // Beril follow-up finding, 2026-09-15: without this the note dot on the invoice has
+    // nothing to show for an audit-link, unlike an equivalent money-applying link.
+    expect(updateInvoiceMock).toHaveBeenCalledWith("pay-1", expect.objectContaining({ notes: expect.stringContaining(baseParams.note) }))
+  })
+
+  it("appends the audit-link note to an existing note rather than overwriting it", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid", notes: "2026-06-01: original installment note." }
+    await linkFeedTransactionToInvoice(baseParams)
+    const call = updateInvoiceMock.mock.calls[0][1] as { notes: string }
+    expect(call.notes).toContain("2026-06-01: original installment note.")
+    expect(call.notes).toContain(baseParams.note)
+  })
+
+  it("still returns ok:true (audit-linked) when only the invoice note-write fails, but reports it", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid" }
+    updateInvoiceMock.mockResolvedValue({ success: false, error: "some transient failure" })
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.auditLink).toBe(true)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
   })
 
   it("audit-links via the coarse `status` column when invoice_status is absent — the 48-row production case", async () => {
