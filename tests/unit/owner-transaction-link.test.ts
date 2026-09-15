@@ -365,13 +365,96 @@ describe("linkFeedTransactionToInvoice", () => {
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
   })
 
-  it("refuses a terminal (already closed) invoice", async () => {
+  // Paid is no longer a flat refusal (2026-09-15, Antonio hit this live: an
+  // invoice marked paid manually, no bank transaction ever linked, had no way
+  // back once its one prior audit-link was undone) — see the two audit-link
+  // tests below. Voided/Cancelled/Credit/Split still refuse outright.
+  it.each(["Voided", "Cancelled", "Credit", "Split"])(
+    "refuses a terminal (already closed, non-Paid) invoice — %s",
+    async (terminalStatus) => {
+      paymentFixture = { ...basePayment, invoice_status: terminalStatus, status: terminalStatus }
+      const result = await linkFeedTransactionToInvoice(baseParams)
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(new RegExp(`already ${terminalStatus}`))
+      expect(result.invoiceNumber).toBe("INV-002181")
+      expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+      expect(updateFeedMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it("audit-links (does not refuse) an already-Paid invoice — no money applied, the record-only case Antonio hit live", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid", amount_paid: 1200 }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.invoiceNumber).toBe("INV-002181")
+    expect(result.newAmountDue).toBe(0)
+    expect(result.auditLink).toBe(true)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+    expect(updateFeedMock).toHaveBeenCalledWith(
+      "feed-1",
+      expect.objectContaining({
+        matched_payment_id: "pay-1",
+        match_confidence: "manual",
+        status: "matched",
+        review_metadata: expect.objectContaining({ audit_link: true, money_applied: false }),
+      }),
+      "link-feed-transaction-to-invoice:audit-link",
+    )
+    // Mirrored onto the source My Finances row too, same as the money-applying path.
+    expect(txUpdateLog).toContainEqual(
+      expect.objectContaining({ linked_payment_id: "pay-1", linked_note: baseParams.note, linked_by: "dashboard:antonio" }),
+    )
+  })
+
+  it("audit-links via the coarse `status` column when invoice_status is absent — the 48-row production case", async () => {
+    paymentFixture = { ...basePayment, invoice_status: null, status: "Paid" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.auditLink).toBe(true)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  // Senior-engineer finding, 2026-09-15: isPaidInvoice's first draft (this
+  // same day) reused wasFullyPaid, whose "trust invoice_status completely
+  // whenever present" rule reads "Overdue" as NOT paid and never falls
+  // through to check `status` at all — reproducing the exact dead-end this
+  // feature exists to fix, for any invoice whose document was never updated
+  // to Paid even though the ledger already shows it. Fixed by matching
+  // isTerminalInvoice's own precedence instead: an open-looking invoice_status
+  // falls back to the coarse status rather than vetoing it.
+  it("audit-links an invoice whose invoice_status is stale (Overdue) but whose ledger status already reads Paid", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Overdue", status: "Paid" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(result.auditLink).toBe(true)
+    expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+  })
+
+  it("still returns ok:true (audit-linked) when the My Finances mirror write fails, but reports it", async () => {
     paymentFixture = { ...basePayment, invoice_status: "Paid", status: "Paid" }
+    txMarkError = { message: "row lock timeout" }
+    const result = await linkFeedTransactionToInvoice(baseParams)
+    expect(result.ok).toBe(true)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  // The landmine this whole design had to route around, closed at its root
+  // (lib/finance/invoice-matchability.ts's isPaidInvoice itself, 2026-09-15,
+  // not by avoiding it here) rather than by picking a different predicate: a
+  // credit note's coarse `status` column often also reads "Paid" — an
+  // artifact of that column's default for the document type, not a signal
+  // that TD received money (confirmed against real production Credit rows,
+  // every one a negative-amount referral reward, refund, or paid-call
+  // credit — see isPaidInvoice's own doc comment). The OLD, unfixed
+  // isPaidInvoice ORed that coarse column in unconditionally and would have
+  // audit-linked this as "money already received", exactly backwards.
+  it("does NOT audit-link a credit note even though its `status` column also reads Paid", async () => {
+    paymentFixture = { ...basePayment, invoice_status: "Credit", status: "Paid" }
     const result = await linkFeedTransactionToInvoice(baseParams)
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/already Paid/)
-    expect(result.invoiceNumber).toBe("INV-002181")
+    expect(result.error).toMatch(/already Credit/)
     expect(applyMoneyToInvoiceMock).not.toHaveBeenCalled()
+    expect(updateFeedMock).not.toHaveBeenCalled()
   })
 
   it("applies money through a REAL feedId — inheriting applyMoneyToInvoice's own double-credit lock instead of a bespoke one", async () => {

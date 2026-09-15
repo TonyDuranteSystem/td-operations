@@ -864,6 +864,15 @@ function UnmatchedRow({
   const [noteLinkNote, setNoteLinkNote] = useState('')
   const [noteLinkWriteOff, setNoteLinkWriteOff] = useState(false)
   const [noteLinkSubmitting, setNoteLinkSubmitting] = useState(false)
+  // Already-paid invoices, searched separately from `openInvoices` (which
+  // deliberately excludes them) — for connecting a transaction to an invoice
+  // that was already marked paid some other way. See
+  // lib/finance/owner-transaction-link.ts's isPaidInvoice branch: picking one
+  // of these creates an audit-trail link, not a real payment. On-demand only
+  // (Antonio: "no limit at all" on reach, but never loaded until searched).
+  const [noteLinkPaidResults, setNoteLinkPaidResults] = useState<OpenInvoice[]>([])
+  const [noteLinkPaidLoading, setNoteLinkPaidLoading] = useState(false)
+  const [noteLinkPaidError, setNoteLinkPaidError] = useState<string | null>(null)
 
   const closeNoteLink = () => {
     if (noteLinkSubmitting) return
@@ -872,6 +881,8 @@ function UnmatchedRow({
     setNoteLinkInvoiceId(null)
     setNoteLinkNote('')
     setNoteLinkWriteOff(false)
+    setNoteLinkPaidResults([])
+    setNoteLinkPaidError(null)
   }
 
   // Reports open/closed to the parent so it can disable "Sync All Banks Now"
@@ -896,7 +907,44 @@ function UnmatchedRow({
           (inv.invoice_number ?? '').toLowerCase().includes(noteLinkQueryLower),
         )
   ).slice(0, 20)
-  const noteLinkSelected = openInvoices.find(inv => inv.id === noteLinkInvoiceId) ?? null
+
+  // Same query, also searched against already-Paid invoices — debounced and
+  // gated at 2 chars to match the endpoint's own floor, so this never fires
+  // while the box is empty. Cancels its own stale response via the `cancelled`
+  // flag, same pattern as any other debounced-search effect in this codebase.
+  useEffect(() => {
+    if (!noteLinkOpen || noteLinkQueryLower.length < 2) {
+      setNoteLinkPaidResults([])
+      setNoteLinkPaidError(null)
+      return
+    }
+    let cancelled = false
+    setNoteLinkPaidLoading(true)
+    const timer = setTimeout(() => {
+      fetch(`/api/finance/search-paid-invoices?q=${encodeURIComponent(noteLinkQueryLower)}`)
+        .then(async res => {
+          const d = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(d.error || `Search failed (${res.status})`)
+          if (!cancelled) { setNoteLinkPaidResults(d.invoices ?? []); setNoteLinkPaidError(null) }
+        })
+        .catch(err => {
+          if (!cancelled) {
+            setNoteLinkPaidResults([])
+            setNoteLinkPaidError(err instanceof Error && err.message ? err.message : 'Search failed — try again.')
+          }
+        })
+        .finally(() => { if (!cancelled) setNoteLinkPaidLoading(false) })
+    }, 300)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [noteLinkOpen, noteLinkQueryLower])
+
+  const noteLinkSelected = openInvoices.find(inv => inv.id === noteLinkInvoiceId)
+    ?? noteLinkPaidResults.find(inv => inv.id === noteLinkInvoiceId)
+    ?? null
+  // Selected but not in the open list → it came from the paid search. Governs
+  // which explanation/UI shows below (an audit-link has no balance to write
+  // off — the invoice is already closed).
+  const noteLinkSelectedIsPaidPick = noteLinkSelected != null && !openInvoices.some(inv => inv.id === noteLinkInvoiceId)
   const noteLinkSelectedDue = noteLinkSelected
     ? Number(noteLinkSelected.amount_due ?? noteLinkSelected.total ?? noteLinkSelected.amount ?? 0)
     : 0
@@ -918,10 +966,17 @@ function UnmatchedRow({
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || d.ok === false) throw new Error(d.error || `Request failed (${res.status})`)
+      // Read the server's own auditLink flag, not this component's pre-submit guess
+      // (noteLinkSelectedIsPaidPick) — that guess is derived from props that can go
+      // stale between opening this popup and submitting it (the invoice's real status
+      // may have changed elsewhere in the meantime), and the server always re-reads
+      // the invoice fresh at the moment it decides which branch actually ran.
       toast.success(
-        d.newStatus === 'Paid'
-          ? `Linked to ${d.invoiceNumber ?? 'the invoice'} — closed as paid.`
-          : `Linked to ${d.invoiceNumber ?? 'the invoice'}.`,
+        d.auditLink === true
+          ? `Linked to ${d.invoiceNumber ?? 'the invoice'} for the record — it was already paid, no money applied.`
+          : d.newStatus === 'Paid'
+            ? `Linked to ${d.invoiceNumber ?? 'the invoice'} — closed as paid.`
+            : `Linked to ${d.invoiceNumber ?? 'the invoice'}.`,
       )
       closeNoteLink()
       router.refresh()
@@ -1559,12 +1614,25 @@ function UnmatchedRow({
             <div className="space-y-1">
               <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Invoice</label>
               {noteLinkSelected ? (
-                <div className="flex items-center gap-2 border border-blue-300 bg-blue-50 rounded-md px-3 py-2 text-xs">
-                  <span className="font-mono text-blue-700">{noteLinkSelected.invoice_number ?? '—'}</span>
+                <div className={cn(
+                  'flex items-center gap-2 border rounded-md px-3 py-2 text-xs',
+                  noteLinkSelectedIsPaidPick ? 'border-amber-300 bg-amber-50' : 'border-blue-300 bg-blue-50',
+                )}>
+                  <span className={cn('font-mono', noteLinkSelectedIsPaidPick ? 'text-amber-700' : 'text-blue-700')}>{noteLinkSelected.invoice_number ?? '—'}</span>
                   <span className="truncate flex-1">{invoicePartyName(noteLinkSelected)}</span>
-                  <span className="font-medium">{formatCurrency(noteLinkSelectedDue, noteLinkSelected.amount_currency)} due</span>
+                  {noteLinkSelectedIsPaidPick ? (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                  ) : (
+                    <span className="font-medium">{formatCurrency(noteLinkSelectedDue, noteLinkSelected.amount_currency)} due</span>
+                  )}
                   <FastTooltip label="Change invoice">
-                    <button type="button" onClick={() => setNoteLinkInvoiceId(null)} disabled={noteLinkSubmitting} className="p-0.5 rounded hover:bg-blue-100 text-blue-500" aria-label="Change invoice">
+                    <button
+                      type="button"
+                      onClick={() => { setNoteLinkInvoiceId(null); setNoteLinkWriteOff(false) }}
+                      disabled={noteLinkSubmitting}
+                      className={cn('p-0.5 rounded', noteLinkSelectedIsPaidPick ? 'hover:bg-amber-100 text-amber-500' : 'hover:bg-blue-100 text-blue-500')}
+                      aria-label="Change invoice"
+                    >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </FastTooltip>
@@ -1583,26 +1651,57 @@ function UnmatchedRow({
                     />
                   </div>
                   <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto">
-                    {noteLinkCandidates.length === 0 ? (
-                      <p className="text-xs text-muted-foreground px-1 py-1">No open invoices match.</p>
-                    ) : noteLinkCandidates.map(inv => {
-                      const due = Number(inv.amount_due ?? inv.total ?? inv.amount ?? 0)
-                      return (
-                        <button
-                          key={inv.id}
-                          type="button"
-                          onClick={() => setNoteLinkInvoiceId(inv.id)}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-blue-50 hover:border-blue-200 transition-colors"
-                        >
-                          <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
-                          <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
-                          {inv.invoice_status === 'Partial' && (
-                            <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
-                          )}
-                          <span className="font-medium">{formatCurrency(due, inv.amount_currency)}</span>
-                        </button>
-                      )
-                    })}
+                    {noteLinkCandidates.length === 0 && noteLinkPaidResults.length === 0 && !noteLinkPaidLoading && !noteLinkPaidError ? (
+                      <p className="text-xs text-muted-foreground px-1 py-1">No invoices match.</p>
+                    ) : (
+                      <>
+                        {noteLinkCandidates.map(inv => {
+                          const due = Number(inv.amount_due ?? inv.total ?? inv.amount ?? 0)
+                          return (
+                            <button
+                              key={inv.id}
+                              type="button"
+                              onClick={() => setNoteLinkInvoiceId(inv.id)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                            >
+                              <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                              <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                              {inv.invoice_status === 'Partial' && (
+                                <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
+                              )}
+                              <span className="font-medium">{formatCurrency(due, inv.amount_currency)}</span>
+                            </button>
+                          )
+                        })}
+                        {noteLinkQueryLower.length >= 2 && (noteLinkPaidResults.length > 0 || noteLinkPaidLoading || noteLinkPaidError) && (
+                          <>
+                            <p className="text-[10px] text-muted-foreground px-1 pt-1.5 uppercase tracking-wide">
+                              Already paid — link for the record only
+                            </p>
+                            {noteLinkPaidLoading && noteLinkPaidResults.length === 0 && (
+                              <p className="text-xs text-muted-foreground px-1 py-1 flex items-center gap-1.5">
+                                <Loader2 className="h-3 w-3 animate-spin" /> Searching…
+                              </p>
+                            )}
+                            {noteLinkPaidError && !noteLinkPaidLoading && (
+                              <p className="text-xs text-red-600 px-1 py-1">{noteLinkPaidError}</p>
+                            )}
+                            {noteLinkPaidResults.map(inv => (
+                              <button
+                                key={inv.id}
+                                type="button"
+                                onClick={() => setNoteLinkInvoiceId(inv.id)}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
+                              >
+                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
                   </div>
                   {noteLinkQueryLower.length === 0 && openInvoices.length > noteLinkCandidates.length && (
                     <p className="text-[11px] text-muted-foreground">Showing {noteLinkCandidates.length} of {openInvoices.length} — type to narrow.</p>
@@ -1623,23 +1722,30 @@ function UnmatchedRow({
               />
             </div>
 
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={noteLinkWriteOff}
-                onChange={e => setNoteLinkWriteOff(e.target.checked)}
-                disabled={noteLinkSubmitting}
-                className="mt-0.5"
-              />
-              <span className="text-sm text-zinc-800">
-                This closes the invoice — write off the rest
-                <span className="block text-[11px] text-zinc-500">
-                  {noteLinkSelected && noteLinkSelectedDue > amount
-                    ? `Marks it Paid; the remaining ${formatCurrency(noteLinkSelectedDue - amount, noteLinkSelected.amount_currency)} is written off, not left owing.`
-                    : 'Marks the invoice Paid instead of leaving any remaining balance due.'}
+            {noteLinkSelectedIsPaidPick ? (
+              <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>This invoice is already paid. Linking connects this transaction to it for the record — no money moves, no balance changes.</span>
+              </div>
+            ) : (
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={noteLinkWriteOff}
+                  onChange={e => setNoteLinkWriteOff(e.target.checked)}
+                  disabled={noteLinkSubmitting}
+                  className="mt-0.5"
+                />
+                <span className="text-sm text-zinc-800">
+                  This closes the invoice — write off the rest
+                  <span className="block text-[11px] text-zinc-500">
+                    {noteLinkSelected && noteLinkSelectedDue > amount
+                      ? `Marks it Paid; the remaining ${formatCurrency(noteLinkSelectedDue - amount, noteLinkSelected.amount_currency)} is written off, not left owing.`
+                      : 'Marks the invoice Paid instead of leaving any remaining balance due.'}
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+            )}
 
             <div className="flex justify-end gap-2 pt-1">
               <button type="button" onClick={closeNoteLink} disabled={noteLinkSubmitting} className="px-3 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">

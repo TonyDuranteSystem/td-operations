@@ -48,5 +48,6 @@ export async function POST(req: Request) {
     newStatus: result.newStatus,
     newAmountPaid: result.newAmountPaid,
     newAmountDue: result.newAmountDue,
+    auditLink: result.auditLink === true,
   })
 }
