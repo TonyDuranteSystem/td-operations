@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
+import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -44,14 +45,8 @@ interface DocInfo {
   updatedAt: string | null
 }
 
-// Mirrors lib/documents/visibility-guard.ts::isUnresolvedPersonalDocument.
-// Not imported directly: that module pulls in lib/portal/document-alerts.ts,
-// which pulls in server-only code (supabaseAdmin, notification senders) that
-// must not end up in a client bundle. The condition itself is two primitives
-// and is exercised by that module's own tests — safe to mirror here.
-const PERSONAL_CATEGORY = 2
 function isUnresolvedPersonalDoc(doc: { category: number | null; contactId: string | null }): boolean {
-  return doc.category === PERSONAL_CATEGORY && !doc.contactId
+  return isUnresolvedPersonalDocument({ category: doc.category, contact_id: doc.contactId })
 }
 
 interface FilesResponse {
