@@ -100,17 +100,34 @@ export async function GET(
       folders.push({ id: folder.id, name: folder.name, files, subfolders })
     }
 
-    // Fetch document records from Supabase to get portal_visible + document IDs
+    // Fetch document records from Supabase to get portal_visible + document IDs.
+    // category/contact_id/confidence/updated_at feed the guided-share "who is
+    // this for" resolution (dev job following ece21c44) — the row needs them
+    // to decide whether a decision is needed, without a second fetch per row.
     const { data: docs } = await supabaseAdmin
       .from('documents')
-      .select('id, drive_file_id, portal_visible')
+      .select('id, drive_file_id, portal_visible, category, contact_id, confidence, updated_at')
       .eq('account_id', accountId)
 
-    // Build a map: drive_file_id -> { docId, portal_visible }
-    const docMap = new Map<string, { docId: string; portalVisible: boolean }>()
+    // Build a map: drive_file_id -> doc info the row needs
+    const docMap = new Map<string, {
+      docId: string
+      portalVisible: boolean
+      category: number | null
+      contactId: string | null
+      confidence: string | null
+      updatedAt: string | null
+    }>()
     for (const doc of docs || []) {
       if (doc.drive_file_id) {
-        docMap.set(doc.drive_file_id, { docId: doc.id, portalVisible: doc.portal_visible ?? false })
+        docMap.set(doc.drive_file_id, {
+          docId: doc.id,
+          portalVisible: doc.portal_visible ?? false,
+          category: doc.category,
+          contactId: doc.contact_id,
+          confidence: doc.confidence,
+          updatedAt: doc.updated_at,
+        })
       }
     }
 

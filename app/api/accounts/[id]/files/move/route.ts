@@ -17,7 +17,17 @@ const FOLDER_TO_CATEGORY: Record<string, number> = {
  * POST /api/accounts/[id]/files/move
  * Move a file to a different folder on Google Drive.
  * Also updates the document category in Supabase if tracked.
- * Body: { fileId: string, targetFolderId: string, targetFolderName?: string }
+ * Body: { fileId: string, targetFolderId: string, targetFolderName?: string, preserveCategory?: boolean }
+ *
+ * preserveCategory: skip the category sync below. Needed by the guided-share
+ * "file this in the right folder" step (dev job following ece21c44) — that
+ * step runs on a document already confirmed personal (category 2) with a
+ * resolved owner; syncing category to the destination folder would silently
+ * turn that off (isUnresolvedPersonalDocument checks category === 2), letting
+ * an already-resolved personal document look unresolved-personal-free to any
+ * future check with no owner actually re-verified. The manual drag-and-drop /
+ * "Move to..." menu (this route's original caller) is unaffected — it never
+ * passes this flag, so its category-sync behavior is unchanged.
  */
 export async function POST(
   request: NextRequest,
@@ -31,7 +41,7 @@ export async function POST(
     return NextResponse.json({ error: 'Dashboard access required' }, { status: 403 })
   }
 
-  const { fileId, targetFolderId, targetFolderName } = await request.json()
+  const { fileId, targetFolderId, targetFolderName, preserveCategory } = await request.json()
   if (!fileId || !targetFolderId) {
     return NextResponse.json({ error: 'fileId and targetFolderId required' }, { status: 400 })
   }
@@ -41,7 +51,7 @@ export async function POST(
     const result = await moveFile(fileId, targetFolderId)
 
     // Update document category in Supabase if tracked
-    if (targetFolderName) {
+    if (targetFolderName && !preserveCategory) {
       const newCategory = FOLDER_TO_CATEGORY[targetFolderName]
       if (newCategory) {
         const categoryNames: Record<number, string> = {

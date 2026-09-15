@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -37,6 +38,20 @@ interface FolderData {
 interface DocInfo {
   docId: string
   portalVisible: boolean
+  category: number | null
+  contactId: string | null
+  confidence: string | null
+  updatedAt: string | null
+}
+
+// Mirrors lib/documents/visibility-guard.ts::isUnresolvedPersonalDocument.
+// Not imported directly: that module pulls in lib/portal/document-alerts.ts,
+// which pulls in server-only code (supabaseAdmin, notification senders) that
+// must not end up in a client bundle. The condition itself is two primitives
+// and is exercised by that module's own tests — safe to mirror here.
+const PERSONAL_CATEGORY = 2
+function isUnresolvedPersonalDoc(doc: { category: number | null; contactId: string | null }): boolean {
+  return doc.category === PERSONAL_CATEGORY && !doc.contactId
 }
 
 interface FilesResponse {
@@ -99,6 +114,7 @@ function FileRow({
   const [showThumb, setShowThumb] = useState(false)
   const [portalVisible, setPortalVisible] = useState(docInfo?.portalVisible ?? false)
   const [togglingVisibility, setTogglingVisibility] = useState(false)
+  const [showResolver, setShowResolver] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -208,6 +224,13 @@ function FileRow({
   }
 
   const handleTogglePortalVisibility = async () => {
+    // Turning ON an already-indexed personal document with no resolved owner
+    // needs a decision, not a request — show the inline resolver instead of
+    // letting the guard just throw a dead-end error.
+    if (docInfo?.docId && !portalVisible && isUnresolvedPersonalDoc(docInfo)) {
+      setShowResolver(true)
+      return
+    }
     setTogglingVisibility(true)
     try {
       if (docInfo?.docId) {
@@ -255,7 +278,7 @@ function FileRow({
           ref={provided.innerRef}
           {...provided.draggableProps}
           className={cn(
-            'flex items-center gap-2 px-3 py-2 hover:bg-zinc-50 transition-colors group text-sm',
+            'flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-zinc-50 transition-colors group text-sm',
             snapshot.isDragging && 'bg-blue-50 shadow-lg rounded-lg border border-blue-200'
           )}
         >
@@ -461,6 +484,23 @@ function FileRow({
               </div>
             )}
           </div>
+
+          {/* Inline "who is this for" resolution — replaces the old dead-end
+              error toast for a personal document with no resolved owner */}
+          {showResolver && docInfo?.docId && (
+            <div className="basis-full mt-1.5">
+              <ResolvePersonalDocument
+                documentId={docInfo.docId}
+                driveFileId={file.id}
+                accountId={accountId}
+                confidence={docInfo.confidence}
+                updatedAt={docInfo.updatedAt}
+                folders={folders.map(f => ({ id: f.id, name: f.name }))}
+                onResolved={() => { setShowResolver(false); onRefresh() }}
+                onCancel={() => setShowResolver(false)}
+              />
+            </div>
+          )}
         </div>
       )}
     </Draggable>
