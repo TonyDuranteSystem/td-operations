@@ -290,29 +290,34 @@ export default function PortalChatsPage() {
   /** Non-empty when selected thread is an account-level (multi-member LLC) thread */
   const [selectedThreadMembers, setSelectedThreadMembers] = useState<{ id: string; name: string }[]>([])
   // "Addressed to" — staff-picked label for WHICH member of a multi-member
-  // account this message is addressed to (dev job 08a8be62). Display
-  // metadata only — never gates visibility (lib/portal/admin-send-scope.ts
+  // account this message is addressed to (dev job 08a8be62). Keyed by the
+  // roster row's OWN id, not its resolved contact (dev job 34bd9009) — two
+  // rows (an individual member and a company member they represent) can
+  // resolve to the identical contact, and only the member id tells them
+  // apart; the corresponding contact id and display name are always derived
+  // from addressedToOptions where needed, never stored as separate state.
+  // Display metadata only — never gates visibility (lib/portal/admin-send-scope.ts
   // is untouched by this feature). null = "no explicit pick yet, defer to
   // the system's guess" — mirrors the existing panelCompanyId fallback
   // pattern below, not a separate flag, so there's no extra state to keep
   // in sync. Reset everywhere selectedCompanyId already resets (thread
   // switch, New Chat, mobile Back) since a stale pick from a DIFFERENT
   // account's roster must never silently carry into this one.
-  const [selectedAddressedToContactId, setSelectedAddressedToContactId] = useState<string | null>(null)
+  const [selectedAddressedToMemberId, setSelectedAddressedToMemberId] = useState<string | null>(null)
   // Explicit "addressed to the whole company" (Antonio, 2026-09-05, dev job
   // 08a8be62 — found live on a real multi-member account: the picker only
   // ever offered individual members, with no way to say "the whole company"
   // itself, and the unset default looked identical to a message nobody had
   // bothered to label). A SEPARATE boolean, not a sentinel value stuffed
-  // into selectedAddressedToContactId — that field is compared directly
-  // against real contact ids elsewhere (`addressedToOptions.find(o =>
-  // o.contactId === ...)`), and a magic string there risks matching or
+  // into selectedAddressedToMemberId — that field is compared directly
+  // against real roster member ids elsewhere (`addressedToOptions.find(o =>
+  // o.memberId === ...)`), and a magic string there risks matching or
   // breaking that comparison by accident. Mutually exclusive with a
   // specific member — enforced on every click that sets either one, not
   // just server-side. Never guessed/defaulted like a member pick can be
   // (pickAddressedToGuess) — this one is opt-in only, since the entire
   // point is that staff meant it, not that the system assumed it. Reset
-  // everywhere selectedAddressedToContactId already resets.
+  // everywhere selectedAddressedToMemberId already resets.
   const [selectedAddressedToCompany, setSelectedAddressedToCompany] = useState(false)
   const [addressedToJustChanged, setAddressedToJustChanged] = useState(false)
   // Pre-send confirmation pop-up (Antonio, 2026-09-04 — explicit, deliberate
@@ -321,7 +326,7 @@ export default function PortalChatsPage() {
   // Even in a single-member LLC, there is a personal and a company"). Opens
   // on EVERY send, every conversation shape, no exceptions — the modal reads
   // and edits the SAME live selection state the ambient chips already used
-  // (selectedCompanyId / selectedAddressedToContactId / adminActiveTopic), so
+  // (selectedCompanyId / selectedAddressedToMemberId / adminActiveTopic), so
   // there is no separate copy of the choice to keep in sync; it is captured
   // at "Confirm & Send" time, mirroring the existing capture-before-await
   // discipline (dev job c3bb4abc) one step later than before.
@@ -441,7 +446,7 @@ export default function PortalChatsPage() {
       if (!t) {
         setSelectedName(null); setSelectedThreadContactId(null)
         setSelectedThreadMembers([]); setSelectedThreadCompanies([])
-        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }
+        if (!isSameConversation) { setSelectedCompanyId(null); setSelectedAddressedToMemberId(null); setSelectedAddressedToCompany(false) }
         return
       }
       const members = t.members ?? []
@@ -473,7 +478,7 @@ export default function PortalChatsPage() {
       // requires — this narrows WHEN the reset fires, it doesn't remove it.
       if (!isSameConversation) {
         setSelectedCompanyId(null)
-        setSelectedAddressedToContactId(null)
+        setSelectedAddressedToMemberId(null)
         setSelectedAddressedToCompany(false)
       }
     },
@@ -1837,7 +1842,7 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToContactId: string | null; targetAddressedToCompany: boolean }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1845,14 +1850,18 @@ export default function PortalChatsPage() {
           ...(targetAccountId
             ? {
                 account_id: targetAccountId,
-                // "Addressed to" label (dev job 08a8be62) — display metadata
+                // "Addressed to" label (dev job 08a8be62; keyed by the
+                // roster row's own id, dev job 34bd9009) — display metadata
                 // only, deliberately NOT sent as contact_id/sender_context
                 // (that pair is decideAdminSendScope's leak-prevention gate,
                 // which only recognizes account_contacts links and would
-                // wrongly reject a real company-type member). Sent as its
-                // own field; the server drops it silently if invalid rather
-                // than blocking the send.
-                ...(targetAddressedToContactId ? { addressed_to_contact_id: targetAddressedToContactId } : {}),
+                // wrongly reject a real company-type member). Sent as a
+                // member id, never a contact id or a name string — two
+                // roster rows can share one contact, and the server resolves
+                // both the contact reference and the display name from a
+                // fresh roster read; it drops the id silently if invalid
+                // rather than blocking the send.
+                ...(targetAddressedToMemberId ? { addressed_to_member_id: targetAddressedToMemberId } : {}),
                 ...(targetAddressedToCompany ? { addressed_to_company: true } : {}),
               }
             : {
@@ -1942,7 +1951,7 @@ export default function PortalChatsPage() {
   // handler and useSelectionHistory restore: a stale pick from a DIFFERENT
   // account's member roster must never carry into this one.
   useEffect(() => {
-    setSelectedAddressedToContactId(null)
+    setSelectedAddressedToMemberId(null)
     setSelectedAddressedToCompany(false)
   }, [selectedAccountId, selectedContactId])
 
@@ -2084,7 +2093,7 @@ export default function PortalChatsPage() {
   // reintroducing the exact ambiguity it exists to remove. The render gates
   // below now key on this query's own result (addressedToOptions), which is
   // correct regardless of how staff got here.
-  const { data: addressedToData } = useQuery<{ members: AddressedToOption[]; guessContactId: string | null }>({
+  const { data: addressedToData } = useQuery<{ members: AddressedToOption[]; guessMemberId: string | null }>({
     queryKey: ['portal-chat-addressed-to', selectedAccountId, replyToMsg?.id ?? null],
     queryFn: () => fetch(`/api/portal/chat/members?account_id=${selectedAccountId}${replyToMsg?.id ? `&reply_to_id=${replyToMsg.id}` : ''}`).then(r => r.json()),
     enabled: !!selectedAccountId,
@@ -2094,23 +2103,27 @@ export default function PortalChatsPage() {
   // null selection defers to the guess — mirrors panelCompanyId's own
   // selectedCompanyId-or-fallback pattern a few lines above, so a fresh
   // guess (e.g. the reply target changed) shows up live unless staff has
-  // explicitly picked someone for THIS thread already.
-  const effectiveAddressedToContactId = selectedAddressedToContactId ?? addressedToData?.guessContactId ?? null
-  const addressedToSelectedOption = addressedToOptions.find(o => o.contactId === effectiveAddressedToContactId) ?? null
+  // explicitly picked someone for THIS thread already. Keyed by memberId,
+  // not contactId (dev job 34bd9009) — see the state declaration above for
+  // why. The corresponding contact id / display name are read off
+  // addressedToSelectedOption below wherever they're actually needed —
+  // never re-derived or stored separately.
+  const effectiveAddressedToMemberId = selectedAddressedToMemberId ?? addressedToData?.guessMemberId ?? null
+  const addressedToSelectedOption = addressedToOptions.find(o => o.memberId === effectiveAddressedToMemberId) ?? null
   // Brief highlight, not a continuous pulse — that pattern already means
   // "unread, needs a response" elsewhere on this page (Erika Hall, council
   // pass 2); reusing it here would dilute what it means everywhere else.
   const prevAddressedToGuessRef = useRef<string | null>(null)
   useEffect(() => {
-    const guess = addressedToData?.guessContactId ?? null
-    if (prevAddressedToGuessRef.current !== null && prevAddressedToGuessRef.current !== guess && selectedAddressedToContactId === null && !selectedAddressedToCompany) {
+    const guess = addressedToData?.guessMemberId ?? null
+    if (prevAddressedToGuessRef.current !== null && prevAddressedToGuessRef.current !== guess && selectedAddressedToMemberId === null && !selectedAddressedToCompany) {
       setAddressedToJustChanged(true)
       const t = setTimeout(() => setAddressedToJustChanged(false), 1500)
       return () => clearTimeout(t)
     }
     prevAddressedToGuessRef.current = guess
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addressedToData?.guessContactId])
+  }, [addressedToData?.guessMemberId])
 
   const selectedClosedCompany = selectedThreadCompanies.find(c => c.id === selectedCompanyId && c.closed)
   const sendingToClosedAccount = selectedAccountId
@@ -2195,14 +2208,18 @@ export default function PortalChatsPage() {
     // "Addressed to" label (dev job 08a8be62) — same capture-before-await
     // discipline as the four values above (dev job c3bb4abc): must be
     // frozen here, at click time, never re-read from live state inside
-    // mutationFn after the attachment-upload await.
+    // mutationFn after the attachment-upload await. Captured as the roster
+    // row's own id (dev job 34bd9009), never a contact id or a resolved
+    // name — the server independently resolves both, fresh, from the
+    // account's live roster at insert time, so nothing captured here needs
+    // to survive a roster rebuild between now and when the request lands.
     //
     // targetAddressedToCompany is captured from selectedAddressedToCompany
-    // directly, NOT effectiveAddressedToContactId's sibling logic — and
-    // when it's set, targetAddressedToContactId is forced to null HERE,
-    // not left to fall through to the guess. effectiveAddressedToContactId
-    // is `selectedAddressedToContactId ?? addressedToData?.guessContactId
-    // ?? null` — clicking "Whole company" sets selectedAddressedToContactId
+    // directly, NOT effectiveAddressedToMemberId's sibling logic — and
+    // when it's set, targetAddressedToMemberId is forced to null HERE,
+    // not left to fall through to the guess. effectiveAddressedToMemberId
+    // is `selectedAddressedToMemberId ?? addressedToData?.guessMemberId
+    // ?? null` — clicking "Whole company" sets selectedAddressedToMemberId
     // to null explicitly, which is exactly the case that `??` fallback
     // exists for, so without this the guessed member would ride along in
     // the very same payload as the explicit "whole company" flag. The
@@ -2211,7 +2228,7 @@ export default function PortalChatsPage() {
     // storage either way — fixing it here too means the request itself is
     // never self-contradictory, not just the row that lands from it.
     const targetAddressedToCompany = selectedAddressedToCompany
-    const targetAddressedToContactId = targetAddressedToCompany ? null : effectiveAddressedToContactId
+    const targetAddressedToMemberId = targetAddressedToCompany ? null : effectiveAddressedToMemberId
 
     if (pendingAdminFiles.length > 0) {
       setUploadingAdminFile(true)
@@ -2222,7 +2239,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -2230,7 +2247,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToContactId, targetAddressedToCompany })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
     }
   }
 
@@ -2535,7 +2552,7 @@ export default function PortalChatsPage() {
                       setSelectedThreadMembers(members)
                       setSelectedThreadCompanies([])
                       setSelectedCompanyId(null)
-                      setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToMemberId(null)
                       setSelectedAddressedToCompany(false)
                     } else {
                       // Contact-level thread: fetch by contact_id
@@ -2553,7 +2570,7 @@ export default function PortalChatsPage() {
                       // click; read-only panels keep their company context via
                       // panelCompanyId.
                       setSelectedCompanyId(null)
-                      setSelectedAddressedToContactId(null)
+                      setSelectedAddressedToMemberId(null)
                       setSelectedAddressedToCompany(false)
                     }
                     setSidebarView('chats')
@@ -2729,7 +2746,7 @@ export default function PortalChatsPage() {
                     setSelectedThreadCompanies([])
                     setSelectedThreadMembers([])
                     setSelectedCompanyId(null)
-                    setSelectedAddressedToContactId(null)
+                    setSelectedAddressedToMemberId(null)
                     setSelectedAddressedToCompany(false)
                     setSelectedAccountId(acct.id)
                     setChatSearch('')
@@ -2806,7 +2823,7 @@ export default function PortalChatsPage() {
                             setSelectedThreadCompanies([])
                             setSelectedThreadMembers([])
                             setSelectedCompanyId(null)
-                            setSelectedAddressedToContactId(null)
+                            setSelectedAddressedToMemberId(null)
                             setSelectedAddressedToCompany(false)
                             if (action.account_id) { setSelectedAccountId(action.account_id); setSelectedContactId(null) }
                             else if (action.contact_id) { setSelectedContactId(action.contact_id); setSelectedAccountId(null) }
@@ -3166,7 +3183,7 @@ export default function PortalChatsPage() {
             {/* Header */}
             <div className="px-4 py-3 border-b bg-white shrink-0">
               <button
-                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToContactId(null); setSelectedAddressedToCompany(false) }}
+                onClick={() => { setSelectedAccountId(null); setSelectedContactId(null); setSelectedCompanyId(null); setSelectedThreadCompanies([]); setSelectedThreadMembers([]); setSelectedAddressedToMemberId(null); setSelectedAddressedToCompany(false) }}
                 className="lg:hidden text-sm text-blue-600 mb-1"
               >
                 &larr; Back
@@ -4464,8 +4481,8 @@ export default function PortalChatsPage() {
                           {/* selectedAddressedToCompany must be checked FIRST, not
                               folded into addressedToSelectedOption's own fallback —
                               found live testing the fix that introduced it: choosing
-                              "Whole company" sets selectedAddressedToContactId to null,
-                              which is exactly the condition effectiveAddressedToContactId
+                              "Whole company" sets selectedAddressedToMemberId to null,
+                              which is exactly the condition effectiveAddressedToMemberId
                               falls through to the GUESSED member for, so
                               addressedToSelectedOption resolves to that guessed
                               member's option (non-null) and this label would show their
@@ -4497,7 +4514,7 @@ export default function PortalChatsPage() {
                               'px-3 py-1.5 text-sm cursor-pointer outline-none',
                               selectedAddressedToCompany ? 'bg-teal-50 text-teal-700 font-medium' : 'text-zinc-700 hover:bg-teal-50'
                             )}
-                            onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                            onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToMemberId(null) }}
                           >
                             Whole company
                           </DropdownMenu.Item>
@@ -4509,7 +4526,7 @@ export default function PortalChatsPage() {
                               <DropdownMenu.Item
                                 key={opt.memberId}
                                 className="px-3 py-1.5 text-sm text-zinc-700 hover:bg-teal-50 cursor-pointer outline-none"
-                                onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
+                                onClick={() => { setSelectedAddressedToMemberId(opt.memberId); setSelectedAddressedToCompany(false) }}
                               >
                                 {opt.name}
                               </DropdownMenu.Item>
@@ -4889,7 +4906,7 @@ export default function PortalChatsPage() {
                           setSelectedThreadCompanies([])
                           setSelectedThreadMembers([])
                           setSelectedCompanyId(null)
-                          setSelectedAddressedToContactId(null)
+                          setSelectedAddressedToMemberId(null)
                           setSelectedAddressedToCompany(false)
                           setSelectedAccountId(acct.id)
                           setSelectedContactId(null)
@@ -5119,7 +5136,7 @@ export default function PortalChatsPage() {
                         message), not a cosmetic reset — see the migration comment. */}
                     <button
                       type="button"
-                      onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToContactId(null) }}
+                      onClick={() => { setSelectedAddressedToCompany(true); setSelectedAddressedToMemberId(null) }}
                       className={cn(
                         'px-3 py-1.5 text-sm rounded-full border transition-colors',
                         selectedAddressedToCompany ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
@@ -5135,10 +5152,10 @@ export default function PortalChatsPage() {
                         <button
                           key={opt.memberId}
                           type="button"
-                          onClick={() => { setSelectedAddressedToContactId(opt.contactId); setSelectedAddressedToCompany(false) }}
+                          onClick={() => { setSelectedAddressedToMemberId(opt.memberId); setSelectedAddressedToCompany(false) }}
                           className={cn(
                             'px-3 py-1.5 text-sm rounded-full border transition-colors',
-                            !selectedAddressedToCompany && effectiveAddressedToContactId === opt.contactId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+                            !selectedAddressedToCompany && effectiveAddressedToMemberId === opt.memberId ? 'bg-teal-600 text-white border-teal-600' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
                           )}
                         >
                           {opt.name}
