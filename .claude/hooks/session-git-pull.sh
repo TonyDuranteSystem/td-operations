@@ -36,7 +36,10 @@ GIT_DIR_SHARED=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
 if [ -n "$GIT_DIR_SELF" ] && [ "$GIT_DIR_SELF" != "$GIT_DIR_SHARED" ]; then
-  echo "ℹ️  Worktree on '$CURRENT_BRANCH' — not stashing, not pulling main (R070 governs the main checkout)."
+  # CURRENT_BRANCH is empty on a detached HEAD (e.g. a worktree checked out at
+  # a specific commit) — fall back to a label instead of printing '' , which
+  # reads like a failure when it isn't one.
+  echo "ℹ️  Worktree on '${CURRENT_BRANCH:-detached HEAD}' — not stashing, not pulling main (R070 governs the main checkout)."
 else
   # Check for uncommitted changes
   if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
