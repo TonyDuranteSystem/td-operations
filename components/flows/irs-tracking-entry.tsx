@@ -4,6 +4,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { Truck, Loader2, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
 
+// TD's business timezone (Largo, FL — Eastern), matching lib/portal/office-hours.ts's
+// OFFICE_TZ. delivered_at now carries the carrier's real timestamp (2026-09-16 fix) — a
+// delivery near midnight UTC could otherwise render as the wrong calendar day depending
+// on the viewer's own browser timezone. Inlined rather than importing that module here,
+// to avoid pulling server-oriented office-hours logic into this client component.
+const DISPLAY_TZ = 'America/New_York'
+
 interface IrsTrackingEntryProps {
   serviceDeliveryId: string
 }
@@ -111,7 +118,7 @@ export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
               </div>
               <div className="text-xs text-zinc-500">
                 {saved.delivered_at
-                  ? `Confirmed delivered ${new Date(saved.delivered_at).toLocaleDateString()}`
+                  ? `Confirmed delivered ${new Date(saved.delivered_at).toLocaleDateString('en-US', { timeZone: DISPLAY_TZ })}`
                   : saved.status
                     ? `Last check: ${STATUS_LABEL[saved.status] ?? saved.status}${saved.matched_ship_date ? ` · label shipped ${new Date(saved.matched_ship_date).toLocaleDateString()}` : ''}`
                     : 'Not checked yet'}
