@@ -33,18 +33,24 @@ export async function resolveSubjectEmail(opts: {
 }
 
 /**
- * Read-only email lookup for a refine instruction — the "Discuss with AI"
- * counterpart to fetchCallContext() in the sibling generate-offer-narrative
- * route. Reuses the SAME gmail_search/gmail_read_thread implementations the
- * dashboard's read-only AI worker already calls (lib/ai-agent/tools.ts —
- * gated read-only there via WORKER_READ_ONLY_TOOL_NAMES); this calls them
- * directly rather than pulling in that worker's full conversational engine,
- * which is a heavier, stateful, approval-gated system built for a different
- * job (and whose UNGATED predecessor was retired specifically because it let
- * a model dispatch tool calls, including sends, with no permission step —
- * see app/api/ai-agent/route.ts's 2026-07-19 note). This path is read-only
- * end to end: it can only find and quote an email back into the prompt,
- * never send or write anything.
+ * Read-only email lookup for a conversational turn on the offer-narrative
+ * chat — the counterpart to fetchCallContext() (call-transcript grounding),
+ * which only runs on the FIRST turn. This runs on every turn AFTER the
+ * first (offer-narrative-chat/route.ts::handleFollowUpTurn), one instruction
+ * at a time — the classification gate below decides per-turn whether that
+ * particular instruction needs a lookup at all. Reuses the SAME
+ * gmail_search/gmail_read_thread implementations the dashboard's read-only
+ * AI worker already calls (lib/ai-agent/tools.ts — gated read-only there via
+ * WORKER_READ_ONLY_TOOL_NAMES); this calls them directly rather than pulling
+ * in that worker's full conversational engine, which is a heavier, stateful,
+ * approval-gated system built for a different job (and whose UNGATED
+ * predecessor was retired specifically because it let a model dispatch tool
+ * calls, including sends, with no permission step — see
+ * app/api/ai-agent/route.ts's 2026-07-19 note). This path is read-only end
+ * to end: it can only find and quote an email back into the prompt, never
+ * send or write anything, and — unlike that worker's tool-choice surface —
+ * the model here is never given a tool schema at all; CODE decides whether
+ * to look something up, the same "code decides then calls" shape as always.
  *
  * Two-step, both best-effort (any failure or empty result just means no
  * context — the caller proceeds exactly as it did before this existed):
