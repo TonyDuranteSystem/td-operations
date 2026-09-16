@@ -69,6 +69,63 @@ export function offerIncludesManagement(contractType?: string | null): boolean {
   return MANAGEMENT_CONTRACT_TYPES.has((contractType || '').trim())
 }
 
+/**
+ * GROUNDING GATES (dev job 2b6e5988 fix + council redesign, 2026-09-16).
+ *
+ * dev_task 2b6e5988: the generator invented "South Dakota" as the formation
+ * state on a real client offer because neither the generate nor the refine
+ * route was ever TOLD the real state — there was no field to send. These two
+ * gates decide when it is safe to assert a specific state/entity type as fact
+ * instead of leaving the writer to guess (or, worse, not guess and invent
+ * something plausible-sounding). Both are re-checked SERVER-SIDE in the
+ * narrative-chat route, never trusted from the dialog alone — the exact
+ * surface where the bug below was found.
+ *
+ * `hasMultipleOptions` reuses the existing multi-option ambiguity signal: a
+ * package picker means the offer doesn't have ONE state/entity-type, it has
+ * several (one per option), so neither may be asserted as THE state/type.
+ */
+
+/**
+ * Whether a formation state may be asserted as fact. Requires BOTH:
+ * unambiguous (not multi-option) AND the offer's contract type is actually
+ * 'formation' — a formation state is only meaningful when a company is
+ * actually being formed in this narrative.
+ *
+ * The contract-type check is NOT redundant with the ambiguity check
+ * (bug-hunter blocker): `formationState` is Create Offer dialog component
+ * state that can survive a staffer switching a formation offer's selected
+ * services to a different service type (e.g. onboarding/ITIN-only) — plain
+ * `useState`, not recomputed from the current selection. `contractType` here
+ * is expected to be the dialog's `derivedContractType`, a `useMemo` that IS
+ * always recomputed from the live selection — so gating on it (rather than
+ * on ambiguity alone) closes exactly the leak: a stale formation state can
+ * never be asserted into a narrative whose contract type has since moved on.
+ */
+export function canGroundFormationState(opts: {
+  contractType?: string | null
+  hasMultipleOptions: boolean
+}): boolean {
+  return !opts.hasMultipleOptions && (opts.contractType || '').trim() === 'formation'
+}
+
+/**
+ * Whether an entity type (SMLLC/MMLLC/Corp) may be asserted as fact. Unlike
+ * formation state, entity type is meaningful for BOTH formation AND
+ * onboarding offers — an onboarding client's already-existing company still
+ * has an entity type that decides its tax filing (see buildUserPrompt's tax
+ * wording) — so it is gated on ambiguity alone, not on contract type.
+ *
+ * Before this fix NEITHER route gated entity type at all: it was sent
+ * unconditionally, so a multi-option offer whose packages disagreed on
+ * entity type (SMLLC vs MMLLC) would still have ONE entity type asserted as
+ * fact for the whole narrative — a live, real gap independent of the
+ * conversational-memory redesign.
+ */
+export function canGroundEntityType(opts: { hasMultipleOptions: boolean }): boolean {
+  return !opts.hasMultipleOptions
+}
+
 /** A selected service as it may arrive from the dialog: a bare name, or a
  * name plus its catalog description (the editable source of truth). */
 export type NarrativeServiceInput = string | { name?: string | null; description?: string | null }
@@ -215,11 +272,14 @@ ${reference}`
 }
 
 /** User prompt for a refine round: the current narrative (as the staff member
- * currently has it, including hand-edits) + the offer context + the instruction. */
+ * currently has it, including hand-edits) + the offer context + the instruction.
+ * `formationState` must already be gated by the caller (see
+ * {@link canGroundFormationState}) — omit/leave '' when it isn't safe to assert one. */
 export function buildRefineUserPrompt(opts: {
   clientName: string
   contractType: string
   entityType: string
+  formationState?: string
   serviceLines: string[]
   current: { intro_en?: string; intro_it?: string; strategy?: string; next_steps?: string; future_developments?: string; immediate_actions?: string }
   instruction: string
@@ -228,14 +288,28 @@ export function buildRefineUserPrompt(opts: {
   // the route. Absent (not just empty) whenever no lookup was attempted or
   // nothing matched, so the prompt never implies a lookup happened when it didn't.
   emailContext?: string
+  // A note about what changed on the offer SINCE this narrative was last
+  // grounded (state/entity-type/package selection) — surfaced so the model
+  // itself knows a hand-off happened, mirroring the dialog's own visible
+  // staleness warning (see canGroundFormationState's header). Absent when
+  // nothing is stale.
+  staleGroundingNote?: string
 }): string {
   const c = opts.current
   const emailBlock = opts.emailContext
     ? `\nRELEVANT EMAIL (found for this instruction — use it, don't invent beyond it):\n${opts.emailContext}\n`
     : ''
+  const stateLine = opts.formationState
+    ? `\nSTATE OF FORMATION: ${opts.formationState} — the ONLY state this offer forms in. Do not mention any other U.S. state.`
+    : opts.contractType === 'formation'
+      ? '\nSTATE OF FORMATION: Not specified — do NOT name or imply any specific U.S. state.'
+      : ''
+  const staleBlock = opts.staleGroundingNote
+    ? `\nNOTE: ${opts.staleGroundingNote}\n`
+    : ''
   return `CLIENT: ${opts.clientName}
 CONTRACT TYPE: ${opts.contractType}
-ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}
+ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}${stateLine}
 SELECTED SERVICES:
 ${opts.serviceLines.map((s) => `- ${s}`).join('\n')}
 
@@ -246,14 +320,17 @@ CURRENT NARRATIVE (refine from exactly this — leave any section you are not as
 [next_steps]: ${c.next_steps || '(empty)'}
 [future_developments]: ${c.future_developments || '(empty)'}
 [immediate_actions]: ${c.immediate_actions || '(empty)'}
-${emailBlock}
+${emailBlock}${staleBlock}
 INSTRUCTION FROM STAFF: ${opts.instruction}
 
 Return the JSON now.`
 }
 
 /** Build the user prompt from the concrete offer inputs. `serviceLines` are the
- * pre-rendered "Name — description" lines from {@link renderServiceLines}. */
+ * pre-rendered "Name — description" lines from {@link renderServiceLines}.
+ * `formationState` must already be gated by the caller (see
+ * {@link canGroundFormationState}) — pass '' when it isn't safe to assert one;
+ * this function does not re-derive the gate, it only renders the decision. */
 export function buildUserPrompt(
   clientName: string,
   language: 'en' | 'it',
@@ -261,13 +338,24 @@ export function buildUserPrompt(
   notesContext: string,
   contractType: string,
   entityType: string,
+  formationState?: string,
 ): string {
+  // dev_task 2b6e5988: the writer once invented "South Dakota" because it was
+  // never told the real state at all — there was no field to send it in.
+  // When the caller withheld a state (ambiguous or not a formation offer),
+  // say so explicitly rather than leaving the line out, so the model reads
+  // "don't invent one" instead of silently treating absence as a green light.
+  const stateLine = formationState
+    ? `\nSTATE OF FORMATION: ${formationState} — this is the ONLY state this offer forms in. Do not mention any other U.S. state.`
+    : contractType === 'formation'
+      ? '\nSTATE OF FORMATION: Not specified — this offer has more than one possible state/option, or the state was not pinned yet. Do NOT name or imply any specific U.S. state.'
+      : ''
   return `Generate offer narrative content for this client:
 
 CLIENT: ${clientName}
 PREFERRED LANGUAGE: ${language === 'it' ? 'Italian' : 'English'}
 CONTRACT TYPE: ${contractType}
-ENTITY TYPE: ${entityType || 'Not specified — keep tax wording generic, do not assume a form or any bookkeeping'}
+ENTITY TYPE: ${entityType || 'Not specified — keep tax wording generic, do not assume a form or any bookkeeping'}${stateLine}
 SELECTED SERVICES (describe ONLY these, plus standard management/portal features ONLY if this offer includes ongoing management):
 ${serviceLines.map((s) => `- ${s}`).join('\n')}
 
