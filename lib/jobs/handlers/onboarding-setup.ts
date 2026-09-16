@@ -515,11 +515,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         if (mm.member_type !== 'individual') continue
         const nm = [mm.member_first_name, mm.member_last_name].filter(Boolean).join(' ')
         const em = mm.member_email
-        if (!nm || !em) continue
-        const key = `${normalizePersonName(nm)} ${normalizeEmail(em)}`
+        if (!em) continue
+        // Use the SAME effective identity as the resolver (name, or email when the
+        // name is blank) so two nameless members sharing one email are caught too —
+        // previously both were skipped by the name check above and neither was ever
+        // added to `seen`, so neither could be flagged as a duplicate of the other.
+        const effName = nm || em
+        const key = `${normalizePersonName(effName)} ${normalizeEmail(em)}`
         if (seen.has(key)) {
           skippedMemberIdx.add(i)
-          result.steps.push(step(`member_${i + 1}`, 'error', `Duplicate member "${nm}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct the wizard data and re-run.`))
+          result.steps.push(step(`member_${i + 1}`, 'error', `Duplicate member "${effName}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct the wizard data and re-run.`))
         } else {
           seen.add(key)
         }

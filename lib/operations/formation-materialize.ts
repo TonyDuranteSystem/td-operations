@@ -42,6 +42,7 @@ import { ensureCompanyFolder, migrateContactToCompany } from "@/lib/drive-folder
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
+import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { syncTier } from "./sync-tier"
 import { uploadBinaryToDrive } from "@/lib/google-drive"
 
@@ -652,11 +653,16 @@ export async function materializeFormationCompany(
           if (mm.member_type !== "individual") continue
           const nm = [mm.member_first_name, mm.member_last_name].filter(Boolean).join(" ")
           const em = mm.member_email
-          if (!nm || !em) continue
-          const key = `${normalizePersonName(nm)} ${normalizeEmail(em)}`
+          if (!em) continue
+          // Use the SAME effective identity as the resolver (name, or email when the
+          // name is blank) so two nameless members sharing one email are caught too —
+          // previously both were skipped by the name check above and neither was ever
+          // added to `seen`, so neither could be flagged as a duplicate of the other.
+          const effName = nm || em
+          const key = `${normalizePersonName(effName)} ${normalizeEmail(em)}`
           if (seen.has(key)) {
             skippedMemberIdx.add(i)
-            steps.push({ step: `member_${i + 1}`, status: "error", detail: `Duplicate member "${nm}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct and re-materialize.` })
+            steps.push({ step: `member_${i + 1}`, status: "error", detail: `Duplicate member "${effName}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct and re-materialize.` })
           } else {
             seen.add(key)
           }
@@ -683,33 +689,43 @@ export async function materializeFormationCompany(
             const repName = m.member_rep_name ? String(m.member_rep_name).trim() : null
             const memberCompanyName = m.member_company_name ? String(m.member_company_name).trim() : `Company Member ${i + 1}`
 
-            await supabaseAdmin.from("members").insert(
-              {
-                account_id: accountId,
-                member_type: "company",
-                company_name: memberCompanyName,
-                ein: m.member_company_ein ?? null,
-                address_street: m.member_company_street ?? null,
-                address_city: m.member_company_city ?? null,
-                address_state: m.member_company_state ?? null,
-                address_zip: m.member_company_zip ?? null,
-                address_country: m.member_company_country ?? null,
-                ownership_pct: ownershipPct,
-                is_primary: false,
-                // Signer selected in the MMLLC formation wizard. A company member
-                // can be the SS-4 Responsible Party — it resolves to its
-                // representative at SS-4 generation (decideSs4Signer).
-                is_signer: m.is_signer === true,
-                representative_name: repName,
-                representative_email: repEmail,
-                representative_address_street: m.member_rep_address_street ?? null,
-                representative_address_city: m.member_rep_address_city ?? null,
-                representative_address_state: m.member_rep_address_state ?? null,
-                representative_address_zip: m.member_rep_address_zip ?? null,
-                representative_address_country: m.member_rep_address_country ?? null,
-                updated_at: now,
-              },
-            )
+            // Routed through the shared upsertMemberRow (not a bare .insert()) for two
+            // reasons: it's idempotent on a job re-run (members has only PARTIAL unique
+            // indexes supabase-js can't use as an ON CONFLICT arbiter — see that file's
+            // header), and its error is actually captured below instead of discarded,
+            // which would otherwise report "ownership recorded" for a row never written.
+            const { error: companyMemberRowErr } = await upsertMemberRow({
+              account_id: accountId,
+              member_type: "company",
+              company_name: memberCompanyName,
+              ein: m.member_company_ein ?? null,
+              address_street: m.member_company_street ?? null,
+              address_city: m.member_company_city ?? null,
+              address_state: m.member_company_state ?? null,
+              address_zip: m.member_company_zip ?? null,
+              address_country: m.member_company_country ?? null,
+              ownership_pct: ownershipPct,
+              is_primary: false,
+              // Signer selected in the MMLLC formation wizard. A company member
+              // can be the SS-4 Responsible Party — it resolves to its
+              // representative at SS-4 generation (decideSs4Signer).
+              is_signer: m.is_signer === true,
+              representative_name: repName,
+              representative_email: repEmail,
+              representative_address_street: m.member_rep_address_street ?? null,
+              representative_address_city: m.member_rep_address_city ?? null,
+              representative_address_state: m.member_rep_address_state ?? null,
+              representative_address_zip: m.member_rep_address_zip ?? null,
+              representative_address_country: m.member_rep_address_country ?? null,
+              updated_at: now,
+            })
+            if (companyMemberRowErr) {
+              steps.push({
+                step: `member_${i + 1}_link`,
+                status: "error",
+                detail: `${memberCompanyName} — OWNERSHIP ROW FAILED TO WRITE (${companyMemberRowErr}). The ownership table will not total 100 until this is fixed.`,
+              })
+            }
 
             // Find-or-create the representative contact for portal access.
             if (repEmail) {
@@ -773,26 +789,28 @@ export async function materializeFormationCompany(
             // The result was a members table summing to LESS than 100 and a
             // person missing from the SS-4 and the OA. `members.contact_id` is
             // nullable precisely for this case. (dev job fc69557f.)
-            const { error: memberRowErr } = await supabaseAdmin.from("members").insert(
-              {
-                account_id: accountId,
-                member_type: "individual",
-                full_name: memberName,
-                email: memberEmail,
-                address_street: m.member_street ?? null,
-                address_city: m.member_city ?? null,
-                address_state: m.member_state_province ?? null,
-                address_zip: m.member_zip ?? null,
-                address_country: m.member_country ?? null,
-                ownership_pct: ownershipPct,
-                is_primary: isPrimary,
-                // Signer selected in the MMLLC formation wizard
-                // (member_{idx}_is_signer). See is_signer note above.
-                is_signer: m.is_signer === true,
-                contact_id: membContactId,
-                updated_at: now,
-              },
-            )
+            // Routed through the shared upsertMemberRow (not a bare .insert()) so a
+            // job re-run is idempotent instead of hitting a duplicate-key error on an
+            // already-written row (members has only PARTIAL unique indexes supabase-js
+            // can't use as an ON CONFLICT arbiter — see that file's header).
+            const { error: memberRowErr } = await upsertMemberRow({
+              account_id: accountId,
+              member_type: "individual",
+              full_name: memberName,
+              email: memberEmail,
+              address_street: m.member_street ?? null,
+              address_city: m.member_city ?? null,
+              address_state: m.member_state_province ?? null,
+              address_zip: m.member_zip ?? null,
+              address_country: m.member_country ?? null,
+              ownership_pct: ownershipPct,
+              is_primary: isPrimary,
+              // Signer selected in the MMLLC formation wizard
+              // (member_{idx}_is_signer). See is_signer note above.
+              is_signer: m.is_signer === true,
+              contact_id: membContactId,
+              updated_at: now,
+            })
             // supabase-js RETURNS errors rather than throwing, so the enclosing
             // try/catch cannot see this one. Unchecked, the step below would
             // assert "ownership recorded" about a row that was never written —
@@ -802,7 +820,7 @@ export async function materializeFormationCompany(
               steps.push({
                 step: `member_${i + 1}_link`,
                 status: "error",
-                detail: `${memberName} — OWNERSHIP ROW FAILED TO WRITE (${memberRowErr.message}). The ownership table will not total 100 until this is fixed.`,
+                detail: `${memberName} — OWNERSHIP ROW FAILED TO WRITE (${memberRowErr}). The ownership table will not total 100 until this is fixed.`,
               })
             }
 
@@ -869,27 +887,32 @@ export async function materializeFormationCompany(
       const ownerFullName = [ownerFirst, ownerLast].filter(Boolean).join(" ") || null
       const ownerEmail = submitted.owner_email ? String(submitted.owner_email).toLowerCase().trim() : null
       const ownerPct = Math.max(0, Math.round((100 - additionalPctSum) * 100) / 100)
-      await supabaseAdmin.from("members").insert(
-        {
-          account_id: accountId,
-          member_type: "individual",
-          full_name: ownerFullName,
-          email: ownerEmail,
-          address_street: submitted.owner_street ? String(submitted.owner_street) : null,
-          address_city: submitted.owner_city ? String(submitted.owner_city) : null,
-          address_state: submitted.owner_state_province ? String(submitted.owner_state_province) : null,
-          address_zip: submitted.owner_zip ? String(submitted.owner_zip) : null,
-          address_country: submitted.owner_country ? String(submitted.owner_country) : null,
-          ownership_pct: ownerPct,
-          is_primary: primaryMemberIndex === 0,
-          // Owner is the SS-4 Responsible Party when they selected themselves on
-          // the owner step of the MMLLC formation wizard (owner_is_signer).
-          is_signer: submitted.owner_is_signer === true,
-          contact_id: params.contact_id,
-          updated_at: new Date().toISOString(),
-        },
-      )
-      steps.push({ step: "owner_member_row", status: "ok", detail: `Owner member row (${ownerPct}%)` })
+      // Routed through the shared upsertMemberRow, error captured — a bare .insert()
+      // here previously reported "ok" unconditionally, which would assert this legal
+      // ownership fact was recorded even on a genuine write failure.
+      const { error: ownerMemberRowErr } = await upsertMemberRow({
+        account_id: accountId,
+        member_type: "individual",
+        full_name: ownerFullName,
+        email: ownerEmail,
+        address_street: submitted.owner_street ? String(submitted.owner_street) : null,
+        address_city: submitted.owner_city ? String(submitted.owner_city) : null,
+        address_state: submitted.owner_state_province ? String(submitted.owner_state_province) : null,
+        address_zip: submitted.owner_zip ? String(submitted.owner_zip) : null,
+        address_country: submitted.owner_country ? String(submitted.owner_country) : null,
+        ownership_pct: ownerPct,
+        is_primary: primaryMemberIndex === 0,
+        // Owner is the SS-4 Responsible Party when they selected themselves on
+        // the owner step of the MMLLC formation wizard (owner_is_signer).
+        is_signer: submitted.owner_is_signer === true,
+        contact_id: params.contact_id,
+        updated_at: new Date().toISOString(),
+      })
+      if (ownerMemberRowErr) {
+        steps.push({ step: "owner_member_row", status: "error", detail: `Owner member row FAILED TO WRITE (${ownerMemberRowErr}). The ownership table will not total 100 until this is fixed.` })
+      } else {
+        steps.push({ step: "owner_member_row", status: "ok", detail: `Owner member row (${ownerPct}%)` })
+      }
     }
 
     // 9. Drive folder + migration.

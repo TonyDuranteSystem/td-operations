@@ -63,10 +63,40 @@ describe('firstDuplicateIndividualIdentity', () => {
     expect(firstDuplicateIndividualIdentity(members)).toBeNull()
   })
 
-  it('skips members with empty name or email (they carry null contact_id)', () => {
+  it('skips a member with NO email entirely (carries null contact_id, cannot collide)', () => {
+    const members: IdentityMember[] = [
+      { member_type: 'individual', full_name: '', email: '' },
+      { member_type: 'individual', full_name: '', email: '' },
+    ]
+    expect(firstDuplicateIndividualIdentity(members)).toBeNull()
+  })
+
+  // REGRESSION (2026-07-23 finding, previously unfixed): this used to assert
+  // toBeNull() here -- i.e. it PINNED the bug as correct. Two nameless members
+  // sharing one email were both silently skipped by the old `!name || !email`
+  // check, so neither was ever added to `seen` and the collision was never
+  // caught -- it surfaced later as a raw duplicate-key error at save instead of
+  // this clear, pre-save message.
+  it('catches two NAMELESS members sharing the same email', () => {
     const members: IdentityMember[] = [
       { member_type: 'individual', full_name: '', email: 'x@y.com' },
+      { member_type: 'individual', full_name: '', email: 'X@Y.com' },
+    ]
+    expect(firstDuplicateIndividualIdentity(members)).toBe('x@y.com')
+  })
+
+  it('does NOT flag two nameless members with genuinely DIFFERENT emails', () => {
+    const members: IdentityMember[] = [
       { member_type: 'individual', full_name: '', email: 'x@y.com' },
+      { member_type: 'individual', full_name: '', email: 'z@y.com' },
+    ]
+    expect(firstDuplicateIndividualIdentity(members)).toBeNull()
+  })
+
+  it('does NOT flag a nameless member against a named member on a different email', () => {
+    const members: IdentityMember[] = [
+      { member_type: 'individual', full_name: 'Gabriele Finelli', email: 'finelli.g23@gmail.com' },
+      { member_type: 'individual', full_name: '', email: 'other@x.com' },
     ]
     expect(firstDuplicateIndividualIdentity(members)).toBeNull()
   })
