@@ -1,22 +1,29 @@
 /**
  * CRON: IRS shipment tracking check.
  *
- * Daily. For every service delivery currently sitting in a stage that has
- * pipeline_stages.tracking_check_enabled=true and a tracking number on file with no
- * confirmed delivery yet, asks ShipStation for the label's current status:
+ * Daily — registered in vercel.json / lib/cron-coverage.ts, live in production since
+ * 2026-09-09 with a real ShipStation key (this comment used to claim otherwise; see
+ * docs/systems/flows.md's correction). For every service delivery currently sitting in a
+ * stage that has pipeline_stages.tracking_check_enabled=true and a tracking number on
+ * file with no confirmed delivery yet, asks ShipStation for the label's current status:
  *
  *   - No match at all for 5 consecutive days -> one alert email (deduped).
  *   - Matched, not delivered -> just cache the status, reset both streak counters.
- *   - Matched, delivered, for the 2nd consecutive check -> stamp delivered_at (guarded —
- *     the notification only fires if this exact write is the one that set it) and post
- *     the same kind of portal-chat message the "Submitted to IRS" milestone already uses.
+ *   - Matched, delivered, for the 2nd consecutive check, once the carrier's real delivery
+ *     date is available -> stamp delivered_at with THAT real date (guarded — the
+ *     notification only fires if this exact write is the one that set it) and post the
+ *     same kind of portal-chat message the "Submitted to IRS" milestone already uses. If
+ *     the real date isn't available yet, confirmation waits rather than guessing — see
+ *     lib/operations/irs-tracking.ts's decideCheckOutcome for the bounded grace period
+ *     that eventually falls back to today's date rather than stalling forever (2026-09-16
+ *     fix — the real date was previously never captured at all).
  *   - Independent of the above: a case open past 150 days with nothing confirmed and no
  *     prior stuck-alert -> a second, separate alert email.
  *
  * Every step is isolated per case (try/catch) so one bad tracking number can't stop the
- * rest of the batch. This cron is NOT yet registered on the schedule (vercel.json /
- * lib/cron-coverage.ts) or invoked with a real ShipStation key — both are a deliberate,
- * separate go/no-go from building this code, per the approved plan.
+ * rest of the batch — this includes ShipStation's second, per-label delivery-date call,
+ * which lives entirely inside lookupTrackingStatus() and fails soft, never widening this
+ * boundary.
  *
  * Auth: Bearer CRON_SECRET — the same strict pattern as app/api/cron/itin-processing-check
  * (a missing env var refuses, it does not fail open).
@@ -133,7 +140,7 @@ export async function GET(req: NextRequest) {
         if (decision.confirmDelivered) {
           const { data: confirmed, error: confirmErr } = await db
             .from('irs_shipment_tracking')
-            .update({ delivered_at: now.toISOString() })
+            .update({ delivered_at: decision.deliveredAt })
             .eq('service_delivery_id', row.service_delivery_id)
             .eq('tracking_number', row.tracking_number)
             .is('delivered_at', null)

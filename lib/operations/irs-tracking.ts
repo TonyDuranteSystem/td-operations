@@ -14,12 +14,25 @@
  * here — because a real fire-once guard needs to be checked against the live row at
  * write time (Postgres's own row locking), not against what this function read a moment
  * earlier.
+ *
+ * 2026-09-16: `deliveredAt` is the value the caller must write when `confirmDelivered` is
+ * true — never derive that date from `now` in the caller. Confirmation prefers the
+ * carrier's real `actualDeliveryDate` (from ShipStation's per-label /track endpoint); if
+ * that isn't available yet on the day the 2-consecutive-check threshold is first reached,
+ * confirmation WAITS (stays false) rather than guessing — exactly like the system already
+ * waits for a genuinely undelivered package. Only if the real date still hasn't shown up
+ * after DELIVERED_DATE_GRACE_CHECKS additional consecutive delivered checks does this
+ * fall back to `checkedAt` as a deliberate last resort, so a permanently-unavailable real
+ * date (e.g. a carrier API limitation) can never stall a case forever. `deliveredAt` is
+ * always a non-null ISO string exactly when `confirmDelivered` is true, and always null
+ * otherwise.
  */
 
 import type { ShipStationLookupResult } from '@/lib/shipstation'
 
 export const NO_MATCH_ALERT_THRESHOLD = 5
 export const DELIVERED_CONFIRM_THRESHOLD = 2
+export const DELIVERED_DATE_GRACE_CHECKS = 5
 export const STUCK_ALERT_THRESHOLD_DAYS = 150
 
 export interface TrackingRow {
@@ -42,9 +55,12 @@ export interface CheckPatch {
 
 export interface CheckDecision {
   patch: CheckPatch
-  /** Set only when THIS check just reached the confirm threshold. Caller applies via a
-   *  write guarded on `delivered_at IS NULL` and only notifies if a row was returned. */
+  /** Set only when THIS check should confirm delivery. Caller applies via a write
+   *  guarded on `delivered_at IS NULL` and only notifies if a row was returned. */
   confirmDelivered: boolean
+  /** The value to write to delivered_at when confirmDelivered is true. Always a valid
+   *  ISO string exactly when confirmDelivered is true; always null otherwise. */
+  deliveredAt: string | null
   /** Set only when THIS check just crossed the no-match threshold for the first time. */
   raiseNoMatchAlert: boolean
 }
@@ -64,6 +80,7 @@ export function decideCheckOutcome(row: TrackingRow, lookup: ShipStationLookupRe
         consecutive_unmatched_checks: newUnmatched,
       },
       confirmDelivered: false,
+      deliveredAt: null,
       raiseNoMatchAlert: newUnmatched >= NO_MATCH_ALERT_THRESHOLD && !row.no_match_alerted_at,
     }
   }
@@ -78,11 +95,16 @@ export function decideCheckOutcome(row: TrackingRow, lookup: ShipStationLookupRe
         consecutive_unmatched_checks: 0,
       },
       confirmDelivered: false,
+      deliveredAt: null,
       raiseNoMatchAlert: false,
     }
   }
 
   const newDeliveredCount = row.consecutive_delivered_checks + 1
+  const atOrPastThreshold = newDeliveredCount >= DELIVERED_CONFIRM_THRESHOLD && !row.delivered_at
+  const pastGracePeriod = newDeliveredCount >= DELIVERED_CONFIRM_THRESHOLD + DELIVERED_DATE_GRACE_CHECKS
+  const readyToConfirm = atOrPastThreshold && (lookup.actualDeliveryDate != null || pastGracePeriod)
+
   return {
     patch: {
       status: 'delivered',
@@ -91,7 +113,8 @@ export function decideCheckOutcome(row: TrackingRow, lookup: ShipStationLookupRe
       consecutive_delivered_checks: newDeliveredCount,
       consecutive_unmatched_checks: 0,
     },
-    confirmDelivered: newDeliveredCount >= DELIVERED_CONFIRM_THRESHOLD && !row.delivered_at,
+    confirmDelivered: readyToConfirm,
+    deliveredAt: readyToConfirm ? (lookup.actualDeliveryDate ?? checkedAt) : null,
     raiseNoMatchAlert: false,
   }
 }
