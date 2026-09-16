@@ -83,7 +83,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 <!-- GENERATED:mcp-tools -->
 _Regenerated 2026-09-16. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
-**49 active tool groups**, **221 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
+**49 active tool groups**, **219 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
 `AgentApproval` · `AgentMessage` · `AgentThread` · `BankStatement` · `BankingForm` · `Calendar` · `Calendly` · `Catalog` · `Checkpoint` · `Circleback` · `Classify` · `Closure` · `CodebaseRead` · `Crm` · `Deadline` · `DevTask` · `Doc` · `Docai` · `DocumentGeneration` · `Drive` · `Formation` · `Gmail` · `HarborCompliance` · `HermesRead` · `ITINForm` · `Job` · `Knowledge` · `Lead` · `Lease` · `Lock` · `MemberInfo` · `Messaging` · `Oa` · `Offer` · `Onboarding` · `Operations` · `Portal` · `Referral` · `Signature` · `Sql` · `Ss4` · `Storage` · `Sysdoc` · `Tax` · `TaxQuote` · `TeamChat` · `Testing` · `WelcomePackage` · `Whop`
 <!-- /GENERATED:mcp-tools -->
@@ -179,7 +179,7 @@ _Regenerated 2026-09-16 from the R-rule list in CLAUDE.md — **42 rules**, high
 _Regenerated 2026-09-16. Every subsystem doc under `docs/systems/` (42 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-08-30)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-08-30)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-15)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-08-29)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-15)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-10)_
@@ -187,7 +187,7 @@ _Regenerated 2026-09-16. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-08-29)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-15)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-09-15)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
@@ -198,7 +198,7 @@ _Regenerated 2026-09-16. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-07)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-05)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-07-29)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-08-30)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-15)_
@@ -206,7 +206,7 @@ _Regenerated 2026-09-16. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-08-30)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-14)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-14)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-09-15)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-08-29)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

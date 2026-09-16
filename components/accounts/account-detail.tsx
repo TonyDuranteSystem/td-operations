@@ -17,7 +17,6 @@ import { EditableField } from './editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { PortalUserButton } from './portal-user-button'
-import { PortalTransitionButton } from './portal-transition-button'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/documents-panel'
 import { GenerateOADialog } from '@/app/(dashboard)/accounts/[id]/components/generate-oa-dialog'
@@ -689,7 +688,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
               </span>
             )}
             <PortalUserButton accountId={account.id} portalAccount={account.portal_account ?? false} />
-            <PortalTransitionButton accountId={account.id} portalAccount={account.portal_account ?? false} />
             <ComposeEmailButton
               accountId={account.id}
               contactId={primaryContact?.id}
