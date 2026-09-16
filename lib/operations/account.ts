@@ -5,9 +5,7 @@
  * field write. Callers:
  *   - Dashboard server actions (app/(dashboard)/accounts/actions.ts
  *     updateAccountField / addAccountNote / changeAccountStatus)
- *   - MCP portal tool (lib/mcp/tools/portal.ts — portal user creation
- *     + legacy transition)
- *   - CRM admin-actions routes (app/api/portal/admin/transition)
+ *   - MCP portal tool (lib/mcp/tools/portal.ts — portal user creation)
  *   - Future: MCP crm_update_record, other API routes.
  *
  * Why: before this, ~7 different call sites did raw

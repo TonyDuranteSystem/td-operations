@@ -5,10 +5,6 @@
  * / file-name / account-linking writes. Callers:
  *   - Dashboard action toggleDocumentPortalVisibility
  *     (app/(dashboard)/accounts/actions.ts)
- *   - MCP portal_transition_setup bulk portal-visibility toggle
- *     (lib/mcp/tools/portal.ts)
- *   - CRM admin transition route bulk portal-visibility toggle
- *     (app/api/portal/admin/transition/route.ts)
  *   - MCP doc_map_folders orphan-to-account linker
  *     (lib/mcp/tools/doc.ts)
  *   - Signature webhook portal-visibility flip

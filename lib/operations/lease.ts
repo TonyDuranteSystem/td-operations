@@ -7,8 +7,6 @@
  *   - Onboarding auto-chain handler (lib/jobs/handlers/onboarding-setup.ts)
  *   - Welcome package handler (lib/jobs/handlers/welcome-package-setup.ts)
  *   - MCP welcome_package_prepare (lib/mcp/tools/welcome-package.ts)
- *   - MCP portal_transition_setup legacy-onboard branch (lib/mcp/tools/portal.ts)
- *   - CRM admin transition route (app/api/portal/admin/transition/route.ts)
  *   - CRM "Place Client" button (app/api/crm/admin-actions/place-client/route.ts)
  *   - CRM "Generate Document" for leases (app/api/crm/admin-actions/generate-document/route.ts)
  *   - Annual renewal on first-installment payment (lib/installment-handler.ts) —

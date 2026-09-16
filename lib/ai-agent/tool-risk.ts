@@ -65,7 +65,6 @@ export const HARD_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   "doc_mass_process", // OCR + document writes across ALL accounts
   "doc_update_health", // overwrites client_health on every active account
   "hc_sync_license_deadlines", // writes deadlines for every linked company
-  "portal_transition_batch", // full portal cascade + auto-sends welcome email per client
   // Irreversible destruction
   "storage_delete", // mass file removal, no dry-run, Drive mirror left orphaned
   "whop_delete_product", // permanent external delete; dry_run has NO default → deletes
@@ -133,7 +132,7 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   "offer_send", "offer_resend",
   "lease_send", "oa_send", "itin_form_send",
   "portal_invoice_create", "portal_invoice_send", "portal_create_user",
-  "portal_chat_send", "portal_team_send", "portal_transition_setup", "portal_transition_batch",
+  "portal_chat_send", "portal_team_send",
   "sd_advance_stage", "service_deactivate", "service_reactivate",
   "referral_payout", "tax_send_to_accountant", "formation_confirm",
   "drive_delete", "storage_delete", "agent_msg_send",
