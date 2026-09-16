@@ -38,6 +38,8 @@ import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { logCron } from "@/lib/cron-log"
 import { decideJuneInstallment } from "@/lib/billing/june-installment-eligibility"
 import { isFirstInstallment, isSecondInstallment, type ClassifiablePayment } from "@/lib/billing/payment-classification"
+import { PORTAL_INSTALLMENT_PAYMENT_INSTRUCTION } from "@/lib/billing/installment-message"
+import { PORTAL_AUDIENCE_TIERS } from "@/lib/portal/pay-token"
 import type { Json } from "@/lib/database.types"
 
 export async function GET(req: NextRequest) {
@@ -74,7 +76,7 @@ export async function GET(req: NextRequest) {
     // Get all active Client accounts
     const { data: accounts, error } = await supabaseAdmin
       .from("accounts")
-      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, ra_switch_date, client_since, formation_date")
+      .select("id, company_name, entity_type, account_type, installment_2_amount, status, is_test, ra_switch_date, client_since, formation_date, portal_tier")
       .eq("status", "Active")
       .eq("account_type", "Client")
       .or("is_test.is.null,is_test.eq.false")
@@ -165,6 +167,10 @@ export async function GET(req: NextRequest) {
 
       const description = `${installmentLabel} ${year} — LLC Annual Management`
       const installmentLabelEnum = "Installment 2 (Jun)"
+      const isPortalAudience = !!(acct.portal_tier && PORTAL_AUDIENCE_TIERS.has(acct.portal_tier))
+      const paymentInstruction = isPortalAudience
+        ? PORTAL_INSTALLMENT_PAYMENT_INSTRUCTION
+        : "Please remit payment by wire transfer to the bank details below, or via card using the link provided separately."
 
       // Idempotency key — prevents the same installment being invoiced twice on a
       // cron re-run / retry / concurrent fire. createTDInvoice returns the existing
@@ -187,7 +193,7 @@ export async function GET(req: NextRequest) {
           }],
           currency: "USD",
           due_date: dueDate,
-          message: `Payment for ${installmentLabel} ${year} — LLC Annual Management fee.\nPlease remit payment by wire transfer to the bank details below, or via card using the link provided separately.`,
+          message: `Payment for ${installmentLabel} ${year} — LLC Annual Management fee.\n${paymentInstruction}`,
           idempotency_key: idempotencyKey,
           installment: installmentLabelEnum,
           payment_category: "installment_2",

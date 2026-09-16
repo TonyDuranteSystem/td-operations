@@ -89,3 +89,42 @@ export function wrapPdfText(
 
   return lines
 }
+
+/**
+ * Word-wrap free text that may contain the sender's own line breaks (e.g. a
+ * bank-transfer template pasted into an invoice note), splitting on every
+ * character pdf-lib's own drawText() treats as a forced line break (\r\n,
+ * \r, \n, \f) BEFORE word-wrapping each resulting paragraph independently.
+ *
+ * This exists because drawText() silently draws an embedded line-break
+ * character as extra internal lines at its own line height, which a caller
+ * tracking vertical position line-by-line (`y -= lineHeight` per drawText
+ * call) has no way to detect or account for — the two disagree on how many
+ * lines were actually drawn, and later content overlaps earlier content.
+ * Pre-splitting here guarantees the caller never hands drawText() a string
+ * containing one of these characters, so its own line count is always right.
+ *
+ * A blank paragraph (from a doubled line break, or a whitespace-only line)
+ * is preserved as an empty string in the returned array — the caller decides
+ * how much vertical space to give it, typically a shorter gap than a real
+ * text line — never dropped, or the sender's intentional spacing collapses.
+ */
+export function wrapPdfParagraphs(
+  text: string,
+  font: TextMeasurer,
+  size: number,
+  maxWidth: number,
+): string[] {
+  if (!text) return []
+
+  const paragraphs = text.split(/\r\n|[\r\n\f]/)
+  const lines: string[] = []
+  for (const paragraph of paragraphs) {
+    if (paragraph.trim() === '') {
+      lines.push('')
+      continue
+    }
+    lines.push(...wrapPdfText(paragraph, font, size, maxWidth))
+  }
+  return lines
+}
