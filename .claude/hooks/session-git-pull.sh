@@ -9,9 +9,13 @@ cd "$REPO_DIR"
 # Reset context-loaded flag — forces Claude to read session-context before editing code
 rm -f /tmp/claude-td-context-loaded
 
-# ── Is this a linked worktree on a feature branch? ────────────────────────
-# If so, DO NOT stash and DO NOT pull main. (Antonio approved 2026-08-10, after four
-# occurrences on one job. Rationale in dev job fddbf2d5.)
+# ── Is this a linked worktree? ─────────────────────────────────────────────
+# If so, DO NOT stash and DO NOT pull main — regardless of which branch it is
+# currently on. (Antonio approved 2026-08-10, after four occurrences on one
+# job. Rationale in dev job fddbf2d5. Widened 2026-09-16, dev job fc645bbb:
+# the old check also required CURRENT_BRANCH != "main", so a worktree left
+# sitting on main — e.g. right after `gh pr merge --delete-branch` — fell
+# through to the stash+pull path below and got auto-stashed anyway.)
 #
 # Both halves of the old behaviour are right in the main checkout on main, and wrong here:
 #   - the stash silently removes in-flight work from the tree, and recovery depends on the
@@ -20,13 +24,18 @@ rm -f /tmp/claude-td-context-loaded
 #     built from a clean checkout and only looked healthy because the working copy still held
 #     the missing piece. A silent tidy-up can make finished work retroactively broken.
 #   - pulling main INTO a feature branch is a merge decision, not housekeeping.
+#   - a worktree can land ON main too, and is exactly as wrong to auto-stash/pull there: being
+#     a worktree at all (GIT_DIR_SELF != GIT_DIR_SHARED) already answers whether this hook
+#     should touch it — checking the branch name on top of that only reopens the hazard for
+#     the one branch name most likely to occur right after a merge.
 #
-# R070 ("pull before any work") continues to govern the MAIN checkout, which is unchanged.
+# R070 ("pull before any work") continues to govern the MAIN checkout (GIT_DIR_SELF ==
+# GIT_DIR_SHARED), which is unchanged.
 GIT_DIR_SELF=$(git rev-parse --git-dir 2>/dev/null || echo "")
 GIT_DIR_SHARED=$(git rev-parse --git-common-dir 2>/dev/null || echo "")
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
-if [ -n "$GIT_DIR_SELF" ] && [ "$GIT_DIR_SELF" != "$GIT_DIR_SHARED" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+if [ -n "$GIT_DIR_SELF" ] && [ "$GIT_DIR_SELF" != "$GIT_DIR_SHARED" ]; then
   echo "ℹ️  Worktree on '$CURRENT_BRANCH' — not stashing, not pulling main (R070 governs the main checkout)."
 else
   # Check for uncommitted changes
