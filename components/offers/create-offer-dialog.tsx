@@ -10,6 +10,7 @@ import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import { deriveContractType } from '@/lib/offers/derive-contract-type'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
+import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -342,10 +343,14 @@ export function CreateOfferDialog({
       .catch(() => setPartners([]))
   }, [])
 
-  // Narrative content (client-facing, AI-generated or manual)
+  // Narrative content (client-facing, AI-generated or manual). ONE conversational
+  // panel: the first turn (no instruction) auto-produces the full narrative,
+  // exactly like the old one-click "Generate with AI"; every turn after that is a
+  // real conversational exchange with actual memory (lib/offers/narrative-conversation.ts
+  // persists turns server-side; conversationId is this browser's handle onto that
+  // server-side thread). See sendNarrativeTurn() below — it replaces the old,
+  // separate generateNarrative()/refineNarrative() pair.
   const [narrativeOpen, setNarrativeOpen] = useState(false)
-  // Conversational refine: discuss the narrative with the AI. It returns ONLY the
-  // sections it changed, applied over the current (possibly hand-edited) content.
   const [refineInput, setRefineInput] = useState('')
   const [refineLoading, setRefineLoading] = useState(false)
   const [refineMessages, setRefineMessages] = useState<{ role: 'you' | 'ai'; text: string }[]>([])
@@ -356,6 +361,44 @@ export function CreateOfferDialog({
   const [nextStepsJson, setNextStepsJson] = useState('')
   const [futureDevJson, setFutureDevJson] = useState('')
   const [immediateActionsJson, setImmediateActionsJson] = useState('')
+  // The server-side conversation this browser is continuing (null = no active
+  // thread yet, or the next send is a fresh "Generate"). See narrative-conversation.ts.
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  // What the CURRENT narrative was actually grounded against, captured every time
+  // a turn's result is applied — compared against live dialog state below
+  // (narrativeMayBeStale) to warn when the state/entity-type/package selection has
+  // since moved on and specific facts in the narrative may now be wrong (bug-hunter,
+  // "don't let a specific, confident, now-wrong fact sit there looking authoritative").
+  const [narrativeGroundedAt, setNarrativeGroundedAt] = useState<{
+    contractType: string
+    entityType: string
+    formationState: string
+    packagesFingerprint: string
+  } | null>(null)
+
+  // The component stays mounted when closed (see account-offer-panel.tsx /
+  // lead-actions.tsx), so without this a narrative + conversation drafted for one
+  // client rides onto the next offer raised from the same panel — an AI-written
+  // narrative describing the WRONG client sitting in a "has content" state until
+  // someone notices, and a conversation thread that would go on to blend two
+  // clients' context on its very next turn. Mirrors the splitEnabled/splitParts
+  // (above) and clientNameValue/referrer reset-on-open effects already in this file.
+  useEffect(() => {
+    if (!open) return
+    setNarrativeOpen(false)
+    setRefineInput('')
+    setRefineLoading(false)
+    setRefineMessages([])
+    setNarrativeLoading(false)
+    setIntroEn('')
+    setIntroIt('')
+    setStrategyJson('')
+    setNextStepsJson('')
+    setFutureDevJson('')
+    setImmediateActionsJson('')
+    setConversationId(null)
+    setNarrativeGroundedAt(null)
+  }, [open])
 
   // Notes context for offer creation
   const [notesContext, setNotesContext] = useState<NoteSource[]>([])
@@ -434,16 +477,47 @@ export function CreateOfferDialog({
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
   const installmentCurrencySymbol = installmentCurrency === 'EUR' ? '\u20AC' : '$'
 
-  // AI narrative generation handler
-  async function generateNarrative() {
-    if (narrativeLoading) return
+  // ONE conversational flow for both "Generate" and "Discuss" (offer-narrative
+  // chat redesign, 2026-09-16) — POSTs to /api/crm/admin-actions/offer-narrative-chat.
+  // Called with no argument (or blank): the FIRST turn — auto-fires the full
+  // narrative generation, same one-click affordance as the old "Generate with AI"
+  // button, and always starts a brand-new conversation (dropping any existing
+  // conversationId) so clicking Generate again never silently appends a redundant
+  // "regenerate" instruction onto an old thread. Called with instruction text: a
+  // real conversational turn with actual memory of everything said before, PLUS
+  // the full current (possibly hand-edited) narrative resent fresh as grounding —
+  // memory augments grounding, it never replaces it, so a stale AI turn can't
+  // silently overwrite a human's hand-edit.
+  async function sendNarrativeTurn(instructionText?: string) {
+    const instruction = (instructionText ?? '').trim()
+    const isFirstTurn = !instruction
+    if (narrativeLoading || refineLoading) return
     if (selected.length === 0) {
-      toast.error('Select at least one service before generating')
+      toast.error(isFirstTurn ? 'Select at least one service before generating' : 'Generate a narrative first')
       return
     }
-    setNarrativeLoading(true)
+    if (!isFirstTurn && !conversationId) {
+      toast.error('Generate a narrative first')
+      return
+    }
+
+    if (isFirstTurn) {
+      setNarrativeLoading(true)
+      // A fresh "Generate" always starts over — invalidate any active thread
+      // (server-side: a new conversation row is created regardless of what we
+      // send; client-side: drop the old id and transcript so nothing stale lingers).
+      setConversationId(null)
+      setRefineMessages([])
+    } else {
+      setRefineLoading(true)
+      setRefineMessages(m => [...m, { role: 'you', text: instruction }])
+      setRefineInput('')
+    }
+
     try {
-      // Build notes context for AI (same as what goes into admin_notes)
+      // Build notes context for AI (same as what goes into admin_notes) — only
+      // meaningful on the first turn; later turns ground on the CURRENT narrative
+      // state instead (below), not the original notes.
       const noteParts: string[] = []
       for (const source of notesContext) {
         if (!selectedNoteIds.has(source.id)) continue
@@ -481,33 +555,58 @@ export function CreateOfferDialog({
           || !!svc?.has_annual || svc?.category === 'primary'
       })
 
-      const res = await fetch('/api/crm/admin-actions/generate-offer-narrative', {
+      const body: Record<string, unknown> = {
+        conversation_id: isFirstTurn ? null : conversationId,
+        client_name: clientNameValue,
+        language,
+        services: serviceDetails,
+        // Same contract-type the offer RECORD uses (derivedContractType skips
+        // null-contract_type services), so the narrative can't describe forming
+        // a new company for an onboarding client on a bundled offer.
+        contract_type: derivedContractType,
+        // Entity type drives the tax wording (SMLLC = 5472/1120 information
+        // return, MMLLC = 1065 partnership with P&L + balance sheet). Gated by
+        // groundedEntityType (below) so an ambiguous multi-option offer never
+        // has ONE entity type asserted as fact — re-checked server-side too.
+        entity_type: groundedEntityType || null,
+        // State of formation — gated by groundedFormationState (below): only
+        // sent when this is genuinely a single-option formation offer. dev_task
+        // 2b6e5988: the writer once invented "South Dakota" because it was never
+        // told the real state at all.
+        formation_state: groundedFormationState || null,
+        // Gates the management/portal language so standalone offers don't
+        // over-promise ongoing services.
+        includes_management: includesManagement,
+        // Tells the writer to mention (without inventing details of) the
+        // picker on the offer page — Antonio's bug report, dev job 3c1bb5fa.
+        // Also the ambiguity signal both grounding gates above are built on.
+        has_multiple_options: hasMultipleOptions,
+        lead_id: leadId || null,
+        account_id: accountId || null,
+        contact_id: contactId || null,
+      }
+      if (isFirstTurn) {
+        // Let the server pull the client's full call transcript (notes + every
+        // turn) from call_summaries for a richer, personalized narrative.
+        body.notes_context = noteParts.join('\n\n')
+      } else {
+        // The FULL current (possibly hand-edited) narrative — resent every
+        // turn as grounding, never relied on via replayed history alone.
+        body.current = {
+          intro_en: introEn, intro_it: introIt,
+          strategy: strategyJson, next_steps: nextStepsJson,
+          future_developments: futureDevJson, immediate_actions: immediateActionsJson,
+        }
+        body.instruction = instruction
+        if (narrativeMayBeStale) {
+          body.stale_grounding_note = 'The offer’s formation state, entity type, or package selection changed since this narrative was last generated — specific facts in the current narrative below (e.g. a state or company type) may now be wrong. If the instruction is about that, fix it; otherwise leave it as-is and flag it in your note.'
+        }
+      }
+
+      const res = await fetch('/api/crm/admin-actions/offer-narrative-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_name: clientNameValue,
-          language,
-          services: serviceDetails,
-          notes_context: noteParts.join('\n\n'),
-          // Same contract-type the offer RECORD uses (derivedContractType skips
-          // null-contract_type services), so the narrative can't describe forming
-          // a new company for an onboarding client on a bundled offer.
-          contract_type: derivedContractType,
-          // Entity type drives the tax wording (SMLLC = 5472/1120 information
-          // return, MMLLC = 1065 partnership with P&L + balance sheet). Without
-          // it the writer can't describe the correct filing for this client.
-          entity_type: entityType || null,
-          // Gates the management/portal language so standalone offers don't
-          // over-promise ongoing services.
-          includes_management: includesManagement,
-          // Tells the writer to mention (without inventing details of) the
-          // picker on the offer page — Antonio's bug report, dev job 3c1bb5fa.
-          has_multiple_options: extraPackages.length > 0,
-          // Let the server pull the client's full call transcript (notes + every
-          // turn) from call_summaries for a richer, personalized narrative.
-          lead_id: leadId || null,
-          account_id: accountId || null,
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!res.ok) {
@@ -516,101 +615,71 @@ export function CreateOfferDialog({
           throw new Error(SESSION_EXPIRED_MSG)
         }
         reportDialogError({
-          route: '/api/crm/admin-actions/generate-offer-narrative',
+          route: '/api/crm/admin-actions/offer-narrative-chat',
           method: 'POST',
           http_status: res.status,
           message: parsed.error || `Non-JSON error response (HTTP ${res.status})`,
           body_snippet: parsed.error ? null : raw.slice(0, 500),
         })
-        throw new Error(parsed.error || `Generation failed (HTTP ${res.status})`)
+        if (res.status === 409 && !isFirstTurn) {
+          // The server refused to continue this conversation (expired, or its
+          // stored scope no longer matches this draft) — never silently start a
+          // fresh thread out from under a typed instruction the model never saw
+          // grounding for. Drop the dead id; the staffer regenerates explicitly.
+          setConversationId(null)
+          throw new Error(`${parsed.error || 'Conversation expired.'} Click "Generate with AI" to start over.`)
+        }
+        throw new Error(parsed.error || `Request failed (HTTP ${res.status})`)
       }
 
       const data = await res.json()
-      const n = data.narrative
+      if (data.conversation_id) setConversationId(data.conversation_id)
 
-      // Populate editable fields
-      setIntroEn(n.intro_en || '')
-      setIntroIt(n.intro_it || '')
-      setStrategyJson(JSON.stringify(n.strategy, null, 2))
-      setNextStepsJson(JSON.stringify(n.next_steps, null, 2))
-      setFutureDevJson(JSON.stringify(n.future_developments, null, 2))
-      setImmediateActionsJson(JSON.stringify(n.immediate_actions, null, 2))
-      setNarrativeOpen(true)
-      toast.success('Narrative generated — review and edit before creating draft')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Generation failed'
-      toast.error(msg)
-    } finally {
-      setNarrativeLoading(false)
-    }
-  }
-
-  // Conversational refine — discuss the narrative; apply only what changed.
-  async function refineNarrative() {
-    const instruction = refineInput.trim()
-    if (refineLoading || !instruction) return
-    if (selected.length === 0) { toast.error('Generate or add a narrative first'); return }
-    setRefineLoading(true)
-    setRefineMessages(m => [...m, { role: 'you', text: instruction }])
-    setRefineInput('')
-    try {
-      const serviceDetails = selected.map(s => {
-        const cat = catalog.find(c => c.id === s.id)
-        return { name: cat?.name || s.id, description: cat?.description || null }
-      })
-      const includesManagement = selected.some(s => {
-        const svc = catalog.find(c => c.id === s.id)
-        const ct = svc?.contract_type
-        return ct === 'formation' || ct === 'onboarding' || ct === 'renewal' || !!svc?.has_annual || svc?.category === 'primary'
-      })
-      const res = await fetch('/api/crm/admin-actions/refine-offer-narrative', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_name: clientNameValue,
-          language,
-          services: serviceDetails,
-          contract_type: derivedContractType,
-          entity_type: entityType || null,
-          includes_management: includesManagement,
-          current: {
-            intro_en: introEn, intro_it: introIt,
-            strategy: strategyJson, next_steps: nextStepsJson,
-            future_developments: futureDevJson, immediate_actions: immediateActionsJson,
-          },
-          instruction,
-          // Lets the server look up an email when the instruction asks for one
-          // (e.g. "read the email from Francesco") — scoped to whichever of
-          // these identifies who this offer is actually for.
-          lead_id: leadId || null,
-          account_id: accountId || null,
-          contact_id: contactId || null,
-        }),
-      })
-      if (!res.ok) {
-        const { parsed, raw } = await readErrorBody(res)
-        if (isSessionExpired(res.status, parsed)) throw new Error(SESSION_EXPIRED_MSG)
-        reportDialogError({ route: '/api/crm/admin-actions/refine-offer-narrative', method: 'POST', http_status: res.status, message: parsed.error || `Non-JSON error (HTTP ${res.status})`, body_snippet: parsed.error ? null : raw.slice(0, 500) })
-        throw new Error(parsed.error || `Refine failed (HTTP ${res.status})`)
+      const groundedSnapshot = {
+        contractType: derivedContractType,
+        entityType: groundedEntityType,
+        formationState: groundedFormationState,
+        packagesFingerprint,
       }
-      const data = await res.json()
-      const changes = data.changes || {}
-      const applied: string[] = []
-      if ('intro_en' in changes) { setIntroEn(changes.intro_en || ''); applied.push('intro (EN)') }
-      if ('intro_it' in changes) { setIntroIt(changes.intro_it || ''); applied.push('intro (IT)') }
-      if ('strategy' in changes) { setStrategyJson(JSON.stringify(changes.strategy, null, 2)); applied.push('strategy') }
-      if ('next_steps' in changes) { setNextStepsJson(JSON.stringify(changes.next_steps, null, 2)); applied.push('next steps') }
-      if ('future_developments' in changes) { setFutureDevJson(JSON.stringify(changes.future_developments, null, 2)); applied.push('future developments') }
-      if ('immediate_actions' in changes) { setImmediateActionsJson(JSON.stringify(changes.immediate_actions, null, 2)); applied.push('immediate actions') }
-      const note = typeof data.note === 'string' && data.note ? data.note : (applied.length ? `Updated ${applied.join(', ')}.` : 'No change made.')
-      setRefineMessages(m => [...m, { role: 'ai', text: applied.length ? `${note} (updated: ${applied.join(', ')})` : note }])
-      if (applied.length) toast.success(`Updated: ${applied.join(', ')}`)
+
+      if (isFirstTurn) {
+        const n = data.narrative
+        setIntroEn(n.intro_en || '')
+        setIntroIt(n.intro_it || '')
+        setStrategyJson(JSON.stringify(n.strategy, null, 2))
+        setNextStepsJson(JSON.stringify(n.next_steps, null, 2))
+        setFutureDevJson(JSON.stringify(n.future_developments, null, 2))
+        setImmediateActionsJson(JSON.stringify(n.immediate_actions, null, 2))
+        setNarrativeOpen(true)
+        setNarrativeGroundedAt(groundedSnapshot)
+        toast.success('Narrative generated — review, edit, or discuss below')
+      } else {
+        const changes = data.changes || {}
+        const applied: string[] = []
+        if ('intro_en' in changes) { setIntroEn(changes.intro_en || ''); applied.push('intro (EN)') }
+        if ('intro_it' in changes) { setIntroIt(changes.intro_it || ''); applied.push('intro (IT)') }
+        if ('strategy' in changes) { setStrategyJson(JSON.stringify(changes.strategy, null, 2)); applied.push('strategy') }
+        if ('next_steps' in changes) { setNextStepsJson(JSON.stringify(changes.next_steps, null, 2)); applied.push('next steps') }
+        if ('future_developments' in changes) { setFutureDevJson(JSON.stringify(changes.future_developments, null, 2)); applied.push('future developments') }
+        if ('immediate_actions' in changes) { setImmediateActionsJson(JSON.stringify(changes.immediate_actions, null, 2)); applied.push('immediate actions') }
+        const note = typeof data.note === 'string' && data.note ? data.note : (applied.length ? `Updated ${applied.join(', ')}.` : 'No change made.')
+        setRefineMessages(m => [...m, { role: 'ai', text: applied.length ? `${note} (updated: ${applied.join(', ')})` : note }])
+        if (applied.length) {
+          setNarrativeGroundedAt(groundedSnapshot)
+          toast.success(`Updated: ${applied.join(', ')}`)
+        }
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Refine failed'
-      setRefineMessages(m => [...m, { role: 'ai', text: `⚠️ ${msg}` }])
-      toast.error(msg)
+      const msg = err instanceof Error ? err.message : (isFirstTurn ? 'Generation failed' : 'Refine failed')
+      if (isFirstTurn) {
+        toast.error(msg)
+      } else {
+        setRefineMessages(m => [...m, { role: 'ai', text: `⚠️ ${msg}` }])
+        toast.error(msg)
+      }
     } finally {
-      setRefineLoading(false)
+      if (isFirstTurn) setNarrativeLoading(false)
+      else setRefineLoading(false)
     }
   }
 
@@ -640,6 +709,40 @@ export function CreateOfferDialog({
       return svc?.has_annual
     })
   }, [selected, catalog])
+
+  // ── AI narrative grounding (dev_task 2b6e5988 fix) ──────────────────────────
+  // A multi-option offer has SEVERAL states/entity types (one per option), so
+  // neither may be asserted as THE state/type for the whole narrative — the
+  // existing signal the AI prompt already used for this ambiguity.
+  const hasMultipleOptions = extraPackages.length > 0
+  // Re-derived here (not just trusted at send time) so the SAME value drives
+  // both what gets sent to the AI endpoint and the staleness comparison below.
+  const groundedFormationState = canGroundFormationState({ contractType: derivedContractType, hasMultipleOptions })
+    ? formationState
+    : ''
+  const groundedEntityType = canGroundEntityType({ hasMultipleOptions })
+    ? entityType
+    : ''
+  // A cheap, stable summary of the extra-package selection, so the staleness
+  // check below notices a package being added/removed/changed even though
+  // entityType/formationState (Option 1's own fields) didn't move.
+  const packagesFingerprint = useMemo(
+    () => JSON.stringify(extraPackages.map(p => [p.entityType, p.formationState, p.price])),
+    [extraPackages],
+  )
+  // True once the narrative has content AND the state/entity-type/package
+  // selection it was actually grounded against has since changed — the UI
+  // signal so a specific, confident, now-wrong fact doesn't sit there looking
+  // authoritative (bug-hunter). Cleared implicitly whenever a turn's result is
+  // applied (narrativeGroundedAt is refreshed to the CURRENT values then).
+  const narrativeMayBeStale = useMemo(() => {
+    if (!narrativeGroundedAt) return false
+    if (!(introEn.trim() || introIt.trim() || strategyJson.trim())) return false
+    return narrativeGroundedAt.contractType !== derivedContractType
+      || narrativeGroundedAt.entityType !== groundedEntityType
+      || narrativeGroundedAt.formationState !== groundedFormationState
+      || narrativeGroundedAt.packagesFingerprint !== packagesFingerprint
+  }, [narrativeGroundedAt, introEn, introIt, strategyJson, derivedContractType, groundedEntityType, groundedFormationState, packagesFingerprint])
 
   // Detect bank/currency incompatibility. Mercury/Relay/Revolut are USD-only;
   // Airwallex is EUR-only. 'auto' is always compatible (picks the right one by currency).
@@ -2121,17 +2224,23 @@ export function CreateOfferDialog({
               </button>
               <button
                 type="button"
-                onClick={generateNarrative}
-                disabled={narrativeLoading || selected.length === 0}
+                onClick={() => sendNarrativeTurn()}
+                disabled={narrativeLoading || refineLoading || selected.length === 0}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
               >
                 {narrativeLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-                {narrativeLoading ? 'Generating...' : 'Generate with AI'}
+                {narrativeLoading ? 'Generating...' : (introEn || introIt) ? 'Regenerate with AI' : 'Generate with AI'}
               </button>
             </div>
             {narrativeOpen && (
               <div className="p-4 space-y-3 bg-white">
                 <p className="text-[10px] text-zinc-400">These sections appear on the client-facing offer page. Edit freely — AI-generated content is a starting point.</p>
+                {narrativeMayBeStale && (
+                  <div className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-500" />
+                    <span>The state, company type, or package selection changed since this narrative was written — it may reference the old one. Regenerate, or ask the AI below to fix it.</span>
+                  </div>
+                )}
                 <div>
                   <label className="text-xs font-medium text-zinc-700">Introduction (English)</label>
                   <textarea value={introEn} onChange={e => setIntroEn(e.target.value)} rows={3} placeholder="Personalized introduction for the client..." className="w-full mt-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
@@ -2164,10 +2273,10 @@ export function CreateOfferDialog({
                       <span className="font-normal text-violet-500">— ask for a change (e.g. &ldquo;shorten the intro&rdquo;, &ldquo;drop step 3&rdquo;)</span>
                     </div>
                     {refineMessages.length > 0 && (
-                      <div className="max-h-40 overflow-y-auto space-y-1.5 text-xs">
+                      <div className="max-h-72 overflow-y-auto space-y-1.5 text-xs">
                         {refineMessages.map((m, i) => (
                           <div key={i} className={m.role === 'you' ? 'text-right' : 'text-left'}>
-                            <span className={`inline-block px-2 py-1 rounded-md ${m.role === 'you' ? 'bg-violet-600 text-white' : 'bg-white border text-zinc-700'}`}>
+                            <span className={`inline-block max-w-[85%] px-2 py-1 rounded-md ${m.role === 'you' ? 'bg-violet-600 text-white' : 'bg-white border text-zinc-700'}`}>
                               {m.text}
                             </span>
                           </div>
@@ -2178,22 +2287,22 @@ export function CreateOfferDialog({
                       <textarea
                         value={refineInput}
                         onChange={e => setRefineInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); refineNarrative() } }}
+                        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendNarrativeTurn(refineInput) } }}
                         disabled={refineLoading}
                         rows={3}
                         placeholder="Tell the AI what to change, or give it context about the client… (⌘/Ctrl+Enter to send)"
                         className="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 resize-y min-h-[64px] max-h-56"
                       />
-                      <button type="button" onClick={refineNarrative} disabled={refineLoading || !refineInput.trim()} className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-md bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 shrink-0">
+                      <button type="button" onClick={() => sendNarrativeTurn(refineInput)} disabled={refineLoading || narrativeLoading || !refineInput.trim()} className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-md bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 shrink-0">
                         {refineLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
                         {refineLoading ? 'Working...' : 'Send'}
                       </button>
                     </div>
-                    <p className="text-[10px] text-violet-400">Give it context about the client or ask for a change. It only edits what you ask, keeps your other edits, and won&rsquo;t promise services that aren&rsquo;t in the offer.</p>
+                    <p className="text-[10px] text-violet-400">Give it context about the client or ask for a change. It remembers this whole conversation, only edits what you ask, keeps your other edits, and won&rsquo;t promise services that aren&rsquo;t in the offer.</p>
                   </div>
                 )}
                 {(introEn || strategyJson) && (
-                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson(''); setRefineMessages([]) }} className="text-xs text-red-500 hover:text-red-700">
+                  <button type="button" onClick={() => { setIntroEn(''); setIntroIt(''); setStrategyJson(''); setNextStepsJson(''); setFutureDevJson(''); setImmediateActionsJson(''); setRefineMessages([]); setConversationId(null); setNarrativeGroundedAt(null) }} className="text-xs text-red-500 hover:text-red-700">
                     Clear all narrative content
                   </button>
                 )}
