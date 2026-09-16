@@ -203,6 +203,43 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
         }
       : null
 
+  // ── "Add your members" call-to-action (dev job ef529eaf) ──
+  // Company Formation's own version of the itinCta pattern above: once the
+  // company is real (Articles Received or later) and it's a Multi Member LLC,
+  // a pending member-info request means the client hasn't told us their
+  // partners + SS-4 signer yet — surface it on the SAME flow page they've
+  // been watching the whole time (where they already saw/approved their
+  // name), not a separate tool that appears out of nowhere. A 'submitted'
+  // request means they already answered, so this only ever looks for 'pending'.
+  let memberInfoCta: { title: string; body: string; cta: string; href: string } | null = null
+  if (sd.service_type === 'Company Formation' && sd.account_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: acctRow } = await (supabaseAdmin as any)
+      .from('accounts')
+      .select('entity_type')
+      .eq('id', sd.account_id)
+      .maybeSingle()
+    if (acctRow?.entity_type === 'Multi Member LLC') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: pendingReq } = await (supabaseAdmin as any)
+        .from('member_info_requests')
+        .select('token, access_code')
+        .eq('account_id', sd.account_id)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as { data: { token: string; access_code: string } | null }
+      if (pendingReq) {
+        memberInfoCta = {
+          title: t('flowDetail.membersTitle', locale, translations),
+          body: t('flowDetail.membersBody', locale, translations),
+          cta: t('flowDetail.membersCta', locale, translations),
+          href: `/portal/form/${pendingReq.token}/${pendingReq.access_code}`,
+        }
+      }
+    }
+  }
+
   // ── Flow chat messages (read-only) — same scoping as the portal chat client
   // view: never show soft-deleted rows or internal chat-event notes. ──
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -270,6 +307,25 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
               <p className="mt-1 text-sm text-blue-800">{itinCta.body}</p>
               <span className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white">
                 {itinCta.cta}
+                <ArrowRight className="h-4 w-4" />
+              </span>
+            </div>
+          </div>
+        </Link>
+      )}
+
+      {memberInfoCta && (
+        <Link
+          href={memberInfoCta.href}
+          className="block rounded-xl border-2 border-blue-500 bg-blue-50 p-4 sm:p-5 hover:bg-blue-100 transition-colors"
+        >
+          <div className="flex items-start gap-3">
+            <PenSquare className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-blue-900">{memberInfoCta.title}</h2>
+              <p className="mt-1 text-sm text-blue-800">{memberInfoCta.body}</p>
+              <span className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white">
+                {memberInfoCta.cta}
                 <ArrowRight className="h-4 w-4" />
               </span>
             </div>

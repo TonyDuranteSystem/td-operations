@@ -101,6 +101,16 @@ export async function getOrCreateMemberInfoRequest(accountId: string): Promise<M
   }
 
   // Idempotent: reuse a pending request rather than creating a second one.
+  // Deliberately does NOT also match 'submitted' — unlike the automatic
+  // kickoff (which must stay silent once a client has already answered, see
+  // lib/service-delivery.ts's own upfront check), both callers of this
+  // function hand the resulting formUrl to someone who is about to actually
+  // fill it in right now (the staff "send/resend" button, and the client's
+  // own Generate Documents correction button). The submit endpoint 409s on
+  // any resubmission once status is 'submitted', so reusing that dead link
+  // here would hand out a broken URL — a fresh 'pending' row (this function's
+  // existing else-branch, pre-populated from the current members table) is
+  // the correct behavior for a human-initiated re-ask/correction.
   const { data: existing } = await supabaseAdmin
     .from("member_info_requests")
     .select("id, token, access_code, status")

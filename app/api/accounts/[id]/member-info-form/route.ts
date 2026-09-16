@@ -75,10 +75,14 @@ export async function POST(
     .eq("id", contactId)
     .maybeSingle()
 
-  const lang = contactData?.language ?? "en"
-  const isItalian = lang === "it" || lang === "Italian"
+  // Canonical language check (dev job ef529eaf) — the previous exact-match
+  // `lang === "Italian"` missed real values like "Italiano" (documented messy
+  // free text, lib/locale.ts), so this manual-send button could silently
+  // revert to English for a client the automatic kickoff correctly detects.
+  const { isItalian } = await import("@/lib/locale")
+  const italian = isItalian(contactData?.language ?? null)
 
-  const chatMessage = isItalian
+  const chatMessage = italian
     ? `Ciao! Abbiamo bisogno di aggiornare le informazioni dei soci di **${companyName}**.\n\nPer favore compila questo breve modulo con i dati aggiornati di tutti i soci:\n\n${formUrl}`
     : `Hi! We need to update the member information for **${companyName}**.\n\nPlease fill out this short form with the updated details for all members:\n\n${formUrl}`
 
@@ -102,7 +106,7 @@ export async function POST(
     notifyClientOfAdminMessage({
       account_id: accountId,
       contact_id: contactId,
-      messagePreview: isItalian
+      messagePreview: italian
         ? `Aggiorna le informazioni dei soci di ${companyName}`
         : `Update member information for ${companyName}`,
     }).catch(err => console.error("[member-info-form] notify failed:", err))
