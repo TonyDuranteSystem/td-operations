@@ -95,6 +95,7 @@ export interface MaterializeFormationResult {
   success: boolean
   outcome:
     | "materialized"
+    | "materialized_with_member_errors"
     | "already_materialized"
     | "missing_chosen_name"
     | "missing_submission"
@@ -631,6 +632,11 @@ export async function materializeFormationCompany(
     // 7. MMLLC additional members.
     let primaryMemberIndex = 0
     let additionalPctSum = 0
+    // Set at any point below where the members/ownership table ends up wrong
+    // (a write failed, or a genuine duplicate was skipped) — read at the final
+    // return so `outcome` tells the caller this isn't a clean "materialized"
+    // even though the account itself was created successfully.
+    let memberWriteFailed = false
     if (isMMLC) {
       const additionalMembers = extractMembersFromWizardData(submitted)
       // Uses the resolver-supplied uploadPaths (from formation_submissions when
@@ -662,6 +668,7 @@ export async function materializeFormationCompany(
           const key = `${normalizePersonName(effName)} ${normalizeEmail(em)}`
           if (seen.has(key)) {
             skippedMemberIdx.add(i)
+            memberWriteFailed = true
             steps.push({ step: `member_${i + 1}`, status: "error", detail: `Duplicate member "${effName}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct and re-materialize.` })
           } else {
             seen.add(key)
@@ -720,6 +727,7 @@ export async function materializeFormationCompany(
               updated_at: now,
             })
             if (companyMemberRowErr) {
+              memberWriteFailed = true
               steps.push({
                 step: `member_${i + 1}_link`,
                 status: "error",
@@ -817,6 +825,7 @@ export async function materializeFormationCompany(
             // a false green on a legal fact, which is the whole thing this
             // change exists to make trustworthy.
             if (memberRowErr) {
+              memberWriteFailed = true
               steps.push({
                 step: `member_${i + 1}_link`,
                 status: "error",
@@ -909,6 +918,7 @@ export async function materializeFormationCompany(
         updated_at: new Date().toISOString(),
       })
       if (ownerMemberRowErr) {
+        memberWriteFailed = true
         steps.push({ step: "owner_member_row", status: "error", detail: `Owner member row FAILED TO WRITE (${ownerMemberRowErr}). The ownership table will not total 100 until this is fixed.` })
       } else {
         steps.push({ step: "owner_member_row", status: "ok", detail: `Owner member row (${ownerPct}%)` })
@@ -1465,7 +1475,12 @@ export async function materializeFormationCompany(
       },
     })
 
-    return { success: true, outcome: "materialized", account_id: accountId, steps }
+    return {
+      success: true,
+      outcome: memberWriteFailed ? "materialized_with_member_errors" : "materialized",
+      account_id: accountId,
+      steps,
+    }
   } catch (err) {
     return {
       success: false,
