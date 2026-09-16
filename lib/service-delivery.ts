@@ -946,47 +946,72 @@ export async function advanceServiceDelivery(
       // itself was the bug, independent of decideMemberInfoKickoff being
       // correct in isolation.
       if (acct?.entity_type === "Multi Member LLC") {
-        const { getOrCreateMemberInfoRequest } = await import("@/lib/members/member-info-request")
-        const miResult = await getOrCreateMemberInfoRequest(materialization.account_id)
-        const { decideMemberInfoKickoff, buildMemberInfoKickoffMessage } = await import("@/lib/members/member-info-kickoff")
-        const kickoff = decideMemberInfoKickoff({
-          entityType: acct.entity_type,
-          requestOutcome: miResult.outcome,
-          isExistingRequest: miResult.outcome === "ok" ? miResult.isExisting : false,
-        })
-        if (miResult.outcome === "error") {
-          autoTriggers.push(`⚠ member-info kickoff: request creation failed (${miResult.message})`)
-        } else if (kickoff.shouldSend) {
-          const { data: contactRow } = await supabaseAdmin
-            .from("contacts")
-            .select("language")
-            .eq("id", miResult.contactId)
-            .maybeSingle()
-          const { message, messagePreview } = buildMemberInfoKickoffMessage({
-            companyName: miResult.companyName,
-            formUrl: miResult.formUrl,
-            language: contactRow?.language ?? null,
+        // Bug-hunter catch (E2E QA pass, dev job ef529eaf): materializeFormationCompany's
+        // "already_materialized" branch can return before the SD gets linked
+        // back (formation-materialize.ts's own step 10, e.g. an ambiguous
+        // multi-candidate SD or a transient write miss) — so a genuine RETRY
+        // of this same advance can re-enter this whole block with a fresh
+        // materialization.account_id even though nothing about the company
+        // actually changed. getOrCreateMemberInfoRequest only recognizes a
+        // 'pending' row as "already exists", so if the client had already
+        // submitted in the meantime, a retry would create a SECOND live
+        // request and re-send the "please add your members" ask to someone
+        // who already answered. Checked upfront, before the (side-effecting)
+        // creation call, same pattern already used in record-ein-received.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: existingRequest } = await (supabaseAdmin as any)
+          .from("member_info_requests")
+          .select("id")
+          .eq("account_id", materialization.account_id)
+          .in("status", ["pending", "submitted"])
+          .limit(1)
+          .maybeSingle() as { data: { id: string } | null }
+
+        if (existingRequest) {
+          autoTriggers.push(`Member-info request already exists for this account (${existingRequest.id}) — kickoff skipped.`)
+        } else {
+          const { getOrCreateMemberInfoRequest } = await import("@/lib/members/member-info-request")
+          const miResult = await getOrCreateMemberInfoRequest(materialization.account_id)
+          const { decideMemberInfoKickoff, buildMemberInfoKickoffMessage } = await import("@/lib/members/member-info-kickoff")
+          const kickoff = decideMemberInfoKickoff({
+            entityType: acct.entity_type,
+            requestOutcome: miResult.outcome,
+            isExistingRequest: miResult.outcome === "ok" ? miResult.isExisting : false,
           })
-          const MEMBER_INFO_ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
-          const { error: miChatErr } = await supabaseAdmin.from("portal_messages").insert({
-            account_id: materialization.account_id,
-            contact_id: miResult.contactId,
-            sender_type: "admin",
-            sender_id: MEMBER_INFO_ADMIN_SENDER_ID,
-            message,
-          })
-          if (!miChatErr) {
-            const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
-            await notifyClientOfAdminMessage({
+          if (miResult.outcome === "error") {
+            autoTriggers.push(`⚠ member-info kickoff: request creation failed (${miResult.message})`)
+          } else if (kickoff.shouldSend) {
+            const { data: contactRow } = await supabaseAdmin
+              .from("contacts")
+              .select("language")
+              .eq("id", miResult.contactId)
+              .maybeSingle()
+            const { message, messagePreview } = buildMemberInfoKickoffMessage({
+              companyName: miResult.companyName,
+              formUrl: miResult.formUrl,
+              language: contactRow?.language ?? null,
+            })
+            const MEMBER_INFO_ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+            const { error: miChatErr } = await supabaseAdmin.from("portal_messages").insert({
               account_id: materialization.account_id,
               contact_id: miResult.contactId,
-              messagePreview,
-            }).catch((notifyErr) => {
-              console.error("[flow-advance] member-info kickoff: client notification failed:", notifyErr)
+              sender_type: "admin",
+              sender_id: MEMBER_INFO_ADMIN_SENDER_ID,
+              message,
             })
-            autoTriggers.push(`Member-info request sent to client for ${miResult.companyName}`)
-          } else {
-            autoTriggers.push(`⚠ member-info kickoff: chat insert failed (${miChatErr.message})`)
+            if (!miChatErr) {
+              const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
+              await notifyClientOfAdminMessage({
+                account_id: materialization.account_id,
+                contact_id: miResult.contactId,
+                messagePreview,
+              }).catch((notifyErr) => {
+                console.error("[flow-advance] member-info kickoff: client notification failed:", notifyErr)
+              })
+              autoTriggers.push(`Member-info request sent to client for ${miResult.companyName}`)
+            } else {
+              autoTriggers.push(`⚠ member-info kickoff: chat insert failed (${miChatErr.message})`)
+            }
           }
         }
       }
