@@ -1,5 +1,6 @@
 import { PDFDocument, rgb } from 'pdf-lib'
 import { embedUnicodeFonts } from './unicode-fonts'
+import { wrapPdfParagraphs } from './wrap-text'
 
 export interface InvoicePdfInput {
   // Header
@@ -200,23 +201,26 @@ export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8A
   y -= 18
 
   // Message / Payment terms
+  //
+  // input.message may contain the sender's own line breaks (e.g. a
+  // bank-transfer template) — wrapPdfParagraphs splits on those FIRST so
+  // drawText() never receives a multi-line string. Without this, pdf-lib
+  // silently draws an embedded line break as extra lines at its own line
+  // height while this loop's `y -= 13` bookkeeping only ever advances once
+  // per drawText() call — the two disagree, and later lines overlap earlier
+  // ones (INV-002516, dev job 9eb541a5).
   if (input.message) {
     y -= 40
     page.drawText('Payment Terms', { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
-    const words = input.message.split(' ')
-    let line = ''
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word
-      if (helvetica.widthOfTextAtSize(test, 9) > 490) {
+    for (const line of wrapPdfParagraphs(input.message, helvetica, 9, 490)) {
+      if (line === '') {
+        y -= 6
+      } else {
         page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
         y -= 13
-        line = word
-      } else {
-        line = test
       }
     }
-    if (line) page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black })
   }
 
   // Bank details
