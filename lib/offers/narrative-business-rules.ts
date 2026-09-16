@@ -364,3 +364,30 @@ ${notesContext || 'No additional notes provided.'}
 
 Generate the JSON now.`
 }
+
+/**
+ * Recover a JSON object from a model completion that may not be pure JSON.
+ *
+ * The system prompt tells the model to output ONLY a JSON object, but a
+ * CONVERSATIONAL turn (unlike the old one-shot generate/refine calls) can
+ * carry a staff instruction that pulls against a hard rule elsewhere in the
+ * same prompt — e.g. asked to fill in the language variant the LANGUAGE
+ * RULES say must stay an empty string. Live-verified (2026-09-16): when that
+ * happens the model wraps or replaces the JSON with an explanation instead
+ * of refusing outright, which stripping a code fence alone (the old routes'
+ * only defense) cannot recover from.
+ *
+ * Recovers by slicing between the first '{' and the last '}' — a real JSON
+ * object's own outermost braces once fence markers are gone, so any prose
+ * before/after them is exactly what this discards. Falls through to the
+ * fence-stripped string unchanged if no brace pair is found, so the caller's
+ * own JSON.parse still produces the original, diagnosable error rather than
+ * this helper inventing a different one.
+ */
+export function extractJsonObject(rawText: string): string {
+  const fenceStripped = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim()
+  const start = fenceStripped.indexOf('{')
+  const end = fenceStripped.lastIndexOf('}')
+  if (start === -1 || end === -1 || end < start) return fenceStripped
+  return fenceStripped.slice(start, end + 1)
+}

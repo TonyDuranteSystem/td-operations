@@ -12,6 +12,7 @@ import {
   offerIncludesManagement,
   canGroundFormationState,
   canGroundEntityType,
+  extractJsonObject,
   type NarrativeServiceInput,
 } from '@/lib/offers/narrative-business-rules'
 import { loadOfferBusinessRules } from '@/lib/offers/load-business-rules'
@@ -270,13 +271,13 @@ async function handleFirstTurn(opts: {
   }
   if (!rawText) return NextResponse.json({ error: 'AI returned empty response' }, { status: 502 })
 
-  const jsonStr = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
+  const jsonStr = extractJsonObject(rawText)
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonStr)
   } catch {
     console.error('[offer-narrative-chat] failed to parse AI response:', rawText.substring(0, 500))
-    return NextResponse.json({ error: 'AI returned invalid JSON' }, { status: 502 })
+    return NextResponse.json({ error: "Couldn't generate the narrative — try again, or rephrase what you're asking for." }, { status: 502 })
   }
   const validation = validateNarrative(parsed, opts.lang)
   if ('error' in validation) {
@@ -367,13 +368,13 @@ async function handleFollowUpTurn(opts: {
   }
   if (!rawText) return NextResponse.json({ error: 'AI returned empty response' }, { status: 502 })
 
-  const jsonStr = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')
+  const jsonStr = extractJsonObject(rawText)
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonStr)
   } catch {
     console.error('[offer-narrative-chat] failed to parse AI response:', rawText.substring(0, 500))
-    return NextResponse.json({ error: 'AI returned invalid JSON' }, { status: 502 })
+    return NextResponse.json({ error: "Couldn't apply that change — it may conflict with one of the writing rules (e.g. only one language gets filled in at a time). Try rephrasing." }, { status: 502 })
   }
   const validation = validateNarrativeChanges(parsed, opts.lang)
   if ('error' in validation) {

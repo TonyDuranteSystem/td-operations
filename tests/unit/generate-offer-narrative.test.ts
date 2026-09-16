@@ -10,6 +10,7 @@ import {
   offerIncludesManagement,
   canGroundFormationState,
   canGroundEntityType,
+  extractJsonObject,
 } from '@/lib/offers/narrative-business-rules'
 
 function validNarrative(): NarrativeResponse {
@@ -480,5 +481,35 @@ describe('buildRefineUserPrompt — formation-state grounding + staleness note',
     expect(withNote).toContain('NOTE: The state changed.')
     const withoutNote = buildRefineUserPrompt({ ...baseOpts, formationState: 'FL' })
     expect(withoutNote).not.toContain('NOTE:')
+  })
+})
+
+describe('extractJsonObject', () => {
+  it('parses a clean JSON object unchanged', () => {
+    expect(extractJsonObject('{"a":1}')).toBe('{"a":1}')
+  })
+
+  it('strips a markdown code fence', () => {
+    expect(extractJsonObject('```json\n{"a":1}\n```')).toBe('{"a":1}')
+    expect(extractJsonObject('```\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+
+  it('recovers a JSON object wrapped in explanatory prose (live-observed failure mode)', () => {
+    const raw = "I'll keep the Italian intro empty per the rules.\n\n{\"intro_en\": \"Hello.\"}\n\nLet me know if you'd like anything else."
+    expect(extractJsonObject(raw)).toBe('{"intro_en": "Hello."}')
+  })
+
+  it('recovers a fenced object that also has prose before the fence', () => {
+    const raw = "Here you go:\n```json\n{\"a\": {\"nested\": 1}}\n```"
+    expect(JSON.parse(extractJsonObject(raw))).toEqual({ a: { nested: 1 } })
+  })
+
+  it('falls through to the fence-stripped text unchanged when no braces are found, so JSON.parse still fails loudly', () => {
+    expect(extractJsonObject('sorry, I cannot do that')).toBe('sorry, I cannot do that')
+  })
+
+  it('handles nested objects — takes the outermost braces, not the first inner pair', () => {
+    const raw = '{"outer": {"inner": "value"}}'
+    expect(JSON.parse(extractJsonObject(raw))).toEqual({ outer: { inner: 'value' } })
   })
 })
