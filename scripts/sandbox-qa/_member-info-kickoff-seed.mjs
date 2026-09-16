@@ -101,6 +101,12 @@ async function makeWizardAndSd({ label, contactId, entityType, llcName, members 
       service_name: "Company Formation",
       service_type_entry_id: "580fbd2a-a112-4f19-9f22-dfbfc2192759",
       stage: "Filed with State",
+      // Must match pipeline_stages.stage_order for this exact stage name —
+      // advanceServiceDelivery trusts this NUMBER column directly (never
+      // derives it from the stage text), so a raw-inserted row that only sets
+      // `stage` silently computes the wrong "current stage" on its first real
+      // advance (learned the hard way live-testing this exact fixture).
+      stage_order: 3,
       name_checks: [
         { name: llcName, source: "wizard", status: "filed", updated_at: new Date().toISOString() },
       ],
