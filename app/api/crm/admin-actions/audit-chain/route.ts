@@ -1090,7 +1090,7 @@ export async function GET(req: NextRequest) {
             category: "Portal",
             label: "Portal transition needed",
             status: "warning",
-            detail: `Active Client account without portal — run Portal Transition from the Account page (/accounts/${acct.id})`,
+            detail: `Active Client account without portal — click "Create Portal Account" on the Account page (/accounts/${acct.id}), then resolve document visibility per document (personal documents like a passport need an owner picked before they can be shared)`,
           })
         }
       } else if (acct.portal_account) {

@@ -452,7 +452,7 @@ Always check `contacts.gender` before composing any client email. The `getGreeti
 
 ## Client Portal — Legacy Onboarding
 
-The 2026 legacy portal transition is complete. `portal_transition_setup`/`portal_transition_batch` and the CRM "Portal Transition" button are RETIRED (2026-09-15) — they decided document visibility with no per-document owner check, which caused a real privacy exposure. Do not suggest them. To bring an existing client onto the portal today, create their portal login the normal way (`portal_create_user`) and resolve document visibility per document via the account file manager or the contact's own document list — both now prompt for the right owner before sharing a personal document.
+The 2026 legacy portal transition is complete. `portal_transition_setup`/`portal_transition_batch` and the CRM "Portal Transition" button are RETIRED (2026-09-15) — they decided document visibility with no per-document owner check, which caused a real privacy exposure. Do not suggest them. There is no longer a single automated flow for this — bringing a legacy client onto the portal today is several separate manual steps: create their portal login (`portal_create_user`), create their OA/Lease drafts if missing, resolve document visibility per document via the account file manager or the contact's own document list (both now prompt for the right owner before sharing a personal document), then send ONE welcome email covering all of it (never separate oa_send/lease_send emails on top — see the "Portal Transition — ONE welcome email only" KB article).
 
 ## Error Handling
 
