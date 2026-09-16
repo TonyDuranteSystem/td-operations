@@ -58,7 +58,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     // Documents linked to this contact
     supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible')
+      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible, contact_id, confidence, updated_at')
       .eq('contact_id', params.id)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true }),
@@ -130,19 +130,25 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
 
   const serviceDeliveries = (sdsResult.data ?? []) as ServiceDelivery[]
 
-  // Documents: merge contact-direct + account-linked (same pattern as SDs and invoices)
+  // Documents: merge contact-direct + account-linked (same pattern as SDs and invoices).
+  // contact_id/confidence/updated_at feed the guided-share "who is this for"
+  // resolution (dev job dfc00bcf, following ece21c44) -- an account-linked doc
+  // here can belong to a DIFFERENT contact on the same account (e.g. a
+  // co-founder's passport on a shared LLC) and still show up via the
+  // account_id merge below with contact_id still null.
   type DocRecord = {
     id: string; file_name: string; document_type_name: string | null; category_name: string | null
     category: number | null; drive_file_id: string | null; drive_link: string | null
     status: string | null; processed_at: string | null; mime_type: string | null
     file_size: number | null; account_id: string | null; portal_visible: boolean | null
+    contact_id: string | null; confidence: string | null; updated_at: string | null
   }
   const contactDirectDocs = (docsResult.data ?? []) as DocRecord[]
   let accountDocs: DocRecord[] = []
   if (accountIds.length > 0) {
     const { data: accDocsData } = await supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible')
+      .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible, contact_id, confidence, updated_at')
       .in('account_id', accountIds)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true })

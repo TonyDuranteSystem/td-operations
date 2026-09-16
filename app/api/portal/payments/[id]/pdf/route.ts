@@ -5,6 +5,7 @@ import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { resolveMailingAddress } from '@/lib/addresses'
+import { sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 
 import { TD_COMPANY } from '@/lib/config'
 
@@ -111,7 +112,12 @@ export async function GET(
     discount: Number(payment.discount ?? 0),
     total: Number(payment.total ?? payment.amount ?? 0),
 
-    message: payment.message,
+    // Every caller of this route is, by construction, an authenticated
+    // portal user with access to this payment (the check above) — always
+    // "portal" audience, so bank details stay unconditionally hidden and
+    // any machine-generated bank paragraph baked into an older message gets
+    // stripped rather than trusted to be absent (dev jobs 1834af40 / 96e56d06).
+    message: sanitizeInvoiceMessage(payment.message, 'portal'),
     bankDetails: null,
   }
 

@@ -17,7 +17,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { dbWrite } from "@/lib/db"
+import { dbWrite, dbWriteSafe } from "@/lib/db"
 import {
   createTDInvoice,
   reconcileTDInvoiceMirror,
@@ -29,6 +29,7 @@ import {
 // inside applyMoneyToInvoice — the one money writer — so this module no longer
 // calls syncTDInvoiceStatus / syncInvoiceStatus directly.
 import { applyMoneyToInvoice } from "@/lib/finance/apply-payment"
+import { isTerminalInvoice, terminalReason } from "@/lib/finance/invoice-matchability"
 import {
   onFirstInstallmentPaid,
   onSecondInstallmentPaid,
@@ -286,6 +287,109 @@ export async function reconcilePaymentByInvoiceNumber(
   }
 
   return { reconciled: true, outcome: result.outcome, payment_id: existing.id }
+}
+
+// ─── closePaymentWithWriteOff (2026-09-11) ─────────────
+
+export interface CloseWithWriteOffParams {
+  paymentId: string
+  /** Combined/dated note text — the caller (owner-transaction-link.ts) owns
+   *  composing this (it may be appending to an existing note). */
+  notes: string
+}
+export interface CloseWithWriteOffResult {
+  success: boolean
+  error?: string
+}
+
+/**
+ * Close an invoice as Paid without collecting the rest of its balance — a
+ * write-off (e.g. a court-approved settlement for less than the full
+ * amount). Deliberately narrow: only amount_due/status/invoice_status/
+ * paid_date/notes change. `total` and `payment_items` are left exactly as
+ * invoiced — a write-off doesn't mean the invoice was smaller, it means TD
+ * chose not to collect the remainder of a real, correctly-invoiced amount.
+ * Routing this through updateInvoice's total-edit path instead would
+ * unconditionally run adjustSingleServiceLineForTotal, which REFUSES on any
+ * invoice with more than one adjustable line or a fee line — silently
+ * failing to close exactly the multi-line invoice a write-off is likely to
+ * involve (ai-architect finding, 2026-09-11).
+ *
+ * The caller is responsible for having already applied whatever money WAS
+ * actually collected (via applyMoneyToInvoice) before calling this — this
+ * only closes the remaining balance, it never itself records a payment.
+ * client_expenses stays correct automatically: trg_sync_client_expense on
+ * `payments` fires on this exact column set for every writer, not only
+ * updateInvoice.
+ *
+ * Re-reads the invoice fresh rather than trust a value the caller read
+ * before applying money (bug-hunter, second review round, 2026-09-11): by
+ * the time this runs that earlier read is a step stale, so this re-checks
+ * terminal status itself — closing the narrow window where the invoice was
+ * voided/cancelled in between — and also mirrors the legacy `client_invoices`
+ * link when one exists. That mirror is normally kept in sync by
+ * applyMoneyToInvoice on every write (see this module's own header comment);
+ * this function deliberately bypasses applyMoneyToInvoice's total-edit
+ * machinery, so it must replicate that one piece of what it skips, or the
+ * two silently disagree after a write-off.
+ */
+export async function closePaymentWithWriteOff(
+  params: CloseWithWriteOffParams,
+): Promise<CloseWithWriteOffResult> {
+  const { paymentId, notes } = params
+
+  const { data: payment, error: readErr } = await supabaseAdmin
+    .from("payments")
+    .select("invoice_number, invoice_status, status, portal_invoice_id, amount_paid")
+    .eq("id", paymentId)
+    .maybeSingle()
+  if (readErr) return { success: false, error: readErr.message }
+  if (!payment) return { success: false, error: "Invoice not found." }
+  if (isTerminalInvoice(payment)) {
+    return { success: false, error: terminalReason(payment) ?? "This invoice is already closed." }
+  }
+
+  const hasRealInvoiceNumber = !!payment.invoice_number && payment.invoice_number !== "1.0" && payment.invoice_number !== "2.0"
+  const paidDate = new Date().toISOString().slice(0, 10)
+  const now = new Date().toISOString()
+
+  const { error } = await dbWriteSafe(
+    supabaseAdmin
+      .from("payments")
+      .update({
+        amount_due: 0,
+        status: "Paid",
+        ...(hasRealInvoiceNumber ? { invoice_status: "Paid" } : {}),
+        paid_date: paidDate,
+        notes,
+        updated_at: now,
+      })
+      .eq("id", paymentId),
+    "payments.close-with-write-off",
+  )
+  if (error) return { success: false, error }
+
+  // Legacy client_invoices link (older portal records) — see lib/finance/
+  // apply-payment.ts's own identical mirror for why this exists at all.
+  if (payment.portal_invoice_id) {
+    const { error: mirrorErr } = await supabaseAdmin
+      .from("client_invoices")
+      .update({
+        status: "Paid",
+        amount_paid: payment.amount_paid,
+        amount_due: 0,
+        paid_date: paidDate,
+        updated_at: now,
+      })
+      .eq("id", payment.portal_invoice_id)
+    if (mirrorErr) {
+      // The invoice IS closed — do not fail the operation. But this must be
+      // loud: the client's legacy portal copy now disagrees with it.
+      console.error(`[closePaymentWithWriteOff] client_invoices mirror FAILED for ${paymentId}:`, mirrorErr.message)
+    }
+  }
+
+  return { success: true }
 }
 
 // ─── reconcileInvoiceMirror (task 918fe55e) ───────────

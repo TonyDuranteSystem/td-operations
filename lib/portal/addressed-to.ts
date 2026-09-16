@@ -87,27 +87,49 @@ export interface AddressedToGuessInput {
 }
 
 /**
+ * Two distinct roster rows can resolve to the identical contactId — a person
+ * who is both an individual member AND the declared representative of a
+ * company member on the same account (real, confirmed production shape, not
+ * a data error: dev job 34bd9009, e.g. AI Venture Labs LLC / Michele Cotti /
+ * Whalecot Consulting LLC). Whenever a cascade stage matches more than one
+ * option, prefer the individual entry over one representing a company they
+ * merely represent — reaching for "the person" is the more common intent.
+ * Falls back to the first candidate (today's pre-existing order) when the
+ * tied set has no individual side either.
+ */
+function preferIndividual(candidates: AddressedToOption[]): AddressedToOption {
+  return candidates.find(o => !o.isCompanyMember) ?? candidates[0]
+}
+
+/**
  * Pure decision: which resolvable option should be pre-filled as the guess?
  * Mirrors resolveAdminReplyContact's cascade (lib/portal/admin-send-scope.ts:
  * reply-to author -> last client sender -> primary -> first, stable) but
  * against the FULL members-resolved list, not just account_contacts-linked
  * contacts — covering exactly the members that cascade misses today. DB-free
  * so it's directly unit-testable, same shape as decideAdminSendScope.
+ *
+ * The tie-break (dev job 34bd9009) applies at EVERY stage, not just the
+ * final fallback — a shared contactId can just as easily be the reply-to
+ * author or the last client sender as it can be the primary or the stable
+ * sort winner.
  */
 export function pickAddressedToGuess(input: AddressedToGuessInput): AddressedToOption | null {
   const resolvable = input.options.filter(o => o.resolvable && o.contactId)
   if (resolvable.length === 0) return null
 
   if (input.replyToContactId) {
-    const match = resolvable.find(o => o.contactId === input.replyToContactId)
-    if (match) return match
+    const matches = resolvable.filter(o => o.contactId === input.replyToContactId)
+    if (matches.length > 0) return preferIndividual(matches)
   }
   if (input.lastClientContactId) {
-    const match = resolvable.find(o => o.contactId === input.lastClientContactId)
-    if (match) return match
+    const matches = resolvable.filter(o => o.contactId === input.lastClientContactId)
+    if (matches.length > 0) return preferIndividual(matches)
   }
-  const primary = resolvable.find(o => o.isPrimary)
-  if (primary) return primary
+  const primaryMatches = resolvable.filter(o => o.isPrimary)
+  if (primaryMatches.length > 0) return preferIndividual(primaryMatches)
 
-  return [...resolvable].sort((a, b) => (a.contactId! < b.contactId! ? -1 : a.contactId! > b.contactId! ? 1 : 0))[0]
+  const sorted = [...resolvable].sort((a, b) => (a.contactId! < b.contactId! ? -1 : a.contactId! > b.contactId! ? 1 : 0))
+  const tiedWithFirst = sorted.filter(o => o.contactId === sorted[0]!.contactId)
+  return preferIndividual(tiedWithFirst)
 }

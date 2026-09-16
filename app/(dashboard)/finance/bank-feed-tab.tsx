@@ -11,13 +11,14 @@ import { toast } from 'sonner'
 import {
   Landmark, RefreshCw, Plus, Link2, Ban, X,
   Loader2, ArrowRight, CheckCircle2, AlertCircle, AlertTriangle,
-  Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2,
+  Search, Building2, User, Trash2, Check, RotateCw, Copy, Undo2, StickyNote,
 } from 'lucide-react'
 import { matchBankFeedToInvoices, ignoreBankFeed, deleteDuplicateBankFeed, restoreBankFeed, claimBankFeedForOwner } from './actions'
 import { invoicePartyName } from '@/lib/finance/invoice-party'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import { VALID_SERVICE_TYPES } from '@/lib/operations/service-types'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { InvoiceNoteDot } from '@/components/shared/invoice-note-dot'
 
 // ── Types ──
 
@@ -56,12 +57,34 @@ export interface BankFeedRecord {
   created_at: string
   matched_at: string | null
   review_metadata?: unknown
+  /** The real bank name from the source My Finances row, for a feed created by
+   *  "send to Finance" (sendOwnerTransactionToFinance) — these always carry
+   *  source:'manual' (guessFeedSource only recognizes 5 specific banks by
+   *  name), which otherwise loses which bank it actually was. Null for a feed
+   *  that never came from My Finances, or a genuinely bank-unknown manual entry. */
+  source_bank_name?: string | null
   payments?: {
     invoice_number: string | null
     description: string | null
     account_id: string
+    total: number | null
+    amount_paid: number | null
+    invoice_status: string | null
+    notes: string | null
     accounts: { company_name: string } | null
   } | null
+}
+
+/** Closed Paid while collecting less than the invoiced total — a write-off,
+ * not an ordinary full payment. Mirrors the identical, live-verified-safe
+ * check in all-invoices-tab.tsx (no other flow leaves a Paid invoice short
+ * of its own total, so this comparison alone is an unambiguous signal). */
+function isWrittenOffPayment(payment: BankFeedRecord['payments']): boolean {
+  if (!payment) return false
+  // amount_paid != null matters: Number(null) is 0 in JS, which would wrongly
+  // flag an old invoice that never had amount_paid populated at all as a
+  // write-off. Caught live in production the day this shipped.
+  return payment.invoice_status === 'Paid' && payment.amount_paid != null && Number(payment.total) > 0 && Number(payment.amount_paid) < Number(payment.total)
 }
 
 export interface OpenInvoice {
@@ -98,6 +121,7 @@ const SOURCE_LABELS: Record<string, string> = {
   manual: 'Manual',
   stripe: 'Stripe',
   revolut: 'Revolut',
+  chase: 'Chase',
 }
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -110,6 +134,16 @@ const SOURCE_COLORS: Record<string, string> = {
   manual: 'bg-zinc-100 text-zinc-700',
   stripe: 'bg-violet-100 text-violet-700',
   revolut: 'bg-sky-100 text-sky-700',
+  chase: 'bg-cyan-100 text-cyan-700',
+}
+
+/** The badge text for a feed row — the real bank name when we have one
+ *  (a transaction sent over from My Finances), otherwise the generic
+ *  source label ("Manual", "Mercury", etc). Single source of truth for
+ *  all 5 row-render sites below, so a future source type only needs
+ *  updating here. */
+function sourceLabel(feed: Pick<BankFeedRecord, 'source' | 'source_bank_name'>): string {
+  return feed.source_bank_name?.trim() || SOURCE_LABELS[feed.source] || feed.source
 }
 
 // Map bank institution names to source filter values
@@ -213,10 +247,17 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
 
   const fetchLinkToken = useCallback(async () => {
     setLoading(true)
-    const res = await fetch('/api/plaid/create-link-token', { method: 'POST' })
-    const data = await res.json()
-    setLinkToken(data.link_token)
-    setLoading(false)
+    try {
+      const res = await fetch('/api/plaid/create-link-token', { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Could not start the bank connection.')
+        return
+      }
+      setLinkToken(data.link_token)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   const { open, ready } = usePlaidLink({
@@ -273,23 +314,31 @@ function ConnectBankButton({ onSuccess }: { onSuccess: () => void }) {
   )
 }
 
-function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean }) {
+function BanksSummary({ activeSource, onSourceFilter, isAdmin = false, syncBlocked = false }: { activeSource: string[] | null; onSourceFilter: (sources: string[] | null) => void; isAdmin?: boolean; syncBlocked?: boolean }) {
   const router = useRouter()
   const [connections, setConnections] = useState<PlaidConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncingAllBanks, setSyncingAllBanks] = useState(false)
+  const [forbidden, setForbidden] = useState(false)
 
   const fetchConnections = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch('/api/plaid/accounts')
-      const data = await res.json()
+      if (res.status === 401 || res.status === 403) {
+        setForbidden(true)
+        setConnections([])
+        return
+      }
+      setForbidden(false)
+      const data = await res.json().catch(() => ({}))
       setConnections(data.connections ?? [])
     } catch {
       // Plaid may not be configured yet
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -361,11 +410,21 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <FastTooltip label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min.">
+          <FastTooltip
+            label={
+              syncBlocked
+                ? "Blocked while a \"Link with a note\" box is open on this page — finish or cancel it first."
+                : "Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+            }
+          >
             <button
               onClick={handleSyncAllBanks}
-              disabled={syncingAllBanks}
-              aria-label="Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+              disabled={syncingAllBanks || syncBlocked}
+              aria-label={
+                syncBlocked
+                  ? "Blocked while a \"Link with a note\" box is open on this page — finish or cancel it first."
+                  : "Pulls latest transactions from Mercury + Airwallex and runs auto-match + auto-activate. Same chain that runs every 15 min."
+              }
               className="flex items-center gap-1.5 bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
             >
               {syncingAllBanks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -386,6 +445,11 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false }: { activ
 
       {loading ? (
         <p className="text-xs text-muted-foreground">Loading bank connections...</p>
+      ) : forbidden ? (
+        <div className="border-2 border-dashed rounded-lg p-6 text-center">
+          <p className="text-sm text-muted-foreground font-medium">Bank accounts are connected, but you don&apos;t have permission to view their status here.</p>
+          <p className="text-xs text-muted-foreground mt-1">Ask Antonio for access if you need to manage bank connections.</p>
+        </div>
       ) : visibleConnections.length === 0 ? (
         <div className="border-2 border-dashed rounded-lg p-6 text-center">
           <p className="text-sm text-muted-foreground font-medium">No bank accounts connected</p>
@@ -508,6 +572,7 @@ function ClaimForOwnerButton({ feedId }: { feedId: string }) {
 
 function UnmatchedRow({
   feed, openInvoices, isMatching, onStartMatch, onCancelMatch, candidateInfo, isAdmin = false,
+  onNoteLinkOpenChange,
 }: {
   feed: BankFeedRecord
   openInvoices: OpenInvoice[]
@@ -516,11 +581,20 @@ function UnmatchedRow({
   onCancelMatch: () => void
   candidateInfo?: CandidateInfo | null
   isAdmin?: boolean
+  onNoteLinkOpenChange?: (feedId: string, open: boolean) => void
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [candidateBusy, setCandidateBusy] = useState<null | 'confirm' | 'reject'>(null)
   const amount = Number(feed.amount)
+  // Bug-hunter, 2026-09-11: "Match to invoice" has no inline check either — the
+  // real protection is server-side, at settlement time (manualMatch calls
+  // isChargeRefundedNow before crediting a Stripe row) — but linkFeedTransactionToInvoice
+  // has no equivalent, and this row's own button is offered unconditionally
+  // regardless of source. The red banner below already exists for a feed a
+  // prior automatic pass has flagged; this reuses that same signal to keep
+  // "Link with a note" from being the one path with no warning at all.
+  const refundedOrDisputed = isRefundedOrDisputed(feed)
   // Several invoices fitted this payment equally well — see the block below the row.
   const contested = contestedCandidates(feed)
   // On a real book an amount-only tie can be dozens of invoices; only a sample is recorded.
@@ -791,6 +865,143 @@ function UnmatchedRow({
     return { success: true, message: 'Transaction ignored' }
   }
 
+  // ── Link with a note — Antonio's own design (2026-09-11): pick ONE invoice,
+  // write a note explaining what happened, and optionally write off whatever's
+  // left so the invoice closes even though this transaction didn't cover it in
+  // full (a settlement paid at less than the invoice's full total is the case
+  // this exists for). Deliberately a separate, isolated action from "Match to
+  // invoice" above — that flow has no concept of a note or a partial
+  // settlement, and folding one into its multi-invoice waterfall logic risked
+  // breaking a large, working feature. Posts to /api/finance/link-transaction.
+  const [noteLinkOpen, setNoteLinkOpen] = useState(false)
+  const [noteLinkQuery, setNoteLinkQuery] = useState('')
+  const [noteLinkInvoiceId, setNoteLinkInvoiceId] = useState<string | null>(null)
+  const [noteLinkNote, setNoteLinkNote] = useState('')
+  const [noteLinkWriteOff, setNoteLinkWriteOff] = useState(false)
+  const [noteLinkSubmitting, setNoteLinkSubmitting] = useState(false)
+  // Already-paid invoices, searched separately from `openInvoices` (which
+  // deliberately excludes them) — for connecting a transaction to an invoice
+  // that was already marked paid some other way. See
+  // lib/finance/owner-transaction-link.ts's isPaidInvoice branch: picking one
+  // of these creates an audit-trail link, not a real payment. On-demand only
+  // (Antonio: "no limit at all" on reach, but never loaded until searched).
+  const [noteLinkPaidResults, setNoteLinkPaidResults] = useState<OpenInvoice[]>([])
+  const [noteLinkPaidLoading, setNoteLinkPaidLoading] = useState(false)
+  const [noteLinkPaidError, setNoteLinkPaidError] = useState<string | null>(null)
+
+  const closeNoteLink = () => {
+    if (noteLinkSubmitting) return
+    setNoteLinkOpen(false)
+    setNoteLinkQuery('')
+    setNoteLinkInvoiceId(null)
+    setNoteLinkNote('')
+    setNoteLinkWriteOff(false)
+    setNoteLinkPaidResults([])
+    setNoteLinkPaidError(null)
+  }
+
+  // Reports open/closed to the parent so it can disable "Sync All Banks Now"
+  // while this box is open. The cleanup fires on every change AND on real
+  // unmount, so if this row disappears out from under an open box (the exact
+  // failure being guarded against) the parent still hears "closed" and never
+  // gets stuck with the sync button disabled forever.
+  useEffect(() => {
+    onNoteLinkOpenChange?.(feed.id, noteLinkOpen)
+    return () => onNoteLinkOpenChange?.(feed.id, false)
+  }, [noteLinkOpen, feed.id, onNoteLinkOpenChange])
+
+  const noteLinkQueryLower = noteLinkQuery.trim().toLowerCase()
+  // Unlike `suggestions` below (amount-tolerance gated), this searches ALL open
+  // invoices — the whole point of this popup is linking a payment that does
+  // NOT match an invoice's amount (that's what "write off the difference" is for).
+  const noteLinkCandidates = (
+    noteLinkQueryLower.length === 0
+      ? openInvoices
+      : openInvoices.filter(inv =>
+          invoicePartyName(inv).toLowerCase().includes(noteLinkQueryLower) ||
+          (inv.invoice_number ?? '').toLowerCase().includes(noteLinkQueryLower),
+        )
+  ).slice(0, 20)
+
+  // Same query, also searched against already-Paid invoices — debounced and
+  // gated at 2 chars to match the endpoint's own floor, so this never fires
+  // while the box is empty. Cancels its own stale response via the `cancelled`
+  // flag, same pattern as any other debounced-search effect in this codebase.
+  useEffect(() => {
+    if (!noteLinkOpen || noteLinkQueryLower.length < 2) {
+      setNoteLinkPaidResults([])
+      setNoteLinkPaidError(null)
+      return
+    }
+    let cancelled = false
+    setNoteLinkPaidLoading(true)
+    const timer = setTimeout(() => {
+      fetch(`/api/finance/search-paid-invoices?q=${encodeURIComponent(noteLinkQueryLower)}`)
+        .then(async res => {
+          const d = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(d.error || `Search failed (${res.status})`)
+          if (!cancelled) { setNoteLinkPaidResults(d.invoices ?? []); setNoteLinkPaidError(null) }
+        })
+        .catch(err => {
+          if (!cancelled) {
+            setNoteLinkPaidResults([])
+            setNoteLinkPaidError(err instanceof Error && err.message ? err.message : 'Search failed — try again.')
+          }
+        })
+        .finally(() => { if (!cancelled) setNoteLinkPaidLoading(false) })
+    }, 300)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [noteLinkOpen, noteLinkQueryLower])
+
+  const noteLinkSelected = openInvoices.find(inv => inv.id === noteLinkInvoiceId)
+    ?? noteLinkPaidResults.find(inv => inv.id === noteLinkInvoiceId)
+    ?? null
+  // Selected but not in the open list → it came from the paid search. Governs
+  // which explanation/UI shows below (an audit-link has no balance to write
+  // off — the invoice is already closed).
+  const noteLinkSelectedIsPaidPick = noteLinkSelected != null && !openInvoices.some(inv => inv.id === noteLinkInvoiceId)
+  const noteLinkSelectedDue = noteLinkSelected
+    ? Number(noteLinkSelected.amount_due ?? noteLinkSelected.total ?? noteLinkSelected.amount ?? 0)
+    : 0
+
+  const submitNoteLink = async () => {
+    if (!noteLinkInvoiceId) { toast.error('Pick which invoice this pays first'); return }
+    if (!noteLinkNote.trim()) { toast.error('Write a note explaining this'); return }
+    setNoteLinkSubmitting(true)
+    try {
+      const res = await fetch('/api/finance/link-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          feed_id: feed.id,
+          payment_id: noteLinkInvoiceId,
+          note: noteLinkNote.trim(),
+          write_off_remaining: noteLinkWriteOff,
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || d.ok === false) throw new Error(d.error || `Request failed (${res.status})`)
+      // Read the server's own auditLink flag, not this component's pre-submit guess
+      // (noteLinkSelectedIsPaidPick) — that guess is derived from props that can go
+      // stale between opening this popup and submitting it (the invoice's real status
+      // may have changed elsewhere in the meantime), and the server always re-reads
+      // the invoice fresh at the moment it decides which branch actually ran.
+      toast.success(
+        d.auditLink === true
+          ? `Linked to ${d.invoiceNumber ?? 'the invoice'} for the record — it was already paid, no money applied.`
+          : d.newStatus === 'Paid'
+            ? `Linked to ${d.invoiceNumber ?? 'the invoice'} — closed as paid.`
+            : `Linked to ${d.invoiceNumber ?? 'the invoice'}.`,
+      )
+      closeNoteLink()
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not link this transaction.')
+    } finally {
+      setNoteLinkSubmitting(false)
+    }
+  }
+
   // Suggest matching invoices — smart ranking: name match first, then amount match
   const senderLower = (feed.sender_name || '').toLowerCase()
   const memoLower = (feed.memo || '').toLowerCase()
@@ -836,7 +1047,7 @@ function UnmatchedRow({
     <div className="border-b last:border-b-0">
       <div className="flex items-center gap-3 px-4 py-3 text-sm">
         <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-          {SOURCE_LABELS[feed.source] ?? feed.source}
+          {sourceLabel(feed)}
         </span>
         <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
         <span className="font-semibold w-24 shrink-0">{formatCurrency(amount, feed.currency)}</span>
@@ -849,12 +1060,22 @@ function UnmatchedRow({
           {candidateInfo ? 'needs review' : 'unmatched'}
         </span>
         <div className="flex items-center gap-1 shrink-0">
-          {!isMatching ? (
+          {!isMatching && !noteLinkOpen ? (
             <>
               {isAdmin && <ClaimForOwnerButton feedId={feed.id} />}
               <FastTooltip label="Match to invoice">
                 <button onClick={onStartMatch} className="p-1 rounded hover:bg-blue-50 text-blue-500" aria-label="Match to invoice" disabled={isPending}>
                   <Link2 className="h-4 w-4" />
+                </button>
+              </FastTooltip>
+              <FastTooltip label={refundedOrDisputed ? 'Refunded or disputed — this money is not real, do not link it' : 'Link with a note — pick invoice, explain, write off if needed'}>
+                <button
+                  onClick={() => setNoteLinkOpen(true)}
+                  className="p-1 rounded hover:bg-teal-50 text-teal-600 disabled:opacity-40 disabled:hover:bg-transparent"
+                  aria-label="Link with a note"
+                  disabled={isPending || refundedOrDisputed}
+                >
+                  <StickyNote className="h-4 w-4" />
                 </button>
               </FastTooltip>
               <FastTooltip label="Ignore">
@@ -865,7 +1086,7 @@ function UnmatchedRow({
             </>
           ) : (
             <FastTooltip label="Cancel">
-              <button onClick={onCancelMatch} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" aria-label="Cancel">
+              <button onClick={isMatching ? onCancelMatch : closeNoteLink} className="p-1 rounded hover:bg-zinc-100 text-zinc-500" aria-label="Cancel">
                 <X className="h-4 w-4" />
               </button>
             </FastTooltip>
@@ -1390,6 +1611,175 @@ function UnmatchedRow({
         </div>
       )}
 
+      {/* "Link with a note" popup — Antonio: pick the invoice, check the
+          transaction, write the note, write off the difference. Lives here in
+          Finance, not in My Finances — the owner-side button there only sends
+          the transaction over; this is where it actually gets tied to an
+          invoice. */}
+      {noteLinkOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={closeNoteLink}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900">Link with a note</h3>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {formatCurrency(amount, feed.currency)} from {feed.sender_name || 'this transaction'} on {formatDate(feed.transaction_date)}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Invoice</label>
+              {noteLinkSelected ? (
+                <div className={cn(
+                  'flex items-center gap-2 border rounded-md px-3 py-2 text-xs',
+                  noteLinkSelectedIsPaidPick ? 'border-amber-300 bg-amber-50' : 'border-blue-300 bg-blue-50',
+                )}>
+                  <span className={cn('font-mono', noteLinkSelectedIsPaidPick ? 'text-amber-700' : 'text-blue-700')}>{noteLinkSelected.invoice_number ?? '—'}</span>
+                  <span className="truncate flex-1">{invoicePartyName(noteLinkSelected)}</span>
+                  {noteLinkSelectedIsPaidPick ? (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                  ) : (
+                    <span className="font-medium">{formatCurrency(noteLinkSelectedDue, noteLinkSelected.amount_currency)} due</span>
+                  )}
+                  <FastTooltip label="Change invoice">
+                    <button
+                      type="button"
+                      onClick={() => { setNoteLinkInvoiceId(null); setNoteLinkWriteOff(false) }}
+                      disabled={noteLinkSubmitting}
+                      className={cn('p-0.5 rounded', noteLinkSelectedIsPaidPick ? 'hover:bg-amber-100 text-amber-500' : 'hover:bg-blue-100 text-blue-500')}
+                      aria-label="Change invoice"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </FastTooltip>
+                </div>
+              ) : (
+                <>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="Invoice number or client name…"
+                      value={noteLinkQuery}
+                      onChange={e => setNoteLinkQuery(e.target.value)}
+                      className="w-full pl-8 pr-3 py-1.5 text-xs border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                  </div>
+                  <div className="mt-1.5 space-y-1 max-h-48 overflow-y-auto">
+                    {noteLinkCandidates.length === 0 && noteLinkPaidResults.length === 0 && !noteLinkPaidLoading && !noteLinkPaidError ? (
+                      <p className="text-xs text-muted-foreground px-1 py-1">No invoices match.</p>
+                    ) : (
+                      <>
+                        {noteLinkCandidates.map(inv => {
+                          const due = Number(inv.amount_due ?? inv.total ?? inv.amount ?? 0)
+                          return (
+                            <button
+                              key={inv.id}
+                              type="button"
+                              onClick={() => setNoteLinkInvoiceId(inv.id)}
+                              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                            >
+                              <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                              <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                              {inv.invoice_status === 'Partial' && (
+                                <span className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded">Partial</span>
+                              )}
+                              <span className="font-medium">{formatCurrency(due, inv.amount_currency)}</span>
+                            </button>
+                          )
+                        })}
+                        {noteLinkQueryLower.length >= 2 && (noteLinkPaidResults.length > 0 || noteLinkPaidLoading || noteLinkPaidError) && (
+                          <>
+                            <p className="text-[10px] text-muted-foreground px-1 pt-1.5 uppercase tracking-wide">
+                              Already paid — link for the record only
+                            </p>
+                            {noteLinkPaidLoading && noteLinkPaidResults.length === 0 && (
+                              <p className="text-xs text-muted-foreground px-1 py-1 flex items-center gap-1.5">
+                                <Loader2 className="h-3 w-3 animate-spin" /> Searching…
+                              </p>
+                            )}
+                            {noteLinkPaidError && !noteLinkPaidLoading && (
+                              <p className="text-xs text-red-600 px-1 py-1">{noteLinkPaidError}</p>
+                            )}
+                            {noteLinkPaidResults.map(inv => (
+                              <button
+                                key={inv.id}
+                                type="button"
+                                onClick={() => setNoteLinkInvoiceId(inv.id)}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs rounded-md border hover:bg-amber-50 hover:border-amber-200 transition-colors"
+                              >
+                                <span className="font-mono text-blue-600">{inv.invoice_number ?? '—'}</span>
+                                <span className="truncate flex-1 text-left">{invoicePartyName(inv)}</span>
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Paid</span>
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {noteLinkQueryLower.length === 0 && openInvoices.length > noteLinkCandidates.length && (
+                    <p className="text-[11px] text-muted-foreground">Showing {noteLinkCandidates.length} of {openInvoices.length} — type to narrow.</p>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wide">Note</label>
+              <textarea
+                value={noteLinkNote}
+                onChange={e => setNoteLinkNote(e.target.value)}
+                placeholder="What happened — e.g. settlement agreed at $600 to close the $1,200 invoice, case closed."
+                rows={3}
+                disabled={noteLinkSubmitting}
+                className="w-full px-2.5 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {noteLinkSelectedIsPaidPick ? (
+              <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>This invoice is already paid. Linking connects this transaction to it for the record — no money moves, no balance changes.</span>
+              </div>
+            ) : (
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={noteLinkWriteOff}
+                  onChange={e => setNoteLinkWriteOff(e.target.checked)}
+                  disabled={noteLinkSubmitting}
+                  className="mt-0.5"
+                />
+                <span className="text-sm text-zinc-800">
+                  This closes the invoice — write off the rest
+                  <span className="block text-[11px] text-zinc-500">
+                    {noteLinkSelected && noteLinkSelectedDue > amount
+                      ? `Marks it Paid; the remaining ${formatCurrency(noteLinkSelectedDue - amount, noteLinkSelected.amount_currency)} is written off, not left owing.`
+                      : 'Marks the invoice Paid instead of leaving any remaining balance due.'}
+                  </span>
+                </span>
+              </label>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={closeNoteLink} disabled={noteLinkSubmitting} className="px-3 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitNoteLink}
+                disabled={noteLinkSubmitting || !noteLinkInvoiceId || !noteLinkNote.trim()}
+                className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {noteLinkSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}
+                Link transaction
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmDestructiveDialog
         open={ignoreOpen}
         onClose={() => setIgnoreOpen(false)}
@@ -1400,7 +1790,7 @@ function UnmatchedRow({
           affected: { bank_feed: 1 },
           items: [
             {
-              label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+              label: `${sourceLabel(feed)} — ${formatCurrency(feed.amount, feed.currency)}`,
               details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
             },
           ],
@@ -1434,7 +1824,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1467,6 +1857,12 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
       )}>
         {feed.match_confidence ?? 'matched'}
       </span>
+      {isWrittenOffPayment(payment) && (
+        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 bg-amber-100 text-amber-700">
+          Written Off
+        </span>
+      )}
+      <InvoiceNoteDot note={payment?.notes} />
       {/* An audit link is NOT a payment. The invoice was already settled through another
           channel (its own Stripe webhook, or a human marking it paid), and this transaction
           is attached purely for the record — no money was applied. Without this, a matched
@@ -1500,7 +1896,7 @@ function MatchedRow({ feed, canDeleteDuplicate = false }: { feed: BankFeedRecord
               affected: { bank_feed: 1 },
               items: [
                 {
-                  label: `${SOURCE_LABELS[feed.source] ?? feed.source} — ${formatCurrency(feed.amount, feed.currency)}`,
+                  label: `${sourceLabel(feed)} — ${formatCurrency(feed.amount, feed.currency)}`,
                   details: [formatDate(feed.transaction_date), feed.sender_name ?? ''].filter(Boolean),
                 },
               ],
@@ -1550,7 +1946,7 @@ function CrashedRow({ feed }: { feed: BankFeedRecord }) {
     <div className="border-b last:border-b-0">
       <div className="flex items-center gap-3 px-4 py-3 text-sm">
         <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-          {SOURCE_LABELS[feed.source] ?? feed.source}
+          {sourceLabel(feed)}
         </span>
         <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
         <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1613,7 +2009,7 @@ function DuplicateRow({ feed }: { feed: BankFeedRecord }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1641,7 +2037,7 @@ function IgnoredRow({ feed, isAdmin = false }: { feed: BankFeedRecord; isAdmin?:
   return (
     <div className="flex items-center gap-3 px-4 py-3 text-sm border-b last:border-b-0 opacity-60">
       <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded uppercase shrink-0', SOURCE_COLORS[feed.source] ?? 'bg-zinc-100')}>
-        {SOURCE_LABELS[feed.source] ?? feed.source}
+        {sourceLabel(feed)}
       </span>
       <span className="text-xs text-muted-foreground w-24 shrink-0">{formatDate(feed.transaction_date)}</span>
       <span className="font-semibold w-24 shrink-0">{formatCurrency(feed.amount, feed.currency)}</span>
@@ -1667,6 +2063,25 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   const [page, setPage] = useState(0)
   const [highlightFeedId, setHighlightFeedId] = useState<string | null>(null)
   const pageSize = 50
+
+  // Bug-hunter, 2026-09-13: "Sync All Banks Now" reruns matching over every
+  // pre-existing unmatched feed and can settle the exact one a staffer has a
+  // "Link with a note" box open on, unmounting UnmatchedRow and silently
+  // wiping the typed note. Tracked here (not in UnmatchedRow alone) so the
+  // sync button can be disabled while any row's box is open. Uses a Set
+  // (not a single feed id) because more than one row's box could in theory
+  // be open at once.
+  const [feedsWithNoteLinkOpen, setFeedsWithNoteLinkOpen] = useState<Set<string>>(new Set())
+  const handleNoteLinkOpenChange = useCallback((feedId: string, open: boolean) => {
+    setFeedsWithNoteLinkOpen(prev => {
+      const alreadySet = prev.has(feedId)
+      if (open === alreadySet) return prev
+      const next = new Set(prev)
+      if (open) next.add(feedId)
+      else next.delete(feedId)
+      return next
+    })
+  }, [])
 
   // Plaid-Mercury duplicate eligibility — set of Plaid (mercury) feed IDs that
   // have a matched mercury_api twin pointing at the same payment. Used by
@@ -1779,7 +2194,12 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Connected banks summary */}
-      <BanksSummary activeSource={sourceFilter} onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }} isAdmin={isAdmin} />
+      <BanksSummary
+        activeSource={sourceFilter}
+        onSourceFilter={(s) => { setSourceFilter(s); setPage(0) }}
+        isAdmin={isAdmin}
+        syncBlocked={feedsWithNoteLinkOpen.size > 0}
+      />
 
       {/* Stats cards */}
       <div className="flex gap-3">
@@ -1905,7 +2325,21 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
               }
             }
 
-            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' ? (
+            // Bug-hunter, 2026-09-13 (second pass): disabling "Sync All Banks
+            // Now" only blocks ONE of several doors to the same failure — five
+            // other actions on this page (Ignore/Match/Claim/Restore/Delete-
+            // duplicate on any OTHER row) refresh the whole page's data too,
+            // and the 15-min background cron can settle this exact feed with
+            // no button click at all. Guarding at the render decision instead
+            // of at every trigger closes all of them at once: a row whose
+            // note-link box is open keeps rendering as UnmatchedRow no matter
+            // what its freshly-fetched status says, until the box itself is
+            // closed. The server still re-checks the feed's real status at
+            // submit time and refuses if something else already settled it
+            // (lib/finance/owner-transaction-link.ts) — this only protects the
+            // in-progress typing from disappearing, not the money.
+            const keepShowingAsUnmatched = feedsWithNoteLinkOpen.has(feed.id)
+            const inner = feed.status === 'unmatched' || feed.status === 'needs_review' || keepShowingAsUnmatched ? (
               <UnmatchedRow
                 feed={feed}
                 openInvoices={openInvoices}
@@ -1914,6 +2348,7 @@ export function BankFeedTab({ bankFeeds, openInvoices, totalCount, isAdmin = fal
                 onCancelMatch={() => setMatchingFeed(null)}
                 candidateInfo={candidateInfo}
                 isAdmin={isAdmin}
+                onNoteLinkOpenChange={handleNoteLinkOpenChange}
               />
             ) : feed.status === 'activation_crashed' ? (
               <CrashedRow feed={feed} />

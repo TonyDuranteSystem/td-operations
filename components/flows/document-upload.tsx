@@ -81,6 +81,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   // created and the advance would be refused after the upload.
   const [entityTypeNeeded, setEntityTypeNeeded] = useState(false)
   const [entityType, setEntityType] = useState<'SMLLC' | 'MMLLC' | ''>('')
+  // Formation-state override: same shape as the LLC-type override above,
+  // required when the preflight can't resolve a state from the wizard,
+  // submission, or signed offer (2026-09-11, dev job cb771564 — the one
+  // manual fallback the retired contact-page tool used to be the only place
+  // with).
+  const [formationStateNeeded, setFormationStateNeeded] = useState(false)
+  const [formationStateOverride, setFormationStateOverride] = useState<'' | 'NM' | 'WY' | 'FL' | 'DE'>('')
   // Deterministic blocker the staff cannot resolve from this modal (no filed
   // name / no formation data) — shown up front, confirm disabled.
   const [preflightBlocked, setPreflightBlocked] = useState<string | null>(null)
@@ -134,6 +141,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     fileType: string,
     confirmedDate?: string,
     confirmedEntityType?: 'SMLLC' | 'MMLLC' | '',
+    confirmedFormationState?: 'NM' | 'WY' | 'FL' | 'DE' | '',
   ) {
     const apiRes = await fetch(`/api/flows/${serviceDeliveryId}/upload-document`, {
       method: 'POST',
@@ -148,6 +156,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         ...(rename ? { rename } : {}),
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
         ...(confirmedEntityType ? { entity_type: confirmedEntityType } : {}),
+        ...(confirmedFormationState ? { formation_state: confirmedFormationState } : {}),
       }),
     })
     const data = await apiRes.json().catch(() => ({}))
@@ -195,6 +204,8 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         setFormationDate('')
         setEntityTypeNeeded(false)
         setEntityType('')
+        setFormationStateNeeded(false)
+        setFormationStateOverride('')
         setPreflightBlocked(null)
         setConfirming(true)
         setPrefilling(true)
@@ -212,9 +223,13 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
           ])
           if (dateRes?.formation_date) setFormationDate(dateRes.formation_date)
           if (preRes?.applicable && preRes.ok === false) {
-            if (preRes.failure === 'missing_entity_type') {
-              setEntityTypeNeeded(true)
-            } else if (preRes.error) {
+            // needs_state and needs_entity_type are independent — a formation
+            // can need both at once, and both fields must show together so
+            // fixing one doesn't just reveal the other on the next attempt
+            // (2026-09-11 bug-hunter catch).
+            if (preRes.needs_entity_type) setEntityTypeNeeded(true)
+            if (preRes.needs_state) setFormationStateNeeded(true)
+            if (!preRes.needs_entity_type && !preRes.needs_state && preRes.error) {
               setPreflightBlocked(preRes.error)
             }
           }
@@ -250,11 +265,15 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
       setError('Choose the LLC type (single- or multi-member) before continuing.')
       return
     }
+    if (formationStateNeeded && !formationStateOverride) {
+      setError('Choose the formation state before continuing.')
+      return
+    }
     setUploading(true)
     setError(null)
     setWarn(null)
     try {
-      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate, entityType)
+      await commitUpload(stagedPathRef.current, file.name, file.type, formationDate, entityType, formationStateOverride)
       setConfirming(false)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Upload failed — please try again.')
@@ -377,6 +396,28 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
                 <span className="mt-1 block text-xs font-normal text-amber-700">
                   The LLC type could not be determined from the signed contract or the client&apos;s
                   forms — it is required to create the company, so please pick it from the offer.
+                </span>
+              </label>
+            )}
+            {formationStateNeeded && (
+              <label className="mt-4 block text-sm font-medium text-zinc-700">
+                Formation state
+                <select
+                  value={formationStateOverride}
+                  onChange={(e) => setFormationStateOverride(e.target.value as '' | 'NM' | 'WY' | 'FL' | 'DE')}
+                  disabled={uploading}
+                  className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">Select state…</option>
+                  <option value="NM">New Mexico (NM)</option>
+                  <option value="WY">Wyoming (WY)</option>
+                  <option value="FL">Florida (FL)</option>
+                  <option value="DE">Delaware (DE)</option>
+                </select>
+                <span className="mt-1 block text-xs font-normal text-amber-700">
+                  The formation state wasn&apos;t captured anywhere — the client&apos;s questionnaire, the
+                  submitted form, or the signed contract. It&apos;s required to create the company, so
+                  please pick it here.
                 </span>
               </label>
             )}

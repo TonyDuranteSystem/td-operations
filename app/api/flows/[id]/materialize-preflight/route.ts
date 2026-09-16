@@ -2,17 +2,20 @@
  * GET /api/flows/[id]/materialize-preflight
  *
  * Read-only dry-run of the deterministic company-materialization gates for a
- * Company Formation flow: is there formation data, a confirmed filed name, and
- * a resolvable LLC type? The workspace Articles-upload modal calls this when
- * it opens so it can require the staff LLC-type field UP FRONT instead of
- * letting the advance fail after the upload (Covelli/DoctorGut, 2026-07-28).
- * advanceServiceDelivery runs the same check server-side as the enforcement
- * gate — this route only exists so the UI can ask ahead. Staff-only
- * (middleware). Mutates nothing.
+ * Company Formation flow: is there formation data, a confirmed filed name, a
+ * resolvable formation state, and a resolvable LLC type? The workspace
+ * Articles-upload modal calls this when it opens so it can require the staff
+ * formation-state and/or LLC-type fields UP FRONT instead of letting the
+ * advance fail after the upload (Covelli/DoctorGut, 2026-07-28; the state
+ * check added 2026-09-11, dev job cb771564, when retiring the old
+ * contact-page tool that was the only manual fallback for a state nothing
+ * automatic could resolve). advanceServiceDelivery runs the same check
+ * server-side as the enforcement gate — this route only exists so the UI can
+ * ask ahead. Staff-only (middleware). Mutates nothing.
  *
  * Response: { applicable: false } for non-formation / already-materialized
- * flows, else { applicable: true, ok, failure?, error?, entity_code?,
- * entity_source?, chosen_name? }.
+ * flows, else { applicable: true, ok, failure?, error?, chosen_name?,
+ * state_code?, state_source?, entity_code?, entity_source? }.
  */
 
 export const dynamic = 'force-dynamic'
@@ -54,6 +57,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       failure: pre.failure ?? null,
       error: pre.error ?? null,
       chosen_name: pre.chosen_name ?? confirmedName ?? null,
+      state_code: pre.state_code ?? null,
+      state_source: pre.state_source ?? null,
       entity_code: pre.entity_code ?? null,
       entity_source: pre.entity_source ?? null,
     })

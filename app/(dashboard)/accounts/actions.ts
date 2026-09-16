@@ -440,7 +440,25 @@ export async function addAccountNote(
 
 export async function toggleDocumentPortalVisibility(
   documentId: string,
-  visible: boolean
+  visible: boolean,
+  resolution?: {
+    // The account contact this personal document belongs to — supplied by the
+    // guided-share "who is this for" step. Written in the SAME patch as
+    // portal_visible so a resolved owner and the share happen atomically —
+    // never as two separate saves (a two-step version was reviewed and
+    // rejected: interrupting between them left a document with a resolved
+    // owner but no visible record that filing was still pending, and it could
+    // then be shared normally by a later, unrelated click with the pending
+    // step silently dropped).
+    contactId?: string
+    // Staff explicitly said "this isn't actually personal, share anyway" —
+    // bypasses the guard without requiring a contact.
+    overridePersonalCheck?: boolean
+    // The row's updated_at as last read by the caller, so a second person
+    // resolving the same document concurrently gets a clear conflict instead
+    // of silently overwriting the first person's answer.
+    expectedUpdatedAt?: string
+  }
 ): Promise<ActionResult> {
   return safeAction(async () => {
     // Write goes through updateDocument() which owns the action_log entry
@@ -455,15 +473,75 @@ export async function toggleDocumentPortalVisibility(
     const { data: { user } } = await supabase.auth.getUser()
     const actor = `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`
 
+    const patch: Record<string, unknown> = { portal_visible: visible }
+
+    // Turning ON visibility for an already-indexed document is a THIRD path
+    // that can flip a document visible (alongside process-and-share's two
+    // branches) — a real, ordinary click on any document already sitting in
+    // the file list, not a rare case. Must carry the same guard: a personal
+    // document (passport/ID/etc.) with no resolved single owner stays hidden,
+    // UNLESS this call is itself the resolution (a contactId or an explicit
+    // override was supplied).
+    if (visible) {
+      const { data: doc } = await supabaseAdmin
+        .from('documents')
+        .select('category, contact_id')
+        .eq('id', documentId)
+        .maybeSingle()
+      if (doc) {
+        const { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } = await import('@/lib/documents/visibility-guard')
+        const effectiveContactId = resolution?.contactId ?? doc.contact_id
+        const stillUnresolved = isUnresolvedPersonalDocument({
+          category: doc.category,
+          contact_id: effectiveContactId ?? null,
+        })
+        if (stillUnresolved && !resolution?.overridePersonalCheck) {
+          throw new Error(UNRESOLVED_PERSONAL_DOC_MESSAGE)
+        }
+      }
+    }
+    if (resolution?.contactId) {
+      patch.contact_id = resolution.contactId
+    }
+
     const { updateDocument } = await import('@/lib/operations/document')
     const result = await updateDocument({
       id: documentId,
-      patch: { portal_visible: visible },
+      patch,
       actor,
       summary: `Portal visibility ${visible ? 'enabled' : 'disabled'}`,
+      expected_updated_at: resolution?.expectedUpdatedAt,
     })
-    if (!result.success) throw new Error(result.error || 'Failed to update document visibility')
+    if (!result.success) {
+      if (result.outcome === 'stale') {
+        throw new Error('Someone already updated this document — refresh and try again.')
+      }
+      throw new Error(result.error || 'Failed to update document visibility')
+    }
   })
+}
+
+// Feeds the guided-share "who is this for" picker — every real person linked
+// to the account, not filtered to a specific role (Antonio's explicit call:
+// the system doesn't reliably distinguish "owner" from any other linked
+// contact today, so a role-filtered list would under-cover real accounts).
+export async function listAccountContactsForDocumentResolution(
+  accountId: string,
+): Promise<{ id: string; full_name: string }[]> {
+  const { data: links } = await supabaseAdmin
+    .from('account_contacts')
+    .select('contact_id')
+    .eq('account_id', accountId)
+
+  const contactIds = (links || []).map((l) => l.contact_id).filter((id): id is string => !!id)
+  if (contactIds.length === 0) return []
+
+  const { data: contacts } = await supabaseAdmin
+    .from('contacts')
+    .select('id, full_name')
+    .in('id', contactIds)
+
+  return contacts || []
 }
 
 export async function linkContactToAccount(

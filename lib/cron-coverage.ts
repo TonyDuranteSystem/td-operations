@@ -21,6 +21,10 @@
  */
 export const SCHEDULED_CRONS: Record<string, string> = {
   // /api/qb/refresh removed — QuickBooks decommissioned (dev_task eca3ce5c).
+  // /api/cron/articles-detector removed — 4 months / 3,094 runs, 0 successful
+  // materializations ever; every real case it detected was independently
+  // resolved by staff through the Workspace's own upload flow instead
+  // (2026-09-11, dev job cb771564).
   "/api/cron/gmail-watch-renew": "0 5 * * *",
   "/api/cron/email-index-sync": "*/10 * * * *",
   "/api/cron/email-content-backfill": "*/15 * * * *",
@@ -34,7 +38,6 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/annual-report-check": "0 9 * * *",
   "/api/cron/overdue-payments-report": "0 9 * * *",
   "/api/cron/portal-issues": "0 */1 * * *",
-  "/api/cron/articles-detector": "0 */1 * * *",
   "/api/cron/email-monitor": "*/5 * * * *",
   "/api/cron/annual-renewal-msa": "0 9 1 1 *",
   "/api/cron/annual-installments": "0 10 1 * *",

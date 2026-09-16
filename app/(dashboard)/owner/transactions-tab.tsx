@@ -352,21 +352,27 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
   }
 
   /**
-   * "This is for a client" — the system put this here because it could not prove the money
-   * was a client paying an invoice. Antonio knows better; this returns it to the Bank Feed
-   * for matching (and removes it from his books so it can never be counted twice).
+   * "This is for a client" — the owner confirming money that isn't already
+   * proven as a client payment actually is one. Sends it to Finance, where
+   * picking the invoice/note/write-off happens next (that popup lives on
+   * the Finance side, not here — see app/(dashboard)/finance/bank-feed-tab.tsx).
+   * Works the same way whether the row already existed on the Bank Feed
+   * side (the system just couldn't prove it) or is native to My Finances
+   * (e.g. a wire to an account the Bank Feed doesn't watch) — one button,
+   * one endpoint, so there's never a second, competing action on the same
+   * row (fixed 2026-09-11: two separate buttons here once collided, and
+   * clicking the wrong one could erase a transaction's already-recorded link).
    */
   async function sendToFinance(tx: OwnerTransaction) {
-    if (!tx.transaction_ref) return
-    setSendingRef(tx.transaction_ref)
+    setSendingRef(tx.transaction_ref ?? tx.id)
     try {
       const res = await fetch('/api/owner/transactions/to-finance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_ref: tx.transaction_ref }),
+        body: JSON.stringify({ transaction_ref: tx.transaction_ref, transaction_id: tx.id }),
       })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Could not move it to Finance.') }
-      toast.success('Moved to Finance — it will be matched to an invoice')
+      toast.success('Sent to Finance — pick the invoice it pays from there.')
       load(offset)
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not move it to Finance.')
@@ -833,18 +839,38 @@ export function TransactionsTab({ year, initialRows, initialTotal, focus, onBack
                     the bank-feed escape hatch, which does something different. */}
                 <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center gap-1.5">
-                    {/* Only a row that CAME from the bank feed can go back to it. This is the
-                        escape hatch: anything the system could not identify as a client
-                        payment lands here, and one click returns it to the Bank Feed. */}
-                    {tx.transaction_ref?.startsWith('feed:') && (
-                      <FastTooltip label="Move this back to Finance — it is a client paying an invoice">
+                    {/* ONE button, ONE state machine per row — never two competing actions on
+                        the same transaction (a real bug once: a second button here could delete
+                        the record of an already-completed link). Works for any row the system
+                        could not already prove was a client payment — one already mirrored from
+                        the Bank Feed, or one native to My Finances (e.g. a wire to an account the
+                        Bank Feed doesn't watch). Picking the actual invoice/note/write-off happens
+                        next, in Finance — see app/(dashboard)/finance/bank-feed-tab.tsx. */}
+                    {tx.linked_payment_id ? (
+                      <FastTooltip label={tx.linked_note ?? 'Linked to a client invoice in Finance'}>
+                        <span className="rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-500">
+                          Linked ✓
+                        </span>
+                      </FastTooltip>
+                    ) : tx.moved_to_feed_id ? (
+                      <FastTooltip label="Already sent to Finance — pick the invoice it pays from there">
+                        <span className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                          Sent to Finance
+                        </span>
+                      </FastTooltip>
+                    // Money in only — a feed-linked ref alone is not enough on its own
+                    // (this used to be `||`, letting an outgoing feed-linked transaction
+                    // show a button meant for a client paying an invoice; every other
+                    // check of this exact pair in this file already required both).
+                    ) : tx.amount > 0 && (
+                      <FastTooltip label="Send this to Finance — it is a client paying an invoice">
                         <button
                           onClick={() => sendToFinance(tx)}
-                          disabled={sendingRef === tx.transaction_ref}
-                          aria-label="Move this back to Finance — it is a client paying an invoice"
+                          disabled={sendingRef === (tx.transaction_ref ?? tx.id)}
+                          aria-label="Send this to Finance — it is a client paying an invoice"
                           className="rounded border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
                         >
-                          {sendingRef === tx.transaction_ref ? 'Moving…' : 'This is for a client →'}
+                          {sendingRef === (tx.transaction_ref ?? tx.id) ? 'Sending…' : 'This is for a client →'}
                         </button>
                       </FastTooltip>
                     )}

@@ -31,7 +31,6 @@ import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import type { OfferPackageOption } from '@/lib/types/offer'
-import { LlcNameSelectionCard } from '@/components/contacts/llc-name-selection-card'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
 import { LifecycleTimeline } from '@/components/lifecycle/timeline'
@@ -44,6 +43,8 @@ import { toast } from 'sonner'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
+import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
+import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
 import { format, parseISO } from 'date-fns'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry, ChatAttachment } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
@@ -185,6 +186,9 @@ interface ContactDocumentRecord {
   file_size: number | null
   account_id: string | null
   portal_visible: boolean | null
+  contact_id: string | null
+  confidence: string | null
+  updated_at: string | null
 }
 
 interface ContactInvoice {
@@ -800,13 +804,6 @@ function OverviewTab({
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactHasDriveFolder={!!contact.gdrive_folder_url} />
-
-      {/* LLC Name Selection Card */}
-      <LlcNameSelectionCard
-        wizardProgress={wizardProgress}
-        accounts={accounts}
-        contactId={contact.id}
-      />
 
     </div>
   )
@@ -3025,6 +3022,8 @@ function ContactDocumentsTab({
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [resolvingDocId, setResolvingDocId] = useState<string | null>(null)
+  const [resolverFolders, setResolverFolders] = useState<{ id: string; name: string }[]>([])
 
   const handleRunOcr = async (docId: string) => {
     setOcrRunning(docId)
@@ -3049,12 +3048,52 @@ function ContactDocumentsTab({
     }
   }
 
-  const handleToggleVisibility = async (docId: string, current: boolean) => {
-    setTogglingVis(docId)
+  const handleToggleVisibility = async (doc: ContactDocumentRecord) => {
+    // This tab's document list merges in every document on any account this
+    // contact is linked to (see the account_id query in
+    // app/(dashboard)/contacts/[id]/page.tsx), not just documents already
+    // tied to this contact — so a co-founder's passport on a shared LLC can
+    // show up here with contact_id still null and needs the same "who is
+    // this for" resolution as the account file manager (dev job dfc00bcf).
+    // `doc.account_id` is guaranteed non-null whenever contact_id is null
+    // TODAY, because the only query that can produce a null contact_id here
+    // filters on account_id (page.tsx's accountDocs merge) — kept as an
+    // explicit check anyway so a future change to that merge fails safe
+    // (falls through to the plain toggle's own server-side error) instead of
+    // silently skipping the resolver.
+    if (resolvingDocId === doc.id) return // already resolving this exact document — ignore a re-entrant click
+    if (!doc.portal_visible && doc.account_id && isUnresolvedPersonalDocument({ category: doc.category, contact_id: doc.contact_id })) {
+      setResolvingDocId(doc.id)
+      setResolverFolders([])
+      // resolverFolders is shared across every row in this tab (one resolver
+      // shows at a time), so a slower-to-resolve fetch for a PREVIOUS doc
+      // must not clobber a later doc's folder list if staff switch targets
+      // before the first fetch returns. Guard on resolvingDocId still
+      // matching this fetch's own doc.id when it lands.
+      const requestedForDocId = doc.id
+      fetch(`/api/accounts/${doc.account_id}/files`)
+        .then(res => res.json())
+        .then(data => {
+          setResolvingDocId(current => {
+            if (current === requestedForDocId) {
+              setResolverFolders((data.folders || []).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })))
+            }
+            return current
+          })
+        })
+        .catch(() => {
+          setResolvingDocId(current => {
+            if (current === requestedForDocId) setResolverFolders([])
+            return current
+          })
+        })
+      return
+    }
+    setTogglingVis(doc.id)
     try {
-      const result = await toggleDocumentPortalVisibility(docId, !current)
+      const result = await toggleDocumentPortalVisibility(doc.id, !doc.portal_visible)
       if (result.success) {
-        toast.success(`Portal visibility ${!current ? 'enabled' : 'disabled'}`)
+        toast.success(`Portal visibility ${!doc.portal_visible ? 'enabled' : 'disabled'}`)
         window.location.reload()
       } else {
         toast.error(result.error || 'Failed to update visibility')
@@ -3472,9 +3511,17 @@ function ContactDocumentsTab({
           </h3>
           <div className="border rounded-lg divide-y">
             {grouped[category].map(doc => (
-              <button
-                key={doc.id}
+              <div key={doc.id}>
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => doc.drive_file_id ? setPreviewDoc(doc) : undefined}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && doc.drive_file_id) {
+                    e.preventDefault()
+                    setPreviewDoc(doc)
+                  }
+                }}
                 className={cn(
                   'flex items-center justify-between px-4 py-2.5 w-full text-left transition-colors',
                   doc.drive_file_id ? 'hover:bg-zinc-50 cursor-pointer' : 'opacity-60'
@@ -3507,8 +3554,8 @@ function ContactDocumentsTab({
                     <span
                       role="button"
                       tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); handleToggleVisibility(doc.id, !!doc.portal_visible) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleToggleVisibility(doc.id, !!doc.portal_visible) } }}
+                      onClick={(e) => { e.stopPropagation(); handleToggleVisibility(doc) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); handleToggleVisibility(doc) } }}
                       className={cn(
                         'p-1 rounded transition-colors',
                         doc.portal_visible ? 'text-emerald-600 hover:bg-emerald-50' : 'text-zinc-400 hover:bg-zinc-100',
@@ -3559,7 +3606,22 @@ function ContactDocumentsTab({
                     {deleting === doc.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
                   </span>
                 </div>
-              </button>
+              </div>
+              {resolvingDocId === doc.id && doc.account_id && doc.drive_file_id && (
+                <div className="px-4 pb-2.5">
+                  <ResolvePersonalDocument
+                    documentId={doc.id}
+                    driveFileId={doc.drive_file_id}
+                    accountId={doc.account_id}
+                    confidence={doc.confidence}
+                    updatedAt={doc.updated_at}
+                    folders={resolverFolders}
+                    onResolved={() => { setResolvingDocId(null); window.location.reload() }}
+                    onCancel={() => setResolvingDocId(null)}
+                  />
+                </div>
+              )}
+              </div>
             ))}
           </div>
         </div>

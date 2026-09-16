@@ -391,10 +391,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
 
   // Formation excluded (Antonio's architectural model, 2026-05-03/04): when an
   // individual pays for a formation, no LLC exists yet. The account is created
-  // when Articles of Organization are uploaded after state filing — either via
-  // the Upload Articles button on the LLC Name Selection card or by the Drive
-  // detection cron. Invoice + service deliveries + (later) members all attach
-  // to the contact until then.
+  // when Articles of Organization are uploaded after state filing, through the
+  // Formation Workspace (the old contact-page tool and the Drive-detection
+  // cron that used to also do this were both retired 2026-09-11, dev job
+  // cb771564). Invoice + service deliveries + (later) members all attach to
+  // the contact until then.
   //
   // See sysdoc 'ops-2026-05-03-formation-architecture-decision-and-plan'.
   //

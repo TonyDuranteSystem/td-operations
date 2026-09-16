@@ -2,6 +2,11 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isMatchableInvoice } from '@/lib/finance/invoice-matchability'
 import { isDashboardUser, isAdmin, isOwnerOnly } from '@/lib/auth'
+import {
+  buildOwnerLedgerEvidenceContext,
+  isOwnerLedgerFeed,
+  type ProjectableFeed,
+} from '@/lib/finance/owner-ledger-projection'
 import { isCardFeeEnabled, getConfiguredCardFeeRate } from '@/lib/payments/card-fee-config'
 import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
@@ -130,7 +135,11 @@ export default async function FinancePage({
     invoice_number: p.invoice_number ?? '',
     status: p.invoice_status ?? 'Draft',
     total: Number(p.total ?? 0),
-    amount_paid: Number(p.amount_paid ?? 0),
+    // NOT coerced to 0 — a genuinely NULL amount_paid (a handful of old
+    // invoices never had it populated) must stay distinguishable from a real
+    // $0 collected, or the "Written Off" tag (Paid + amount_paid < total)
+    // wrongly fires on every one of them. Caught live in production 2026-09-14.
+    amount_paid: p.amount_paid === null ? null : Number(p.amount_paid),
     amount_due: Number(p.amount_due ?? 0),
     currency: p.amount_currency ?? 'USD',
     issue_date: p.issue_date,
@@ -230,10 +239,10 @@ export default async function FinancePage({
   }
 
   // ── Fetch bank feeds + open invoices for Bank Feed tab ──
-  const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes] = await Promise.all([
+  const [bankFeedsRes, bankFeedCountRes, bankOpenInvoicesRes, movedFromMyFinancesRes] = await Promise.all([
     supabaseAdmin
       .from('td_bank_feeds')
-      .select('*, payments:matched_payment_id(invoice_number, description, account_id, accounts:account_id(company_name))')
+      .select('*, payments:matched_payment_id(invoice_number, description, account_id, total, amount_paid, invoice_status, notes, accounts:account_id(company_name))')
       .order('transaction_date', { ascending: false })
       // 1000, not 200: with ~500 rows in the table, the old 200-row window silently hid every
       // older transaction from EVERY tab — a row returned to the queue from My Finances (two
@@ -249,21 +258,68 @@ export default async function FinancePage({
       .from('payments')
       .select('id, invoice_number, description, total, amount, amount_due, amount_currency, invoice_status, status, is_test, account_id, accounts:account_id(company_name), contact_id, contacts:payments_contact_id_fkey(full_name)')
       .order('created_at', { ascending: false }),
+    // Real bank name for a feed sent over from My Finances — sendOwnerTransactionToFinance
+    // (lib/finance/owner-transaction-link.ts) only uses this to pick a source BUCKET
+    // (guessFeedSource recognizes 5 specific banks by name), never copies the actual string
+    // onto the new td_bank_feeds row, so every other bank falls back to a bare "Manual" badge
+    // with no way to tell which one. Antonio: "I need to know the bank transaction instead of
+    // only 'manual'." No unique constraint on moved_to_feed_id, but sendOwnerTransactionToFinance
+    // refuses a transaction that already has one — one feed, one source row, in practice.
+    supabaseAdmin
+      .from('td_books_transactions')
+      .select('moved_to_feed_id, bank_name')
+      .not('moved_to_feed_id', 'is', null),
   ])
 
   // PRIVACY, ENFORCED ON THE SERVER — not by hiding rows in the browser.
   // TD's own money (money out, and anything routed to My Finances) is Antonio's business, not
   // the staff's. Filtering it client-side still SENDS it to every staff browser, where it is
-  // one dev-tools tab away; the only real gate is never putting it in the response. Admins get
-  // everything, so nothing is lost to the person who owns the books.
+  // one dev-tools tab away; the only real gate is never putting it in the response.
+  //
+  // Gated on isOwnerOnly, not isAdmin: isAdmin is role-based (lib/auth.ts) and includes any
+  // account ever granted admin for other admin-area work (e.g. a QA/staff account), which is
+  // NOT the same as "is Antonio." This exact gate previously used isAdmin here — the third time
+  // this codebase has made that mistake in this feature area (2026-07-27, 2026-08-29) — fixed
+  // 2026-09-11, same rule this page already applies correctly to the Expenses tab below.
+  //
+  // A persisted status alone also isn't enough: a freshly-synced private transaction lands
+  // 'unmatched' and isn't reclassified to 'owner_ledger' until the periodic sweep runs (up to
+  // 6h later) — during that window a status check alone would show it to every viewer. Run the
+  // SAME live classification the sweep and Reconciliation already use for 'unmatched' rows, and
+  // separately hide any row Plaid resolved to one of Antonio's own registered accounts
+  // (owner_account_number/type — a certain identity fact, set only by lib/plaid-sync.ts)
+  // regardless of match status, since a wrongly-matched owner deposit must never become
+  // permanently visible just because it carries a settled invoice link.
   const allBankFeeds = bankFeedsRes.data ?? []
-  const PRIVATE_TO_OWNER = new Set(['outgoing', 'owner_ledger'])
-  const bankFeeds = userIsAdmin
+  const unmatchedForCheck = allBankFeeds.filter(
+    (f) => String((f as { status?: unknown }).status ?? '') === 'unmatched'
+  ) as unknown as ProjectableFeed[]
+  const ownerLedgerUnmatchedIds = new Set<string>()
+  if (!userIsOwner && unmatchedForCheck.length > 0) {
+    const { openInvoices, evidence } = await buildOwnerLedgerEvidenceContext(unmatchedForCheck)
+    for (const feed of unmatchedForCheck) {
+      if (isOwnerLedgerFeed(feed, openInvoices, evidence)) ownerLedgerUnmatchedIds.add(feed.id)
+    }
+  }
+  const isPrivateToOwner = (f: (typeof allBankFeeds)[number]): boolean => {
+    const status = String((f as { status?: unknown }).status ?? '')
+    if (status === 'outgoing' || status === 'owner_ledger') return true
+    if ((f as { owner_account_number?: unknown }).owner_account_number) return true
+    if (status === 'unmatched' && ownerLedgerUnmatchedIds.has((f as { id: string }).id)) return true
+    return false
+  }
+  const bankNameByFeedId = new Map(
+    (movedFromMyFinancesRes.data ?? [])
+      .filter((r): r is { moved_to_feed_id: string; bank_name: string | null } => r.moved_to_feed_id != null)
+      .map(r => [r.moved_to_feed_id, r.bank_name]),
+  )
+  const bankFeeds = (userIsOwner
     ? allBankFeeds
-    : allBankFeeds.filter(f => !PRIVATE_TO_OWNER.has(String((f as { status?: unknown }).status ?? '')))
+    : allBankFeeds.filter(f => !isPrivateToOwner(f))
+  ).map(f => ({ ...f, source_bank_name: bankNameByFeedId.get((f as { id: string }).id) ?? null }))
   // The count must match what the viewer can actually see, or the header claims rows they
   // will never find.
-  const bankFeedTotalCount = userIsAdmin
+  const bankFeedTotalCount = userIsOwner
     ? (bankFeedCountRes.count ?? allBankFeeds.length)
     : bankFeeds.length
   // Cast: the contacts:payments_contact_id_fkey(full_name) embed is correct at

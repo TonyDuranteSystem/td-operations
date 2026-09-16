@@ -1,6 +1,68 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-07 — Claude (**Import path only — zero behavior change.** This page's "create invoice" quick action calls `createInvoice`, which moved from the now-retired Payment Tracker page's own file to the new shared invoice-actions module as part of dev job `ef5da377` ("retire the old Payment Tracker page"). Updated the import here to follow; the function itself, and everything this page does with it, is unchanged.)_
+_Last verified against code: 2026-09-14 — Claude (**"Addressed to" now correctly
+distinguishes a member from a company they merely represent, and remembers which
+one was meant after the message is sent** — dev job `34bd9009`, reported by
+Antonio: on a real multi-member LLC (AI Venture Labs LLC), Michele Cotti is both
+an individual member AND the declared representative of a company member
+(Whalecot Consulting LLC) on the same account. Both roster rows resolve to the
+identical `contact_id` — a real, deliberate ownership shape (a person routing
+part of their stake through a company they also own), confirmed not a one-off
+(a second live account, Azarexa LLC, has the same pattern). **Root cause:** the
+picker's click/highlight/guess logic, and the saved `addressed_to_contact_id`
+itself, were all keyed on that shared `contact_id` — so picking either row
+produced the identical state and the identical saved value; there was no way to
+tell "addressed to the person" apart from "addressed to the company they
+represent," neither live nor in the saved record. **What changed:** every place
+that used to key on the resolved contact now keys on the roster row's own
+unique id instead (`selectedAddressedToMemberId`, replacing
+`selectedAddressedToContactId` outright — not a second parallel state; the
+corresponding contact id is derived from the selected option, never stored
+separately) — both render sites (the ambient bar's dropdown and its own trigger
+label, and the "Before you send" modal's chips), the guess/pre-fill cascade in
+`pickAddressedToGuess` (extended to tie-break at all four stages, preferring the
+individual entry over a company they merely represent, falling back to today's
+order when there's no individual side), and the `GET /api/portal/chat/members`
+response (`guessMemberId`, replacing `guessContactId`). **The "remembers after
+sending" half:** a new nullable `portal_messages.addressed_to_label` column
+holds a frozen, disconnected snapshot of the picked roster row's own display
+name at send time, resolved and written entirely server-side from a fresh
+`resolveAccountMembersForChat()` read (the client sends only the member id,
+never a name string, so a stale or spoofed display name can never reach
+storage) — preferred over the existing `addressed_to_contact_id` join when
+present, falling back to it unchanged for every message sent before this
+shipped (no backfill). **Deliberately NOT a foreign key to `members(id)`** — a
+full 5-reviewer council pass (two rounds) rejected that design: Postgres CHECK
+constraints cannot reference another table (so the "keep the two columns
+consistent" rule the FK draft wanted isn't expressible at all), and `members.id`
+is not durable — the client-facing member-info-form resubmission
+(`submit_member_info()`, see `20260625-1200-member-info-atomic-submit.sql`)
+deletes and reinserts every member row for an account with fresh ids, which
+already happened once on this exact account (2026-08-12). A live FK would
+either silently null out every historical label the next time an affected
+account's roster is resubmitted, or block the resubmission outright. The
+council's second pass also caught and closed a real blocker the first draft
+missed: the new selection state needed the identical reset-on-conversation-
+switch coverage the old `selectedAddressedToContactId` already had at its ~11
+call sites — since this design carries no server-side consistency check
+(deliberately, to avoid the FK problems above), a stale selection surviving a
+switch would have been a silent, permanent, unfixable-after-the-fact mislabel
+on a real client's message, not just a display glitch. Closed by literally
+repurposing the same state variable (rename, not duplicate) so every existing
+reset site is correct by construction. Verified live in a local dev server
+against the sandbox database (Vercel's deployment protection blocked testing
+the deployed preview URL directly) with a synthetic QA fixture built to
+reproduce the exact shape (`QA AddrTo Twin LLC`, sandbox account
+`aaaaaaaa-a4a1-4000-8000-000000000001` — one contact behind an individual row
+and a company row, plus an unrelated third member): both roster rows
+independently selectable in both the dropdown and the modal, the ambient label
+and the historical "For {name}" badge both correctly distinguish the two after
+sending, a live conversation switch mid-session does not leak the prior
+selection, and "Whole company" is unaffected. Full test suite (11,006 tests)
+and production build green. `tests/unit/portal-addressed-to.test.ts` extended
+with the tie-break cases. Not yet in production — awaiting Antonio's word after
+this sandbox QA.)_
+_Prior: 2026-09-07 — Claude (**Import path only — zero behavior change.** This page's "create invoice" quick action calls `createInvoice`, which moved from the now-retired Payment Tracker page's own file to the new shared invoice-actions module as part of dev job `ef5da377` ("retire the old Payment Tracker page"). Updated the import here to follow; the function itself, and everything this page does with it, is unchanged.)_
 _Prior: 2026-09-06 — Claude (**"Addressed to" (and its sibling "who wrote
 this" sender badge) stopped silently disappearing on three ordinary navigation paths** — dev
 job e01fe70f, found during a full end-to-end QA pass Antonio requested in PRODUCTION right
@@ -208,6 +270,15 @@ only the read/unread badge logic, not the composer.
   exclusive with `addressed_to_contact_id` via a CHECK constraint. Also label-only,
   same as a member pick — never guessed/defaulted, only ever set by staff explicitly
   choosing it.
+  **Keyed by the roster row's own id, not its resolved contact (2026-09-14, dev job
+  34bd9009).** A person can be both an individual member AND the declared
+  representative of a company member on the same account (real, confirmed shape —
+  see the changelog entry at the top) — two roster rows sharing one `contact_id`.
+  Picking, highlighting, and guessing all key on `memberId` now; `addressed_to_contact_id`
+  is still what's saved (derived from the picked row), plus a new
+  `portal_messages.addressed_to_label` frozen name snapshot (resolved server-side only,
+  never client-supplied) so the two roles stay distinguishable in the historical record
+  too, not just in the live picker.
 
 ## How it's built
 
@@ -216,10 +287,10 @@ only the read/unread badge logic, not the composer.
   is no sub-component split for the Chats/Team panels.
 - **API routes:** `app/api/portal/chat/*` for the client composer (`route.ts` = send,
   plus `suggest`, `polish`, `read`, `upload`, `attachment`, `audience`, `threads`,
-  `members` — the last one new, 2026-09-04, GET-only, real member roster + a pre-fill
-  guess for the "Addressed to" picker, see `lib/portal/addressed-to.ts`).
-  `app/api/internal/threads/*` for the internal Team composer (`[id]/messages`,
-  `[id]/upload`).
+  `members` — GET-only, real member roster + a pre-fill guess (`guessMemberId`, dev job
+  34bd9009 — was `guessContactId` until then) for the "Addressed to" picker, see
+  `lib/portal/addressed-to.ts`). `app/api/internal/threads/*` for the internal Team
+  composer (`[id]/messages`, `[id]/upload`).
 - **Tables:** `portal_messages` (client conversation messages) vs. `internal_threads` +
   `internal_messages` (staff Team threads) — two entirely separate tables/models behind
   a visually similar UI. Don't assume a helper that touches one also covers the other.
@@ -231,6 +302,10 @@ only the read/unread badge logic, not the composer.
   `pickAddressedToGuess` is the pure decision function (same shape as
   `decideAdminSendScope`) — unit-tested in `tests/unit/portal-addressed-to.test.ts`.
   Deliberately does NOT touch `lib/portal/admin-send-scope.ts` — see Gotchas below.
+  **`preferIndividual` tie-break (2026-09-14, dev job 34bd9009)** — when a cascade stage
+  matches two rows sharing one `contact_id`, prefers the individual member over one
+  representing a company they merely represent, applied at all four cascade stages, not
+  just the final fallback.
 - **Send confirmation modal (2026-09-04d)** — `handleSend` only guards + opens
   `sendConfirmOpen`; `performSend` (same file) holds the actual send body and is fired
   by the modal's Confirm button. No new file — reuses the composer's own live

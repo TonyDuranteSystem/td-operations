@@ -5,8 +5,13 @@
  * demand. Same chain the 15-min crons run; surfaced as a button on
  * Finance → Bank Feed for staff who don't want to wait for the next cron tick.
  *
- * Providers: Mercury, Airwallex, Stripe, Plaid (covers Relay + any other
- * active Plaid connections except Mercury which has its own direct sync above).
+ * Providers: Mercury, Airwallex, Stripe, Plaid (covers Relay + any other active,
+ * staff-managed Plaid connection except Mercury, which has its own direct sync above).
+ *
+ * The Plaid query below excludes owner_scoped connections deliberately — this response goes
+ * to any dashboard user, and a connection Antonio made through My Finances for a purely
+ * personal bank (owner_scoped=true) must never have its bank name and transaction count
+ * returned here. Relay/Revolut/etc. stay owner_scoped=false and are unaffected.
  *
  * Each sub-step is wrapped so a failure in one provider (e.g. Mercury outage)
  * does not prevent the others from running. The match step always runs — it's
@@ -70,11 +75,15 @@ export async function POST(_req: NextRequest) {
 
   let plaid: PlaidResult = { error: "not_run" }
   try {
-    const { data: connections } = await supabaseAdmin
-      .from('plaid_connections')
+    // `as never`: owner_scoped isn't in the generated types yet — see accounts/route.ts's
+    // sibling comment.
+    const { data: connectionsRaw } = await supabaseAdmin
+      .from('plaid_connections' as never)
       .select('id, access_token, bank_name')
       .eq('status', 'active')
+      .eq('owner_scoped', false)
       .neq('bank_name', 'mercury')
+    const connections = connectionsRaw as unknown as { id: string; access_token: string; bank_name: string }[] | null
     if (!connections || connections.length === 0) {
       plaid = { connections: 0, results: [] }
     } else {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, ExternalLink, Building2, ArrowRight } from 'lucide-react'
-import { NAME_STATUS_META, hasFiledName, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
+import { NAME_STATUS_META, hasFiledName, allNamesDead, type NameCheck, type NameCheckStatus } from '@/lib/flows/name-checks'
 import { resolveFormationFilingLink } from '@/lib/flows/state-links'
 import type { NameAction } from '@/lib/operations/formation-name-checks'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -192,14 +192,9 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const canAdvance = hasFiledName(checks)
   // Every candidate is a dead end (unavailable / rejected by client or SOS) and
   // none is still viable — offer to ask the client for a fresh set of names.
-  const allDead =
-    checks.length > 0 &&
-    checks.every(
-      (c) =>
-        c.status === 'not_available' ||
-        c.status === 'rejected_by_client' ||
-        c.status === 'rejected_by_sos',
-    )
+  // Shared with the server-side guard in lib/operations/formation-name-checks.ts
+  // so the button's visibility and the API's enforcement can never disagree.
+  const allDead = allNamesDead(checks)
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">

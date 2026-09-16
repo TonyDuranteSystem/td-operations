@@ -61,6 +61,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // materializer when contract/form/wizard cannot resolve it (Covelli case).
     const entityType: 'SMLLC' | 'MMLLC' | undefined =
       body.entity_type === 'SMLLC' || body.entity_type === 'MMLLC' ? body.entity_type : undefined
+    // Staff-supplied formation state from the Articles-upload modal — required
+    // when the automatic wizard/submission/offer chain resolves to nothing
+    // (2026-09-11, dev job cb771564).
+    const formationState: 'NM' | 'WY' | 'FL' | 'DE' | undefined =
+      body.formation_state === 'NM' || body.formation_state === 'WY' || body.formation_state === 'FL' || body.formation_state === 'DE'
+        ? body.formation_state
+        : undefined
     // Default true: every existing upload stage auto-advances. A caller can opt
     // out (auto_advance:false) when a separate action owns the advance — e.g. the
     // Tax Return "Tax Return Prepared" stage, where "Send for Signature" advances.
@@ -362,6 +369,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           delivery_id: serviceDeliveryId,
           formation_date: formationDate,
           entity_type: entityType,
+          formation_state: formationState,
           actor: 'flow-upload',
           notes: `Document uploaded: ${fileName}`,
         })
