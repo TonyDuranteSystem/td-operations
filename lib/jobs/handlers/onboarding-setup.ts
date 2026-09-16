@@ -515,11 +515,17 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         if (mm.member_type !== 'individual') continue
         const nm = [mm.member_first_name, mm.member_last_name].filter(Boolean).join(' ')
         const em = mm.member_email
-        if (!nm || !em) continue
-        const key = `${normalizePersonName(nm)} ${normalizeEmail(em)}`
+        if (!em) continue
+        // Use the SAME effective identity as the resolver (name, or email when the
+        // name is blank) so two nameless members sharing one email are caught too —
+        // previously both were skipped by the name check above and neither was ever
+        // added to `seen`, so neither could be flagged as a duplicate of the other.
+        const effName = nm || em
+        const key = `${normalizePersonName(effName)} ${normalizeEmail(em)}`
         if (seen.has(key)) {
           skippedMemberIdx.add(i)
-          result.steps.push(step(`member_${i + 1}`, 'error', `Duplicate member "${nm}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct the wizard data and re-run.`))
+          result.ok = false
+          result.steps.push(step(`member_${i + 1}`, 'error', `Duplicate member "${effName}" (${em}) — same name and email as the owner or another member. Skipped to protect the ownership table; please correct the wizard data and re-run.`))
         } else {
           seen.add(key)
         }
@@ -561,7 +567,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             representative_address_country: m.member_rep_address_country,
             updated_at: now2,
           })
-          if (companyRowErr) result.steps.push(step(`member_${i + 1}_row`, 'error', companyRowErr))
+          if (companyRowErr) {
+            result.ok = false
+            result.steps.push(step(`member_${i + 1}_row`, 'error', companyRowErr))
+          }
 
           if (repEmail) {
             // Resolve the representative's contact by email + name (shared resolver)
@@ -636,7 +645,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               contact_id: membContactId,
               updated_at: now2,
             })
-            if (memberRowErr) result.steps.push(step(`member_${i + 1}_row`, 'error', memberRowErr))
+            if (memberRowErr) {
+              result.ok = false
+              result.steps.push(step(`member_${i + 1}_row`, 'error', memberRowErr))
+            }
 
             // Passport: find in upload_paths by key pattern passport_member_${i}
             const memberPassportPath = (p.upload_paths ?? []).find(up => up.includes(`passport_member_${i}`))
@@ -724,6 +736,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           contact_id,
           updated_at: now2,
         })
+        if (ownerRowErr) result.ok = false
         result.steps.push(ownerRowErr
           ? step('owner_members_row', 'error', ownerRowErr)
           : step('owner_members_row', 'ok', `Owner written to members table (${ownerPct}%)`))
