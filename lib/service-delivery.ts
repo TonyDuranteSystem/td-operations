@@ -20,6 +20,9 @@
  *   9. Welcome package enqueue (on Articles Received)
  *   10. Company Closure cascade (cancel SDs, deactivate account/portal, closure tasks)
  *   11. Action log entry
+ *   12. MMLLC member-info kickoff — tells the client they can now submit their
+ *       members + SS-4 signer, the moment materialization actually creates the
+ *       company (dev job ef529eaf)
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -904,6 +907,93 @@ export async function advanceServiceDelivery(
         outcome: "error",
         error: `${msg} — the company record was NOT created.`,
       }
+    }
+  }
+
+  // 11. MMLLC member-info kickoff (dev job ef529eaf). Fires the moment the
+  // company genuinely exists — fresh materialization OR an idempotent retry,
+  // both of which set materialization.account_id — never before, since the
+  // member-info mechanism requires a real accounts row. Deliberately its OWN
+  // try/catch, entirely OUTSIDE the materialization try/catch above: a throw
+  // in here must never turn a successful materialization into a reported
+  // "the company record was NOT created" failure. MMLLC-only, checked fresh
+  // against the account's own entity_type (never assumed from context, since
+  // a known open bug — job 6c0d7b4c — can mis-resolve entity type for a
+  // returning client's new formation). Reuses the same client-self-service
+  // member-info mechanism (getOrCreateMemberInfoRequest) the "Generate
+  // Documents" screen already uses, so the client lands on an already-live,
+  // already-idempotent, already-validated form (100% ownership + exactly one
+  // SS-4 signer enforced server-side) — not a new mechanism.
+  if (materialization?.account_id) {
+    try {
+      const { data: acct, error: acctErr } = await supabaseAdmin
+        .from("accounts")
+        .select("entity_type")
+        .eq("id", materialization.account_id)
+        .maybeSingle()
+      if (acctErr) {
+        console.error("[flow-advance] member-info kickoff: entity_type read failed:", acctErr.message)
+        autoTriggers.push(`⚠ member-info kickoff: could not read entity_type (${acctErr.message})`)
+      }
+      // Entity-type gate FIRST, before touching getOrCreateMemberInfoRequest —
+      // that call is NOT read-only (it inserts a live member_info_requests row
+      // when none exists), so checking it before the gate would create a
+      // stray, permanent, unexplained row — and therefore a red "Member
+      // information required" banner on the client's own portal homepage
+      // (app/portal/page.tsx's pending-request query has no entity filter of
+      // its own) — for EVERY Single-Member LLC formation, the majority case.
+      // Bug-hunter catch, final pass against the shipped diff: the ordering
+      // itself was the bug, independent of decideMemberInfoKickoff being
+      // correct in isolation.
+      if (acct?.entity_type === "Multi Member LLC") {
+        const { getOrCreateMemberInfoRequest } = await import("@/lib/members/member-info-request")
+        const miResult = await getOrCreateMemberInfoRequest(materialization.account_id)
+        const { decideMemberInfoKickoff, buildMemberInfoKickoffMessage } = await import("@/lib/members/member-info-kickoff")
+        const kickoff = decideMemberInfoKickoff({
+          entityType: acct.entity_type,
+          requestOutcome: miResult.outcome,
+          isExistingRequest: miResult.outcome === "ok" ? miResult.isExisting : false,
+        })
+        if (miResult.outcome === "error") {
+          autoTriggers.push(`⚠ member-info kickoff: request creation failed (${miResult.message})`)
+        } else if (kickoff.shouldSend) {
+          const { data: contactRow } = await supabaseAdmin
+            .from("contacts")
+            .select("language")
+            .eq("id", miResult.contactId)
+            .maybeSingle()
+          const { message, messagePreview } = buildMemberInfoKickoffMessage({
+            companyName: miResult.companyName,
+            formUrl: miResult.formUrl,
+            language: contactRow?.language ?? null,
+          })
+          const MEMBER_INFO_ADMIN_SENDER_ID = "b0da5d9c-acf6-4761-9cae-2c3b14dbc631"
+          const { error: miChatErr } = await supabaseAdmin.from("portal_messages").insert({
+            account_id: materialization.account_id,
+            contact_id: miResult.contactId,
+            sender_type: "admin",
+            sender_id: MEMBER_INFO_ADMIN_SENDER_ID,
+            message,
+          })
+          if (!miChatErr) {
+            const { notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
+            await notifyClientOfAdminMessage({
+              account_id: materialization.account_id,
+              contact_id: miResult.contactId,
+              messagePreview,
+            }).catch((notifyErr) => {
+              console.error("[flow-advance] member-info kickoff: client notification failed:", notifyErr)
+            })
+            autoTriggers.push(`Member-info request sent to client for ${miResult.companyName}`)
+          } else {
+            autoTriggers.push(`⚠ member-info kickoff: chat insert failed (${miChatErr.message})`)
+          }
+        }
+      }
+    } catch (memberInfoErr) {
+      const msg = memberInfoErr instanceof Error ? memberInfoErr.message : String(memberInfoErr)
+      console.error("[flow-advance] member-info kickoff failed (non-fatal):", msg)
+      autoTriggers.push(`⚠ member-info kickoff failed (non-fatal, company still created): ${msg}`)
     }
   }
 

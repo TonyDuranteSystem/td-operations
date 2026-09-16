@@ -127,79 +127,125 @@ export async function POST(req: NextRequest) {
     const isMMLC = account.entity_type === 'Multi Member LLC'
     if (isMMLC) {
       try {
-        // Check for existing pending request (idempotent)
+        // Check for ANY existing request, not just a pending one (dev job
+        // ef529eaf). A 'submitted' row means the client already answered —
+        // most likely via the newer prompt sent right when the company was
+        // materialized (lib/service-delivery.ts's member-info kickoff). The
+        // old pending-only check couldn't see that row, so it minted a SECOND
+        // request and re-asked every client who had already, correctly,
+        // already given this information — the exact double-ask this fix
+        // exists to close. A 'pending' row is unchanged: still reused and
+        // still re-messaged below, same as before.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: existingReq } = await (supabaseAdmin as any)
           .from('member_info_requests')
-          .select('id, token, access_code')
+          .select('id, token, access_code, status')
           .eq('account_id', account_id)
-          .eq('status', 'pending')
-          .maybeSingle() as { data: { id: string; token: string; access_code: string } | null }
+          .in('status', ['pending', 'submitted'])
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle() as { data: { id: string; token: string; access_code: string; status: string } | null }
 
-        let reqToken: string
-        let reqCode: string
+        const { decideEinReceivedMemberInfoAction } = await import('@/lib/members/member-info-kickoff')
+        const einAction = decideEinReceivedMemberInfoAction(
+          existingReq?.status as 'pending' | 'submitted' | undefined,
+        )
 
-        if (existingReq) {
-          memberInfoRequestId = existingReq.id
-          reqToken = existingReq.token
-          reqCode = existingReq.access_code
+        if (einAction === 'skip_already_submitted') {
+          // Already answered — nothing to create, nothing to re-send.
+          memberInfoRequestId = existingReq!.id
         } else {
-          // Get existing members for pre-population
-          const { data: existingMembers } = await supabaseAdmin
-            .from('members')
-            .select('member_type, full_name, company_name, email, phone, ownership_pct, is_primary')
-            .eq('account_id', account_id)
-            .order('is_primary', { ascending: false })
+          let reqToken: string
+          let reqCode: string
 
-          const { data: primaryMember } = await supabaseAdmin
-            .from('members')
-            .select('contact_id')
-            .eq('account_id', account_id)
-            .eq('is_primary', true)
-            .maybeSingle()
-
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: createdReq } = await (supabaseAdmin as any)
-            .from('member_info_requests')
-            .insert({
-              account_id,
-              contact_id: primaryMember?.contact_id || formationSD.contact_id || null,
-              status: 'pending',
-              company_name: account.company_name,
-              entity_type: account.entity_type,
-              pre_populated_data: existingMembers?.length
-                ? { members: existingMembers.map(m => ({ ...m, ownership_pct: m.ownership_pct ? String(m.ownership_pct) : '' })) }
-                : null,
-            })
-            .select('id, token, access_code')
-            .single() as { data: { id: string; token: string; access_code: string } | null }
-
-          if (createdReq) {
-            memberInfoRequestId = createdReq.id
-            reqToken = createdReq.token
-            reqCode = createdReq.access_code
+          if (existingReq) {
+            memberInfoRequestId = existingReq.id
+            reqToken = existingReq.token
+            reqCode = existingReq.access_code
           } else {
-            throw new Error('Failed to create member_info_request')
-          }
-        }
+            // Get existing members for pre-population
+            const { data: existingMembers } = await supabaseAdmin
+              .from('members')
+              .select('member_type, full_name, company_name, email, phone, ownership_pct, is_primary')
+              .eq('account_id', account_id)
+              .order('is_primary', { ascending: false })
 
-        // Send portal message to primary contact
-        const primaryContact = formationSD.contact_id
-        memberInfoFormUrl = await buildFormUrl({
-          contactId: primaryContact ?? '',
-          token: reqToken,
-          accessCode: reqCode,
-          formType: 'member_info',
-        })
-        if (primaryContact) {
-          const msgBody = `Great news! The EIN for ${account.company_name} has been issued (${normalizedEIN}).\n\nTo proceed with opening your business bank account, we need the complete information for all LLC members.\n\nPlease fill out this short form:\n${memberInfoFormUrl}\n\nOnce submitted, we will update your account and guide you through the next steps.`
-          await supabaseAdmin.from('portal_messages').insert({
-            account_id,
-            contact_id: primaryContact,
-            sender_type: 'admin',
-            sender_id: 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631',
-            message: msgBody,
+            const { data: primaryMember } = await supabaseAdmin
+              .from('members')
+              .select('contact_id')
+              .eq('account_id', account_id)
+              .eq('is_primary', true)
+              .maybeSingle()
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const { data: createdReq } = await (supabaseAdmin as any)
+              .from('member_info_requests')
+              .insert({
+                account_id,
+                contact_id: primaryMember?.contact_id || formationSD.contact_id || null,
+                status: 'pending',
+                company_name: account.company_name,
+                entity_type: account.entity_type,
+                pre_populated_data: existingMembers?.length
+                  ? { members: existingMembers.map(m => ({ ...m, ownership_pct: m.ownership_pct ? String(m.ownership_pct) : '' })) }
+                  : null,
+              })
+              .select('id, token, access_code')
+              .single() as { data: { id: string; token: string; access_code: string } | null }
+
+            if (createdReq) {
+              memberInfoRequestId = createdReq.id
+              reqToken = createdReq.token
+              reqCode = createdReq.access_code
+            } else {
+              throw new Error('Failed to create member_info_request')
+            }
+          }
+
+          // Send portal message to primary contact
+          const primaryContact = formationSD.contact_id
+          memberInfoFormUrl = await buildFormUrl({
+            contactId: primaryContact ?? '',
+            token: reqToken,
+            accessCode: reqCode,
+            formType: 'member_info',
           })
+          if (primaryContact) {
+            // Bilingual (dev job ef529eaf) — this route previously sent a
+            // hardcoded English message regardless of the client's language,
+            // the same recurring mistake lib/locale.ts's canonical isItalian()
+            // exists to close (five prior instances documented there).
+            const { data: contactRow } = await supabaseAdmin
+              .from('contacts')
+              .select('language')
+              .eq('id', primaryContact)
+              .maybeSingle()
+            const { buildEinReceivedMemberInfoMessage } = await import('@/lib/members/member-info-kickoff')
+            const { message: msgBody, messagePreview } = buildEinReceivedMemberInfoMessage({
+              companyName: account.company_name,
+              ein: normalizedEIN,
+              formUrl: memberInfoFormUrl,
+              language: contactRow?.language ?? null,
+            })
+            const { error: eirMsgErr } = await supabaseAdmin.from('portal_messages').insert({
+              account_id,
+              contact_id: primaryContact,
+              sender_type: 'admin',
+              sender_id: 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631',
+              message: msgBody,
+            })
+            // Paired notification (R103 pattern) — this route previously only
+            // inserted the DB row, so the client got no email/push and would
+            // only see the ask if they happened to open the portal.
+            if (!eirMsgErr) {
+              const { notifyClientOfAdminMessage } = await import('@/lib/portal/notifications')
+              await notifyClientOfAdminMessage({
+                account_id,
+                contact_id: primaryContact,
+                messagePreview,
+              }).catch(() => {})
+            }
+          }
         }
       } catch (mmllcErr) {
         console.error('[record-ein-received] MMLLC member info flow failed:', mmllcErr)
