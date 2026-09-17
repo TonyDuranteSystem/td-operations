@@ -21,6 +21,7 @@ import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { sortPortalThreads } from '@/lib/portal-chats/sort-threads'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { isChatEventMessage } from '@/lib/portal/chat-scope'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
@@ -160,6 +161,10 @@ interface ChatMessage {
   attachments?: ChatAttachment[] | null
   topic?: string | null
   read_at?: string | null
+  // Chat-event notices (see lib/portal/chat-events.ts) never get read_at —
+  // their "seen" signal is this field, set only via What's New's "Mark
+  // handled" (docs/systems/portal-chat-unread.md).
+  handled_at?: string | null
   reply_to_id?: string | null
   deleted_at?: string | null
   deleted_by?: string | null
@@ -939,6 +944,8 @@ export default function PortalChatsPage() {
     let count = 0
     for (const m of adminFilteredMessages) {
       if (m.sender_type === 'admin' || m.read_at || m.deleted_at) continue
+      // Same handled-chat-event exclusion as adminUnreadByTopic above.
+      if (isChatEventMessage(m.message) && m.handled_at) continue
       const el = document.getElementById(`pc-msg-${m.id}`)
       if (el && el.getBoundingClientRect().top >= contBottom) count++
     }
@@ -1049,6 +1056,10 @@ export default function PortalChatsPage() {
   // red badge so staff sees the topic immediately.
   const adminUnreadByTopic = combinedMessages.reduce<Record<string, number>>((acc, m) => {
     if (m.sender_type === 'admin' || m.read_at) return acc
+    // Chat-event rows never get read_at (by design) — once staff has
+    // explicitly handled one in What's New, it must stop counting here too,
+    // or the badge is stuck red forever regardless of what staff does.
+    if (isChatEventMessage(m.message) && m.handled_at) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
     return acc
@@ -3721,7 +3732,10 @@ export default function PortalChatsPage() {
                   // bubble. Strip the embedded idempotency marker before display.
                   if (isSystem) {
                     const displayBody = msg.message.replace(/<!--[\s\S]*?-->/g, '').trim()
-                    const isUnread = !msg.read_at
+                    // Chat-event rows never get read_at (by design) — once
+                    // staff has handled one in What's New, it must stop
+                    // rendering as unread here too.
+                    const isUnread = !msg.read_at && !(isChatEventMessage(msg.message) && msg.handled_at)
                     return (
                       <div key={msg.id} id={`pc-msg-${msg.id}`} className="flex justify-center my-1.5 scroll-mt-4">
                         <div className={cn(
