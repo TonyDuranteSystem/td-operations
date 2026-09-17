@@ -11,6 +11,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { dispatchWhatsAppMessage } from "@/lib/messaging/send-dispatcher"
+import { findOrCreateWhatsAppGroup } from "@/lib/messaging/groups"
 
 export function registerMessagingTools(server: McpServer) {
 
@@ -176,6 +177,7 @@ export function registerMessagingTools(server: McpServer) {
             .select("id")
             .eq("platform", "whatsapp")
             .eq("is_active", true)
+            .order("created_at", { ascending: true })
             .limit(1)
           resolvedChannelId = channels?.[0]?.id
           if (!resolvedChannelId) {
@@ -185,7 +187,25 @@ export function registerMessagingTools(server: McpServer) {
           }
         }
 
-        const result = await dispatchWhatsAppMessage(chat_id, message, resolvedChannelId)
+        // This tool used to skip messaging_groups entirely — a message sent
+        // this way never got recorded, so it wouldn't appear as a real
+        // conversation anywhere. Resolving/creating the group first fixes that.
+        const groupResult = await findOrCreateWhatsAppGroup({
+          channelId: resolvedChannelId,
+          remoteIdentifier: chat_id,
+        })
+        if ("error" in groupResult) {
+          return {
+            content: [{ type: "text" as const, text: `❌ ${groupResult.error}` }],
+          }
+        }
+
+        const result = await dispatchWhatsAppMessage({
+          chatId: chat_id,
+          message,
+          channelId: resolvedChannelId,
+          groupId: groupResult.group.id,
+        })
 
         if (!result.ok) {
           const errMsg = 'error' in result ? result.error : 'unknown error'

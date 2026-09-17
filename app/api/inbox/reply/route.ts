@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { dispatchWhatsAppMessage } from "@/lib/messaging/send-dispatcher"
 import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
@@ -237,7 +238,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ─── WhatsApp/Telegram via Edge Function ─────────
+    // ─── WhatsApp/Telegram ────────────────────────────
     // Get group info to find external_group_id
     const { supabaseAdmin } = await import("@/lib/supabase-admin")
 
@@ -254,6 +255,36 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // WhatsApp goes through the real provider-agnostic dispatcher — the old
+    // Edge Function below no longer exists in this repo (docs/systems/messaging.md)
+    // and every WhatsApp reply through this route failed until this branch existed.
+    if (channel === "whatsapp") {
+      const sendResult = await dispatchWhatsAppMessage({
+        chatId: group.external_group_id,
+        message,
+        channelId: group.channel_id,
+        groupId: conversationId,
+      })
+
+      if (!sendResult.ok) {
+        // The specific reason goes in `error` itself — the client throws on
+        // this field directly (R099), and "Send failed" alone told staff
+        // nothing about whether the number needs reconnecting, is unconfigured,
+        // or the provider rejected the message.
+        return NextResponse.json(
+          { error: (sendResult as { ok: false; error: string }).error },
+          { status: 502 }
+        )
+      }
+
+      return NextResponse.json({
+        success: true,
+        channel: "whatsapp",
+        result: sendResult.result,
+      })
+    }
+
+    // ─── Telegram via Edge Function (unchanged) ──────
     const efUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-message`
 
     const response = await fetch(efUrl, {
