@@ -10,7 +10,7 @@ import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
 import { FlowProgressTracker } from '@/components/portal/flow-progress-tracker'
 import { PortalFlowStatusSection } from '@/components/portal/flow-status-section'
 import { ActionItems } from '@/components/portal/action-items'
-import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight, ListChecks } from 'lucide-react'
+import { Building2, Shield, MapPin, Calendar, FileText, Clock, CheckCircle2, Mail, Phone, User, ChevronRight, ListChecks, ShieldCheck, Package } from 'lucide-react'
 import Link from 'next/link'
 import { PaymentHistory } from '@/components/portal/payment-history'
 import { cn } from '@/lib/utils'
@@ -984,9 +984,15 @@ export default async function PortalDashboardPage() {
             <InfoRow icon={Calendar} label={t('dashboard.formation', locale, translations)} value={formatDate(account.formation_date)} />
             <InfoRow icon={Shield} label={t('dashboard.ein', locale, translations)} value={formatEin(account.ein_number)} />
             {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale, translations)} value={account.filing_id} />}
-            {account.registered_agent_address && <InfoRow icon={MapPin} label={t('dashboard.raAddress', locale, translations)} value={account.registered_agent_address} />}
-            {account.physical_address && <InfoRow icon={MapPin} label={t('dashboard.address', locale, translations)} value={account.physical_address} />}
+            {account.legal_address && <InfoRow icon={Building2} label={t('dashboard.legalAddress', locale, translations)} value={account.legal_address} />}
+            {account.registered_agent_address && <InfoRow icon={ShieldCheck} label={t('dashboard.raAddress', locale, translations)} value={account.registered_agent_address} />}
+            {account.physical_address && <InfoRow icon={Mail} label={t('dashboard.mailingAddress', locale, translations)} value={account.physical_address} />}
+            {account.shipping_address && <InfoRow icon={Package} label={t('dashboard.shippingAddress', locale, translations)} value={account.shipping_address} />}
           </div>
+          <Link href="/portal/addresses" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1">
+            {t('dashboard.whatAreTheseAddresses', locale, translations)}
+            <ChevronRight className="h-3 w-3" />
+          </Link>
         </div>
 
         {/* Members Card — shown for multi-member LLCs or when multiple contacts */}

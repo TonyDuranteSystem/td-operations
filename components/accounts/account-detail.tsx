@@ -2475,6 +2475,17 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
+              <p className="text-xs text-zinc-500 mb-1">Shipping Address</p>
+              <AddressPicker
+                accountId={account.id}
+                accountUpdatedAt={account.updated_at}
+                kind="shipping"
+                value={account.shipping_address_id ?? null}
+                verified={account.shipping_link_verified ?? false}
+                onChange={() => router.refresh()}
+              />
+            </div>
+            <div>
               <p className="text-xs text-zinc-500 mb-1">Registered Agent</p>
               <RAPicker
                 accountId={account.id}

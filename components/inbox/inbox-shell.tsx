@@ -1579,45 +1579,53 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   </p>
                 </div>
 
-                {/* Action buttons — not shown for WhatsApp (read-only) */}
-                {!isWhatsApp && (
-                  <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
-                    <HoverHint label="Create Task">
-                      <button
-                        onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
-                      >
-                        <ClipboardList className="h-4 w-4" />
-                      </button>
-                    </HoverHint>
-                    <HoverHint label="Create Service">
-                      <button
-                        onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
-                      >
-                        <Cog className="h-4 w-4" />
-                      </button>
-                    </HoverHint>
-                    <HoverHint label="Create Invoice">
-                      <button
-                        onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
-                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
-                      >
-                        <Receipt className="h-4 w-4" />
-                      </button>
-                    </HoverHint>
+                {/* Action buttons — WhatsApp gets Reply only for now; the
+                    AI worker and CRM quick-create actions stay Gmail/Telegram-only
+                    until WhatsApp has its own reviewed assist flow (dev job f331cd43). */}
+                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
+                  {!isWhatsApp && (
+                    <>
+                      <HoverHint label="Create Task">
+                        <button
+                          onClick={() => setCreateDialog({ type: 'task', conversation: selected })}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-orange-500 transition-colors"
+                        >
+                          <ClipboardList className="h-4 w-4" />
+                        </button>
+                      </HoverHint>
+                      <HoverHint label="Create Service">
+                        <button
+                          onClick={() => setCreateDialog({ type: 'service', conversation: selected })}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-emerald-500 transition-colors"
+                        >
+                          <Cog className="h-4 w-4" />
+                        </button>
+                      </HoverHint>
+                      <HoverHint label="Create Invoice">
+                        <button
+                          onClick={() => setCreateDialog({ type: 'invoice', conversation: selected })}
+                          className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                        >
+                          <Receipt className="h-4 w-4" />
+                        </button>
+                      </HoverHint>
 
-                    <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+                      <div className="w-px h-4 bg-zinc-200 mx-0.5" />
+                    </>
+                  )}
 
-                    <HoverHint label="Write a reply">
-                      <button
-                        onClick={handleReply}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
-                      >
-                        <Reply className="h-3.5 w-3.5" />
-                        Reply
-                      </button>
-                    </HoverHint>
+                  <HoverHint label="Write a reply">
+                    <button
+                      onClick={handleReply}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
+                    >
+                      <Reply className="h-3.5 w-3.5" />
+                      Reply
+                    </button>
+                  </HoverHint>
+
+                  {!isWhatsApp && (
+                    <>
                     <HoverHint label="AI worker — reads CRM, DB & memory">
                       <button
                         onClick={handleWorker}
@@ -1824,8 +1832,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         )}
                       </>
                     )}
+                    </>
+                  )}
                   </div>
-                )}
               </div>
 
               {/* Thread body */}

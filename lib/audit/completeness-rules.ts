@@ -104,6 +104,7 @@ export type AccountInput = {
   registered_agent_id: string | null
   business_mailing_address_id: string | null
   business_legal_address_id: string | null
+  shipping_address_id: string | null
 }
 
 // ── Scoring functions ──────────────────────────────────────────────────────
@@ -253,9 +254,11 @@ export function scoreAccount(
   }
 
   // Mailing address: required when CMRA service is active.
-  // Checks the new FK first; falls back to legacy physical_address during transition.
+  // Checks the new FK first; falls back to legacy physical_address during
+  // transition; a Shipping address on file also satisfies this (dev job
+  // 254834cc) — it's the same "CMRA-type" concept, just a separate slot.
   if (activeServiceTypes.includes('CMRA Mailing Address')) {
-    const hasMailing = !!(account.business_mailing_address_id || account.physical_address)
+    const hasMailing = !!(account.business_mailing_address_id || account.physical_address || account.shipping_address_id)
     if (!hasMailing) {
       if (hasNA('business_mailing_address_id') || hasNA('physical_address')) {
         na_fields.push('business_mailing_address_id')

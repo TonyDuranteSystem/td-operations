@@ -73,7 +73,7 @@ export function formatCountyAndState(county: string, stateCode: string): string 
   return `${county} County, ${stateName}`
 }
 
-export const VALID_KINDS = ['business_legal', 'business_mailing', 'registered_agent'] as const
+export const VALID_KINDS = ['business_legal', 'business_mailing', 'registered_agent', 'shipping'] as const
 export type AddressKind = (typeof VALID_KINDS)[number]
 
 export function isValidKind(k: unknown): k is AddressKind {
@@ -89,7 +89,7 @@ export function freshAddressClient(): SupabaseClient<Database> {
 }
 
 // Count active (not Cancelled/Closed) accounts referencing addressId across
-// all three FK columns. Used by PATCH (return count) and DELETE (guard).
+// all four FK columns. Used by PATCH (return count) and DELETE (guard).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function linkedAccountCount(db: SupabaseClient<Database>, addressId: string): Promise<number> {
   const { count, error } = await (db as any)
@@ -98,7 +98,8 @@ export async function linkedAccountCount(db: SupabaseClient<Database>, addressId
     .or(
       `business_legal_address_id.eq.${addressId},` +
       `business_mailing_address_id.eq.${addressId},` +
-      `registered_agent_id.eq.${addressId}`
+      `registered_agent_id.eq.${addressId},` +
+      `shipping_address_id.eq.${addressId}`
     )
     .not('status', 'in', '("Cancelled","Closed")')
   if (error) throw new Error(error.message)

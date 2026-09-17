@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { retryActivation } from '@/app/(dashboard)/client-health/actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { WelcomeLinkButton, type WelcomeLinkButtonHandle } from '@/components/offers/welcome-link-button'
 import { ConfirmPaymentDialog } from './confirm-payment-dialog'
 import { ConvertLeadDialog } from './convert-lead-dialog'
@@ -40,6 +41,7 @@ interface LeadActionsProps {
   leadId: string
   leadName: string
   leadEmail?: string | null
+  leadPhone?: string | null
   leadStatus: string
   leadLanguage?: string | null
   leadReferrer?: string | null
@@ -55,6 +57,7 @@ export function LeadActions({
   leadId,
   leadName,
   leadEmail,
+  leadPhone,
   leadStatus,
   leadLanguage,
   leadReferrer,
@@ -71,6 +74,7 @@ export function LeadActions({
   const [showActivateLead, setShowActivateLead] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [showConvert, setShowConvert] = useState(false)
+  const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [showLostReason, setShowLostReason] = useState(false)
   const [lostReason, setLostReason] = useState('')
 
@@ -287,6 +291,15 @@ export function LeadActions({
             to={leadEmail || undefined}
             linkLabel={leadName}
           />
+          {leadPhone && (
+            <button
+              onClick={() => setShowWhatsApp(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border border-green-300 text-green-700 hover:bg-green-50 transition-colors"
+            >
+              <MessageCircle className="h-4 w-4" />
+              WhatsApp
+            </button>
+          )}
           {/* Step 1: Create Offer */}
           {canCreateOffer && (
             <button
@@ -557,6 +570,16 @@ export function LeadActions({
         leadId={leadId}
         leadName={leadName}
       />
+
+      {leadPhone && (
+        <NewWhatsAppConversationDialog
+          open={showWhatsApp}
+          onClose={() => setShowWhatsApp(false)}
+          leadId={leadId}
+          name={leadName}
+          phone={leadPhone}
+        />
+      )}
 
       {/* Delete / Reset dialogs */}
       <DeleteLeadDialog

@@ -58,9 +58,11 @@ export type AccountRow = {
   business_legal_address_id: string | null
   business_mailing_address_id: string | null
   registered_agent_id: string | null
+  shipping_address_id: string | null
   legal_link_verified: boolean | null
   mailing_link_verified: boolean | null
   ra_link_verified: boolean | null
+  shipping_link_verified: boolean | null
   contacts: ContactRow[]
   anomaly_score: number
   completeness?: CompletenessScore

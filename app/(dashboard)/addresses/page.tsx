@@ -9,7 +9,7 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type TabKind = 'registered_agent' | 'business_legal' | 'business_mailing'
+type TabKind = 'registered_agent' | 'business_legal' | 'business_mailing' | 'shipping'
 
 interface AddressForm {
   name: string
@@ -36,6 +36,7 @@ const TABS: { kind: TabKind; label: string }[] = [
   { kind: 'registered_agent', label: 'Registered Agents' },
   { kind: 'business_legal', label: 'Legal Addresses' },
   { kind: 'business_mailing', label: 'Mailing Addresses' },
+  { kind: 'shipping', label: 'Shipping Addresses' },
 ]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -370,11 +371,13 @@ export default function AddressesPage() {
     registered_agent: [],
     business_legal: [],
     business_mailing: [],
+    shipping: [],
   })
   const [loading, setLoading] = useState<Record<TabKind, boolean>>({
     registered_agent: false,
     business_legal: false,
     business_mailing: false,
+    shipping: false,
   })
   const [showInactive, setShowInactive] = useState(false)
   const [editRow, setEditRow] = useState<AddressRow | null>(null)

@@ -97,12 +97,25 @@ export default async function PortalProfilePage() {
             <InfoField label={t('dashboard.ein', locale)} value={account.ein_number || '\u2014'} />
             <InfoField label={t('dashboard.formationDate', locale)} value={account.formation_date ?? '\u2014'} />
             <InfoField label={t('profile.filingId', locale)} value={account.filing_id ?? '\u2014'} />
+            {account.legal_address && (
+              <div className="sm:col-span-2">
+                <InfoField label={t('dashboard.legalAddress', locale)} value={account.legal_address} />
+              </div>
+            )}
             {account.physical_address && (
               <div className="sm:col-span-2">
-                <InfoField label={t('profile.address', locale)} value={account.physical_address} />
+                <InfoField label={t('dashboard.mailingAddress', locale)} value={account.physical_address} />
+              </div>
+            )}
+            {account.shipping_address && (
+              <div className="sm:col-span-2">
+                <InfoField label={t('dashboard.shippingAddress', locale)} value={account.shipping_address} />
               </div>
             )}
           </div>
+          <Link href="/portal/addresses" className="text-xs text-blue-600 hover:underline">
+            {t('dashboard.whatAreTheseAddresses', locale)}
+          </Link>
         </div>
       )}
 

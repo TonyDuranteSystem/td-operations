@@ -8,15 +8,15 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import type { AddressRow } from '@/lib/addresses'
 import { updateAccountField } from '@/app/(dashboard)/accounts/actions'
 
-// Only the two non-RA kinds are valid for this picker.
-type LegalMailingKind = 'business_legal' | 'business_mailing'
+// The non-RA kinds valid for this picker (RA has its own picker — RAPicker).
+type LegalMailingKind = 'business_legal' | 'business_mailing' | 'shipping'
 
 export interface AddressPickerProps {
   accountId: string
   accountUpdatedAt: string
   kind: LegalMailingKind
-  value: string | null       // business_legal_address_id or business_mailing_address_id
-  verified: boolean          // legal_link_verified or mailing_link_verified
+  value: string | null       // business_legal_address_id, business_mailing_address_id, or shipping_address_id
+  verified: boolean          // legal_link_verified, mailing_link_verified, or shipping_link_verified
   onChange: () => void       // call after any successful mutation; parent re-fetches account
 }
 
@@ -24,18 +24,21 @@ export interface AddressPickerProps {
 const FK_FIELD: Record<LegalMailingKind, string> = {
   business_legal: 'business_legal_address_id',
   business_mailing: 'business_mailing_address_id',
+  shipping: 'shipping_address_id',
 }
 
 // Which verified flag each kind flips.
 const VERIFIED_FIELD: Record<LegalMailingKind, string> = {
   business_legal: 'legal_link_verified',
   business_mailing: 'mailing_link_verified',
+  shipping: 'shipping_link_verified',
 }
 
 // Human-readable label used in dialog titles and toasts.
 const KIND_LABEL: Record<LegalMailingKind, string> = {
   business_legal: 'legal address',
   business_mailing: 'mailing address',
+  shipping: 'shipping address',
 }
 
 interface AddressForm {

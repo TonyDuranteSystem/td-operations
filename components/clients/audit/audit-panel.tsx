@@ -898,6 +898,8 @@ export function AuditPanel({
   const [legalVerified, setLegalVerified] = useState<boolean>(account.legal_link_verified ?? false)
   const [mailingAddressId, setMailingAddressId] = useState<string | null>(account.business_mailing_address_id ?? null)
   const [mailingVerified, setMailingVerified] = useState<boolean>(account.mailing_link_verified ?? false)
+  const [shippingAddressId, setShippingAddressId] = useState<string | null>(account.shipping_address_id ?? null)
+  const [shippingVerified, setShippingVerified] = useState<boolean>(account.shipping_link_verified ?? false)
   const [raId, setRaId] = useState<string | null>(account.registered_agent_id ?? null)
   const [raVerified, setRaVerified] = useState<boolean>(account.ra_link_verified ?? false)
   const [raCounty, setRaCounty] = useState<string | null>(null)
@@ -912,6 +914,8 @@ export function AuditPanel({
       setLegalVerified(d.legal_link_verified ?? false)
       setMailingAddressId(d.business_mailing_address_id ?? null)
       setMailingVerified(d.mailing_link_verified ?? false)
+      setShippingAddressId(d.shipping_address_id ?? null)
+      setShippingVerified(d.shipping_link_verified ?? false)
       setRaId(d.registered_agent_id ?? null)
       setRaVerified(d.ra_link_verified ?? false)
       setRaCounty(d.ra_county ?? null)
@@ -955,6 +959,7 @@ export function AuditPanel({
         registered_agent_id: raId,
         business_mailing_address_id: mailingAddressId,
         business_legal_address_id: legalAddressId,
+        shipping_address_id: shippingAddressId,
       },
       primaryContact
         ? {
@@ -971,7 +976,7 @@ export function AuditPanel({
       [],
       [],
     )
-  }, [dbData, localContacts, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId])
+  }, [dbData, localContacts, account.entity_type, ein, stateOfFormation, address, onboardingDate, accountType, raId, mailingAddressId, legalAddressId, shippingAddressId])
 
   // ── Billing status (computed after DB data loads) ──
   const billingStatus = useMemo((): BillingStatusResult | null => {
@@ -1855,6 +1860,23 @@ export function AuditPanel({
             kind="business_mailing"
             value={mailingAddressId}
             verified={mailingVerified}
+            onChange={refreshAddressData}
+          />
+        </Section>
+
+        {/* S_shipping — Shipping Address */}
+        <Section
+          icon={MapPin}
+          title="Shipping Address"
+          done={sectionsDone['shipping_address']}
+          onToggleDone={() => toggleSection('shipping_address')}
+        >
+          <AddressPicker
+            accountId={account.id}
+            accountUpdatedAt={acctUpdatedAt}
+            kind="shipping"
+            value={shippingAddressId}
+            verified={shippingVerified}
             onChange={refreshAddressData}
           />
         </Section>

@@ -1,5 +1,5 @@
 # Portal Chat — Read/Unread State
-_Last verified against code: 2026-08-30 — Claude (portal-chats topic-scoped read fix)_
+_Last verified against code: 2026-09-17 — Claude (handled_at-aware unread indicators)_
 
 ## What it is
 Tracks, per message in `portal_messages`, whether staff has "seen" it — drives
@@ -23,7 +23,14 @@ using the same column with roles reversed — not covered here.
   `handled_at`/`handled_by`, toggled explicitly by staff in the What's New
   panel (see `docs/systems/whats-new.md`). This is deliberate: a client action
   that still needs a human response must not silently disappear just because
-  someone opened the conversation for an unrelated reason.
+  someone opened the conversation for an unrelated reason. **`read_at` is
+  never set on these rows by any mark-as-read path — that part is permanent,
+  not a bug.** What changed 2026-09-17: the three DISPLAY-layer indicators in
+  `page.tsx` (see "How it's built" below) now also accept `handled_at` as an
+  alternate "stop showing this as needing attention" signal, so a chat-event
+  notice that's already been handled doesn't stay visually stuck forever. The
+  read-marking ROUTES (`read/route.ts`, `mark-thread-read.ts`) are unchanged
+  and still correctly never touch these rows.
 
 ## How it's built
 - **Table/columns:** `portal_messages.read_at` (staff-unread signal for
@@ -52,14 +59,63 @@ using the same column with roles reversed — not covered here.
     never drift), the MCP portal-message-send tool, and the AI worker's
     portal-message-send path — the latter two always pass `null` because
     neither ever tags its own insert with a topic.
-  - `app/(dashboard)/portal-chats/page.tsx` — `adminUnreadByTopic` (topic-pill
-    badges) and the sidebar `threads` query (`get_portal_chat_threads_v2`,
-    filters `sender_type='client'` only) are two SEPARATE counters computed
-    differently; don't assume fixing one fixes the other.
+  - `app/(dashboard)/portal-chats/page.tsx` — THREE separate staff-facing
+    "unread" indicators live in this one file, all reading `combinedMessages`
+    directly (not a server aggregate): `adminUnreadByTopic` (topic-pill
+    badges), `recomputeJumpState`/`unreadBelowCount` (the "Jump to latest ↓N"
+    floating badge), and the per-message amber pill on system-notice bubbles
+    (`isUnread` inside the `isSystem` render branch). All three are
+    `handled_at`-aware as of 2026-09-17 (see Gotchas below) via the shared
+    `isChatEventMessage()` helper in `lib/portal/chat-scope.ts`. These are
+    SEPARATE from the sidebar `threads` query (`get_portal_chat_threads_v2`,
+    filters `sender_type='client'` only) and the global nav badge (below) —
+    don't assume fixing one fixes the others.
   - `app/api/portal/chat/badge/route.ts` — global CRM sidebar nav badge,
     filters `sender_type='client'` only.
+  - `lib/portal/chat-scope.ts` — `isChatEventMessage(message)`, the shared
+    client+server-safe helper that detects the `<!-- chat-event: -->` marker
+    (see `lib/portal/chat-events.ts`). Lives here (not in `chat-events.ts`,
+    which imports `supabaseAdmin` and can't be pulled into a `'use client'`
+    file) specifically so the three page.tsx indicators above don't each
+    hand-roll their own copy of this check.
 
 ## Gotchas, invariants & past bugs
+- **2026-09-17 bug: a handled chat-event notice stayed visually "unread" forever, on THREE separate indicators.**
+  `adminUnreadByTopic` (topic-pill badges), `recomputeJumpState`/`unreadBelowCount`
+  (the "Jump to latest ↓N" floating badge), and the per-message amber pill on
+  system-notice bubbles all computed "unread" as `sender_type !== 'admin' &&
+  !read_at`, with no awareness of chat-event rows or `handled_at`. Since a
+  chat-event row's `read_at` is permanently null by design (see Business rules
+  above), any topic that ever received one stayed red — and its message bubble
+  amber — forever, even after staff explicitly marked it handled in What's New.
+  Confirmed live in production before the fix: 78 already-handled chat-event
+  rows stuck with `read_at IS NULL` system-wide (2 of them on one real account,
+  both handled the same day they arrived). Found via a 5-reviewer council pass
+  on the initial 1-site fix proposal — senior-engineer, bug-hunter, and
+  project-director independently found the other two sites the same day.
+  Fixed by adding a shared `isChatEventMessage()` helper (`lib/portal/chat-scope.ts`)
+  and, at all three sites, treating a chat-event row as cleared once EITHER
+  `read_at` OR `handled_at` is set (every other row type is unchanged, still
+  keyed on `read_at` alone). A brand-new, not-yet-handled chat-event still
+  shows red/amber immediately — deliberately preserved, per Antonio's original
+  2026-05-18 requirement that a new client action must be visible right away.
+  **Follow-up same day:** a pre-existing, separate gap in `adminUnreadByTopic`
+  (predates this fix — confirmed via `git show` on the fix's own commit, the
+  line was untouched context, not introduced by it) meant it was the only one
+  of the three sites that never excluded `deleted_at`. A chat-event note gets
+  soft-deleted, never re-created, whenever a client corrects and resubmits
+  something before staff handled the original (`retireWizardSubmittedNote`
+  and its siblings in `lib/portal/chat-events.ts` — real, live call sites, not
+  theoretical). A retired note that was never handled first is invisible to
+  every clearing path (excluded from read-clear queries by the chat-event
+  marker exclusion, excluded from the What's New feed by its own `deleted_at`
+  filter) — so before this follow-up, it inflated `adminUnreadByTopic` with a
+  permanent, un-clearable phantom count, the one case this whole fix didn't
+  yet cover. Caught by a Bug Hunter pass run deliberately against the shipped
+  commit (not the plan) before production. Fixed by adding the same
+  `|| m.deleted_at` exclusion the other two sites already had.
+  No backfill needed — existing stuck rows self-resolve the moment the fix
+  ships, since it reads `handled_at`, which was already correctly set on them.
 - **2026-08-30 bug (decision reversed from 2026-08-27's "clear the whole
   conversation" design):** a staff reply was clearing the unread flag on
   EVERY topic-tagged sub-thread of a client conversation, not just the one it
@@ -93,6 +149,17 @@ using the same column with roles reversed — not covered here.
 
 ## How to verify current state
 ```sql
+-- Already-handled chat-event notices with read_at still null: EXPECTED to be
+-- nonzero forever (read_at is permanently null on these by design) — this is
+-- what the three page.tsx indicators are now handled_at-aware about. Useful
+-- as a spot-check of the underlying population, NOT as a "should be 0" health
+-- check (unlike the plain-notices query below) — the frontend fix can't be
+-- verified from SQL alone, since it doesn't change any stored data. Verify the
+-- actual badge/pill/jump-count behavior in the browser instead.
+select count(*) from portal_messages
+where sender_type='system' and message ilike '%<!-- chat-event:%'
+  and read_at is null and handled_at is not null;
+
 -- Stuck plain notices (should be near 0 shortly after this fix ships + backfills):
 select count(*) from portal_messages
 where sender_type='system' and read_at is null

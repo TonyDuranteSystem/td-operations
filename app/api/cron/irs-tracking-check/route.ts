@@ -1,22 +1,29 @@
 /**
  * CRON: IRS shipment tracking check.
  *
- * Daily. For every service delivery currently sitting in a stage that has
- * pipeline_stages.tracking_check_enabled=true and a tracking number on file with no
- * confirmed delivery yet, asks ShipStation for the label's current status:
+ * Daily — registered in vercel.json / lib/cron-coverage.ts, live in production since
+ * 2026-09-09 with a real ShipStation key (this comment used to claim otherwise; see
+ * docs/systems/flows.md's correction). For every service delivery currently sitting in a
+ * stage that has pipeline_stages.tracking_check_enabled=true and a tracking number on
+ * file with no confirmed delivery yet, asks ShipStation for the label's current status:
  *
  *   - No match at all for 5 consecutive days -> one alert email (deduped).
  *   - Matched, not delivered -> just cache the status, reset both streak counters.
- *   - Matched, delivered, for the 2nd consecutive check -> stamp delivered_at (guarded —
- *     the notification only fires if this exact write is the one that set it) and post
- *     the same kind of portal-chat message the "Submitted to IRS" milestone already uses.
+ *   - Matched, delivered, for the 2nd consecutive check, once the carrier's real delivery
+ *     date is available -> stamp delivered_at with THAT real date (guarded — the
+ *     notification only fires if this exact write is the one that set it) and post the
+ *     same kind of portal-chat message the "Submitted to IRS" milestone already uses. If
+ *     the real date isn't available yet, confirmation waits rather than guessing — see
+ *     lib/operations/irs-tracking.ts's decideCheckOutcome for the bounded grace period
+ *     that eventually falls back to today's date rather than stalling forever (2026-09-16
+ *     fix — the real date was previously never captured at all).
  *   - Independent of the above: a case open past 150 days with nothing confirmed and no
  *     prior stuck-alert -> a second, separate alert email.
  *
  * Every step is isolated per case (try/catch) so one bad tracking number can't stop the
- * rest of the batch. This cron is NOT yet registered on the schedule (vercel.json /
- * lib/cron-coverage.ts) or invoked with a real ShipStation key — both are a deliberate,
- * separate go/no-go from building this code, per the approved plan.
+ * rest of the batch — this includes ShipStation's second, per-label delivery-date call,
+ * which lives entirely inside lookupTrackingStatus() and fails soft, never widening this
+ * boundary.
  *
  * Auth: Bearer CRON_SECRET — the same strict pattern as app/api/cron/itin-processing-check
  * (a missing env var refuses, it does not fail open).
@@ -30,10 +37,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logCron } from '@/lib/cron-log'
 import { lookupTrackingStatus } from '@/lib/shipstation'
 import { decideCheckOutcome, isStuck, buildTrackingAlertEmail, type TrackingRow } from '@/lib/operations/irs-tracking'
+import { applyDeliveryConfirmation } from '@/lib/operations/irs-tracking-confirm'
 import { gmailPost } from '@/lib/gmail'
-
-const ADMIN_SENDER_ID = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
-const FALLBACK_DELIVERED_MESSAGE = 'Good news — the IRS has received your application.'
 
 // irs_shipment_tracking + pipeline_stages.tracking_check_enabled/tracking_delivered_message
 // aren't in the generated types until Antonio promotes the migration to production.
@@ -131,34 +136,12 @@ export async function GET(req: NextRequest) {
         if (patchErr) throw new Error(`patch write failed: ${patchErr.message}`)
 
         if (decision.confirmDelivered) {
-          const { data: confirmed, error: confirmErr } = await db
-            .from('irs_shipment_tracking')
-            .update({ delivered_at: now.toISOString() })
-            .eq('service_delivery_id', row.service_delivery_id)
-            .eq('tracking_number', row.tracking_number)
-            .is('delivered_at', null)
-            .select()
-          if (confirmErr) throw new Error(`delivered-confirm write failed: ${confirmErr.message}`)
-          if (confirmed?.length) {
+          const confirmResult = await applyDeliveryConfirmation(sd, row, decision.deliveredAt as string)
+          if (confirmResult.justConfirmed) {
             justConfirmed = true
             results.confirmed_delivered++
-            const cfg = stageConfig.get(enabledKey(sd.service_type, sd.stage || '')) as Record<string, unknown> | undefined
-            const message = (cfg?.tracking_delivered_message as string | null) || FALLBACK_DELIVERED_MESSAGE
-            const topic = (cfg?.client_chat_topic as string | null) || sd.service_type
-            try {
-              const { error: chatErr } = await supabaseAdmin.from('portal_messages').insert({
-                account_id: sd.account_id ?? null,
-                contact_id: sd.contact_id ?? null,
-                service_delivery_id: sd.id,
-                sender_type: 'admin',
-                sender_id: ADMIN_SENDER_ID,
-                message,
-                topic,
-                attachments: [],
-              })
-              if (chatErr) throw new Error(chatErr.message)
-            } catch (notifyErr) {
-              results.errors.push({ service_delivery_id: sd.id, error: `notification failed: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}` })
+            if (confirmResult.notifyError) {
+              results.errors.push({ service_delivery_id: sd.id, error: `notification failed: ${confirmResult.notifyError}` })
             }
           }
         }

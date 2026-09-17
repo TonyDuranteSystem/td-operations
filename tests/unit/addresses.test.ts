@@ -12,6 +12,7 @@ describe('isValidKind', () => {
     expect(isValidKind('business_legal')).toBe(true)
     expect(isValidKind('business_mailing')).toBe(true)
     expect(isValidKind('registered_agent')).toBe(true)
+    expect(isValidKind('shipping')).toBe(true)
   })
 
   it('rejects invalid kinds', () => {
@@ -79,6 +80,19 @@ describe('linkedAccountCount', () => {
     const db = mockDb(chain)
 
     await expect(linkedAccountCount(db, 'addr-uuid-3')).rejects.toThrow('DB failure')
+  })
+
+  it('checks the shipping_address_id column alongside the original three', async () => {
+    const chain = mockChain()
+    chain.not = vi.fn().mockResolvedValue({ count: 0, error: null })
+    const db = mockDb(chain)
+
+    await linkedAccountCount(db, 'addr-uuid-4')
+    const orArg = (chain.or as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(orArg).toContain('shipping_address_id.eq.addr-uuid-4')
+    expect(orArg).toContain('business_legal_address_id.eq.addr-uuid-4')
+    expect(orArg).toContain('business_mailing_address_id.eq.addr-uuid-4')
+    expect(orArg).toContain('registered_agent_id.eq.addr-uuid-4')
   })
 })
 

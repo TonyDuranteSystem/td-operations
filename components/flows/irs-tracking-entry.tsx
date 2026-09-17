@@ -1,8 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Truck, Loader2, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react'
+import { Truck, Loader2, CheckCircle2, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react'
 import { COURIERS, courierTrackingUrl } from '@/lib/flows/courier'
+
+// TD's business timezone (Largo, FL — Eastern), matching lib/portal/office-hours.ts's
+// OFFICE_TZ. delivered_at now carries the carrier's real timestamp (2026-09-16 fix) — a
+// delivery near midnight UTC could otherwise render as the wrong calendar day depending
+// on the viewer's own browser timezone. Inlined rather than importing that module here,
+// to avoid pulling server-oriented office-hours logic into this client component.
+const DISPLAY_TZ = 'America/New_York'
 
 interface IrsTrackingEntryProps {
   serviceDeliveryId: string
@@ -29,8 +36,9 @@ const STATUS_LABEL: Record<string, string> = {
  * Staff entry for the tracking number of the ITIN package mailed to the IRS. Shown on
  * both "Submitted to IRS" (the natural moment, right after the mailing receipt is
  * uploaded) and "IRS Processing" (so the 3 real cases already sitting there when this
- * shipped can be backfilled from their existing receipt scan). A daily check then
- * confirms delivery automatically and tells the client — staff never re-check by hand.
+ * shipped can be backfilled from their existing receipt scan). A daily check confirms
+ * delivery automatically and tells the client; "Check now" (2026-09-17) runs that same
+ * check immediately instead of waiting for the next scheduled pass.
  */
 export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
   const [courier, setCourier] = useState<string>('')
@@ -38,6 +46,7 @@ export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
   const [saved, setSaved] = useState<TrackingState | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
 
@@ -81,6 +90,23 @@ export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
     }
   }
 
+  async function checkNow() {
+    setChecking(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/irs-tracking/check-now`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Could not check tracking right now.')
+      }
+      if (data.tracking) setSaved((prev) => (prev ? { ...prev, ...data.tracking } : prev))
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not check tracking right now.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
   const trackingUrl = saved ? courierTrackingUrl(saved.courier, saved.tracking_number) : null
 
   return (
@@ -111,17 +137,29 @@ export function IrsTrackingEntry({ serviceDeliveryId }: IrsTrackingEntryProps) {
               </div>
               <div className="text-xs text-zinc-500">
                 {saved.delivered_at
-                  ? `Confirmed delivered ${new Date(saved.delivered_at).toLocaleDateString()}`
+                  ? `Confirmed delivered ${new Date(saved.delivered_at).toLocaleDateString('en-US', { timeZone: DISPLAY_TZ })}`
                   : saved.status
                     ? `Last check: ${STATUS_LABEL[saved.status] ?? saved.status}${saved.matched_ship_date ? ` · label shipped ${new Date(saved.matched_ship_date).toLocaleDateString()}` : ''}`
                     : 'Not checked yet'}
               </div>
-              <button
-                onClick={() => setEditing(true)}
-                className="text-xs font-medium text-blue-600 hover:underline"
-              >
-                Correct this
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setEditing(true)}
+                  className="text-xs font-medium text-blue-600 hover:underline"
+                >
+                  Correct this
+                </button>
+                {!saved.delivered_at && (
+                  <button
+                    onClick={checkNow}
+                    disabled={checking}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50"
+                  >
+                    {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                    Check now
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
