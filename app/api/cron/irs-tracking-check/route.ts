@@ -37,10 +37,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { logCron } from '@/lib/cron-log'
 import { lookupTrackingStatus } from '@/lib/shipstation'
 import { decideCheckOutcome, isStuck, buildTrackingAlertEmail, type TrackingRow } from '@/lib/operations/irs-tracking'
+import { applyDeliveryConfirmation } from '@/lib/operations/irs-tracking-confirm'
 import { gmailPost } from '@/lib/gmail'
-
-const ADMIN_SENDER_ID = 'b0da5d9c-acf6-4761-9cae-2c3b14dbc631'
-const FALLBACK_DELIVERED_MESSAGE = 'Good news — the IRS has received your application.'
 
 // irs_shipment_tracking + pipeline_stages.tracking_check_enabled/tracking_delivered_message
 // aren't in the generated types until Antonio promotes the migration to production.
@@ -138,34 +136,12 @@ export async function GET(req: NextRequest) {
         if (patchErr) throw new Error(`patch write failed: ${patchErr.message}`)
 
         if (decision.confirmDelivered) {
-          const { data: confirmed, error: confirmErr } = await db
-            .from('irs_shipment_tracking')
-            .update({ delivered_at: decision.deliveredAt })
-            .eq('service_delivery_id', row.service_delivery_id)
-            .eq('tracking_number', row.tracking_number)
-            .is('delivered_at', null)
-            .select()
-          if (confirmErr) throw new Error(`delivered-confirm write failed: ${confirmErr.message}`)
-          if (confirmed?.length) {
+          const confirmResult = await applyDeliveryConfirmation(sd, row, decision.deliveredAt as string)
+          if (confirmResult.justConfirmed) {
             justConfirmed = true
             results.confirmed_delivered++
-            const cfg = stageConfig.get(enabledKey(sd.service_type, sd.stage || '')) as Record<string, unknown> | undefined
-            const message = (cfg?.tracking_delivered_message as string | null) || FALLBACK_DELIVERED_MESSAGE
-            const topic = (cfg?.client_chat_topic as string | null) || sd.service_type
-            try {
-              const { error: chatErr } = await supabaseAdmin.from('portal_messages').insert({
-                account_id: sd.account_id ?? null,
-                contact_id: sd.contact_id ?? null,
-                service_delivery_id: sd.id,
-                sender_type: 'admin',
-                sender_id: ADMIN_SENDER_ID,
-                message,
-                topic,
-                attachments: [],
-              })
-              if (chatErr) throw new Error(chatErr.message)
-            } catch (notifyErr) {
-              results.errors.push({ service_delivery_id: sd.id, error: `notification failed: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}` })
+            if (confirmResult.notifyError) {
+              results.errors.push({ service_delivery_id: sd.id, error: `notification failed: ${confirmResult.notifyError}` })
             }
           }
         }
