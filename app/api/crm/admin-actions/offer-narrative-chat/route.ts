@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { canPerform } from '@/lib/permissions'
-import { supabaseAdmin } from '@/lib/supabase-admin'
-import { validateNarrative, validateNarrativeChanges, renderCallForOffer, normalizeEntityType } from '@/lib/offer-narrative'
+import { validateNarrative, validateNarrativeChanges, normalizeEntityType } from '@/lib/offer-narrative'
 import {
   renderServiceLines,
   buildSystemPrompt,
@@ -22,6 +21,7 @@ import { getAllSellableServices } from '@/lib/services'
 import { callAI } from '@/lib/portal/ai-provider'
 import { reportSystemError } from '@/lib/system-errors'
 import { resolveSubjectEmail, findRelevantEmailContext } from '@/lib/offers/narrative-email-context'
+import { fetchCallContext, findRelevantCallContext } from '@/lib/offers/narrative-call-context'
 import {
   createConversation,
   loadConversation,
@@ -61,14 +61,17 @@ import {
  * — mirrors lib/ai-agent/client-scope.ts's "never trust a client-supplied id
  * blindly" discipline, adapted to this narrower, non-model-dispatched surface.
  * The only tools ever invoked (gmail_search / gmail_read_thread, via
- * findRelevantEmailContext) are CODE-decided, never model-chosen — this
- * route does not hand the model a tool schema and never routes through the
- * general worker/agent engine's decideAction()-then-dispatch surface. That
- * surface exists for a DIFFERENT job (flexible, model-chosen tool calls with
- * an approval rail); wiring this bounded, read-only, two-tool helper into it
- * would not add safety here — it would subject a call that must always
- * resolve silently to an approval gate that is OFF by default (R108/R111),
- * which is a regression dressed as hardening. See docs/systems/offers.md's
+ * findRelevantEmailContext; plus the call_summaries read via
+ * findRelevantCallContext, added 2026-09-16 so a follow-up turn can re-check
+ * the call transcript on request, not just the first turn) are CODE-decided,
+ * never model-chosen — this route does not hand the model a tool schema and
+ * never routes through the general worker/agent engine's
+ * decideAction()-then-dispatch surface. That surface exists for a DIFFERENT
+ * job (flexible, model-chosen tool calls with an approval rail); wiring
+ * these bounded, read-only lookups into it would not add safety here — it
+ * would subject a call that must always resolve silently to an approval
+ * gate that is OFF by default (R108/R111), which is a regression dressed as
+ * hardening. See docs/systems/offers.md's
  * 2026-08-28e entry for the incident (an ungated predecessor sending an
  * email with no approval) that this boundary exists to prevent — this
  * surface still cannot reach a send/write/mutate tool, at any turn.
@@ -86,30 +89,6 @@ interface CurrentNarrativeBody {
   next_steps?: string
   future_developments?: string
   immediate_actions?: string
-}
-
-/**
- * Fetch the most recent call's notes + full transcript for this lead/account,
- * rendered as context for the FIRST turn. Best-effort: '' on no call / any
- * error, so the writer falls back to notes-only. Ported verbatim from the
- * old generate-offer-narrative route.
- */
-async function fetchCallContext(leadId?: string | null, accountId?: string | null): Promise<string> {
-  if (!leadId && !accountId) return ''
-  try {
-    let query = supabaseAdmin
-      .from('call_summaries')
-      .select('meeting_name, created_at, notes, transcript')
-      .order('created_at', { ascending: false })
-      .limit(1)
-    query = leadId ? query.eq('lead_id', leadId) : query.eq('account_id', accountId as string)
-    const { data, error } = await query.maybeSingle()
-    if (error || !data) return ''
-    return renderCallForOffer(data)
-  } catch (err) {
-    console.error('[offer-narrative-chat] call-context fetch failed (non-fatal):', err instanceof Error ? err.message : err)
-    return ''
-  }
 }
 
 /** Full sellable-service menu, for the refine model's reference (never claim TD
@@ -337,7 +316,13 @@ async function handleFollowUpTurn(opts: {
   const [serviceMenu, subjectEmail] = await Promise.all([loadServiceMenu(), resolveSubjectEmail({
     contactId: opts.contactId, leadId: opts.leadId, accountId: opts.accountId,
   })])
-  const emailContext = await findRelevantEmailContext(opts.instruction, subjectEmail)
+  // Both lookups are independent, best-effort, and code-decided (see the
+  // route's own header comment) — run them concurrently rather than paying
+  // for two round trips in sequence.
+  const [emailContext, callContext] = await Promise.all([
+    findRelevantEmailContext(opts.instruction, subjectEmail),
+    findRelevantCallContext(opts.instruction, opts.leadId, opts.accountId),
+  ])
 
   const systemPrompt = buildRefineSystemPrompt(opts.lang, opts.businessRules, serviceMenu)
   const userPrompt = buildRefineUserPrompt({
@@ -349,6 +334,7 @@ async function handleFollowUpTurn(opts: {
     current: opts.current,
     instruction: opts.instruction,
     emailContext,
+    callContext,
     staleGroundingNote: opts.staleGroundingNote,
   })
   const history = toMessageHistory(loaded.turns)

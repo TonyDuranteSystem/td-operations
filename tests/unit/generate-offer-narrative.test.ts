@@ -183,6 +183,11 @@ describe('buildRefineSystemPrompt (faithful writing assistant)', () => {
     expect(p.toLowerCase()).not.toContain('never add bookkeeping')
     expect(p).toContain('Italian')
   })
+
+  it('tells the model to ground on a RELEVANT CALL CONTEXT block when one is given (2026-09-16)', () => {
+    const p = buildRefineSystemPrompt('en', 'RULES')
+    expect(p).toContain('RELEVANT CALL CONTEXT')
+  })
 })
 
 describe('validateNarrative', () => {
@@ -483,6 +488,22 @@ describe('buildRefineUserPrompt — formation-state grounding + staleness note',
     expect(withNote).toContain('NOTE: The state changed.')
     const withoutNote = buildRefineUserPrompt({ ...baseOpts, formationState: 'FL' })
     expect(withoutNote).not.toContain('NOTE:')
+  })
+
+  it('includes the RELEVANT CALL CONTEXT block only when the caller passed one (2026-09-16)', () => {
+    const withCall = buildRefineUserPrompt({ ...baseOpts, callContext: 'He asked for a Wyoming LLC on the call.' })
+    expect(withCall).toContain('RELEVANT CALL CONTEXT')
+    expect(withCall).toContain('He asked for a Wyoming LLC on the call.')
+    const withoutCall = buildRefineUserPrompt({ ...baseOpts })
+    expect(withoutCall).not.toContain('RELEVANT CALL CONTEXT')
+  })
+
+  it('can include both RELEVANT EMAIL and RELEVANT CALL CONTEXT at once', () => {
+    const p = buildRefineUserPrompt({ ...baseOpts, emailContext: 'Email says Florida.', callContext: 'Call says Wyoming.' })
+    expect(p).toContain('RELEVANT EMAIL')
+    expect(p).toContain('Email says Florida.')
+    expect(p).toContain('RELEVANT CALL CONTEXT')
+    expect(p).toContain('Call says Wyoming.')
   })
 })
 

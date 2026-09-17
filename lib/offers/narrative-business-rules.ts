@@ -266,7 +266,7 @@ HOW TO WRITE:
 - Only touch the section(s) his instruction is about; leave every other section exactly as it is (don't return it), so his other edits are preserved.
 - Write in ${lang}. Address the client by the CLIENT name given (never a name from the notes). Don't include pricing/amounts.
 - Don't invent specific facts he didn't give you; otherwise follow his instruction.
-- If a RELEVANT EMAIL block is given, it was found specifically for this instruction — ground your answer in what it actually says. If no such block is given, answer from the instruction and current narrative alone; don't claim to have checked an email you weren't shown.
+- If a RELEVANT EMAIL or RELEVANT CALL CONTEXT block is given, it was found specifically for this instruction — ground your answer in what it actually says. If neither is given, answer from the instruction and current narrative alone; don't claim to have checked an email or call you weren't shown.
 
 ${reference}`
 }
@@ -288,6 +288,11 @@ export function buildRefineUserPrompt(opts: {
   // the route. Absent (not just empty) whenever no lookup was attempted or
   // nothing matched, so the prompt never implies a lookup happened when it didn't.
   emailContext?: string
+  // The client's call notes/transcript, when the instruction asked to check
+  // or re-read the call and a call was actually found — see
+  // findRelevantCallContext() in lib/offers/narrative-call-context.ts. Same
+  // absent-vs-empty contract as emailContext, above.
+  callContext?: string
   // A note about what changed on the offer SINCE this narrative was last
   // grounded (state/entity-type/package selection) — surfaced so the model
   // itself knows a hand-off happened, mirroring the dialog's own visible
@@ -298,6 +303,9 @@ export function buildRefineUserPrompt(opts: {
   const c = opts.current
   const emailBlock = opts.emailContext
     ? `\nRELEVANT EMAIL (found for this instruction — use it, don't invent beyond it):\n${opts.emailContext}\n`
+    : ''
+  const callBlock = opts.callContext
+    ? `\nRELEVANT CALL CONTEXT (found for this instruction — use it, don't invent beyond it):\n${opts.callContext}\n`
     : ''
   const stateLine = opts.formationState
     ? `\nSTATE OF FORMATION: ${opts.formationState} — the ONLY state this offer forms in. Do not mention any other U.S. state.`
@@ -320,7 +328,7 @@ CURRENT NARRATIVE (refine from exactly this — leave any section you are not as
 [next_steps]: ${c.next_steps || '(empty)'}
 [future_developments]: ${c.future_developments || '(empty)'}
 [immediate_actions]: ${c.immediate_actions || '(empty)'}
-${emailBlock}${staleBlock}
+${emailBlock}${callBlock}${staleBlock}
 INSTRUCTION FROM STAFF: ${opts.instruction}
 
 Return the JSON now.`
