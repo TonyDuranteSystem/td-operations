@@ -5,6 +5,7 @@ import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging"
 import {
   parseStagedAttachmentInputs,
   loadStagedEmailAttachments,
@@ -30,11 +31,13 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
       mailbox?: string
+      /** Staged WhatsApp attachment path (whatsapp-new/<uuid>.<ext>) — see lib/messaging/attachment-staging.ts. */
+      attachmentPath?: string
       /** "gala" | "hat" | "text". Replies default to text-only. */
       signature_variant?: string
       /** Which specific Gmail message this replies to — always sent by the
@@ -259,11 +262,24 @@ export async function POST(req: NextRequest) {
     // Edge Function below no longer exists in this repo (docs/systems/messaging.md)
     // and every WhatsApp reply through this route failed until this branch existed.
     if (channel === "whatsapp") {
+      let mediaUrl: string | undefined
+      if (attachmentPath) {
+        const resolved = await resolveWhatsAppAttachmentUrl(attachmentPath)
+        if (!resolved) {
+          return NextResponse.json(
+            { error: "The attachment is no longer available — please re-attach it and try again." },
+            { status: 400 }
+          )
+        }
+        mediaUrl = resolved
+      }
+
       const sendResult = await dispatchWhatsAppMessage({
         chatId: group.external_group_id,
         message,
         channelId: group.channel_id,
         groupId: conversationId,
+        mediaUrl,
       })
 
       if (!sendResult.ok) {
