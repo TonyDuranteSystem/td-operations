@@ -13,6 +13,8 @@ import {
   canGroundFormationState,
   canGroundEntityType,
   extractJsonObject,
+  reconstructAiNarrativeBaseline,
+  detectOverwrittenHandEdits,
   type NarrativeServiceInput,
 } from '@/lib/offers/narrative-business-rules'
 import { loadOfferBusinessRules } from '@/lib/offers/load-business-rules'
@@ -382,6 +384,19 @@ async function handleFollowUpTurn(opts: {
     return NextResponse.json({ error: `AI response validation failed: ${validation.error}` }, { status: 502 })
   }
 
+  // Hand-edit-loss warning (dev job 9d7ad3f1, Antonio's option 1 from the
+  // 2026-09-16 stress test): flag it, don't block it. `loaded.turns` is the
+  // history BEFORE this turn, so the reconstructed baseline is exactly "what
+  // the AI last set each field to" — compared against `opts.current`, the
+  // on-screen value at the moment this turn was sent, for only the fields
+  // this turn is actually about to overwrite.
+  const aiBaseline = reconstructAiNarrativeBaseline(loaded.turns)
+  const overwrittenHandEdits = detectOverwrittenHandEdits(
+    opts.current as unknown as Record<string, string | undefined | null>,
+    aiBaseline,
+    Object.keys(validation.changes),
+  )
+
   // Persist the exchange AFTER validation succeeds — an invalid/unusable turn
   // never becomes "memory" the next turn is forced to build on. appendTurnPair
   // writes both sides of the exchange in ONE atomic insert, so a failure here
@@ -402,5 +417,9 @@ async function handleFollowUpTurn(opts: {
     }).catch(() => {})
   }
 
-  return NextResponse.json({ success: true, conversation_id: opts.conversationId, turn: 'refine', note: validation.note, changes: validation.changes })
+  return NextResponse.json({
+    success: true, conversation_id: opts.conversationId, turn: 'refine',
+    note: validation.note, changes: validation.changes,
+    overwritten_hand_edits: overwrittenHandEdits,
+  })
 }

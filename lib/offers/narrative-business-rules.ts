@@ -391,3 +391,116 @@ export function extractJsonObject(rawText: string): string {
   if (start === -1 || end === -1 || end < start) return fenceStripped
   return fenceStripped.slice(start, end + 1)
 }
+
+/** Same UI copy as the field labels in components/offers/create-offer-dialog.tsx
+ * (minus the "(JSON array)" format hint, which doesn't belong in a chat sentence). */
+export const NARRATIVE_FIELD_LABELS: Record<string, string> = {
+  intro_en: 'Introduction (English)',
+  intro_it: 'Introduction (Italian)',
+  strategy: 'Strategy',
+  next_steps: 'Next Steps',
+  future_developments: 'Future Developments',
+  immediate_actions: 'Immediate Actions',
+}
+
+/** Order-independent for object keys, order-sensitive for arrays (reordering
+ * steps is a real change here, not noise). No existing deep-equal dependency
+ * in this codebase for a comparison this small. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => deepEqual(v, b[i]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a as Record<string, unknown>)
+    const bKeys = Object.keys(b as Record<string, unknown>)
+    if (aKeys.length !== bKeys.length) return false
+    return aKeys.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+  }
+  return false
+}
+
+/**
+ * Reconstruct "what the AI last set each narrative field to", by replaying
+ * stored turns in order and overlaying each assistant turn's fields onto a
+ * running snapshot. Turn 1's assistant content is the FULL narrative at the
+ * top level; every later turn's assistant content is a `{ note, changes }`
+ * delta holding only the fields that turn actually changed (see
+ * narrative-conversation.ts's module header for why turns are stored this
+ * way) — so a field untouched since turn 1 is still correctly found there.
+ *
+ * Feeds ONLY an advisory hand-edit-loss note (detectOverwrittenHandEdits,
+ * below) — never a decision that can block or alter the actual response —
+ * so a turn whose stored content isn't parseable JSON is silently skipped
+ * rather than thrown.
+ */
+export function reconstructAiNarrativeBaseline(
+  turns: { role: string; content: string }[],
+): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {}
+  for (const turn of turns) {
+    if (turn.role !== 'assistant') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(extractJsonObject(turn.content))
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== 'object') continue
+    const obj = parsed as Record<string, unknown>
+    const fields = (obj.changes && typeof obj.changes === 'object') ? obj.changes as Record<string, unknown> : obj
+    for (const key of Object.keys(NARRATIVE_FIELD_LABELS)) {
+      if (key in fields) snapshot[key] = fields[key]
+    }
+  }
+  return snapshot
+}
+
+/**
+ * Which of THIS turn's changed fields the human had ALSO hand-edited (typed
+ * directly into the field) since the AI last touched it — i.e. an edit this
+ * turn's AI response is about to silently replace. `current` holds the
+ * on-screen values exactly as the dialog's textareas hold them (plain string
+ * for the two intros, JSON text for the array fields) at the moment this
+ * turn was sent, BEFORE this turn's own edit is applied.
+ *
+ * Live-verified gap (2026-09-16 stress test): a broad instruction that
+ * legitimately needs to rewrite a field (e.g. the entity type changed, so
+ * the intro must too) silently discarded a sentence Antonio had typed by
+ * hand into that same field, with no warning. Antonio's chosen fix (of two
+ * offered) is to WARN rather than block: the AI still makes the correction
+ * so nothing stays factually wrong, but the chat reply now says so.
+ *
+ * Best-effort / fail-open throughout: a field that can't be compared (no
+ * prior AI baseline yet, or either side isn't parseable JSON) is never
+ * flagged. This only ever adds a note; it must never block or corrupt the
+ * actual response.
+ */
+export function detectOverwrittenHandEdits(
+  current: Record<string, string | undefined | null>,
+  aiBaseline: Record<string, unknown>,
+  changedFields: string[],
+): string[] {
+  const overwritten: string[] = []
+  for (const key of changedFields) {
+    if (!(key in NARRATIVE_FIELD_LABELS)) continue
+    if (!(key in aiBaseline)) continue // nothing to compare against yet
+    const currentRaw = current[key]
+    if (currentRaw == null || !currentRaw.trim()) continue
+    const baselineValue = aiBaseline[key]
+
+    if (key === 'intro_en' || key === 'intro_it') {
+      if (currentRaw.trim() !== String(baselineValue ?? '').trim()) overwritten.push(NARRATIVE_FIELD_LABELS[key])
+      continue
+    }
+    let currentParsed: unknown
+    try {
+      currentParsed = JSON.parse(currentRaw)
+    } catch {
+      continue // hand-edited into invalid JSON — can't safely compare, don't guess
+    }
+    if (!deepEqual(currentParsed, baselineValue)) overwritten.push(NARRATIVE_FIELD_LABELS[key])
+  }
+  return overwritten
+}

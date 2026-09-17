@@ -663,7 +663,12 @@ export function CreateOfferDialog({
         if ('future_developments' in changes) { setFutureDevJson(JSON.stringify(changes.future_developments, null, 2)); applied.push('future developments') }
         if ('immediate_actions' in changes) { setImmediateActionsJson(JSON.stringify(changes.immediate_actions, null, 2)); applied.push('immediate actions') }
         const note = typeof data.note === 'string' && data.note ? data.note : (applied.length ? `Updated ${applied.join(', ')}.` : 'No change made.')
-        setRefineMessages(m => [...m, { role: 'ai', text: applied.length ? `${note} (updated: ${applied.join(', ')})` : note }])
+        let text = applied.length ? `${note} (updated: ${applied.join(', ')})` : note
+        const overwritten: string[] = Array.isArray(data.overwritten_hand_edits) ? data.overwritten_hand_edits : []
+        if (overwritten.length) {
+          text += ` ⚠️ This also overwrote your manual edit to ${overwritten.join(', ')} — check it's still what you want.`
+        }
+        setRefineMessages(m => [...m, { role: 'ai', text }])
         if (applied.length) {
           setNarrativeGroundedAt(groundedSnapshot)
           toast.success(`Updated: ${applied.join(', ')}`)

@@ -11,6 +11,8 @@ import {
   canGroundFormationState,
   canGroundEntityType,
   extractJsonObject,
+  reconstructAiNarrativeBaseline,
+  detectOverwrittenHandEdits,
 } from '@/lib/offers/narrative-business-rules'
 
 function validNarrative(): NarrativeResponse {
@@ -511,5 +513,130 @@ describe('extractJsonObject', () => {
   it('handles nested objects — takes the outermost braces, not the first inner pair', () => {
     const raw = '{"outer": {"inner": "value"}}'
     expect(JSON.parse(extractJsonObject(raw))).toEqual({ outer: { inner: 'value' } })
+  })
+})
+
+describe('reconstructAiNarrativeBaseline', () => {
+  it('reads turn 1 (the full narrative at the top level, no "changes" wrapper)', () => {
+    const turns = [
+      { role: 'user', content: 'generate' },
+      { role: 'assistant', content: JSON.stringify({ intro_en: 'Hello.', future_developments: [{ text: 'grow' }] }) },
+    ]
+    expect(reconstructAiNarrativeBaseline(turns)).toEqual({
+      intro_en: 'Hello.',
+      future_developments: [{ text: 'grow' }],
+    })
+  })
+
+  it('overlays a later { note, changes } turn onto turn 1, keeping untouched fields', () => {
+    const turns = [
+      { role: 'assistant', content: JSON.stringify({ intro_en: 'Hello.', strategy: [{ step_number: 1, title: 'A', description: 'B' }] }) },
+      { role: 'user', content: 'be more casual' },
+      { role: 'assistant', content: JSON.stringify({ note: 'Warmed the tone.', changes: { intro_en: 'Hey there!' } }) },
+    ]
+    expect(reconstructAiNarrativeBaseline(turns)).toEqual({
+      intro_en: 'Hey there!', // overlaid by turn 2
+      strategy: [{ step_number: 1, title: 'A', description: 'B' }], // untouched, still from turn 1
+    })
+  })
+
+  it('ignores user turns', () => {
+    const turns = [{ role: 'user', content: JSON.stringify({ intro_en: 'should not appear' }) }]
+    expect(reconstructAiNarrativeBaseline(turns)).toEqual({})
+  })
+
+  it('skips an unparseable assistant turn instead of throwing', () => {
+    const turns = [
+      { role: 'assistant', content: JSON.stringify({ intro_en: 'Hello.' }) },
+      { role: 'assistant', content: 'sorry, I cannot do that' },
+    ]
+    expect(() => reconstructAiNarrativeBaseline(turns)).not.toThrow()
+    expect(reconstructAiNarrativeBaseline(turns)).toEqual({ intro_en: 'Hello.' })
+  })
+
+  it('returns an empty baseline for no turns', () => {
+    expect(reconstructAiNarrativeBaseline([])).toEqual({})
+  })
+})
+
+describe('detectOverwrittenHandEdits', () => {
+  const changedTurns = (baseline: Record<string, unknown>) => [
+    { role: 'assistant' as const, content: JSON.stringify(baseline) },
+  ]
+
+  it('does not flag a field whose on-screen value still matches the AI baseline', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.' }))
+    const result = detectOverwrittenHandEdits({ intro_en: 'Hello.' }, baseline, ['intro_en'])
+    expect(result).toEqual([])
+  })
+
+  it('flags a plain-text field (intro) that was hand-edited since the AI last wrote it', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.' }))
+    const result = detectOverwrittenHandEdits({ intro_en: 'Hello. HAND-EDIT-MARKER.' }, baseline, ['intro_en'])
+    expect(result).toEqual(['Introduction (English)'])
+  })
+
+  it('never flags a field the AI is not changing this turn, even if it was hand-edited', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.', strategy: [] }))
+    const result = detectOverwrittenHandEdits(
+      { intro_en: 'Hello. HAND-EDIT-MARKER.', strategy: '[]' },
+      baseline,
+      ['strategy'], // only strategy is changing this turn — intro_en's hand-edit is not at risk
+    )
+    expect(result).toEqual([])
+  })
+
+  it('never flags a field with no prior AI baseline (nothing to compare against yet)', () => {
+    const result = detectOverwrittenHandEdits({ intro_it: 'Ciao.' }, {}, ['intro_it'])
+    expect(result).toEqual([])
+  })
+
+  it('flags a JSON array field whose item order changed (order is a real change here)', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({
+      future_developments: [{ text: 'first' }, { text: 'second' }],
+    }))
+    const handEdited = JSON.stringify([{ text: 'second' }, { text: 'first' }])
+    const result = detectOverwrittenHandEdits({ future_developments: handEdited }, baseline, ['future_developments'])
+    expect(result).toEqual(['Future Developments'])
+  })
+
+  it('does NOT flag a JSON array field that only differs in whitespace/formatting', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({
+      future_developments: [{ text: 'grow' }],
+    }))
+    const rePrettyPrinted = JSON.stringify([{ text: 'grow' }], null, 2)
+    const result = detectOverwrittenHandEdits({ future_developments: rePrettyPrinted }, baseline, ['future_developments'])
+    expect(result).toEqual([])
+  })
+
+  it('does NOT flag an object whose keys are in a different order but same content', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({
+      immediate_actions: [{ title: 'Sign', description: 'Do it now' }],
+    }))
+    const reordered = JSON.stringify([{ description: 'Do it now', title: 'Sign' }])
+    const result = detectOverwrittenHandEdits({ immediate_actions: reordered }, baseline, ['immediate_actions'])
+    expect(result).toEqual([])
+  })
+
+  it('does not flag and does not throw on an empty/whitespace-only current value', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_it: 'Ciao.' }))
+    expect(() => detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, ['intro_it'])).not.toThrow()
+    expect(detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, ['intro_it'])).toEqual([])
+  })
+
+  it('fails safe (no flag, no throw) when the on-screen JSON is invalid — cannot safely compare', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ strategy: [{ step_number: 1, title: 'A', description: 'B' }] }))
+    const result = detectOverwrittenHandEdits({ strategy: '{not valid json' }, baseline, ['strategy'])
+    expect(result).toEqual([])
+  })
+
+  it('can flag multiple fields in the same turn', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.', intro_it: 'Ciao.' }))
+    const result = detectOverwrittenHandEdits(
+      { intro_en: 'Hello, hand-edited.', intro_it: 'Ciao, modificato a mano.' },
+      baseline,
+      ['intro_en', 'intro_it'],
+    )
+    expect(result).toEqual(['Introduction (English)', 'Introduction (Italian)'])
   })
 })
