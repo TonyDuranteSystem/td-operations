@@ -10,7 +10,7 @@ import {
   Loader2, ChevronRight, Eye, EyeOff, X, FolderOpen, CreditCard,
   Stethoscope, Send, Zap, Bell, PlayCircle, Paperclip, Wand2, Sparkles, ScanText, Trash2,
   ChevronDown as ChevronDownIcon, ExternalLink, Folder, ShieldCheck, RefreshCw,
-  Activity, Plus, GitBranch, Ban, Languages,
+  Activity, Plus, GitBranch, Ban, Languages, MessageCircle,
 } from 'lucide-react'
 import { InvoiceDialog, type InvoiceDialogDefaults } from '@/components/shared/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
@@ -22,6 +22,7 @@ import { ClientConversationsPanel } from '@/components/conversations/client-conv
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
 import { MessageReactions } from '@/components/chat/message-reactions'
@@ -297,6 +298,7 @@ export function ContactDetail({
   const [activeTab, setActiveTab] = useState('overview')
   const [showChainAudit, setShowChainAudit] = useState(false)
   const [showDeleteContact, setShowDeleteContact] = useState(false)
+  const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
   const makeContactSaver = (field: string) => async (value: string) => {
@@ -377,6 +379,15 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
+          {(contact.phone || contact.phone_2) && (
+            <button
+              onClick={() => setShowWhatsApp(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition-colors"
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              WhatsApp
+            </button>
+          )}
           <FastTooltip label="Audit the full client lifecycle — lead, offer, activation, account, services, portal, profile completeness.">
             <button
               onClick={() => setShowChainAudit(true)}
@@ -540,6 +551,16 @@ export function ContactDetail({
         contactId={contact.id}
         contactName={contact.full_name}
       />
+
+      {(contact.phone || contact.phone_2) && (
+        <NewWhatsAppConversationDialog
+          open={showWhatsApp}
+          onClose={() => setShowWhatsApp(false)}
+          contactId={contact.id}
+          name={contact.full_name || contact.email || 'this contact'}
+          phone={(contact.phone || contact.phone_2) as string}
+        />
+      )}
 
       <ConfirmDestructiveDialog
         open={showDeleteContact}
