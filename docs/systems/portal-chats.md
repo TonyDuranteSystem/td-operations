@@ -1,6 +1,15 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-14 — Claude (**"Addressed to" now correctly
+_Last verified against code: 2026-09-17 — Claude (**Three unread indicators on
+this page — the topic-pill badges, the "Jump to latest" floating counter, and
+the per-message system-notice pill — no longer get permanently stuck on an
+already-handled or retired client-action notice.** This is read/unread badge
+logic, not composer behavior — full detail lives in
+`docs/systems/portal-chat-unread.md`, not duplicated here. Noted in this
+doc's changelog only because it touches this same file
+(`app/(dashboard)/portal-chats/page.tsx`) and a future reader scanning this
+history for "what changed on this page" should be able to find it.)_
+_Prior: 2026-09-14 — Claude (**"Addressed to" now correctly
 distinguishes a member from a company they merely represent, and remembers which
 one was meant after the message is sent** — dev job `34bd9009`, reported by
 Antonio: on a real multi-member LLC (AI Venture Labs LLC), Michele Cotti is both
