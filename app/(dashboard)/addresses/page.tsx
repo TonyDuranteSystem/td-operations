@@ -35,8 +35,8 @@ const EMPTY_FORM: AddressForm = {
 const TABS: { kind: TabKind; label: string }[] = [
   { kind: 'registered_agent', label: 'Registered Agents' },
   { kind: 'business_legal', label: 'Legal Addresses' },
-  { kind: 'business_mailing', label: 'Mailing Addresses' },
-  { kind: 'shipping', label: 'Shipping Addresses' },
+  { kind: 'business_mailing', label: 'CMRA Addresses' },
+  { kind: 'shipping', label: 'Mailing Addresses' },
 ]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
