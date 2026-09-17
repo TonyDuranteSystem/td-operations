@@ -196,10 +196,10 @@ _Regenerated 2026-09-17. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-17)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-16)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-07)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-17)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-07-29)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-17)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-08-30)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-15)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
