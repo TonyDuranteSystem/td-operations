@@ -511,6 +511,20 @@ function extractInsertedMiddle(before: string, after: string): string {
  * accepted scope boundary — flagged here, not silently pretended away — and
  * could over-warn there in the equivalent scenario if it's ever hit live.
  *
+ * KNOWN LIMITATION, disclosed rather than silently accepted (found in the
+ * SAME re-test that caught the false positive above): protection lasts for
+ * ONE turn only. Once a hand-edit survives a turn, the AI's own output for
+ * that turn — the only thing this function has to compare against for the
+ * NEXT turn — now legitimately contains it, so it looks exactly like
+ * AI-authored content from then on. A LATER turn that drops it will not be
+ * flagged, because by then `current` and the reconstructed baseline agree
+ * with each other; there is no more "hand-edit" signal left to see. Fixing
+ * this for real would mean persisting hand-edit provenance across the whole
+ * conversation, not just diffing against the immediately preceding turn —
+ * real added scope, not built here without checking first. What IS covered:
+ * the common case this was built for, a hand-edit followed immediately by
+ * the next AI turn — which is also the shape of the original live bug.
+ *
  * Best-effort / fail-open throughout: a field that can't be compared (no
  * prior AI baseline yet, or either side isn't parseable JSON) is never
  * flagged. This only ever adds a note; it must never block or corrupt the

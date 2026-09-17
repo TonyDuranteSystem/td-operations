@@ -594,6 +594,26 @@ describe('detectOverwrittenHandEdits', () => {
     expect(result).toEqual([])
   })
 
+  it('KNOWN LIMITATION, pinned not accidental: once a hand-edit survives one turn, a LATER turn can drop it undetected (live-verified 2026-09-16 re-testing the false-positive fix)', () => {
+    // Turn 1: the AI's own output already contains the hand-typed marker
+    // (the "preserved" case above) — from this point on it's indistinguishable
+    // from AI-authored content, because nothing but the turn history is
+    // available to reconstruct a baseline from.
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({
+      intro_en: 'Uxio Test LLC, thanks for the call. HAND-EDIT-MARKER-3: Antonio typed this himself, do not remove it. Florida Corporation ahead.',
+    }))
+    // Turn 2: nothing was hand-edited AGAIN before sending — current equals
+    // the baseline exactly — then the AI fully rewrites the intro and the
+    // marker is genuinely gone. This SHOULD arguably be flagged but is not:
+    // there is no "current differs from baseline" signal left to detect it.
+    const current = {
+      intro_en: 'Uxio Test LLC, thanks for the call. HAND-EDIT-MARKER-3: Antonio typed this himself, do not remove it. Florida Corporation ahead.',
+    }
+    const rewritten = 'Your Florida Corporation starts here — fast, clean, and fully handled.'
+    const result = detectOverwrittenHandEdits(current, baseline, { intro_en: rewritten })
+    expect(result).toEqual([]) // known gap, not a false claim of safety — see the function's own doc comment
+  })
+
   it('never flags a field the AI is not changing this turn, even if it was hand-edited', () => {
     const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.', strategy: [] }))
     const result = detectOverwrittenHandEdits(
