@@ -206,13 +206,13 @@ _Regenerated 2026-09-17. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-08-30)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-14)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-16)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-09-17)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-08-29)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-08-05)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-09)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-09-03)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-09-16)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-08-23)_

@@ -39,9 +39,9 @@ export async function updateAccountField(
     'installment_2_amount', 'installment_2_currency',
     'communication_email',
     // Path 2 address FK columns
-    'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id',
+    'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id', 'shipping_address_id',
     // Path 2 verified flags
-    'legal_link_verified', 'mailing_link_verified', 'ra_link_verified',
+    'legal_link_verified', 'mailing_link_verified', 'ra_link_verified', 'shipping_link_verified',
     // Dunning / payment-reminder config (Phase 4)
     'dunning_reminder_1_days', 'dunning_reminder_2_days', 'dunning_pause',
     // Dated reminder pause + trace ("client promised to pay by X", 2026-07-03)
@@ -51,7 +51,7 @@ export async function updateAccountField(
     return { success: false, error: `Field '${field}' is not editable` }
   }
 
-  const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified', 'dunning_pause'])
+  const booleanFields = new Set(['legal_link_verified', 'mailing_link_verified', 'ra_link_verified', 'shipping_link_verified', 'dunning_pause'])
   const integerFields = new Set(['member_count', 'dunning_reminder_1_days', 'dunning_reminder_2_days'])
 
   // EIN inputs are normalized to canonical XX-XXXXXXX. A non-empty input that

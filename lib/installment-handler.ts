@@ -28,7 +28,6 @@ import { resolveSecondInstallmentAdvance } from "@/lib/services/stages"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { reactivateOnHoldTaxReturns } from "@/lib/tax/reactivation"
 import { parsePartnerDeal, shouldPayRenewal } from "@/lib/partners/partner-deal"
-import { reportSystemError } from "@/lib/system-errors"
 
 interface InstallmentResult {
   steps: Array<{ step: string; status: string; detail?: string }>
@@ -367,75 +366,19 @@ export async function onFirstInstallmentPaid(
     steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })
   }
 
-  // ─── 6. Auto-create the renewal lease and put it in the client portal to sign ───
-  // The office lease is an annual Jan 1 → Dec 31 agreement. On renewal, create
-  // this year's lease and send it straight to the portal to sign — no manual
-  // step, no email. Formerly this section only dropped a reminder onto the
-  // (now-defunct) staff task list, so renewal leases were routinely forgotten.
-  // Idempotent: createLease guards on (account, contract_year); on a duplicate
-  // we still (re-)send the existing lease so a partial prior run completes.
-  try {
-    // No explicit contact_id — createLease resolves the tenant/signer itself
-    // from the account's members table (falls back cleanly to "not_found" if
-    // nothing is linked at all, same outcome the old `if (!contactId)` guard
-    // produced).
-    const { createLease, sendLeaseToPortal } = await import("@/lib/operations/lease")
-    const leaseResult = await createLease({
-      account_id: accountId,
-      contract_year: year,
-      effective_date: `${year}-01-01`,
-      term_start_date: `${year}-01-01`,
-      term_end_date: `${year}-12-31`,
-      actor: "system:first-installment",
-      summary: `Renewal lease ${year} auto-created on 1st installment for ${account.company_name}`,
-      details: { source: "first-installment", year },
-    })
-
-    if (leaseResult.success && leaseResult.lease) {
-      // Only auto-send a lease THIS run created. Never blind-send a
-      // pre-existing same-year lease — it may be a staff work-in-progress
-      // draft (custom rent/dates) that a human has not finished reviewing.
-      const sent = await sendLeaseToPortal(leaseResult.lease.token)
-      if (sent.success) {
-        steps.push({
-          step: "lease",
-          status: "created+sent",
-          detail: `${leaseResult.lease.token} (${sent.already ? "already in portal" : "now in portal to sign"})`,
-        })
-      } else {
-        steps.push({ step: "lease", status: "error", detail: `Lease ${leaseResult.lease.token} created but send failed: ${sent.error}` })
-      }
-    } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
-      steps.push({
-        step: "lease",
-        status: "exists",
-        detail: `A ${year} lease already exists (${leaseResult.existing.status}) — left as-is, not auto-sent. Review/send manually if needed.`,
-      })
-    } else {
-      const detail = leaseResult.error || "Lease not created"
-      steps.push({ step: "lease", status: "error", detail })
-      // This is the fully-automatic path — nobody is watching it fire. Before
-      // the resolver fix, this step always produced SOME lease (possibly
-      // naming the wrong person); now it can correctly refuse instead of
-      // guessing, which means it can also silently produce NOTHING unless
-      // this alert exists. Bug-Hunter finding, dev job 9ad76300-6181-4250-a1de-c77f37933f82.
-      await reportSystemError({
-        source: "server",
-        route: "lib/installment-handler.ts:onFirstInstallmentPaid",
-        message: `Renewal lease for ${account.company_name} (${year}) was not created: ${detail}`,
-        context: { account_id: accountId, year },
-      })
-    }
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e)
-    steps.push({ step: "lease", status: "error", detail })
-    await reportSystemError({
-      source: "server",
-      route: "lib/installment-handler.ts:onFirstInstallmentPaid",
-      message: `Renewal lease for ${account.company_name} (${year}) threw an error: ${detail}`,
-      context: { account_id: accountId, year },
-    })
-  }
+  // ─── 6. Renewal lease — auto-generation TURNED OFF (Antonio, 2026-09-16) ───
+  // This step used to auto-create the renewal lease and send it straight to
+  // the portal on first-installment payment, no human step at all (see git
+  // history / dev job 254834cc for the removed implementation). Antonio
+  // wants to review the renewal contract/system before deciding whether
+  // leases should ever be issued automatically again — until he says
+  // otherwise, this is a deliberate no-op; renewal leases are generated
+  // manually. Do not re-enable without his explicit go-ahead.
+  steps.push({
+    step: "lease",
+    status: "skipped",
+    detail: "Automatic renewal-lease generation is turned off — issued manually until Antonio decides otherwise.",
+  })
 
   // ─── Partner renewal payout — installment 1 share (recurring, USD) ───
   // A managed partner earns a renewal share each year the client renews, split

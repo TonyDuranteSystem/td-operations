@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { MapPin, Building2, ShieldCheck, Mail } from 'lucide-react'
+import { MapPin, Building2, ShieldCheck, Mail, FileText, Package } from 'lucide-react'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
@@ -24,7 +24,12 @@ type AddrRow = MailingAddressRow & {
  *   1. Tony Durante's mailing address (TD-provided business_mailing) — where the
  *      client sends physical mail / signed originals to TD.
  *   2. Their Registered Agent address.
- *   3. Their mailing / CMRA address (the account's business_mailing_address_id).
+ *   3. Their Legal address (the account's business_legal_address_id).
+ *   4. Their Mailing / CMRA address (the account's business_mailing_address_id).
+ *   5. Their Shipping address (the account's shipping_address_id) — a separate,
+ *      stable slot from Legal (which can be TD's own office for a company TD
+ *      formed, or a client's old pre-existing address for one onboarded from
+ *      elsewhere — dev job 254834cc, 2026-09-16).
  *
  * Read-only. Access is account-scoped: a client contact resolves via their
  * accounts; a teammate via their granted account.
@@ -64,26 +69,32 @@ export default async function PortalAddressesPage() {
     .maybeSingle()
 
   // The client's account: RA address (free-text + provider) + the FK-joined
-  // mailing address (business_mailing_address_id = their CMRA mailing address).
+  // legal / mailing (CMRA) / shipping addresses.
   let raAddress: string | null = null
   let raProvider: string | null = null
+  let legal: AddrRow | null = null
   let cmra: AddrRow | null = null
+  let shipping: AddrRow | null = null
   let companyName: string | null = null
   if (selectedAccountId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, registered_agent_address, registered_agent_provider, mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     raAddress = (acct?.registered_agent_address as string | null) ?? null
     raProvider = (acct?.registered_agent_provider as string | null) ?? null
+    legal = (acct?.legal as AddrRow | null) ?? null
     cmra = (acct?.mailing as AddrRow | null) ?? null
+    shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }
 
   const tdLine = formatAddressString(tdAddr as MailingAddressRow | null)
+  const legalLine = formatAddressString(legal as MailingAddressRow | null)
   const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
+  const shippingLine = formatAddressString(shipping as MailingAddressRow | null)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
@@ -120,6 +131,18 @@ export default async function PortalAddressesPage() {
         empty={t('addresses.raEmpty', locale, translations)}
       />
 
+      {/* Legal address */}
+      <AddressCard
+        icon={FileText}
+        accent="amber"
+        title={t('addresses.legalTitle', locale, translations)}
+        subtitle={t('addresses.legalSubtitle', locale, translations)}
+        name={(legal?.name as string | null) ?? companyName}
+        line={legalLine}
+        country={(legal?.country as string | null) ?? null}
+        empty={t('addresses.legalEmpty', locale, translations)}
+      />
+
       {/* Mailing / CMRA address */}
       <AddressCard
         icon={Mail}
@@ -131,6 +154,18 @@ export default async function PortalAddressesPage() {
         country={(cmra?.country as string | null) ?? null}
         empty={t('addresses.cmraEmpty', locale, translations)}
       />
+
+      {/* Shipping address */}
+      <AddressCard
+        icon={Package}
+        accent="rose"
+        title={t('addresses.shippingTitle', locale, translations)}
+        subtitle={t('addresses.shippingSubtitle', locale, translations)}
+        name={(shipping?.name as string | null) ?? companyName}
+        line={shippingLine}
+        country={(shipping?.country as string | null) ?? null}
+        empty={t('addresses.shippingEmpty', locale, translations)}
+      />
     </div>
   )
 }
@@ -139,6 +174,8 @@ const ACCENTS: Record<string, string> = {
   blue: 'text-blue-600 bg-blue-50',
   emerald: 'text-emerald-600 bg-emerald-50',
   violet: 'text-violet-600 bg-violet-50',
+  amber: 'text-amber-600 bg-amber-50',
+  rose: 'text-rose-600 bg-rose-50',
 }
 
 function AddressCard({

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -464,12 +464,19 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', accountId)
     .single()
 
   if (!data) return data
-  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
+  return {
+    ...data,
+    // physical_address stays the resolved MAILING address for existing callers
+    // (Operating Agreement generation, invoices, SS-4) — do not repurpose it.
+    physical_address: resolveMailingAddress(data.mailing_address, data.physical_address),
+    legal_address: formatAddressString(data.legal_address),
+    shipping_address: formatAddressString(data.shipping_address),
+  }
 }
 
 export async function getPortalMembers(accountId: string) {
