@@ -204,8 +204,8 @@ _Regenerated 2026-09-17. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-15)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
-- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-08-30)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-14)_
+- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-17)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-17)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-09-17)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-08-29)_

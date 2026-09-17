@@ -89,3 +89,20 @@ export function messageVisibleInPlan(
       return msg.account_id == null && msg.contact_id === plan.contactId
   }
 }
+
+/**
+ * Detects the idempotency marker `lib/portal/chat-events.ts` writes into a
+ * "chat-event" system notice's own body (`<!-- chat-event: kind=... -->`).
+ *
+ * Lives here (not next to the marker's own source in chat-events.ts) because
+ * that file imports supabaseAdmin at module scope — unsafe to pull into a
+ * 'use client' component. This file is already the proven dependency-free,
+ * client+server-shared home for portal-chat cross-cutting checks (see
+ * lib/hooks/use-portal-chat.ts and app/api/portal/chat/route.ts), so a second,
+ * unrelated-but-equally-safe concern rides along here rather than adding yet
+ * another ad hoc copy of this same string match (docs/systems/portal-chat-unread.md
+ * — this exact check was already independently duplicated across ~9 files).
+ */
+export function isChatEventMessage(message: string): boolean {
+  return message.toLowerCase().includes('<!-- chat-event:')
+}

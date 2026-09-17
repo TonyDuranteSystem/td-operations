@@ -3,6 +3,7 @@ import {
   mayIncludePersonalNull,
   buildChatQueryPlan,
   messageVisibleInPlan,
+  isChatEventMessage,
 } from '@/lib/portal/chat-scope'
 
 describe('mayIncludePersonalNull (leak-proof personal inclusion)', () => {
@@ -93,5 +94,30 @@ describe('messageVisibleInPlan (realtime drop filter mirrors the server query)',
     expect(messageVisibleInPlan(plan, { account_id: null, contact_id: me })).toBe(true)
     expect(messageVisibleInPlan(plan, { account_id: null, contact_id: other })).toBe(false)
     expect(messageVisibleInPlan(plan, { account_id: acctA, contact_id: me })).toBe(false)
+  })
+})
+
+describe('isChatEventMessage (chat-event marker detection)', () => {
+  it('detects the marker lib/portal/chat-events.ts actually writes', () => {
+    const body =
+      'Abbiamo ricevuto le tue informazioni.\n\n<!-- chat-event: kind=wizard_submitted src=tax_return_submissions:abc123 -->'
+    expect(isChatEventMessage(body)).toBe(true)
+  })
+
+  it('is case-insensitive, mirroring the server-side SQL ILIKE check', () => {
+    expect(isChatEventMessage('note <!-- CHAT-EVENT: kind=payment_received -->')).toBe(true)
+  })
+
+  it('returns false for a plain client or system message', () => {
+    expect(isChatEventMessage('ok perfetto grazie mille')).toBe(false)
+    expect(isChatEventMessage('We are currently closed. Our office is open Monday to Friday.')).toBe(false)
+  })
+
+  it('returns false for an unrelated HTML comment', () => {
+    expect(isChatEventMessage('some text <!-- not an event marker --> more text')).toBe(false)
+  })
+
+  it('handles an empty string without throwing', () => {
+    expect(isChatEventMessage('')).toBe(false)
   })
 })
