@@ -142,11 +142,24 @@ export async function POST(request: NextRequest) {
 
     const userMessage = `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
 
-    const { reply } = await callWorkerWithAttachments(userMessage, {
+    const { reply, reachedMaxLoops } = await callWorkerWithAttachments(userMessage, {
       systemPromptOverride,
       enableDocReads: false,
-      maxIterations: 3,
+      maxIterations: 6,
     })
+
+    // A drafting task this thin should never need tool calls at all — but if
+    // the worker loop ever exhausts its step budget without a real answer, its
+    // generic "I reached my working limit..." fallback text must NOT be
+    // handed back as if it were a drafted message: it would land silently in
+    // the compose box looking exactly like a real suggestion (caught live,
+    // 2026-09-17 — Antonio got that exact internal fallback text as a "draft").
+    if (reachedMaxLoops || !reply?.trim()) {
+      return NextResponse.json(
+        { error: 'Could not generate a suggestion — please try again or write the message yourself.' },
+        { status: 502 }
+      )
+    }
 
     return NextResponse.json({ suggestion: reply, provider: 'anthropic' })
   } catch (err: unknown) {
