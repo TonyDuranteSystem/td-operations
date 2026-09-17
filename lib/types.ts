@@ -132,9 +132,11 @@ export interface Account {
   business_legal_address_id: string | null
   business_mailing_address_id: string | null
   registered_agent_id: string | null
+  shipping_address_id: string | null
   legal_link_verified: boolean | null
   mailing_link_verified: boolean | null
   ra_link_verified: boolean | null
+  shipping_link_verified: boolean | null
   member_structure: 'single_member' | 'multi_member' | null
   // Authoritative member count for MMLLC — source of truth for OA generation
   // pre-flight. Backfilled from ss4_applications.member_count; manually set

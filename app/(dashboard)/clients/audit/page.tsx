@@ -37,9 +37,11 @@ export default async function ClientAuditPage() {
       business_legal_address_id,
       business_mailing_address_id,
       registered_agent_id,
+      shipping_address_id,
       legal_link_verified,
       mailing_link_verified,
-      ra_link_verified
+      ra_link_verified,
+      shipping_link_verified
     `)
     .not('status', 'in', '("Cancelled","Closed")')
     .order('company_name')
@@ -121,6 +123,7 @@ export default async function ClientAuditPage() {
         registered_agent_id: a.registered_agent_id ?? null,
         business_mailing_address_id: a.business_mailing_address_id ?? null,
         business_legal_address_id: a.business_legal_address_id ?? null,
+        shipping_address_id: a.shipping_address_id ?? null,
       },
       primaryContact
         ? {
