@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { formatAddressString, type MailingAddressRow } from '@/lib/addresses'
+import { formatAddressString, resolveMailingAddress, type MailingAddressRow } from '@/lib/addresses'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -76,11 +76,12 @@ export default async function PortalAddressesPage() {
   let cmra: AddrRow | null = null
   let shipping: AddrRow | null = null
   let companyName: string | null = null
+  let legacyMailing: string | null = null
   if (selectedAccountId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, physical_address, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     raAddress = (acct?.registered_agent_address as string | null) ?? null
@@ -89,11 +90,18 @@ export default async function PortalAddressesPage() {
     cmra = (acct?.mailing as AddrRow | null) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
+    legacyMailing = (acct?.physical_address as string | null) ?? null
   }
 
   const tdLine = formatAddressString(tdAddr as MailingAddressRow | null)
   const legalLine = formatAddressString(legal as MailingAddressRow | null)
-  const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
+  // Accounts predating the address registry only ever got the free-text
+  // `physical_address` column set, never the linked `mailing` row — without
+  // this fallback (the same one lib/portal/queries.ts::getPortalAccountDetail
+  // already uses for the dashboard) this card would wrongly claim "not on
+  // file" for an address the rest of the system already resolves and relies
+  // on. Dev job 254834cc, 2026-09-17.
+  const cmraLine = resolveMailingAddress(cmra as MailingAddressRow | null, legacyMailing)
   const shippingLine = formatAddressString(shipping as MailingAddressRow | null)
 
   return (
