@@ -2464,7 +2464,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
+              <p className="text-xs text-zinc-500 mb-1">CMRA Address</p>
               <AddressPicker
                 accountId={account.id}
                 accountUpdatedAt={account.updated_at}
@@ -2475,7 +2475,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">Shipping Address</p>
+              <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
               <AddressPicker
                 accountId={account.id}
                 accountUpdatedAt={account.updated_at}
