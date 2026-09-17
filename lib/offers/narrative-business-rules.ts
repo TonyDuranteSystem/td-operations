@@ -458,12 +458,38 @@ export function reconstructAiNarrativeBaseline(
 }
 
 /**
+ * Isolate what a human likely INSERTED into a plain-text field: the longest
+ * common prefix and suffix between `before` and `after` are trimmed off,
+ * leaving whatever's left in the middle of `after`. Exact for a pure
+ * insertion (someone clicked into the middle of a sentence and typed) —
+ * the common real-world case this function exists for. For a deletion or a
+ * more tangled edit it can return an empty string even though `after`
+ * genuinely differs from `before`; the caller treats that as "can't isolate
+ * the inserted text" and falls back to its own, more conservative check,
+ * not as "nothing was edited."
+ */
+function extractInsertedMiddle(before: string, after: string): string {
+  let prefixLen = 0
+  while (prefixLen < before.length && prefixLen < after.length && before[prefixLen] === after[prefixLen]) prefixLen++
+  let suffixLen = 0
+  const maxSuffix = Math.min(before.length - prefixLen, after.length - prefixLen)
+  while (
+    suffixLen < maxSuffix &&
+    before[before.length - 1 - suffixLen] === after[after.length - 1 - suffixLen]
+  ) suffixLen++
+  return after.slice(prefixLen, after.length - suffixLen)
+}
+
+/**
  * Which of THIS turn's changed fields the human had ALSO hand-edited (typed
- * directly into the field) since the AI last touched it — i.e. an edit this
- * turn's AI response is about to silently replace. `current` holds the
+ * directly into the field) since the AI last touched it, where the AI's OWN
+ * new value for that field no longer reflects that edit — i.e. an edit this
+ * turn's response actually lost, not just touched. `current` holds the
  * on-screen values exactly as the dialog's textareas hold them (plain string
  * for the two intros, JSON text for the array fields) at the moment this
- * turn was sent, BEFORE this turn's own edit is applied.
+ * turn was sent, BEFORE this turn's own edit is applied; `changes` is this
+ * turn's own actual output (`validateNarrativeChanges`'s `changes`) for the
+ * fields it decided to touch.
  *
  * Live-verified gap (2026-09-16 stress test): a broad instruction that
  * legitimately needs to rewrite a field (e.g. the entity type changed, so
@@ -471,6 +497,19 @@ export function reconstructAiNarrativeBaseline(
  * hand into that same field, with no warning. Antonio's chosen fix (of two
  * offered) is to WARN rather than block: the AI still makes the correction
  * so nothing stays factually wrong, but the chat reply now says so.
+ *
+ * Live-verified FALSE POSITIVE this warning must not repeat (found re-testing
+ * the fix itself, same day): the model can be smart enough to weave a
+ * correction around a hand-typed sentence and keep it verbatim — in which
+ * case nothing was actually lost, and warning anyway would just be crying
+ * wolf. For the two plain-text intro fields, this isolates the human's
+ * inserted text (via `extractInsertedMiddle`, above) and only flags when the
+ * NEW value no longer contains it — an edit the AI's own output still
+ * carries is not a loss. The two array/JSON fields keep the coarser
+ * "did the value change from what the AI last set it to" check (no
+ * character-level insertion concept for structured JSON); this is a known,
+ * accepted scope boundary — flagged here, not silently pretended away — and
+ * could over-warn there in the equivalent scenario if it's ever hit live.
  *
  * Best-effort / fail-open throughout: a field that can't be compared (no
  * prior AI baseline yet, or either side isn't parseable JSON) is never
@@ -480,10 +519,10 @@ export function reconstructAiNarrativeBaseline(
 export function detectOverwrittenHandEdits(
   current: Record<string, string | undefined | null>,
   aiBaseline: Record<string, unknown>,
-  changedFields: string[],
+  changes: Record<string, unknown>,
 ): string[] {
   const overwritten: string[] = []
-  for (const key of changedFields) {
+  for (const key of Object.keys(changes)) {
     if (!(key in NARRATIVE_FIELD_LABELS)) continue
     if (!(key in aiBaseline)) continue // nothing to compare against yet
     const currentRaw = current[key]
@@ -491,7 +530,13 @@ export function detectOverwrittenHandEdits(
     const baselineValue = aiBaseline[key]
 
     if (key === 'intro_en' || key === 'intro_it') {
-      if (currentRaw.trim() !== String(baselineValue ?? '').trim()) overwritten.push(NARRATIVE_FIELD_LABELS[key])
+      const baselineText = String(baselineValue ?? '').trim()
+      const currentText = currentRaw.trim()
+      if (currentText === baselineText) continue // no hand edit at all
+      const inserted = extractInsertedMiddle(baselineText, currentText).trim()
+      const newText = String(changes[key] ?? '')
+      if (inserted && newText.includes(inserted)) continue // preserved verbatim — not a loss
+      overwritten.push(NARRATIVE_FIELD_LABELS[key])
       continue
     }
     let currentParsed: unknown

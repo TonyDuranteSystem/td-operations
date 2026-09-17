@@ -394,7 +394,7 @@ async function handleFollowUpTurn(opts: {
   const overwrittenHandEdits = detectOverwrittenHandEdits(
     opts.current as unknown as Record<string, string | undefined | null>,
     aiBaseline,
-    Object.keys(validation.changes),
+    validation.changes as unknown as Record<string, unknown>,
   )
 
   // Persist the exchange AFTER validation succeeds — an invalid/unusable turn

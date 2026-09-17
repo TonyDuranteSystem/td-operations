@@ -566,14 +566,32 @@ describe('detectOverwrittenHandEdits', () => {
 
   it('does not flag a field whose on-screen value still matches the AI baseline', () => {
     const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.' }))
-    const result = detectOverwrittenHandEdits({ intro_en: 'Hello.' }, baseline, ['intro_en'])
+    const result = detectOverwrittenHandEdits({ intro_en: 'Hello.' }, baseline, { intro_en: 'Hello, updated.' })
     expect(result).toEqual([])
   })
 
-  it('flags a plain-text field (intro) that was hand-edited since the AI last wrote it', () => {
-    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello.' }))
-    const result = detectOverwrittenHandEdits({ intro_en: 'Hello. HAND-EDIT-MARKER.' }, baseline, ['intro_en'])
+  it('flags a plain-text field (intro) whose hand-typed insertion does NOT survive in the new value', () => {
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_en: 'Hello there.' }))
+    const result = detectOverwrittenHandEdits(
+      { intro_en: 'Hello HAND-EDIT-MARKER there.' },
+      baseline,
+      { intro_en: 'Hi there, completely rewritten.' }, // the marker is gone — a real loss
+    )
     expect(result).toEqual(['Introduction (English)'])
+  })
+
+  it('does NOT flag a plain-text field when the hand-typed insertion survives verbatim in the new value (live false-positive found 2026-09-16 re-testing this fix)', () => {
+    // Reproduces the exact live scenario: a marker sentence typed mid-paragraph,
+    // then a broad instruction that legitimately rewrites the surrounding text —
+    // the model wove its correction around the hand-typed sentence and kept it
+    // intact, so nothing was actually lost.
+    const baseline = reconstructAiNarrativeBaseline(changedTurns({
+      intro_en: 'Uxio Test LLC, it was great connecting with you on our recent call and learning about your plans to establish a new business presence through a Florida Multi-Member LLC.',
+    }))
+    const handEdited = 'Uxio Test LLC, it was great connecting with you on our recent call and learning about your plans to establish a new busiHAND-EDIT-MARKER-2: Antonio typed this himself, do not remove it. ess presence through a Florida Multi-Member LLC.'
+    const newValue = 'Uxio Test LLC, it was great connecting with you on our recent call and learning about your plans to establish a new busiHAND-EDIT-MARKER-2: Antonio typed this himself, do not remove it. ess presence through a Florida Corporation.'
+    const result = detectOverwrittenHandEdits({ intro_en: handEdited }, baseline, { intro_en: newValue })
+    expect(result).toEqual([])
   })
 
   it('never flags a field the AI is not changing this turn, even if it was hand-edited', () => {
@@ -581,13 +599,13 @@ describe('detectOverwrittenHandEdits', () => {
     const result = detectOverwrittenHandEdits(
       { intro_en: 'Hello. HAND-EDIT-MARKER.', strategy: '[]' },
       baseline,
-      ['strategy'], // only strategy is changing this turn — intro_en's hand-edit is not at risk
+      { strategy: [{ step_number: 1, title: 'A', description: 'B' }] }, // only strategy is changing this turn — intro_en's hand-edit is not at risk
     )
     expect(result).toEqual([])
   })
 
   it('never flags a field with no prior AI baseline (nothing to compare against yet)', () => {
-    const result = detectOverwrittenHandEdits({ intro_it: 'Ciao.' }, {}, ['intro_it'])
+    const result = detectOverwrittenHandEdits({ intro_it: 'Ciao.' }, {}, { intro_it: 'Ciao, updated.' })
     expect(result).toEqual([])
   })
 
@@ -596,7 +614,11 @@ describe('detectOverwrittenHandEdits', () => {
       future_developments: [{ text: 'first' }, { text: 'second' }],
     }))
     const handEdited = JSON.stringify([{ text: 'second' }, { text: 'first' }])
-    const result = detectOverwrittenHandEdits({ future_developments: handEdited }, baseline, ['future_developments'])
+    const result = detectOverwrittenHandEdits(
+      { future_developments: handEdited },
+      baseline,
+      { future_developments: [{ text: 'second' }, { text: 'first' }, { text: 'third' }] },
+    )
     expect(result).toEqual(['Future Developments'])
   })
 
@@ -605,7 +627,11 @@ describe('detectOverwrittenHandEdits', () => {
       future_developments: [{ text: 'grow' }],
     }))
     const rePrettyPrinted = JSON.stringify([{ text: 'grow' }], null, 2)
-    const result = detectOverwrittenHandEdits({ future_developments: rePrettyPrinted }, baseline, ['future_developments'])
+    const result = detectOverwrittenHandEdits(
+      { future_developments: rePrettyPrinted },
+      baseline,
+      { future_developments: [{ text: 'grow' }, { text: 'new item' }] },
+    )
     expect(result).toEqual([])
   })
 
@@ -614,19 +640,27 @@ describe('detectOverwrittenHandEdits', () => {
       immediate_actions: [{ title: 'Sign', description: 'Do it now' }],
     }))
     const reordered = JSON.stringify([{ description: 'Do it now', title: 'Sign' }])
-    const result = detectOverwrittenHandEdits({ immediate_actions: reordered }, baseline, ['immediate_actions'])
+    const result = detectOverwrittenHandEdits(
+      { immediate_actions: reordered },
+      baseline,
+      { immediate_actions: [{ title: 'Sign', description: 'Do it now' }, { title: 'Pay', description: 'Now' }] },
+    )
     expect(result).toEqual([])
   })
 
   it('does not flag and does not throw on an empty/whitespace-only current value', () => {
     const baseline = reconstructAiNarrativeBaseline(changedTurns({ intro_it: 'Ciao.' }))
-    expect(() => detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, ['intro_it'])).not.toThrow()
-    expect(detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, ['intro_it'])).toEqual([])
+    expect(() => detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, { intro_it: 'Ciao, updated.' })).not.toThrow()
+    expect(detectOverwrittenHandEdits({ intro_it: '   ' }, baseline, { intro_it: 'Ciao, updated.' })).toEqual([])
   })
 
   it('fails safe (no flag, no throw) when the on-screen JSON is invalid — cannot safely compare', () => {
     const baseline = reconstructAiNarrativeBaseline(changedTurns({ strategy: [{ step_number: 1, title: 'A', description: 'B' }] }))
-    const result = detectOverwrittenHandEdits({ strategy: '{not valid json' }, baseline, ['strategy'])
+    const result = detectOverwrittenHandEdits(
+      { strategy: '{not valid json' },
+      baseline,
+      { strategy: [{ step_number: 1, title: 'A', description: 'C' }] },
+    )
     expect(result).toEqual([])
   })
 
@@ -635,7 +669,7 @@ describe('detectOverwrittenHandEdits', () => {
     const result = detectOverwrittenHandEdits(
       { intro_en: 'Hello, hand-edited.', intro_it: 'Ciao, modificato a mano.' },
       baseline,
-      ['intro_en', 'intro_it'],
+      { intro_en: 'Completely different.', intro_it: 'Del tutto diverso.' },
     )
     expect(result).toEqual(['Introduction (English)', 'Introduction (Italian)'])
   })
