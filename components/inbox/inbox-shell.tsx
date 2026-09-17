@@ -11,6 +11,8 @@ import { ConversationList } from './conversation-list'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
 import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
+import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
+import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
@@ -100,6 +102,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [selectedOrigin, setSelectedOrigin] = useState<string>(ORIGIN_UNKNOWN)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
+  const [whatsappPickerOpen, setWhatsappPickerOpen] = useState(false)
+  const [whatsappNewRecipient, setWhatsappNewRecipient] = useState<WhatsAppRecipient | null>(null)
   const [forwardData, setForwardData] = useState<{
     subject: string
     body: string
@@ -1268,6 +1272,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   <Mail className="h-4 w-4 text-blue-500" />
                   New Email
                 </button>
+                <button
+                  onClick={() => {
+                    setComposeMenuOpen(false)
+                    setWhatsappPickerOpen(true)
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+                >
+                  <MessageSquare className="h-4 w-4 text-green-600" />
+                  New WhatsApp Message
+                </button>
               </div>
             </>
           )}
@@ -1933,6 +1947,34 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             : `Email — ${shareItems[0]?.title || ''}`}
           onShared={shareFromBulk ? clearSelection : undefined}
           onClose={() => { setShareItems(null); setShareFromBulk(false) }}
+        />
+      )}
+
+      <NewWhatsAppRecipientPicker
+        open={whatsappPickerOpen}
+        onClose={() => setWhatsappPickerOpen(false)}
+        onPick={(r) => {
+          setWhatsappPickerOpen(false)
+          setWhatsappNewRecipient(r)
+        }}
+      />
+      {whatsappNewRecipient && (
+        <NewWhatsAppConversationDialog
+          open
+          onClose={() => setWhatsappNewRecipient(null)}
+          leadId={whatsappNewRecipient.type === 'lead' ? whatsappNewRecipient.id : undefined}
+          contactId={whatsappNewRecipient.type === 'contact' ? whatsappNewRecipient.id : undefined}
+          accountId={whatsappNewRecipient.accountId}
+          name={whatsappNewRecipient.name}
+          phone={whatsappNewRecipient.phone}
+          onSent={(conversation) => {
+            setActiveChannel('whatsapp')
+            // The WhatsApp conversation list (app/api/inbox/whatsapp/conversations)
+            // prefixes every row id with "whatsapp:" — new-whatsapp's response
+            // returns the bare group id, so it must be prefixed the same way
+            // here or selection/read-state matching against the list breaks.
+            setSelected({ ...conversation, id: `whatsapp:${conversation.id}` })
+          }}
         />
       )}
     </div>
