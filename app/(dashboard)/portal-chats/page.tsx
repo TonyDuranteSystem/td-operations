@@ -1055,7 +1055,11 @@ export default function PortalChatsPage() {
   // document uploaded, payment received, etc.) — they must count toward the
   // red badge so staff sees the topic immediately.
   const adminUnreadByTopic = combinedMessages.reduce<Record<string, number>>((acc, m) => {
-    if (m.sender_type === 'admin' || m.read_at) return acc
+    // deleted_at: a retired chat-event note (e.g. client resubmitted before
+    // staff handled the original) must not count — it can never be cleared
+    // any other way, since it's invisible to both the read-clear queries and
+    // the What's New feed once deleted. Matches unreadBelowCount below.
+    if (m.sender_type === 'admin' || m.read_at || m.deleted_at) return acc
     // Chat-event rows never get read_at (by design) — once staff has
     // explicitly handled one in What's New, it must stop counting here too,
     // or the badge is stuck red forever regardless of what staff does.

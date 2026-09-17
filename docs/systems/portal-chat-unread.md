@@ -99,6 +99,21 @@ using the same column with roles reversed — not covered here.
   keyed on `read_at` alone). A brand-new, not-yet-handled chat-event still
   shows red/amber immediately — deliberately preserved, per Antonio's original
   2026-05-18 requirement that a new client action must be visible right away.
+  **Follow-up same day:** a pre-existing, separate gap in `adminUnreadByTopic`
+  (predates this fix — confirmed via `git show` on the fix's own commit, the
+  line was untouched context, not introduced by it) meant it was the only one
+  of the three sites that never excluded `deleted_at`. A chat-event note gets
+  soft-deleted, never re-created, whenever a client corrects and resubmits
+  something before staff handled the original (`retireWizardSubmittedNote`
+  and its siblings in `lib/portal/chat-events.ts` — real, live call sites, not
+  theoretical). A retired note that was never handled first is invisible to
+  every clearing path (excluded from read-clear queries by the chat-event
+  marker exclusion, excluded from the What's New feed by its own `deleted_at`
+  filter) — so before this follow-up, it inflated `adminUnreadByTopic` with a
+  permanent, un-clearable phantom count, the one case this whole fix didn't
+  yet cover. Caught by a Bug Hunter pass run deliberately against the shipped
+  commit (not the plan) before production. Fixed by adding the same
+  `|| m.deleted_at` exclusion the other two sites already had.
   No backfill needed — existing stuck rows self-resolve the moment the fix
   ships, since it reads `handled_at`, which was already correctly set on them.
 - **2026-08-30 bug (decision reversed from 2026-08-27's "clear the whole
