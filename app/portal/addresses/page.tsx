@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { MapPin, Building2, ShieldCheck, Mail, FileText, Package } from 'lucide-react'
+import { MapPin, ShieldCheck, Mail, FileText, Package } from 'lucide-react'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { formatAddressString, resolveMailingAddress, type MailingAddressRow } from '@/lib/addresses'
+import { formatAddressString, type MailingAddressRow } from '@/lib/addresses'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -20,16 +20,23 @@ type AddrRow = MailingAddressRow & {
 }
 
 /**
- * Portal Addresses — the client's key addresses in one place:
- *   1. Tony Durante's mailing address (TD-provided business_mailing) — where the
- *      client sends physical mail / signed originals to TD.
- *   2. Their Registered Agent address.
- *   3. Their Legal address (the account's business_legal_address_id).
- *   4. Their Mailing / CMRA address (the account's business_mailing_address_id).
- *   5. Their Shipping address (the account's shipping_address_id) — a separate,
- *      stable slot from Legal (which can be TD's own office for a company TD
- *      formed, or a client's old pre-existing address for one onboarded from
- *      elsewhere — dev job 254834cc, 2026-09-16).
+ * Portal Addresses — the client's key addresses in one place, exactly four,
+ * all set per-account in the CRM (Antonio, dev job 254834cc, 2026-09-17) —
+ * nothing here is hardcoded:
+ *   1. Registered Agent address (registered_agent_address/_provider).
+ *   2. Legal address (business_legal_address_id) — from the Articles of
+ *      Organization.
+ *   3. CMRA Office address (business_mailing_address_id) — normally Tony
+ *      Durante's own Largo office, but a per-account link set in the CRM
+ *      like every other field here, not a code-level constant.
+ *   4. Mailing/Shipping address (shipping_address_id) — normally Tony
+ *      Durante's Seminole office; also where clients mail original
+ *      documents to TD (folds in what used to be a separate "Tony Durante
+ *      Mailing Address" card — same address, same purpose, one section).
+ *
+ * None of these fall back to the account's legacy free-text `physical_address`
+ * column. If a link isn't set in the CRM yet, the card says so — showing a
+ * stale or wrong address instead would be worse than "not on file."
  *
  * Read-only. Access is account-scoped: a client contact resolves via their
  * accounts; a teammate via their granted account.
@@ -56,32 +63,20 @@ export default async function PortalAddressesPage() {
     selectedAccountId = tmAccountId
   }
 
-  // TD-provided mailing address (where the client mails things to TD).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tdAddr } = await (supabaseAdmin as any)
-    .from('addresses')
-    .select('name, agent_name, provider, address_line1, address_line2, city, state, zip, country')
-    .eq('is_td_provided', true)
-    .eq('kind', 'business_mailing')
-    .eq('active', true)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
   // The client's account: RA address (free-text + provider) + the FK-joined
-  // legal / mailing (CMRA) / shipping addresses.
+  // legal / mailing (CMRA) / shipping addresses. Every field here is set
+  // per-account in the CRM — none of it falls back to legacy free-text data.
   let raAddress: string | null = null
   let raProvider: string | null = null
   let legal: AddrRow | null = null
   let cmra: AddrRow | null = null
   let shipping: AddrRow | null = null
   let companyName: string | null = null
-  let legacyMailing: string | null = null
   if (selectedAccountId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, physical_address, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     raAddress = (acct?.registered_agent_address as string | null) ?? null
@@ -90,18 +85,10 @@ export default async function PortalAddressesPage() {
     cmra = (acct?.mailing as AddrRow | null) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
-    legacyMailing = (acct?.physical_address as string | null) ?? null
   }
 
-  const tdLine = formatAddressString(tdAddr as MailingAddressRow | null)
   const legalLine = formatAddressString(legal as MailingAddressRow | null)
-  // Accounts predating the address registry only ever got the free-text
-  // `physical_address` column set, never the linked `mailing` row — without
-  // this fallback (the same one lib/portal/queries.ts::getPortalAccountDetail
-  // already uses for the dashboard) this card would wrongly claim "not on
-  // file" for an address the rest of the system already resolves and relies
-  // on. Dev job 254834cc, 2026-09-17.
-  const cmraLine = resolveMailingAddress(cmra as MailingAddressRow | null, legacyMailing)
+  const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
   const shippingLine = formatAddressString(shipping as MailingAddressRow | null)
 
   return (
@@ -114,18 +101,6 @@ export default async function PortalAddressesPage() {
           {t('addresses.subtitle', locale, translations)}
         </p>
       </div>
-
-      {/* TD mailing address */}
-      <AddressCard
-        icon={Building2}
-        accent="blue"
-        title={t('addresses.tdTitle', locale, translations)}
-        subtitle={t('addresses.tdSubtitle', locale, translations)}
-        name={(tdAddr?.name as string | null) ?? 'Tony Durante LLC'}
-        line={tdLine}
-        country={(tdAddr?.country as string | null) ?? null}
-        empty={t('addresses.tdEmpty', locale, translations)}
-      />
 
       {/* Registered Agent address */}
       <AddressCard
