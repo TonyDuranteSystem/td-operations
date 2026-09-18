@@ -211,7 +211,7 @@ _Regenerated 2026-09-18. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-08-29)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-08-05)_
-- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-09)_
+- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-18)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-09-16)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
