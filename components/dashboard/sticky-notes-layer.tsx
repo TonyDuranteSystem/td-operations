@@ -26,8 +26,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { StickyNote, Plus, Clock, Share2, Check, Loader2, Users, Lock, Building2, MessageSquare, ExternalLink, Trash2, Minimize2, Pin } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { NoteEditor } from '@/components/dashboard/note-editor'
+import { NoteEditor, type CreateDefaults } from '@/components/dashboard/note-editor'
 // AccountCombobox no longer needed here — the create UI is the full NoteEditor now.
+import { CREATE_NOTE_EVENT } from '@/lib/notes/create-note'
 import { useDraggableFab } from '@/components/ui/use-draggable-fab'
 import { useEdgeDock } from '@/components/ui/use-edge-dock'
 import { hoverRevealClass } from '@/lib/ui/edge-dock'
@@ -232,6 +233,9 @@ function StickyNotesInner() {
   }, [noteAlerts, qc])
 
   const [composing, setComposing] = useState(false)
+  // Set only when composing was opened via requestCreateNote (e.g. the WhatsApp
+  // row's sticky-note icon) — overrides the page-subject defaults below.
+  const [externalCreateDefaults, setExternalCreateDefaults] = useState<CreateDefaults | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<Note | null>(null)
   // Both entry points are draggable (Antonio, 2026-07-23) — separate keys so the
@@ -311,6 +315,20 @@ function StickyNotesInner() {
     return () => document.removeEventListener(OPEN_NOTE_EVENT, onOpen)
   }, [notes, parkedNotes])
 
+  /** Open the editor straight into create mode, pre-filled — see lib/notes/create-note.ts. */
+  useEffect(() => {
+    const onCreate = (e: Event) => {
+      const detail = (e as CustomEvent).detail as CreateDefaults | undefined
+      if (!detail) return
+      e.preventDefault()
+      setSheetOpen(false)
+      setExternalCreateDefaults(detail)
+      setComposing(true)
+    }
+    document.addEventListener(CREATE_NOTE_EVENT, onCreate)
+    return () => document.removeEventListener(CREATE_NOTE_EVENT, onCreate)
+  }, [])
+
   const invalidate = useCallback(() => qc.invalidateQueries({ queryKey: ['staff-notes-active'] }), [qc])
 
   if (isError) return null // never block the CRM on a notes failure
@@ -324,11 +342,11 @@ function StickyNotesInner() {
           note={null}
           members={members}
           meId={meId}
-          createDefaults={{
+          createDefaults={externalCreateDefaults ?? {
             ...creationSubjectDefaults(),
             originUrl: typeof window !== 'undefined' ? window.location.pathname + window.location.search : undefined,
           }}
-          onClose={() => setComposing(false)}
+          onClose={() => { setComposing(false); setExternalCreateDefaults(null) }}
           onChanged={invalidate}
         />
       )}
@@ -367,7 +385,7 @@ function StickyNotesInner() {
           ref={deskFab.ref}
           {...deskFab.dragProps}
           style={{ ...deskFab.style, ...deskDock.dockStyle }}
-          onClick={() => { if (!deskFab.dragging) setComposing(true) }}
+          onClick={() => { if (!deskFab.dragging) { setExternalCreateDefaults(null); setComposing(true) } }}
           onDoubleClick={() => { deskFab.reset(); deskDock.revealPermanently() }}
           className={`hidden lg:flex fixed bottom-24 left-4 z-[45] h-11 w-11 touch-none items-center justify-center rounded-full bg-amber-400 text-amber-950 shadow-lg hover:bg-amber-300 ${hoverRevealClass('left')}`}
           aria-label="New note"
@@ -421,7 +439,7 @@ function StickyNotesInner() {
           members={members}
           meId={meId}
           onClose={() => setSheetOpen(false)}
-          onNew={() => { setSheetOpen(false); setComposing(true) }}
+          onNew={() => { setSheetOpen(false); setExternalCreateDefaults(null); setComposing(true) }}
           onChange={invalidate}
           onOpen={(n) => { setSheetOpen(false); setEditing(n) }}
           noteColors={noteColors}

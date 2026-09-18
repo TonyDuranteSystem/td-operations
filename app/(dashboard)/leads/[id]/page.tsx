@@ -349,14 +349,18 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                   field="status"
                   value={lead.status}
                   type="select"
+                  // "Converted"/"Paid" are deliberately NOT selectable here — they
+                  // mean payment confirmed (R094) and must come from the Convert
+                  // to Contact / Confirm Payment actions, never a plain field
+                  // edit (the endpoint also refuses them server-side). A lead
+                  // already in one of those states still displays its real
+                  // value; it just can't be picked as a new value from here.
                   options={[
                     { value: 'New', label: 'New' },
                     { value: 'Call Scheduled', label: 'Call Scheduled' },
                     { value: 'Call Done', label: 'Call Done' },
                     { value: 'Offer Sent', label: 'Offer Sent' },
                     { value: 'Negotiating', label: 'Negotiating' },
-                    { value: 'Paid', label: 'Paid' },
-                    { value: 'Converted', label: 'Converted' },
                     { value: 'Lost', label: 'Lost' },
                     { value: 'Suspended', label: 'Suspended' },
                   ]}

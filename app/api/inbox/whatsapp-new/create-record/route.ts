@@ -19,20 +19,29 @@ export const dynamic = "force-dynamic"
  * accountId only applies to recordType 'contact' — links the new contact to
  * an existing client. Omitted → a standalone contact, matching Antonio's
  * explicit third option.
+ *
+ * Body (attach mode): { groupId, existingContactId } — attaches the WhatsApp
+ * number to a PERSON WHO ALREADY EXISTS at the picked account instead of
+ * creating a new one. Added 2026-09-18 (dev job f331cd43) after "Contact of
+ * an existing client" silently created a duplicate Marinela Marku: the flow
+ * could find the right company but had no way to say "it's HER, not a new
+ * person." Fills the contact's phone only if it is currently null — never
+ * overwrites a real number already on file.
  */
 export async function POST(request: NextRequest) {
   const denied = await requireStaffRoute()
   if (denied) return denied
 
-  const { groupId, fullName, recordType, accountId } = await request.json() as {
+  const { groupId, fullName, recordType, accountId, existingContactId } = await request.json() as {
     groupId?: string
     fullName?: string
     recordType?: "lead" | "contact"
     accountId?: string | null
+    existingContactId?: string
   }
 
-  if (!groupId || !fullName?.trim() || (recordType !== "lead" && recordType !== "contact")) {
-    return NextResponse.json({ error: "groupId, fullName, and a valid recordType are required" }, { status: 400 })
+  if (!groupId) {
+    return NextResponse.json({ error: "groupId is required" }, { status: 400 })
   }
 
   const { data: group } = await supabaseAdmin
@@ -44,6 +53,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Conversation not found" }, { status: 404 })
   }
   const phone = `+${group.external_group_id.replace(/\D/g, "")}`
+
+  if (existingContactId) {
+    const { data: existing, error: fetchError } = await supabaseAdmin
+      .from("contacts")
+      .select("id, full_name, phone")
+      .eq("id", existingContactId)
+      .single()
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: "That contact could not be found" }, { status: 404 })
+    }
+
+    if (!existing.phone) {
+      // eslint-disable-next-line no-restricted-syntax -- same accepted pre-P2.4 pattern as the contacts.insert below in this file, extract to lib/operations/ per dev_task fda76fd3
+      await supabaseAdmin.from("contacts").update({ phone }).eq("id", existingContactId)
+    }
+
+    await supabaseAdmin
+      .from("messaging_groups")
+      .update({ contact_id: existingContactId, account_id: accountId || null, group_name: existing.full_name })
+      .eq("id", groupId)
+
+    return NextResponse.json({ success: true, record: { type: "contact", id: existingContactId, name: existing.full_name } })
+  }
+
+  if (!fullName?.trim() || (recordType !== "lead" && recordType !== "contact")) {
+    return NextResponse.json({ error: "groupId, fullName, and a valid recordType are required" }, { status: 400 })
+  }
   const name = fullName.trim()
 
   try {

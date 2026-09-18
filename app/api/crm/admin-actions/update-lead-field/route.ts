@@ -24,6 +24,11 @@ const ALLOWED_FIELDS = [
   "status",
 ]
 
+// R094: "Converted"/"Paid" mean payment confirmed — never a plain field edit.
+// Dedicated flows (Convert to Contact, Confirm Payment, the payment webhooks)
+// are the only paths allowed to set them; this generic endpoint must refuse.
+const BLOCKED_STATUS_VALUES = ["Converted", "Paid"]
+
 export async function POST(request: Request) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -53,6 +58,13 @@ export async function POST(request: Request) {
       if (!emailRegex.test(value.trim())) {
         return NextResponse.json({ error: "Invalid email format" }, { status: 400 })
       }
+    }
+
+    if (field === "status" && BLOCKED_STATUS_VALUES.includes(value)) {
+      return NextResponse.json(
+        { error: `Status "${value}" cannot be set directly. Use Convert to Contact / Confirm Payment on the lead's Actions panel.` },
+        { status: 400 }
+      )
     }
 
     const { data: lead } = await supabaseAdmin
