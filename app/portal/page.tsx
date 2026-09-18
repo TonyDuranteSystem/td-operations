@@ -984,15 +984,48 @@ export default async function PortalDashboardPage() {
             <InfoRow icon={Calendar} label={t('dashboard.formation', locale, translations)} value={formatDate(account.formation_date)} />
             <InfoRow icon={Shield} label={t('dashboard.ein', locale, translations)} value={formatEin(account.ein_number)} />
             {account.filing_id && <InfoRow icon={FileText} label={t('profile.filingId', locale, translations)} value={account.filing_id} />}
-            {account.legal_address && <InfoRow icon={Building2} label={t('dashboard.legalAddress', locale, translations)} value={account.legal_address} />}
-            {account.registered_agent_address && <InfoRow icon={ShieldCheck} label={t('dashboard.raAddress', locale, translations)} value={account.registered_agent_address} />}
-            {account.physical_address && <InfoRow icon={Mail} label={t('dashboard.mailingAddress', locale, translations)} value={account.physical_address} />}
-            {account.shipping_address && <InfoRow icon={Package} label={t('dashboard.shippingAddress', locale, translations)} value={account.shipping_address} />}
           </div>
-          <Link href="/portal/addresses" className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1">
-            {t('dashboard.whatAreTheseAddresses', locale, translations)}
-            <ChevronRight className="h-3 w-3" />
-          </Link>
+        </div>
+
+        {/* Your Addresses Card — always shows all four, full width so the
+            descriptions have room to breathe (Antonio, dev job 254834cc,
+            2026-09-17: descriptions must stay full-length, not shortened;
+            every account shows all four, never silently hiding one). */}
+        <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('addresses.title', locale, translations)}</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">{t('addresses.subtitle', locale, translations)}</p>
+          </div>
+          <div className="space-y-4">
+            <AddressInfoRow
+              icon={ShieldCheck}
+              label={t('dashboard.raAddress', locale, translations)}
+              description={t('addresses.raSubtitleDefault', locale, translations)}
+              value={account.registered_agent_address}
+              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+            />
+            <AddressInfoRow
+              icon={FileText}
+              label={t('dashboard.legalAddress', locale, translations)}
+              description={t('addresses.legalSubtitle', locale, translations)}
+              value={account.legal_address}
+              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+            />
+            <AddressInfoRow
+              icon={Mail}
+              label={t('dashboard.mailingAddress', locale, translations)}
+              description={t('addresses.cmraSubtitle', locale, translations)}
+              value={account.physical_address}
+              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+            />
+            <AddressInfoRow
+              icon={Package}
+              label={t('dashboard.shippingAddress', locale, translations)}
+              description={t('addresses.shippingSubtitle', locale, translations)}
+              value={account.shipping_address}
+              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+            />
+          </div>
         </div>
 
         {/* Members Card — shown for multi-member LLCs or when multiple contacts */}
@@ -1194,6 +1227,27 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
       <div className="flex flex-col sm:flex-row sm:gap-2 min-w-0">
         <span className="text-zinc-500 text-xs sm:text-sm sm:min-w-[110px] shrink-0">{label}</span>
         <span className="font-medium text-zinc-900 text-sm break-words">{value}</span>
+      </div>
+    </div>
+  )
+}
+
+// One of the four addresses on the "Your Addresses" card — always renders,
+// with its full plain-English description, never hidden when empty.
+function AddressInfoRow({ icon: Icon, label, description, value, emptyText }: {
+  icon: React.ElementType
+  label: string
+  description: string
+  value: string | null
+  emptyText: string
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <Icon className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <span className="text-zinc-700 text-sm font-medium">{label}</span>
+        <p className="text-xs text-zinc-400 mt-0.5">{description}</p>
+        <p className="text-sm text-zinc-900 break-words mt-1">{value ?? <span className="text-zinc-400">{emptyText}</span>}</p>
       </div>
     </div>
   )

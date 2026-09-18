@@ -19,6 +19,16 @@ import { X, Loader2, Send, Paperclip, Sparkles, MessageCircle } from 'lucide-rea
 import { toast } from 'sonner'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 
+interface SentConversation {
+  id: string
+  channel: 'whatsapp'
+  name: string
+  preview: string
+  unread: number
+  lastMessageAt: string
+  accountId: string | null
+}
+
 interface NewWhatsAppConversationDialogProps {
   open: boolean
   onClose: () => void
@@ -27,6 +37,11 @@ interface NewWhatsAppConversationDialogProps {
   accountId?: string | null
   name: string
   phone: string
+  /** Notified with the created/updated conversation right after a successful
+   *  send — lets a caller inside the Inbox itself (unlike a lead/contact
+   *  page, which has nowhere to navigate to) select it and switch to the
+   *  WhatsApp tab. */
+  onSent?: (conversation: SentConversation) => void
 }
 
 interface StagedFile {
@@ -76,6 +91,7 @@ export function NewWhatsAppConversationDialog({
   accountId,
   name,
   phone,
+  onSent,
 }: NewWhatsAppConversationDialogProps) {
   const identityId = leadId ?? contactId ?? ''
   const queryClient = useQueryClient()
@@ -122,13 +138,17 @@ export function NewWhatsAppConversationDialog({
       }
       return res.json()
     },
-    onSuccess: () => {
+    onSuccess: (data: { conversation: SentConversation }) => {
       saveDraft(identityId, '') // clears it
       setMessage('')
       setFile(null)
       setConfirming(false)
       toast.success(`Sent to ${name}`)
-      queryClient.invalidateQueries({ queryKey: ['whatsapp-conversations'] })
+      // The Inbox's list is keyed 'inbox-conversations' regardless of
+      // channel (see conversation-list.tsx) — 'whatsapp-conversations' was
+      // never a real query anywhere in this app.
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      onSent?.(data.conversation)
       onClose()
     },
     onError: (err: Error) => {

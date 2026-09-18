@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { callWorkerWithAttachments } from '@/lib/ai-agent/attachment-reader'
-import { toWhatsAppJid } from '@/lib/messaging/phone'
+import { toWhatsAppJid, jidToE164 } from '@/lib/messaging/phone'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const maxDuration = 300
@@ -24,7 +24,10 @@ export const maxDuration = 300
  * would risk grounding a cold-lead draft in language that doesn't apply yet
  * (Senior Engineer finding, dev job f331cd43).
  *
- * Body: { leadId?, contactId?, phone }. Exactly one of leadId/contactId.
+ * Body: { leadId?, contactId?, phone? } for a brand-new conversation, or
+ * { groupId } for a reply inside an existing one (leadId/contactId/phone are
+ * then resolved from the conversation itself, falling back to phone-only
+ * context when it has no CRM link).
  */
 export async function POST(request: NextRequest) {
   const rl = checkRateLimit(getRateLimitKey(request) + ':whatsapp-suggest', 6, 60_000)
@@ -42,19 +45,48 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { leadId, contactId, phone } = await request.json() as {
+  const { leadId: leadIdBody, contactId: contactIdBody, phone: phoneBody, groupId } = await request.json() as {
     leadId?: string
     contactId?: string
     phone?: string
+    /** Existing conversation to draft a reply for — an alternative to
+     *  leadId/contactId for a conversation with no CRM link (common: most
+     *  WhatsApp groups are phone-only, see docs/systems/messaging.md). */
+    groupId?: string
   }
-  if (!leadId && !contactId) {
-    return NextResponse.json({ error: 'leadId or contactId required' }, { status: 400 })
+  if (!leadIdBody && !contactIdBody && !groupId) {
+    return NextResponse.json({ error: 'leadId, contactId, or groupId required' }, { status: 400 })
   }
-  if (!phone) {
+  if (!phoneBody && !groupId) {
     return NextResponse.json({ error: 'phone required' }, { status: 400 })
   }
 
+  let leadId = leadIdBody
+  let contactId = contactIdBody
+  let phone = phoneBody
+
   try {
+    // 0. An existing conversation may already carry a lead/contact link and
+    // always carries the phone (via its JID) — resolve those first so the
+    // rest of this route (which was written for the "new conversation"
+    // case) doesn't need a second code path.
+    if (groupId) {
+      const { data: group } = await supabaseAdmin
+        .from('messaging_groups')
+        .select('external_group_id, lead_id, contact_id')
+        .eq('id', groupId)
+        .single()
+      if (!group) {
+        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+      }
+      leadId = leadId ?? group.lead_id ?? undefined
+      contactId = contactId ?? group.contact_id ?? undefined
+      phone = phone ?? jidToE164(group.external_group_id)
+    }
+    if (!phone) {
+      return NextResponse.json({ error: 'Could not resolve a phone number for this conversation' }, { status: 400 })
+    }
+
     // 1. Load the (thin) lead/contact record this draft is for.
     let name: string | null = null
     let sourceNote = ''
@@ -110,11 +142,24 @@ export async function POST(request: NextRequest) {
 
     const userMessage = `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
 
-    const { reply } = await callWorkerWithAttachments(userMessage, {
+    const { reply, reachedMaxLoops } = await callWorkerWithAttachments(userMessage, {
       systemPromptOverride,
       enableDocReads: false,
-      maxIterations: 3,
+      maxIterations: 6,
     })
+
+    // A drafting task this thin should never need tool calls at all — but if
+    // the worker loop ever exhausts its step budget without a real answer, its
+    // generic "I reached my working limit..." fallback text must NOT be
+    // handed back as if it were a drafted message: it would land silently in
+    // the compose box looking exactly like a real suggestion (caught live,
+    // 2026-09-17 — Antonio got that exact internal fallback text as a "draft").
+    if (reachedMaxLoops || !reply?.trim()) {
+      return NextResponse.json(
+        { error: 'Could not generate a suggestion — please try again or write the message yourself.' },
+        { status: 502 }
+      )
+    }
 
     return NextResponse.json({ suggestion: reply, provider: 'anthropic' })
   } catch (err: unknown) {
