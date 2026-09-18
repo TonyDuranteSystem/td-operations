@@ -6,8 +6,8 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { formatAddressString, type MailingAddressRow } from '@/lib/addresses'
-import { t, getLocale } from '@/lib/portal/i18n'
+import { type MailingAddressRow } from '@/lib/addresses'
+import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
 export const dynamic = 'force-dynamic'
@@ -70,7 +70,8 @@ export default async function PortalAddressesPage() {
   // does, because unlike CMRA its legacy text and FK represent the exact
   // same fact (just two storage locations for it), not two different
   // addresses. Dev job 254834cc, 2026-09-18.
-  let raAddress: string | null = null
+  let raRow: AddrRow | null = null
+  let raLegacyAddress: string | null = null
   let raProvider: string | null = null
   let legal: AddrRow | null = null
   let cmra: AddrRow | null = null
@@ -88,18 +89,14 @@ export default async function PortalAddressesPage() {
     // account set up through it has a real, verified RA the CRM can see, but
     // these columns stay null. Prefer the linked row; fall back to the
     // legacy text only for accounts never migrated. Dev job 254834cc, 2026-09-18.
-    const raRow = (acct?.registered_agent as AddrRow | null) ?? null
-    raAddress = formatAddressString(raRow as MailingAddressRow | null) ?? (acct?.registered_agent_address as string | null) ?? null
+    raRow = (acct?.registered_agent as AddrRow | null) ?? null
+    raLegacyAddress = raRow?.address_line1 ? null : ((acct?.registered_agent_address as string | null) ?? null)
     raProvider = (raRow?.provider as string | null) ?? (acct?.registered_agent_provider as string | null) ?? null
     legal = (acct?.legal as AddrRow | null) ?? null
     cmra = (acct?.mailing as AddrRow | null) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }
-
-  const legalLine = formatAddressString(legal as MailingAddressRow | null)
-  const cmraLine = formatAddressString(cmra as MailingAddressRow | null)
-  const shippingLine = formatAddressString(shipping as MailingAddressRow | null)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-6">
@@ -119,9 +116,12 @@ export default async function PortalAddressesPage() {
         title={t('addresses.raTitle', locale, translations)}
         subtitle={raProvider ? `Provider: ${raProvider}` : t('addresses.raSubtitleDefault', locale, translations)}
         name={companyName}
-        line={raAddress}
+        addr={raRow}
+        legacyText={raLegacyAddress}
         country={null}
         empty={t('addresses.raEmpty', locale, translations)}
+        locale={locale}
+        translations={translations}
       />
 
       {/* Legal address */}
@@ -131,9 +131,12 @@ export default async function PortalAddressesPage() {
         title={t('addresses.legalTitle', locale, translations)}
         subtitle={t('addresses.legalSubtitle', locale, translations)}
         name={(legal?.name as string | null) ?? companyName}
-        line={legalLine}
+        addr={legal}
+        legacyText={null}
         country={(legal?.country as string | null) ?? null}
         empty={t('addresses.legalEmpty', locale, translations)}
+        locale={locale}
+        translations={translations}
       />
 
       {/* Mailing / CMRA address */}
@@ -143,9 +146,12 @@ export default async function PortalAddressesPage() {
         title={t('addresses.cmraTitle', locale, translations)}
         subtitle={t('addresses.cmraSubtitle', locale, translations)}
         name={(cmra?.name as string | null) ?? companyName}
-        line={cmraLine}
+        addr={cmra}
+        legacyText={null}
         country={(cmra?.country as string | null) ?? null}
         empty={t('addresses.cmraEmpty', locale, translations)}
+        locale={locale}
+        translations={translations}
       />
 
       {/* Shipping address */}
@@ -155,9 +161,12 @@ export default async function PortalAddressesPage() {
         title={t('addresses.shippingTitle', locale, translations)}
         subtitle={t('addresses.shippingSubtitle', locale, translations)}
         name={(shipping?.name as string | null) ?? companyName}
-        line={shippingLine}
+        addr={shipping}
+        legacyText={null}
         country={(shipping?.country as string | null) ?? null}
         empty={t('addresses.shippingEmpty', locale, translations)}
+        locale={locale}
+        translations={translations}
       />
     </div>
   )
@@ -171,19 +180,29 @@ const ACCENTS: Record<string, string> = {
   rose: 'text-rose-600 bg-rose-50',
 }
 
+// Antonio, 2026-09-18: each field on its own labeled line (Address / Suite /
+// City / State / Zip Code), not one joined string. Only possible when the
+// address is a CRM-linked structured row (`addr`) — the RA card's legacy
+// free-text fallback (`legacyText`) has no fields to split, so it renders as
+// one plain line instead.
 function AddressCard({
-  icon: Icon, accent, title, subtitle, name, line, country, empty,
+  icon: Icon, accent, title, subtitle, name, addr, legacyText, country, empty, locale, translations,
 }: {
   icon: React.ElementType
   accent: string
   title: string
   subtitle: string
   name: string | null
-  line: string | null
+  addr: AddrRow | null
+  legacyText: string | null
   country: string | null
   empty: string
+  locale: Locale
+  translations: Record<string, string>
 }) {
   const showCountry = country && !['US', 'USA', 'United States'].includes(country.trim())
+  const hasStructured = !!addr?.address_line1
+  const hasAny = hasStructured || !!legacyText
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">
       <div className="flex items-start gap-3">
@@ -193,10 +212,20 @@ function AddressCard({
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
           <p className="text-xs text-zinc-600 mt-0.5">{subtitle}</p>
-          {line ? (
-            <div className="mt-3 text-sm text-zinc-800 leading-relaxed select-all">
+          {hasAny ? (
+            <div className="mt-3 text-sm text-zinc-800 leading-relaxed select-all space-y-0.5">
               {name && <div className="font-medium">{name}</div>}
-              <div>{line}</div>
+              {hasStructured ? (
+                <>
+                  <div><span className="text-zinc-500">{t('addresses.labelAddress', locale, translations)}:</span> {addr!.address_line1}</div>
+                  {addr!.address_line2 && <div><span className="text-zinc-500">{t('addresses.labelSuite', locale, translations)}:</span> {addr!.address_line2}</div>}
+                  <div><span className="text-zinc-500">{t('addresses.labelCity', locale, translations)}:</span> {addr!.city}</div>
+                  <div><span className="text-zinc-500">{t('addresses.labelState', locale, translations)}:</span> {addr!.state}</div>
+                  <div><span className="text-zinc-500">{t('addresses.labelZip', locale, translations)}:</span> {addr!.zip}</div>
+                </>
+              ) : (
+                <div>{legacyText}</div>
+              )}
               {showCountry && <div>{country}</div>}
             </div>
           ) : (

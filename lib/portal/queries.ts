@@ -484,6 +484,16 @@ export async function getPortalAccountDetail(accountId: string) {
     // for accounts never migrated to the FK. Dev job 254834cc, 2026-09-18.
     registered_agent_address: resolveMailingAddress(data.registered_agent, data.registered_agent_address),
     registered_agent_provider: data.registered_agent?.provider ?? data.registered_agent_provider,
+    // Structured rows, kept alongside the plain-string fields above, so the
+    // Overview page's Addresses card can render one labeled line per field
+    // (Address/Suite/City/State/Zip) instead of one joined string. Only
+    // populated when a CRM-linked row exists — an account still on the
+    // legacy free-text columns has no structure to label, so the card falls
+    // back to the plain string in that case. Antonio, 2026-09-18.
+    legal_address_parts: data.legal_address ?? null,
+    mailing_address_parts: data.mailing_address ?? null,
+    shipping_address_parts: data.shipping_address ?? null,
+    registered_agent_address_parts: data.registered_agent ?? null,
   }
 }
 
