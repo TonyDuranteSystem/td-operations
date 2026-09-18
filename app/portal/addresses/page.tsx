@@ -180,6 +180,19 @@ const ACCENTS: Record<string, string> = {
   rose: 'text-rose-600 bg-rose-50',
 }
 
+// Antonio, 2026-09-18: the description under each address title must be
+// "more evident and attract the client's attention" — bumped from a small
+// gray line to bold, larger, color-coded text matching the card's own
+// accent (same palette as the icon badge above), on both this page and the
+// Overview dashboard card.
+const ACCENT_TEXT: Record<string, string> = {
+  blue: 'text-blue-700',
+  emerald: 'text-emerald-700',
+  violet: 'text-violet-700',
+  amber: 'text-amber-700',
+  rose: 'text-rose-700',
+}
+
 // Antonio, 2026-09-18: each field on its own labeled line (Address / Suite /
 // City / State / Zip Code), not one joined string. Only possible when the
 // address is a CRM-linked structured row (`addr`) — the RA card's legacy
@@ -215,7 +228,7 @@ function AddressCard({
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
-          <p className="text-xs text-zinc-600 mt-0.5">{subtitle}</p>
+          <p className={`text-sm font-semibold mt-0.5 ${ACCENT_TEXT[accent] ?? ACCENT_TEXT.blue}`}>{subtitle}</p>
           {hasAny ? (
             <div className="mt-3 text-sm text-zinc-800 leading-relaxed select-all space-y-0.5">
               {name && <div className="font-medium">{name}</div>}
