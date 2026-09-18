@@ -43,13 +43,21 @@ interface Body {
   feed_id?: string
   account_id?: string
   contact_id?: string
+  /**
+   * Branch C only — a LEAD who has paid for something (a strategy call) but
+   * has not signed/paid for a real service yet, so no contact record exists
+   * for them. Deliberately not accepted by Branch A/B: a lead has no service
+   * deliveries to attach to and no business creating one — only the paid-call
+   * path is valid for this target type.
+   */
+  lead_id?: string
   /** Branch B only — required when service_delivery_id is absent. */
   service_type?: string
   /** Branch B only — defaults to service_type. */
   service_name?: string
   /** Branch A — when set, attach payment to this SD instead of creating one. */
   service_delivery_id?: string
-  /** Branch C — this transaction was a PAID STRATEGY CALL. Contact target only. */
+  /** Branch C — this transaction was a PAID STRATEGY CALL. Contact or lead target only. */
   paid_call?: boolean
   /** Branch C — "revenue only, history kept": the credit is born already used. */
   paid_call_revenue_only?: boolean
@@ -74,6 +82,7 @@ export async function POST(req: NextRequest) {
   const feedId = body.feed_id?.trim()
   const accountId = body.account_id?.trim()
   const contactId = body.contact_id?.trim()
+  const leadId = body.lead_id?.trim()
   const serviceDeliveryId = body.service_delivery_id?.trim()
   const serviceType = body.service_type?.trim()
   const serviceName = (body.service_name?.trim() || serviceType || "").slice(0, 200)
@@ -90,15 +99,26 @@ export async function POST(req: NextRequest) {
   if (!feedId) {
     return NextResponse.json({ error: "feed_id is required" }, { status: 400 })
   }
-  if (!accountId && !contactId) {
+  const targetCount = [accountId, contactId, leadId].filter(Boolean).length
+  if (targetCount === 0) {
     return NextResponse.json(
-      { error: "account_id or contact_id required" },
+      { error: "account_id, contact_id, or lead_id required" },
       { status: 400 },
     )
   }
-  if (accountId && contactId) {
+  if (targetCount > 1) {
     return NextResponse.json(
-      { error: "pass account_id OR contact_id, not both" },
+      { error: "pass exactly one of account_id, contact_id, or lead_id" },
+      { status: 400 },
+    )
+  }
+  // A lead has no service deliveries and no business getting a real invoice
+  // for one — the ONLY thing a lead target may be used for is recording a
+  // paid call. Antonio's rule: recording it must never itself convert the
+  // lead into a client.
+  if (leadId && !isPaidCall) {
+    return NextResponse.json(
+      { error: "A lead can only be used for a paid strategy call — pick or create a contact for any other invoice." },
       { status: 400 },
     )
   }
@@ -119,9 +139,9 @@ export async function POST(req: NextRequest) {
   //                          nothing is deductible but the client's history
   //                          still shows they paid for a call.
   if (isPaidCall) {
-    if (!contactId) {
+    if (!contactId && !leadId) {
       return NextResponse.json(
-        { error: "A paid strategy call is recorded against a PERSON — pick a contact, not a company." },
+        { error: "A paid strategy call is recorded against a PERSON — pick a contact or a lead, not a company." },
         { status: 400 },
       )
     }
@@ -134,12 +154,31 @@ export async function POST(req: NextRequest) {
     const feed = feedRow as { amount: number; currency: string; transaction_date: string; status: string } | null
     if (!feed) return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
 
-    const { data: person } = await supabaseAdmin
-      .from("contacts").select("email, full_name").eq("id", contactId).maybeSingle()
-    const p = person as { email: string | null; full_name: string | null } | null
-    if (!p?.email) {
+    // Resolve the target's email/name/is_test regardless of whether it's an
+    // existing contact or a lead who hasn't become one yet — recordPaidCall
+    // only ever needs an email; it finds-or-creates the actual contact.
+    let personEmail: string | null = null
+    let personName: string | null = null
+    let personIsTest = false
+    if (contactId) {
+      const { data: person } = await supabaseAdmin
+        .from("contacts").select("email, full_name, is_test").eq("id", contactId).maybeSingle()
+      const p = person as { email: string | null; full_name: string | null; is_test: boolean | null } | null
+      personEmail = p?.email ?? null
+      personName = p?.full_name ?? null
+      personIsTest = !!p?.is_test
+    } else if (leadId) {
+      const { data: lead } = await supabaseAdmin
+        .from("leads").select("email, full_name, is_test").eq("id", leadId).maybeSingle()
+      const l = lead as { email: string | null; full_name: string | null; is_test: boolean | null } | null
+      if (!l) return NextResponse.json({ error: "Lead not found" }, { status: 404 })
+      personEmail = l.email
+      personName = l.full_name
+      personIsTest = !!l.is_test
+    }
+    if (!personEmail) {
       return NextResponse.json(
-        { error: "That contact has no email address, so the credit could never be found again. Add one first." },
+        { error: `That ${leadId ? "lead" : "contact"} has no email address, so the credit could never be found again. Add one first.` },
         { status: 400 },
       )
     }
@@ -152,11 +191,49 @@ export async function POST(req: NextRequest) {
           currency: String(feed.currency).toUpperCase() === "EUR" ? "EUR" : "USD",
           provider: "manual",
         },
-        inviteeEmail: p.email,
-        inviteeName: p.full_name,
+        inviteeEmail: personEmail,
+        inviteeName: personName,
         callDate: feed.transaction_date,
+        isTest: personIsTest,
         manual: { feedId, creditUsedAtCreation: paidCallRevenueOnly },
       })
+
+      // Idempotent replay guard: the invoice/credit pair is keyed on the FEED
+      // row, not the target, so re-submitting this same transaction against a
+      // DIFFERENT person (a wrong pick, corrected and resubmitted; or two
+      // duplicate lead rows for the same human) would otherwise return the
+      // FIRST attempt's invoice while this response reports the freshly
+      // resolved contact — money silently stays on the wrong person while
+      // staff are told it succeeded on the right one. Verify they agree.
+      const { data: bookedRow } = await supabaseAdmin
+        .from("payments").select("contact_id").eq("id", result.invoiceId).maybeSingle()
+      const bookedContactId = (bookedRow as { contact_id: string | null } | null)?.contact_id ?? null
+      if (bookedContactId && bookedContactId !== result.contactId) {
+        return NextResponse.json(
+          {
+            error:
+              "This transaction was already recorded as a paid call for a different person. " +
+              "If that was the wrong pick, fix it by hand on the existing invoice/credit — resubmitting here will not move the money.",
+          },
+          { status: 409 },
+        )
+      }
+
+      // Tag the LEAD (never converted_to_contact_id — that flips status to
+      // Converted and is reserved for a real signed+paid offer, R094). Mirrors
+      // the Calendly webhook's own existing pattern for the same situation:
+      // the CRM's lead/contact-link diagnostic already knows this column
+      // means "linked, but deliberately not a sales conversion" and won't
+      // flag it — the lead stays exactly a lead. Only set if not already
+      // pointing somewhere, so this never clobbers an existing link.
+      if (leadId) {
+        const { error: tagErr } = await supabaseAdmin
+          .from("leads")
+          .update({ existing_client_contact_id: result.contactId })
+          .eq("id", leadId)
+          .is("existing_client_contact_id", null)
+        if (tagErr) console.error(`[create-from-feed] failed to tag lead ${leadId} with contact ${result.contactId}:`, tagErr.message)
+      }
 
       const match = await manualMatch(feedId, result.invoiceId)
       return NextResponse.json({
