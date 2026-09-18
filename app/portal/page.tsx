@@ -999,6 +999,7 @@ export default async function PortalDashboardPage() {
           <div className="space-y-4">
             <AddressInfoRow
               icon={ShieldCheck}
+              accent="emerald"
               label={t('dashboard.raAddress', locale, translations)}
               description={t('addresses.raSubtitleDefault', locale, translations)}
               parts={account.registered_agent_address_parts}
@@ -1009,6 +1010,7 @@ export default async function PortalDashboardPage() {
             />
             <AddressInfoRow
               icon={FileText}
+              accent="amber"
               label={t('dashboard.legalAddress', locale, translations)}
               description={t('addresses.legalSubtitle', locale, translations)}
               parts={account.legal_address_parts}
@@ -1019,6 +1021,7 @@ export default async function PortalDashboardPage() {
             />
             <AddressInfoRow
               icon={Mail}
+              accent="violet"
               label={t('dashboard.mailingAddress', locale, translations)}
               description={t('addresses.cmraSubtitle', locale, translations)}
               parts={account.mailing_address_parts}
@@ -1029,6 +1032,7 @@ export default async function PortalDashboardPage() {
             />
             <AddressInfoRow
               icon={Package}
+              accent="rose"
               label={t('dashboard.shippingAddress', locale, translations)}
               description={t('addresses.shippingSubtitle', locale, translations)}
               parts={account.shipping_address_parts}
@@ -1251,8 +1255,21 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
 // account has a CRM-linked structured address (`parts`); an account still on
 // the legacy free-text column has no fields to split, so it falls back to
 // that one plain line.
-function AddressInfoRow({ icon: Icon, label, description, parts, legacyValue, emptyText, locale, translations }: {
+// Antonio, 2026-09-18: the description under each address label must be
+// "more evident and attract the client's attention" — bumped from a small
+// gray line to bold, larger, color-coded text, same palette as the icon
+// (and matching the accent colors already used on the dedicated Addresses
+// page, for visual consistency between the two surfaces).
+const ADDRESS_ACCENT: Record<string, { icon: string; text: string }> = {
+  emerald: { icon: 'text-emerald-600', text: 'text-emerald-700' },
+  amber: { icon: 'text-amber-600', text: 'text-amber-700' },
+  violet: { icon: 'text-violet-600', text: 'text-violet-700' },
+  rose: { icon: 'text-rose-600', text: 'text-rose-700' },
+}
+
+function AddressInfoRow({ icon: Icon, accent, label, description, parts, legacyValue, emptyText, locale, translations }: {
   icon: React.ElementType
+  accent: string
   label: string
   description: string
   parts: { address_line1: string | null; address_line2?: string | null; city: string | null; state: string | null; zip: string | null } | null
@@ -1267,12 +1284,13 @@ function AddressInfoRow({ icon: Icon, label, description, parts, legacyValue, em
   // showing a labeled row with nothing after the colon.
   const hasStructured = !!(parts?.address_line1?.trim() && parts?.city?.trim() && parts?.state?.trim() && parts?.zip?.trim())
   const hasAny = hasStructured || !!legacyValue
+  const colors = ADDRESS_ACCENT[accent] ?? { icon: 'text-zinc-400', text: 'text-zinc-700' }
   return (
     <div className="flex items-start gap-2">
-      <Icon className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5" />
+      <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${colors.icon}`} />
       <div className="min-w-0 flex-1">
         <span className="text-zinc-700 text-sm font-medium">{label}</span>
-        <p className="text-xs text-zinc-600 mt-0.5">{description}</p>
+        <p className={`text-sm font-semibold mt-0.5 ${colors.text}`}>{description}</p>
         {hasAny ? (
           hasStructured ? (
             <div className="text-sm text-zinc-900 break-words mt-1 space-y-0.5">
