@@ -24,7 +24,6 @@ import {
   PenLine,
   FilePen,
   PlusCircle,
-  MapPin,
   Landmark,
   Palette,
 } from 'lucide-react'
@@ -148,7 +147,6 @@ const tierTopItems: NavItem[] = [
 const companyItems: NavItem[] = [
   { key: 'nav.overview', href: '/portal', icon: LayoutDashboard },
   { key: 'nav.myCompany', href: '/portal/company', icon: Briefcase },
-  { key: 'nav.addresses', href: '/portal/addresses', icon: MapPin },
   { key: 'nav.team', href: '/portal/team', icon: Users, teamAdminOnly: true },
   { key: 'nav.documents', href: '/portal/documents', icon: FolderOpen },
   // Bank Applications — self-service guidance to open a business bank account
