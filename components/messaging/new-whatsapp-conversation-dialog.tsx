@@ -14,10 +14,13 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Loader2, Send, Paperclip, Sparkles, MessageCircle } from 'lucide-react'
+import { X, Loader2, Send, Paperclip, Sparkles, MessageCircle, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
+
+const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
 interface SentConversation {
   id: string
@@ -100,8 +103,30 @@ export function NewWhatsAppConversationDialog({
   const [uploading, setUploading] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const emojiPickerRef = useRef<HTMLDivElement>(null)
+
+  // Auto-grow the message box as the draft gets longer (Antonio, 2026-09-17).
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+  }, [message])
+
+  useEffect(() => {
+    if (!showEmojiPicker) return
+    const handleClick = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showEmojiPicker])
 
   // Load the draft when the dialog opens; each open re-checks in case the
   // draft aged out (7-day TTL) since it was written.
@@ -260,12 +285,13 @@ export function NewWhatsAppConversationDialog({
             <div className="px-6 py-4 space-y-3">
               <p className="text-sm text-zinc-500">{phone}</p>
               <textarea
+                ref={textareaRef}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 rows={5}
                 disabled={suggesting}
                 placeholder={suggesting ? 'Writing a suggestion…' : 'Type a WhatsApp message…'}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 resize-none disabled:bg-zinc-50 disabled:text-zinc-400"
+                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 resize-none disabled:bg-zinc-50 disabled:text-zinc-400 max-h-60"
               />
               <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
               {file && (
@@ -280,6 +306,41 @@ export function NewWhatsAppConversationDialog({
               )}
               <div className="flex items-center justify-between pt-1">
                 <div className="flex items-center gap-2">
+                  <div className="relative" ref={emojiPickerRef}>
+                    <button
+                      onClick={() => setShowEmojiPicker((v) => !v)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border hover:bg-zinc-50"
+                    >
+                      <Smile className="h-3.5 w-3.5" />
+                      Emoji
+                    </button>
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-9 left-0 z-30">
+                        <EmojiPicker
+                          onEmojiClick={(emojiData: { emoji: string }) => {
+                            const el = textareaRef.current
+                            if (el) {
+                              const start = el.selectionStart ?? message.length
+                              const end = el.selectionEnd ?? start
+                              const next = message.slice(0, start) + emojiData.emoji + message.slice(end)
+                              setMessage(next)
+                              requestAnimationFrame(() => {
+                                el.focus()
+                                el.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length)
+                              })
+                            } else {
+                              setMessage((prev) => prev + emojiData.emoji)
+                            }
+                            setShowEmojiPicker(false)
+                          }}
+                          width={300}
+                          height={360}
+                          lazyLoadEmojis
+                          skinTonesDisabled
+                        />
+                      </div>
+                    )}
+                  </div>
                   <button
                     onClick={handlePickFile}
                     disabled={!!file}
