@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { dispatchWhatsAppMessage } from '@/lib/messaging/send-dispatcher'
+import { findOrCreateWhatsAppGroup } from '@/lib/messaging/groups'
+import { toWhatsAppJid } from '@/lib/messaging/phone'
+import { resolveWhatsAppAttachmentUrl } from '@/lib/messaging/attachment-staging'
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 
 export const dynamic = 'force-dynamic'
 
 /**
  * POST /api/inbox/new-whatsapp
- * Find or create a WhatsApp messaging_group for a contact, then send the first message.
- * Body: { contactId, phone, message, accountId? }
+ * Find or create a WhatsApp messaging_group for a lead or a contact, then
+ * send the first message. Exactly one of leadId/contactId is required — a
+ * lead has no contact record until it converts, so this cannot require
+ * contactId the way it used to.
+ * Body: { leadId? | contactId?, phone, message, accountId?, attachmentPath? }
  */
 export async function POST(req: NextRequest) {
   // Staff gate — middleware only guarantees "is logged in" for /api routes,
@@ -17,28 +23,34 @@ export async function POST(req: NextRequest) {
   if (denied) return denied
 
   try {
-    const { contactId, phone, message, accountId } = await req.json() as {
-      contactId: string
+    const { leadId, contactId, phone, message, accountId, attachmentPath } = await req.json() as {
+      leadId?: string
+      contactId?: string
       phone: string
       message: string
       accountId?: string | null
+      attachmentPath?: string
     }
 
-    if (!contactId || !phone || !message) {
-      return NextResponse.json({ error: 'contactId, phone, and message are required' }, { status: 400 })
+    if (!leadId && !contactId) {
+      return NextResponse.json({ error: 'leadId or contactId is required' }, { status: 400 })
+    }
+    if (!phone || !message) {
+      return NextResponse.json({ error: 'phone and message are required' }, { status: 400 })
     }
 
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
 
-    // Normalize phone to WhatsApp chat_id format: digits@c.us
-    const digits = phone.replace(/[^\d]/g, '')
-    const chatId = `${digits}@c.us`
+    const chatId = toWhatsAppJid(phone)
 
-    // Find the WhatsApp Lead channel (default channel for outbound)
+    // Find the WhatsApp Lead channel (default channel for outbound) — active
+    // only, ordered so a second/third channel later can't make this ambiguous.
     const { data: channels } = await supabaseAdmin
       .from('messaging_channels')
       .select('id')
       .eq('platform', 'whatsapp')
+      .eq('is_active', true)
+      .order('created_at', { ascending: true })
       .limit(1)
 
     const channelId = channels?.[0]?.id
@@ -46,47 +58,59 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No WhatsApp channel configured' }, { status: 500 })
     }
 
-    // Check if a messaging_group already exists for this chat_id
-    let { data: group } = await supabaseAdmin
-      .from('messaging_groups')
-      .select('id, group_name, external_group_id')
-      .eq('external_group_id', chatId)
-      .single()
-
-    // If not found, create one
-    if (!group) {
-      // Get contact name for group_name
+    // Name for the group label (only matters if the group is new) — from
+    // whichever record this send is scoped to.
+    let groupName: string | null = null
+    if (contactId) {
       const { data: contact } = await supabaseAdmin
         .from('contacts')
         .select('full_name')
         .eq('id', contactId)
         .single()
-
-      const groupName = contact?.full_name ?? phone
-
-      const { data: newGroup, error: insertErr } = await supabaseAdmin
-        .from('messaging_groups')
-        .insert({
-          channel_id: channelId,
-          external_group_id: chatId,
-          group_name: groupName,
-          account_id: accountId || null,
-          contact_id: contactId,
-          unread_count: 0,
-          participant_count: 2,
-        })
-        .select('id, group_name, external_group_id')
+      groupName = contact?.full_name ?? null
+    } else if (leadId) {
+      const { data: lead } = await supabaseAdmin
+        .from('leads')
+        .select('full_name')
+        .eq('id', leadId)
         .single()
+      groupName = lead?.full_name ?? null
+    }
 
-      if (insertErr) {
-        console.error('Failed to create messaging group:', insertErr)
-        return NextResponse.json({ error: 'Failed to create conversation' }, { status: 500 })
+    const groupResult = await findOrCreateWhatsAppGroup({
+      channelId,
+      remoteIdentifier: phone,
+      groupName: groupName ?? phone,
+      accountId: accountId || null,
+      contactId: contactId || null,
+      leadId: leadId || null,
+    })
+    if ('error' in groupResult) {
+      console.error('Failed to find/create messaging group:', groupResult.error)
+      return NextResponse.json({ error: 'Failed to create conversation' }, { status: 500 })
+    }
+    const group = groupResult.group
+
+    let mediaUrl: string | undefined
+    if (attachmentPath) {
+      const resolved = await resolveWhatsAppAttachmentUrl(attachmentPath)
+      if (!resolved) {
+        return NextResponse.json(
+          { error: 'The attachment is no longer available — please re-attach it and try again.' },
+          { status: 400 }
+        )
       }
-      group = newGroup
+      mediaUrl = resolved
     }
 
     // Send message via provider routing (reads provider from messaging_channels)
-    const sendResult = await dispatchWhatsAppMessage(chatId, message, channelId)
+    const sendResult = await dispatchWhatsAppMessage({
+      chatId,
+      message,
+      channelId,
+      groupId: group.id,
+      mediaUrl,
+    })
 
     if (!sendResult.ok) {
       const errMsg = 'error' in sendResult ? sendResult.error : 'Failed to send WhatsApp message'
@@ -97,9 +121,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       conversation: {
-        id: group!.id,
+        id: group.id,
         channel: 'whatsapp',
-        name: group!.group_name,
+        name: group.group_name,
         preview: message.slice(0, 80),
         unread: 0,
         lastMessageAt: new Date().toISOString(),

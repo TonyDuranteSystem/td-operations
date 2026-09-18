@@ -3364,6 +3364,17 @@ export interface WorkerResponse {
    * controls — never left to the reply text to mention. See WorkerArtifact.
    */
   artifacts?: WorkerArtifact[]
+  /**
+   * True when the tool loop exhausted its step budget without the model ever
+   * producing a real answer, so `reply` is the generic "I reached my working
+   * limit..." fallback text rather than a genuine response. A caller that would
+   * otherwise treat `reply` as user-facing content (a drafted message, a value
+   * to display verbatim) MUST check this first — surfacing the fallback text
+   * as if it were real output reads as a completed, on-topic answer when it is
+   * actually an internal failure notice (caught live: it landed in a WhatsApp
+   * compose box as if it were a drafted reply, 2026-09-17).
+   */
+  reachedMaxLoops?: boolean
 }
 
 /**
@@ -5141,6 +5152,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
     toolsUsed: result.toolsUsed,
     pendingOffThreadRecipient: capturedOffThreadAttempts[0] ?? null,
     portalRefusedDraft: sendContext?.portalRefusedDraft ?? null,
+    reachedMaxLoops: result.reachedMaxLoops,
     ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
   }
 }

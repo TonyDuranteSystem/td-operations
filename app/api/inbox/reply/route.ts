@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { dispatchWhatsAppMessage } from "@/lib/messaging/send-dispatcher"
 import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging"
 import {
   parseStagedAttachmentInputs,
   loadStagedEmailAttachments,
@@ -29,11 +31,13 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
       mailbox?: string
+      /** Staged WhatsApp attachment path (whatsapp-new/<uuid>.<ext>) — see lib/messaging/attachment-staging.ts. */
+      attachmentPath?: string
       /** "gala" | "hat" | "text". Replies default to text-only. */
       signature_variant?: string
       /** Which specific Gmail message this replies to — always sent by the
@@ -237,7 +241,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ─── WhatsApp/Telegram via Edge Function ─────────
+    // ─── WhatsApp/Telegram ────────────────────────────
     // Get group info to find external_group_id
     const { supabaseAdmin } = await import("@/lib/supabase-admin")
 
@@ -254,6 +258,49 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // WhatsApp goes through the real provider-agnostic dispatcher — the old
+    // Edge Function below no longer exists in this repo (docs/systems/messaging.md)
+    // and every WhatsApp reply through this route failed until this branch existed.
+    if (channel === "whatsapp") {
+      let mediaUrl: string | undefined
+      if (attachmentPath) {
+        const resolved = await resolveWhatsAppAttachmentUrl(attachmentPath)
+        if (!resolved) {
+          return NextResponse.json(
+            { error: "The attachment is no longer available — please re-attach it and try again." },
+            { status: 400 }
+          )
+        }
+        mediaUrl = resolved
+      }
+
+      const sendResult = await dispatchWhatsAppMessage({
+        chatId: group.external_group_id,
+        message,
+        channelId: group.channel_id,
+        groupId: conversationId,
+        mediaUrl,
+      })
+
+      if (!sendResult.ok) {
+        // The specific reason goes in `error` itself — the client throws on
+        // this field directly (R099), and "Send failed" alone told staff
+        // nothing about whether the number needs reconnecting, is unconfigured,
+        // or the provider rejected the message.
+        return NextResponse.json(
+          { error: (sendResult as { ok: false; error: string }).error },
+          { status: 502 }
+        )
+      }
+
+      return NextResponse.json({
+        success: true,
+        channel: "whatsapp",
+        result: sendResult.result,
+      })
+    }
+
+    // ─── Telegram via Edge Function (unchanged) ──────
     const efUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-message`
 
     const response = await fetch(efUrl, {
