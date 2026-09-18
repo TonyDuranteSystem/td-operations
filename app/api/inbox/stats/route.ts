@@ -19,6 +19,7 @@ export async function GET() {
       supabaseAdmin
         .from("messaging_groups")
         .select("unread_count")
+        .eq("is_active", true)
         .gt("unread_count", 0),
     ])
 

@@ -12,6 +12,7 @@ const channelSingle = vi.fn()
 const messagesInsert = vi.fn()
 const groupsSelectSingle = vi.fn()
 const groupsUpdate = vi.fn()
+const groupsUpdatePayload = vi.fn()
 
 vi.mock("@/lib/supabase-admin", () => {
   const from = vi.fn((table: string) => {
@@ -24,7 +25,10 @@ vi.mock("@/lib/supabase-admin", () => {
     if (table === "messaging_groups") {
       return {
         select: () => ({ eq: () => ({ single: groupsSelectSingle }) }),
-        update: () => ({ eq: groupsUpdate }),
+        update: (payload: unknown) => {
+          groupsUpdatePayload(payload)
+          return { eq: groupsUpdate }
+        },
       }
     }
     throw new Error(`unexpected table ${table}`)
@@ -130,6 +134,29 @@ describe("POST /api/webhooks/2chat/[channelId]", () => {
         content_text: "hello",
         status: "new",
       })
+    )
+  })
+
+  it("revives a deleted (hidden) group when a new inbound message arrives, not just bumps unread_count", async () => {
+    // Bug-hunter finding, dev job f331cd43, 2026-09-18: a client texting back
+    // into a group staff had hidden via Delete used to update the SAME hidden
+    // row's unread_count with no way for it to ever reappear in the Inbox.
+    channelSingle.mockResolvedValue({ data: { id: "ch1", phone_number: "+1", webhook_secret: "s" }, error: null })
+    findOrCreateWhatsAppGroup.mockResolvedValue({ group: { id: "g1", channel_id: "ch1", external_group_id: "x", group_name: null } })
+    messagesInsert.mockResolvedValue({ data: null, error: null })
+    groupsSelectSingle.mockResolvedValue({ data: { unread_count: 0 }, error: null })
+
+    const res = await POST(
+      makeRequest(
+        { uuid: "MSG2", sent_by: "user", remote_phone_number: "+15551234567", message: { text: "still there?" } },
+        "s"
+      ),
+      { params: { channelId: "ch1" } }
+    )
+
+    expect(res.status).toBe(200)
+    expect(groupsUpdatePayload).toHaveBeenCalledWith(
+      expect.objectContaining({ is_active: true, unread_count: 1 })
     )
   })
 
