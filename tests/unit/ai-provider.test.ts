@@ -89,3 +89,58 @@ describe("callAI (Sonnet/Opus only, no Haiku/GPT)", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe("callAI history (conversation memory, 2026-09-16)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-key"
+    fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("omitting history sends exactly one user message — unchanged single-shot behavior", async () => {
+    fetchMock.mockResolvedValueOnce(anthropicOk("hi"))
+    await callAI({ ...baseReq })
+    const body = bodyOf(fetchMock.mock.calls[0])
+    expect(body.messages).toEqual([{ role: "user", content: "user" }])
+  })
+
+  it("an empty history array behaves identically to omitting it", async () => {
+    fetchMock.mockResolvedValueOnce(anthropicOk("hi"))
+    await callAI({ ...baseReq, history: [] })
+    const body = bodyOf(fetchMock.mock.calls[0])
+    expect(body.messages).toEqual([{ role: "user", content: "user" }])
+  })
+
+  it("forwards prior turns as real Anthropic messages BEFORE the new user turn, verbatim and in order", async () => {
+    fetchMock.mockResolvedValueOnce(anthropicOk("turn 3 reply"))
+    const history = [
+      { role: "user" as const, content: "turn 1 instruction" },
+      { role: "assistant" as const, content: '{"note":"did turn 1","changes":{}}' },
+      { role: "user" as const, content: "turn 2 instruction" },
+      { role: "assistant" as const, content: '{"note":"did turn 2","changes":{}}' },
+    ]
+    await callAI({ ...baseReq, userPrompt: "turn 3 instruction", history })
+    const body = bodyOf(fetchMock.mock.calls[0])
+    expect(body.messages).toEqual([
+      ...history,
+      { role: "user", content: "turn 3 instruction" },
+    ])
+  })
+
+  it("history is forwarded on the Opus fallback attempt too, not just the primary", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(false, { error: "overloaded" }, 529))
+      .mockResolvedValueOnce(anthropicOk("recovered"))
+    const history = [{ role: "user" as const, content: "earlier" }, { role: "assistant" as const, content: "earlier reply" }]
+    await callAI({ ...baseReq, history })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(bodyOf(fetchMock.mock.calls[0]).messages).toEqual([...history, { role: "user", content: "user" }])
+    expect(bodyOf(fetchMock.mock.calls[1]).messages).toEqual([...history, { role: "user", content: "user" }])
+  })
+})

@@ -15,7 +15,20 @@
  * tokens) must pass an explicit `timeoutMs` AND set a matching route
  * `maxDuration`, because a big Sonnet generation runs well past the small
  * default. The default was too short and silently timed the offer narrative out.
+ *
+ * CONVERSATION HISTORY (2026-09-16, offer-narrative chat redesign): `history`
+ * carries PRIOR turns as proper Anthropic messages — `[...history, {role:
+ * 'user', content: userPrompt}]` is sent verbatim, never collapsed into a
+ * single user message. This is a small, deliberately contained addition: it
+ * only changes what `messages` contains, nothing about auth, model choice,
+ * or timeout handling. Optional and additive — every existing caller that
+ * omits `history` gets today's exact single-user-message behavior.
  */
+
+export interface AIMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
 
 export interface AIRequest {
   systemPrompt: string
@@ -33,6 +46,15 @@ export interface AIRequest {
    * a matching route `maxDuration`.
    */
   timeoutMs?: number
+  /**
+   * Prior conversation turns, oldest first, sent BEFORE `userPrompt` as real
+   * Anthropic message history (not folded into one user string). Omit or pass
+   * `[]` for a single-shot call — identical to today's behavior. The caller
+   * owns ordering and content; this module does not persist, validate, or
+   * re-order anything (see lib/offers/narrative-conversation.ts for the
+   * offer-narrative caller's race-safe persistence + ordering).
+   */
+  history?: AIMessage[]
 }
 
 export interface AIResult {
@@ -77,7 +99,7 @@ async function callAnthropic(req: AIRequest, modelKey: ModelKey): Promise<string
     model: modelId,
     max_tokens: req.maxTokens,
     system: req.systemPrompt,
-    messages: [{ role: 'user', content: req.userPrompt }],
+    messages: [...(req.history ?? []), { role: 'user', content: req.userPrompt }],
   }
   if (MODELS_ACCEPTING_TEMPERATURE.has(modelKey)) {
     body.temperature = req.temperature

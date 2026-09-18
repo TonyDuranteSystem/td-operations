@@ -69,6 +69,63 @@ export function offerIncludesManagement(contractType?: string | null): boolean {
   return MANAGEMENT_CONTRACT_TYPES.has((contractType || '').trim())
 }
 
+/**
+ * GROUNDING GATES (dev job 2b6e5988 fix + council redesign, 2026-09-16).
+ *
+ * dev_task 2b6e5988: the generator invented "South Dakota" as the formation
+ * state on a real client offer because neither the generate nor the refine
+ * route was ever TOLD the real state — there was no field to send. These two
+ * gates decide when it is safe to assert a specific state/entity type as fact
+ * instead of leaving the writer to guess (or, worse, not guess and invent
+ * something plausible-sounding). Both are re-checked SERVER-SIDE in the
+ * narrative-chat route, never trusted from the dialog alone — the exact
+ * surface where the bug below was found.
+ *
+ * `hasMultipleOptions` reuses the existing multi-option ambiguity signal: a
+ * package picker means the offer doesn't have ONE state/entity-type, it has
+ * several (one per option), so neither may be asserted as THE state/type.
+ */
+
+/**
+ * Whether a formation state may be asserted as fact. Requires BOTH:
+ * unambiguous (not multi-option) AND the offer's contract type is actually
+ * 'formation' — a formation state is only meaningful when a company is
+ * actually being formed in this narrative.
+ *
+ * The contract-type check is NOT redundant with the ambiguity check
+ * (bug-hunter blocker): `formationState` is Create Offer dialog component
+ * state that can survive a staffer switching a formation offer's selected
+ * services to a different service type (e.g. onboarding/ITIN-only) — plain
+ * `useState`, not recomputed from the current selection. `contractType` here
+ * is expected to be the dialog's `derivedContractType`, a `useMemo` that IS
+ * always recomputed from the live selection — so gating on it (rather than
+ * on ambiguity alone) closes exactly the leak: a stale formation state can
+ * never be asserted into a narrative whose contract type has since moved on.
+ */
+export function canGroundFormationState(opts: {
+  contractType?: string | null
+  hasMultipleOptions: boolean
+}): boolean {
+  return !opts.hasMultipleOptions && (opts.contractType || '').trim() === 'formation'
+}
+
+/**
+ * Whether an entity type (SMLLC/MMLLC/Corp) may be asserted as fact. Unlike
+ * formation state, entity type is meaningful for BOTH formation AND
+ * onboarding offers — an onboarding client's already-existing company still
+ * has an entity type that decides its tax filing (see buildUserPrompt's tax
+ * wording) — so it is gated on ambiguity alone, not on contract type.
+ *
+ * Before this fix NEITHER route gated entity type at all: it was sent
+ * unconditionally, so a multi-option offer whose packages disagreed on
+ * entity type (SMLLC vs MMLLC) would still have ONE entity type asserted as
+ * fact for the whole narrative — a live, real gap independent of the
+ * conversational-memory redesign.
+ */
+export function canGroundEntityType(opts: { hasMultipleOptions: boolean }): boolean {
+  return !opts.hasMultipleOptions
+}
+
 /** A selected service as it may arrive from the dialog: a bare name, or a
  * name plus its catalog description (the editable source of truth). */
 export type NarrativeServiceInput = string | { name?: string | null; description?: string | null }
@@ -209,17 +266,20 @@ HOW TO WRITE:
 - Only touch the section(s) his instruction is about; leave every other section exactly as it is (don't return it), so his other edits are preserved.
 - Write in ${lang}. Address the client by the CLIENT name given (never a name from the notes). Don't include pricing/amounts.
 - Don't invent specific facts he didn't give you; otherwise follow his instruction.
-- If a RELEVANT EMAIL block is given, it was found specifically for this instruction — ground your answer in what it actually says. If no such block is given, answer from the instruction and current narrative alone; don't claim to have checked an email you weren't shown.
+- If a RELEVANT EMAIL or RELEVANT CALL CONTEXT block is given, it was found specifically for this instruction — ground your answer in what it actually says. If neither is given, answer from the instruction and current narrative alone; don't claim to have checked an email or call you weren't shown.
 
 ${reference}`
 }
 
 /** User prompt for a refine round: the current narrative (as the staff member
- * currently has it, including hand-edits) + the offer context + the instruction. */
+ * currently has it, including hand-edits) + the offer context + the instruction.
+ * `formationState` must already be gated by the caller (see
+ * {@link canGroundFormationState}) — omit/leave '' when it isn't safe to assert one. */
 export function buildRefineUserPrompt(opts: {
   clientName: string
   contractType: string
   entityType: string
+  formationState?: string
   serviceLines: string[]
   current: { intro_en?: string; intro_it?: string; strategy?: string; next_steps?: string; future_developments?: string; immediate_actions?: string }
   instruction: string
@@ -228,14 +288,36 @@ export function buildRefineUserPrompt(opts: {
   // the route. Absent (not just empty) whenever no lookup was attempted or
   // nothing matched, so the prompt never implies a lookup happened when it didn't.
   emailContext?: string
+  // The client's call notes/transcript, when the instruction asked to check
+  // or re-read the call and a call was actually found — see
+  // findRelevantCallContext() in lib/offers/narrative-call-context.ts. Same
+  // absent-vs-empty contract as emailContext, above.
+  callContext?: string
+  // A note about what changed on the offer SINCE this narrative was last
+  // grounded (state/entity-type/package selection) — surfaced so the model
+  // itself knows a hand-off happened, mirroring the dialog's own visible
+  // staleness warning (see canGroundFormationState's header). Absent when
+  // nothing is stale.
+  staleGroundingNote?: string
 }): string {
   const c = opts.current
   const emailBlock = opts.emailContext
     ? `\nRELEVANT EMAIL (found for this instruction — use it, don't invent beyond it):\n${opts.emailContext}\n`
     : ''
+  const callBlock = opts.callContext
+    ? `\nRELEVANT CALL CONTEXT (found for this instruction — use it, don't invent beyond it):\n${opts.callContext}\n`
+    : ''
+  const stateLine = opts.formationState
+    ? `\nSTATE OF FORMATION: ${opts.formationState} — the ONLY state this offer forms in. Do not mention any other U.S. state.`
+    : opts.contractType === 'formation'
+      ? '\nSTATE OF FORMATION: Not specified — do NOT name or imply any specific U.S. state.'
+      : ''
+  const staleBlock = opts.staleGroundingNote
+    ? `\nNOTE: ${opts.staleGroundingNote}\n`
+    : ''
   return `CLIENT: ${opts.clientName}
 CONTRACT TYPE: ${opts.contractType}
-ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}
+ENTITY TYPE: ${opts.entityType || 'Not specified — keep tax wording generic'}${stateLine}
 SELECTED SERVICES:
 ${opts.serviceLines.map((s) => `- ${s}`).join('\n')}
 
@@ -246,14 +328,17 @@ CURRENT NARRATIVE (refine from exactly this — leave any section you are not as
 [next_steps]: ${c.next_steps || '(empty)'}
 [future_developments]: ${c.future_developments || '(empty)'}
 [immediate_actions]: ${c.immediate_actions || '(empty)'}
-${emailBlock}
+${emailBlock}${callBlock}${staleBlock}
 INSTRUCTION FROM STAFF: ${opts.instruction}
 
 Return the JSON now.`
 }
 
 /** Build the user prompt from the concrete offer inputs. `serviceLines` are the
- * pre-rendered "Name — description" lines from {@link renderServiceLines}. */
+ * pre-rendered "Name — description" lines from {@link renderServiceLines}.
+ * `formationState` must already be gated by the caller (see
+ * {@link canGroundFormationState}) — pass '' when it isn't safe to assert one;
+ * this function does not re-derive the gate, it only renders the decision. */
 export function buildUserPrompt(
   clientName: string,
   language: 'en' | 'it',
@@ -261,13 +346,24 @@ export function buildUserPrompt(
   notesContext: string,
   contractType: string,
   entityType: string,
+  formationState?: string,
 ): string {
+  // dev_task 2b6e5988: the writer once invented "South Dakota" because it was
+  // never told the real state at all — there was no field to send it in.
+  // When the caller withheld a state (ambiguous or not a formation offer),
+  // say so explicitly rather than leaving the line out, so the model reads
+  // "don't invent one" instead of silently treating absence as a green light.
+  const stateLine = formationState
+    ? `\nSTATE OF FORMATION: ${formationState} — this is the ONLY state this offer forms in. Do not mention any other U.S. state.`
+    : contractType === 'formation'
+      ? '\nSTATE OF FORMATION: Not specified — this offer has more than one possible state/option, or the state was not pinned yet. Do NOT name or imply any specific U.S. state.'
+      : ''
   return `Generate offer narrative content for this client:
 
 CLIENT: ${clientName}
 PREFERRED LANGUAGE: ${language === 'it' ? 'Italian' : 'English'}
 CONTRACT TYPE: ${contractType}
-ENTITY TYPE: ${entityType || 'Not specified — keep tax wording generic, do not assume a form or any bookkeeping'}
+ENTITY TYPE: ${entityType || 'Not specified — keep tax wording generic, do not assume a form or any bookkeeping'}${stateLine}
 SELECTED SERVICES (describe ONLY these, plus standard management/portal features ONLY if this offer includes ongoing management):
 ${serviceLines.map((s) => `- ${s}`).join('\n')}
 
@@ -275,4 +371,203 @@ NOTES & CONTEXT (internal — do not reproduce verbatim, use to personalize):
 ${notesContext || 'No additional notes provided.'}
 
 Generate the JSON now.`
+}
+
+/**
+ * Recover a JSON object from a model completion that may not be pure JSON.
+ *
+ * The system prompt tells the model to output ONLY a JSON object, but a
+ * CONVERSATIONAL turn (unlike the old one-shot generate/refine calls) can
+ * carry a staff instruction that pulls against a hard rule elsewhere in the
+ * same prompt — e.g. asked to fill in the language variant the LANGUAGE
+ * RULES say must stay an empty string. Live-verified (2026-09-16): when that
+ * happens the model wraps or replaces the JSON with an explanation instead
+ * of refusing outright, which stripping a code fence alone (the old routes'
+ * only defense) cannot recover from.
+ *
+ * Recovers by slicing between the first '{' and the last '}' — a real JSON
+ * object's own outermost braces once fence markers are gone, so any prose
+ * before/after them is exactly what this discards. Falls through to the
+ * fence-stripped string unchanged if no brace pair is found, so the caller's
+ * own JSON.parse still produces the original, diagnosable error rather than
+ * this helper inventing a different one.
+ */
+export function extractJsonObject(rawText: string): string {
+  const fenceStripped = rawText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim()
+  const start = fenceStripped.indexOf('{')
+  const end = fenceStripped.lastIndexOf('}')
+  if (start === -1 || end === -1 || end < start) return fenceStripped
+  return fenceStripped.slice(start, end + 1)
+}
+
+/** Same UI copy as the field labels in components/offers/create-offer-dialog.tsx
+ * (minus the "(JSON array)" format hint, which doesn't belong in a chat sentence). */
+export const NARRATIVE_FIELD_LABELS: Record<string, string> = {
+  intro_en: 'Introduction (English)',
+  intro_it: 'Introduction (Italian)',
+  strategy: 'Strategy',
+  next_steps: 'Next Steps',
+  future_developments: 'Future Developments',
+  immediate_actions: 'Immediate Actions',
+}
+
+/** Order-independent for object keys, order-sensitive for arrays (reordering
+ * steps is a real change here, not noise). No existing deep-equal dependency
+ * in this codebase for a comparison this small. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => deepEqual(v, b[i]))
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a as Record<string, unknown>)
+    const bKeys = Object.keys(b as Record<string, unknown>)
+    if (aKeys.length !== bKeys.length) return false
+    return aKeys.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+  }
+  return false
+}
+
+/**
+ * Reconstruct "what the AI last set each narrative field to", by replaying
+ * stored turns in order and overlaying each assistant turn's fields onto a
+ * running snapshot. Turn 1's assistant content is the FULL narrative at the
+ * top level; every later turn's assistant content is a `{ note, changes }`
+ * delta holding only the fields that turn actually changed (see
+ * narrative-conversation.ts's module header for why turns are stored this
+ * way) — so a field untouched since turn 1 is still correctly found there.
+ *
+ * Feeds ONLY an advisory hand-edit-loss note (detectOverwrittenHandEdits,
+ * below) — never a decision that can block or alter the actual response —
+ * so a turn whose stored content isn't parseable JSON is silently skipped
+ * rather than thrown.
+ */
+export function reconstructAiNarrativeBaseline(
+  turns: { role: string; content: string }[],
+): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {}
+  for (const turn of turns) {
+    if (turn.role !== 'assistant') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(extractJsonObject(turn.content))
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== 'object') continue
+    const obj = parsed as Record<string, unknown>
+    const fields = (obj.changes && typeof obj.changes === 'object') ? obj.changes as Record<string, unknown> : obj
+    for (const key of Object.keys(NARRATIVE_FIELD_LABELS)) {
+      if (key in fields) snapshot[key] = fields[key]
+    }
+  }
+  return snapshot
+}
+
+/**
+ * Isolate what a human likely INSERTED into a plain-text field: the longest
+ * common prefix and suffix between `before` and `after` are trimmed off,
+ * leaving whatever's left in the middle of `after`. Exact for a pure
+ * insertion (someone clicked into the middle of a sentence and typed) —
+ * the common real-world case this function exists for. For a deletion or a
+ * more tangled edit it can return an empty string even though `after`
+ * genuinely differs from `before`; the caller treats that as "can't isolate
+ * the inserted text" and falls back to its own, more conservative check,
+ * not as "nothing was edited."
+ */
+function extractInsertedMiddle(before: string, after: string): string {
+  let prefixLen = 0
+  while (prefixLen < before.length && prefixLen < after.length && before[prefixLen] === after[prefixLen]) prefixLen++
+  let suffixLen = 0
+  const maxSuffix = Math.min(before.length - prefixLen, after.length - prefixLen)
+  while (
+    suffixLen < maxSuffix &&
+    before[before.length - 1 - suffixLen] === after[after.length - 1 - suffixLen]
+  ) suffixLen++
+  return after.slice(prefixLen, after.length - suffixLen)
+}
+
+/**
+ * Which of THIS turn's changed fields the human had ALSO hand-edited (typed
+ * directly into the field) since the AI last touched it, where the AI's OWN
+ * new value for that field no longer reflects that edit — i.e. an edit this
+ * turn's response actually lost, not just touched. `current` holds the
+ * on-screen values exactly as the dialog's textareas hold them (plain string
+ * for the two intros, JSON text for the array fields) at the moment this
+ * turn was sent, BEFORE this turn's own edit is applied; `changes` is this
+ * turn's own actual output (`validateNarrativeChanges`'s `changes`) for the
+ * fields it decided to touch.
+ *
+ * Live-verified gap (2026-09-16 stress test): a broad instruction that
+ * legitimately needs to rewrite a field (e.g. the entity type changed, so
+ * the intro must too) silently discarded a sentence Antonio had typed by
+ * hand into that same field, with no warning. Antonio's chosen fix (of two
+ * offered) is to WARN rather than block: the AI still makes the correction
+ * so nothing stays factually wrong, but the chat reply now says so.
+ *
+ * Live-verified FALSE POSITIVE this warning must not repeat (found re-testing
+ * the fix itself, same day): the model can be smart enough to weave a
+ * correction around a hand-typed sentence and keep it verbatim — in which
+ * case nothing was actually lost, and warning anyway would just be crying
+ * wolf. For the two plain-text intro fields, this isolates the human's
+ * inserted text (via `extractInsertedMiddle`, above) and only flags when the
+ * NEW value no longer contains it — an edit the AI's own output still
+ * carries is not a loss. The two array/JSON fields keep the coarser
+ * "did the value change from what the AI last set it to" check (no
+ * character-level insertion concept for structured JSON); this is a known,
+ * accepted scope boundary — flagged here, not silently pretended away — and
+ * could over-warn there in the equivalent scenario if it's ever hit live.
+ *
+ * KNOWN LIMITATION, disclosed rather than silently accepted (found in the
+ * SAME re-test that caught the false positive above): protection lasts for
+ * ONE turn only. Once a hand-edit survives a turn, the AI's own output for
+ * that turn — the only thing this function has to compare against for the
+ * NEXT turn — now legitimately contains it, so it looks exactly like
+ * AI-authored content from then on. A LATER turn that drops it will not be
+ * flagged, because by then `current` and the reconstructed baseline agree
+ * with each other; there is no more "hand-edit" signal left to see. Fixing
+ * this for real would mean persisting hand-edit provenance across the whole
+ * conversation, not just diffing against the immediately preceding turn —
+ * real added scope, not built here without checking first. What IS covered:
+ * the common case this was built for, a hand-edit followed immediately by
+ * the next AI turn — which is also the shape of the original live bug.
+ *
+ * Best-effort / fail-open throughout: a field that can't be compared (no
+ * prior AI baseline yet, or either side isn't parseable JSON) is never
+ * flagged. This only ever adds a note; it must never block or corrupt the
+ * actual response.
+ */
+export function detectOverwrittenHandEdits(
+  current: Record<string, string | undefined | null>,
+  aiBaseline: Record<string, unknown>,
+  changes: Record<string, unknown>,
+): string[] {
+  const overwritten: string[] = []
+  for (const key of Object.keys(changes)) {
+    if (!(key in NARRATIVE_FIELD_LABELS)) continue
+    if (!(key in aiBaseline)) continue // nothing to compare against yet
+    const currentRaw = current[key]
+    if (currentRaw == null || !currentRaw.trim()) continue
+    const baselineValue = aiBaseline[key]
+
+    if (key === 'intro_en' || key === 'intro_it') {
+      const baselineText = String(baselineValue ?? '').trim()
+      const currentText = currentRaw.trim()
+      if (currentText === baselineText) continue // no hand edit at all
+      const inserted = extractInsertedMiddle(baselineText, currentText).trim()
+      const newText = String(changes[key] ?? '')
+      if (inserted && newText.includes(inserted)) continue // preserved verbatim — not a loss
+      overwritten.push(NARRATIVE_FIELD_LABELS[key])
+      continue
+    }
+    let currentParsed: unknown
+    try {
+      currentParsed = JSON.parse(currentRaw)
+    } catch {
+      continue // hand-edited into invalid JSON — can't safely compare, don't guess
+    }
+    if (!deepEqual(currentParsed, baselineValue)) overwritten.push(NARRATIVE_FIELD_LABELS[key])
+  }
+  return overwritten
 }

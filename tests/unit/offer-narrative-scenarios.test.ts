@@ -16,6 +16,8 @@ import {
   offerIncludesManagement,
   buildSystemPrompt,
   buildUserPrompt,
+  canGroundFormationState,
+  canGroundEntityType,
   FALLBACK_BUSINESS_RULES,
   type NarrativeServiceInput,
 } from '@/lib/offers/narrative-business-rules'
@@ -37,6 +39,7 @@ function simulate(opts: {
   services: NarrativeServiceInput[]
   contractType: string
   entityType?: string | null
+  formationState?: string | null
   includesManagement?: boolean
   hasMultipleOptions?: boolean
   notes?: string
@@ -50,17 +53,27 @@ function simulate(opts: {
     typeof opts.includesManagement === 'boolean'
       ? opts.includesManagement
       : offerIncludesManagement(opts.contractType)
+  const hasMultipleOptions = opts.hasMultipleOptions ?? false
   const serviceLines = renderServiceLines(opts.services)
-  const systemPrompt = buildSystemPrompt(lang, rules, includesManagement, opts.hasMultipleOptions ?? false)
+  const systemPrompt = buildSystemPrompt(lang, rules, includesManagement, hasMultipleOptions)
+  // Grounding gates re-derived here exactly like the route does — a caller-passed
+  // state/entity type that fails the gate must never reach the prompt.
+  const groundedFormationState = canGroundFormationState({ contractType: opts.contractType, hasMultipleOptions })
+    ? (opts.formationState || '')
+    : ''
+  const groundedEntityType = canGroundEntityType({ hasMultipleOptions })
+    ? normalizeEntityType(opts.entityType)
+    : ''
   const userPrompt = buildUserPrompt(
     opts.clientName,
     lang,
     serviceLines,
     opts.notes ?? '',
     opts.contractType,
-    normalizeEntityType(opts.entityType),
+    groundedEntityType,
+    groundedFormationState,
   )
-  return { systemPrompt, userPrompt, rulesSource: source, includesManagement, serviceLines }
+  return { systemPrompt, userPrompt, rulesSource: source, includesManagement, serviceLines, groundedFormationState, groundedEntityType }
 }
 
 // Every scenario must satisfy these invariants no matter what.
@@ -221,5 +234,89 @@ describe('offer-narrative scenario simulation', () => {
       entityType: 'SMLLC',
     })
     expect(systemPrompt).not.toContain('MULTIPLE OPTIONS')
+  })
+
+  // ── dev_task 2b6e5988: the generator invented "South Dakota" because it was
+  // never told the real state. These scenarios pin the fix at the prompt level.
+
+  it('single-option formation offer with a real state — the state reaches the writer as fact', () => {
+    const { userPrompt, groundedFormationState } = simulate({
+      clientName: 'Barnabás Zahola',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'SMLLC',
+      formationState: 'WY',
+    })
+    expect(groundedFormationState).toBe('WY')
+    expect(userPrompt).toContain('STATE OF FORMATION: WY')
+    expect(userPrompt).toContain('the ONLY state this offer forms in')
+  })
+
+  it('single-option formation offer with NO state pinned yet — forbids inventing one instead of staying silent', () => {
+    const { userPrompt, groundedFormationState } = simulate({
+      clientName: 'No State Yet',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'SMLLC',
+      formationState: null,
+    })
+    expect(groundedFormationState).toBe('')
+    expect(userPrompt).toContain('STATE OF FORMATION: Not specified')
+    expect(userPrompt).not.toMatch(/STATE OF FORMATION: (NM|WY|FL|DE)/)
+  })
+
+  it('multi-option formation offer — a state pinned on "Option 1" must NOT be asserted for the whole offer', () => {
+    const { userPrompt, groundedFormationState } = simulate({
+      clientName: 'Mattia Tedesco',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'SMLLC',
+      formationState: 'WY', // leftover "Option 1" state — must be withheld, not trusted
+      hasMultipleOptions: true,
+    })
+    expect(groundedFormationState).toBe('')
+    expect(userPrompt).toContain('STATE OF FORMATION: Not specified')
+  })
+
+  it('a stale formation state surviving on a NOW-onboarding offer is dropped — not asserted just because it is unambiguous', () => {
+    // The exact bug-hunter blocker: formationState is dialog component state that
+    // can survive a staffer switching a formation offer's services to onboarding.
+    const { userPrompt, groundedFormationState } = simulate({
+      clientName: 'Switched Services',
+      services: [{ name: 'Onboarding', description: 'Take over management of an existing LLC.' }],
+      contractType: 'onboarding', // no longer formation — the offer's services changed
+      entityType: 'SMLLC',
+      formationState: 'WY', // stale leftover from when this WAS a formation offer
+      hasMultipleOptions: false,
+    })
+    expect(groundedFormationState).toBe('')
+    expect(userPrompt).not.toContain('STATE OF FORMATION')
+    expect(userPrompt).not.toContain('WY')
+  })
+
+  it('multi-option offer — entity type is ALSO withheld, not just formation state (the live gap this fix closes)', () => {
+    const { userPrompt, groundedEntityType } = simulate({
+      clientName: 'Ambiguous Entity',
+      services: [{ name: 'Company Formation', description: 'Form a new US LLC.' }],
+      contractType: 'formation',
+      entityType: 'MMLLC', // "Option 1" says multi-member; other options may not
+      hasMultipleOptions: true,
+    })
+    expect(groundedEntityType).toBe('')
+    expect(userPrompt).toContain('ENTITY TYPE: Not specified')
+  })
+
+  it('onboarding offer — entity type IS asserted even though it is not a formation offer (unlike state)', () => {
+    // Entity type matters for tax wording on an onboarding client's EXISTING
+    // company too, so it is gated on ambiguity alone, not on contract type.
+    const { userPrompt, groundedEntityType } = simulate({
+      clientName: 'Existing Co',
+      services: [{ name: 'Onboarding', description: 'Take over management.' }],
+      contractType: 'onboarding',
+      entityType: 'MMLLC',
+      hasMultipleOptions: false,
+    })
+    expect(groundedEntityType).toBe('Multi-Member LLC')
+    expect(userPrompt).toContain('ENTITY TYPE: Multi-Member LLC')
   })
 })
