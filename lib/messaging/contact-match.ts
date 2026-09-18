@@ -12,32 +12,49 @@ export interface WhatsAppContactMatch {
 /**
  * Look up whether a WhatsApp number already has a CRM record — checked when a
  * conversation is opened, so Antonio sees who he's already talking to instead
- * of being asked to save someone twice. Matches on the LAST 8 DIGITS, same
- * tolerance as `lead_create`'s own duplicate check (lib/mcp/tools/leads.ts) —
- * phone numbers in this system show up in inconsistent formats (with/without
- * country code, spaces, dashes), so a strict equality check would miss real
- * matches. Checks leads first, then contacts (linked or not) — the first hit
- * wins; a person is not expected to be both.
+ * of being asked to save someone twice.
+ *
+ * Matches on the FULL NUMBER, not a digit substring (Antonio, 2026-09-18,
+ * after a last-8-digit match on the "Christian P." conversation surfaced a
+ * real duplicate — two different named contacts sharing a number — and he
+ * corrected: "the entire number mst match not only some digits"). A last-8
+ * substring risks matching the wrong person once numbers from more than one
+ * country are involved; a real duplicate (the same full number genuinely on
+ * two records) still surfaces, just as an ambiguous case for a human to
+ * resolve — see lib/messaging/backfill-matches.ts — rather than silently
+ * picking one.
+ *
+ * Still queries with a last-8 `ilike` first (a normal indexed-friendly
+ * substring scan, not the matching decision itself) to keep the candidate
+ * set small, then confirms full-digit equality in JS before accepting a
+ * match — phone numbers here are stored in inconsistent formats (spaces,
+ * dashes, parens), so a raw string-equality WHERE clause would miss real
+ * matches that this two-step shape still catches. Checks leads first, then
+ * contacts (linked or not) — the first hit wins; a person is not expected to
+ * be both.
  */
 export async function findContactByPhone(phone: string): Promise<WhatsAppContactMatch | null> {
-  const last8 = digitsOnly(phone).slice(-8)
+  const target = digitsOnly(phone)
+  const last8 = target.slice(-8)
   if (last8.length < 8) return null
   const pattern = `%${last8}%`
 
-  const { data: lead } = await supabaseAdmin
+  const { data: leads } = await supabaseAdmin
     .from("leads")
-    .select("id, full_name")
+    .select("id, full_name, phone")
     .ilike("phone", pattern)
-    .limit(1)
-    .maybeSingle()
+    .limit(10)
+  const lead = (leads ?? []).find((l) => digitsOnly(l.phone ?? "") === target)
   if (lead) return { type: "lead", id: lead.id, name: lead.full_name }
 
-  const { data: contact } = await supabaseAdmin
+  const { data: contacts } = await supabaseAdmin
     .from("contacts")
-    .select("id, full_name, account_contacts(accounts(company_name))")
+    .select("id, full_name, phone, phone_2, account_contacts(accounts(company_name))")
     .or(`phone.ilike.${pattern},phone_2.ilike.${pattern}`)
-    .limit(1)
-    .maybeSingle()
+    .limit(10)
+  const contact = (contacts ?? []).find(
+    (c) => digitsOnly(c.phone ?? "") === target || digitsOnly(c.phone_2 ?? "") === target
+  )
   if (contact) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const accountName = (contact as any).account_contacts?.[0]?.accounts?.company_name ?? null

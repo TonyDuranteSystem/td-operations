@@ -17,10 +17,12 @@ vi.mock("@/lib/auth/require-staff-route", () => ({
 
 const groupSingle = vi.fn()
 const contactSingle = vi.fn()
+const leadSingle = vi.fn()
 const contactsUpdate = vi.fn()
 const groupsUpdate = vi.fn()
 const accountContactsInsert = vi.fn()
 const contactsInsert = vi.fn()
+const leadsInsert = vi.fn()
 
 vi.mock("@/lib/supabase-admin", () => {
   const from = vi.fn((table: string) => {
@@ -35,6 +37,12 @@ vi.mock("@/lib/supabase-admin", () => {
         select: () => ({ eq: () => ({ single: contactSingle }) }),
         update: (payload: unknown) => { contactsUpdate(payload); return { eq: () => Promise.resolve({ data: null, error: null }) } },
         insert: (payload: unknown) => { contactsInsert(payload); return { select: () => ({ single: () => Promise.resolve({ data: { id: "new-contact-id", full_name: payload && (payload as { full_name: string }).full_name }, error: null }) }) } },
+      }
+    }
+    if (table === "leads") {
+      return {
+        select: () => ({ eq: () => ({ single: leadSingle }) }),
+        insert: (payload: unknown) => { leadsInsert(payload); return { select: () => ({ single: () => Promise.resolve({ data: { id: "new-lead-id", full_name: payload && (payload as { full_name: string }).full_name }, error: null }) }) } },
       }
     }
     if (table === "account_contacts") {
@@ -103,5 +111,30 @@ describe("POST /api/inbox/whatsapp-new/create-record — attach to existing cont
     expect(contactsInsert).toHaveBeenCalled()
     expect(body.record.name).toBe("Brand New Person")
     expect(accountContactsInsert).toHaveBeenCalledWith({ account_id: "a1", contact_id: "new-contact-id" })
+  })
+})
+
+describe("POST /api/inbox/whatsapp-new/create-record — attach to existing lead", () => {
+  it("attaches to the existing lead without creating a new one", async () => {
+    leadSingle.mockResolvedValue({ data: { id: "l1", full_name: "Pietro Dalmaso" }, error: null })
+
+    const res = await POST(makeRequest({ groupId: "g1", existingLeadId: "l1" }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.record).toEqual({ type: "lead", id: "l1", name: "Pietro Dalmaso" })
+    expect(leadsInsert).not.toHaveBeenCalled()
+    expect(groupsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ lead_id: "l1", group_name: "Pietro Dalmaso" })
+    )
+  })
+
+  it("404s when the existing lead id doesn't resolve to a real row", async () => {
+    leadSingle.mockResolvedValue({ data: null, error: { message: "not found" } })
+
+    const res = await POST(makeRequest({ groupId: "g1", existingLeadId: "missing" }))
+
+    expect(res.status).toBe(404)
+    expect(groupsUpdate).not.toHaveBeenCalled()
   })
 })
