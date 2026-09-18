@@ -128,6 +128,12 @@ export async function POST(
     .update({
       last_message_at: new Date().toISOString(),
       unread_count: (current?.unread_count ?? 0) + 1,
+      // A genuinely new inbound message revives a hidden (deleted) conversation
+      // back into the Inbox list — same fix as un-trashing in Gmail when the
+      // same person emails again. Without this, a client who texts back after
+      // staff deleted the thread stays invisible forever (bug-hunter finding,
+      // dev job f331cd43, 2026-09-18).
+      is_active: true,
     })
     .eq("id", groupResult.group.id)
 

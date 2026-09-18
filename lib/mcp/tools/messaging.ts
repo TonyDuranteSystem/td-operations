@@ -305,10 +305,13 @@ export function registerMessagingTools(server: McpServer) {
 
         if (error) throw error
 
-        // Get group counts per channel — aggregate in JS (no exec_sql)
+        // Get group counts per channel — aggregate in JS (no exec_sql).
+        // is_active filter matches v_messaging_inbox / the Inbox list itself —
+        // a deleted (hidden) conversation shouldn't inflate these totals.
         const { data: groups } = await supabaseAdmin
           .from("messaging_groups")
           .select("channel_id, unread_count")
+          .eq("is_active", true)
 
         const countsMap = new Map<string, { group_count: number; total_unread: number }>()
         for (const g of groups || []) {
