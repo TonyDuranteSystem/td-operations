@@ -172,6 +172,13 @@ export async function GET(request: NextRequest) {
       email: l.email,
     }))
 
-  const results: Result[] = [...accountResults, ...contactResults, ...leadResults].slice(0, limit)
+  // NOT sliced down to `limit` again here — each of the three lists above is
+  // already independently capped at `limit` from its own query. A shared
+  // final slice would let a query that happens to match many accounts (a
+  // very real case here: most client companies are named after a person)
+  // silently push leads off the end with no sign anything was cut — exactly
+  // the one thing this endpoint was widened to find (bug-hunter finding,
+  // post-build review).
+  const results: Result[] = [...accountResults, ...contactResults, ...leadResults]
   return NextResponse.json({ results })
 }
