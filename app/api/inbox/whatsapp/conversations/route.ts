@@ -26,13 +26,19 @@ export async function GET() {
       return NextResponse.json({ conversations: [], total: 0 })
     }
 
-    // Step 2: get messaging groups for those channels
+    // Step 2: get messaging groups for those channels. Deleted (is_active =
+    // false) groups are excluded — a WhatsApp "Delete" is a hide, not an
+    // erase (lib/messaging plumbing and the messages themselves are
+    // untouched; see /api/inbox/whatsapp/delete). Pinned rows sort first,
+    // matching the Gmail list's own pinned-first behavior.
     const { data: groups, error: grpErr } = await supabaseAdmin
       .from("messaging_groups")
       .select(
-        "id, group_name, account_id, contact_id, lead_id, last_message_at, unread_count"
+        "id, group_name, account_id, contact_id, lead_id, last_message_at, unread_count, pinned"
       )
       .in("channel_id", channelIds)
+      .eq("is_active", true)
+      .order("pinned", { ascending: false })
       .order("last_message_at", { ascending: false })
       .limit(200)
 
@@ -76,6 +82,7 @@ export async function GET() {
         unread: group.unread_count ?? 0,
         accountId: group.account_id ?? null,
         contactId: group.contact_id ?? null,
+        starred: group.pinned ?? false,
       }
     })
 

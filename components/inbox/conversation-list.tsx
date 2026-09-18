@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
@@ -163,6 +163,18 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // ~300-Gmail-call refetch under load is what blanked the inbox (2026-07-08).
   const markMutation = useMutation({
     mutationFn: async ({ conv, action }: { conv: InboxConversation; action: 'mark_read' | 'mark_unread' }) => {
+      // Same Gmail-only gap as pin: this hit /api/inbox/email-actions
+      // unconditionally, which silently failed/no-op'd for a WhatsApp
+      // conversation id (confirmed before adding this branch, 2026-09-18).
+      if (conv.channel === 'whatsapp') {
+        const res = await fetch('/api/inbox/whatsapp/mark-read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId: conv.id.replace('whatsapp:', ''), unread: action === 'mark_unread' }),
+        })
+        if (!res.ok) throw new Error('Failed to update')
+        return action
+      }
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -395,6 +407,22 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // for instant feedback, then a refetch that already agrees (write-through).
   const pinMutation = useMutation({
     mutationFn: async (conv: InboxConversation) => {
+      // WhatsApp has no Gmail star to piggyback on — its own `pinned` column
+      // on messaging_groups (migration 20260918-0800) backs this instead.
+      // Gmail's pin silently no-op'd for every other channel before this
+      // (confirmed live before adding the branch, Antonio 2026-09-18).
+      if (conv.channel === 'whatsapp') {
+        const res = await fetch('/api/inbox/whatsapp/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId: conv.id.replace('whatsapp:', ''), pinned: !conv.starred }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || 'Could not update the pin.')
+        }
+        return res.json().catch(() => ({}))
+      }
       if (conv.channel !== 'gmail') return
       const res = await fetch('/api/inbox/email-actions', {
         method: 'POST',
@@ -425,6 +453,66 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       toast.error(err instanceof Error && err.message ? err.message : 'Could not update the pin.')
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
     },
+  })
+
+  // WhatsApp delete/undo is deliberately its OWN simple mutation, not routed
+  // through the Gmail deleteMutation above — that one drives `onDeleted?.()`
+  // into the parent's trash/archive/payload-origin reconcile machinery, which
+  // is Gmail-view-specific and has no WhatsApp equivalent. A WhatsApp
+  // "delete" just hides the row (is_active=false) and an Undo un-hides it;
+  // nothing else in the app needs to know. Antonio, 2026-09-18.
+  const whatsappDeleteMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      const groupId = conv.id.replace('whatsapp:', '')
+      const res = await fetch('/api/inbox/whatsapp/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId }),
+      })
+      if (!res.ok) throw new Error('Failed to delete')
+      return groupId
+    },
+    onSuccess: (groupId) => {
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      toast('Conversation deleted', {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            await fetch('/api/inbox/whatsapp/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ groupId, restore: true }),
+            })
+            queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+          },
+        },
+      })
+    },
+    onError: () => toast.error('Could not delete this conversation.'),
+  })
+
+  // "Create a sticky note from it" — Antonio, 2026-09-18. Reuses the existing
+  // sticky-notes feature (docs/systems/staff-notes.md) as-is; nothing
+  // WhatsApp-specific on that end, just a body + a link back to the Inbox.
+  const stickyNoteMutation = useMutation({
+    mutationFn: async (conv: InboxConversation) => {
+      const res = await fetch('/api/crm/staff-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: conv.name,
+          body: conv.preview || `WhatsApp conversation with ${conv.name}`,
+          origin_url: '/inbox',
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Could not create the sticky note.')
+      }
+      return res.json().catch(() => ({}))
+    },
+    onSuccess: () => toast.success('Sticky note created'),
+    onError: (err) => toast.error(err instanceof Error && err.message ? err.message : 'Could not create the sticky note.'),
   })
 
   const isWhatsApp = activeChannel === 'whatsapp'
@@ -884,6 +972,65 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                 )}
               </div>
             )}
+            {/* WhatsApp mobile row actions — always visible, no hover on
+                touch, same reasoning as Gmail's mobile block above (Antonio
+                runs this whole app as a phone PWA). */}
+            {conv.channel === 'whatsapp' && (
+              <div className="sm:hidden shrink-0 self-center flex items-center">
+                <FastTooltip label={conv.starred ? 'Unpin' : 'Pin'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      pinMutation.mutate(conv)
+                    }}
+                    disabled={pinMutation.isPending}
+                    className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                    aria-label={conv.starred ? 'Unpin' : 'Pin'}
+                  >
+                    <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      markMutation.mutate({ conv, action: conv.unread > 0 ? 'mark_read' : 'mark_unread' })
+                    }}
+                    disabled={markMutation.isPending}
+                    className="p-1.5 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors"
+                    aria-label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
+                  >
+                    {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Create a sticky note">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      stickyNoteMutation.mutate(conv)
+                    }}
+                    disabled={stickyNoteMutation.isPending}
+                    className="p-1.5 rounded hover:bg-yellow-100 text-zinc-400 hover:text-yellow-600 transition-colors"
+                    aria-label="Create a sticky note"
+                  >
+                    <StickyNote className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
+                <FastTooltip label="Delete">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      whatsappDeleteMutation.mutate(conv)
+                    }}
+                    disabled={whatsappDeleteMutation.isPending}
+                    className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                    aria-label="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </FastTooltip>
+              </div>
+            )}
             {conv.channel === 'gmail' && (
               <div
                 className={cn(
@@ -1101,6 +1248,76 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     <Trash2 className="h-4 w-4" />
                   </button></HoverHint>
                 )}
+                </div>
+              </div>
+            )}
+            {/* WhatsApp row actions — pin, mark unread/read, sticky note,
+                delete. Deliberately a separate, simpler bar from Gmail's
+                above rather than threaded through its snooze/move-to-folder/
+                trash-view machinery, none of which has a WhatsApp equivalent
+                (Antonio, 2026-09-18 — explicitly asked to discard move-to-
+                folder and snooze for WhatsApp). Same "hidden until hover"
+                desktop behavior as Gmail's bar. */}
+            {conv.channel === 'whatsapp' && (
+              <div
+                className={cn(
+                  'absolute inset-y-0 right-2 hidden items-center',
+                  'sm:group-hover:flex'
+                )}
+              >
+                <div className="flex items-center gap-0.5 bg-white border border-zinc-200 rounded-lg shadow-md px-1 py-0.5">
+                  <HoverHint label={conv.starred ? 'Unpin' : 'Pin — keep at the top'}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        pinMutation.mutate(conv)
+                      }}
+                      disabled={pinMutation.isPending}
+                      className="p-1.5 rounded hover:bg-amber-50 text-zinc-400 hover:text-amber-500 transition-colors"
+                      aria-label={conv.starred ? 'Unpin' : 'Pin'}
+                    >
+                      <Star className={cn('h-4 w-4', conv.starred && 'fill-amber-400 text-amber-400')} />
+                    </button>
+                  </HoverHint>
+                  <HoverHint label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        markMutation.mutate({ conv, action: conv.unread > 0 ? 'mark_read' : 'mark_unread' })
+                      }}
+                      disabled={markMutation.isPending}
+                      className="p-1.5 rounded hover:bg-blue-100 text-zinc-400 hover:text-blue-600 transition-colors"
+                      aria-label={conv.unread > 0 ? 'Mark as read' : 'Mark as unread'}
+                    >
+                      {conv.unread > 0 ? <Mail className="h-4 w-4" /> : <MailOpen className="h-4 w-4" />}
+                    </button>
+                  </HoverHint>
+                  <HoverHint label="Create a sticky note from this conversation">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        stickyNoteMutation.mutate(conv)
+                      }}
+                      disabled={stickyNoteMutation.isPending}
+                      className="p-1.5 rounded hover:bg-yellow-100 text-zinc-400 hover:text-yellow-600 transition-colors"
+                      aria-label="Create a sticky note"
+                    >
+                      <StickyNote className="h-4 w-4" />
+                    </button>
+                  </HoverHint>
+                  <HoverHint label="Delete">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        whatsappDeleteMutation.mutate(conv)
+                      }}
+                      disabled={whatsappDeleteMutation.isPending}
+                      className="p-1.5 rounded hover:bg-red-100 text-zinc-400 hover:text-red-600 transition-colors"
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </HoverHint>
                 </div>
               </div>
             )}
