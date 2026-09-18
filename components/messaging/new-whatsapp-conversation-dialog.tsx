@@ -19,6 +19,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { X, Loader2, Send, Paperclip, Sparkles, MessageCircle, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
@@ -55,36 +56,8 @@ interface StagedFile {
   error?: string
 }
 
-const draftKey = (leadOrContactId: string) => `td_whatsapp_new_draft_v1_${leadOrContactId}`
-const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000
-
-function loadDraft(id: string): string {
-  try {
-    const raw = localStorage.getItem(draftKey(id))
-    if (!raw) return ''
-    const { text, savedAt } = JSON.parse(raw) as { text: string; savedAt: number }
-    if (Date.now() - savedAt > DRAFT_TTL_MS) {
-      localStorage.removeItem(draftKey(id))
-      return ''
-    }
-    return text ?? ''
-  } catch {
-    return ''
-  }
-}
-
-function saveDraft(id: string, text: string) {
-  try {
-    if (!text.trim()) {
-      localStorage.removeItem(draftKey(id))
-      return
-    }
-    localStorage.setItem(draftKey(id), JSON.stringify({ text, savedAt: Date.now() }))
-  } catch {
-    // Storage can be full or unavailable (private browsing) — losing a draft
-    // save is not worth surfacing an error for.
-  }
-}
+const loadDraft = (id: string) => loadWhatsAppDraft('new', id)
+const saveDraft = (id: string, text: string) => saveWhatsAppDraft('new', id, text)
 
 export function NewWhatsAppConversationDialog({
   open,
@@ -108,6 +81,7 @@ export function NewWhatsAppConversationDialog({
   const sendingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
+  const suppressDraftSaveRef = useRef(false)
 
   // Auto-grow the message box as the draft gets longer (Antonio, 2026-09-17).
   useEffect(() => {
@@ -130,8 +104,16 @@ export function NewWhatsAppConversationDialog({
 
   // Load the draft when the dialog opens; each open re-checks in case the
   // draft aged out (7-day TTL) since it was written.
+  //
+  // suppressDraftSaveRef guards a real race, found live in the sibling reply
+  // composer (components/inbox/whatsapp-thread.tsx, 2026-09-18) and fixed
+  // here the same way: without it, the save effect below can fire with the
+  // stale pre-load message ('') before this effect's setMessage commits,
+  // deleting the very draft just read from storage. Reproduced reliably
+  // under React's dev double-invoke (StrictMode runs mount effects twice).
   useEffect(() => {
     if (!open || !identityId) return
+    suppressDraftSaveRef.current = true
     setMessage(loadDraft(identityId))
     setFile(null)
     setConfirming(false)
@@ -140,6 +122,10 @@ export function NewWhatsAppConversationDialog({
   // Save on every change, not just on close — a crashed tab must not lose it.
   useEffect(() => {
     if (!open || !identityId) return
+    if (suppressDraftSaveRef.current) {
+      suppressDraftSaveRef.current = false
+      return
+    }
     saveDraft(identityId, message)
   }, [open, identityId, message])
 
