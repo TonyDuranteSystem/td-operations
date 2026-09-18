@@ -199,7 +199,7 @@ _Regenerated 2026-09-18. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-18)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-17)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-18)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-16)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-15)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
