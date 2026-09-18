@@ -63,9 +63,13 @@ export default async function PortalAddressesPage() {
     selectedAccountId = tmAccountId
   }
 
-  // The client's account: RA address (free-text + provider) + the FK-joined
-  // legal / mailing (CMRA) / shipping addresses. Every field here is set
-  // per-account in the CRM — none of it falls back to legacy free-text data.
+  // The client's account: RA (FK-joined, falls back to the legacy free-text
+  // columns for accounts never migrated) + the FK-joined legal / mailing
+  // (CMRA) / shipping addresses. Every field here is set per-account in the
+  // CRM — CMRA/Legal/Mailing never fall back to legacy free-text data; RA
+  // does, because unlike CMRA its legacy text and FK represent the exact
+  // same fact (just two storage locations for it), not two different
+  // addresses. Dev job 254834cc, 2026-09-18.
   let raAddress: string | null = null
   let raProvider: string | null = null
   let legal: AddrRow | null = null
@@ -76,11 +80,17 @@ export default async function PortalAddressesPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, registered_agent_address, registered_agent_provider, legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
-    raAddress = (acct?.registered_agent_address as string | null) ?? null
-    raProvider = (acct?.registered_agent_provider as string | null) ?? null
+    // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
+    // registered_agent_id, never the legacy free-text columns — so an
+    // account set up through it has a real, verified RA the CRM can see, but
+    // these columns stay null. Prefer the linked row; fall back to the
+    // legacy text only for accounts never migrated. Dev job 254834cc, 2026-09-18.
+    const raRow = (acct?.registered_agent as AddrRow | null) ?? null
+    raAddress = formatAddressString(raRow as MailingAddressRow | null) ?? (acct?.registered_agent_address as string | null) ?? null
+    raProvider = (raRow?.provider as string | null) ?? (acct?.registered_agent_provider as string | null) ?? null
     legal = (acct?.legal as AddrRow | null) ?? null
     cmra = (acct?.mailing as AddrRow | null) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
@@ -182,7 +192,7 @@ function AddressCard({
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
-          <p className="text-xs text-zinc-500 mt-0.5">{subtitle}</p>
+          <p className="text-xs text-zinc-600 mt-0.5">{subtitle}</p>
           {line ? (
             <div className="mt-3 text-sm text-zinc-800 leading-relaxed select-all">
               {name && <div className="font-medium">{name}</div>}

@@ -994,7 +994,7 @@ export default async function PortalDashboardPage() {
         <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3 lg:col-span-2">
           <div>
             <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">{t('addresses.title', locale, translations)}</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">{t('addresses.subtitle', locale, translations)}</p>
+            <p className="text-xs text-zinc-600 mt-0.5">{t('addresses.subtitle', locale, translations)}</p>
           </div>
           <div className="space-y-4">
             <AddressInfoRow
@@ -1246,7 +1246,7 @@ function AddressInfoRow({ icon: Icon, label, description, value, emptyText }: {
       <Icon className="h-4 w-4 text-zinc-400 shrink-0 mt-0.5" />
       <div className="min-w-0 flex-1">
         <span className="text-zinc-700 text-sm font-medium">{label}</span>
-        <p className="text-xs text-zinc-400 mt-0.5">{description}</p>
+        <p className="text-xs text-zinc-600 mt-0.5">{description}</p>
         <p className="text-sm text-zinc-900 break-words mt-1">{value ?? <span className="text-zinc-400">{emptyText}</span>}</p>
       </div>
     </div>
