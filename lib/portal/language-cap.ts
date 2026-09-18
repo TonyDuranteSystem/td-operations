@@ -11,6 +11,17 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
  */
 export const MAX_NEW_LANGUAGES_PER_DAY = 8
 
+/**
+ * Ceiling on how many already-established languages the daily top-up cron
+ * (app/api/cron/portal-translation-topup) can fan out to in ONE run (dev job
+ * 4fa1d8e5, council review). Without this, a single content push that
+ * leaves many established languages simultaneously behind could enqueue one
+ * real, paid AI-translation chain PER language in the same run — unbounded
+ * per-run spend. Any language past this cap simply waits for the next day's
+ * run rather than being dropped — eventually consistent, not lossy.
+ */
+export const MAX_LANGUAGES_PER_TOPUP_RUN = 10
+
 const WINDOW_MS = 24 * 60 * 60 * 1000
 /** Upper bound on rows scanned for the distinct-language count — a single day's
  *  translation activity across all languages fits comfortably under this; if a

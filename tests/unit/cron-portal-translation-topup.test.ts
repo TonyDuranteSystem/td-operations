@@ -51,8 +51,20 @@ describe("GET /api/cron/portal-translation-topup", () => {
     const body = await res.json()
     expect(kickoffMock).toHaveBeenCalledTimes(3)
     expect(kickoffMock).toHaveBeenCalledWith("es", "portal-translation-topup-cron")
+    expect(body.totalEstablished).toBe(3)
     expect(body.checked).toBe(3)
     expect(body.queued).toBe(1) // only "es" returns a non-null outcome from the mock
+  })
+
+  it("caps how many established languages it processes in one run, so one content push can't fan out into unbounded simultaneous paid AI chains", async () => {
+    // MAX_LANGUAGES_PER_TOPUP_RUN is 10 (lib/portal/language-cap.ts) — 12 established languages should only process the first 10.
+    establishedLanguages = Array.from({ length: 12 }, (_, i) => `lang${i}`)
+    const res = await GET(req("test-secret"))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(kickoffMock).toHaveBeenCalledTimes(10)
+    expect(body.totalEstablished).toBe(12)
+    expect(body.checked).toBe(10)
   })
 
   it("never lets one language's failure stop the rest of the run", async () => {
