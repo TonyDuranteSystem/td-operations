@@ -1,11 +1,16 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, Loader2, Paperclip, Sparkles, X } from 'lucide-react'
+import { Send, Loader2, Paperclip, Sparkles, X, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
+
+// Same dynamic-import + ssr:false pattern as every other composer in this
+// codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
+const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 
 interface WhatsAppMessage {
   id: string
@@ -47,12 +52,36 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const emojiPickerRef = useRef<HTMLDivElement>(null)
   const [text, setText] = useState('')
   const [file, setFile] = useState<StagedFile | null>(null)
   const [uploading, setUploading] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const queryClient = useQueryClient()
+
+  // Auto-grow the textarea as the message gets longer, capped so the reply
+  // bar can't push the message list off-screen (Antonio, 2026-09-17: "I don't
+  // see the field where I write that is expandable to see the entire text").
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+  }, [text])
+
+  useEffect(() => {
+    if (!showEmojiPicker) return
+    const handleClick = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showEmojiPicker])
 
   const { data, isLoading, error } = useQuery<{ messages: WhatsAppMessage[] }>({
     queryKey: ['whatsapp-messages', groupId],
@@ -287,8 +316,44 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
               </div>
             )}
             <div className="flex items-end gap-2">
+              <div className="relative shrink-0" ref={emojiPickerRef}>
+                <button
+                  onClick={() => setShowEmojiPicker((v) => !v)}
+                  className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50"
+                  aria-label="Insert an emoji"
+                >
+                  <Smile className="h-4 w-4" />
+                </button>
+                {showEmojiPicker && (
+                  <div className="absolute bottom-11 left-0 z-30">
+                    <EmojiPicker
+                      onEmojiClick={(emojiData: { emoji: string }) => {
+                        const el = textareaRef.current
+                        if (el) {
+                          const start = el.selectionStart ?? text.length
+                          const end = el.selectionEnd ?? start
+                          const next = text.slice(0, start) + emojiData.emoji + text.slice(end)
+                          setText(next)
+                          requestAnimationFrame(() => {
+                            el.focus()
+                            el.setSelectionRange(start + emojiData.emoji.length, start + emojiData.emoji.length)
+                          })
+                        } else {
+                          setText((prev) => prev + emojiData.emoji)
+                        }
+                        setShowEmojiPicker(false)
+                      }}
+                      width={300}
+                      height={360}
+                      lazyLoadEmojis
+                      skinTonesDisabled
+                    />
+                  </div>
+                )}
+              </div>
               <textarea
-                className="compose-reply-textarea flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-blue-400 min-h-[40px] max-h-32 disabled:bg-zinc-50 disabled:text-zinc-400"
+                ref={textareaRef}
+                className="compose-reply-textarea flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-blue-400 min-h-[40px] max-h-60 disabled:bg-zinc-50 disabled:text-zinc-400"
                 rows={1}
                 disabled={suggesting}
                 placeholder={suggesting ? 'Writing a suggestion…' : 'Type a WhatsApp message…'}

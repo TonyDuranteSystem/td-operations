@@ -13,6 +13,7 @@ import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
+import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
@@ -1853,7 +1854,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
               {/* Thread body */}
               {selected.channel === 'whatsapp' && whatsappGroupId ? (
-                <WhatsappThread groupId={whatsappGroupId} />
+                <>
+                  <WhatsAppContactMatchBanner
+                    key={whatsappGroupId}
+                    groupId={whatsappGroupId}
+                    onSaved={() => {
+                      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+                    }}
+                  />
+                  <WhatsappThread groupId={whatsappGroupId} />
+                </>
               ) : (
                 <div className="flex flex-1 min-h-0">
                   <div className="flex-1 flex flex-col min-w-0">
