@@ -27,17 +27,23 @@ export const dynamic = "force-dynamic"
  * could find the right company but had no way to say "it's HER, not a new
  * person." Fills the contact's phone only if it is currently null — never
  * overwrites a real number already on file.
+ *
+ * Body (attach-to-lead mode): { groupId, existingLeadId } — the lead sibling
+ * of existingContactId, for resolving an ambiguous bulk-match result (see
+ * /api/inbox/whatsapp/backfill-matches) when one of the two candidates
+ * sharing a number is a lead rather than a contact.
  */
 export async function POST(request: NextRequest) {
   const denied = await requireStaffRoute()
   if (denied) return denied
 
-  const { groupId, fullName, recordType, accountId, existingContactId } = await request.json() as {
+  const { groupId, fullName, recordType, accountId, existingContactId, existingLeadId } = await request.json() as {
     groupId?: string
     fullName?: string
     recordType?: "lead" | "contact"
     accountId?: string | null
     existingContactId?: string
+    existingLeadId?: string
   }
 
   if (!groupId) {
@@ -75,6 +81,24 @@ export async function POST(request: NextRequest) {
       .eq("id", groupId)
 
     return NextResponse.json({ success: true, record: { type: "contact", id: existingContactId, name: existing.full_name } })
+  }
+
+  if (existingLeadId) {
+    const { data: existing, error: fetchError } = await supabaseAdmin
+      .from("leads")
+      .select("id, full_name")
+      .eq("id", existingLeadId)
+      .single()
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: "That lead could not be found" }, { status: 404 })
+    }
+
+    await supabaseAdmin
+      .from("messaging_groups")
+      .update({ lead_id: existingLeadId, group_name: existing.full_name })
+      .eq("id", groupId)
+
+    return NextResponse.json({ success: true, record: { type: "lead", id: existingLeadId, name: existing.full_name } })
   }
 
   if (!fullName?.trim() || (recordType !== "lead" && recordType !== "contact")) {
