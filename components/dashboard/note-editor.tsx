@@ -85,6 +85,7 @@ export interface Member { id: string; name: string }
 
 /** Prefill for CREATE mode — where the note starts from (page subject, quoted text, origin). */
 export interface CreateDefaults {
+  title?: string
   body?: string
   accountId?: string
   accountName?: string
@@ -132,7 +133,7 @@ export function NoteEditor({
   // back to a slice of the body wherever a note is shown compactly (see
   // active-notes-strip.tsx's own titleOrPreview), so leaving this blank costs
   // nothing.
-  const [title, setTitle] = useState(note?.title ?? '')
+  const [title, setTitle] = useState(note?.title ?? createDefaults?.title ?? '')
   const [when, setWhen] = useState(toLocalInputValue(myWhenIso))
   const [accountId, setAccountId] = useState<string | undefined>(note?.account_id ?? createDefaults?.accountId)
   const [accountName, setAccountName] = useState<string | undefined>(
