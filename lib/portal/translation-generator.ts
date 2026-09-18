@@ -1,6 +1,11 @@
 import crypto from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { fetchAllPaged } from "@/lib/bank-transactions-fetch"
+import { enqueueJob } from "@/lib/jobs/queue"
+import { getEnglishDictionary } from "@/lib/portal/i18n"
+import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
+import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
+import { languageName } from "@/lib/portal/language-codes"
 
 /**
  * Turns any {key: englishText} source dictionary into real translated rows
@@ -479,4 +484,91 @@ export async function generateTranslationsForLanguage(
   }
 
   return result
+}
+
+// Same order the job handler's own chain hops through (translate-language.ts's
+// NEXT_SOURCE) — dictionary, then wizard, then the guide/help-article library.
+// Exported (moved from app/api/portal/language/route.ts, dev job 4fa1d8e5) so
+// both the language-picker route and the daily top-up cron share one list
+// instead of two copies that could drift.
+export type TranslationSource = "dictionary" | "wizard" | "guide"
+export const TRANSLATION_SOURCES_IN_ORDER: Array<{ source: TranslationSource; dictionary: () => Record<string, string> }> = [
+  { source: "dictionary", dictionary: getEnglishDictionary },
+  { source: "wizard", dictionary: getWizardTranslatableText },
+  { source: "guide", dictionary: getGuideTranslatableText },
+]
+
+/**
+ * The job handler's own chain-continuation dedup only guards chunk-to-chunk
+ * within an already-running chain — it never protected this initial enqueue.
+ * Two callers picking the same language/source at once could each start
+ * their own chunk-0 job for it. Per-key claiming inside the job still
+ * prevents double-translating any single entry, but this avoids the wasted
+ * duplicate job outright. Moved here (from the language route) so the daily
+ * top-up cron shares the same guard, dev job 4fa1d8e5.
+ */
+export async function hasLiveTranslateJob(languageCode: string, source: TranslationSource): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("job_queue")
+    .select("id")
+    .eq("job_type", "translate_language")
+    .eq("payload->>language_code", languageCode)
+    .eq("payload->>source", source)
+    .in("status", ["pending", "processing"])
+    .limit(1)
+  return !!data && data.length > 0
+}
+
+/**
+ * Seed+enqueue whichever source (dictionary, then wizard, then guide) still
+ * has missing work for one language — the same "find what's missing, queue
+ * it" step the language-picker route runs inline right after a client picks
+ * a language. Shared here (dev job 4fa1d8e5) so the daily top-up cron
+ * (scripts/cron: portal-translation-topup) can run the identical step for
+ * every already-established language, instead of only ever running it when
+ * a client happens to reselect that language after new text is added.
+ *
+ * Returns which source (if any) had missing work and got a job queued —
+ * `null` means everything for this language is already done or already has
+ * a live job in flight.
+ */
+export async function kickoffMissingTranslationWork(languageCode: string, createdBy: string): Promise<{ source: TranslationSource; missing: number } | null> {
+  for (const { source, dictionary } of TRANSLATION_SOURCES_IN_ORDER) {
+    const seeded = await seedPendingTranslations(languageCode, dictionary())
+    if (seeded.missing > 0) {
+      if (!(await hasLiveTranslateJob(languageCode, source))) {
+        await enqueueJob({
+          job_type: "translate_language",
+          payload: { language_code: languageCode, language_name: languageName(languageCode) ?? languageCode, source, chunk_index: 0, auto_retry: 0 },
+          created_by: createdBy,
+        })
+      }
+      return { source, missing: seeded.missing }
+    }
+  }
+  return null
+}
+
+/**
+ * Every language code that has ever had at least one portal_translations row
+ * — i.e. every language a real client has picked, or that had prior
+ * translation investment (dev job 4fa1d8e5). Deliberately NOT "all ~180
+ * ISO codes the picker offers": that would spend real paid AI-translation
+ * calls on languages nobody has ever chosen. `en`/`it` never appear here —
+ * seedPendingTranslations() short-circuits for SUPPORTED_LOCALES and never
+ * writes a row for them, since they're the two hand-written static
+ * dictionaries, not AI-generated.
+ */
+export async function getEstablishedLanguageCodes(): Promise<string[]> {
+  const rows = await fetchAllPaged<{ language_code: string }>(async (from, to) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- portal_translations not yet in generated types (regenerated on production promotion)
+    const { data, error } = await (supabaseAdmin as any)
+      .from("portal_translations")
+      .select("language_code")
+      .order("language_code", { ascending: true })
+      .range(from, to)
+    if (error) return []
+    return data ?? []
+  })
+  return Array.from(new Set(rows.map(r => r.language_code)))
 }

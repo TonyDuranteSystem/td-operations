@@ -4,7 +4,29 @@ vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: { from: vi.fn() },
 }))
 
-import { generateTranslationsForLanguage, seedPendingTranslations } from "@/lib/portal/translation-generator"
+const enqueueJobMock = vi.fn(async () => ({ id: "job-new" }))
+vi.mock("@/lib/jobs/queue", () => ({
+  enqueueJob: (...a: unknown[]) => enqueueJobMock(...a),
+}))
+vi.mock("@/lib/portal/i18n", () => ({
+  getEnglishDictionary: () => ({ "nav.chat": "Chat" }),
+}))
+vi.mock("@/lib/portal/wizard-translatable-text", () => ({
+  getWizardTranslatableText: () => ({ "First Name": "First Name" }),
+}))
+vi.mock("@/lib/portal/guide-translatable-text", () => ({
+  getGuideTranslatableText: () => ({ "Portal Guide": "Portal Guide" }),
+}))
+vi.mock("@/lib/portal/language-codes", () => ({
+  languageName: (code: string) => (code === "fr" ? "French" : code),
+}))
+
+import {
+  generateTranslationsForLanguage,
+  seedPendingTranslations,
+  kickoffMissingTranslationWork,
+  getEstablishedLanguageCodes,
+} from "@/lib/portal/translation-generator"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
 const TEST_DICT = { "nav.chat": "Chat", "nav.profile": "Profile" }
@@ -32,6 +54,7 @@ function makeChain(steps: Array<{ data: unknown; error?: unknown }>) {
     lt: vi.fn(() => c),
     order: vi.fn(() => c),
     range: vi.fn(() => c),
+    limit: vi.fn(() => c),
     then: (resolve: (v: { data: unknown; error: unknown }) => unknown) => {
       const step = steps[Math.min(i, steps.length - 1)]
       i++
@@ -489,5 +512,105 @@ describe("seedPendingTranslations", () => {
     expect(result).toEqual({ requested: 2, alreadyDone: 2, missing: 0 })
     const upsertCalls = vi.mocked(chains[0].upsert as ReturnType<typeof vi.fn>).mock?.calls ?? []
     expect(upsertCalls.length).toBe(0)
+  })
+})
+
+// ── kickoffMissingTranslationWork / getEstablishedLanguageCodes ─────────────
+// (dev job 4fa1d8e5) — the shared "find what's missing, queue it" step now
+// used by both the language-picker route and the daily top-up cron.
+
+describe("kickoffMissingTranslationWork", () => {
+  beforeEach(() => {
+    enqueueJobMock.mockClear()
+  })
+
+  it("enqueues a translate job for the dictionary source when nothing is already live", async () => {
+    const chains = [
+      makeChain([{ data: [] }]), // dictionary: loadExistingStatus — nothing exists yet
+      makeChain([{ data: null }]), // dictionary: upsert brand-new pending row
+      makeChain([{ data: [] }]), // hasLiveTranslateJob — nothing live
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await kickoffMissingTranslationWork("fr", "test-caller")
+
+    expect(result).toEqual({ source: "dictionary", missing: 1 })
+    expect(enqueueJobMock).toHaveBeenCalledTimes(1)
+    expect(enqueueJobMock.mock.calls[0][0]).toMatchObject({
+      job_type: "translate_language",
+      payload: { language_code: "fr", language_name: "French", source: "dictionary", chunk_index: 0, auto_retry: 0 },
+      created_by: "test-caller",
+    })
+  })
+
+  it("does NOT enqueue a duplicate job when a dictionary-source job for this language is already live", async () => {
+    const chains = [
+      makeChain([{ data: [] }]), // dictionary: loadExistingStatus
+      makeChain([{ data: null }]), // dictionary: upsert
+      makeChain([{ data: [{ id: "already-live" }] }]), // hasLiveTranslateJob — already live
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await kickoffMissingTranslationWork("fr", "test-caller")
+
+    expect(result).toEqual({ source: "dictionary", missing: 1 })
+    expect(enqueueJobMock).not.toHaveBeenCalled()
+  })
+
+  it("falls through to the guide source when dictionary and wizard are already fully seeded", async () => {
+    const chains = [
+      makeChain([{ data: [{ key: "nav.chat", status: "done" }] }]), // dictionary: done
+      makeChain([{ data: [{ key: "First Name", status: "done" }] }]), // wizard: done
+      makeChain([{ data: [] }]), // guide: loadExistingStatus — missing
+      makeChain([{ data: null }]), // guide: upsert
+      makeChain([{ data: [] }]), // hasLiveTranslateJob for guide — nothing live
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await kickoffMissingTranslationWork("fr", "test-caller")
+
+    expect(result).toEqual({ source: "guide", missing: 1 })
+    expect(enqueueJobMock).toHaveBeenCalledTimes(1)
+    expect(enqueueJobMock.mock.calls[0][0]).toMatchObject({ payload: { source: "guide" } })
+  })
+
+  it("returns null when every source is already fully translated", async () => {
+    const chains = [
+      makeChain([{ data: [{ key: "nav.chat", status: "done" }] }]), // dictionary: done
+      makeChain([{ data: [{ key: "First Name", status: "done" }] }]), // wizard: done
+      makeChain([{ data: [{ key: "Portal Guide", status: "done" }] }]), // guide: done
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await kickoffMissingTranslationWork("it", "test-caller")
+
+    expect(result).toBeNull()
+    expect(enqueueJobMock).not.toHaveBeenCalled()
+  })
+})
+
+describe("getEstablishedLanguageCodes", () => {
+  it("returns the distinct set of language codes that have any translation row", async () => {
+    const chains = [
+      makeChain([{ data: [{ language_code: "es" }, { language_code: "de" }, { language_code: "es" }, { language_code: "fr" }] }]),
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await getEstablishedLanguageCodes()
+    expect(result.sort()).toEqual(["de", "es", "fr"])
+  })
+
+  it("returns an empty list when no language has ever been translated", async () => {
+    const chains = [makeChain([{ data: [] }])]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await getEstablishedLanguageCodes()
+    expect(result).toEqual([])
   })
 })

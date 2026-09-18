@@ -1,13 +1,12 @@
 /**
- * /api/portal/language — dedup regression guard (found in review, 2026-08-23).
- *
- * The job handler's own chain-continuation dedup only protects chunk-to-chunk
- * WITHIN an already-running chain. This route's own enqueue (the very first
- * chunk-0 job for a language) had no equivalent guard — two picks of the same
- * never-before-seen language in quick succession could each start their own
- * job. These tests cover only that guard; the rest of the route's behavior
- * (auth, rate limit, cap) is exercised elsewhere / is straightforward enough
- * not to need its own harness here.
+ * /api/portal/language — saves the preference and kicks off translation work
+ * for a locale outside the two hand-written ones. The actual seed+enqueue
+ * dedup logic lives in lib/portal/translation-generator.ts::kickoffMissingTranslationWork
+ * (dev job 4fa1d8e5, shared with the daily top-up cron) and has its own
+ * dedicated coverage in tests/unit/translation-topup.test.ts — this file only
+ * covers what the ROUTE itself is responsible for: saving the preference,
+ * respecting the daily new-language cap, and calling the shared kickoff with
+ * the right language and caller tag.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -23,41 +22,23 @@ vi.mock("@/lib/portal/rate-limit", () => ({
   getRateLimitKey: () => "rl-key",
 }))
 
+const isBrandNewLanguageMock = vi.fn(async () => false)
+const distinctLanguagesTranslatedTodayMock = vi.fn(async () => 0)
 vi.mock("@/lib/portal/language-cap", () => ({
-  isBrandNewLanguage: () => Promise.resolve(false),
-  distinctLanguagesTranslatedToday: () => Promise.resolve(0),
+  isBrandNewLanguage: (...a: unknown[]) => isBrandNewLanguageMock(...a),
+  distinctLanguagesTranslatedToday: (...a: unknown[]) => distinctLanguagesTranslatedTodayMock(...a),
   MAX_NEW_LANGUAGES_PER_DAY: 8,
 }))
 
-const seedPendingTranslationsMock = vi.fn(async () => ({ requested: 100, alreadyDone: 0, missing: 100 }))
+const kickoffMock = vi.fn(async () => ({ source: "dictionary", missing: 100 }))
 vi.mock("@/lib/portal/translation-generator", () => ({
-  seedPendingTranslations: (...a: unknown[]) => seedPendingTranslationsMock(...a),
-}))
-vi.mock("@/lib/portal/wizard-translatable-text", () => ({
-  getWizardTranslatableText: () => ({ "First Name": "First Name" }),
-}))
-vi.mock("@/lib/portal/guide-translatable-text", () => ({
-  getGuideTranslatableText: () => ({ "Portal Guide": "Portal Guide" }),
+  kickoffMissingTranslationWork: (...a: unknown[]) => kickoffMock(...a),
 }))
 
-const enqueueJobMock = vi.fn(async () => ({ id: "job-new" }))
-vi.mock("@/lib/jobs/queue", () => ({
-  enqueueJob: (...a: unknown[]) => enqueueJobMock(...a),
-}))
-
-let liveJobs: unknown[] = []
+let updateUserByIdError: unknown = null
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
-    auth: { admin: { updateUserById: () => Promise.resolve({ error: null }) } },
-    from: () => {
-      const chain: Record<string, unknown> = {}
-      const noop = () => chain
-      chain.select = noop
-      chain.eq = noop
-      chain.in = noop
-      chain.limit = () => Promise.resolve({ data: liveJobs, error: null })
-      return chain
-    },
+    auth: { admin: { updateUserById: () => Promise.resolve({ error: updateUserByIdError }) } },
   },
 }))
 
@@ -72,50 +53,52 @@ function req(language: string) {
 }
 
 beforeEach(() => {
-  seedPendingTranslationsMock.mockClear()
-  enqueueJobMock.mockClear()
-  liveJobs = []
+  kickoffMock.mockClear()
+  isBrandNewLanguageMock.mockClear().mockResolvedValue(false)
+  distinctLanguagesTranslatedTodayMock.mockClear().mockResolvedValue(0)
+  updateUserByIdError = null
 })
 
-describe("POST /api/portal/language — dictionary enqueue dedup", () => {
-  it("enqueues a translate job for a brand-new pick with nothing already live", async () => {
-    const res = await POST(req("fr"))
-    expect(res.status).toBe(200)
-    expect(enqueueJobMock).toHaveBeenCalledTimes(1)
-    expect(enqueueJobMock.mock.calls[0][0]).toMatchObject({
-      job_type: "translate_language",
-      payload: { language_code: "fr", source: "dictionary", chunk_index: 0, auto_retry: 0 },
-    })
+describe("POST /api/portal/language", () => {
+  it("rejects a string that isn't a recognized ISO language code", async () => {
+    const res = await POST(req("not-a-real-language"))
+    expect(res.status).toBe(400)
+    expect(kickoffMock).not.toHaveBeenCalled()
   })
 
-  it("does NOT enqueue a duplicate job when a dictionary-source job for this language is already live", async () => {
-    liveJobs = [{ id: "already-live" }]
-    const res = await POST(req("fr"))
+  it("saves en/it without kicking off any translation work — they're the hand-written dictionaries, not AI-generated", async () => {
+    const res = await POST(req("it"))
     expect(res.status).toBe(200)
-    expect(enqueueJobMock).not.toHaveBeenCalled()
-    // The preference itself is still saved regardless — never block the pick.
+    expect(kickoffMock).not.toHaveBeenCalled()
   })
 
-  it("does NOT enqueue a duplicate wizard-source job when one is already live and the dictionary is already fully seeded", async () => {
-    seedPendingTranslationsMock.mockResolvedValueOnce({ requested: 100, alreadyDone: 100, missing: 0 })
-    liveJobs = [{ id: "already-live-wizard" }]
+  it("kicks off the shared translation work for a non-hand-written locale, tagged as the language picker", async () => {
     const res = await POST(req("fr"))
     expect(res.status).toBe(200)
-    expect(enqueueJobMock).not.toHaveBeenCalled()
+    expect(kickoffMock).toHaveBeenCalledTimes(1)
+    expect(kickoffMock).toHaveBeenCalledWith("fr", "portal-language-picker")
   })
 
-  it("falls through to the guide source when both dictionary and wizard are already fully seeded (a returning language whose help-article content still lags)", async () => {
-    seedPendingTranslationsMock
-      .mockResolvedValueOnce({ requested: 100, alreadyDone: 100, missing: 0 }) // dictionary: done
-      .mockResolvedValueOnce({ requested: 50, alreadyDone: 50, missing: 0 })   // wizard: done
-      .mockResolvedValueOnce({ requested: 200, alreadyDone: 0, missing: 200 }) // guide: still missing
+  it("skips the kickoff (but still saves the preference) when the daily brand-new-language cap is reached", async () => {
+    isBrandNewLanguageMock.mockResolvedValueOnce(true)
+    distinctLanguagesTranslatedTodayMock.mockResolvedValueOnce(8)
     const res = await POST(req("fr"))
     expect(res.status).toBe(200)
-    expect(seedPendingTranslationsMock).toHaveBeenCalledTimes(3)
-    expect(enqueueJobMock).toHaveBeenCalledTimes(1)
-    expect(enqueueJobMock.mock.calls[0][0]).toMatchObject({
-      job_type: "translate_language",
-      payload: { language_code: "fr", source: "guide", chunk_index: 0, auto_retry: 0 },
-    })
+    expect(kickoffMock).not.toHaveBeenCalled()
+  })
+
+  it("still saves the preference even when the translation kickoff throws", async () => {
+    kickoffMock.mockRejectedValueOnce(new Error("boom"))
+    const res = await POST(req("fr"))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+  })
+
+  it("returns 500 when saving the preference itself fails", async () => {
+    updateUserByIdError = new Error("db down")
+    const res = await POST(req("fr"))
+    expect(res.status).toBe(500)
+    expect(kickoffMock).not.toHaveBeenCalled()
   })
 })

@@ -195,6 +195,10 @@
     {
       "path": "/api/cron/irs-tracking-check",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/portal-translation-topup",
+      "schedule": "0 10 * * *"
     }
   ],
   "rewrites": [
