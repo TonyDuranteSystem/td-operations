@@ -27,10 +27,10 @@ describe("validateStatusField", () => {
     expect(validateStatusField("tasks", { status: "Done" })).toBeNull()
   })
 
-  it("accepts valid leads.status", () => {
+  it("accepts valid leads.status that don't require a dedicated flow", () => {
     expect(validateStatusField("leads", { status: "New" })).toBeNull()
-    expect(validateStatusField("leads", { status: "Paid" })).toBeNull()
-    expect(validateStatusField("leads", { status: "Converted" })).toBeNull()
+    expect(validateStatusField("leads", { status: "Call Done" })).toBeNull()
+    expect(validateStatusField("leads", { status: "Lost" })).toBeNull()
   })
 
   it("accepts valid deals.stage", () => {
@@ -67,6 +67,27 @@ describe("validateStatusField", () => {
     const result = validateStatusField("deals", { stage: "paid" })
     expect(result).toContain("Invalid stage value")
     expect(result).toContain('"paid"')
+  })
+
+  // ── R094: leads.status "Converted"/"Paid" require a dedicated flow ──
+  // (real incident: a lead was flipped to Converted through this exact gap
+  // with no offer ever created — see dev job 6ba61663)
+
+  it("blocks leads.status = Converted even though it is a valid enum member", () => {
+    const result = validateStatusField("leads", { status: "Converted" })
+    expect(result).toContain("cannot be set directly")
+    expect(result).toContain("Converted")
+  })
+
+  it("blocks leads.status = Paid even though it is a valid enum member", () => {
+    const result = validateStatusField("leads", { status: "Paid" })
+    expect(result).toContain("cannot be set directly")
+    expect(result).toContain("Paid")
+  })
+
+  it("does not block Paid on other tables that legitimately use it", () => {
+    expect(validateStatusField("payments", { status: "Paid" })).toBeNull()
+    expect(validateStatusField("deals", { stage: "Paid" })).toBeNull()
   })
 
   // ── Unmapped tables pass through (should return null) ──

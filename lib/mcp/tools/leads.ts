@@ -309,13 +309,27 @@ export function registerLeadTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "lead_update",
-    "Update a lead's fields (status, notes, offer data, etc.). Use lead_search first to find the ID. For status changes: New → Call Scheduled → Call Done → Offer Sent → Negotiating → Converted/Lost.",
+    "Update a lead's fields (notes, offer data, etc.). Use lead_search first to find the ID. Status changes: New → Call Scheduled → Call Done → Offer Sent → Negotiating → Lost are fine here; Converted/Paid are BLOCKED on this tool because they mean payment confirmed — use confirm-payment / the Convert-to-Contact flow (or crm_update_record, which is also blocked, for the same reason) instead of setting the label directly.",
     {
       id: z.string().uuid().describe("Lead UUID (from lead_search)"),
       updates: z.record(z.string(), z.any()).describe("Fields to update (e.g., {status: 'Call Done', notes: 'Discussed LLC formation'})"),
     },
     async ({ id, updates }) => {
       try {
+        // R094: "Converted"/"Paid" mean payment confirmed — never a plain
+        // field edit. A generic tool call has no way to verify an offer was
+        // ever signed or paid, so it must never be the thing that decides a
+        // client converted (real incident: a lead was flipped to Converted
+        // with no offer at all behind it, traced to this exact gap).
+        if (typeof updates.status === "string" && ["Converted", "Paid"].includes(updates.status)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `❌ Cannot set status "${updates.status}" via lead_update — it means payment confirmed and must come from the real payment/conversion flow, not a direct field edit. Use the Convert to Contact / Confirm Payment actions in the CRM.`,
+            }],
+          }
+        }
+
         const { data, error } = await supabaseAdmin
           .from("leads")
           .update({ ...updates, updated_at: new Date().toISOString() })
