@@ -35,13 +35,16 @@ export interface MailingAddressRow {
 }
 
 // Build a single-line address string from a structured addresses row.
+// Antonio, 2026-09-18: each component on its own, separated by " - "
+// (Address - Suite - City - State - Zip) — not grouped/comma-joined.
 export function formatAddressString(addr: MailingAddressRow | null | undefined): string | null {
   if (!addr?.address_line1) return null
   const parts: string[] = [addr.address_line1.trim()]
   if (addr.address_line2?.trim()) parts.push(addr.address_line2.trim())
-  const csz = [addr.city?.trim(), addr.state?.trim(), addr.zip?.trim()].filter(Boolean).join(' ')
-  if (csz) parts.push(csz)
-  return parts.join(', ')
+  if (addr.city?.trim()) parts.push(addr.city.trim())
+  if (addr.state?.trim()) parts.push(addr.state.trim())
+  if (addr.zip?.trim()) parts.push(addr.zip.trim())
+  return parts.join(' - ')
 }
 
 // Prefer the FK-joined address row; fall back to the legacy physical_address text column.

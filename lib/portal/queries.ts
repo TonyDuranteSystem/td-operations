@@ -464,7 +464,7 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip)')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip)')
     .eq('id', accountId)
     .single()
 
@@ -476,6 +476,14 @@ export async function getPortalAccountDetail(accountId: string) {
     physical_address: resolveMailingAddress(data.mailing_address, data.physical_address),
     legal_address: formatAddressString(data.legal_address),
     shipping_address: formatAddressString(data.shipping_address),
+    // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
+    // registered_agent_id, never the legacy free-text columns below — so an
+    // account set up through it has a real, verified RA the CRM can see, but
+    // these text columns stay null. Same fallback shape as the other three
+    // addresses: prefer the linked row, fall back to the legacy text only
+    // for accounts never migrated to the FK. Dev job 254834cc, 2026-09-18.
+    registered_agent_address: resolveMailingAddress(data.registered_agent, data.registered_agent_address),
+    registered_agent_provider: data.registered_agent?.provider ?? data.registered_agent_provider,
   }
 }
 
