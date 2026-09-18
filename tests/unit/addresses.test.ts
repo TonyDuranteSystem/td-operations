@@ -168,7 +168,7 @@ describe('formatAddressString', () => {
       city: 'Largo',
       state: 'FL',
       zip: '33771',
-    })).toBe('10225 Ulmerton Rd - Largo - FL - 33771')
+    })).toBe('10225 Ulmerton Rd, Largo FL 33771')
   })
 
   it('includes address_line2 when present', () => {
@@ -178,7 +178,7 @@ describe('formatAddressString', () => {
       city: 'Largo',
       state: 'FL',
       zip: '33771',
-    })).toBe('10225 Ulmerton Rd - Suite 3D - Largo - FL - 33771')
+    })).toBe('10225 Ulmerton Rd, Suite 3D, Largo FL 33771')
   })
 
   it('handles missing city/state/zip gracefully', () => {
@@ -193,7 +193,7 @@ describe('resolveMailingAddress', () => {
     expect(resolveMailingAddress(
       { address_line1: '10225 Ulmerton Rd', city: 'Largo', state: 'FL', zip: '33771' },
       '456 Old St, Miami, FL 33101',
-    )).toBe('10225 Ulmerton Rd - Largo - FL - 33771')
+    )).toBe('10225 Ulmerton Rd, Largo FL 33771')
   })
 
   it('falls back to legacyPhysical when mailingRow is null', () => {

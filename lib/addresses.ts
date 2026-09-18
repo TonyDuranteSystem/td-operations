@@ -35,16 +35,19 @@ export interface MailingAddressRow {
 }
 
 // Build a single-line address string from a structured addresses row.
-// Antonio, 2026-09-18: each component on its own, separated by " - "
-// (Address - Suite - City - State - Zip) — not grouped/comma-joined.
+// Used for real documents (invoice/payment PDFs, emails, OA/SS-4 generation,
+// the AI agent client card) where a plain joined line is required — NOT for
+// the portal's own address cards, which render each field on its own
+// labeled line instead (see AddressCard/AddressInfoRow). Reverted to the
+// comma format 2026-09-18 after the dash-separator change (dev job
+// 254834cc) leaked into these document call sites unreviewed.
 export function formatAddressString(addr: MailingAddressRow | null | undefined): string | null {
   if (!addr?.address_line1) return null
   const parts: string[] = [addr.address_line1.trim()]
   if (addr.address_line2?.trim()) parts.push(addr.address_line2.trim())
-  if (addr.city?.trim()) parts.push(addr.city.trim())
-  if (addr.state?.trim()) parts.push(addr.state.trim())
-  if (addr.zip?.trim()) parts.push(addr.zip.trim())
-  return parts.join(' - ')
+  const csz = [addr.city?.trim(), addr.state?.trim(), addr.zip?.trim()].filter(Boolean).join(' ')
+  if (csz) parts.push(csz)
+  return parts.join(', ')
 }
 
 // Prefer the FK-joined address row; fall back to the legacy physical_address text column.
