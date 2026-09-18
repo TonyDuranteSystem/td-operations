@@ -26,6 +26,17 @@ export const STATUS_VALIDATION_MAP: Record<string, { field: string; allowed: rea
   tax_returns: { field: "status", allowed: TAX_RETURN_STATUS },
 }
 
+// R094: on leads, "Converted"/"Paid" mean payment confirmed — they are valid
+// LEAD_STATUS enum members, so the plain membership check below would wave
+// them through even with no offer or payment behind the lead at all. Real
+// incident: a lead was flipped to Converted through this exact gap with no
+// offer ever created. Earning these two values is the job of the payment
+// webhooks / Convert-to-Contact / Confirm Payment flows, never a generic
+// field write, so they are blocked here regardless of table membership.
+const STATUS_VALUES_REQUIRING_DEDICATED_FLOW: Record<string, readonly string[]> = {
+  leads: ["Converted", "Paid"],
+}
+
 /**
  * Validate a status/stage field value before writing to a CRM table.
  * Returns null if valid or unmapped, error string if invalid.
@@ -34,6 +45,10 @@ export function validateStatusField(table: string, updates: Record<string, unkno
   const rule = STATUS_VALIDATION_MAP[table]
   if (!rule || !(rule.field in updates)) return null
   const value = updates[rule.field] as string
+  const blocked = STATUS_VALUES_REQUIRING_DEDICATED_FLOW[table]
+  if (blocked?.includes(value)) {
+    return `"${value}" cannot be set directly on ${table} — it means payment confirmed. Use the Convert to Contact / Confirm Payment flow instead of a generic field update.`
+  }
   if (rule.allowed.includes(value)) return null
   return `Invalid ${rule.field} value "${value}" for ${table}. Allowed values: ${rule.allowed.join(", ")}`
 }
