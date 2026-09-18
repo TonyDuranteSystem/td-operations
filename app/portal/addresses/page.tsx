@@ -201,7 +201,11 @@ function AddressCard({
   translations: Record<string, string>
 }) {
   const showCountry = country && !['US', 'USA', 'United States'].includes(country.trim())
-  const hasStructured = !!addr?.address_line1
+  // Only render labeled fields when every field is actually present — a
+  // partial structured row (e.g. address_line1 set but city/state/zip blank
+  // from an incomplete edit) falls back to the legacy text instead of
+  // showing a labeled row with nothing after the colon.
+  const hasStructured = !!(addr?.address_line1?.trim() && addr?.city?.trim() && addr?.state?.trim() && addr?.zip?.trim())
   const hasAny = hasStructured || !!legacyText
   return (
     <div className="bg-white rounded-xl border shadow-sm p-5">

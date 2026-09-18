@@ -7,6 +7,7 @@ import { Send, Loader2, Paperclip, Sparkles, X, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
+import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -54,6 +55,7 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
+  const suppressDraftSaveRef = useRef(false)
   const [text, setText] = useState('')
   const [file, setFile] = useState<StagedFile | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -97,12 +99,33 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
   }, [data?.messages])
 
   // Switching conversations must not carry over a half-composed reply or
-  // confirm screen from the previous one.
+  // confirm screen from the previous one — but a draft FOR the conversation
+  // being switched to should load back in, same as the new-conversation
+  // popup already does (Antonio, 2026-09-18: caught this one missing here).
+  //
+  // suppressDraftSaveRef guards a real race: the save effect below runs on
+  // EVERY text change, but on mount it would otherwise fire with the render's
+  // stale pre-load text ('') BEFORE this effect's setText commits — wiping
+  // out the very draft just read from storage. Caught live under React's dev
+  // double-invoke (StrictMode runs mount effects twice), which reproduced it
+  // reliably: the draft was saved correctly, then silently deleted the
+  // instant the conversation was reopened. The flag defers the very next
+  // save-effect run until after the loaded value has actually committed.
   useEffect(() => {
-    setText('')
+    suppressDraftSaveRef.current = true
+    setText(loadWhatsAppDraft('reply', groupId))
     setFile(null)
     setConfirming(false)
   }, [groupId])
+
+  // Save on every change, not just on unmount — a crashed tab must not lose it.
+  useEffect(() => {
+    if (suppressDraftSaveRef.current) {
+      suppressDraftSaveRef.current = false
+      return
+    }
+    saveWhatsAppDraft('reply', groupId, text)
+  }, [groupId, text])
 
   const sendMutation = useMutation({
     mutationFn: async () => {

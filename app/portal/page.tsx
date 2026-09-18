@@ -1261,7 +1261,11 @@ function AddressInfoRow({ icon: Icon, label, description, parts, legacyValue, em
   locale: Locale
   translations: Record<string, string>
 }) {
-  const hasStructured = !!parts?.address_line1
+  // Only render labeled fields when every field is actually present — a
+  // partial structured row (e.g. address_line1 set but city/state/zip blank
+  // from an incomplete edit) falls back to the legacy line instead of
+  // showing a labeled row with nothing after the colon.
+  const hasStructured = !!(parts?.address_line1?.trim() && parts?.city?.trim() && parts?.state?.trim() && parts?.zip?.trim())
   const hasAny = hasStructured || !!legacyValue
   return (
     <div className="flex items-start gap-2">
