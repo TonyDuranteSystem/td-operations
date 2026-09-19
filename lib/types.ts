@@ -517,7 +517,7 @@ export interface PortalNotification {
 
 // ─── Inbox Types ─────────────────────────────────────────
 
-export type InboxChannel = 'gmail' | 'portal' | 'whatsapp'
+export type InboxChannel = 'gmail' | 'portal' | 'whatsapp' | 'telegram'
 
 export interface InboxConversation {
   id: string
@@ -580,6 +580,7 @@ export interface InboxMessage {
 export interface InboxStats {
   gmail: number
   whatsapp: number
+  telegram: number
   total: number
 }
 

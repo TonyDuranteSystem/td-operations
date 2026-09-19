@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { Fragment, useMemo, useRef, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star, StickyNote } from 'lucide-react'
+import { Mail, MailOpen, CheckSquare, Square, Paperclip, Trash2, MessagesSquare, MessageSquare, Archive, ArchiveRestore, Palette, FolderInput, Ban, AlarmClock, FlameKindling, Star, StickyNote, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
@@ -95,12 +95,14 @@ const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
   portal: MessagesSquare,
   whatsapp: MessageSquare,
+  telegram: Send,
 }
 
 const channelColors: Record<InboxChannel, string> = {
   gmail: 'text-red-500',
   portal: 'text-purple-600',
   whatsapp: 'text-green-500',
+  telegram: 'text-sky-500',
 }
 
 function formatTime(dateStr: string) {
@@ -154,7 +156,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // part of the fetch key or every keystroke would re-request the identical
   // WhatsApp conversations endpoint (2026-09-19).
   const isWhatsApp = activeChannel === 'whatsapp'
-  const fetchSearchQuery = isWhatsApp ? '' : searchQuery
+  const isTelegram = activeChannel === 'telegram'
+  const fetchSearchQuery = isWhatsApp || isTelegram ? '' : searchQuery
 
   // Switching mailbox / folder / search / search-scope is a NEW list — page 1.
   const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${fetchSearchQuery ?? ''}|${effScope}|${mailbox ?? ''}`
@@ -534,6 +537,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       // "No conversations" until a manual refresh (Antonio 2026-07-08).
       const url = isWhatsApp
         ? '/api/inbox/whatsapp/conversations'
+        : isTelegram
+        ? '/api/inbox/telegram/conversations'
         : (() => {
             const params = new URLSearchParams()
             if (activeChannel) params.set('channel', activeChannel)
@@ -599,7 +604,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     // it judge would "confirm" every pending Gmail delete at once. `origin` also
     // carries the channel, which makes that unrepresentable — this is the second
     // lock, so the foreign list never even pays for the pass.
-    if (!data?.origin || !onReconciled || isWhatsApp) return
+    if (!data?.origin || !onReconciled || isWhatsApp || isTelegram) return
     const payload: ConversationsPayload = { conversations: data.conversations ?? [], unenrichedIds: data.unenrichedIds, partial: data.partial }
     const advanced = advanceReleases({ payload, origin: data.origin, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
     if (!overrideMapsEqual(advanced.overrides, ov) || !unreadMapsEqual(advanced.unread, un)) {
@@ -760,7 +765,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
           select-all must not archive read emails invisibly). Page-scoped by
           design: whole-mailbox bulk actions would re-create the 2026-08-02
           Gmail quota incident. */}
-      {!isWhatsApp && !inTrash && onSelectMany && selectableIds.length > 0 && (
+      {!isWhatsApp && !isTelegram && !inTrash && onSelectMany && selectableIds.length > 0 && (
         <button
           onClick={() => onSelectMany(allSelected ? [] : selectableIds)}
           className="flex items-center gap-2 w-full px-4 py-2 border-b bg-zinc-50/60 text-xs font-medium text-zinc-500 hover:bg-zinc-100 transition-colors"
@@ -777,7 +782,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
         const Icon = channelIcons[conv.channel]
         const isSelected = selectedId === conv.id
         const isChecked = selectedIds.has(conv.id)
-        const showCheckbox = !isWhatsApp && (bulkMode || conv.channel === 'gmail')
+        const showCheckbox = !isWhatsApp && !isTelegram && (bulkMode || conv.channel === 'gmail')
         const mark = markByKey(conv.colorMark)
 
         // Section headers: "Pinned (N)" above the pinned band, "All email"
@@ -1347,7 +1352,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       {/* REAL PAGE NUMBERS — 1 2 3 … N, like Gmail. Rendered only for
           index-served views (the server returns a true total there); the
           live-Gmail fallback can't know a total, so no pager is shown. */}
-      {!isWhatsApp && totalPages > 1 && (
+      {!isWhatsApp && !isTelegram && totalPages > 1 && (
         <div className="flex items-center justify-center gap-1 p-3 border-t flex-wrap">
           <button
             onClick={() => setPage(page - 1)}
