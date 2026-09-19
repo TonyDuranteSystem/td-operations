@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { dispatchWhatsAppMessage } from "@/lib/messaging/send-dispatcher"
-import { dispatchTelegramMessage } from "@/lib/messaging/telegram-dispatcher"
 import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
@@ -301,28 +300,35 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ─── Telegram, via the real Bot API dispatcher ───
-    // Previously called a Supabase Edge Function that no longer exists in
-    // this repo — every Telegram reply through this route failed, the exact
-    // same defect WhatsApp had here until 2026-09-17 (docs/systems/messaging.md).
-    const sendResult = await dispatchTelegramMessage({
-      chatId: group.external_group_id,
-      message,
-      channelId: group.channel_id,
-      groupId: conversationId,
+    // ─── Telegram via Edge Function (unchanged) ──────
+    const efUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-message`
+
+    const response = await fetch(efUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      body: JSON.stringify({
+        chat_id: group.external_group_id,
+        message,
+        channel_id: group.channel_id,
+      }),
     })
 
-    if (!sendResult.ok) {
+    const result = await response.json()
+
+    if (!response.ok) {
       return NextResponse.json(
-        { error: (sendResult as { ok: false; error: string }).error },
-        { status: 502 }
+        { error: "Send failed", details: result },
+        { status: response.status }
       )
     }
 
     return NextResponse.json({
       success: true,
-      channel: "telegram",
-      result: sendResult.result,
+      channel: channel || "whatsapp",
+      result,
     })
   } catch (error) {
     console.error("Inbox reply error:", error)

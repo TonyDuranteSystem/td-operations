@@ -11,7 +11,6 @@ import { ConversationList } from './conversation-list'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
 import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
-import { TelegramThread } from './telegram-thread'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
 import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
@@ -45,14 +44,12 @@ const channelIcons: Record<InboxChannel, React.ElementType> = {
   gmail: Mail,
   portal: MessagesSquare,
   whatsapp: MessageSquare,
-  telegram: Send,
 }
 
 const channelLabels: Record<InboxChannel, string> = {
   gmail: 'Gmail',
   portal: 'Portal',
   whatsapp: 'WhatsApp',
-  telegram: 'Telegram',
 }
 
 /**
@@ -240,7 +237,6 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const defaultReplyTargetRef = useRef<(() => Omit<ReplyTarget, 'mode'> | null) | null>(null)
 
   const isWhatsApp = activeChannel === 'whatsapp'
-  const isTelegram = activeChannel === 'telegram'
   const isGmail = selected?.channel === 'gmail'
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
   const openUnread = selected
@@ -642,7 +638,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     queryKey: ['gmail-labels', activeMailbox],
     queryFn: () => fetch(`/api/inbox/labels?mailbox=${activeMailbox}`).then(r => r.json()),
     refetchInterval: 60_000,
-    enabled: !isWhatsApp && !isTelegram,
+    enabled: !isWhatsApp,
   })
   const userLabels = (labelsData?.labels || []).filter(l => l.type === 'user')
 
@@ -1247,9 +1243,6 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const whatsappGroupId = selected?.channel === 'whatsapp'
     ? selected.id.replace('whatsapp:', '')
     : null
-  const telegramGroupId = selected?.channel === 'telegram'
-    ? selected.id.replace('telegram:', '')
-    : null
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -1314,7 +1307,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       </div>
 
       {/* Mailbox selector — Gmail only; antonio@ is personal (admin only) */}
-      {!isWhatsApp && !isTelegram && canUsePersonalMailbox && (
+      {!isWhatsApp && canUsePersonalMailbox && (
         <div className="flex items-center gap-1 px-4 py-1.5 border-b bg-zinc-50/50">
           <span className="text-xs text-zinc-400 mr-2">Mailbox:</span>
           {(['support', 'antonio'] as const).map(mb => (
@@ -1335,7 +1328,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       )}
 
       {/* Search bar + Read/Unread filter — Gmail only */}
-      {!isWhatsApp && !isTelegram && (
+      {!isWhatsApp && (
         <div className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
@@ -1456,7 +1449,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       )}
 
       {/* Bulk Action Bar — Gmail only */}
-      {bulkMode && !isWhatsApp && !isTelegram && (
+      {bulkMode && !isWhatsApp && (
         <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
           <CheckSquare className="h-4 w-4 text-blue-500" />
           <span className="text-sm font-medium text-blue-700">
@@ -1928,8 +1921,6 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   />
                   <WhatsappThread groupId={whatsappGroupId} />
                 </>
-              ) : selected.channel === 'telegram' && telegramGroupId ? (
-                <TelegramThread groupId={telegramGroupId} />
               ) : (
                 <div className="flex flex-1 min-h-0">
                   <div className="flex-1 flex flex-col min-w-0">
