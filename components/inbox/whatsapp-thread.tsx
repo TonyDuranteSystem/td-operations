@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
+import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -63,6 +64,31 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
   const [suggesting, setSuggesting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const queryClient = useQueryClient()
+
+  // Mark this conversation read the moment it's opened — Antonio, 2026-09-18:
+  // "the number of unread and read doesn't work." Root cause: unlike Gmail's
+  // thread view (message-thread.tsx), nothing here ever called a mark-read
+  // endpoint at all — the only way a WhatsApp conversation's unread_count
+  // ever reached 0 was the explicit row icon, so real conversations read
+  // months ago were still sitting on double-digit unread counts, inflating
+  // the WhatsApp tab's badge. Reuses the same dedicated route the row icon
+  // already calls (app/api/inbox/whatsapp/mark-read), and the same
+  // trackOpenMarkRead/openMarkReadSettled guard Gmail's equivalent open-time
+  // mark-read already uses — this call and the row's own "mark unread"
+  // toggle both write the same column, and without the guard a fast reopen
+  // right after clicking "mark unread" could race this call to land last and
+  // silently undo it (the exact incident that guard was built for, 2026-08-05).
+  useEffect(() => {
+    const call = fetch('/api/inbox/whatsapp/mark-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId, unread: false }),
+    }).then(() => {
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-stats'] })
+    })
+    trackOpenMarkRead(`whatsapp:${groupId}`, call)
+  }, [groupId, queryClient])
 
   // Auto-grow the textarea as the message gets longer, capped so the reply
   // bar can't push the message list off-screen (Antonio, 2026-09-17: "I don't

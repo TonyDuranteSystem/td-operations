@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
 import { snoozePresets, SNOOZE_LABEL_NAME } from '@/lib/inbox/email-snooze'
 import { requestCreateNote } from '@/lib/notes/create-note'
+import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import {
   advanceReleases,
@@ -168,6 +169,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
       // unconditionally, which silently failed/no-op'd for a WhatsApp
       // conversation id (confirmed before adding this branch, 2026-09-18).
       if (conv.channel === 'whatsapp') {
+        // Same guard as Gmail's header mark-unread (inbox-shell.tsx) — opening
+        // this conversation now auto-marks it read (whatsapp-thread.tsx,
+        // 2026-09-18), so marking it unread right after opening can otherwise
+        // race that call and get silently undone.
+        if (action === 'mark_unread') await openMarkReadSettled(conv.id)
         const res = await fetch('/api/inbox/whatsapp/mark-read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
