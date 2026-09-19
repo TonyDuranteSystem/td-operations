@@ -4,10 +4,19 @@
  *   - Google Drive (real `drive_file_id`) via the service account, and
  *   - Supabase Storage (synthetic `storage:<path>` id in `onboarding-uploads`)
  *     used by flow uploads and persisted fax-upload attachments.
- * No Google login required — the SA has access to the Shared Drive.
+ * Dashboard users only — every real caller (fax history, contact document
+ * preview, SS-4 fax panel, flow document fallback link) is a staff-only CRM
+ * surface. This route used to have NO access check beyond "some session
+ * exists", which a logged-in CLIENT portal session also satisfies — a client
+ * who obtained any document's id (passport, tax return, etc.) could pull its
+ * bytes regardless of portal_visible or account ownership. Same class of gap
+ * already closed on /api/storage/upload (2026-07-20) and matches the sibling
+ * /api/drive-preview/[fileId] route's isDashboardUser gate.
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { createClient } from "@/lib/supabase/server"
+import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { downloadFileBinary } from "@/lib/google-drive"
 
@@ -16,6 +25,12 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const { id } = params
+
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
+  }
 
   // Look up document in Supabase
   const { data: doc, error } = await supabaseAdmin
