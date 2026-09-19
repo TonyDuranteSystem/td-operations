@@ -512,6 +512,9 @@ function BanksSummary({ activeSource, onSourceFilter, isAdmin = false, syncBlock
 type FeedMatchResult =
   | { type: 'account'; id: string; name: string; status: string | null; contact_name?: string | null }
   | { type: 'contact'; id: string; name: string; email?: string | null }
+  // A person who hasn't become a client yet (e.g. paid for a strategy call
+  // but never signed/paid for a real service) — paid-call target only.
+  | { type: 'lead'; id: string; name: string; email?: string | null }
 
 // Existing-service shape returned from /api/feed/target-services
 interface TargetServiceDelivery {
@@ -743,6 +746,12 @@ function UnmatchedRow({
     setCreateServiceType('')
     setCreateSelectedSdId(null)
     setTargetServices([])
+    // A lead has no service deliveries to attach to or create — the paid-call
+    // checkbox is the only action available, so there's nothing to look up.
+    if (r.type === 'lead') {
+      setCreatePaidCall(true)
+      return
+    }
     // Fetch existing active SDs on this target so the user can attach the
     // payment to one of them instead of creating a duplicate "Delivered" SD.
     setLoadingTargetServices(true)
@@ -796,10 +805,17 @@ function UnmatchedRow({
 
   const submitCreate = async () => {
     if (!createForResult) return
-    const isPaidCall = createPaidCall && createForResult.type === 'contact'
+    const isPaidCall = createPaidCall && (createForResult.type === 'contact' || createForResult.type === 'lead')
     const isAttach = !isPaidCall && !!createSelectedSdId
     const description = createDescription.trim()
     const serviceType = createServiceType.trim()
+
+    // A lead has no invoices/services of its own — the paid-call checkbox is
+    // the only valid action, matching the server's own guard.
+    if (createForResult.type === 'lead' && !isPaidCall) {
+      toast.error('A lead can only be used to record a paid strategy call.')
+      return
+    }
 
     if (!isPaidCall && !isAttach) {
       if (!serviceType) {
@@ -820,6 +836,8 @@ function UnmatchedRow({
       const body: Record<string, unknown> = { feed_id: feed.id }
       if (createForResult.type === 'account') {
         body.account_id = createForResult.id
+      } else if (createForResult.type === 'lead') {
+        body.lead_id = createForResult.id
       } else {
         body.contact_id = createForResult.id
       }
@@ -1226,27 +1244,34 @@ function UnmatchedRow({
                   // invoice carries contact_id with account_id null). Strictly
                   // filter by the matched id so we never surface another party's
                   // invoice.
+                  // A lead has no invoices of its own yet — it's not a
+                  // matchable target, only a paid-call recording target.
                   const matchingInvoices = r.type === 'account'
                     ? openInvoices.filter(inv => inv.account_id === r.id)
-                    : openInvoices.filter(inv => inv.contact_id === r.id)
+                    : r.type === 'contact'
+                      ? openInvoices.filter(inv => inv.contact_id === r.id)
+                      : []
                   return (
                     <div key={`${r.type}-${r.id}`} className="border rounded-md overflow-hidden">
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40 text-xs">
                         {r.type === 'account' ? (
                           <Building2 className="h-3 w-3 text-blue-600 shrink-0" />
                         ) : (
-                          <User className="h-3 w-3 text-purple-600 shrink-0" />
+                          <User className={cn("h-3 w-3 shrink-0", r.type === 'lead' ? "text-amber-600" : "text-purple-600")} />
                         )}
                         <span className="font-medium truncate flex-1">{r.name}</span>
                         {r.type === 'account' && r.contact_name && (
                           <span className="text-[10px] text-muted-foreground truncate">via {r.contact_name}</span>
+                        )}
+                        {r.type === 'lead' && (
+                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded shrink-0">Lead — not a client yet</span>
                         )}
                         <button
                           type="button"
                           onClick={() => openCreateModal(r)}
                           className="text-[11px] px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 shrink-0"
                         >
-                          + Create invoice from this feed
+                          {r.type === 'lead' ? '+ Record paid call' : '+ Create invoice from this feed'}
                         </button>
                       </div>
                       {matchingInvoices.length > 0 && (
@@ -1453,8 +1478,10 @@ function UnmatchedRow({
               </div>
             </div>
 
-            {/* Branch A — attach to existing active SD ─────────────── */}
-            {loadingTargetServices ? (
+            {/* Branch A — attach to existing active SD. Never for a lead: they
+                have no services yet by definition, and the only valid action
+                for a lead target is the paid-call checkbox below. */}
+            {createForResult?.type !== 'lead' && (loadingTargetServices ? (
               <div className="text-xs text-zinc-500 flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin" /> Looking up existing services…
               </div>
@@ -1497,26 +1524,30 @@ function UnmatchedRow({
                 <AlertCircle className="h-3 w-3" />
                 No active services on this client. Record a one-off below.
               </div>
-            )}
+            ))}
 
             {/* Branch C — WS-A: this was a PAID STRATEGY CALL ─────────
-                Only for a PERSON: the credit is person-scoped by design, so a
+                For a PERSON — a contact, or a lead who hasn't become a
+                client yet: the credit is person-scoped by design, so a
                 company's renewal can never eat someone's call fee. */}
-            {createForResult?.type === 'contact' && (
+            {(createForResult?.type === 'contact' || createForResult?.type === 'lead') && (
               <div className="border-t pt-3 space-y-2">
                 <label className="flex items-start gap-2 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={createPaidCall}
                     onChange={e => setCreatePaidCall(e.target.checked)}
-                    disabled={createSubmitting}
+                    // A lead has nothing else this modal can do — locked on
+                    // rather than letting the user uncheck into a dead end.
+                    disabled={createSubmitting || createForResult?.type === 'lead'}
                     className="mt-0.5"
                   />
                   <span className="text-sm text-zinc-800">
                     This was a <strong>paid strategy call</strong>
                     <span className="block text-[11px] text-zinc-500">
-                      Records the revenue and gives them a credit toward their next purchase —
-                      the same as when the system recognises the booking itself.
+                      {createForResult?.type === 'lead'
+                        ? "Records the revenue and gives them a credit toward their next purchase — they stay a lead until they actually sign and pay for a real service."
+                        : "Records the revenue and gives them a credit toward their next purchase — the same as when the system recognises the booking itself."}
                     </span>
                   </span>
                 </label>

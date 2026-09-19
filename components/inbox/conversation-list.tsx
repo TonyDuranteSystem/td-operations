@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { markByKey, COLOR_MARKS, MARK_LABEL_PREFIX } from '@/lib/inbox/color-marks'
 import { snoozePresets, SNOOZE_LABEL_NAME } from '@/lib/inbox/email-snooze'
+import { requestCreateNote } from '@/lib/notes/create-note'
 import type { InboxConversation, InboxChannel } from '@/lib/types'
 import {
   advanceReleases,
@@ -494,26 +495,21 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // "Create a sticky note from it" — Antonio, 2026-09-18. Reuses the existing
   // sticky-notes feature (docs/systems/staff-notes.md) as-is; nothing
   // WhatsApp-specific on that end, just a body + a link back to the Inbox.
-  const stickyNoteMutation = useMutation({
-    mutationFn: async (conv: InboxConversation) => {
-      const res = await fetch('/api/crm/staff-notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: conv.name,
-          body: conv.preview || `WhatsApp conversation with ${conv.name}`,
-          origin_url: '/inbox',
-        }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Could not create the sticky note.')
-      }
-      return res.json().catch(() => ({}))
-    },
-    onSuccess: () => toast.success('Sticky note created'),
-    onError: (err) => toast.error(err instanceof Error && err.message ? err.message : 'Could not create the sticky note.'),
-  })
+  //
+  // Opens the SAME full note editor every other "new note" entry point uses
+  // (lib/notes/create-note.ts), pre-filled from the conversation — it does
+  // NOT create the note itself. Antonio, 2026-09-18: the first version
+  // silently POSTed a note in the background with no chance to edit it
+  // first ("when I click on sticky note the note pop up must open for me to
+  // set it up").
+  const openStickyNoteFor = (conv: InboxConversation) => {
+    const handled = requestCreateNote({
+      title: conv.name,
+      body: conv.preview || `WhatsApp conversation with ${conv.name}`,
+      originUrl: '/inbox',
+    })
+    if (!handled) toast.error('Could not open the note editor — try reloading the page.')
+  }
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
@@ -1007,9 +1003,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
-                      stickyNoteMutation.mutate(conv)
+                      openStickyNoteFor(conv)
                     }}
-                    disabled={stickyNoteMutation.isPending}
                     className="p-1.5 rounded hover:bg-yellow-100 text-zinc-400 hover:text-yellow-600 transition-colors"
                     aria-label="Create a sticky note"
                   >
@@ -1296,9 +1291,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        stickyNoteMutation.mutate(conv)
+                        openStickyNoteFor(conv)
                       }}
-                      disabled={stickyNoteMutation.isPending}
                       className="p-1.5 rounded hover:bg-yellow-100 text-zinc-400 hover:text-yellow-600 transition-colors"
                       aria-label="Create a sticky note"
                     >

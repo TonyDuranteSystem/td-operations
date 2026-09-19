@@ -181,13 +181,13 @@ _Regenerated 2026-09-18. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-08-30)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-17)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-08-29)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-15)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-10)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-06)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-15)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-18)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-09-15)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
@@ -208,10 +208,10 @@ _Regenerated 2026-09-18. Every subsystem doc under `docs/systems/` (42 docs), wi
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-17)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-09-18)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
-- [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-08-29)_
+- [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-08-05)_
-- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-09)_
+- [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-18)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-09-16)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_

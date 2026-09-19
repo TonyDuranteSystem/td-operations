@@ -29,6 +29,12 @@ interface AccountSearchResult {
   name: string
 }
 
+interface ExistingAccountContact {
+  id: string
+  name: string
+  phone: string | null
+}
+
 type RecordType = 'lead' | 'contact-with-account' | 'contact-standalone'
 
 export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: string; onSaved?: () => void }) {
@@ -40,6 +46,12 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [accountResults, setAccountResults] = useState<AccountSearchResult[]>([])
   const [selectedAccount, setSelectedAccount] = useState<{ id: string; name: string } | null>(null)
   const [searching, setSearching] = useState(false)
+  // The account's existing people, once one is picked — offered as "attach to
+  // this one" so this flow stops creating a duplicate for someone who's
+  // already a contact of the client (Marinela Marku, 2026-09-18).
+  const [existingContacts, setExistingContacts] = useState<ExistingAccountContact[]>([])
+  const [loadingExistingContacts, setLoadingExistingContacts] = useState(false)
+  const [addingNewPerson, setAddingNewPerson] = useState(false)
 
   const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean }>({
     queryKey: ['whatsapp-contact-match', groupId],
@@ -53,6 +65,8 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
     setAccountQuery('')
     setAccountResults([])
     setSelectedAccount(null)
+    setExistingContacts([])
+    setAddingNewPerson(false)
   }, [groupId])
 
   useEffect(() => {
@@ -75,6 +89,34 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
     return () => clearTimeout(handle)
   }, [accountQuery, recordType])
 
+  // Once an account is picked, look up who's already a contact there —
+  // "Contact of an existing client" used to only know how to CREATE a
+  // person, which silently duplicated one who already existed (Marinela
+  // Marku, 2026-09-18). No existing people → skip straight to the new-
+  // person form, nothing to offer instead.
+  useEffect(() => {
+    if (recordType !== 'contact-with-account' || !selectedAccount) {
+      setExistingContacts([])
+      setAddingNewPerson(false)
+      return
+    }
+    let cancelled = false
+    setLoadingExistingContacts(true)
+    fetch(`/api/inbox/whatsapp-new/account-contacts?accountId=${encodeURIComponent(selectedAccount.id)}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return
+        const contacts: ExistingAccountContact[] = json.contacts ?? []
+        setExistingContacts(contacts)
+        setAddingNewPerson(contacts.length === 0)
+      })
+      .catch(() => {
+        if (!cancelled) { setExistingContacts([]); setAddingNewPerson(true) }
+      })
+      .finally(() => { if (!cancelled) setLoadingExistingContacts(false) })
+    return () => { cancelled = true }
+  }, [recordType, selectedAccount])
+
   const handleSave = async () => {
     if (!recordType || !name.trim()) return
     if (recordType === 'contact-with-account' && !selectedAccount) {
@@ -96,6 +138,30 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Could not save.')
       toast.success(`Saved ${name.trim()}`)
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
+      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      onSaved?.()
+      setRecordType(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** "It's this person" — attach instead of create. */
+  const handleAttachExisting = async (contact: ExistingAccountContact) => {
+    if (!selectedAccount) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/inbox/whatsapp-new/create-record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, existingContactId: contact.id, accountId: selectedAccount.id }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Could not save.')
+      toast.success(`Linked ${contact.name}`)
       queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
       queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
       onSaved?.()
@@ -162,13 +228,6 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
           </button>
         ))}
       </div>
-      <input
-        type="text"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Full name"
-        className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
       {recordType === 'contact-with-account' && (
         <div className="space-y-1">
           {selectedAccount ? (
@@ -211,14 +270,56 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
           )}
         </div>
       )}
-      <button
-        onClick={handleSave}
-        disabled={saving || !name.trim()}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
-      >
-        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
-        Save
-      </button>
+      {/* Is this number one of the client's existing people? Attaching here is
+          the fix for the Marinela Marku duplicate — before this, the only
+          option past this point was to create a brand-new person. */}
+      {recordType === 'contact-with-account' && selectedAccount && loadingExistingContacts && (
+        <div className="flex items-center gap-1.5 px-1 py-1 text-xs text-zinc-500">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking who&apos;s already on file…
+        </div>
+      )}
+      {recordType === 'contact-with-account' && selectedAccount && !loadingExistingContacts && existingContacts.length > 0 && !addingNewPerson && (
+        <div className="space-y-1">
+          <span className="text-xs text-zinc-500">Is this one of these people?</span>
+          <div className="space-y-1">
+            {existingContacts.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => handleAttachExisting(c)}
+                disabled={saving}
+                className="w-full text-left px-3 py-1.5 text-sm bg-white border rounded-md hover:bg-zinc-50 disabled:opacity-40"
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setAddingNewPerson(true)}
+            className="text-xs font-medium text-blue-600 hover:text-blue-700"
+          >
+            + It&apos;s a new person at this company
+          </button>
+        </div>
+      )}
+      {(recordType !== 'contact-with-account' || !selectedAccount || addingNewPerson) && (
+        <>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Full name"
+            className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving || !name.trim()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+            Save
+          </button>
+        </>
+      )}
     </div>
   )
 }

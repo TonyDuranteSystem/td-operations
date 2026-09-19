@@ -39,7 +39,11 @@ export interface PaidCallResult {
  * the credit is a payments row and payments require a contact or an account, so
  * without this the fee simply cannot be recorded).
  */
-async function resolveContact(email: string, name: string | null): Promise<{ id: string; created: boolean; ambiguous: boolean }> {
+async function resolveContact(
+  email: string,
+  name: string | null,
+  isTest: boolean,
+): Promise<{ id: string; created: boolean; ambiguous: boolean }> {
   // ONE resolver, shared with offer creation, so the person we CREDIT and the
   // person the offer SHOWS a balance for can never diverge. This used to be a
   // local lookup taking the first row of an unordered query — on a duplicated
@@ -48,10 +52,16 @@ async function resolveContact(email: string, name: string | null): Promise<{ id:
   const { contactId, ambiguous } = subjectForRecording(subject)
   if (contactId) return { id: contactId, created: false, ambiguous }
 
+  // is_test is only meaningful on a FRESH contact — an existing one (the
+  // branch above) already carries its own flag. Threaded from the lead a
+  // manual attach was recorded against (offer-signed's lead→contact
+  // conversion hit the identical hazard: a test lead's real signature
+  // silently minting a real contact + invoice — see that webhook's own
+  // is_test copy for the precedent this mirrors).
   // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; same sanctioned path as offer-signed's lead→contact conversion (dev_task 98484283)
   const { data: created, error } = await supabaseAdmin
     .from("contacts")
-    .insert({ full_name: name || email.split("@")[0], email, status: "active" })
+    .insert({ full_name: name || email.split("@")[0], email, status: "active", is_test: isTest })
     .select("id")
     .single()
   if (error || !created) throw new Error(`paid-call: contact creation failed for ${email}: ${error?.message}`)
@@ -75,6 +85,12 @@ export async function recordPaidCall(params: {
   inviteeName?: string | null
   callDate?: string | null
   /**
+   * Only meaningful on a FRESH contact (see resolveContact) — carried from
+   * whatever record (a lead, most often) staff recorded this against, so a
+   * QA/test record can never mint a real invoice + credit.
+   */
+  isTest?: boolean
+  /**
    * Set when a human ATTACHES an unmatched bank-feed row to a person, because
    * the client paid under an address the system cannot tie to them. Keys the
    * rows on the FEED instead of the charge so a double-click cannot mint a
@@ -92,13 +108,13 @@ export async function recordPaidCall(params: {
      creditUsedAtCreation?: boolean
   }
 }): Promise<PaidCallResult> {
-  const { payment, inviteeEmail, inviteeName, callDate, manual } = params
+  const { payment, inviteeEmail, inviteeName, callDate, manual, isTest } = params
   const description = paidCallDescription(callDate ?? null)
   const keyFor = (kind: "invoice" | "credit") =>
     manual ? manualPaidCallIdempotencyKey(manual.feedId, kind) : paidCallIdempotencyKey(payment.chargeId, kind)
   const creditBornUsed = manual?.creditUsedAtCreation === true
 
-  const contact = await resolveContact(inviteeEmail, inviteeName ?? null)
+  const contact = await resolveContact(inviteeEmail, inviteeName ?? null, isTest ?? false)
   // The INVOICE may carry the client's sole company (it is revenue for that
   // relationship), but the CREDIT stays person-scoped — deliberately.
   //

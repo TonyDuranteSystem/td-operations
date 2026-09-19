@@ -2,8 +2,10 @@
  * GET /api/accounts/search-for-feed-match?q=<name>&limit=10
  *
  * Used by the Bank Feed UnmatchedRow → Match dialog. Returns accounts +
- * contacts (without linked accounts) so staff can attribute an incoming
- * payment to either the LLC or an individual person.
+ * contacts (without linked accounts) + still-open leads so staff can
+ * attribute an incoming payment to a company, an existing person, or
+ * someone who has paid for something (typically a strategy call) but has
+ * not yet become a client.
  *
  * Why a separate endpoint from /api/accounts: the existing endpoint only
  * returns accounts. Contacts that aren't linked to any account get dropped.
@@ -11,10 +13,20 @@
  * a person) need a contact-only result so staff can create a contact-
  * scoped invoice without an account.
  *
+ * Leads: deliberately excludes anything already converted
+ * (`converted_to_contact_id` set) — that person already has a real contact
+ * record, which the contacts search above already surfaces, so listing the
+ * lead too would just be the same human twice under two different result
+ * types. Picking a lead result is for the "paid strategy call" path ONLY
+ * (see create-from-feed's Branch C) — it never creates a service-delivery
+ * invoice for a lead, since a lead by definition has not bought a service
+ * yet.
+ *
  * Response shape:
  *   { results: Array<
  *       | { type: 'account', id, name, status, contact_name? }
  *       | { type: 'contact', id, name, email? }
+ *       | { type: 'lead', id, name, email? }
  *     > }
  */
 import { createClient } from '@/lib/supabase/server'
@@ -35,7 +47,13 @@ interface ContactResult {
   name: string
   email?: string | null
 }
-type Result = AccountResult | ContactResult
+interface LeadResult {
+  type: 'lead'
+  id: string
+  name: string
+  email?: string | null
+}
+type Result = AccountResult | ContactResult | LeadResult
 
 export async function GET(request: NextRequest) {
   const supabase = createClient()
@@ -134,6 +152,33 @@ export async function GET(request: NextRequest) {
     email: c.email,
   }))
 
-  const results: Result[] = [...accountResults, ...contactResults].slice(0, limit)
+  // 4. Leads not yet converted to a contact — the "paid a call but never
+  //    signed" case. full_name is the only name field on this table.
+  const { data: leadMatches } = await supabase
+    .from('leads')
+    .select('id, full_name, email')
+    .ilike('full_name', `%${q}%`)
+    .is('converted_to_contact_id', null)
+    .limit(limit)
+
+  type LeadRow = { id: string; full_name: string | null; email: string | null }
+  const leadResults: LeadResult[] = ((leadMatches ?? []) as LeadRow[])
+    .filter(l => !!l.full_name)
+    .slice(0, limit)
+    .map(l => ({
+      type: 'lead',
+      id: l.id,
+      name: l.full_name as string,
+      email: l.email,
+    }))
+
+  // NOT sliced down to `limit` again here — each of the three lists above is
+  // already independently capped at `limit` from its own query. A shared
+  // final slice would let a query that happens to match many accounts (a
+  // very real case here: most client companies are named after a person)
+  // silently push leads off the end with no sign anything was cut — exactly
+  // the one thing this endpoint was widened to find (bug-hunter finding,
+  // post-build review).
+  const results: Result[] = [...accountResults, ...contactResults, ...leadResults]
   return NextResponse.json({ results })
 }

@@ -14,6 +14,7 @@ import { WhatsappThread } from './whatsapp-thread'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
 import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
+import { WhatsAppBackfillMatchesDialog } from '@/components/messaging/whatsapp-backfill-matches-dialog'
 import { ComposeReply } from './compose-reply'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
@@ -103,6 +104,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [selectedOrigin, setSelectedOrigin] = useState<string>(ORIGIN_UNKNOWN)
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeMenuOpen, setComposeMenuOpen] = useState(false)
+  const [backfillMatchesOpen, setBackfillMatchesOpen] = useState(false)
   const [whatsappPickerOpen, setWhatsappPickerOpen] = useState(false)
   const [whatsappNewRecipient, setWhatsappNewRecipient] = useState<WhatsAppRecipient | null>(null)
   const [forwardData, setForwardData] = useState<{
@@ -1250,7 +1252,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             setSelected(null)
           }}
         />
-        <div className="pr-4 relative">
+        <div className="pr-4 relative flex items-center gap-2">
+          {isWhatsApp && (
+            <button
+              onClick={() => setBackfillMatchesOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-600 text-sm font-medium hover:bg-zinc-50 transition-colors"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Find matching clients
+            </button>
+          )}
           <button
             onClick={() => setComposeMenuOpen(!composeMenuOpen)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors"
@@ -1923,6 +1934,10 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           )}
         </div>
       </div>
+
+      {backfillMatchesOpen && (
+        <WhatsAppBackfillMatchesDialog onClose={() => setBackfillMatchesOpen(false)} />
+      )}
 
       <ComposeDialog
         open={composeOpen}
