@@ -14,13 +14,27 @@ export async function GET() {
   if (denied) return denied
 
   try {
+    // messaging_groups holds BOTH WhatsApp and Telegram rows (messaging_channels.platform
+    // distinguishes them) — summing unread_count with no platform filter silently folded
+    // Telegram's unread count into the "WhatsApp" badge (Antonio, 2026-09-19: badge showed
+    // 5 unread with nothing unread visible in the WhatsApp list; the 5 was 2 unread Telegram
+    // conversations). Filter to whatsapp channel ids explicitly.
+    const { data: whatsappChannelRows } = await supabaseAdmin
+      .from("messaging_channels")
+      .select("id")
+      .eq("platform", "whatsapp")
+    const whatsappChannelIds = (whatsappChannelRows ?? []).map((c) => c.id)
+
     const [gmailResult, waResult] = await Promise.allSettled([
       gmailGet("/labels/INBOX") as Promise<{ messagesUnread?: number } | null>,
-      supabaseAdmin
-        .from("messaging_groups")
-        .select("unread_count")
-        .eq("is_active", true)
-        .gt("unread_count", 0),
+      whatsappChannelIds.length
+        ? supabaseAdmin
+            .from("messaging_groups")
+            .select("unread_count")
+            .eq("is_active", true)
+            .gt("unread_count", 0)
+            .in("channel_id", whatsappChannelIds)
+        : Promise.resolve({ data: [], error: null }),
     ])
 
     const gmailUnread =
