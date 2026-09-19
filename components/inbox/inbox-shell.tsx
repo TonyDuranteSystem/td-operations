@@ -116,6 +116,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState<{ type: 'task' | 'service' | 'invoice'; conversation: InboxConversation } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // Separate from Gmail's `searchQuery` above — that one is only committed to
+  // the list once `searchActive` flips true (Enter, or the live-search debounce),
+  // so reusing it here would show WhatsApp results only after a Gmail-style
+  // trigger, and switching tabs would leak each box's leftover text into the
+  // other's search input (both bound to one variable). Kept fully independent.
+  const [waSearchQuery, setWaSearchQuery] = useState('')
   // Type-ahead dropdown under the search box (Antonio 2026-08-04). Open only
   // while the box has focus — a stale dropdown over the list is worse than none.
   const [suggestOpen, setSuggestOpen] = useState(false)
@@ -1402,6 +1408,46 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         </div>
       )}
 
+      {/* Search + Read/Unread filter — WhatsApp. Client-side only (no Gmail-style
+          operator search): filters the already-loaded conversations by name or
+          phone, and reuses the same unreadFilter state/logic as Gmail's bar
+          above (conversation-list.tsx applies it identically for both channels).
+          Antonio, 2026-09-19: asked for a way to find a conversation by name/
+          number, and to filter down to what's actually unread. */}
+      {isWhatsApp && (
+        <div className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+          <Search className="h-4 w-4 text-zinc-400 shrink-0" />
+          <input
+            type="text"
+            value={waSearchQuery}
+            onChange={e => setWaSearchQuery(e.target.value)}
+            placeholder="Search by name or phone number..."
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-zinc-400"
+          />
+          {waSearchQuery && (
+            <button onClick={() => setWaSearchQuery('')} className="p-0.5 rounded hover:bg-zinc-200 text-zinc-400">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <div className="flex items-center gap-0.5 border-l pl-2 ml-1">
+            {(['all', 'unread', 'read'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setUnreadFilter(f)}
+                className={cn(
+                  'px-2 py-1 rounded text-xs font-medium transition-colors',
+                  unreadFilter === f
+                    ? f === 'unread' ? 'bg-blue-100 text-blue-700' : f === 'read' ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-600'
+                    : 'text-zinc-400 hover:bg-zinc-100'
+                )}
+              >
+                {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Bulk Action Bar — Gmail only */}
       {bulkMode && !isWhatsApp && (
         <div className="flex flex-wrap items-center gap-2 px-4 py-2 bg-blue-50 border-b shrink-0">
@@ -1553,7 +1599,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             selectedIds={selectedIds}
             onToggleSelect={handleToggleSelect}
             labelFilter={activeLabel}
-            searchQuery={searchActive ? searchQuery : undefined}
+            searchQuery={isWhatsApp ? (waSearchQuery || undefined) : (searchActive ? searchQuery : undefined)}
             searchScope={searchScope}
             onWidenScope={() => setSearchScope('all')}
             onSelectMany={(ids) => setSelectedIds(new Set(ids))}
