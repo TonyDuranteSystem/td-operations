@@ -93,6 +93,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // not filed (a last-signer render/store hiccup); excludes by_hand.
   "/api/cron/oa-finalize-sweep": "*/10 * * * *",
   "/api/cron/action-required-reminders": "0 13 * * *",
+  "/api/cron/portal-translation-topup": "0 10 * * *",
 }
 
 /**

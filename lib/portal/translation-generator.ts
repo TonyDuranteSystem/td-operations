@@ -1,6 +1,11 @@
 import crypto from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { fetchAllPaged } from "@/lib/bank-transactions-fetch"
+import { enqueueJob } from "@/lib/jobs/queue"
+import { getEnglishDictionary, SUPPORTED_LOCALES } from "@/lib/portal/i18n"
+import { getWizardTranslatableText } from "@/lib/portal/wizard-translatable-text"
+import { getGuideTranslatableText } from "@/lib/portal/guide-translatable-text"
+import { languageName } from "@/lib/portal/language-codes"
 
 /**
  * Turns any {key: englishText} source dictionary into real translated rows
@@ -479,4 +484,145 @@ export async function generateTranslationsForLanguage(
   }
 
   return result
+}
+
+// Same order the job handler's own chain hops through (translate-language.ts's
+// NEXT_SOURCE) — dictionary, then wizard, then the guide/help-article library.
+// Exported (moved from app/api/portal/language/route.ts, dev job 4fa1d8e5) so
+// both the language-picker route and the daily top-up cron share one list
+// instead of two copies that could drift.
+export type TranslationSource = "dictionary" | "wizard" | "guide"
+export const TRANSLATION_SOURCES_IN_ORDER: Array<{ source: TranslationSource; dictionary: () => Record<string, string> }> = [
+  { source: "dictionary", dictionary: getEnglishDictionary },
+  { source: "wizard", dictionary: getWizardTranslatableText },
+  { source: "guide", dictionary: getGuideTranslatableText },
+]
+
+/**
+ * The job handler's own chain-continuation dedup only guards chunk-to-chunk
+ * within an already-running chain — it never protected this initial enqueue.
+ * Two callers picking the same language/source at once could each start
+ * their own chunk-0 job for it. Per-key claiming inside the job still
+ * prevents double-translating any single entry, but this avoids the wasted
+ * duplicate job outright. Moved here (from the language route) so the daily
+ * top-up cron shares the same guard, dev job 4fa1d8e5.
+ */
+export async function hasLiveTranslateJob(languageCode: string, source: TranslationSource): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("job_queue")
+    .select("id")
+    .eq("job_type", "translate_language")
+    .eq("payload->>language_code", languageCode)
+    .eq("payload->>source", source)
+    .in("status", ["pending", "processing"])
+    .limit(1)
+  return !!data && data.length > 0
+}
+
+/**
+ * Seed+enqueue whichever source (dictionary, then wizard, then guide) still
+ * has missing work for one language — the same "find what's missing, queue
+ * it" step the language-picker route runs inline right after a client picks
+ * a language. Shared here (dev job 4fa1d8e5) so the daily top-up cron
+ * (scripts/cron: portal-translation-topup) can run the identical step for
+ * every already-established language, instead of only ever running it when
+ * a client happens to reselect that language after new text is added.
+ *
+ * Returns which source (if any) had missing work and got a job queued —
+ * `null` means everything for this language is already done or already has
+ * a live job in flight.
+ */
+/**
+ * True when the translation watchdog (lib/jobs/translation-watchdog.ts) has
+ * already logged this exact (language, source) scope as exhausted — its
+ * backoff ladder spent, one staff alert already sent, deliberately left for
+ * a human to look at rather than auto-retried forever. Checked here (dev job
+ * 4fa1d8e5, council review) so this function's own fresh chunk-0 enqueue
+ * can't silently reset that ladder: without this check, a daily caller (the
+ * top-up cron) would create a brand-new chunk_index:0/auto_retry:0 job every
+ * day for a permanently-broken source — replaying the full retry ladder and
+ * sending a fresh staff alert every single day forever, exactly the
+ * "one-time incident becomes a daily recurring one" failure this guards.
+ * A human fixing the underlying issue and wanting a fresh attempt still has
+ * the normal path: the language-picker route's own kickoff runs unconditionally
+ * from a client's next pick, OR staff can delete the exhaustion action_log row.
+ */
+async function hasUnresolvedExhaustion(languageCode: string, source: TranslationSource): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("action_log")
+    .select("id")
+    .eq("action_type", "translation_chain_exhausted")
+    .eq("details->>scope", `translate:${languageCode}:${source}`)
+    .limit(1)
+  return !!data && data.length > 0
+}
+
+export async function kickoffMissingTranslationWork(languageCode: string, createdBy: string): Promise<{ source: TranslationSource; missing: number } | null> {
+  for (const { source, dictionary } of TRANSLATION_SOURCES_IN_ORDER) {
+    const seeded = await seedPendingTranslations(languageCode, dictionary())
+    if (seeded.missing > 0) {
+      if (!(await hasLiveTranslateJob(languageCode, source)) && !(await hasUnresolvedExhaustion(languageCode, source))) {
+        const inserted = await enqueueJob({
+          job_type: "translate_language",
+          payload: { language_code: languageCode, language_name: languageName(languageCode) ?? languageCode, source, chunk_index: 0, auto_retry: 0 },
+          created_by: createdBy,
+        })
+        // Post-insert verify (same non-atomic SELECT-then-INSERT guard used
+        // throughout this feature, e.g. translate-language.ts's own
+        // chain-continuation enqueue): a concurrent caller (the cron and a
+        // client's own pick can both pass the hasLiveTranslateJob check
+        // before either has inserted) could otherwise leave two live jobs
+        // for the same (language, source) scope.
+        const { data: live } = await supabaseAdmin
+          .from("job_queue")
+          .select("id")
+          .in("status", ["pending", "processing"])
+          .eq("job_type", "translate_language")
+          .eq("payload->>language_code", languageCode)
+          .eq("payload->>source", source)
+        if ((live ?? []).length > 1) {
+          await supabaseAdmin.from("job_queue").delete().eq("id", inserted.id).eq("status", "pending")
+        }
+      }
+      return { source, missing: seeded.missing }
+    }
+  }
+  return null
+}
+
+/**
+ * Every language code at least one real client account currently has set as
+ * their portal_language (dev job 4fa1d8e5, revised after council review).
+ * Deliberately NOT "every code that ever had a portal_translations row" —
+ * council found that scope live on sandbox: a handful of stray codes (ab,
+ * gd, cy) from unrelated past testing had rows and would be "established"
+ * forever with zero real reader, permanently costing real paid AI-translation
+ * calls on every future content addition with no way to ever un-enroll them.
+ * Sourcing from CURRENT user_metadata instead means a language a client no
+ * longer uses naturally stops being topped up on its own — no manual
+ * cleanup, no permanent zombie enrollment. `en`/`it` are excluded even if a
+ * user has them set: they're the two hand-written static dictionaries, not
+ * AI-generated, and seedPendingTranslations() short-circuits for them anyway.
+ *
+ * Paginates via listUsers() rather than a portal_translations table scan —
+ * bounded by the portal's real user count (hundreds, not millions), same
+ * order of magnitude already proven safe manually against this exact table.
+ */
+export async function getEstablishedLanguageCodes(): Promise<string[]> {
+  const codes = new Set<string>()
+  const perPage = 200
+  for (let page = 1; page <= 100; page++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- auth.admin typing doesn't expose user_metadata's app-specific shape
+    const { data, error } = await (supabaseAdmin as any).auth.admin.listUsers({ page, perPage })
+    if (error) break
+    const users = data?.users ?? []
+    for (const u of users) {
+      const lang = u.user_metadata?.portal_language
+      if (typeof lang === "string" && lang && !(SUPPORTED_LOCALES as readonly string[]).includes(lang)) {
+        codes.add(lang)
+      }
+    }
+    if (users.length < perPage) break
+  }
+  return Array.from(codes)
 }
