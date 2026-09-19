@@ -23,6 +23,7 @@ import {
 } from '@/lib/inbox/conversation-reconcile'
 import { toInboxView, viewKey } from '@/lib/inbox/view-query'
 import { buildPageNumbers } from '@/lib/inbox/pager'
+import { matchesWhatsAppSearch } from '@/lib/messaging/search-match'
 import { HoverHint } from './hover-hint'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
@@ -148,8 +149,15 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // active — folding it in otherwise would split the cache for identical lists.
   const effScope = searchQuery ? (searchScope ?? 'inbox') : ''
 
+  // WhatsApp search is a client-side filter over the already-fetched list (see
+  // `conversations` below) — it never changes what's fetched, so it must NOT be
+  // part of the fetch key or every keystroke would re-request the identical
+  // WhatsApp conversations endpoint (2026-09-19).
+  const isWhatsApp = activeChannel === 'whatsapp'
+  const fetchSearchQuery = isWhatsApp ? '' : searchQuery
+
   // Switching mailbox / folder / search / search-scope is a NEW list — page 1.
-  const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${searchQuery ?? ''}|${effScope}|${mailbox ?? ''}`
+  const viewSig = `${activeChannel ?? ''}|${labelFilter ?? ''}|${fetchSearchQuery ?? ''}|${effScope}|${mailbox ?? ''}`
   const prevViewSig = useRef(viewSig)
   useEffect(() => {
     if (prevViewSig.current !== viewSig) {
@@ -517,10 +525,8 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     if (!handled) toast.error('Could not open the note editor — try reloading the page.')
   }
 
-  const isWhatsApp = activeChannel === 'whatsapp'
-
   const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<ConversationsPayload & { total?: number; origin?: PayloadOrigin; allScopeTotal?: number | null; archivedUnavailable?: boolean }>({
-    queryKey: ['inbox-conversations', activeChannel, labelFilter, searchQuery, effScope, mailbox, page],
+    queryKey: ['inbox-conversations', activeChannel, labelFilter, fetchSearchQuery, effScope, mailbox, page],
     queryFn: async () => {
       // Throw on non-2xx (R099): a failed refetch must NOT replace the list
       // with emptiness — react-query keeps the previous data on error, so a
@@ -563,7 +569,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     // a missed push (watch lapse / PWA background) — kept reasonably tight so
     // the inbox never goes minutes stale, but no longer the 30s churn that, with
     // full-replace, drove the flicker.
-    refetchInterval: searchQuery ? false : 75_000,
+    refetchInterval: fetchSearchQuery ? false : 75_000,
     // Never flash an empty pane while a refetch (or a mailbox/filter switch)
     // is in flight — keep showing the list we already have (Antonio
     // 2026-07-08: the list "disappeared" on actions/scroll under Gmail load).
@@ -665,12 +671,17 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
   // pages don't render 107 buttons. `null` renders as an ellipsis.
   const pageNumbers = useMemo(() => buildPageNumbers(page, totalPages), [page, totalPages])
 
+  // WhatsApp has no server-side search (unlike Gmail's from:/subject: operator
+  // search) — see lib/messaging/search-match.ts for the actual match rule.
+  const whatsappQuery = isWhatsApp ? (searchQuery ?? '') : ''
+
   const conversations = useMemo(() => visibleRows.filter(c => {
+    if (whatsappQuery && !matchesWhatsAppSearch(c.name, whatsappQuery)) return false
     if (!unreadFilter || unreadFilter === 'all') return true
     if (unreadFilter === 'unread') return c.unread > 0
     if (unreadFilter === 'read') return c.unread === 0
     return true
-  }), [visibleRows, unreadFilter])
+  }), [visibleRows, unreadFilter, whatsappQuery])
 
   if (isLoading) {
     return (
@@ -708,6 +719,13 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
           >
             Show {data?.allScopeTotal} match{(data?.allScopeTotal ?? 0) === 1 ? '' : 'es'} from all mail
           </button>
+        </div>
+      )
+    }
+    if (isWhatsApp && (whatsappQuery || (unreadFilter && unreadFilter !== 'all'))) {
+      return (
+        <div className="flex-1 flex items-center justify-center text-zinc-400 text-sm">
+          No matching conversations
         </div>
       )
     }
