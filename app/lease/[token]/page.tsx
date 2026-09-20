@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { LOGO_URL } from '@/lib/supabase/public-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -96,7 +96,6 @@ export default function LeasePage() {
     if (!token) return 'error'
 
     const adminMode = searchParams.get('preview') === 'td'
-    if (adminMode) setIsAdmin(true)
 
     const cookieEmail = document.cookie
       .split(';')
@@ -129,6 +128,7 @@ export default function LeasePage() {
     const data = await res.json()
     if (data.requiresEmail) { setLoading(false); return 'requires-email' }
 
+    setIsAdmin(!!data.isPreview)
     setLease(data.lease)
     setSigned(!!data.lease.signed_at)
     setVerified(true)
@@ -235,15 +235,17 @@ export default function LeasePage() {
       })
       if (!uploadRes.ok) throw new Error('PDF upload failed')
 
-      // 6. Update lease record
-      await supabasePublic
-        .from('lease_agreements')
-        .update({
-          status: 'signed',
-          signed_at: new Date().toISOString(),
-          pdf_storage_path: pdfPath,
-        })
-        .eq('id', lease.id)
+      // 6. Update lease record via the server route (service role) — the page
+      // can no longer write lease_agreements directly.
+      const signRes = await fetch(`/api/lease/${token}/sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: accessCode, pdf_storage_path: pdfPath }),
+      })
+      if (!signRes.ok) {
+        const d = await signRes.json().catch(() => ({}))
+        throw new Error(d.error || 'Failed to record signature')
+      }
 
       // 7. Notify backend (email to support@, SD history, task creation)
       try {
