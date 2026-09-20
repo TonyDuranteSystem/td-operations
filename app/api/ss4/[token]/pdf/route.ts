@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { accessCodeError } from "@/lib/esign/access-guard"
 import { fillSS4, type SS4FillData } from "@/lib/pdf/ss4-fill"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 
@@ -33,9 +34,16 @@ export async function GET(
     return NextResponse.json({ error: "SS-4 application not found" }, { status: 404 })
   }
 
-  // Verify access code (skip for admin preview)
-  if (!isAdmin && ss4.access_code !== code) {
-    return NextResponse.json({ error: "Invalid access code" }, { status: 403 })
+  // Verify access code — fails closed on a blank/null code (a bare !== compare
+  // treats null-equals-null as a match, an exposure this exact table already
+  // hit once via schema drift, see lib/operations/ss4.ts), constant-time, and
+  // rate-limited so the 32-bit access_code can't be brute-forced. Returns the
+  // FILLED PDF including responsible_party_itin, so this is the only real
+  // gate on that data now that ss4_applications' anon database access is
+  // revoked (dev job 527b2377).
+  const codeErr = accessCodeError(request, { token, expected: ss4.access_code ?? "", provided: code ?? "", isPreview: isAdmin })
+  if (codeErr) {
+    return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
   }
 
   // Mailing address — fall back to TD Park Blvd for legacy rows without stored address
