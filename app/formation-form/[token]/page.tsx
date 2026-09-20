@@ -236,14 +236,16 @@ export default function FormationFormPage() {
   async function handleSubmit() {
     if (!submission || !disclaimerAccepted) return
 
-    // Validate passport upload is mandatory
-    if (!uploadFiles.passport_owner) {
+    // Validate passport upload is mandatory (skipped for staff admin preview,
+    // same as app/formation-form/[token]/[code]/page.tsx, so staff can QA the
+    // full submit flow without attaching a real passport)
+    if (!isAdmin && !uploadFiles.passport_owner) {
       setSubmitError(lang === 'it' ? 'Il passaporto del titolare è obbligatorio. Carica una copia del passaporto per procedere.' : 'Owner passport is required. Please upload a copy of your passport to proceed.')
       return
     }
 
     // For MMLLC, validate passports for individual members only
-    if (submission.entity_type === 'MMLLC' && members.length > 0) {
+    if (!isAdmin && submission.entity_type === 'MMLLC' && members.length > 0) {
       for (let i = 0; i < members.length; i++) {
         if (members[i].member_type === 'company') continue
         if (!uploadFiles[`passport_member_${i}`]) {
