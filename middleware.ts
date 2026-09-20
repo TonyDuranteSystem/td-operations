@@ -71,6 +71,19 @@ const PUBLIC_PREFIXES = [
   '/api/operating-agreement/',
   '/api/ss4-signed',
   '/api/ss4',
+  // Public token+code data/gate routes for the tax/banking/formation/onboarding/
+  // itin public forms (lib/public-forms/verify-token-access.ts). These replaced
+  // the old direct anon-key browser queries — the route itself verifies the
+  // token+access_code (or a real staff session) server-side, the same pattern
+  // as the lease/OA/ss4 routes above. Without this prefix the middleware's own
+  // session gate 401s the request before the route's own check ever runs, the
+  // exact same gap documented for /api/system-errors/report above — found live
+  // 2026-09-20 when these routes 401'd in production right after shipping.
+  '/api/tax-form/',
+  '/api/banking-form/',
+  '/api/formation-form/',
+  '/api/onboarding-form/',
+  '/api/itin-form/',
   // Referral landing page (/invitation/[code]) + legacy /r/ redirect
   '/r/',
   '/invitation/',
