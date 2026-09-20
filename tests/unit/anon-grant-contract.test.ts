@@ -69,13 +69,11 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // fixed 2026-09-19 (dev job 527b2377); the anon GRANT itself is the next
   // step, once this test confirms zero remaining call sites.
   //
-  // SELECT dropped 2026-07-24: the lease signing pages no longer read the row with
-  // the anon key — they call the server route /api/lease/[token]/fetch, which
-  // verifies the code and returns a whitelist (lib/lease/public-view). anon SELECT
-  // is revoked to id-only by 20260724-1900-lease-close-public-read.sql. UPDATE
-  // REMAINS because the signing WRITE is still browser-side; moving it server-side
-  // and revoking this is the tracked step 2 (mirrors the OA).
-  lease_agreements: ["UPDATE"],
+  // NO lease_agreements entry — SELECT was dropped 2026-07-24 (the lease
+  // signing pages read via the server route /api/lease/[token]/fetch, which
+  // verifies the code and returns a whitelist, lib/lease/public-view). UPDATE
+  // closed 2026-09-20: the sign and admin-regen writes moved to
+  // /api/lease/[token]/{sign,regen} (service key), mirroring the OA.
   member_info_requests: ["SELECT"],
   // NO oa_agreements / oa_signatures entry — the browser no longer writes EITHER
   // OA table with the anon key. The canonical `[token]/[code]` page moved signing
