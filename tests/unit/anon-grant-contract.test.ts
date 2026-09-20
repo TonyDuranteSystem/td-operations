@@ -47,7 +47,16 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   contracts: ["INSERT", "UPDATE"],
   form_8832_applications: ["SELECT", "UPDATE"],
   formation_submissions: ["SELECT", "UPDATE"],
-  itin_submissions: ["SELECT", "UPDATE"],
+  // NO itin_submissions entry — the ITIN wizard and its pre-code email gate no
+  // longer read or write this table with the anon key. Both moved fully
+  // server-side (service key) this session: /api/itin-form/[token]/data
+  // (fetch, view-tracking, final submit) and /api/itin-form/[token]/gate
+  // (the email-gate landing page, which used to fetch the FULL row —
+  // including the real access_code — before any email was even checked).
+  // This closes the ITIN half of the anon-SELECT/UPDATE exposure found and
+  // fixed 2026-09-19 (dev job 527b2377); the anon GRANT itself is the next
+  // step, once this test confirms zero remaining call sites.
+  //
   // SELECT dropped 2026-07-24: the lease signing pages no longer read the row with
   // the anon key — they call the server route /api/lease/[token]/fetch, which
   // verifies the code and returns a whitelist (lib/lease/public-view). anon SELECT
@@ -67,7 +76,12 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   offers: ["SELECT", "UPDATE"],
   onboarding_submissions: ["SELECT", "UPDATE"],
   signature_requests: ["SELECT", "UPDATE"],
-  ss4_applications: ["SELECT", "UPDATE"],
+  // NO ss4_applications entry — the SS-4 signing page no longer reads or
+  // writes this table with the anon key (fetch, view-tracking, and the
+  // signature write all moved to /api/ss4/[token]/data, service key). Same
+  // 2026-09-19 fix as itin_submissions above. The PDF and upload-signed
+  // routes already used the service key before this change and are
+  // untouched. Anon GRANT revoke is the next step.
   tax_quote_submissions: ["SELECT", "UPDATE"],
   tax_return_submissions: ["SELECT", "UPDATE"],
 }

@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { accessCodeError } from "@/lib/esign/access-guard"
 
 export async function POST(
   req: NextRequest,
@@ -42,10 +43,14 @@ export async function POST(
     // Verify access code. Admin preview requires a REAL staff session — the
     // flag alone proves nothing. This upload overwrites the stored signed SS-4
     // (upsert:true below), so a bypass here is document substitution on an IRS
-    // filing. See lib/auth/staff-preview.ts (2026-07-21 incident).
+    // filing. See lib/auth/staff-preview.ts (2026-07-21 incident). Fails
+    // closed on a blank/null code and is rate-limited — see the pdf route's
+    // matching comment; this table's anon database access is revoked as of
+    // dev job 527b2377, making this the only real gate on this write.
     const isAdmin = await isStaffPreview(preview === "td")
-    if (!isAdmin && ss4.access_code !== code) {
-      return NextResponse.json({ error: "Invalid access code" }, { status: 403 })
+    const codeErr = accessCodeError(req, { token, expected: ss4.access_code ?? "", provided: code ?? "", isPreview: isAdmin })
+    if (codeErr) {
+      return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
     }
 
     // Upload to Supabase Storage using service_role
