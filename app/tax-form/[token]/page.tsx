@@ -16,18 +16,6 @@ import {
   type LabelKey,
 } from '@/lib/types/tax-form'
 
-// ─── Cookie Helpers ─────────────────────────────────────────
-
-const COOKIE_NAME = 'taxform_verified'
-
-function setVerifiedCookie(token: string) {
-  document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-}
-
-function hasVerifiedCookie(token: string): boolean {
-  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
-}
-
 // ─── Date Helpers ───────────────────────────────────────────
 
 function formatDateTime(d: string, lang: 'en' | 'it') {
@@ -64,93 +52,122 @@ export default function TaxFormPage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
+  const [bankStatementFiles, setBankStatementFiles] = useState<File[]>([])
 
   // Dynamic arrays for MMLLC additional members and SMLLC related party transactions
   const [members, setMembers] = useState<Record<string, string>[]>([])
   const [transactions, setTransactions] = useState<Record<string, string>[]>([])
 
   const L = LABELS[lang]
+  const [code, setCode] = useState<string | null>(null)
+  const [gateError, setGateError] = useState<'none' | 'no_email_on_file'>('none')
 
   // ─── Load Submission ────────────────────────────────────
+  //
+  // Two-phase load, same pattern as the ITIN gate (app/itin-form/[token]/page.tsx):
+  // phase 1 fetches only non-sensitive gate info (status/language/whether an
+  // email is on file) via the gate route; the full submission — including
+  // prefilled_data — is only fetched, via the [token]/data route with a real
+  // access_code, once a real staff session or a server-verified email match
+  // has actually proven who's asking. The page used to fetch the ENTIRE row
+  // unconditionally on load and gate only the UI, with the anon key, and the
+  // database's own access control did not actually enforce the token filter
+  // — see lib/public-forms/verify-token-access.ts.
+
+  const trackOpen = useCallback((accessCode: string, sub: TaxFormSubmission) => {
+    if (sub.status === 'pending' || sub.status === 'sent') {
+      fetch(`/api/tax-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: accessCode, action: 'track_open' }),
+      }).catch(() => {})
+    }
+  }, [token])
+
+  const loadFullData = useCallback(async (accessCode: string, adminMode: boolean) => {
+    const qs = new URLSearchParams({ code: accessCode })
+    if (adminMode) qs.set('preview', 'td')
+    const res = await fetch(`/api/tax-form/${token}/data?${qs.toString()}`)
+    const body = await res.json()
+    if (!res.ok || !body.data) {
+      setError('not_found')
+      setLoading(false)
+      return
+    }
+    const sub = body.data as TaxFormSubmission
+    setSubmission(sub)
+    setLang(sub.language || 'en')
+    if (sub.prefilled_data) setFormData({ ...sub.prefilled_data })
+    setLoading(false)
+    if (!adminMode) trackOpen(accessCode, sub)
+  }, [token, trackOpen])
 
   const loadSubmission = useCallback(async () => {
     try {
-      // Admin preview bypass
       const adminMode = searchParams.get('preview') === 'td'
-      if (adminMode) {
-        setIsAdmin(true)
-        setVerified(true)
-      }
+      const qs = adminMode ? '?preview=td' : ''
+      const res = await fetch(`/api/tax-form/${token}/gate${qs}`)
+      const body = await res.json()
+      if (!res.ok) { setError('not_found'); setLoading(false); return }
 
-      const { data, error: err } = await supabasePublic
-        .from('tax_return_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      setLang(body.language || 'en')
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      const sub = data as TaxFormSubmission
-
-      // If already completed
-      if (sub.status === 'completed' || sub.status === 'reviewed') {
-        setSubmission(sub)
-        setLang(sub.language || 'en')
+      if (body.status === 'completed' || body.status === 'reviewed') {
+        // Minimal synthetic submission — just enough to render the "already
+        // submitted" screen, which only needs the completion timestamp. No
+        // need to fetch the full sensitive row for this.
+        setSubmission({ completed_at: body.completedAt } as TaxFormSubmission)
         setSubmitted(true)
         setLoading(false)
         return
       }
 
-      setSubmission(sub)
-      setLang(sub.language || 'en')
+      if (adminMode && body.accessCode) {
+        setIsAdmin(true)
+        setVerified(true)
+        setCode(body.accessCode)
+        await loadFullData(body.accessCode, true)
+        return
+      }
 
-      // Pre-fill form data from prefilled_data
-      if (sub.prefilled_data) {
-        setFormData({ ...sub.prefilled_data })
+      if (!body.hasOwnerEmail) {
+        // No email on file to verify against, and no real staff session —
+        // deliberately deny rather than expose the wizard with zero gate,
+        // which is what this page used to do in this exact case. The real
+        // client-facing link always includes the access code (see the
+        // sibling [code] page); this bare URL shape reaching a real client
+        // with no email on file was never actually a supported path.
+        setGateError('no_email_on_file')
+        setLoading(false)
+        return
       }
 
       setLoading(false)
-
-      if (adminMode) return
-
-      // Check cookie-based verification
-      if (hasVerifiedCookie(token)) {
-        setVerified(true)
-      }
-
-      // Track opening
-      if (hasVerifiedCookie(token) || !sub.prefilled_data?.owner_email) {
-        trackOpen(sub)
-      }
     } catch {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, searchParams])
+  }, [token, searchParams, loadFullData])
 
-  function trackOpen(sub: TaxFormSubmission) {
-    if (sub.status === 'pending' || sub.status === 'sent') {
-      supabasePublic
-        .from('tax_return_submissions')
-        .update({
-          opened_at: new Date().toISOString(),
-          status: 'opened',
-        })
-        .eq('id', sub.id)
-        .then(() => {})
-    }
-  }
-
-  function handleEmailVerify(e: React.FormEvent) {
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!submission) return
-    const prefillEmail = (submission.prefilled_data?.owner_email as string) || ''
-    if (emailInput.toLowerCase().trim() === prefillEmail.toLowerCase().trim()) {
-      setVerified(true)
+    try {
+      const res = await fetch(`/api/tax-form/${token}/gate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailInput }),
+      })
+      const body = await res.json()
+      if (!res.ok || !body.access_code) {
+        setEmailError(true)
+        return
+      }
       setEmailError(false)
-      setVerifiedCookie(token)
-      trackOpen(submission)
-    } else {
+      setVerified(true)
+      setCode(body.access_code)
+      setLoading(true)
+      await loadFullData(body.access_code, false)
+    } catch {
       setEmailError(true)
     }
   }
@@ -249,6 +266,21 @@ export default function TaxFormPage() {
         }
       }
 
+      // 1b. Upload bank statements
+      for (let i = 0; i < bankStatementFiles.length; i++) {
+        const file = bankStatementFiles[i]
+        const path = `${submission.token}/${attemptId}/bank_statement_${i}_${file.name}`
+        const { error: upErr } = await supabasePublic.storage
+          .from('tax-form-uploads')
+          .upload(path, file, { cacheControl: '3600', upsert: false })
+        if (upErr) {
+          console.error(`[form] upload failed for bank_statement_${i}:`, upErr.message)
+          uploadFailures.push({ key: `bank_statement_${i}`, fileName: file.name })
+        } else {
+          uploadPaths.push(path)
+        }
+      }
+
       // Block ONLY when a file the client attached failed. Not when they chose
       // to attach nothing — that is an ordinary business gap the review loop
       // already handles. Their answers stay on screen; this costs one retry.
@@ -274,22 +306,24 @@ export default function TaxFormPage() {
         }
       }
 
-      // 4. Update submission
-      const { error: subErr } = await supabasePublic
-        .from('tax_return_submissions')
-        .update({
+      // 4. Update submission via the server route (service role) — the page
+      // can no longer write tax_return_submissions directly.
+      const submitRes = await fetch(`/api/tax-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          preview: isAdmin ? 'td' : undefined,
+          action: 'submit',
           submitted_data: submittedData,
           changed_fields: changedFields,
           upload_paths: uploadPaths,
-          confirmation_accepted: true,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_ip: '',
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (subErr) throw new Error(subErr.message)
+        }),
+      })
+      if (!submitRes.ok) {
+        const errBody = await submitRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to submit')
+      }
 
       setSubmitted(true)
       setSubmission(prev => prev ? { ...prev, status: 'completed', completed_at: new Date().toISOString() } : null)
@@ -537,6 +571,53 @@ export default function TaxFormPage() {
                 </div>
               </div>
             )}
+
+            {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item">
+                <span>{L.priorYearReturn}</span>
+                <div className="tf-doc-upload">
+                  <span className="tf-doc-optional">{L.priorYearReturnOptional}</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={e => setUploadFiles(prev => ({ ...prev, prior_year_return: e.target.files?.[0] || null }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <span>{L.bankStatementsUpload}</span>
+                  <span className="tf-doc-missing">📎 {L.uploadRequired}</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#6b7280', margin: '6px 0 4px' }}>{L.bankStatementsHint}</p>
+                <p style={{ fontSize: 13, color: '#b8292f', fontWeight: 600, margin: '0 0 10px' }}>{L.bankStatementsCsvNote}</p>
+                <input
+                  type="file"
+                  accept=".pdf,.csv,.xls,.xlsx,.jpg,.jpeg,.png"
+                  multiple
+                  onChange={e => { if (e.target.files) setBankStatementFiles(prev => [...prev, ...Array.from(e.target.files!)]) }}
+                />
+                {bankStatementFiles.length > 0 && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {bankStatementFiles.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <span style={{ flex: 1 }}>{f.name} ({(f.size / 1024).toFixed(0)} KB)</span>
+                        <button
+                          type="button"
+                          style={{ background: 'none', border: 'none', color: '#b8292f', cursor: 'pointer', fontSize: 13 }}
+                          onClick={() => setBankStatementFiles(prev => prev.filter((_, j) => j !== i))}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Disclaimer */}
@@ -596,7 +677,17 @@ export default function TaxFormPage() {
     </>
   )
 
-  if (!submission) return null
+  if (gateError === 'no_email_on_file') return (
+    <>
+      <TaxFormStyles />
+      <div className="tf-error-page">
+        <div>
+          <h1>{L.notFound}</h1>
+          <p>{L.notFoundMessage}</p>
+        </div>
+      </div>
+    </>
+  )
 
   // Already submitted
   if (submitted) return (
@@ -609,7 +700,7 @@ export default function TaxFormPage() {
           <div className="tf-success-icon">✅</div>
           <h1>{L.successTitle}</h1>
           <p>{L.successMessage}</p>
-          {submission.completed_at && (
+          {submission?.completed_at && (
             <p className="tf-success-ts">{L.successTimestamp}: {formatDateTime(submission.completed_at, lang)}</p>
           )}
         </div>
@@ -617,9 +708,11 @@ export default function TaxFormPage() {
     </>
   )
 
-  // Email verification gate (admin preview bypasses synchronously)
+  // Email verification gate (admin preview bypasses synchronously). Does NOT
+  // depend on `submission` — the full row isn't fetched until after this
+  // gate is passed (or admin preview supplies a real access_code).
   const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview && submission.prefilled_data?.owner_email) {
+  if (!verified && !isAdminPreview) {
     return (
       <>
         <TaxFormStyles />
@@ -647,6 +740,8 @@ export default function TaxFormPage() {
       </>
     )
   }
+
+  if (!submission) return null
 
   // ─── Main Form ──────────────────────────────────────────
 

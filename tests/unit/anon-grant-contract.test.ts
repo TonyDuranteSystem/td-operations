@@ -42,11 +42,18 @@ const ROOT = process.cwd()
  */
 const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   annual_agreements: ["SELECT", "UPDATE"],
-  banking_submissions: ["SELECT", "UPDATE"],
+  // NO banking_submissions entry — both banking-form pages (the bare
+  // email-gated page and the [code] page) moved fully server-side
+  // (service key) 2026-09-20: /api/banking-form/[token]/data (fetch,
+  // view-tracking, final submit) and /api/banking-form/[token]/gate (the
+  // pre-code email gate, which used to fetch the FULL row before checking
+  // anything). Anon GRANT revoke is the next step, same as ss4/itin.
   closure_submissions: ["SELECT", "UPDATE"],
   contracts: ["INSERT", "UPDATE"],
   form_8832_applications: ["SELECT", "UPDATE"],
-  formation_submissions: ["SELECT", "UPDATE"],
+  // NO formation_submissions entry — both formation-form pages moved fully
+  // server-side (service key) 2026-09-20, same shape as tax_return_submissions:
+  // /api/formation-form/[token]/data + /api/formation-form/[token]/gate.
   // NO itin_submissions entry — the ITIN wizard and its pre-code email gate no
   // longer read or write this table with the anon key. Both moved fully
   // server-side (service key) this session: /api/itin-form/[token]/data
@@ -74,7 +81,9 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // grant on oa_agreements (migration 20260811-2100). The signed-oa BUCKET stays
   // anon-reachable (the canonical page still downloads signature images from it).
   offers: ["SELECT", "UPDATE"],
-  onboarding_submissions: ["SELECT", "UPDATE"],
+  // NO onboarding_submissions entry — both onboarding-form pages moved fully
+  // server-side (service key) 2026-09-20, same shape as formation_submissions
+  // above: /api/onboarding-form/[token]/data + /api/onboarding-form/[token]/gate.
   signature_requests: ["SELECT", "UPDATE"],
   // NO ss4_applications entry — the SS-4 signing page no longer reads or
   // writes this table with the anon key (fetch, view-tracking, and the
@@ -83,7 +92,10 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // routes already used the service key before this change and are
   // untouched. Anon GRANT revoke is the next step.
   tax_quote_submissions: ["SELECT", "UPDATE"],
-  tax_return_submissions: ["SELECT", "UPDATE"],
+  // NO tax_return_submissions entry — both tax-form pages moved fully
+  // server-side (service key) 2026-09-20, same shape and same reason as
+  // banking_submissions above: /api/tax-form/[token]/data +
+  // /api/tax-form/[token]/gate.
 }
 
 /**
