@@ -23,8 +23,6 @@ interface ItinRow {
   access_code: string | null
   status: string
   view_count: number | null
-  prefilled_data: Record<string, unknown> | null
-  [key: string]: unknown
 }
 
 export async function GET(req: NextRequest, { params }: Params) {
@@ -32,9 +30,9 @@ export async function GET(req: NextRequest, { params }: Params) {
   const code = req.nextUrl.searchParams.get("code")
   const preview = req.nextUrl.searchParams.get("preview") === "td"
 
-  const access = await verifyTokenAccess<ItinRow>("itin_submissions", "*", token, code, preview)
-  if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+  const access = await verifyTokenAccess<ItinRow>(req, "itin_submissions", "*", token, code, preview)
+  if (access.error) {
+    return NextResponse.json({ error: access.error }, { status: access.status ?? 500 })
   }
 
   return NextResponse.json({ data: access.row, isAdmin: access.isAdmin })
@@ -47,14 +45,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const preview = body.preview === "td"
 
   const access = await verifyTokenAccess<ItinRow>(
+    req,
     "itin_submissions",
     "id, access_code, status, view_count, prefilled_data",
     token,
     code,
     preview,
   )
-  if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+  if (access.error) {
+    return NextResponse.json({ error: access.error }, { status: access.status ?? 500 })
   }
 
   if (body.action === "track_open") {
@@ -76,13 +75,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     // Only a submission not already completed/reviewed may be submitted —
     // the page never exposed the form once submitted (early-return on
     // status === 'completed' | 'reviewed'), so enforce the same server-side.
+    // As with SS-4's "sign", the read-time check alone can't stop two
+    // near-simultaneous submits, so the same condition is repeated on the
+    // UPDATE itself and a zero-row result is a real 409, not a silent no-op.
     if (access.row.status === "completed" || access.row.status === "reviewed") {
       return NextResponse.json({ error: "Already submitted" }, { status: 409 })
     }
     if (!body.submitted_data || typeof body.submitted_data !== "object") {
       return NextResponse.json({ error: "submitted_data required" }, { status: 400 })
     }
-    const { error } = await supabaseAdmin
+    const { data: updated, error } = await supabaseAdmin
       .from("itin_submissions")
       .update({
         submitted_data: body.submitted_data,
@@ -93,7 +95,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         client_user_agent: req.headers.get("user-agent") ?? "",
       })
       .eq("id", access.row.id)
+      .not("status", "in", "(completed,reviewed)")
+      .select("id")
+      .maybeSingle()
     if (error) return NextResponse.json({ error: "Failed to record submission" }, { status: 500 })
+    if (!updated) {
+      return NextResponse.json({ error: "Already submitted" }, { status: 409 })
+    }
     return NextResponse.json({ ok: true })
   }
 

@@ -28,10 +28,7 @@ interface Ss4Row {
   id: string
   access_code: string | null
   status: string
-  company_name: string
-  responsible_party_name: string | null
   view_count: number | null
-  [key: string]: unknown
 }
 
 export async function GET(req: NextRequest, { params }: Params) {
@@ -39,9 +36,9 @@ export async function GET(req: NextRequest, { params }: Params) {
   const code = req.nextUrl.searchParams.get("code")
   const preview = req.nextUrl.searchParams.get("preview") === "td"
 
-  const access = await verifyTokenAccess<Ss4Row>("ss4_applications", "*", token, code, preview)
-  if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+  const access = await verifyTokenAccess<Ss4Row>(req, "ss4_applications", "*", token, code, preview)
+  if (access.error) {
+    return NextResponse.json({ error: access.error }, { status: access.status ?? 500 })
   }
 
   return NextResponse.json({ data: access.row, isAdmin: access.isAdmin })
@@ -54,14 +51,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const preview = body.preview === "td"
 
   const access = await verifyTokenAccess<Ss4Row>(
+    req,
     "ss4_applications",
     "id, access_code, status, view_count",
     token,
     code,
     preview,
   )
-  if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+  if (access.error) {
+    return NextResponse.json({ error: access.error }, { status: access.status ?? 500 })
   }
 
   if (body.action === "track_open") {
@@ -85,9 +83,12 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   if (body.action === "sign") {
-    // Only a form actually out for signature may be signed — the exact same
-    // gate the page enforced client-side (canSign = status === "awaiting_signature"),
-    // now enforced server-side where it can't be skipped by calling this route directly.
+    // Only a form actually out for signature may be signed. The read-time
+    // check below is necessary but not sufficient on its own (two
+    // near-simultaneous requests would both pass it) — the SAME condition is
+    // repeated as a predicate on the UPDATE itself, and a zero-row result
+    // (someone else's request won the race, or the status moved between the
+    // read and the write) is treated as a real failure, not a silent no-op.
     if (access.row.status !== "awaiting_signature") {
       return NextResponse.json({ error: "Not awaiting signature" }, { status: 409 })
     }
@@ -95,7 +96,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "signature_data_url required" }, { status: 400 })
     }
     const signedAt = new Date().toISOString()
-    const { error } = await supabaseAdmin
+    const { data: updated, error } = await supabaseAdmin
       .from("ss4_applications")
       .update({
         status: "signed",
@@ -107,7 +108,13 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         },
       })
       .eq("id", access.row.id)
+      .eq("status", "awaiting_signature")
+      .select("id")
+      .maybeSingle()
     if (error) return NextResponse.json({ error: "Failed to record signature" }, { status: 500 })
+    if (!updated) {
+      return NextResponse.json({ error: "Already signed or no longer awaiting signature" }, { status: 409 })
+    }
     return NextResponse.json({ ok: true, signedAt })
   }
 

@@ -87,21 +87,25 @@ export default function SS4SignPage() {
         setSigned(data.status === "signed")
         setCanSign(data.status === "awaiting_signature")
 
-        // Build PDF URL
-        const pdfEndpoint = `/api/ss4/${token}/pdf?code=${encodeURIComponent((data.access_code as string) || code)}${isAdmin ? "&preview=td" : ""}`
+        // Build PDF URL. access_code is never in the response (the server
+        // route strips it before returning) — the code the page already has
+        // from the URL is the same one, so just use it directly.
+        const pdfEndpoint = `/api/ss4/${token}/pdf?code=${encodeURIComponent(code)}${isAdmin ? "&preview=td" : ""}`
         setPdfUrl(pdfEndpoint)
 
         // Track view (not for admin). See the route's own comment: this must
         // NEVER promote status — a draft flipped to awaiting_signature just
         // because the page was opened let a draft be signed by anyone holding
         // the link, and undid a staff signer switch the moment the previous
-        // signer's old link was merely opened.
+        // signer's old link was merely opened. Fire-and-forget, own try/catch
+        // — a transient failure here must never surface as a page-level
+        // error over an otherwise fully-loaded, signable form.
         if (!isAdmin) {
-          await fetch(`/api/ss4/${token}/data`, {
+          fetch(`/api/ss4/${token}/data`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code, preview: isAdmin ? "td" : undefined, action: "track_open" }),
-          })
+            body: JSON.stringify({ code, action: "track_open" }),
+          }).catch(() => {})
         }
       } catch {
         setError("Failed to load SS-4 data.")

@@ -16,6 +16,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { clientIp } from "@/lib/esign/request-meta"
+import { checkLoginRateLimit, recordLoginFailure, clearLoginFailures } from "@/lib/portal/rate-limit"
 
 type Params = { params: Promise<{ token: string }> }
 
@@ -66,12 +68,25 @@ export async function POST(req: NextRequest, { params }: Params) {
   const row = await loadRow(token)
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
+  // Rate-limited the same way access_code guessing is elsewhere in this
+  // codebase (lib/esign/access-guard.ts) — without this, the token alone
+  // (guessable per lib/mcp/tools/itin-form.ts's slug+year scheme) plus
+  // unlimited email guesses would let an attacker brute-force their way to
+  // the real access_code, which this route hands back on a match.
+  const key = `itin-gate:${clientIp(req) || "unknown"}:${token}`
+  const rl = checkLoginRateLimit(key)
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many attempts. Please wait a few minutes and try again." }, { status: 429 })
+  }
+
   const prefillEmail = ((row.prefilled_data?.email as string) || "").trim().toLowerCase()
   if (!prefillEmail || email !== prefillEmail) {
+    recordLoginFailure(key)
     // Deliberately generic — never confirm/deny whether an email exists on
     // file, and never echo the real email back.
     return NextResponse.json({ error: "Email does not match our records." }, { status: 403 })
   }
+  clearLoginFailures(key)
 
   if (!row.access_code) {
     return NextResponse.json({ error: "This link is not ready yet." }, { status: 409 })
