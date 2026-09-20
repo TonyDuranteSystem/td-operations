@@ -14,18 +14,6 @@ import {
   type LabelKey,
 } from '@/lib/types/formation-form'
 
-// ─── Cookie Helpers ─────────────────────────────────────────
-
-const COOKIE_NAME = 'formation_verified'
-
-function setVerifiedCookie(token: string) {
-  document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-}
-
-function hasVerifiedCookie(token: string): boolean {
-  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
-}
-
 // ─── Date Helpers ───────────────────────────────────────────
 
 function formatDateTime(d: string, lang: 'en' | 'it') {
@@ -67,83 +55,103 @@ export default function FormationFormPage() {
   const [members, setMembers] = useState<Record<string, string>[]>([])
 
   const L = LABELS[lang]
+  const [code, setCode] = useState<string | null>(null)
+  const [gateError, setGateError] = useState<'none' | 'no_email_on_file'>('none')
 
   // ─── Load Submission ────────────────────────────────────
+  //
+  // Two-phase load, same pattern as app/tax-form/[token]/page.tsx: phase 1
+  // fetches only non-sensitive gate info via the gate route; the full
+  // submission is only fetched, with a real access_code, once a real staff
+  // session or a server-verified email match has proven who's asking. The
+  // page used to fetch the ENTIRE row unconditionally with the anon key —
+  // see lib/public-forms/verify-token-access.ts.
+
+  const trackOpen = useCallback((accessCode: string, sub: FormationSubmission) => {
+    if (sub.status === 'pending' || sub.status === 'sent') {
+      fetch(`/api/formation-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: accessCode, action: 'track_open' }),
+      }).catch(() => {})
+    }
+  }, [token])
+
+  const loadFullData = useCallback(async (accessCode: string, adminMode: boolean) => {
+    const qs = new URLSearchParams({ code: accessCode })
+    if (adminMode) qs.set('preview', 'td')
+    const res = await fetch(`/api/formation-form/${token}/data?${qs.toString()}`)
+    const body = await res.json()
+    if (!res.ok || !body.data) {
+      setError('not_found')
+      setLoading(false)
+      return
+    }
+    const sub = body.data as FormationSubmission
+    setSubmission(sub)
+    setLang(sub.language || 'en')
+    if (sub.prefilled_data) setFormData({ ...sub.prefilled_data })
+    setLoading(false)
+    if (!adminMode) trackOpen(accessCode, sub)
+  }, [token, trackOpen])
 
   const loadSubmission = useCallback(async () => {
     try {
-      // Admin preview bypass
       const adminMode = searchParams.get('preview') === 'td'
-      if (adminMode) {
-        setIsAdmin(true)
-        setVerified(true)
-      }
+      const qs = adminMode ? '?preview=td' : ''
+      const res = await fetch(`/api/formation-form/${token}/gate${qs}`)
+      const body = await res.json()
+      if (!res.ok) { setError('not_found'); setLoading(false); return }
 
-      const { data, error: err } = await supabasePublic
-        .from('formation_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      setLang(body.language || 'en')
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      const sub = data as FormationSubmission
-
-      if (sub.status === 'completed' || sub.status === 'reviewed') {
-        setSubmission(sub)
-        setLang(sub.language || 'en')
+      if (body.status === 'completed' || body.status === 'reviewed') {
+        setSubmission({ completed_at: body.completedAt } as FormationSubmission)
         setSubmitted(true)
         setLoading(false)
         return
       }
 
-      setSubmission(sub)
-      setLang(sub.language || 'en')
+      if (adminMode && body.accessCode) {
+        setIsAdmin(true)
+        setVerified(true)
+        setCode(body.accessCode)
+        await loadFullData(body.accessCode, true)
+        return
+      }
 
-      if (sub.prefilled_data) {
-        setFormData({ ...sub.prefilled_data })
+      if (!body.hasOwnerEmail) {
+        setGateError('no_email_on_file')
+        setLoading(false)
+        return
       }
 
       setLoading(false)
-
-      if (adminMode) return
-
-      if (hasVerifiedCookie(token)) {
-        setVerified(true)
-      }
-
-      if (hasVerifiedCookie(token) || !sub.prefilled_data?.owner_email) {
-        trackOpen(sub)
-      }
     } catch {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, searchParams])
+  }, [token, searchParams, loadFullData])
 
-  function trackOpen(sub: FormationSubmission) {
-    if (sub.status === 'pending' || sub.status === 'sent') {
-      supabasePublic
-        .from('formation_submissions')
-        .update({
-          opened_at: new Date().toISOString(),
-          status: 'opened',
-        })
-        .eq('id', sub.id)
-        .then(() => {})
-    }
-  }
-
-  function handleEmailVerify(e: React.FormEvent) {
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!submission) return
-    const prefillEmail = (submission.prefilled_data?.owner_email as string) || ''
-    if (emailInput.toLowerCase().trim() === prefillEmail.toLowerCase().trim()) {
-      setVerified(true)
+    try {
+      const res = await fetch(`/api/formation-form/${token}/gate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailInput }),
+      })
+      const body = await res.json()
+      if (!res.ok || !body.access_code) {
+        setEmailError(true)
+        return
+      }
       setEmailError(false)
-      setVerifiedCookie(token)
-      trackOpen(submission)
-    } else {
+      setVerified(true)
+      setCode(body.access_code)
+      setLoading(true)
+      await loadFullData(body.access_code, false)
+    } catch {
       setEmailError(true)
     }
   }
@@ -302,21 +310,24 @@ export default function FormationFormPage() {
         }
       }
 
-      // 4. Update submission
-      const { error: subErr } = await supabasePublic
-        .from('formation_submissions')
-        .update({
+      // 4. Update submission via the server route (service role) — the page
+      // can no longer write formation_submissions directly.
+      const submitRes = await fetch(`/api/formation-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          preview: isAdmin ? 'td' : undefined,
+          action: 'submit',
           submitted_data: submittedData,
           changed_fields: changedFields,
           upload_paths: uploadPaths,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_ip: '',
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (subErr) throw new Error(subErr.message)
+        }),
+      })
+      if (!submitRes.ok) {
+        const errBody = await submitRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to submit')
+      }
 
       // Trigger auto-chain (non-blocking)
       try {
@@ -612,7 +623,17 @@ export default function FormationFormPage() {
     </>
   )
 
-  if (!submission) return null
+  if (gateError === 'no_email_on_file') return (
+    <>
+      <FormationFormStyles />
+      <div className="tf-error-page">
+        <div>
+          <h1>{L.notFound}</h1>
+          <p>{L.notFoundMessage}</p>
+        </div>
+      </div>
+    </>
+  )
 
   // Already submitted
   if (submitted) return (
@@ -625,7 +646,7 @@ export default function FormationFormPage() {
           <div className="tf-success-icon">&#9989;</div>
           <h1>{L.successTitle}</h1>
           <p>{L.successMessage}</p>
-          {submission.completed_at && (
+          {submission?.completed_at && (
             <p className="tf-success-ts">{L.successTimestamp}: {formatDateTime(submission.completed_at, lang)}</p>
           )}
         </div>
@@ -633,9 +654,11 @@ export default function FormationFormPage() {
     </>
   )
 
-  // Email verification gate (admin preview bypasses synchronously)
+  // Email verification gate (admin preview bypasses synchronously). Does NOT
+  // depend on `submission` — the full row isn't fetched until after this
+  // gate is passed (or admin preview supplies a real access_code).
   const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview && submission.prefilled_data?.owner_email) {
+  if (!verified && !isAdminPreview) {
     return (
       <>
         <FormationFormStyles />
@@ -663,6 +686,8 @@ export default function FormationFormPage() {
       </>
     )
   }
+
+  if (!submission) return null
 
   // ─── Main Form ──────────────────────────────────────────
 

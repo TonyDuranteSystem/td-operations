@@ -69,31 +69,42 @@ export default function FormationFormCodePage() {
 
   const L = LABELS[lang]
 
+  const trackOpen = useCallback((sub: FormationSubmission) => {
+    if (sub.status === 'pending' || sub.status === 'sent') {
+      fetch(`/api/formation-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, action: 'track_open' }),
+      }).catch(() => {})
+    }
+  }, [token, code])
+
   // ─── Load Submission ────────────────────────────────────
 
   const loadSubmission = useCallback(async () => {
     try {
-      // Admin preview bypass
-      const adminMode = searchParams.get('preview') === 'td'
-      if (adminMode) {
-        setIsAdmin(true)
-        setVerified(true)
+      // The query flag only decides what we ASK the server for — whether the
+      // caller actually IS staff is the server's own verified answer
+      // (resBody.isAdmin), used below. Trusting the raw flag client-side
+      // would let anyone spoof the admin badge on their own real link.
+      const previewRequested = searchParams.get('preview') === 'td'
+
+      const qs = new URLSearchParams({ code: code || '' })
+      if (previewRequested) qs.set('preview', 'td')
+      const res = await fetch(`/api/formation-form/${token}/data?${qs.toString()}`)
+      const resBody = await res.json()
+
+      if (!res.ok || !resBody.data) {
+        setError(res.status === 403 ? 'invalid_link' : 'not_found')
+        setLoading(false)
+        return
       }
 
-      const { data, error: err } = await supabasePublic
-        .from('formation_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      const isAdminVerified = !!resBody.isAdmin
+      setIsAdmin(isAdminVerified)
+      if (isAdminVerified) setVerified(true)
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      // Validate access_code from URL path
-      if (!adminMode && data.access_code !== code) {
-        setError('invalid_link'); setLoading(false); return
-      }
-
-      const sub = data as FormationSubmission
+      const sub = resBody.data as FormationSubmission
 
       if (sub.status === 'completed' || sub.status === 'reviewed') {
         setSubmission(sub)
@@ -112,32 +123,15 @@ export default function FormationFormCodePage() {
 
       setLoading(false)
 
-      // Access code matched — skip email gate entirely
-      if (!adminMode) {
+      if (!isAdminVerified) {
         setVerified(true)
-      }
-
-      if (!adminMode) {
         trackOpen(sub)
       }
     } catch {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, code, searchParams])
-
-  function trackOpen(sub: FormationSubmission) {
-    if (sub.status === 'pending' || sub.status === 'sent') {
-      supabasePublic
-        .from('formation_submissions')
-        .update({
-          opened_at: new Date().toISOString(),
-          status: 'opened',
-        })
-        .eq('id', sub.id)
-        .then(() => {})
-    }
-  }
+  }, [token, code, searchParams, trackOpen])
 
   function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
@@ -310,21 +304,24 @@ export default function FormationFormCodePage() {
         }
       }
 
-      // 4. Update submission
-      const { error: subErr } = await supabasePublic
-        .from('formation_submissions')
-        .update({
+      // 4. Update submission via the server route (service role) — the page
+      // can no longer write formation_submissions directly.
+      const submitRes = await fetch(`/api/formation-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          preview: isAdmin ? 'td' : undefined,
+          action: 'submit',
           submitted_data: submittedData,
           changed_fields: changedFields,
           upload_paths: uploadPaths,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_ip: '',
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (subErr) throw new Error(subErr.message)
+        }),
+      })
+      if (!submitRes.ok) {
+        const errBody = await submitRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to submit')
+      }
 
       // Trigger auto-chain (non-blocking)
       try {
