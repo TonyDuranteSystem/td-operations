@@ -61,30 +61,44 @@ export default function ClosureFormCodePage() {
 
   const L = LABELS[lang]
 
+  const trackOpen = useCallback((sub: ClosureSubmission) => {
+    if (sub.status === 'pending' || sub.status === 'sent') {
+      fetch(`/api/closure-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, action: 'track_open' }),
+      }).catch(() => {})
+    }
+  }, [token, code])
+
   // ─── Load Submission ────────────────────────────────────
 
   const loadSubmission = useCallback(async () => {
     try {
-      const adminMode = searchParams.get('preview') === 'td'
-      if (adminMode) {
-        setIsAdmin(true)
-        setVerified(true)
+      // Admin preview: the query flag alone is NOT proof — it only decides
+      // what we ASK the server for. Whether the caller actually IS staff is
+      // the server's own answer (resBody.isAdmin, from a real isStaffPreview
+      // session check), used below. Trusting the raw flag client-side would
+      // let anyone append ?preview=td to their own real link and spoof the
+      // admin badge / silently suppress view-open tracking.
+      const previewRequested = searchParams.get('preview') === 'td'
+
+      const qs = new URLSearchParams({ code: code || '' })
+      if (previewRequested) qs.set('preview', 'td')
+      const res = await fetch(`/api/closure-form/${token}/data?${qs.toString()}`)
+      const resBody = await res.json()
+
+      if (!res.ok || !resBody.data) {
+        setError(res.status === 403 ? 'invalid_link' : 'not_found')
+        setLoading(false)
+        return
       }
 
-      const { data, error: err } = await supabasePublic
-        .from('closure_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      const isAdminVerified = !!resBody.isAdmin
+      setIsAdmin(isAdminVerified)
+      if (isAdminVerified) setVerified(true)
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      // Validate access code from URL path
-      if (!adminMode && data.access_code !== code) {
-        setError('invalid_link'); setLoading(false); return
-      }
-
-      const sub = data as ClosureSubmission
+      const sub = resBody.data as ClosureSubmission
 
       if (sub.status === 'completed' || sub.status === 'reviewed') {
         setSubmission(sub)
@@ -103,30 +117,17 @@ export default function ClosureFormCodePage() {
 
       setLoading(false)
 
+      if (isAdminVerified) return
+
       // Access code validated — skip email gate, auto-verify
-      if (!adminMode) {
-        setVerified(true)
-        setVerifiedCookie(token)
-        trackOpen(sub)
-      }
+      setVerified(true)
+      setVerifiedCookie(token)
+      trackOpen(sub)
     } catch {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, code, searchParams])
-
-  function trackOpen(sub: ClosureSubmission) {
-    if (sub.status === 'pending' || sub.status === 'sent') {
-      supabasePublic
-        .from('closure_submissions')
-        .update({
-          opened_at: new Date().toISOString(),
-          status: 'opened',
-        })
-        .eq('id', sub.id)
-        .then(() => {})
-    }
-  }
+  }, [token, code, searchParams, trackOpen])
 
   function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
@@ -258,21 +259,24 @@ export default function ClosureFormCodePage() {
         }
       }
 
-      // 4. Update submission
-      const { error: subErr } = await supabasePublic
-        .from('closure_submissions')
-        .update({
+      // 4. Update submission via the server route (service role) — the page
+      // can no longer write closure_submissions directly.
+      const submitRes = await fetch(`/api/closure-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          preview: isAdmin ? 'td' : undefined,
+          action: 'submit',
           submitted_data: submittedData,
           changed_fields: changedFields,
           upload_paths: uploadPaths,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_ip: '',
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (subErr) throw new Error(subErr.message)
+        }),
+      })
+      if (!submitRes.ok) {
+        const errBody = await submitRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to submit')
+      }
 
       // Trigger auto-chain (non-blocking)
       try {

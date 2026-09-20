@@ -48,7 +48,12 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // view-tracking, final submit) and /api/banking-form/[token]/gate (the
   // pre-code email gate, which used to fetch the FULL row before checking
   // anything). Anon GRANT revoke is the next step, same as ss4/itin.
-  closure_submissions: ["SELECT", "UPDATE"],
+  // NO closure_submissions entry — both closure-form pages (the bare
+  // email-gated page and the [code] page) moved fully server-side (service
+  // key) 2026-09-20: /api/closure-form/[token]/data (fetch, view-tracking,
+  // final submit) and /api/closure-form/[token]/gate (the pre-code email
+  // gate, which used to fetch the FULL row — including the real access_code
+  // and owner_email — before any email was even checked).
   contracts: ["INSERT", "UPDATE"],
   form_8832_applications: ["SELECT", "UPDATE"],
   // NO formation_submissions entry — both formation-form pages moved fully
@@ -91,7 +96,11 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // 2026-09-19 fix as itin_submissions above. The PDF and upload-signed
   // routes already used the service key before this change and are
   // untouched. Anon GRANT revoke is the next step.
-  tax_quote_submissions: ["SELECT", "UPDATE"],
+  // NO tax_quote_submissions entry — the bare tax-quote page moved fully
+  // server-side (service key) 2026-09-20: /api/tax-quote/[token]/data
+  // (fetch, view-tracking, final submit). This table has no access_code
+  // column at all — the token itself was always the only secret — so this
+  // route does not use verifyTokenAccess, unlike every other converted form.
   // NO tax_return_submissions entry — both tax-form pages moved fully
   // server-side (service key) 2026-09-20, same shape and same reason as
   // banking_submissions above: /api/tax-form/[token]/data +

@@ -84,6 +84,14 @@ const PUBLIC_PREFIXES = [
   '/api/formation-form/',
   '/api/onboarding-form/',
   '/api/itin-form/',
+  // Same conversion, 2026-09-20, same reasoning — added to this list in the
+  // SAME change this time (the lesson from the 5 routes above: a route
+  // conversion off the anon-key browser pattern is not done until a real
+  // unauthenticated request against the deployed route has been tested).
+  // /api/tax-quote/[token]/data has no access_code concept at all (see that
+  // route's own doc comment) but is equally public/token-gated.
+  '/api/closure-form/',
+  '/api/tax-quote/',
   // Referral landing page (/invitation/[code]) + legacy /r/ redirect
   '/r/',
   '/invitation/',

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   LLC_TYPE_OPTIONS,
@@ -52,24 +52,26 @@ function TaxQuoteContent() {
 
   const loadSubmission = useCallback(async () => {
     try {
-      const adminMode = searchParams.get('preview') === 'td'
+      // Admin preview: the query flag alone is NOT proof — it only decides
+      // what we ASK the server for. Whether the caller actually IS staff is
+      // the server's own answer (body.isAdmin, from a real isStaffPreview
+      // session check), used below. Trusting the raw flag client-side would
+      // let anyone append ?preview=td to their own real link and spoof the
+      // admin badge / silently suppress view-open tracking.
+      const previewRequested = searchParams.get('preview') === 'td'
 
-      const { data, error: err } = await supabasePublic
-        .from('tax_quote_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
-
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      const sub = data as TaxQuoteSubmission
+      const res = await fetch(`/api/tax-quote/${token}/data${previewRequested ? '?preview=td' : ''}`)
+      if (!res.ok) { setError('not_found'); setLoading(false); return }
+      const body = await res.json()
+      const sub = body.data as TaxQuoteSubmission
+      const isAdminVerified = !!body.isAdmin
+      setIsAdmin(isAdminVerified)
 
       // Already completed
       if (sub.status === 'completed' || sub.status === 'processed') {
         setSubmission(sub)
         setLang(sub.language || 'en')
         setSubmitted(true)
-        if (adminMode) setIsAdmin(true)
         setLoading(false)
         return
       }
@@ -81,15 +83,13 @@ function TaxQuoteContent() {
       if (sub.client_name) setClientName(sub.client_name)
       if (sub.client_email) setClientEmail(sub.client_email)
 
-      if (adminMode) setIsAdmin(true)
-
       // Track open (non-admin only)
-      if (!adminMode && (sub.status === 'pending' || sub.status === 'sent')) {
-        supabasePublic
-          .from('tax_quote_submissions')
-          .update({ opened_at: new Date().toISOString(), status: 'opened' })
-          .eq('id', sub.id)
-          .then(() => {})
+      if (!isAdminVerified && (sub.status === 'pending' || sub.status === 'sent')) {
+        fetch(`/api/tax-quote/${token}/data`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'track_open' }),
+        }).catch(() => {})
       }
 
       setLoading(false)
@@ -129,9 +129,11 @@ function TaxQuoteContent() {
     setSubmitError(null)
 
     try {
-      const { error: updateErr } = await supabasePublic
-        .from('tax_quote_submissions')
-        .update({
+      const submitRes = await fetch(`/api/tax-quote/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'submit',
           llc_name: llcName.trim(),
           llc_state: llcState,
           llc_type: llcType,
@@ -139,13 +141,12 @@ function TaxQuoteContent() {
           client_name: clientName.trim(),
           client_email: clientEmail.trim().toLowerCase(),
           client_phone: clientPhone.trim() || null,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (updateErr) throw updateErr
+        }),
+      })
+      if (!submitRes.ok) {
+        const d = await submitRes.json().catch(() => ({}))
+        throw new Error(d.error || 'Failed to submit')
+      }
 
       // Trigger auto-offer creation (non-blocking)
       try {
