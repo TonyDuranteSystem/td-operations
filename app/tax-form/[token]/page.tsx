@@ -52,6 +52,7 @@ export default function TaxFormPage() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({})
+  const [bankStatementFiles, setBankStatementFiles] = useState<File[]>([])
 
   // Dynamic arrays for MMLLC additional members and SMLLC related party transactions
   const [members, setMembers] = useState<Record<string, string>[]>([])
@@ -260,6 +261,21 @@ export default function TaxFormPage() {
         if (upErr) {
           console.error(`[form] upload failed for ${key}:`, upErr.message)
           uploadFailures.push({ key, fileName: file.name })
+        } else {
+          uploadPaths.push(path)
+        }
+      }
+
+      // 1b. Upload bank statements
+      for (let i = 0; i < bankStatementFiles.length; i++) {
+        const file = bankStatementFiles[i]
+        const path = `${submission.token}/${attemptId}/bank_statement_${i}_${file.name}`
+        const { error: upErr } = await supabasePublic.storage
+          .from('tax-form-uploads')
+          .upload(path, file, { cacheControl: '3600', upsert: false })
+        if (upErr) {
+          console.error(`[form] upload failed for bank_statement_${i}:`, upErr.message)
+          uploadFailures.push({ key: `bank_statement_${i}`, fileName: file.name })
         } else {
           uploadPaths.push(path)
         }
@@ -553,6 +569,53 @@ export default function TaxFormPage() {
                     onChange={e => setUploadFiles(prev => ({ ...prev, financial_statements: e.target.files?.[0] || null }))}
                   />
                 </div>
+              </div>
+            )}
+
+            {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item">
+                <span>{L.priorYearReturn}</span>
+                <div className="tf-doc-upload">
+                  <span className="tf-doc-optional">{L.priorYearReturnOptional}</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={e => setUploadFiles(prev => ({ ...prev, prior_year_return: e.target.files?.[0] || null }))}
+                  />
+                </div>
+              </div>
+            )}
+
+            {submission.entity_type === 'MMLLC' && (
+              <div className="tf-doc-item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <span>{L.bankStatementsUpload}</span>
+                  <span className="tf-doc-missing">📎 {L.uploadRequired}</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#6b7280', margin: '6px 0 4px' }}>{L.bankStatementsHint}</p>
+                <p style={{ fontSize: 13, color: '#b8292f', fontWeight: 600, margin: '0 0 10px' }}>{L.bankStatementsCsvNote}</p>
+                <input
+                  type="file"
+                  accept=".pdf,.csv,.xls,.xlsx,.jpg,.jpeg,.png"
+                  multiple
+                  onChange={e => { if (e.target.files) setBankStatementFiles(prev => [...prev, ...Array.from(e.target.files!)]) }}
+                />
+                {bankStatementFiles.length > 0 && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {bankStatementFiles.map((f, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <span style={{ flex: 1 }}>{f.name} ({(f.size / 1024).toFixed(0)} KB)</span>
+                        <button
+                          type="button"
+                          style={{ background: 'none', border: 'none', color: '#b8292f', cursor: 'pointer', fontSize: 13 }}
+                          onClick={() => setBankStatementFiles(prev => prev.filter((_, j) => j !== i))}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
