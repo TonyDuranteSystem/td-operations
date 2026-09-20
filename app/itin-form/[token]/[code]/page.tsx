@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic, LOGO_URL } from '@/lib/supabase/public-client'
+import { LOGO_URL } from '@/lib/supabase/public-client'
 import {
   LABELS,
   TOOLTIPS,
@@ -82,6 +82,16 @@ export default function ITINFormCodePage() {
 
   const L = LABELS[lang]
 
+  const trackOpen = useCallback((sub: ITINSubmission) => {
+    if (sub.status === 'pending' || sub.status === 'sent') {
+      fetch(`/api/itin-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, action: 'track_open' }),
+      }).catch(() => {})
+    }
+  }, [token, code])
+
   // --- Load Submission ---
 
   const loadSubmission = useCallback(async () => {
@@ -91,20 +101,23 @@ export default function ITINFormCodePage() {
         setIsAdmin(true)
       }
 
-      const { data, error: err } = await supabasePublic
-        .from('itin_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      // Server-verified fetch — the page used to query itin_submissions
+      // directly with the anon key, trusting its own token filter. The
+      // database did not actually enforce that filter, so a request that
+      // skipped it could read or rewrite any submission. See
+      // lib/public-forms/verify-token-access.ts.
+      const qs = new URLSearchParams({ code: code || '' })
+      if (adminMode) qs.set('preview', 'td')
+      const res = await fetch(`/api/itin-form/${token}/data?${qs.toString()}`)
+      const resBody = await res.json()
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
-
-      // Validate access_code from URL path
-      if (!adminMode && data.access_code !== code) {
-        setError('invalid_link'); setLoading(false); return
+      if (!res.ok || !resBody.data) {
+        setError(res.status === 403 ? 'invalid_link' : 'not_found')
+        setLoading(false)
+        return
       }
 
-      const sub = data as ITINSubmission
+      const sub = resBody.data as ITINSubmission
 
       if (sub.status === 'completed' || sub.status === 'reviewed') {
         setSubmission(sub)
@@ -132,20 +145,7 @@ export default function ITINFormCodePage() {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, code, searchParams])
-
-  function trackOpen(sub: ITINSubmission) {
-    if (sub.status === 'pending' || sub.status === 'sent') {
-      supabasePublic
-        .from('itin_submissions')
-        .update({
-          opened_at: new Date().toISOString(),
-          status: 'opened',
-        })
-        .eq('id', sub.id)
-        .then(() => {})
-    }
-  }
+  }, [token, code, searchParams, trackOpen])
 
   useEffect(() => {
     if (!token || !code) { setError('invalid_link'); setLoading(false); return }
@@ -223,21 +223,23 @@ export default function ITINFormCodePage() {
         }
       }
 
-      // 4. Update submission
-      const { error: subErr } = await supabasePublic
-        .from('itin_submissions')
-        .update({
+      // 4. Update submission — via the server route (service role); the
+      // page can no longer write itin_submissions directly.
+      const submitRes = await fetch(`/api/itin-form/${token}/data`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          action: 'submit',
           submitted_data: submittedData,
           changed_fields: changedFields,
           upload_paths: uploadPaths,
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          client_ip: '',
-          client_user_agent: navigator.userAgent,
-        })
-        .eq('id', submission.id)
-
-      if (subErr) throw new Error(subErr.message)
+        }),
+      })
+      if (!submitRes.ok) {
+        const errBody = await submitRes.json().catch(() => ({}))
+        throw new Error(errBody.error || 'Failed to submit')
+      }
 
       // 5. Notify backend — both submission_id and token are required by
       // /api/itin-form-completed (validated at the top of the route). Sending

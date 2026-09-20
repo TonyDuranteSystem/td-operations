@@ -2,9 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
 import { LOGO_URL } from '@/lib/supabase/public-client'
-import { LABELS, type ITINSubmission } from '@/lib/types/itin-form'
+import { LABELS } from '@/lib/types/itin-form'
 
 // --- Cookie Helpers ---
 
@@ -12,10 +11,6 @@ const COOKIE_NAME = 'itin_verified'
 
 function setVerifiedCookie(token: string) {
   document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-}
-
-function hasVerifiedCookie(token: string): boolean {
-  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
 }
 
 // --- Date Helpers ---
@@ -32,50 +27,53 @@ function formatDateTime(d: string, lang: 'en' | 'it') {
 
 // --- Main Component ---
 
+interface GateInfo {
+  status: string
+  language: 'en' | 'it'
+  completedAt: string | null
+  accessCode: string | null
+}
+
 export default function ITINFormGatePage() {
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
   const token = params.token as string
 
-  const [submission, setSubmission] = useState<ITINSubmission | null>(null)
+  const [gate, setGate] = useState<GateInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [emailInput, setEmailInput] = useState('')
   const [emailError, setEmailError] = useState(false)
+  const [verifying, setVerifying] = useState(false)
   const [lang, setLang] = useState<'en' | 'it'>('en')
 
   const L = LABELS[lang]
 
   const loadSubmission = useCallback(async () => {
     try {
-      // Admin preview bypass — redirect to [code] route
       const adminMode = searchParams.get('preview') === 'td'
+      const qs = adminMode ? '?preview=td' : ''
+      const res = await fetch(`/api/itin-form/${token}/gate${qs}`)
+      const body = await res.json()
 
-      const { data, error: err } = await supabasePublic
-        .from('itin_submissions')
-        .select('*')
-        .eq('token', token)
-        .single()
+      if (!res.ok) { setError('not_found'); setLoading(false); return }
 
-      if (err || !data) { setError('not_found'); setLoading(false); return }
+      const info = body as GateInfo
+      setGate(info)
+      setLang(info.language || 'en')
 
-      const sub = data as ITINSubmission
-      setSubmission(sub)
-      setLang(sub.language || 'en')
-
-      if (adminMode) {
-        // Redirect to [code] route with preview param
-        router.replace(`/itin-form/${token}/${sub.access_code || 'preview'}?preview=td`)
+      if (adminMode && info.accessCode) {
+        // Real staff session confirmed server-side — jump to the code route.
+        router.replace(`/itin-form/${token}/${info.accessCode}?preview=td`)
         return
       }
 
-      // If cookie is set, redirect to [code] route
-      if (hasVerifiedCookie(token) && sub.access_code) {
-        router.replace(`/itin-form/${token}/${sub.access_code}`)
-        return
-      }
-
+      // If cookie is set, we still need the code — ask the server to
+      // re-verify with the ALREADY-verified email... but we don't retain the
+      // email locally, so the cookie alone can't jump the user past this
+      // page anymore. That's intended: only a real, server-checked email
+      // match (or a real staff session) ever yields the code.
       setLoading(false)
     } catch {
       setError('load_error')
@@ -83,19 +81,27 @@ export default function ITINFormGatePage() {
     }
   }, [token, searchParams, router])
 
-  function handleEmailVerify(e: React.FormEvent) {
+  async function handleEmailVerify(e: React.FormEvent) {
     e.preventDefault()
-    if (!submission) return
-    const prefillEmail = (submission.prefilled_data?.email as string) || ''
-    if (emailInput.toLowerCase().trim() === prefillEmail.toLowerCase().trim()) {
+    setVerifying(true)
+    try {
+      const res = await fetch(`/api/itin-form/${token}/gate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailInput }),
+      })
+      const body = await res.json()
+      if (!res.ok || !body.access_code) {
+        setEmailError(true)
+        return
+      }
       setEmailError(false)
       setVerifiedCookie(token)
-      // Redirect to [code] route
-      if (submission.access_code) {
-        router.replace(`/itin-form/${token}/${submission.access_code}`)
-      }
-    } else {
+      router.replace(`/itin-form/${token}/${body.access_code}`)
+    } catch {
       setEmailError(true)
+    } finally {
+      setVerifying(false)
     }
   }
 
@@ -105,13 +111,13 @@ export default function ITINFormGatePage() {
   }, [token, loadSubmission])
 
   useEffect(() => {
-    if (submission) {
+    if (gate) {
       document.title = lang === 'en'
         ? `ITIN Application - ${token}`
         : `Richiesta ITIN - ${token}`
       document.documentElement.lang = lang
     }
-  }, [submission, lang, token])
+  }, [gate, lang, token])
 
   // --- Render States ---
 
@@ -137,10 +143,10 @@ export default function ITINFormGatePage() {
     </>
   )
 
-  if (!submission) return null
+  if (!gate) return null
 
   // Already submitted
-  if (submission.status === 'completed' || submission.status === 'reviewed') {
+  if (gate.status === 'completed' || gate.status === 'reviewed') {
     return (
       <>
         <ITINFormStyles />
@@ -151,8 +157,8 @@ export default function ITINFormGatePage() {
             <div className="tf-success-icon">&#9989;</div>
             <h1>{L.successTitle}</h1>
             <p>{L.successMessage}</p>
-            {submission.completed_at && (
-              <p className="tf-success-ts">{L.successTimestamp}: {formatDateTime(submission.completed_at, lang)}</p>
+            {gate.completedAt && (
+              <p className="tf-success-ts">{L.successTimestamp}: {formatDateTime(gate.completedAt, lang)}</p>
             )}
           </div>
         </div>
@@ -181,7 +187,7 @@ export default function ITINFormGatePage() {
               autoFocus
             />
             {emailError && <div className="tf-gate-error-msg">{L.emailGateError}</div>}
-            <button type="submit" className="tf-gate-btn">{L.emailGateButton}</button>
+            <button type="submit" className="tf-gate-btn" disabled={verifying}>{L.emailGateButton}</button>
           </form>
         </div>
       </div>

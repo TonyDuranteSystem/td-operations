@@ -20,7 +20,6 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useParams, useSearchParams } from "next/navigation"
-import { supabasePublic } from "@/lib/supabase/public-client"
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { isMeaningfulSignature } from "@/lib/signature-validation"
 
@@ -63,65 +62,46 @@ export default function SS4SignPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sigPadRef = useRef<InstanceType<typeof import("signature_pad").default> | null>(null)
 
-  // Load SS-4 data
+  // Load SS-4 data via the server route — the page used to query
+  // ss4_applications directly with the anon key, trusting its own
+  // `.eq("token", token)` filter for scoping. The database itself did not
+  // enforce that filter, so a request that skipped it (or hit Supabase's
+  // REST API directly) could read or rewrite ANY application. The server
+  // route does the token+code check with the service role instead.
   useEffect(() => {
     async function load() {
       try {
-        const supabase = supabasePublic
-        const { data, error: err } = await supabase
-          .from("ss4_applications")
-          .select("*")
-          .eq("token", token)
-          .maybeSingle()
+        const qs = new URLSearchParams({ code: code || "" })
+        if (isAdmin) qs.set("preview", "td")
+        const res = await fetch(`/api/ss4/${token}/data?${qs.toString()}`)
+        const body = await res.json()
 
-        if (err || !data) {
-          setError("SS-4 application not found.")
+        if (!res.ok || !body.data) {
+          setError(res.status === 403 ? "Invalid access code." : "SS-4 application not found.")
           setLoading(false)
           return
         }
 
-        // Verify access code — ALWAYS. Neither the portal flag NOR the admin
-        // preview flag skips it. A query-string flag is not a credential
-        // (2026-07-21 incident, lib/auth/staff-preview.ts): the old skips let a
-        // departed signer append ?portal=true (their own re-sent iframe link)
-        // OR ?preview=td (the internal admin convention) to bypass the code and
-        // reach a signable form after a signer switch (round-5/6 council).
-        // BOTH legitimate flows already carry the CURRENT code — every admin
-        // preview link is /ss4/{token}/{access_code}?preview=td, and the portal
-        // wrapper (contact-gated) embeds the current code — so enforcing the
-        // check unconditionally breaks neither. The flags remain
-        // layout/postMessage-only. Real staff-session preview is enforced
-        // server-side on the PDF/upload routes via isStaffPreview, unchanged.
-        if (data.access_code !== code) {
-          setError("Invalid access code.")
-          setLoading(false)
-          return
-        }
-
+        const data = body.data as Record<string, unknown>
         setSs4(data)
         setSigned(data.status === "signed")
         setCanSign(data.status === "awaiting_signature")
 
         // Build PDF URL
-        const pdfEndpoint = `/api/ss4/${token}/pdf?code=${encodeURIComponent(data.access_code || code)}${isAdmin ? "&preview=td" : ""}`
+        const pdfEndpoint = `/api/ss4/${token}/pdf?code=${encodeURIComponent((data.access_code as string) || code)}${isAdmin ? "&preview=td" : ""}`
         setPdfUrl(pdfEndpoint)
 
-        // Track view (not for admin).
-        // NEVER promote the status here. This used to flip a draft straight to
-        // awaiting_signature just because the page was opened, which meant a
-        // draft could be signed by anyone holding the link AND that pulling a
-        // sent SS-4 back to draft (what the signer picker does when staff change
-        // the responsible party) was undone by the previous signer merely
-        // opening their old link. Promotion is an explicit staff action only —
-        // "Send to Client for Signature" / ss4_update.
+        // Track view (not for admin). See the route's own comment: this must
+        // NEVER promote status — a draft flipped to awaiting_signature just
+        // because the page was opened let a draft be signed by anyone holding
+        // the link, and undid a staff signer switch the moment the previous
+        // signer's old link was merely opened.
         if (!isAdmin) {
-          await supabase
-            .from("ss4_applications")
-            .update({
-              view_count: (data.view_count || 0) + 1,
-              viewed_at: new Date().toISOString(),
-            })
-            .eq("id", data.id)
+          await fetch(`/api/ss4/${token}/data`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, preview: isAdmin ? "td" : undefined, action: "track_open" }),
+          })
         }
       } catch {
         setError("Failed to load SS-4 data.")
@@ -191,7 +171,6 @@ export default function SS4SignPage() {
     setSigning(true)
 
     try {
-      const supabase = supabasePublic
       const sigDataUrl = sigPadRef.current.toDataURL("image/png")
 
       // 1. Fetch the filled (unsigned) PDF bytes from our API
@@ -248,20 +227,22 @@ export default function SS4SignPage() {
         // Continue even if storage fails — we still want to mark as signed
       }
 
-      // 4. Update ss4_applications in DB
-      const signedAt = new Date().toISOString()
-      await supabase
-        .from("ss4_applications")
-        .update({
-          status: "signed",
-          signed_at: signedAt,
-          signature_data: {
-            dataUrl: sigDataUrl,
-            signedName: ss4.responsible_party_name,
-            signedAt,
-          },
-        })
-        .eq("id", ss4.id)
+      // 4. Record the signature via the server route (service role) — the
+      // page can no longer write ss4_applications directly.
+      const signRes = await fetch(`/api/ss4/${token}/data`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          action: "sign",
+          signature_data_url: sigDataUrl,
+          signed_name: ss4.responsible_party_name,
+        }),
+      })
+      if (!signRes.ok) {
+        const body = await signRes.json().catch(() => ({}))
+        throw new Error(body.error || "Failed to record signature")
+      }
 
       // 5. Call /api/ss4-signed for notifications + Drive upload
       await fetch("/api/ss4-signed", {
