@@ -19,7 +19,7 @@ import { cookies } from 'next/headers'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { wizardLabelFor } from '@/lib/portal/wizard-labels'
-import { getInProgressFormations, getPortalAccounts } from '@/lib/portal/queries'
+import { getInProgressFormations, getInProgressOnboardings, getPortalAccounts } from '@/lib/portal/queries'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -95,6 +95,20 @@ export default async function WizardPage({
       const inProgress = await getInProgressFormations(contactId)
       const selected = inProgress.find(f => f.id === cookieFormation)
       if (selected?.leadId) effectiveLeadParam = selected.leadId
+    }
+  }
+
+  // Same fallback, for the onboarding equivalent of the formation cookie
+  // above (dev job bc2a8f7f, 2026-09-21). A stray bare /portal/wizard link
+  // (any future caller that forgets to build the full ?type=&lead= URL the
+  // way the sidebar/switcher now do) still resolves correctly as long as the
+  // client has an in-progress onboarding selected in the switcher.
+  if (!effectiveLeadParam && !forcedType && contactId) {
+    const cookieOnboarding = (await cookieStore).get('portal_onboarding')?.value
+    if (cookieOnboarding) {
+      const inProgressOnb = await getInProgressOnboardings(contactId)
+      const selectedOnb = inProgressOnb.find(o => o.id === cookieOnboarding)
+      if (selectedOnb?.leadId) effectiveLeadParam = selectedOnb.leadId
     }
   }
 

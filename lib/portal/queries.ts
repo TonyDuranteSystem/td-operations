@@ -461,6 +461,89 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
   }))
 }
 
+export interface InProgressOnboarding {
+  /** Synthetic switcher id — namespaced so it never collides with a real account id. */
+  id: string
+  /** Display name: the offer's client_name, or a generic label. */
+  label: string
+  /** Portal stage used for tier-gating when this entity is selected. */
+  stage: 'onboarding'
+  /**
+   * The lead this new-company onboarding is anchored on. Every CTA that opens
+   * this onboarding's wizard MUST carry it (dev job bc2a8f7f) — otherwise a
+   * returning client who already owns an account falls through to that
+   * account's wizard, either silently defaulting entity type wrong or, for
+   * an existing account, risking the new company's data landing on it.
+   */
+  leadId: string
+}
+
+/**
+ * In-progress onboardings for a contact — companies that have signed and paid
+ * for onboarding but do NOT yet exist as a confirmed account, because (unlike
+ * formation) NOTHING is created for onboarding until staff reviews and
+ * confirms the client's submitted wizard data. There is no service_delivery
+ * to key off the way formation does; "not yet confirmed" is read directly
+ * from whether this lead's onboarding_submissions row (if any) has reached
+ * status='reviewed'.
+ *
+ * Mirrors getInProgressFormations' contact/lead resolution exactly (direct
+ * offers.contact_id, or via a lead that converted to this contact) so a
+ * returning client's second onboarding surfaces in the same switcher a
+ * second formation would (found missing live, 2026-09-21 — the client's
+ * ever-present "Complete Setup" sidebar link and the switcher had no way to
+ * tell a second onboarding apart from an existing account, the exact same
+ * gap already fixed for the payment-time notification and the reminder
+ * cron).
+ */
+export async function getInProgressOnboardings(contactId: string): Promise<InProgressOnboarding[]> {
+  const { data: convertedLeads } = await supabaseAdmin
+    .from('leads')
+    .select('id')
+    .eq('converted_to_contact_id', contactId)
+  const convertedLeadIds = (convertedLeads ?? []).map(l => l.id)
+
+  const offerOr = [`contact_id.eq.${contactId}`]
+  if (convertedLeadIds.length > 0) offerOr.push(`lead_id.in.(${convertedLeadIds.join(',')})`)
+  const { data: offers } = await supabaseAdmin
+    .from('offers')
+    .select('token, lead_id, client_name, created_at')
+    .eq('contract_type', 'onboarding')
+    .or(offerOr.join(','))
+    .in('status', ['signed', 'completed'])
+    .order('created_at', { ascending: false })
+
+  const withLead = (offers ?? []).filter((o): o is typeof o & { lead_id: string } => !!o.lead_id)
+  if (withLead.length === 0) return []
+
+  // Which of these leads already became a real, staff-confirmed account?
+  // Those are done — they belong in `accounts`, not this in-progress list.
+  const leadIds = withLead.map(o => o.lead_id)
+  const { data: reviewed } = await supabaseAdmin
+    .from('onboarding_submissions')
+    .select('lead_id')
+    .in('lead_id', leadIds)
+    .eq('status', 'reviewed')
+  const reviewedLeadIds = new Set((reviewed ?? []).map(r => r.lead_id))
+
+  // One entry per lead (a lead can have at most one onboarding offer in
+  // practice, but dedupe defensively — first/most-recent wins, matching the
+  // `order('created_at', desc)` above).
+  const seen = new Set<string>()
+  const result: InProgressOnboarding[] = []
+  for (const o of withLead) {
+    if (reviewedLeadIds.has(o.lead_id) || seen.has(o.lead_id)) continue
+    seen.add(o.lead_id)
+    result.push({
+      id: `onboarding:${o.lead_id}`,
+      label: o.client_name || 'New company (in onboarding)',
+      stage: 'onboarding',
+      leadId: o.lead_id,
+    })
+  }
+  return result
+}
+
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')

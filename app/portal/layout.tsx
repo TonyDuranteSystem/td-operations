@@ -3,7 +3,7 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getPortalAccountById, getUnpaidInvoiceCount } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getInProgressOnboardings, getPortalAccountById, getUnpaidInvoiceCount } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
@@ -138,14 +138,17 @@ export default async function PortalLayout({
   const contactId = getClientContactId(user)
   let accounts = contactId ? await getPortalAccounts(contactId) : []
   const inProgress = contactId ? await getInProgressFormations(contactId) : []
+  const inProgressOnboardings = contactId ? await getInProgressOnboardings(contactId) : []
 
-  // Resolve the selected entity from the two selection cookies. portal_account_id
-  // stays account-id-only; portal_formation (set only by the company switcher)
-  // selects an in-progress formation. The contact-level tier is now only the
-  // fallback when the contact has neither an account nor an in-progress formation.
+  // Resolve the selected entity from the selection cookies. portal_account_id
+  // stays account-id-only; portal_formation / portal_onboarding (set only by
+  // the company switcher) select an in-progress formation/onboarding. The
+  // contact-level tier is now only the fallback when the contact has neither
+  // an account nor an in-progress formation/onboarding.
   const cookieStore = await cookies()
   const cookieAccountId = cookieStore.get('portal_account_id')?.value
   const cookieFormation = cookieStore.get('portal_formation')?.value
+  const cookieOnboarding = cookieStore.get('portal_onboarding')?.value
 
   // Read-only "View as client": if a valid marker cookie is present, render the
   // persistent banner. The minted session is the client's, so the rest of the
@@ -216,14 +219,15 @@ export default async function PortalLayout({
   // users are unchanged.
   const portalModeCtx = await resolvePortalMode(
     contactId,
-    accounts.length > 0 || inProgress.length > 0,
+    accounts.length > 0 || inProgress.length > 0 || inProgressOnboardings.length > 0,
     cookieStore.get('portal_mode')?.value,
   )
   const effectivePortalRole = portalModeCtx.mode === 'partner'
     ? 'partner'
     : (portalModeCtx.dual ? 'client' : portalRole)
   const selected = resolveSelectedEntity({
-    accounts, inProgress, accountCookie: cookieAccountId, formationCookie: cookieFormation, fallbackTier: contactTier,
+    accounts, inProgress, accountCookie: cookieAccountId, formationCookie: cookieFormation,
+    inProgressOnboardings, onboardingCookie: cookieOnboarding, fallbackTier: contactTier,
   })
   const selectedAccountId = selected.kind === 'account' ? selected.accountId : ''
   const selectedAccount = selected.kind === 'account' ? selected.account : undefined
@@ -315,6 +319,8 @@ export default async function PortalLayout({
             hasWizardPending={hasWizardPending}
             inProgress={inProgress}
             selectedFormationId={selected.kind === 'formation' ? selected.formationId : undefined}
+            inProgressOnboardings={inProgressOnboardings}
+            selectedOnboardingId={selected.kind === 'onboarding' ? selected.onboardingId : undefined}
             canManageTeam={canManageTeam}
           />
         <main className="flex-1 overflow-y-auto overscroll-y-contain">

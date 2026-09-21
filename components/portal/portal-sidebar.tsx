@@ -35,7 +35,7 @@ import { LanguageSwitcher } from './language-switcher'
 import { GlobalSearch } from '@/components/shared/global-search'
 import { NavItemHint } from './nav-item-hint'
 import type { PortalAccount } from '@/lib/types'
-import type { PortalNavVisibility, InProgressFormation } from '@/lib/portal/queries'
+import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
 
@@ -63,6 +63,10 @@ interface PortalSidebarProps {
   inProgress?: InProgressFormation[]
   /** Set when an in-progress formation is the current selection. */
   selectedFormationId?: string
+  /** Companies onboarding (existing LLC joining TD), not yet staff-confirmed — selectable in the switcher. */
+  inProgressOnboardings?: InProgressOnboarding[]
+  /** Set when an in-progress onboarding is the current selection. */
+  selectedOnboardingId?: string
   /** True when the logged-in user is the account admin for the selected company (can manage the Team tab). */
   canManageTeam?: boolean
   /** True when the logged-in user is a teammate (Portal Team Access) — nav filtered by capability. */
@@ -192,7 +196,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -330,7 +334,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
   // Locale-aware section labels — used by the Personal / Companies headers.
   const personalLabel = SECTION_LABELS['nav.section.personal']?.[locale] ?? SECTION_LABELS['nav.section.personal']?.en ?? 'Personal'
-  const totalEntities = accounts.length + inProgress.length
+  const totalEntities = accounts.length + inProgress.length + inProgressOnboardings.length
   const companiesLabel = (totalEntities > 1
     ? SECTION_LABELS['nav.section.companies']
     : SECTION_LABELS['nav.section.company'])?.[locale] ?? 'Companies'
@@ -482,10 +486,22 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       navLabel = t('sidebar.bankApplications')
     }
 
+    // The wizard link itself must carry which onboarding it's for, the same
+    // way the payment-time notification and the reminder cron were fixed to
+    // (dev job bc2a8f7f, 2026-09-21) — without it, a returning client with an
+    // existing account who's mid-way through a SECOND onboarding gets sent to
+    // a bare /portal/wizard, which silently falls through to their EXISTING
+    // account instead of the one they're actually switched to here.
+    let navHref = item.href
+    if (item.key === 'nav.wizard' && selectedOnboardingId) {
+      const selected = inProgressOnboardings.find(o => o.id === selectedOnboardingId)
+      if (selected?.leadId) navHref = `/portal/wizard?type=onboarding&lead=${encodeURIComponent(selected.leadId)}`
+    }
+
     return (
       <Link
         key={item.href}
-        href={item.href}
+        href={navHref}
         onClick={() => {
           setMobileOpen(false)
           // Clear the Team "NEW" badge once the admin opens the Team page,
@@ -548,6 +564,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             selectedAccountId={selectedAccountId}
             inProgress={inProgress}
             selectedFormationId={selectedFormationId}
+            inProgressOnboardings={inProgressOnboardings}
+            selectedOnboardingId={selectedOnboardingId}
             userName={fullName || user.email?.split('@')[0]}
           />
         ) : (
@@ -619,6 +637,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
                 selectedAccountId={selectedAccountId}
                 inProgress={inProgress}
                 selectedFormationId={selectedFormationId}
+                inProgressOnboardings={inProgressOnboardings}
+                selectedOnboardingId={selectedOnboardingId}
                 userName={fullName || user.email?.split('@')[0]}
                 dualRole
                 partnerMode={portalMode === 'partner'}
