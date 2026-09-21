@@ -211,7 +211,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout")
+    .select("contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout, lead_id")
     .eq("token", activation.offer_token)
     .single()
 
@@ -1021,16 +1021,36 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           (contact?.full_name ? contact.full_name.split(/\s+/)[0] : undefined)
 
         if (template) {
+          // Onboarding's wizard link must carry the specific lead it's for —
+          // without it, the wizard has no way to tell a brand-new company
+          // apart from an existing account (dev job bc2a8f7f). The catalog
+          // template path itself can't encode a per-activation id (it's a
+          // static string shared by every onboarding welcome message), so
+          // it's appended here where the real offer/lead is known. Only
+          // applies when this activation's offer actually has a lead_id —
+          // absent for the older manual-token-link tool and for any
+          // contract not tied to a lead. Applied identically to the
+          // {{wizardUrl}} placeholder text and the notification's own
+          // click-through link (which keep their original, DIFFERENT
+          // fallbacks — "/portal/wizard" for the text, "/portal" for the
+          // link — so they never disagree once a lead is added, but neither
+          // regresses when there's no lead to add).
+          const appendLead = (url: string): string => {
+            if (contractType !== "onboarding" || !offer?.lead_id) return url
+            const sep = url.includes("?") ? "&" : "?"
+            return `${url}${sep}lead=${encodeURIComponent(offer.lead_id)}`
+          }
+
           const vars = {
             firstName,
             lastName: contact?.last_name ?? undefined,
             companyName,
             serviceName: template.title,
-            wizardUrl: template.wizardPath ?? "/portal/wizard",
+            wizardUrl: appendLead(template.wizardPath ?? "/portal/wizard"),
           }
           const title = renderTemplate(template.title, vars)
           const body = renderTemplate(template.body, vars)
-          const link = template.wizardPath ?? "/portal"
+          const link = appendLead(template.wizardPath ?? "/portal")
 
           createPortalNotification({
             account_id: autoAccountId || undefined,

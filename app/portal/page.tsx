@@ -404,13 +404,20 @@ export default async function PortalDashboardPage() {
       // pre-existing limitation, not currently exercised by any real
       // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const { data: os } = await supabaseAdmin
+        // Scope to THIS offer's lead when we have one — a contact with a
+        // PAST reviewed onboarding for a different company must not have
+        // that old row read as "this new company is already submitted"
+        // (dev job bc2a8f7f, found live 2026-09-21: the contact-only query
+        // below leaked across companies). Falls back to contact-only when no
+        // lead_id is available (the older manual-token tool, or an offer
+        // that predates lead_id being recorded on the submission).
+        let osQuery = supabaseAdmin
           .from('onboarding_submissions')
           .select('id')
           .eq('contact_id', contactId)
           .in('status', ['completed', 'reviewed'])
-          .limit(1)
-          .maybeSingle()
+        osQuery = offerData?.lead_id ? osQuery.eq('lead_id', offerData.lead_id) : osQuery
+        const { data: os } = await osQuery.limit(1).maybeSingle()
         wizardSubmitted = !!os
       }
     }
@@ -423,13 +430,13 @@ export default async function PortalDashboardPage() {
     // (dev job bc2a8f7f, found live 2026-09-21).
     let wizardReviewed = false
     if (contactId) {
-      const { data: reviewedOs } = await supabaseAdmin
+      let reviewedQuery = supabaseAdmin
         .from('onboarding_submissions')
         .select('id')
         .eq('contact_id', contactId)
         .eq('status', 'reviewed')
-        .limit(1)
-        .maybeSingle()
+      reviewedQuery = offerData?.lead_id ? reviewedQuery.eq('lead_id', offerData.lead_id) : reviewedQuery
+      const { data: reviewedOs } = await reviewedQuery.limit(1).maybeSingle()
       wizardReviewed = !!reviewedOs
     }
 
@@ -663,13 +670,16 @@ export default async function PortalDashboardPage() {
       // pre-existing limitation, not currently exercised by any real
       // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const { data: os } = await supabaseAdmin
+        // Scope to THIS offer's lead when we have one — see the matching
+        // block above for why a contact-only query leaks a past company's
+        // reviewed submission onto a brand-new one (dev job bc2a8f7f).
+        let osQuery = supabaseAdmin
           .from('onboarding_submissions')
           .select('id')
           .eq('contact_id', contactId)
           .in('status', ['completed', 'reviewed'])
-          .limit(1)
-          .maybeSingle()
+        osQuery = offerData?.lead_id ? osQuery.eq('lead_id', offerData.lead_id) : osQuery
+        const { data: os } = await osQuery.limit(1).maybeSingle()
         wizardSubmitted = !!os
       }
     }
@@ -678,13 +688,13 @@ export default async function PortalDashboardPage() {
     // above for why wizardSubmitted alone can't tell (dev job bc2a8f7f).
     let wizardReviewed = false
     if (contactId) {
-      const { data: reviewedOs } = await supabaseAdmin
+      let reviewedQuery = supabaseAdmin
         .from('onboarding_submissions')
         .select('id')
         .eq('contact_id', contactId)
         .eq('status', 'reviewed')
-        .limit(1)
-        .maybeSingle()
+      reviewedQuery = offerData?.lead_id ? reviewedQuery.eq('lead_id', offerData.lead_id) : reviewedQuery
+      const { data: reviewedOs } = await reviewedQuery.limit(1).maybeSingle()
       wizardReviewed = !!reviewedOs
     }
 
