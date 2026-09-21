@@ -724,31 +724,55 @@ export function StorageBrowserClient() {
         </div>
       )}
 
-      {movePicker && (
-        <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setMovePicker(null)}>
-          <div className="bg-white rounded-lg shadow-xl w-80 max-h-[70vh] overflow-y-auto p-3" onClick={e => e.stopPropagation()}>
-            <div className="text-sm font-medium mb-2 px-1">Move to…</div>
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-gray-100"
-              onClick={() => { moveItemsTo(null, movePicker.folderIds, movePicker.fileIds); setMovePicker(null) }}
-            >
-              🗄️ Storage (root)
-            </button>
-            {tree.map(node => (
+      {movePicker && (() => {
+        // Disable the folder(s) being moved AND all of their own descendants
+        // — moving a folder into one of its own subfolders is invalid, and
+        // the picker should never offer a destination the server would
+        // reject, rather than let someone pick it and then explain why not.
+        const disabled = new Set(movePicker.folderIds)
+        const queue = [...movePicker.folderIds]
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          for (const child of childrenByParent.get(current) ?? []) {
+            disabled.add(child.id)
+            queue.push(child.id)
+          }
+        }
+
+        function renderPickerNode(node: FolderNode, depth: number) {
+          const children = childrenByParent.get(node.id) ?? []
+          return (
+            <div key={node.id}>
               <button
-                key={node.id}
                 type="button"
-                className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-gray-100 truncate"
-                disabled={movePicker.folderIds.includes(node.id)}
+                className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-gray-100 truncate disabled:opacity-40 disabled:hover:bg-transparent"
+                style={{ paddingLeft: `${8 + depth * 16}px` }}
+                disabled={disabled.has(node.id)}
                 onClick={() => { moveItemsTo(node.id, movePicker.folderIds, movePicker.fileIds); setMovePicker(null) }}
               >
                 📁 {node.name}
               </button>
-            ))}
+              {children.map(child => renderPickerNode(child, depth + 1))}
+            </div>
+          )
+        }
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center" onClick={() => setMovePicker(null)}>
+            <div className="bg-white rounded-lg shadow-xl w-80 max-h-[70vh] overflow-y-auto p-3" onClick={e => e.stopPropagation()}>
+              <div className="text-sm font-medium mb-2 px-1">Move to…</div>
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-gray-100"
+                onClick={() => { moveItemsTo(null, movePicker.folderIds, movePicker.fileIds); setMovePicker(null) }}
+              >
+                🗄️ Storage (root)
+              </button>
+              {rootChildren.map(node => renderPickerNode(node, 0))}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
