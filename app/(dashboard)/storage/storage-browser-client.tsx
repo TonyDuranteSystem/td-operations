@@ -70,6 +70,7 @@ export function StorageBrowserClient() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renaming, setRenaming] = useState<{ kind: 'folder' | 'file'; id: string; value: string } | null>(null)
   const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [favFolders, setFavFolders] = useState<Set<string>>(new Set())
   const [favFiles, setFavFiles] = useState<Set<string>>(new Set())
@@ -185,25 +186,37 @@ export function StorageBrowserClient() {
     if (!files || files.length === 0) return
     setUploading(true)
     setError(null)
-    try {
-      for (const file of Array.from(files)) {
+    // Each file is uploaded independently — one bad file (e.g. a name that
+    // already exists) must not silently abandon the rest of the batch, and
+    // the person needs to know exactly which ones failed and why.
+    const failures: string[] = []
+    for (const file of Array.from(files)) {
+      try {
         const form = new FormData()
         form.append('file', file)
         if (selectedFolderId) form.append('folder_id', selectedFolderId)
         await jsonOrThrow(await fetch('/api/crm-storage/files', { method: 'POST', body: form }))
+      } catch (err) {
+        failures.push(`${file.name}: ${err instanceof Error ? err.message : 'upload failed'}`)
       }
-      await loadContents(selectedFolderId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
-    } finally {
-      setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
     }
+    // loadContents clears any error as part of its own refresh, so the
+    // failure summary must be set AFTER it, not before — setting it first
+    // would have it wiped out before the person ever saw it.
+    await loadContents(selectedFolderId)
+    if (failures.length > 0) {
+      const succeeded = files.length - failures.length
+      const prefix = succeeded > 0 ? `${succeeded} of ${files.length} uploaded. ` : ''
+      setError(`${prefix}${failures.join('; ')}`)
+    }
+    setUploading(false)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   async function createFolder() {
     const trimmed = newFolderName.trim()
-    if (!trimmed) return
+    if (!trimmed || creatingFolder) return
+    setCreatingFolder(true)
     setError(null)
     try {
       await jsonOrThrow(await fetch('/api/crm-storage/folders', {
@@ -216,6 +229,8 @@ export function StorageBrowserClient() {
       await refreshAfterChange()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create folder')
+    } finally {
+      setCreatingFolder(false)
     }
   }
 
@@ -491,7 +506,9 @@ export function StorageBrowserClient() {
               onKeyDown={e => { if (e.key === 'Enter') createFolder() }}
               autoFocus
             />
-            <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-gray-900 text-white" onClick={createFolder}>Create</button>
+            <button type="button" className="px-3 py-1.5 text-sm rounded-md bg-gray-900 text-white disabled:opacity-50" disabled={creatingFolder} onClick={createFolder}>
+              {creatingFolder ? 'Creating…' : 'Create'}
+            </button>
           </div>
         )}
 
