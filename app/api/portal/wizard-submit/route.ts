@@ -534,6 +534,35 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Staff notifications for a fresh onboarding submission — the real
+      // portal-wizard journey (dev job bc2a8f7f) was missing both of these:
+      // neither the What's New feed nor the Staff Alerts board ever fired at
+      // submission time, only as a late byproduct of the review already being
+      // done via /onboarding-review. Both calls are idempotent (keyed on this
+      // submission's id / an open card for the same source_ref), so they're
+      // safe to call on a resubmission too. contact_id is always present here
+      // (the client is logged into the portal); account_id is null for a
+      // brand-new company until staff confirms — expected, not an error.
+      if (wizard_type === 'onboarding' && submissionId) {
+        try {
+          const { emitOnboardingWizardSubmittedEvent } = await import('@/lib/portal/chat-events')
+          await emitOnboardingWizardSubmittedEvent({
+            onboarding_submission_id: submissionId,
+            contact_id: contact_id || null,
+            account_id: account_id || null,
+          })
+          const { emitActionNeeded } = await import('@/lib/notifications/act-event')
+          await emitActionNeeded({
+            event: 'onboarding_wizard_submitted',
+            account_id: account_id || null,
+            contact_id: contact_id || null,
+            source_ref: `onboarding_submissions:${submissionId}`,
+          })
+        } catch (e) {
+          console.error('[wizard-submit] onboarding staff notification error:', e)
+        }
+      }
+
       // Prior-year return matrix (tax wizard, master plan §5): resolve the
       // client's answer — verify Case A against our records, extract+validate
       // a Case-B upload, cross-check Case C vs formation date, store the
