@@ -167,6 +167,16 @@ export function StorageBrowserClient() {
     })
   }
 
+  // Navigating to a folder always leaves the Favorites overlay, even when
+  // the target folder is already the current selection (e.g. it was open
+  // before Favorites was opened on top of it) — relying only on the
+  // selectedFolderId-changed effect misses that case, since the id never
+  // actually changes.
+  function goToFolder(id: string | null) {
+    setShowingFavorites(false)
+    setSelectedFolderId(id)
+  }
+
   async function refreshAfterChange() {
     await Promise.all([loadTree(), loadContents(selectedFolderId)])
   }
@@ -297,6 +307,7 @@ export function StorageBrowserClient() {
   async function runSearch(q: string) {
     setSearchQuery(q)
     if (!q.trim()) { setSearchResults(null); return }
+    setSelectedItems(new Set())
     try {
       const body = await jsonOrThrow(await fetch(`/api/crm-storage/search?q=${encodeURIComponent(q)}`))
       setSearchResults(body)
@@ -358,7 +369,7 @@ export function StorageBrowserClient() {
         <div
           className={`flex items-center gap-1 px-2 py-1.5 text-sm rounded cursor-pointer select-none ${isSelected ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'} ${isDragOver ? 'ring-2 ring-blue-400' : ''}`}
           style={{ paddingLeft: `${8 + depth * 16}px` }}
-          onClick={() => setSelectedFolderId(node.id)}
+          onClick={() => goToFolder(node.id)}
           onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', id: node.id, name: node.name }) }}
           draggable
           onDragStart={e => e.dataTransfer.setData('application/x-crm-storage', JSON.stringify({ kind: 'folder', id: node.id }))}
@@ -406,14 +417,14 @@ export function StorageBrowserClient() {
       >
         <div
           className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded cursor-pointer ${showingFavorites ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'}`}
-          onClick={() => { setShowingFavorites(true); setSearchResults(null); setSearchQuery('') }}
+          onClick={() => { setShowingFavorites(true); setSearchResults(null); setSearchQuery(''); setSelectedItems(new Set()) }}
         >
           <span aria-hidden>★</span>
           <span>Favorites</span>
         </div>
         <div
           className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded cursor-pointer ${selectedFolderId === null && !showingFavorites ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'}`}
-          onClick={() => setSelectedFolderId(null)}
+          onClick={() => goToFolder(null)}
         >
           <span aria-hidden>🗄️</span>
           <span>Storage</span>
@@ -429,11 +440,11 @@ export function StorageBrowserClient() {
               <span className="font-medium text-gray-900 flex items-center gap-1"><span aria-hidden>★</span> Favorites</span>
             ) : (
               <>
-                <button type="button" className="hover:text-blue-600 hover:underline shrink-0" onClick={() => setSelectedFolderId(null)}>Storage</button>
+                <button type="button" className="hover:text-blue-600 hover:underline shrink-0" onClick={() => goToFolder(null)}>Storage</button>
                 {breadcrumbs.map(node => (
                   <span key={node.id} className="flex items-center gap-1 min-w-0">
                     <span className="text-gray-300">/</span>
-                    <button type="button" className="hover:text-blue-600 hover:underline truncate" onClick={() => setSelectedFolderId(node.id)}>{node.name}</button>
+                    <button type="button" className="hover:text-blue-600 hover:underline truncate" onClick={() => goToFolder(node.id)}>{node.name}</button>
                   </span>
                 ))}
               </>
@@ -515,7 +526,7 @@ export function StorageBrowserClient() {
                 </div>
               )}
               {favoritesList?.folders.map(f => (
-                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => setSelectedFolderId(f.id)}>
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => goToFolder(f.id)}>
                   <span aria-hidden>★</span>
                   <span aria-hidden>📁</span>
                   <span className="flex-1 min-w-0 truncate text-sm">{f.name}</span>
@@ -538,7 +549,7 @@ export function StorageBrowserClient() {
                 <div className="text-sm text-gray-400 py-8 text-center">No matches</div>
               )}
               {searchResults.folders.map(f => (
-                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => { setSearchQuery(''); setSearchResults(null); setSelectedFolderId(f.id) }}>
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => { setSearchQuery(''); setSearchResults(null); goToFolder(f.id) }}>
                   <span aria-hidden>📁</span>
                   <span className="flex-1 min-w-0 truncate text-sm">{f.name}</span>
                   <span className="text-xs text-gray-400 truncate max-w-[40%]">{f.path}</span>
@@ -611,19 +622,19 @@ export function StorageBrowserClient() {
                         className="flex-1 min-w-0 px-2 py-0.5 text-sm border border-gray-300 rounded"
                         value={renaming.value}
                         onChange={e => setRenaming({ ...renaming, value: e.target.value })}
-                        onKeyDown={e => { if (e.key === 'Enter') submitRename() }}
+                        onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(null) }}
                         onBlur={submitRename}
                         autoFocus
                       />
                     ) : (
-                      <button type="button" className="flex-1 min-w-0 text-left text-sm truncate hover:text-blue-600" onDoubleClick={() => setSelectedFolderId(folder.id)}>{folder.name}</button>
+                      <button type="button" className="flex-1 min-w-0 text-left text-sm truncate hover:text-blue-600" onDoubleClick={() => goToFolder(folder.id)}>{folder.name}</button>
                     )}
                     <FastTooltip label={favFolders.has(folder.id) ? 'Unstar' : 'Star'}>
                       <button type="button" className="text-xs" onClick={() => toggleFavorite('folder', folder.id)} aria-label={favFolders.has(folder.id) ? 'Unstar' : 'Star'}>
                         {favFolders.has(folder.id) ? '★' : '☆'}
                       </button>
                     </FastTooltip>
-                    <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => setSelectedFolderId(folder.id)}>Open</button>
+                    <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => goToFolder(folder.id)}>Open</button>
                     <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => setRenaming({ kind: 'folder', id: folder.id, value: folder.name })}>Rename</button>
                     <button type="button" className="px-2 py-1 text-xs text-red-500 hover:text-red-700" onClick={() => deleteFolder(folder.id, folder.name)}>Delete</button>
                   </div>
@@ -646,7 +657,7 @@ export function StorageBrowserClient() {
                         className="flex-1 min-w-0 px-2 py-0.5 text-sm border border-gray-300 rounded"
                         value={renaming.value}
                         onChange={e => setRenaming({ ...renaming, value: e.target.value })}
-                        onKeyDown={e => { if (e.key === 'Enter') submitRename() }}
+                        onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(null) }}
                         onBlur={submitRename}
                         autoFocus
                       />
@@ -676,7 +687,7 @@ export function StorageBrowserClient() {
           onClick={e => e.stopPropagation()}
         >
           {contextMenu.kind === 'folder' && (
-            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { setSelectedFolderId(contextMenu.id); setContextMenu(null) }}>Open</button>
+            <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { goToFolder(contextMenu.id); setContextMenu(null) }}>Open</button>
           )}
           <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { setRenaming({ kind: contextMenu.kind, id: contextMenu.id, value: contextMenu.name }); setContextMenu(null) }}>Rename</button>
           <button
