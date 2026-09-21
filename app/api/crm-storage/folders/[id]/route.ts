@@ -112,11 +112,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const folderIds = await collectDescendantFolderIds(id)
   const now = new Date().toISOString()
 
-  const [{ error: foldersErr }, { error: filesErr }] = await Promise.all([
+  const [{ error: foldersErr }, { data: deletedFiles, error: filesErr }] = await Promise.all([
     db.from("crm_storage_folders").update({ deleted_at: now }).in("id", folderIds).is("deleted_at", null),
-    db.from("crm_storage_files").update({ deleted_at: now }).in("folder_id", folderIds).is("deleted_at", null),
+    db.from("crm_storage_files").update({ deleted_at: now }).in("folder_id", folderIds).is("deleted_at", null).select("id"),
   ])
 
   if (foldersErr || filesErr) return NextResponse.json({ error: "Failed to delete the folder" }, { status: 500 })
+
+  // Same garbage-collection as a single file delete, but for every folder
+  // and every file just removed by this recursive delete — otherwise a
+  // starred subfolder or file leaves an orphaned favorite behind forever.
+  const deletedFileIds = (deletedFiles ?? []).map((f: { id: string }) => f.id)
+  await Promise.all([
+    db.from("crm_storage_favorites").delete().in("folder_id", folderIds),
+    deletedFileIds.length > 0 ? db.from("crm_storage_favorites").delete().in("file_id", deletedFileIds) : Promise.resolve(),
+  ])
+
   return NextResponse.json({ ok: true })
 }

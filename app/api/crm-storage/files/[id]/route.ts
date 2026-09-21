@@ -85,5 +85,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   if (error) return NextResponse.json({ error: "Failed to delete the file" }, { status: 500 })
   if (!row) return NextResponse.json({ error: "File not found" }, { status: 404 })
+
+  // A favorite pointing at a deleted file is pure garbage — nothing else
+  // ever cleans these up, so without this every delete of a starred file
+  // leaves an orphaned row behind permanently.
+  await db.from("crm_storage_favorites").delete().eq("file_id", id)
   return NextResponse.json({ ok: true })
 }

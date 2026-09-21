@@ -179,7 +179,11 @@ export function StorageBrowserClient() {
   }
 
   async function refreshAfterChange() {
-    await Promise.all([loadTree(), loadContents(selectedFolderId)])
+    // Favorites must be refetched here too — a starred item that gets
+    // renamed, moved, or deleted elsewhere would otherwise keep showing
+    // its old name/location, or keep showing at all, in the Favorites
+    // view until something else happened to trigger a refetch.
+    await Promise.all([loadTree(), loadContents(selectedFolderId), loadFavorites()])
   }
 
   async function handleUpload(files: FileList | null) {
