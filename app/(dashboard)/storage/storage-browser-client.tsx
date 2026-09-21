@@ -362,10 +362,11 @@ export function StorageBrowserClient() {
           onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', id: node.id, name: node.name }) }}
           draggable
           onDragStart={e => e.dataTransfer.setData('application/x-crm-storage', JSON.stringify({ kind: 'folder', id: node.id }))}
-          onDragOver={e => { e.preventDefault(); setDragOverTreeId(node.id) }}
+          onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOverTreeId(node.id) }}
           onDragLeave={() => setDragOverTreeId(prev => (prev === node.id ? null : prev))}
           onDrop={e => {
             e.preventDefault()
+            e.stopPropagation()
             setDragOverTreeId(null)
             const raw = e.dataTransfer.getData('application/x-crm-storage')
             if (!raw) return
@@ -448,7 +449,11 @@ export function StorageBrowserClient() {
           />
           {!showingFavorites && (
             <>
-              <button type="button" className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50" onClick={() => setNewFolderOpen(s => !s)}>
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50"
+                onClick={() => { setNewFolderOpen(s => !s); setNewFolderName(''); setError(null) }}
+              >
                 New folder
               </button>
               <button
@@ -586,10 +591,11 @@ export function StorageBrowserClient() {
                     onContextMenu={e => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'folder', id: folder.id, name: folder.name }) }}
                     draggable
                     onDragStart={e => e.dataTransfer.setData('application/x-crm-storage', JSON.stringify({ kind: 'folder', id: folder.id }))}
-                    onDragOver={e => { e.preventDefault(); setDragOverTreeId(folder.id) }}
+                    onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOverTreeId(folder.id) }}
                     onDragLeave={() => setDragOverTreeId(prev => (prev === folder.id ? null : prev))}
                     onDrop={e => {
                       e.preventDefault()
+                      e.stopPropagation()
                       setDragOverTreeId(null)
                       const raw = e.dataTransfer.getData('application/x-crm-storage')
                       if (!raw) return

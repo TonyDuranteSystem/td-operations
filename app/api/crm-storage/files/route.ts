@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
     if (!folder) return NextResponse.json({ error: "Destination folder not found" }, { status: 404 })
   }
 
+  let dupeQuery = db.from("crm_storage_files").select("id", { count: "exact", head: true }).ilike("file_name", nameCheck.name).is("deleted_at", null)
+  dupeQuery = folderId ? dupeQuery.eq("folder_id", folderId) : dupeQuery.is("folder_id", null)
+  const { count: dupeCount } = await dupeQuery
+  if (dupeCount && dupeCount > 0) {
+    return NextResponse.json({ error: `A file named "${nameCheck.name}" already exists here` }, { status: 409 })
+  }
+
   const storagePath = `${randomUUID()}-${nameCheck.name}`
   const bytes = await file.arrayBuffer()
   const { error: uploadErr } = await db.storage

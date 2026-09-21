@@ -54,6 +54,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const body = await req.json().catch(() => ({}))
   const update: Record<string, unknown> = {}
 
+  const { data: current } = await db.from("crm_storage_folders").select("id, name, parent_id").eq("id", id).is("deleted_at", null).maybeSingle()
+  if (!current) return NextResponse.json({ error: "Folder not found" }, { status: 404 })
+
   if (body.name !== undefined) {
     const nameCheck = validateStorageName(body.name)
     if (nameCheck.error) return NextResponse.json({ error: nameCheck.error }, { status: 400 })
@@ -73,6 +76,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   if (Object.keys(update).length === 0) return NextResponse.json({ error: "Nothing to update" }, { status: 400 })
+
+  const effectiveName = (update.name as string | undefined) ?? current.name
+  const effectiveParentId = update.parent_id !== undefined ? (update.parent_id as string | null) : current.parent_id
+  let dupeQuery = db.from("crm_storage_folders").select("id", { count: "exact", head: true }).ilike("name", effectiveName).is("deleted_at", null).neq("id", id)
+  dupeQuery = effectiveParentId ? dupeQuery.eq("parent_id", effectiveParentId) : dupeQuery.is("parent_id", null)
+  const { count: dupeCount } = await dupeQuery
+  if (dupeCount && dupeCount > 0) {
+    return NextResponse.json({ error: `A folder named "${effectiveName}" already exists here` }, { status: 409 })
+  }
+
   update.updated_at = new Date().toISOString()
 
   const { data: row, error } = await db

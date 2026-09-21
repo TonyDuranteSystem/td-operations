@@ -65,6 +65,13 @@ export async function POST(req: NextRequest) {
     if (!parent) return NextResponse.json({ error: "Parent folder not found" }, { status: 404 })
   }
 
+  let dupeQuery = db.from("crm_storage_folders").select("id", { count: "exact", head: true }).ilike("name", nameCheck.name).is("deleted_at", null)
+  dupeQuery = parentId ? dupeQuery.eq("parent_id", parentId) : dupeQuery.is("parent_id", null)
+  const { count: dupeCount } = await dupeQuery
+  if (dupeCount && dupeCount > 0) {
+    return NextResponse.json({ error: `A folder named "${nameCheck.name}" already exists here` }, { status: 409 })
+  }
+
   const { data: row, error } = await db
     .from("crm_storage_folders")
     .insert({ name: nameCheck.name, parent_id: parentId })
