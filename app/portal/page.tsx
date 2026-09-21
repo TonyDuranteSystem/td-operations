@@ -196,7 +196,7 @@ export default async function PortalDashboardPage() {
     if (emailArr.length > 0) {
       const { data: offer } = await supabaseAdmin
         .from('offers')
-        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
         .in('client_email', emailArr)
         .not('status', 'eq', 'expired')
         .order('created_at', { ascending: false })
@@ -216,7 +216,7 @@ export default async function PortalDashboardPage() {
         if (leads?.length) {
           const { data: leadOffer } = await supabaseAdmin
             .from('offers')
-            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
             .eq('lead_id', leads[0].id)
             .not('status', 'eq', 'expired')
             .order('created_at', { ascending: false })
@@ -573,7 +573,7 @@ export default async function PortalDashboardPage() {
     if (emailArr.length > 0) {
       const { data: offer } = await supabaseAdmin
         .from('offers')
-        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
         .in('client_email', emailArr)
         .not('status', 'eq', 'expired')
         .order('created_at', { ascending: false })
@@ -593,7 +593,7 @@ export default async function PortalDashboardPage() {
         if (leads?.length) {
           const { data: leadOffer } = await supabaseAdmin
             .from('offers')
-            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
             .eq('lead_id', leads[0].id)
             .not('status', 'eq', 'expired')
             .order('created_at', { ascending: false })

@@ -32,6 +32,14 @@ interface WelcomeDashboardProps {
     payment_links: { url: string; label: string; amount: number }[] | null
     bank_details: { beneficiary?: string; account_number?: string; routing_number?: string; iban?: string; bic?: string; bank_name?: string } | null
     payment_type: string | null
+    /** The lead this offer was sent on. For an onboarding offer, carried
+     * through to the wizard link as `?lead=` — the same "this session is
+     * this ONE specific new company" safety marker formation already uses
+     * (dev job bc2a8f7f, 2026-09-20: a returning client with an existing
+     * account bringing a SECOND, brand-new company had no such marker on
+     * this link, so the wizard fell back to guessing an existing account —
+     * risking silently overwriting that account's real data). */
+    lead_id: string | null
   } | null
   /** True when an onboarding wizard_progress row exists with status='submitted'.
    *  Flips step 4 ("Complete Setup") from an active link into a passive
@@ -46,6 +54,12 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
   const isViewed = offerData?.status === 'viewed' || offerData?.status === 'signed' || offerData?.status === 'completed'
   const isSigned = offerData?.status === 'signed' || offerData?.status === 'completed'
   const isPaid = offerData?.status === 'completed'
+  // Carry the offer's lead through to the wizard link for an onboarding
+  // offer specifically — see the field comment on offerData.lead_id above.
+  const wizardHref =
+    offerData?.contract_type === 'onboarding' && offerData?.lead_id
+      ? `/portal/wizard?type=onboarding&lead=${offerData.lead_id}`
+      : '/portal/wizard'
 
   // Parse services from offer
   const services: OfferService[] = Array.isArray(offerData?.services) ? offerData.services : []
@@ -136,7 +150,7 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
             description={wizardSubmitted ? t.step4ReviewDesc : t.step4Desc}
             completed={wizardSubmitted}
             active={isOnboarding && !wizardSubmitted}
-            href={isOnboarding && !wizardSubmitted ? '/portal/wizard' : undefined}
+            href={isOnboarding && !wizardSubmitted ? wizardHref : undefined}
           />
         </div>
       </div>
@@ -261,7 +275,7 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
         )}
         {isOnboarding && !wizardSubmitted && (
           <Link
-            href="/portal/wizard"
+            href={wizardHref}
             className="flex items-center gap-3 p-4 bg-white rounded-xl border hover:border-blue-300 hover:shadow-sm transition-all group"
           >
             <div className="h-10 w-10 rounded-lg bg-blue-50 flex items-center justify-center group-hover:bg-blue-100 transition-colors">

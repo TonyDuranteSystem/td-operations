@@ -40,6 +40,9 @@ export const TABLES_WITHOUT_ACCOUNT_ID = new Set(["formation_submissions"])
 /** Tables that HAVE a `tax_year` column. */
 export const TABLES_WITH_TAX_YEAR = new Set(["tax_return_submissions"])
 
+/** Tables that HAVE a `source` column (dev job bc2a8f7f, 2026-09-20). */
+export const TABLES_WITH_SOURCE = new Set(["onboarding_submissions"])
+
 export interface SubmissionRecordInput {
   token: string | null
   contact_id: string | null
@@ -55,6 +58,10 @@ export interface SubmissionRecordInput {
   upload_paths: string[]
   /** Only emitted on tables that have the column AND when non-null. */
   tax_year: number | null
+  /** Only emitted on tables that have the column. 'portal_wizard' marks the
+   * real client portal wizard path vs. NULL for the manual token-link tool
+   * (onboarding_submissions only, dev job bc2a8f7f). */
+  source?: string | null
 }
 
 /**
@@ -100,6 +107,9 @@ export function buildSubmissionRecord(
   }
   if (TABLES_WITH_TAX_YEAR.has(table) && input.tax_year !== null) {
     record.tax_year = input.tax_year
+  }
+  if (TABLES_WITH_SOURCE.has(table)) {
+    record.source = input.source ?? null
   }
 
   return record

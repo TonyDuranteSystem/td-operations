@@ -20,6 +20,22 @@ export interface LeadOwnershipOffer {
   contact_id: string | null
 }
 
+/** Shared ownership check, parameterized by the expected contract_type — see
+ * formationLeadOwned and onboardingLeadOwned below for the public entry points.
+ * Kept internal (not exported) so each contract type still has its own named,
+ * independently-testable function rather than a stringly-typed call site. */
+function leadOwnedForContractType(
+  offer: LeadOwnershipOffer | null,
+  expectedContractType: string,
+  contactId: string | null,
+  ownerEmails: ReadonlySet<string>,
+): boolean {
+  if (!offer || offer.contract_type !== expectedContractType) return false
+  if (offer.contact_id && contactId && offer.contact_id === contactId) return true
+  if (offer.client_email && ownerEmails.has(offer.client_email.toLowerCase())) return true
+  return false
+}
+
 /**
  * True iff the latest offer for the lead proves ownership: it is a formation
  * offer AND (its contact_id is the logged-in contact OR its client_email is one
@@ -31,8 +47,21 @@ export function formationLeadOwned(
   contactId: string | null,
   ownerEmails: ReadonlySet<string>,
 ): boolean {
-  if (!offer || offer.contract_type !== 'formation') return false
-  if (offer.contact_id && contactId && offer.contact_id === contactId) return true
-  if (offer.client_email && ownerEmails.has(offer.client_email.toLowerCase())) return true
-  return false
+  return leadOwnedForContractType(offer, 'formation', contactId, ownerEmails)
+}
+
+/**
+ * Same proof, for an ONBOARDING offer's lead — a returning client bringing a
+ * second, brand-new company (dev job bc2a8f7f, 2026-09-20). The wizard PAGE
+ * gates `?lead=` the same way formation's is gated; the wizard SUBMIT route
+ * must re-prove it here too, for the same reason formation does: a member
+ * could otherwise tamper a lead_id and submit onboarding data tied to
+ * someone else's new-company lead.
+ */
+export function onboardingLeadOwned(
+  offer: LeadOwnershipOffer | null,
+  contactId: string | null,
+  ownerEmails: ReadonlySet<string>,
+): boolean {
+  return leadOwnedForContractType(offer, 'onboarding', contactId, ownerEmails)
 }

@@ -1061,6 +1061,21 @@ export function WizardClient({
             cta: pickText('Message us in chat', 'Vai alla chat'),
             href: '/portal/chat',
           }
+        : wizardType === 'onboarding'
+        ? {
+            // Same rule as formation, worded for onboarding (dev job bc2a8f7f,
+            // 2026-09-20): once staff clicks Confirm, the account-setup chain
+            // is running or already done — the same "isLocked hardcoded to
+            // the wrong wizard's copy" mistake formation already made once
+            // (see comment above this ternary).
+            title: pickText('Your details are with us', 'Dati già inviati'),
+            body: pickText(
+              'We have started setting up your account, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
+              'Abbiamo iniziato a configurare il tuo account, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.',
+            ),
+            cta: pickText('Message us in chat', 'Vai alla chat'),
+            href: '/portal/chat',
+          }
         : {
             title: pickText('Tax information reviewed', 'Informazioni fiscali in elaborazione'),
             body: pickText(

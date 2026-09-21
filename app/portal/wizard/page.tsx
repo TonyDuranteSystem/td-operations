@@ -108,6 +108,18 @@ export default async function WizardPage({
   // ?lead= param from the client.
   let formationLeadId: string | null = null
   let formationEntityType: string | null = null
+  // ── Onboarding-for-a-new-company scope (dev job bc2a8f7f, 2026-09-20) ──
+  // The exact same problem formation already solved above, extended to
+  // onboarding: a RETURNING client (who already owns account(s)) brings a
+  // SECOND, brand-new company via the standard offer → sign → pay → wizard
+  // flow. Before this, onboarding had no equivalent of formationLeadId, so
+  // the account-resolution block below always fell back to one of the
+  // client's EXISTING accounts — meaning the new company's data could get
+  // silently written onto an unrelated, live account (found in QA, never
+  // confirmed to have hit a real client — but the exact mechanism that
+  // already corrupted THW Global LLC for formation, before ITS fix).
+  let onboardingLeadId: string | null = null
+  let onboardingEntityType: string | null = null
   if (effectiveLeadParam) {
     const ownerEmails = new Set<string>()
     if (user.email) ownerEmails.add(user.email.toLowerCase())
@@ -119,13 +131,14 @@ export default async function WizardPage({
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    if (
-      leadOffer?.contract_type === 'formation' &&
-      leadOffer.client_email &&
-      ownerEmails.has(String(leadOffer.client_email).toLowerCase())
-    ) {
+    const emailOwned =
+      leadOffer?.client_email && ownerEmails.has(String(leadOffer.client_email).toLowerCase())
+    if (leadOffer?.contract_type === 'formation' && emailOwned) {
       formationLeadId = effectiveLeadParam
       formationEntityType = (leadOffer.entity_type as string | null) ?? null
+    } else if (leadOffer?.contract_type === 'onboarding' && emailOwned) {
+      onboardingLeadId = effectiveLeadParam
+      onboardingEntityType = (leadOffer.entity_type as string | null) ?? null
     }
   }
 
@@ -143,7 +156,7 @@ export default async function WizardPage({
   // (defensive) no-contact case the prior cookie fallback is kept.
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
   let accountId = contactId ? '' : (cookieAccountId || '')
-  if (contactId && !formationLeadId) {
+  if (contactId && !formationLeadId && !onboardingLeadId) {
     // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
     // found during the MMLLC E2E walk): this page used to pick the first row
     // of a raw, UNORDERED link query — so a two-company client with no cookie
@@ -170,6 +183,11 @@ export default async function WizardPage({
   if (formationLeadId) {
     accountId = ''
   }
+  // Same for a verified onboarding-for-a-new-company lead — never let the
+  // earlier owned-account default (or a stale cookie) leak through here.
+  if (onboardingLeadId) {
+    accountId = ''
+  }
 
   // ── Tax wizard eligibility (PTBT incident, dev job 8cc8e1c8) ──
   // ONE resolver decides "is the tax wizard open, for which year" for every
@@ -183,7 +201,7 @@ export default async function WizardPage({
 
   // Determine wizard type from offer or service deliveries
   let wizardType: WizardType = forcedType || (formationLeadId ? 'formation' : 'onboarding')
-  let entityType = account.entity_type || formationEntityType || 'SMLLC'
+  let entityType = account.entity_type || formationEntityType || onboardingEntityType || 'SMLLC'
   let isItinRenewal = false
 
   // Collect ALL pending wizard types from service deliveries
@@ -198,7 +216,15 @@ export default async function WizardPage({
     labelIt: wizardLabelFor(t, serviceType).it,
   })
 
-  if (!forcedType && !formationLeadId && (accountId || contactId)) {
+  // onboardingLeadId excluded the same way formationLeadId already was (dev
+  // job bc2a8f7f, round-3 QA finding): without this, a verified new-company
+  // onboarding lead reached via a bare ?lead= link (no ?type=, e.g. a hand-
+  // edited URL) could have wizardType silently reassigned away from
+  // 'onboarding' by this SD-derived picker — a landmine reachable today only
+  // by editing the URL (every link this codebase actually generates already
+  // pairs lead= with type=onboarding), closed here at the resolver level
+  // rather than relying on every future caller to remember both params.
+  if (!forcedType && !formationLeadId && !onboardingLeadId && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
     const sdQuery = accountId
       ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
@@ -504,7 +530,22 @@ export default async function WizardPage({
   //                         "recreates the dead end this whole job exists to
   //                         fix, and it would hit returning clients hardest").
   let entityUnresolved = false
-  if (wizardType === 'formation') {
+  // Onboarding for a brand-new second company (dev job bc2a8f7f, 2026-09-20 —
+  // Antonio's direct question: "will the wizard be activated according to the
+  // contract... SMLLC or MMLLC?") gets the EXACT same treatment as formation,
+  // for the EXACT same reason: this is a new company. There is no existing
+  // account to read entity_type from, so without this block onboarding fell
+  // straight through to the hardcoded 'SMLLC' default at :204 regardless of
+  // what the client actually signed and paid for — a returning client with a
+  // signed MULTI-member contract would silently get the single-owner form,
+  // never see the co-owner question, and their real partners would never be
+  // captured. This is the identical Alessandro Della Bianca / Alessandro
+  // Federici defect the block below already fixed for formation, just never
+  // carried over to onboarding's own new-company path. Only applies when
+  // onboardingLeadId is verified (a genuinely new company) — the existing-
+  // company onboarding path is unaffected and correctly keeps reading
+  // entity_type off the real account at :204.
+  if (wizardType === 'formation' || (wizardType === 'onboarding' && onboardingLeadId)) {
     const { resolveEntityTypeForFormation, normalizeEntityCode } = await import(
       '@/lib/portal/entity-type-from-contract'
     )
@@ -519,22 +560,28 @@ export default async function WizardPage({
     // the submission as SMLLC/MMLLC.
     let isCorporation = false
     if (contactId) {
+      // resolveEntityTypeForFormation's own logic (lead/contact → offers →
+      // signed contracts.llc_type) is not actually formation-specific — it
+      // never filters by contract_type — so reusing it here for a verified
+      // onboarding lead is safe and avoids a second, divergent implementation
+      // of the same contract lookup.
       const resolution = await resolveEntityTypeForFormation({
         contactId,
-        leadId: formationLeadId,
+        leadId: formationLeadId || onboardingLeadId,
       })
       code = resolution.wizardCode
       if (resolution.source === 'corporation_manual') {
         isCorporation = true
-        console.warn('[wizard] formation resolved to Corporation — manual handling', resolution.detail)
+        console.warn('[wizard] entity type resolved to Corporation — manual handling', resolution.detail)
       }
     }
 
-    // 2. The offer — what was sold. `formationEntityType` is only populated on
-    //    the ?lead= path (:107-126); every other entry point — the formation
-    //    dashboard button, the services page ?type=formation link, the
-    //    post-payment portal notification, the reminder cron — arrives without
-    //    it, which is why this lookup is repeated here rather than reused.
+    // 2. The offer — what was sold. `formationEntityType`/`onboardingEntityType`
+    //    are only populated on the ?lead= path (:107-141); every other entry
+    //    point — the formation dashboard button, the services page ?type=
+    //    link, the post-payment portal notification, the reminder cron —
+    //    arrives without it, which is why this lookup is repeated here rather
+    //    than reused.
     //
     //    NOTE ON PRECEDENCE: this sits BELOW the signed contract, so editing an
     //    offer does NOT override a contract that already says something else.
@@ -546,10 +593,11 @@ export default async function WizardPage({
       const offerEmails = new Set<string>()
       if (user.email) offerEmails.add(user.email.toLowerCase())
       if (contact.email) offerEmails.add(String(contact.email).toLowerCase())
-      let offerEntity: string | null = normalizeEntityCode(formationEntityType)
+      const prefetchedEntity = wizardType === 'formation' ? formationEntityType : onboardingEntityType
+      let offerEntity: string | null = normalizeEntityCode(prefetchedEntity)
       if (!offerEntity && offerEmails.size > 0) {
         // contract_type is filtered so a newer tax/renewal offer to the same
-        // address cannot answer a question about the formation. status is
+        // address cannot answer a question about this wizard. status is
         // filtered so a superseded draft or an expired offer cannot outrank the
         // live one — the sibling fallback further up this file guards the same
         // way, and duplicated/expired offers are normal in this CRM.
@@ -566,7 +614,7 @@ export default async function WizardPage({
           .from('offers')
           .select('entity_type, created_at')
           .or(emailOr)
-          .eq('contract_type', 'formation')
+          .eq('contract_type', wizardType)
           .in('status', ['sent', 'viewed', 'signed', 'completed'])
           .not('entity_type', 'is', null)
           .order('created_at', { ascending: false })
@@ -590,7 +638,7 @@ export default async function WizardPage({
   // for the precedence + the lead_id-null disambiguation). Building the query
   // dynamically over a union of columns trips TS's type-instantiation depth
   // (TS2589) on the typed builder, so the builder is cast to any.
-  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId, serviceDeliveryId: closureServiceDeliveryId })
+  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId, serviceDeliveryId: closureServiceDeliveryId, onboardingLeadId })
 
   const progressQuery = progressScope
     ? (() => {
@@ -740,6 +788,37 @@ export default async function WizardPage({
     }
   }
 
+  // For submitted ONBOARDING wizards (dev job bc2a8f7f, 2026-09-20): lock once
+  // staff has clicked Confirm on the review-inbox screen (reviewed_at set).
+  // Before that, the submission is just sitting unreviewed — the client
+  // fixing a typo before staff has even looked is harmless and desirable,
+  // same as formation's "editable until we begin work" rule above. After
+  // Confirm, the onboarding_setup job either has already created the
+  // Account/Drive/tasks or is about to — this is EXACTLY the isLocked gap
+  // that already burned formation once (see the comment above: "8 clients
+  // re-ran the setup chain 15 times" before formation got its own lock).
+  //
+  // Scoped as precisely as the current session allows — a contact with
+  // TWO in-flight onboardings (their existing company AND a new second one,
+  // see onboardingLeadId above) must not have one's reviewed state leak
+  // onto the other's lock (round-2 QA finding, 2026-09-20). Prefer the
+  // verified lead (a brand-new company, no account yet), then the resolved
+  // account (an existing company), falling back to contact_id only when
+  // neither is known.
+  if (wizardSubmitStatus === 'submitted' && wizardType === 'onboarding' && contactId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic scope column, same pattern as resolveWizardProgressScope above
+    let subQuery = (supabaseAdmin as any).from('onboarding_submissions').select('reviewed_at')
+    if (onboardingLeadId) {
+      subQuery = subQuery.eq('lead_id', onboardingLeadId)
+    } else if (accountId) {
+      subQuery = subQuery.eq('account_id', accountId)
+    } else {
+      subQuery = subQuery.eq('contact_id', contactId)
+    }
+    const { data: sub } = await subQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
+    isLocked = !!sub?.reviewed_at
+  }
+
   // ── ITIN applicants (dev_task fcf5e254) ──
   // When the formation/onboarding offer bundled ITIN (a start-at-wizard
   // service), the wizard asks the client WHO applies. itinCount = how many
@@ -752,11 +831,16 @@ export default async function WizardPage({
       if (user.email) offerEmails.add(user.email)
       if (contact.email) offerEmails.add(String(contact.email))
       let offerRow: { services: unknown; bundled_pipelines: string[] | null } | null = null
-      if (formationLeadId) {
+      if (formationLeadId || onboardingLeadId) {
+        // Same lead-scoping as the account/progress resolution above (dev job
+        // bc2a8f7f, 2026-09-20 round-3 QA finding): without this, a returning
+        // client with an OLDER unrelated offer (or a second concurrent new-
+        // company onboarding lead bundling a different ITIN count) silently
+        // had the wrong lead's ITIN count applied to the new company's form.
         const { data } = await supabaseAdmin
           .from('offers')
           .select('services, bundled_pipelines')
-          .eq('lead_id', formationLeadId)
+          .eq('lead_id', (formationLeadId || onboardingLeadId) as string)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -1207,7 +1291,7 @@ export default async function WizardPage({
           progressId={progressId}
           accountId={accountId}
           contactId={contactId || ''}
-          leadId={formationLeadId || ''}
+          leadId={formationLeadId || onboardingLeadId || ''}
           locale={locale}
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}

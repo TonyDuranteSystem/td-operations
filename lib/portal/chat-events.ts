@@ -50,6 +50,7 @@ export type ChatEventKind =
   | "financials_attested" // client confirmed their generated P&L / Balance Sheet
   | "lease_signed" // client signed their CMRA lease agreement
   | "formation_wizard_submitted" // client submitted the Company Formation wizard via the portal
+  | "onboarding_wizard_submitted" // client submitted the Client Onboarding data form (existing-LLC clients)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -587,6 +588,35 @@ export async function emitFormationWizardSubmittedEvent(params: {
     message,
     source: { table: "formation_submissions", id: params.formation_submission_id },
     event_kind: "formation_wizard_submitted",
+  })
+}
+
+/**
+ * Onboarding submission notice — Client Onboarding data form (existing-LLC
+ * clients), dev job bc2a8f7f, 2026-09-20. Only emits when a `contact_id` or
+ * `account_id` is already known: a brand-new lead with no prior CRM record
+ * has no portal-chat thread to post into yet (the whole point of this
+ * feature is that the CRM record isn't created until staff review/confirm —
+ * see docs/systems/onboarding.md). For that case the plain task + email
+ * (app/api/onboarding-form-completed/route.ts) remains the only notification
+ * until staff confirm and a real contact/account exists. Callers should
+ * treat a `missing_recipient` result as expected, not an error.
+ */
+export async function emitOnboardingWizardSubmittedEvent(params: {
+  onboarding_submission_id: string
+  contact_id?: string | null
+  account_id?: string | null
+}): Promise<EmitResult> {
+  if (!params.contact_id && !params.account_id) {
+    return { emitted: false, reason: "missing_recipient" }
+  }
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Onboarding",
+    message: "Client submitted their onboarding data form.",
+    source: { table: "onboarding_submissions", id: params.onboarding_submission_id },
+    event_kind: "onboarding_wizard_submitted",
   })
 }
 

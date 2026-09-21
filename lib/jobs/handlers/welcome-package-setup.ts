@@ -65,7 +65,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   // ─── 1. FETCH ACCOUNT ───
   const { data: account, error: accErr } = await supabaseAdmin
     .from("accounts")
-    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status, entity_type, member_structure")
+    .select("id, company_name, ein_number, state_of_formation, formation_date, physical_address, registered_agent_address, registered_agent_provider, drive_folder_id, welcome_package_status, entity_type, member_structure, portal_tier")
     .eq("id", p.account_id)
     .single()
 
@@ -134,12 +134,29 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     let portalExisting = 0
     let portalErrors = 0
 
+    // Formation's EIN-received flow already sets the account to 'active'
+    // BEFORE enqueueing this job (record-ein-received), so hardcoding
+    // "active" here has always just re-confirmed that. But the real
+    // onboarding-wizard flow (context: 'onboarding') deliberately holds the
+    // account at 'onboarding' pending a staff activation step (dev job
+    // bc2a8f7f, 2026-09-20) — this loop force-upgrading every linked
+    // member's tier to "active" here silently defeated that gate the
+    // instant this job ran, seconds after Confirm. Passing the account's
+    // OWN current tier instead of a hardcoded value preserves the existing
+    // formation behavior (already 'active' by this point) while no longer
+    // fighting the onboarding review gate.
+    const { PORTAL_TIERS } = await import("@/lib/portal/tier-config")
+    const memberTier: (typeof PORTAL_TIERS)[number] =
+      account.portal_tier && (PORTAL_TIERS as readonly string[]).includes(account.portal_tier)
+        ? (account.portal_tier as (typeof PORTAL_TIERS)[number])
+        : "active"
+
     for (const link of allLinks ?? []) {
       try {
         const pr = await autoCreatePortalUser({
           accountId: p.account_id,
           contactId: link.contact_id,
-          tier: "active",
+          tier: memberTier,
           autoCreated: true,
         })
         if (pr.success) {

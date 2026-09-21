@@ -263,6 +263,42 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   }
   await updateJobProgress(job.id, result)
 
+  // ─── 0c-gate. STAFF REVIEW GATE (portal wizard submissions only) ───
+  // Antonio, 2026-09-20 (dev job bc2a8f7f): staff must review the client's
+  // submitted data and uploaded documents BEFORE anything gets created —
+  // Account, Contact, Drive folder, tasks, tax return. A submission from
+  // the real client portal wizard (source='portal_wizard') stops here,
+  // completes as a normal job, and does nothing further until a staff
+  // member clicks Confirm on the review-inbox screen — which sets
+  // reviewed_at and re-enqueues a fresh onboarding_setup job (source
+  // cleared) that resumes past this same check. The MCP "Magic Button" /
+  // manual token-link path (source undefined) already went through its own
+  // staff review before this job was ever enqueued (applyOnboardingReview
+  // sets reviewed_at before enqueueing) and is never gated here.
+  if (p.source === "portal_wizard" && p.submission_id) {
+    const { data: subRow, error: subErr } = await supabaseAdmin
+      .from("onboarding_submissions")
+      .select("reviewed_at")
+      .eq("id", p.submission_id)
+      .maybeSingle()
+
+    if (subErr) {
+      result.steps.push(step("staff_review_gate", "error", `Could not check review status: ${subErr.message}`))
+      result.summary = "Blocked: could not verify staff review status"
+      result.ok = false
+      return result
+    }
+
+    if (!subRow?.reviewed_at) {
+      result.steps.push(step("staff_review_gate", "ok", "Awaiting staff review — nothing created yet. Staff: review the submission and click Confirm on the onboarding review screen."))
+      result.summary = "Awaiting staff review — no Account, Contact link, Drive folder, or tasks created yet"
+      result.ok = true
+      return result
+    }
+
+    result.steps.push(step("staff_review_gate", "ok", `Reviewed — resuming setup`))
+  }
+
   // ─── 0c. CREATE ACCOUNT IF NOT PROVIDED ───
   if (!account_id && company_name && contact_id) {
     try {
@@ -1294,13 +1330,32 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // ─── 7. MARK FORM AS REVIEWED ───
   if (p.submission_id) {
     try {
+      // reviewed_at/reviewed_by are the record of WHO actually reviewed this
+      // submission and WHEN — for a portal-wizard row that's the staff
+      // member who clicked Confirm (set before this job resumed, see the
+      // staff review gate above); for the manual token-link path it's the
+      // staff actor applyOnboardingReview already recorded before enqueueing
+      // this job. Never overwrite an existing value here — this step used
+      // to unconditionally stamp `now` + a hardcoded "claude"/"portal_auto",
+      // erasing the real reviewer's identity (the exact cause of a
+      // previously-unexplained "reviewed_by shows claude" anomaly seen
+      // earlier this session). Only fill in a value if one is somehow
+      // still missing (defensive fallback, should not happen post-gate).
+      const { data: currentSub } = await supabaseAdmin
+        .from("onboarding_submissions")
+        .select("reviewed_at, reviewed_by")
+        .eq("id", p.submission_id)
+        .maybeSingle()
+
+      const reviewStamp: Record<string, unknown> = { status: "reviewed" }
+      if (!currentSub?.reviewed_at) {
+        reviewStamp.reviewed_at = now
+        reviewStamp.reviewed_by = p.source === "portal_wizard" ? "portal_auto" : "claude"
+      }
+
       const { error: formErr } = await supabaseAdmin
         .from("onboarding_submissions")
-        .update({
-          status: "reviewed",
-          reviewed_at: now,
-          reviewed_by: p.source === "portal_wizard" ? "portal_auto" : "claude",
-        })
+        .update(reviewStamp)
         .eq("id", p.submission_id)
       if (formErr) {
         result.steps.push(step("form_reviewed", "error", formErr.message))

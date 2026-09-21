@@ -13,6 +13,7 @@ import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
+import { HARBOR } from '@/lib/renewal-links'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -592,6 +593,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         >
           ✍️ Create e-sign document
         </Link>
+        <a
+          href={HARBOR.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-100"
+        >
+          🏛️ Open Harbor Compliance
+        </a>
         {canViewAs && viewAsContactId && <ViewAsClientButton contactId={viewAsContactId} note={viewAsNote} />}
       </div>
       {formationSd && (

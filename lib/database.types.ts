@@ -9059,6 +9059,7 @@ export type Database = {
           reviewed_at: string | null
           reviewed_by: string | null
           sent_at: string | null
+          source: string | null
           state: string
           status: string
           submitted_data: Json | null
@@ -9085,6 +9086,7 @@ export type Database = {
           reviewed_by?: string | null
           sent_at?: string | null
           state?: string
+          source?: string | null
           status?: string
           submitted_data?: Json | null
           token: string
@@ -9111,6 +9113,7 @@ export type Database = {
           sent_at?: string | null
           state?: string
           status?: string
+          source?: string | null
           submitted_data?: Json | null
           token?: string
           updated_at?: string | null

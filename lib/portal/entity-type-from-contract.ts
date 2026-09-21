@@ -170,8 +170,26 @@ export async function resolveEntityTypeForFormation(input: {
       leadIds = (leads ?? []).map(l => l.id)
     }
 
+    // Bug found live, 2026-09-20/21 (dev job bc2a8f7f, extending this
+    // resolver to onboarding): when `input.leadId` is given, this used to
+    // STILL broaden the search with `OR contact_id.eq.X` — directly
+    // contradicting this function's own comment above ("when leadId is known
+    // the lookup is pinned to it"). A client with two signed contracts for
+    // two different new companies (a real, common pattern for onboarding —
+    // a returning client bringing a SECOND existing company later has an
+    // entirely separate signed contract from their first) then hit the
+    // "all signed contracts agree" check below with genuinely DIFFERENT
+    // llc_types across those two unrelated companies, which correctly
+    // refused to resolve — and fell through to the offer-fallback below,
+    // which is ALSO not lead-scoped, and picked up whichever of the
+    // client's other onboarding offers happened to be most recent with a
+    // non-null entity_type — the wrong company's answer. When a specific
+    // lead is known, trust ONLY that lead's own offer(s); the contact-wide
+    // broadening is for the genuinely-unknown-lead case only.
     let offersQuery = supabaseAdmin.from('offers').select('token, lead_id, contact_id')
-    if (leadIds.length > 0) {
+    if (input.leadId) {
+      offersQuery = offersQuery.eq('lead_id', input.leadId)
+    } else if (leadIds.length > 0) {
       offersQuery = offersQuery.or(
         `lead_id.in.(${leadIds.join(',')}),contact_id.eq.${input.contactId}`
       )

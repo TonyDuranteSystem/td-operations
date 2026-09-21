@@ -32,7 +32,7 @@ import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
-import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, onboardingLeadOwned } from '@/lib/portal/formation-lead-access'
 import {
   resolveTaxWizardEligibility,
   CLOSED_REASON_COPY,
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
   // client who reached the formation wizard via any link that dropped the
   // ?lead= scope submitted their new company onto their EXISTING account —
   // the THW Global hijack (Adam Mihaly, 2026-05-20, dev_task 358e8cbe).
-  const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
+  let account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
 
   // ─── 0a. ISOLATION GUARD (default-deny) ───
   // The logged-in user must be allowed to submit for this subject. Without this
@@ -115,6 +115,44 @@ export async function POST(req: NextRequest) {
     if (!formationLeadOwned(leadOffer, ctcId, ownerEmails)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
+  }
+
+  // ─── 0b2. ONBOARDING-FOR-A-NEW-COMPANY LEAD (default-deny + hijack backstop) ───
+  // Same proof as formation's block above, for a returning client bringing a
+  // SECOND, brand-new company (dev job bc2a8f7f, 2026-09-20). The wizard PAGE
+  // gates this the same way and forces account_id blank client-side — but a
+  // member could tamper the posted account_id back in, or reach this route
+  // without going through the page's gate at all. Re-prove the lead here and,
+  // once verified, force account_id null server-side too: the same "never
+  // trust a client-carried account_id for a brand-new company" backstop that
+  // already protects formation (the THW Global hijack, dev_task 358e8cbe),
+  // now closing the equivalent gap for onboarding.
+  if (lead_id && wizard_type === 'onboarding') {
+    const ctcId = identity.kind === 'contact' ? identity.contactId : null
+    const ownerEmails = new Set<string>()
+    if (user.email) ownerEmails.add(user.email.toLowerCase())
+    if (ctcId) {
+      const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
+      if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
+    }
+    const { data: leadOffer } = await supabaseAdmin
+      .from('offers')
+      .select('client_email, contract_type, contact_id')
+      .eq('lead_id', lead_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!onboardingLeadOwned(leadOffer, ctcId, ownerEmails)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+    // This reassignment MUST run after 0a's canSubmitWizard check (which
+    // authorized whatever account_id the client sent) and BEFORE every
+    // downstream use of `account_id` in this file (tax eligibility, banking
+    // gates, the submission-table write, the job payload — all read this
+    // `let` variable, never the raw client value). Moving this earlier or
+    // later, or introducing a new code path that reads `rawAccountId`
+    // directly, would reopen the hijack this block exists to close.
+    account_id = null
   }
 
   // ─── 0b2. CLOSURE SUBJECT RE-VERIFICATION (dev job fbbf4abe) ───
@@ -436,6 +474,11 @@ export async function POST(req: NextRequest) {
           submitted_data: data,
           upload_paths: uploadPaths,
           tax_year: taxYear,
+          // Marks this row as the real client portal wizard path so the
+          // staff review-inbox and the onboarding_setup job's review gate
+          // can tell it apart from the separate manual token-link tool
+          // (dev job bc2a8f7f).
+          source: wizard_type === 'onboarding' ? 'portal_wizard' : null,
         })
 
         // Never undo a completed review. The upsert keys on `token`, and a
