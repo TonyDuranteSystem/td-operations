@@ -14,28 +14,10 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { buildFolderPathMap } from "@/lib/crm-storage/folder-path"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-
-async function buildFolderPathMap(): Promise<Map<string, string>> {
-  const { data: folders } = await db.from("crm_storage_folders").select("id, parent_id, name").is("deleted_at", null)
-  const byId = new Map<string, { parent_id: string | null; name: string }>()
-  for (const row of folders ?? []) byId.set(row.id, { parent_id: row.parent_id, name: row.name })
-
-  const pathCache = new Map<string, string>()
-  function pathFor(id: string): string {
-    if (pathCache.has(id)) return pathCache.get(id)!
-    const node = byId.get(id)
-    if (!node) return ""
-    const parentPath = node.parent_id ? pathFor(node.parent_id) : ""
-    const full = parentPath ? `${parentPath} / ${node.name}` : node.name
-    pathCache.set(id, full)
-    return full
-  }
-  for (const id of Array.from(byId.keys())) pathFor(id)
-  return pathCache
-}
 
 export async function GET(req: NextRequest) {
   const denied = await requireStaffRoute()
@@ -45,7 +27,7 @@ export async function GET(req: NextRequest) {
   const type = req.nextUrl.searchParams.get("type") || "all"
   if (!q) return NextResponse.json({ folders: [], files: [] })
 
-  const folderPaths = await buildFolderPathMap()
+  const folderPaths = await buildFolderPathMap(db)
 
   const [foldersResult, filesResult] = await Promise.all([
     type === "files"

@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { createClient } from "@/lib/supabase/server"
+import { buildFolderPathMap } from "@/lib/crm-storage/folder-path"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -46,7 +47,36 @@ export async function GET() {
     .select("id, folder_id, file_id")
     .eq("user_id", userId)
   if (error) return NextResponse.json({ error: "Failed to load favorites" }, { status: 500 })
-  return NextResponse.json({ favorites: data ?? [] })
+
+  const rows = data ?? []
+  const folderIds = rows.filter((r: { folder_id: string | null }) => r.folder_id).map((r: { folder_id: string }) => r.folder_id)
+  const fileIds = rows.filter((r: { file_id: string | null }) => r.file_id).map((r: { file_id: string }) => r.file_id)
+
+  const [folderPaths, foldersResult, filesResult] = await Promise.all([
+    buildFolderPathMap(db),
+    folderIds.length
+      ? db.from("crm_storage_folders").select("id, parent_id, name").in("id", folderIds).is("deleted_at", null)
+      : Promise.resolve({ data: [] }),
+    fileIds.length
+      ? db.from("crm_storage_files").select("id, folder_id, file_name, mime_type, file_size").in("id", fileIds).is("deleted_at", null)
+      : Promise.resolve({ data: [] }),
+  ])
+
+  const folders = (foldersResult.data ?? []).map((f: { id: string; parent_id: string | null; name: string }) => ({
+    id: f.id,
+    name: f.name,
+    path: f.parent_id ? folderPaths.get(f.parent_id) ?? "" : "",
+  }))
+  const files = (filesResult.data ?? []).map((f: { id: string; folder_id: string | null; file_name: string; mime_type: string | null; file_size: number | null }) => ({
+    id: f.id,
+    file_name: f.file_name,
+    mime_type: f.mime_type,
+    file_size: f.file_size,
+    folder_id: f.folder_id,
+    path: f.folder_id ? folderPaths.get(f.folder_id) ?? "" : "",
+  }))
+
+  return NextResponse.json({ favorites: rows, folders, files })
 }
 
 export async function POST(req: NextRequest) {

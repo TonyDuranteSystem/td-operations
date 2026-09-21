@@ -73,6 +73,8 @@ export function StorageBrowserClient() {
   const [newFolderName, setNewFolderName] = useState('')
   const [favFolders, setFavFolders] = useState<Set<string>>(new Set())
   const [favFiles, setFavFiles] = useState<Set<string>>(new Set())
+  const [favoritesList, setFavoritesList] = useState<{ folders: (FolderRow & { path: string })[]; files: (FileRow & { path: string })[] } | null>(null)
+  const [showingFavorites, setShowingFavorites] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<{ folders: (FolderRow & { path: string })[]; files: (FileRow & { path: string })[] } | null>(null)
   const [movePicker, setMovePicker] = useState<{ folderIds: string[]; fileIds: string[] } | null>(null)
@@ -113,6 +115,7 @@ export function StorageBrowserClient() {
       }
       setFavFolders(folders)
       setFavFiles(files)
+      setFavoritesList({ folders: body.folders ?? [], files: body.files ?? [] })
     } catch {
       // Favorites are a convenience layer — a failed load shouldn't block browsing.
     }
@@ -120,6 +123,17 @@ export function StorageBrowserClient() {
 
   useEffect(() => { loadTree(); loadFavorites() }, [loadTree, loadFavorites])
   useEffect(() => { loadContents(selectedFolderId) }, [selectedFolderId, loadContents])
+  useEffect(() => { setShowingFavorites(false) }, [selectedFolderId])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      setContextMenu(null)
+      setMovePicker(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string, FolderNode[]>()
@@ -390,7 +404,14 @@ export function StorageBrowserClient() {
         }}
       >
         <div
-          className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded cursor-pointer ${selectedFolderId === null ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'}`}
+          className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded cursor-pointer ${showingFavorites ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'}`}
+          onClick={() => { setShowingFavorites(true); setSearchResults(null); setSearchQuery('') }}
+        >
+          <span aria-hidden>★</span>
+          <span>Favorites</span>
+        </div>
+        <div
+          className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded cursor-pointer ${selectedFolderId === null && !showingFavorites ? 'bg-blue-100 text-blue-900' : 'hover:bg-gray-100'}`}
           onClick={() => setSelectedFolderId(null)}
         >
           <span aria-hidden>🗄️</span>
@@ -403,13 +424,19 @@ export function StorageBrowserClient() {
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
           <div className="flex items-center gap-1 text-sm text-gray-600 min-w-0">
-            <button type="button" className="hover:text-blue-600 hover:underline shrink-0" onClick={() => setSelectedFolderId(null)}>Storage</button>
-            {breadcrumbs.map(node => (
-              <span key={node.id} className="flex items-center gap-1 min-w-0">
-                <span className="text-gray-300">/</span>
-                <button type="button" className="hover:text-blue-600 hover:underline truncate" onClick={() => setSelectedFolderId(node.id)}>{node.name}</button>
-              </span>
-            ))}
+            {showingFavorites ? (
+              <span className="font-medium text-gray-900 flex items-center gap-1"><span aria-hidden>★</span> Favorites</span>
+            ) : (
+              <>
+                <button type="button" className="hover:text-blue-600 hover:underline shrink-0" onClick={() => setSelectedFolderId(null)}>Storage</button>
+                {breadcrumbs.map(node => (
+                  <span key={node.id} className="flex items-center gap-1 min-w-0">
+                    <span className="text-gray-300">/</span>
+                    <button type="button" className="hover:text-blue-600 hover:underline truncate" onClick={() => setSelectedFolderId(node.id)}>{node.name}</button>
+                  </span>
+                ))}
+              </>
+            )}
           </div>
           <div className="flex-1" />
           <input
@@ -419,17 +446,21 @@ export function StorageBrowserClient() {
             value={searchQuery}
             onChange={e => runSearch(e.target.value)}
           />
-          <button type="button" className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50" onClick={() => setNewFolderOpen(s => !s)}>
-            New folder
-          </button>
-          <button
-            type="button"
-            className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {uploading ? 'Uploading…' : 'Upload file'}
-          </button>
+          {!showingFavorites && (
+            <>
+              <button type="button" className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50" onClick={() => setNewFolderOpen(s => !s)}>
+                New folder
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploading ? 'Uploading…' : 'Upload file'}
+              </button>
+            </>
+          )}
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleUpload(e.target.files)} />
         </div>
 
@@ -471,7 +502,31 @@ export function StorageBrowserClient() {
             if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleUpload(e.dataTransfer.files)
           }}
         >
-          {searchResults ? (
+          {showingFavorites ? (
+            <div className="divide-y divide-gray-100">
+              {(!favoritesList || (favoritesList.folders.length === 0 && favoritesList.files.length === 0)) && (
+                <div className="text-sm text-gray-400 py-12 text-center">
+                  Nothing starred yet. Click the ☆ next to a folder or file to pin it here.
+                </div>
+              )}
+              {favoritesList?.folders.map(f => (
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => setSelectedFolderId(f.id)}>
+                  <span aria-hidden>★</span>
+                  <span aria-hidden>📁</span>
+                  <span className="flex-1 min-w-0 truncate text-sm">{f.name}</span>
+                  <span className="text-xs text-gray-400 truncate max-w-[40%]">{f.path}</span>
+                </button>
+              ))}
+              {favoritesList?.files.map(f => (
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => handleDownload(f.id, f.file_name)}>
+                  <span aria-hidden>★</span>
+                  <span aria-hidden>📄</span>
+                  <span className="flex-1 min-w-0 truncate text-sm">{f.file_name}</span>
+                  <span className="text-xs text-gray-400 truncate max-w-[40%]">{f.path}</span>
+                </button>
+              ))}
+            </div>
+          ) : searchResults ? (
             <div className="divide-y divide-gray-100">
               <div className="px-4 py-2 text-xs text-gray-500 bg-gray-50">Search results for &quot;{searchQuery}&quot;</div>
               {searchResults.folders.length === 0 && searchResults.files.length === 0 && (
@@ -499,6 +554,26 @@ export function StorageBrowserClient() {
               {(!contents || (contents.subfolders.length === 0 && contents.files.length === 0)) && (
                 <div className="text-sm text-gray-400 py-12 text-center">
                   This folder is empty. Drag files here, or use Upload file.
+                </div>
+              )}
+              {contents && (contents.subfolders.length > 0 || contents.files.length > 0) && (
+                <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-50 text-xs text-gray-500">
+                  <input
+                    type="checkbox"
+                    checked={selectedItems.size > 0 && selectedItems.size === contents.subfolders.length + contents.files.length}
+                    onChange={e => {
+                      if (e.target.checked) {
+                        const all = new Set<SelectedKey>([
+                          ...contents.subfolders.map(f => `folder:${f.id}` as SelectedKey),
+                          ...contents.files.map(f => `file:${f.id}` as SelectedKey),
+                        ])
+                        setSelectedItems(all)
+                      } else {
+                        setSelectedItems(new Set())
+                      }
+                    }}
+                  />
+                  <span>Select all</span>
                 </div>
               )}
               {contents?.subfolders.map(folder => {
