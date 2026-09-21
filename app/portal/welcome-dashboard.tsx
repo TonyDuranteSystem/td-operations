@@ -45,9 +45,18 @@ interface WelcomeDashboardProps {
    *  Flips step 4 ("Complete Setup") from an active link into a passive
    *  "Data submitted — under review" state (Tier Model B, SOP v7.2). */
   wizardSubmitted?: boolean
+  /** True once a staff member has reviewed and confirmed the onboarding
+   *  submission (`onboarding_submissions.status = 'reviewed'`). Distinct from
+   *  `wizardSubmitted`, which stays true both before AND after review — under
+   *  Tier Model B the portal tier does NOT flip to active on review, so tier
+   *  alone can't tell the client review is done. Without this, the "Under
+   *  Review" banner and step label kept showing minutes after staff had
+   *  already confirmed, contradicting the welcome message the client got in
+   *  chat at the same moment (dev job bc2a8f7f, found live 2026-09-21). */
+  wizardReviewed?: boolean
 }
 
-export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted = false }: WelcomeDashboardProps) {
+export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted = false, wizardReviewed = false }: WelcomeDashboardProps) {
   const isLead = tier === 'lead'
   const isFormation = tier === 'formation'
   const isOnboarding = tier === 'onboarding' || isFormation
@@ -82,6 +91,10 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
     step4ReviewDesc: translate('welcomeDash.step4ReviewDesc'),
     underReviewTitle: translate('welcomeDash.underReviewTitle'),
     underReviewBody: translate('welcomeDash.underReviewBody'),
+    step4Reviewed: translate('welcomeDash.step4Reviewed'),
+    step4ReviewedDesc: translate('welcomeDash.step4ReviewedDesc'),
+    reviewedTitle: translate('welcomeDash.reviewedTitle'),
+    reviewedBody: translate('welcomeDash.reviewedBody'),
     servicesPurchased: translate('welcomeDash.servicesPurchased'),
     viewProposal: translate('welcomeDash.viewProposal'),
     viewProposalDesc: translate('welcomeDash.viewProposalDesc'),
@@ -145,9 +158,9 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
             href={isSigned && !isPaid ? '/portal/offer' : undefined}
           />
           <ProgressStep
-            icon={wizardSubmitted ? Clock : PenSquare}
-            label={wizardSubmitted ? t.step4Review : t.step4}
-            description={wizardSubmitted ? t.step4ReviewDesc : t.step4Desc}
+            icon={wizardReviewed ? CheckCircle : wizardSubmitted ? Clock : PenSquare}
+            label={wizardReviewed ? t.step4Reviewed : wizardSubmitted ? t.step4Review : t.step4}
+            description={wizardReviewed ? t.step4ReviewedDesc : wizardSubmitted ? t.step4ReviewDesc : t.step4Desc}
             completed={wizardSubmitted}
             active={isOnboarding && !wizardSubmitted}
             href={isOnboarding && !wizardSubmitted ? wizardHref : undefined}
@@ -155,18 +168,25 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
         </div>
       </div>
 
-      {/* Under-review banner — shown when wizard is submitted but tier hasn't been
-          promoted to active yet. Tells the client their data is in Antonio's
-          review queue instead of a misleading "Complete Setup" link. */}
+      {/* Under-review / reviewed banner. wizardSubmitted stays true both
+          before AND after staff review (Tier Model B doesn't flip the portal
+          tier on review), so wizardReviewed is the only thing that tells this
+          apart — without it the client kept seeing "Under Review" minutes
+          after staff had already confirmed (dev job bc2a8f7f, found live
+          2026-09-21). */}
       {wizardSubmitted && isOnboarding && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 flex items-start gap-3">
-          <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+        <div className={wizardReviewed ? "bg-green-50 border border-green-200 rounded-xl p-5 flex items-start gap-3" : "bg-blue-50 border border-blue-200 rounded-xl p-5 flex items-start gap-3"}>
+          {wizardReviewed ? (
+            <CheckCircle className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
+          ) : (
+            <Clock className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+          )}
           <div>
-            <p className="font-semibold text-blue-900">
-              {t.underReviewTitle}
+            <p className={wizardReviewed ? "font-semibold text-green-900" : "font-semibold text-blue-900"}>
+              {wizardReviewed ? t.reviewedTitle : t.underReviewTitle}
             </p>
-            <p className="text-sm text-blue-700 mt-0.5">
-              {t.underReviewBody}
+            <p className={wizardReviewed ? "text-sm text-green-700 mt-0.5" : "text-sm text-blue-700 mt-0.5"}>
+              {wizardReviewed ? t.reviewedBody : t.underReviewBody}
             </p>
           </div>
         </div>

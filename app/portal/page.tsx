@@ -415,6 +415,24 @@ export default async function PortalDashboardPage() {
       }
     }
 
+    // Has staff actually reviewed the submission yet? wizardSubmitted above
+    // is true for BOTH 'completed' (awaiting review) and 'reviewed' statuses,
+    // and the portal tier stays 'onboarding' either way (Tier Model B), so
+    // neither signal alone told the client review had already happened — the
+    // dashboard kept showing "Under Review" minutes after staff confirmed
+    // (dev job bc2a8f7f, found live 2026-09-21).
+    let wizardReviewed = false
+    if (contactId) {
+      const { data: reviewedOs } = await supabaseAdmin
+        .from('onboarding_submissions')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('status', 'reviewed')
+        .limit(1)
+        .maybeSingle()
+      wizardReviewed = !!reviewedOs
+    }
+
     // Pending actions for clients who have a portal account but no active
     // account yet (e.g. onboarding tier waiting for wizard review). Uses the
     // contact-scoped helper because the regular getPortalActionItems requires
@@ -474,6 +492,7 @@ export default async function PortalDashboardPage() {
           firstName={firstName}
           offerData={offerData}
           wizardSubmitted={wizardSubmitted}
+          wizardReviewed={wizardReviewed}
         />
       </>
     )
@@ -655,6 +674,20 @@ export default async function PortalDashboardPage() {
       }
     }
 
+    // Has staff actually reviewed the submission yet? See the matching block
+    // above for why wizardSubmitted alone can't tell (dev job bc2a8f7f).
+    let wizardReviewed = false
+    if (contactId) {
+      const { data: reviewedOs } = await supabaseAdmin
+        .from('onboarding_submissions')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('status', 'reviewed')
+        .limit(1)
+        .maybeSingle()
+      wizardReviewed = !!reviewedOs
+    }
+
     // Pending actions (signatures, invoices, wizards) for pre-active tier clients.
     // Rendered above the WelcomeDashboard when non-empty so items like a pending
     // SS-4 surface on the home page instead of being stranded behind the
@@ -673,6 +706,7 @@ export default async function PortalDashboardPage() {
           firstName={firstName}
           offerData={offerData}
           wizardSubmitted={wizardSubmitted}
+          wizardReviewed={wizardReviewed}
         />
       </>
     )
