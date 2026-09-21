@@ -73,6 +73,7 @@ export function StorageBrowserClient() {
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [favFolders, setFavFolders] = useState<Set<string>>(new Set())
+  const [togglingFavorites, setTogglingFavorites] = useState<Set<string>>(new Set())
   const [favFiles, setFavFiles] = useState<Set<string>>(new Set())
   const [favoritesList, setFavoritesList] = useState<{ folders: (FolderRow & { path: string })[]; files: (FileRow & { path: string })[] } | null>(null)
   const [showingFavorites, setShowingFavorites] = useState(false)
@@ -241,10 +242,16 @@ export function StorageBrowserClient() {
   async function handleDownload(id: string, fileName: string) {
     try {
       const body = await jsonOrThrow(await fetch(`/api/crm-storage/files/${id}/download`))
+      // The link now forces a real download itself (the server sets
+      // Content-Disposition), so this doesn't need to open a new tab —
+      // and shouldn't: a new tab left the person with a blank/empty tab
+      // behind after the file saved, and it's what made downloading
+      // several files in a row silently drop everything after the first
+      // (a browser only allows one script-opened tab per click; each
+      // later one in a loop gets blocked with no error).
       const a = document.createElement('a')
       a.href = body.url
       a.download = fileName
-      a.target = '_blank'
       a.click()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Download failed')
@@ -294,6 +301,13 @@ export function StorageBrowserClient() {
   }
 
   async function toggleFavorite(kind: 'folder' | 'file', id: string) {
+    // A second rapid click before the first request finishes was racing
+    // the same star against itself — both requests would read "not
+    // starred yet" from the same stale state, the second would hit the
+    // database's own duplicate guard, and the person would see a false
+    // "failed to star" error for a star that actually succeeded.
+    if (togglingFavorites.has(id)) return
+    setTogglingFavorites(prev => new Set(prev).add(id))
     const isFav = kind === 'folder' ? favFolders.has(id) : favFiles.has(id)
     try {
       await jsonOrThrow(await fetch('/api/crm-storage/favorites', {
@@ -304,22 +318,48 @@ export function StorageBrowserClient() {
       await loadFavorites()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update favorite')
+    } finally {
+      setTogglingFavorites(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
   async function moveItemsTo(targetFolderId: string | null, folderIds: string[], fileIds: string[]) {
-    try {
-      await Promise.all([
-        ...folderIds.map(id => jsonOrThrow(fetch(`/api/crm-storage/folders/${id}`, {
+    // Each item is moved independently — Promise.all would reject on the
+    // FIRST failure (e.g. one name collision at the destination) while the
+    // other requests it already fired keep running to completion in the
+    // background. That left people told "move failed" when most of what
+    // they selected had, in fact, already moved.
+    const failures: string[] = []
+    for (const id of folderIds) {
+      try {
+        await jsonOrThrow(fetch(`/api/crm-storage/folders/${id}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: targetFolderId }),
-        }))),
-        ...fileIds.map(id => jsonOrThrow(fetch(`/api/crm-storage/files/${id}`, {
+        }))
+      } catch (err) {
+        const name = tree.find(n => n.id === id)?.name ?? id
+        failures.push(`${name}: ${err instanceof Error ? err.message : 'move failed'}`)
+      }
+    }
+    for (const id of fileIds) {
+      try {
+        await jsonOrThrow(fetch(`/api/crm-storage/files/${id}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder_id: targetFolderId }),
-        }))),
-      ])
-      await refreshAfterChange()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Move failed')
+        }))
+      } catch (err) {
+        const name = contents?.files.find(f => f.id === id)?.file_name ?? id
+        failures.push(`${name}: ${err instanceof Error ? err.message : 'move failed'}`)
+      }
+    }
+    await refreshAfterChange()
+    if (failures.length > 0) {
+      const total = folderIds.length + fileIds.length
+      const succeeded = total - failures.length
+      const prefix = succeeded > 0 ? `${succeeded} of ${total} moved. ` : ''
+      setError(`${prefix}${failures.join('; ')}`)
     }
   }
 
@@ -359,14 +399,34 @@ export function StorageBrowserClient() {
     const { folderIds, fileIds } = selectedIds()
     if (folderIds.length === 0 && fileIds.length === 0) return
     if (!confirm(`Delete ${folderIds.length + fileIds.length} selected item(s)? This can't be undone.`)) return
-    try {
-      await Promise.all([
-        ...folderIds.map(id => jsonOrThrow(fetch(`/api/crm-storage/folders/${id}`, { method: 'DELETE' }))),
-        ...fileIds.map(id => jsonOrThrow(fetch(`/api/crm-storage/files/${id}`, { method: 'DELETE' }))),
-      ])
-      await refreshAfterChange()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Bulk delete failed')
+
+    // Same reasoning as moveItemsTo: report exactly what happened, not an
+    // all-or-nothing verdict that can be wrong the moment two people (or
+    // two tabs) touch the same item — e.g. someone else already deleted
+    // one of the selected items a moment earlier.
+    const failures: string[] = []
+    for (const id of folderIds) {
+      try {
+        await jsonOrThrow(fetch(`/api/crm-storage/folders/${id}`, { method: 'DELETE' }))
+      } catch (err) {
+        const name = tree.find(n => n.id === id)?.name ?? id
+        failures.push(`${name}: ${err instanceof Error ? err.message : 'delete failed'}`)
+      }
+    }
+    for (const id of fileIds) {
+      try {
+        await jsonOrThrow(fetch(`/api/crm-storage/files/${id}`, { method: 'DELETE' }))
+      } catch (err) {
+        const name = contents?.files.find(f => f.id === id)?.file_name ?? id
+        failures.push(`${name}: ${err instanceof Error ? err.message : 'delete failed'}`)
+      }
+    }
+    await refreshAfterChange()
+    if (failures.length > 0) {
+      const total = folderIds.length + fileIds.length
+      const succeeded = total - failures.length
+      const prefix = succeeded > 0 ? `${succeeded} of ${total} deleted. ` : ''
+      setError(`${prefix}${failures.join('; ')}`)
     }
   }
 

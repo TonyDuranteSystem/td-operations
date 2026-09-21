@@ -19,6 +19,15 @@ import { buildFolderPathMap } from "@/lib/crm-storage/folder-path"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
+// ILIKE treats %, _, and \ as pattern-control characters, not literal
+// text. Without escaping them, searching for a name that happens to
+// contain a percent sign or underscore silently returns unrelated
+// results (a bare "%" matches EVERYTHING) instead of what was actually
+// typed — wrong, and with no indication anything unusual happened.
+function escapeIlikePattern(input: string): string {
+  return input.replace(/[\\%_]/g, char => `\\${char}`)
+}
+
 export async function GET(req: NextRequest) {
   const denied = await requireStaffRoute()
   if (denied) return denied
@@ -27,15 +36,16 @@ export async function GET(req: NextRequest) {
   const type = req.nextUrl.searchParams.get("type") || "all"
   if (!q) return NextResponse.json({ folders: [], files: [] })
 
+  const pattern = `%${escapeIlikePattern(q)}%`
   const folderPaths = await buildFolderPathMap(db)
 
   const [foldersResult, filesResult] = await Promise.all([
     type === "files"
       ? Promise.resolve({ data: [] })
-      : db.from("crm_storage_folders").select("id, parent_id, name").is("deleted_at", null).ilike("name", `%${q}%`).limit(50),
+      : db.from("crm_storage_folders").select("id, parent_id, name").is("deleted_at", null).ilike("name", pattern).limit(50),
     type === "folders"
       ? Promise.resolve({ data: [] })
-      : db.from("crm_storage_files").select("id, folder_id, file_name, mime_type, file_size").is("deleted_at", null).ilike("file_name", `%${q}%`).limit(50),
+      : db.from("crm_storage_files").select("id, folder_id, file_name, mime_type, file_size").is("deleted_at", null).ilike("file_name", pattern).limit(50),
   ])
 
   const folders = (foldersResult.data ?? []).map((f: { id: string; parent_id: string | null; name: string }) => ({

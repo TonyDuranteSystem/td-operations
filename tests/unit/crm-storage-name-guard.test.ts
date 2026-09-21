@@ -50,4 +50,37 @@ describe("validateStorageName", () => {
     const name = "a".repeat(255)
     expect(validateStorageName(name)).toEqual({ error: null, name })
   })
+
+  it("accepts unicode and emoji in a name", () => {
+    expect(validateStorageName("📁 Clients 日本語")).toEqual({ error: null, name: "📁 Clients 日本語" })
+  })
+
+  it("rejects a name made up of only a zero-width space", () => {
+    expect(validateStorageName("​").error).toBeTruthy()
+  })
+
+  it("rejects a name made up of only zero-width and invisible characters", () => {
+    expect(validateStorageName("​‌﻿").error).toBeTruthy()
+  })
+
+  it("accepts a visible name with a stray zero-width character mixed in", () => {
+    const result = validateStorageName("Tax​ Returns")
+    expect(result.error).toBeNull()
+  })
+
+  it("rejects a newline in the name", () => {
+    expect(validateStorageName("line1\nline2").error).toBeTruthy()
+  })
+
+  it("rejects a tab in the name", () => {
+    expect(validateStorageName("a\tb").error).toBeTruthy()
+  })
+
+  it("rejects a carriage return in the name", () => {
+    expect(validateStorageName("a\rb").error).toBeTruthy()
+  })
+
+  it("accepts a percent sign in the name", () => {
+    expect(validateStorageName("50% Complete")).toEqual({ error: null, name: "50% Complete" })
+  })
 })
