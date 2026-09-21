@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { createClient } from '@/lib/supabase/client'
+import { CRM_STORAGE_BUCKET } from '@/lib/crm-storage/constants'
 
 interface FolderNode {
   id: string
@@ -64,6 +66,7 @@ export function StorageBrowserClient() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{ fileName: string; percent: number } | null>(null)
   const [dragOverContent, setDragOverContent] = useState(false)
   const [dragOverTreeId, setDragOverTreeId] = useState<string | null>(null)
   const [selectedItems, setSelectedItems] = useState<Set<SelectedKey>>(new Set())
@@ -191,16 +194,48 @@ export function StorageBrowserClient() {
     if (!files || files.length === 0) return
     setUploading(true)
     setError(null)
-    // Each file is uploaded independently — one bad file (e.g. a name that
-    // already exists) must not silently abandon the rest of the batch, and
-    // the person needs to know exactly which ones failed and why.
+    // Every file — not just large ones — goes straight from the browser
+    // into storage now, the same way the portal wizard already handles
+    // big uploads: no size ceiling, real progress, and an interrupted
+    // upload can resume instead of starting over. One consistent path is
+    // simpler than two (a small-file path and a separate large-file one)
+    // and costs nothing for an ordinary small file.
     const failures: string[] = []
     for (const file of Array.from(files)) {
+      setUploadProgress({ fileName: file.name, percent: 0 })
       try {
-        const form = new FormData()
-        form.append('file', file)
-        if (selectedFolderId) form.append('folder_id', selectedFolderId)
-        await jsonOrThrow(await fetch('/api/crm-storage/files', { method: 'POST', body: form }))
+        const mint = await jsonOrThrow(await fetch('/api/crm-storage/files/mint-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_name: file.name, folder_id: selectedFolderId }),
+        }))
+
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session?.access_token) throw new Error('Not signed in')
+
+        const { uploadResumable } = await import('@/lib/portal/resumable-upload')
+        await uploadResumable({
+          supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          accessToken: session.access_token,
+          bucket: CRM_STORAGE_BUCKET,
+          path: mint.path,
+          file,
+          onProgress: percent => setUploadProgress({ fileName: file.name, percent }),
+        })
+
+        await jsonOrThrow(await fetch('/api/crm-storage/files/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storage_path: mint.path,
+            file_name: mint.file_name,
+            folder_id: selectedFolderId,
+            file_size: file.size,
+            mime_type: file.type || null,
+          }),
+        }))
       } catch (err) {
         failures.push(`${file.name}: ${err instanceof Error ? err.message : 'upload failed'}`)
       }
@@ -215,6 +250,7 @@ export function StorageBrowserClient() {
       setError(`${prefix}${failures.join('; ')}`)
     }
     setUploading(false)
+    setUploadProgress(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -552,12 +588,18 @@ export function StorageBrowserClient() {
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
               >
-                {uploading ? 'Uploading…' : 'Upload file'}
+                {uploadProgress ? `Uploading ${uploadProgress.percent}%…` : 'Upload file'}
               </button>
             </>
           )}
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleUpload(e.target.files)} />
         </div>
+
+        {uploadProgress && (
+          <div className="px-4 py-2 border-b border-gray-200 bg-blue-50 text-sm text-blue-900">
+            Uploading &quot;{uploadProgress.fileName}&quot; — {uploadProgress.percent}%
+          </div>
+        )}
 
         {newFolderOpen && (
           <div className="flex gap-2 px-4 py-2 border-b border-gray-200 bg-gray-50">
