@@ -9,10 +9,23 @@
  *
  * Requires the RA receipt (Antonio, follow-up same day: "once we open HC
  * and do the switch, we have to upload the RA receipt and confirm the
- * switch") — the receipt is uploaded to the account's real Drive folder
- * BEFORE the stage advances, same "proof lives with the record" pattern as
- * the RA-renewal file-and-upload flow (components/calendar/mark-filed-dialog.tsx),
- * just for the one-time initial switch rather than the annual renewal.
+ * switch") — the receipt is stored in Supabase Storage FIRST (the same
+ * durable bucket the client's own wizard uploads already use, confirmed
+ * working) BEFORE the stage advances, same "proof lives with the record"
+ * principle as the RA-renewal file-and-upload flow
+ * (components/calendar/mark-filed-dialog.tsx), just for the one-time
+ * initial switch rather than the annual renewal.
+ *
+ * Copying that same receipt into the account's Google Drive folder is
+ * BEST-EFFORT, not required (dev job 7535a166, 2026-09-22: Drive folder
+ * creation is currently failing for every new onboarding account in
+ * sandbox, a pre-existing bug in the shared Drive-folder helper, not
+ * something this route introduced or can fix by itself — confirmed via
+ * the job logs of multiple real accounts, including Antonio's own SAD LLC
+ * test). The switch must never get stuck on Drive being broken: the
+ * receipt is never lost (it's always in Storage), and the response says
+ * plainly whether it also made it to Drive so staff know if a manual
+ * Drive filing is still needed.
  *
  * Also stamps accounts.ra_switch_date and accounts.client_since (Antonio,
  * same follow-up: "I want the Client since and RA switch date so the crm
@@ -99,37 +112,48 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: true, message: 'Already confirmed — Registered Agent switch was already recorded.' })
     }
 
-    // Upload the receipt to the account's real Drive folder BEFORE advancing
-    // the stage — the proof must land before the record says "done", not
-    // after (a failed upload must not silently leave the stage confirmed
-    // with nothing to show for it).
     const { data: account } = await supabaseAdmin
       .from('accounts')
       .select('drive_folder_id, company_name, state_of_formation, formation_date, ra_switch_date, client_since, ra_renewal_date, annual_report_due_date, cmra_renewal_date')
       .eq('id', sub.account_id)
       .maybeSingle()
 
-    let driveFolderId = account?.drive_folder_id ?? null
-    if (!driveFolderId) {
-      if (!account?.company_name || !account?.state_of_formation) {
-        return NextResponse.json(
-          { success: false, error: 'This account has no Drive folder and is missing company name / state of formation — cannot file the receipt.' },
-          { status: 400 },
-        )
-      }
-      const folder = await ensureCompanyFolder(sub.account_id, account.company_name, account.state_of_formation)
-      driveFolderId = folder.folderId
-    }
+    const buffer = Buffer.from(await receipt.arrayBuffer())
+    const fileName = `RA_Switch_Receipt_${new Date().toISOString().slice(0, 10)}_${receipt.name}`
+    const mimeType = receipt.type || 'application/pdf'
 
-    try {
-      const buffer = Buffer.from(await receipt.arrayBuffer())
-      const fileName = `RA_Switch_Receipt_${new Date().toISOString().slice(0, 10)}_${receipt.name}`
-      await uploadBinaryToDrive(fileName, buffer, receipt.type || 'application/pdf', driveFolderId)
-    } catch (e) {
+    // 1. Durable copy FIRST — the same Supabase Storage bucket the client's
+    // own wizard uploads already use (confirmed working live, 2026-09-22).
+    // This is the record's real proof from this point on; Drive below is a
+    // bonus copy, never the only copy.
+    const storagePath = `onboarding-ra-receipts/${sub.account_id}/${Date.now()}_${receipt.name}`
+    const { error: storageErr } = await supabaseAdmin.storage
+      .from('onboarding-uploads')
+      .upload(storagePath, buffer, { contentType: mimeType })
+    if (storageErr) {
       return NextResponse.json(
-        { success: false, error: `Could not upload the receipt to Drive: ${e instanceof Error ? e.message : String(e)}` },
+        { success: false, error: `Could not save the receipt: ${storageErr.message}` },
         { status: 500 },
       )
+    }
+
+    // 2. Drive copy — BEST-EFFORT ONLY (see file header, dev job 7535a166).
+    // Never blocks the switch; a failure here is recorded in the response
+    // text, not thrown.
+    let driveNote = 'not filed to Drive automatically — the account has no Drive folder right now.'
+    try {
+      let driveFolderId = account?.drive_folder_id ?? null
+      if (!driveFolderId && account?.company_name && account?.state_of_formation) {
+        const folder = await ensureCompanyFolder(sub.account_id, account.company_name, account.state_of_formation)
+        driveFolderId = folder.folderId
+      }
+      if (driveFolderId) {
+        await uploadBinaryToDrive(fileName, buffer, mimeType, driveFolderId)
+        driveNote = 'also filed to the account\'s Drive folder.'
+      }
+    } catch (e) {
+      console.error('[confirm-ra-switch] Drive copy failed (non-fatal, receipt is safe in Storage):', e)
+      driveNote = 'could not be filed to Drive automatically — Drive is currently having a problem for new accounts (tracked separately). The receipt itself is safely saved either way.'
     }
 
     const result = await advanceStageIfAt({
@@ -185,7 +209,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       console.error('[confirm-ra-switch] renewal-date stamp failed (non-fatal):', e)
     }
 
-    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and receipt saved to the account's Drive folder — moved to ${finalStage.stage_name}.${dateNote}` })
+    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and the receipt is saved — ${driveNote} Moved to ${finalStage.stage_name}.${dateNote}` })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }
