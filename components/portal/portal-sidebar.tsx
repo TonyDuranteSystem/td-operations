@@ -498,6 +498,17 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     if (item.key === 'nav.wizard' && selectedOnboardingId) {
       const selected = inProgressOnboardings.find(o => o.id === selectedOnboardingId)
       if (selected?.offerId) navHref = `/portal/wizard?type=onboarding&offer=${encodeURIComponent(selected.offerId)}`
+    } else if (item.key === 'nav.wizard' && selectedFormationId) {
+      // Same fix, the formation side — this half was missing entirely: a
+      // client with a SECOND, brand-new company mid-formation (selected via
+      // the switcher) clicking Complete Setup fell through to a bare
+      // /portal/wizard with no ?lead=, which lets the wizard page's own
+      // no-hint fallback pick a DIFFERENT pending wizard type for this
+      // contact (e.g. a leftover ITIN application) instead of formation —
+      // found live 2026-09-22 testing against a fixture with both an
+      // in-progress formation and a stale contact-scoped ITIN service.
+      const selected = inProgress.find(f => f.id === selectedFormationId)
+      if (selected?.leadId) navHref = `/portal/wizard?type=formation&lead=${encodeURIComponent(selected.leadId)}`
     }
 
     return (

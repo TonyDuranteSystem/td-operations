@@ -32,14 +32,19 @@ interface WelcomeDashboardProps {
     payment_links: { url: string; label: string; amount: number }[] | null
     bank_details: { beneficiary?: string; account_number?: string; routing_number?: string; iban?: string; bic?: string; bank_name?: string } | null
     payment_type: string | null
-    /** The lead this offer was sent on. For an onboarding offer, carried
-     * through to the wizard link as `?lead=` — the same "this session is
-     * this ONE specific new company" safety marker formation already uses
-     * (dev job bc2a8f7f, 2026-09-20: a returning client with an existing
-     * account bringing a SECOND, brand-new company had no such marker on
-     * this link, so the wizard fell back to guessing an existing account —
-     * risking silently overwriting that account's real data). */
-    lead_id: string | null
+    /** This offer's own id. Carried through to the wizard link as `?offer=`
+     * — the same "this session is this ONE specific company" safety marker
+     * formation uses via `?lead=` (dev job bc2a8f7f, 2026-09-20: a returning
+     * client with an existing account bringing a SECOND company had no such
+     * marker on this link, so the wizard fell back to guessing an existing
+     * account — risking silently overwriting that account's real data).
+     * Anchored on the offer, NOT the lead (corrected 2026-09-21): a client's
+     * first onboarding starts as a lead, but every one after that has no
+     * lead at all — staff create the offer directly on the contact. Using
+     * lead_id here left this exact link broken for that returning-client
+     * case (it has no lead, so the link fell through to the bare, unscoped
+     * fallback below) — found live 2026-09-22. */
+    id: string
   } | null
   /** True when an onboarding wizard_progress row exists with status='submitted'.
    *  Flips step 4 ("Complete Setup") from an active link into a passive
@@ -63,11 +68,11 @@ export function WelcomeDashboard({ tier, firstName, offerData, wizardSubmitted =
   const isViewed = offerData?.status === 'viewed' || offerData?.status === 'signed' || offerData?.status === 'completed'
   const isSigned = offerData?.status === 'signed' || offerData?.status === 'completed'
   const isPaid = offerData?.status === 'completed'
-  // Carry the offer's lead through to the wizard link for an onboarding
-  // offer specifically — see the field comment on offerData.lead_id above.
+  // Carry the offer's own id through to the wizard link for an onboarding
+  // offer specifically — see the field comment on offerData.id above.
   const wizardHref =
-    offerData?.contract_type === 'onboarding' && offerData?.lead_id
-      ? `/portal/wizard?type=onboarding&lead=${offerData.lead_id}`
+    offerData?.contract_type === 'onboarding' && offerData?.id
+      ? `/portal/wizard?type=onboarding&offer=${offerData.id}`
       : '/portal/wizard'
 
   // Parse services from offer
