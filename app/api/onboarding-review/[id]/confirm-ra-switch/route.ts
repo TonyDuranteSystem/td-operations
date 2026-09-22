@@ -14,6 +14,17 @@
  * the RA-renewal file-and-upload flow (components/calendar/mark-filed-dialog.tsx),
  * just for the one-time initial switch rather than the annual renewal.
  *
+ * Also stamps accounts.ra_switch_date and accounts.client_since (Antonio,
+ * same follow-up: "I want the Client since and RA switch date so the crm
+ * can be updated according to the rules") — the onboarding job's own
+ * renewal_dates step already runs at account-creation time, before either
+ * date exists, so ra_renewal_date is never derived there for a real
+ * onboarding. This is the actual moment both dates are known, so this is
+ * where they get set — null-only writes (never overwrite a real value —
+ * matches lib/operations/renewal-dates.ts's own guard), then the SAME
+ * shared engine derives ra_renewal_date from them, same as formation/
+ * onboarding account creation does.
+ *
  * POST (multipart/form-data, field `receipt`) → { success, message } | { success:false, error }
  * [id] = onboarding_submissions.id.
  */
@@ -26,6 +37,7 @@ import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { advanceStageIfAt } from '@/lib/operations/service-delivery'
 import { ensureCompanyFolder } from '@/lib/drive-folder-utils'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
+import { deriveRenewalDates, applyRenewalDateFills } from '@/lib/operations/renewal-dates'
 
 const MAX_RECEIPT_BYTES = 15 * 1024 * 1024
 
@@ -93,7 +105,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // with nothing to show for it).
     const { data: account } = await supabaseAdmin
       .from('accounts')
-      .select('drive_folder_id, company_name, state_of_formation')
+      .select('drive_folder_id, company_name, state_of_formation, formation_date, ra_switch_date, client_since, ra_renewal_date, annual_report_due_date, cmra_renewal_date')
       .eq('id', sub.account_id)
       .maybeSingle()
 
@@ -132,7 +144,48 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: result.reason || 'Could not advance the stage' }, { status: 409 })
     }
 
-    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and receipt saved to the account's Drive folder — moved to ${finalStage.stage_name}.` })
+    // Stamp today as the RA-switch date / client-since date (null-only — never
+    // overwrites a real value already on the account), then derive
+    // ra_renewal_date from them via the same shared engine formation uses.
+    // Non-fatal: the switch itself already succeeded above; a failure here
+    // is logged, not returned as an error, so staff never see "failed" for
+    // something that actually worked.
+    let dateNote = ''
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const stampFields: Record<string, string> = {}
+      if (!account?.ra_switch_date) stampFields.ra_switch_date = today
+      if (!account?.client_since) stampFields.client_since = today
+      if (Object.keys(stampFields).length > 0) {
+        // eslint-disable-next-line no-restricted-syntax -- null-only initial-date fill, same exempted pattern as lib/operations/renewal-dates.ts's own writer (plan c2d97552)
+        await supabaseAdmin.from('accounts').update(stampFields).eq('id', sub.account_id)
+      }
+
+      const fills = deriveRenewalDates({
+        intake: 'onboarding',
+        formation_date: account?.formation_date ?? null,
+        ra_switch_date: stampFields.ra_switch_date ?? account?.ra_switch_date ?? null,
+        client_since: stampFields.client_since ?? account?.client_since ?? null,
+        state_of_formation: account?.state_of_formation ?? null,
+        existing: {
+          ra_renewal_date: account?.ra_renewal_date ?? null,
+          annual_report_due_date: account?.annual_report_due_date ?? null,
+          cmra_renewal_date: account?.cmra_renewal_date ?? null,
+        },
+      })
+      const applied = await applyRenewalDateFills(sub.account_id, fills, {
+        state: account?.state_of_formation,
+        actor: 'onboarding-ra-switch-confirm',
+      })
+      const stamped = Object.keys(stampFields)
+      if (stamped.length || applied.length) {
+        dateNote = ` ${[...stamped, ...applied].join(', ')} recorded.`
+      }
+    } catch (e) {
+      console.error('[confirm-ra-switch] renewal-date stamp failed (non-fatal):', e)
+    }
+
+    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and receipt saved to the account's Drive folder — moved to ${finalStage.stage_name}.${dateNote}` })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

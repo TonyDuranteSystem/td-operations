@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { ArrowLeft, CheckCircle2, Circle, MessageCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Circle } from 'lucide-react'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { categorizeSubmittedFields } from '@/lib/flows/onboarding-field-categories'
 import { OnboardingWorkspaceDetail } from './components/onboarding-workspace-detail'
@@ -25,11 +25,13 @@ export const dynamic = 'force-dynamic'
  *      confirm in the workspace and the system will update the crm")
  *   7. everything with stages            → the 3-dot stepper below
  * Message-the-client affordance sits DOWN THE PAGE, in every stage's own
- * content block — not a floating top button (Antonio corrected this too:
- * "the chat must be down the page in every stage as in other workspace").
- * Post-review it's the real embedded FlowChat panel other workspaces use
- * (scoped to the now-existing SD); pre-review there is no SD yet to scope an
- * embedded panel to, so it deep-links straight into the real thread instead.
+ * content block, as a REAL embedded chat panel — not a floating top button,
+ * and not a link-out (Antonio corrected both: "the chat must be down the
+ * page in every stage as in other workspace" then "I want the actual chat
+ * filed not a link"). Post-review it's the exact same FlowChat panel other
+ * workspaces use, scoped to the now-existing SD; pre-review there is no SD
+ * yet, so it's the same component pointed at a contact-scoped sibling route
+ * (app/api/onboarding-review/[id]/chat/route.ts) instead.
  * [id] = onboarding_submissions.id. Reached from the compact
  * OnboardingWorkspaceBanner on the account/contact page, and from the
  * global /onboarding-review inbox.
@@ -113,20 +115,6 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
       ? `/contacts/${sub.contact_id}`
       : '/onboarding-review'
 
-  // Message the client — down the page, in every stage, same as the other
-  // workspaces (Antonio, 2026-09-22, correcting the earlier top-right button).
-  // Once the 'Client Onboarding' SD exists (post-review) this is the SAME
-  // embedded chat panel Formation/ITIN/Tax Return use, scoped to that SD —
-  // real parity, not a link-out. Before that (nothing created yet), there is
-  // no SD to scope an embedded panel to, so this deep-links straight into the
-  // client's real portal-chat thread instead — the fastest safe option;
-  // flagged to Antonio as a deliberate scope choice, not silently downgraded.
-  const chatHref = sub.account_id
-    ? `/portal-chats?account=${sub.account_id}`
-    : sub.contact_id
-      ? `/portal-chats?contact=${sub.contact_id}`
-      : null
-
   return (
     <div className="mx-auto max-w-4xl p-6 lg:p-8">
       <Link
@@ -173,15 +161,8 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
       {!reviewed ? (
         <div className="space-y-4">
           <OnboardingWorkspaceDetail entry={entry} clientFields={clientFields} companyFields={companyFields} />
-          {chatHref && (
-            <Link
-              href={chatHref}
-              className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-100"
-            >
-              <MessageCircle className="h-4 w-4" />
-              Message {entry.lead_name !== 'Unknown' ? entry.lead_name : 'the client'} — no service record exists
-              yet to attach an in-page chat to, so this opens their real conversation directly.
-            </Link>
+          {sub.contact_id && (
+            <FlowChat apiPath={`/api/onboarding-review/${sub.id}/chat`} label="Chat with client" />
           )}
         </div>
       ) : (

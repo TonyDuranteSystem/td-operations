@@ -135,6 +135,21 @@ function belowFieldMin(field: { min?: number }, val: unknown): boolean {
   return !Number.isNaN(n) && n < field.min
 }
 
+// A filled EIN that isn't 9 digits blocks the step it's actually ON, not the
+// final Review step — this was previously ONLY checked server-side (the
+// background job, after full submission), so a malformed EIN surfaced its
+// error several steps later than where the client typed it (Antonio,
+// 2026-09-22, live testing). Mirrors lib/jobs/validation.ts::normalizeEIN's
+// exact rule (strip non-digits, must be exactly 9) so client and server
+// never disagree. Empty values are the required-check's business, not this
+// one's — an optional, blank EIN is not a format error.
+function malformedEin(field: { format?: string }, val: unknown): boolean {
+  if (field.format !== 'ein') return false
+  if (val === undefined || val === null || val === '') return false
+  const digits = String(val).replace(/\D/g, '')
+  return digits.length !== 9
+}
+
 type BankGuide = { name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }
 
 /** "Before You Start" step: tells the client to upload their transactions as a
@@ -579,6 +594,7 @@ export function WizardClient({
   // so there is ONE source of truth for step completeness.
   const reqMsg = pickText('Required field', 'Campo obbligatorio')!
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
+  const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
 
   const getStepErrors = useCallback((): Record<string, string> => {
     const errs: Record<string, string> = {}
@@ -609,6 +625,7 @@ export function WizardClient({
           const key = `member_${idx}_${field.name}`
           if (field.required && isEmptyValue(formData[key])) errs[key] = reqMsg
           else if (belowFieldMin(field, formData[key])) errs[key] = minMsg
+          else if (malformedEin(field, formData[key])) errs[key] = einMsg
         }
       }
       if (wizardType === 'tax' && isMMLLC) {
@@ -654,15 +671,17 @@ export function WizardClient({
               String(formData[`${field.name}_${idx}_bank_name`] ?? '').trim().length > 0
             if ((rf.required || modeRequired) && isEmptyValue(formData[key])) errs[key] = reqMsg
             else if (belowFieldMin(rf, formData[key])) errs[key] = minMsg
+            else if (malformedEin(rf, formData[key])) errs[key] = einMsg
           }
         }
         continue
       }
       if (field.required && isEmptyValue(formData[field.name])) errs[field.name] = reqMsg
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
+      else if (malformedEin(field, formData[field.name])) errs[field.name] = einMsg
     }
     return errs
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, institutions, pickText])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText])
 
   const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
 
