@@ -32,7 +32,7 @@ import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
-import { formationLeadOwned, onboardingLeadOwned } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import {
   resolveTaxWizardEligibility,
   CLOSED_REASON_COPY,
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, entity_type, data, account_id: rawAccountId, contact_id, lead_id, progress_id, allow_resubmit, service_delivery_id: rawServiceDeliveryId } = body
+  const { wizard_type, entity_type, data, account_id: rawAccountId, contact_id, lead_id, offer_id, progress_id, allow_resubmit, service_delivery_id: rawServiceDeliveryId } = body
 
   if (!wizard_type || !data) {
     return NextResponse.json({ error: 'wizard_type and data are required' }, { status: 400 })
@@ -117,17 +117,23 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ─── 0b2. ONBOARDING-FOR-A-NEW-COMPANY LEAD (default-deny + hijack backstop) ───
+  // ─── 0b2. ONBOARDING-FOR-A-NEW-COMPANY OFFER (default-deny + hijack backstop) ───
   // Same proof as formation's block above, for a returning client bringing a
-  // SECOND, brand-new company (dev job bc2a8f7f, 2026-09-20). The wizard PAGE
-  // gates this the same way and forces account_id blank client-side — but a
-  // member could tamper the posted account_id back in, or reach this route
-  // without going through the page's gate at all. Re-prove the lead here and,
-  // once verified, force account_id null server-side too: the same "never
-  // trust a client-carried account_id for a brand-new company" backstop that
-  // already protects formation (the THW Global hijack, dev_task 358e8cbe),
-  // now closing the equivalent gap for onboarding.
-  if (lead_id && wizard_type === 'onboarding') {
+  // SECOND, brand-new company — keyed on the OFFER, not a lead (dev job
+  // bc2a8f7f, corrected 2026-09-21). A client's very FIRST onboarding starts
+  // as a lead, same as formation; every one after that has NO lead at all —
+  // staff creates that offer directly on the client's contact record,
+  // confirmed live against production and directly by Antonio. The wizard
+  // PAGE gates this the same way (via ?offer=) and forces account_id blank
+  // client-side — but a member could tamper the posted account_id back in,
+  // or reach this route without going through the page's gate at all.
+  // Re-prove the offer here and, once verified, force account_id null
+  // server-side too: the same "never trust a client-carried account_id for
+  // a brand-new company" backstop that already protects formation (the THW
+  // Global hijack, dev_task 358e8cbe), now closing the equivalent gap for
+  // onboarding — for BOTH the lead-based first company and the lead-less
+  // second+ one, since this block is keyed on the offer either way.
+  if (offer_id && wizard_type === 'onboarding') {
     const ctcId = identity.kind === 'contact' ? identity.contactId : null
     const ownerEmails = new Set<string>()
     if (user.email) ownerEmails.add(user.email.toLowerCase())
@@ -135,14 +141,12 @@ export async function POST(req: NextRequest) {
       const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
       if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
     }
-    const { data: leadOffer } = await supabaseAdmin
+    const { data: theOffer } = await supabaseAdmin
       .from('offers')
       .select('client_email, contract_type, contact_id')
-      .eq('lead_id', lead_id)
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .eq('id', offer_id)
       .maybeSingle()
-    if (!onboardingLeadOwned(leadOffer, ctcId, ownerEmails)) {
+    if (!onboardingOfferOwned(theOffer, ctcId, ownerEmails)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
     // This reassignment MUST run after 0a's canSubmitWizard check (which
@@ -456,7 +460,17 @@ export async function POST(req: NextRequest) {
           leadId: lead_id || null,
           contactId: contact_id || null,
           calendarYear: new Date().getFullYear(),
-          explicitScopeId: closureServiceDeliveryId,
+          // Closure's own per-record scope takes priority (mutually
+          // exclusive with onboarding). Onboarding falls back to its own
+          // offer id when set — without this, a returning client's second
+          // onboarding (no account yet, no lead at all) collapsed to the
+          // SAME token as any other onboarding they'd submitted that same
+          // year (all scoped only by contactId), so the second submission's
+          // upsert would silently overwrite the first's row. Found live
+          // while reworking this mechanism to key on offers instead of
+          // leads (dev job bc2a8f7f, 2026-09-21) — the exact bug class this
+          // token scheme's own header already documents for two companies.
+          explicitScopeId: closureServiceDeliveryId || (wizard_type === 'onboarding' ? offer_id || null : null),
         })
 
         // The submission tables do NOT share one column set (formation has no
@@ -470,6 +484,10 @@ export async function POST(req: NextRequest) {
           contact_id: contact_id || null,
           account_id: account_id || null,
           lead_id: lead_id || null,
+          // The real "which company" anchor for onboarding — see
+          // TABLES_WITH_OFFER_ID's own comment (dev job bc2a8f7f, corrected
+          // 2026-09-21). null for every other wizard type, harmlessly.
+          offer_id: offer_id || null,
           entity_type: entity_type || null,
           submitted_data: data,
           upload_paths: uploadPaths,
@@ -1030,6 +1048,7 @@ export async function POST(req: NextRequest) {
         account_id: account_id || null,
         contact_id: contact_id || null,
         lead_id: lead_id || null, // Formation-for-new-company carries its lead for materialization
+        offer_id: wizard_type === 'onboarding' ? offer_id || null : null, // Onboarding-for-a-returning-client has no lead — the offer is its own anchor
         company_name: companyName,
         state_of_formation: stateOfFormation,
         // NULL, never 'SMLLC', when genuinely unknown. The materializer resolves
@@ -1067,6 +1086,7 @@ export async function POST(req: NextRequest) {
         accountId: account_id,
         contactId: contact_id,
         leadId: lead_id,
+        offerId: wizard_type === 'onboarding' ? offer_id || null : null,
         data,
       })
       payload.dedupe_key = dedupeKey
@@ -1110,6 +1130,7 @@ export async function POST(req: NextRequest) {
         accountId: account_id || null,
         contactId: contact_id || null,
         leadId: lead_id || null,
+        offerId: wizard_type === 'onboarding' ? offer_id || null : null,
         serviceDeliveryId: closureServiceDeliveryId,
       })
       if (wpResult.error) {

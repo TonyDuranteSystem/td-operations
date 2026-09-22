@@ -51,14 +51,34 @@ export function formationLeadOwned(
 }
 
 /**
- * Same proof, for an ONBOARDING offer's lead — a returning client bringing a
- * second, brand-new company (dev job bc2a8f7f, 2026-09-20). The wizard PAGE
- * gates `?lead=` the same way formation's is gated; the wizard SUBMIT route
- * must re-prove it here too, for the same reason formation does: a member
- * could otherwise tamper a lead_id and submit onboarding data tied to
- * someone else's new-company lead.
+ * Same proof, for an onboarding offer — a client's FIRST company via onboarding
+ * always starts as a lead, so this covers that case (dev job bc2a8f7f,
+ * 2026-09-20). A returning client's SECOND+ onboarding has no lead at all —
+ * see onboardingOfferOwned below, the real anchor for that case (2026-09-21,
+ * corrected directly by Antonio after this lead-only version shipped without
+ * covering it).
  */
 export function onboardingLeadOwned(
+  offer: LeadOwnershipOffer | null,
+  contactId: string | null,
+  ownerEmails: ReadonlySet<string>,
+): boolean {
+  return leadOwnedForContractType(offer, 'onboarding', contactId, ownerEmails)
+}
+
+/**
+ * Ownership proof for an onboarding offer found by its OWN id, not a lead —
+ * the real, only anchor for a returning client's second+ company (dev job
+ * bc2a8f7f, 2026-09-21): staff creates that offer directly on the client's
+ * contact record, confirmed live against production and directly by
+ * Antonio. The check itself is identical to onboardingLeadOwned/
+ * formationLeadOwned — same offer shape, same contact_id/client_email
+ * ownership proof — the only difference is how the caller found the offer
+ * row (by id here, instead of by lead_id). Re-proven server-side for the
+ * same reason as the others: a member could otherwise tamper an offer id
+ * and submit data tied to someone else's company.
+ */
+export function onboardingOfferOwned(
   offer: LeadOwnershipOffer | null,
   contactId: string | null,
   ownerEmails: ReadonlySet<string>,

@@ -84,6 +84,7 @@ type WizardRow = {
   account_id: string | null
   contact_id: string | null
   lead_id: string | null
+  offer_id: string | null
   created_at: string
   updated_at: string
 }
@@ -188,7 +189,7 @@ export async function GET(req: NextRequest) {
   // Get all in-progress wizard forms
   const { data: wizards } = await supabaseAdmin
     .from("wizard_progress")
-    .select("id, wizard_type, account_id, contact_id, lead_id, created_at, updated_at")
+    .select("id, wizard_type, account_id, contact_id, lead_id, offer_id, created_at, updated_at")
     .eq("status", "in_progress")
     .limit(100)
 
@@ -203,15 +204,22 @@ export async function GET(req: NextRequest) {
     const lastUpdateMs = now - new Date(w.updated_at).getTime()
     const label = wizardLabelFor(w.wizard_type)
 
-    // Carry the specific lead this wizard is for, same as the payment-time
-    // welcome notification (dev job bc2a8f7f). Without it, a returning client
-    // with an existing account who started a SECOND onboarding gets sent back
-    // to a bare /portal/wizard by this reminder — which silently defaults to
-    // their EXISTING account, risking the new company's data landing on the
-    // wrong one. Harmless to include for any wizard type that has a lead_id
-    // (formation already resolves it correctly); omitted when absent, same as
-    // today.
-    const wizardLink = w.lead_id ? `/portal/wizard?lead=${encodeURIComponent(w.lead_id)}` : "/portal/wizard"
+    // Carry the specific lead/offer this wizard is for, same as the
+    // payment-time welcome notification (dev job bc2a8f7f). Without it, a
+    // returning client with an existing account who started a SECOND
+    // onboarding gets sent back to a bare /portal/wizard by this reminder —
+    // which silently defaults to their EXISTING account, risking the new
+    // company's data landing on the wrong one. Formation stays lead-based
+    // (unchanged, already correct); onboarding uses the offer instead —
+    // corrected 2026-09-21: a returning client's second+ onboarding has NO
+    // lead at all, confirmed live and directly by Antonio. Omitted when
+    // absent, same as today.
+    const wizardLink =
+      w.wizard_type === "onboarding" && w.offer_id
+        ? `/portal/wizard?offer=${encodeURIComponent(w.offer_id)}`
+        : w.lead_id
+          ? `/portal/wizard?lead=${encodeURIComponent(w.lead_id)}`
+          : "/portal/wizard"
 
     // Don't remind someone to fill out a form for something that's already done.
     // The wizard may have been bypassed via another code path (admin entry, CRM action, etc.).

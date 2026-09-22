@@ -41,19 +41,21 @@ export interface ComputeHasWizardPendingParams {
   contactId: string | null
   selectedAccountId: string
   portalTier: string
-  /** The lead of the currently-SELECTED in-progress onboarding, when the
-   *  switcher has one selected (dev job bc2a8f7f, 2026-09-21). Without this,
-   *  a contact with TWO simultaneous onboardings — one already submitted,
-   *  one genuinely not — could have the newer, still-unsubmitted one's
-   *  "Complete Setup" button hidden by the older one's submitted status,
-   *  since the underlying check was contact-wide, not per-company. */
-  onboardingLeadId?: string
+  /** The offer of the currently-SELECTED in-progress onboarding, when the
+   *  switcher has one selected — NOT a lead (dev job bc2a8f7f, corrected
+   *  2026-09-21: a returning client's second+ onboarding has no lead at
+   *  all). Without this, a contact with TWO simultaneous onboardings — one
+   *  already submitted, one genuinely not — could have the newer, still-
+   *  unsubmitted one's "Complete Setup" button hidden by the older one's
+   *  submitted status, since the underlying check was contact-wide, not
+   *  per-company. */
+  onboardingOfferId?: string
 }
 
 export async function computeHasWizardPending(
   params: ComputeHasWizardPendingParams,
 ): Promise<boolean> {
-  const { contactId, selectedAccountId, portalTier, onboardingLeadId } = params
+  const { contactId, selectedAccountId, portalTier, onboardingOfferId } = params
 
   if (selectedAccountId) {
     const { data } = await supabaseAdmin
@@ -166,7 +168,7 @@ export async function computeHasWizardPending(
     // per-company signal available from an SD. Scoped to wizard_type=
     // 'onboarding' at least (a formation submission must never satisfy an
     // onboarding check or vice versa). When the switcher has a SPECIFIC
-    // onboarding selected (onboardingLeadId), scope further to that lead —
+    // onboarding selected (onboardingOfferId), scope further to that offer —
     // without this, a contact with two simultaneous onboardings (one
     // already submitted, one genuinely not) had the newer one's button
     // hidden by the older one's submitted status (bug-hunter finding,
@@ -179,7 +181,7 @@ export async function computeHasWizardPending(
       .eq("contact_id", contactId)
       .eq("wizard_type", "onboarding")
       .eq("status", "submitted")
-    submittedQuery = onboardingLeadId ? submittedQuery.eq("lead_id", onboardingLeadId) : submittedQuery
+    submittedQuery = onboardingOfferId ? submittedQuery.eq("offer_id", onboardingOfferId) : submittedQuery
     const { data: submitted } = await submittedQuery.limit(1)
     let alreadySubmitted = !!submitted?.length
     // FALLBACK (dev job 9a9c5cf5): same missing-write hazard — a client
@@ -191,7 +193,7 @@ export async function computeHasWizardPending(
         .select("id")
         .eq("contact_id", contactId)
         .in("status", ["completed", "reviewed"])
-      subQuery = onboardingLeadId ? subQuery.eq("lead_id", onboardingLeadId) : subQuery
+      subQuery = onboardingOfferId ? subQuery.eq("offer_id", onboardingOfferId) : subQuery
       const { data: sub } = await subQuery.limit(1)
       alreadySubmitted = !!sub?.length
     }

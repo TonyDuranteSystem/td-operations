@@ -9,8 +9,8 @@ const acct = (id: string, tier: string | null): PortalAccount =>
 const formation = (sdId: string, label = 'New Co'): InProgressFormation =>
   ({ id: `formation:${sdId}`, sdId, label, stage: 'formation' })
 
-const onboarding = (leadId: string, label = 'New Onboarding Co'): InProgressOnboarding =>
-  ({ id: `onboarding:${leadId}`, leadId, label, stage: 'onboarding' })
+const onboarding = (offerId: string, label = 'New Onboarding Co'): InProgressOnboarding =>
+  ({ id: `onboarding:${offerId}`, offerId, label, stage: 'onboarding' })
 
 describe('resolveSelectedEntity', () => {
   it('no accounts, no formations → none + fallback tier', () => {
@@ -93,18 +93,18 @@ describe('resolveSelectedEntity', () => {
   it('onboarding cookie selects the in-progress onboarding (onboarding tier)', () => {
     const r = resolveSelectedEntity({
       accounts: [acct('a1', 'active')], inProgress: [],
-      inProgressOnboardings: [onboarding('lead1', 'Marco Ventures LLC')],
-      onboardingCookie: 'onboarding:lead1', fallbackTier: 'lead',
+      inProgressOnboardings: [onboarding('offer1', 'Marco Ventures LLC')],
+      onboardingCookie: 'onboarding:offer1', fallbackTier: 'lead',
     })
     expect(r.kind).toBe('onboarding')
-    if (r.kind === 'onboarding') { expect(r.leadId).toBe('lead1'); expect(r.label).toBe('Marco Ventures LLC'); expect(r.tier).toBe('onboarding') }
+    if (r.kind === 'onboarding') { expect(r.offerId).toBe('offer1'); expect(r.label).toBe('Marco Ventures LLC'); expect(r.tier).toBe('onboarding') }
   })
 
   it('onboarding cookie wins even when an account exists (the multi-company switch, the exact hijack shape)', () => {
     const r = resolveSelectedEntity({
       accounts: [acct('a1', 'active')], inProgress: [],
-      inProgressOnboardings: [onboarding('lead1')],
-      accountCookie: 'a1', onboardingCookie: 'onboarding:lead1', fallbackTier: 'lead',
+      inProgressOnboardings: [onboarding('offer1')],
+      accountCookie: 'a1', onboardingCookie: 'onboarding:offer1', fallbackTier: 'lead',
     })
     expect(r.kind).toBe('onboarding')
   })
@@ -112,7 +112,7 @@ describe('resolveSelectedEntity', () => {
   it('stale/invalid onboarding cookie is ignored → falls back to account', () => {
     const r = resolveSelectedEntity({
       accounts: [acct('a1', 'active')], inProgress: [],
-      inProgressOnboardings: [onboarding('lead1')],
+      inProgressOnboardings: [onboarding('offer1')],
       onboardingCookie: 'onboarding:GONE', fallbackTier: 'lead',
     })
     expect(r.kind).toBe('account')
@@ -120,7 +120,7 @@ describe('resolveSelectedEntity', () => {
 
   it('no account or formation but an onboarding in progress → defaults to the onboarding', () => {
     const r = resolveSelectedEntity({
-      accounts: [], inProgress: [], inProgressOnboardings: [onboarding('lead1', 'Net-new Onboarding Co')],
+      accounts: [], inProgress: [], inProgressOnboardings: [onboarding('offer1', 'Net-new Onboarding Co')],
       fallbackTier: 'lead',
     })
     expect(r.kind).toBe('onboarding')
@@ -130,8 +130,8 @@ describe('resolveSelectedEntity', () => {
   it('formation cookie takes precedence over onboarding cookie when somehow both are set (defensive)', () => {
     const r = resolveSelectedEntity({
       accounts: [], inProgress: [formation('sd1', 'Formation Co')],
-      inProgressOnboardings: [onboarding('lead1', 'Onboarding Co')],
-      formationCookie: 'formation:sd1', onboardingCookie: 'onboarding:lead1', fallbackTier: 'lead',
+      inProgressOnboardings: [onboarding('offer1', 'Onboarding Co')],
+      formationCookie: 'formation:sd1', onboardingCookie: 'onboarding:offer1', fallbackTier: 'lead',
     })
     expect(r.kind).toBe('formation')
   })
@@ -139,9 +139,24 @@ describe('resolveSelectedEntity', () => {
   it('a real account still wins over a non-explicit in-progress onboarding (no cookie set)', () => {
     const r = resolveSelectedEntity({
       accounts: [acct('a1', 'active')], inProgress: [],
-      inProgressOnboardings: [onboarding('lead1')],
+      inProgressOnboardings: [onboarding('offer1')],
       fallbackTier: 'lead',
     })
     expect(r.kind).toBe('account')
+  })
+
+  // ── Real-world shape (Antonio, 2026-09-21): a returning client's second+
+  // onboarding has NO lead — staff creates the offer directly on the
+  // contact. Confirms the switcher entity carries an offer id, not a lead
+  // id, and that this is genuinely independent of whether a lead exists.
+
+  it('a genuinely lead-less onboarding (returning client, offer created on the contact) still selects correctly', () => {
+    const r = resolveSelectedEntity({
+      accounts: [acct('a1', 'active')], inProgress: [],
+      inProgressOnboardings: [onboarding('offer-no-lead', 'Second Company LLC')],
+      accountCookie: 'a1', onboardingCookie: 'onboarding:offer-no-lead', fallbackTier: 'lead',
+    })
+    expect(r.kind).toBe('onboarding')
+    if (r.kind === 'onboarding') { expect(r.offerId).toBe('offer-no-lead'); expect(r.label).toBe('Second Company LLC') }
   })
 })

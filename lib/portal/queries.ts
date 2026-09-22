@@ -469,13 +469,18 @@ export interface InProgressOnboarding {
   /** Portal stage used for tier-gating when this entity is selected. */
   stage: 'onboarding'
   /**
-   * The lead this new-company onboarding is anchored on. Every CTA that opens
-   * this onboarding's wizard MUST carry it (dev job bc2a8f7f) — otherwise a
-   * returning client who already owns an account falls through to that
+   * The offer this onboarding is anchored on — NOT a lead (dev job bc2a8f7f,
+   * corrected 2026-09-21). A client's very FIRST onboarding starts as a
+   * lead, same as formation; every one after that has NO lead at all —
+   * staff creates it directly on the client's own contact record, confirmed
+   * live against production and directly by Antonio. The offer's own id is
+   * the one thing that always exists early enough to anchor on, either way.
+   * Every CTA that opens this onboarding's wizard MUST carry it — otherwise
+   * a returning client who already owns an account falls through to that
    * account's wizard, either silently defaulting entity type wrong or, for
    * an existing account, risking the new company's data landing on it.
    */
-  leadId: string
+  offerId: string
 }
 
 /**
@@ -484,17 +489,18 @@ export interface InProgressOnboarding {
  * formation) NOTHING is created for onboarding until staff reviews and
  * confirms the client's submitted wizard data. There is no service_delivery
  * to key off the way formation does; "not yet confirmed" is read directly
- * from whether this lead's onboarding_submissions row (if any) has reached
+ * from whether this offer's onboarding_submissions row (if any) has reached
  * status='reviewed'.
  *
  * Mirrors getInProgressFormations' contact/lead resolution exactly (direct
  * offers.contact_id, or via a lead that converted to this contact) so a
  * returning client's second onboarding surfaces in the same switcher a
- * second formation would (found missing live, 2026-09-21 — the client's
- * ever-present "Complete Setup" sidebar link and the switcher had no way to
- * tell a second onboarding apart from an existing account, the exact same
- * gap already fixed for the payment-time notification and the reminder
- * cron).
+ * second formation would. Deliberately does NOT require lead_id (that was
+ * the actual bug, found live 2026-09-21 by Antonio: the query already
+ * fetched contact-direct offers correctly, but a filter right after it
+ * threw every one of them away before they ever reached the switcher,
+ * because it only kept offers that HAD a lead — exactly backwards from a
+ * returning client's real, lead-less second company).
  */
 export async function getInProgressOnboardings(contactId: string): Promise<InProgressOnboarding[]> {
   const { data: convertedLeads } = await supabaseAdmin
@@ -507,16 +513,15 @@ export async function getInProgressOnboardings(contactId: string): Promise<InPro
   if (convertedLeadIds.length > 0) offerOr.push(`lead_id.in.(${convertedLeadIds.join(',')})`)
   const { data: offers } = await supabaseAdmin
     .from('offers')
-    .select('token, lead_id, client_name, created_at')
+    .select('id, token, lead_id, contact_id, client_name, client_email, created_at')
     .eq('contract_type', 'onboarding')
     .or(offerOr.join(','))
     .in('status', ['signed', 'completed'])
     .order('created_at', { ascending: false })
 
-  const withLead = (offers ?? []).filter((o): o is typeof o & { lead_id: string } => !!o.lead_id)
-  if (withLead.length === 0) return []
+  if (!offers || offers.length === 0) return []
 
-  // Which of these leads already became a real, staff-confirmed account?
+  // Which of these offers already became a real, staff-confirmed account?
   // Those are done — they belong in `accounts`, not this in-progress list.
   // Checked two ways, not just status='reviewed': the onboarding_setup job
   // sets account_id on this row the MOMENT the account is created (early in
@@ -526,27 +531,22 @@ export async function getInProgressOnboardings(contactId: string): Promise<InPro
   // accounts list at the same time for however long that gap takes
   // (bug-hunter finding, dev job bc2a8f7f round 8) — account_id is the
   // earlier, more reliable signal that the graduation already happened.
-  const leadIds = withLead.map(o => o.lead_id)
+  const offerIds = offers.map(o => o.id)
   const { data: reviewed } = await supabaseAdmin
     .from('onboarding_submissions')
-    .select('lead_id')
-    .in('lead_id', leadIds)
+    .select('offer_id')
+    .in('offer_id', offerIds)
     .or('status.eq.reviewed,account_id.not.is.null')
-  const reviewedLeadIds = new Set((reviewed ?? []).map(r => r.lead_id))
+  const reviewedOfferIds = new Set((reviewed ?? []).map(r => r.offer_id))
 
-  // One entry per lead (a lead can have at most one onboarding offer in
-  // practice, but dedupe defensively — first/most-recent wins, matching the
-  // `order('created_at', desc)` above).
-  const seen = new Set<string>()
   const result: InProgressOnboarding[] = []
-  for (const o of withLead) {
-    if (reviewedLeadIds.has(o.lead_id) || seen.has(o.lead_id)) continue
-    seen.add(o.lead_id)
+  for (const o of offers) {
+    if (reviewedOfferIds.has(o.id)) continue
     result.push({
-      id: `onboarding:${o.lead_id}`,
+      id: `onboarding:${o.id}`,
       label: o.client_name || 'New company (in onboarding)',
       stage: 'onboarding',
-      leadId: o.lead_id,
+      offerId: o.id,
     })
   }
   return result

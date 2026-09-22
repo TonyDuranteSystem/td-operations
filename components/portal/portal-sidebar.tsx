@@ -488,14 +488,16 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
 
     // The wizard link itself must carry which onboarding it's for, the same
     // way the payment-time notification and the reminder cron were fixed to
-    // (dev job bc2a8f7f, 2026-09-21) — without it, a returning client with an
-    // existing account who's mid-way through a SECOND onboarding gets sent to
-    // a bare /portal/wizard, which silently falls through to their EXISTING
-    // account instead of the one they're actually switched to here.
+    // (dev job bc2a8f7f, corrected 2026-09-21 to key on the OFFER, not a
+    // lead — a returning client's second+ onboarding has no lead at all).
+    // Without it, a returning client with an existing account who's mid-way
+    // through a SECOND onboarding gets sent to a bare /portal/wizard, which
+    // silently falls through to their EXISTING account instead of the one
+    // they're actually switched to here.
     let navHref = item.href
     if (item.key === 'nav.wizard' && selectedOnboardingId) {
       const selected = inProgressOnboardings.find(o => o.id === selectedOnboardingId)
-      if (selected?.leadId) navHref = `/portal/wizard?type=onboarding&lead=${encodeURIComponent(selected.leadId)}`
+      if (selected?.offerId) navHref = `/portal/wizard?type=onboarding&offer=${encodeURIComponent(selected.offerId)}`
     }
 
     return (

@@ -42,6 +42,7 @@ interface OnboardingPayload {
   account_id: string | null
   contact_id: string | null
   lead_id: string | null
+  offer_id?: string | null
   company_name: string
   state_of_formation: string
   entity_type: string  // "SMLLC" or "MMLLC"
@@ -1014,11 +1015,13 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         // Resolve pricing from offer (if available)
         let sdAmount: number | null = null
         let sdCurrency = "USD"
-        if (p.lead_id) {
-          const { data: offer } = await supabaseAdmin
-            .from("offers")
-            .select("services")
-            .eq("lead_id", p.lead_id)
+        if (p.lead_id || p.offer_id) {
+          // A second+ company for a returning client has no lead — its offer
+          // was created directly on the contact — so fall back to the
+          // offer's own id when there's no lead to key off of.
+          let offerQuery = supabaseAdmin.from("offers").select("services")
+          offerQuery = p.lead_id ? offerQuery.eq("lead_id", p.lead_id) : offerQuery.eq("id", p.offer_id!)
+          const { data: offer } = await offerQuery
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle()
@@ -1128,11 +1131,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     // Check if tax return is bundled (included) in the client's offer
     let taxReturnIncludedInOffer = false
-    if (p.lead_id) {
-      const { data: offer } = await supabaseAdmin
-        .from("offers")
-        .select("services, bundled_pipelines")
-        .eq("lead_id", p.lead_id)
+    if (p.lead_id || p.offer_id) {
+      let taxOfferQuery = supabaseAdmin.from("offers").select("services, bundled_pipelines")
+      taxOfferQuery = p.lead_id ? taxOfferQuery.eq("lead_id", p.lead_id) : taxOfferQuery.eq("id", p.offer_id!)
+      const { data: offer } = await taxOfferQuery
         .in("status", ["completed", "signed", "viewed", "sent"])
         .order("created_at", { ascending: false })
         .limit(1)

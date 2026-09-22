@@ -23,7 +23,7 @@ import type { InProgressFormation, InProgressOnboarding } from '@/lib/portal/que
 export type SelectedEntity =
   | { kind: 'account'; accountId: string; tier: string; account: PortalAccount }
   | { kind: 'formation'; formationId: string; sdId: string; label: string; tier: 'formation' }
-  | { kind: 'onboarding'; onboardingId: string; leadId: string; label: string; tier: 'onboarding' }
+  | { kind: 'onboarding'; onboardingId: string; offerId: string; label: string; tier: 'onboarding' }
   | { kind: 'none'; tier: string }
 
 export function resolveSelectedEntity(params: {
@@ -51,7 +51,7 @@ export function resolveSelectedEntity(params: {
   // 1b. Explicit in-progress-onboarding selection wins the same way.
   if (onboardingCookie) {
     const o = inProgressOnboardings.find(x => x.id === onboardingCookie)
-    if (o) return { kind: 'onboarding', onboardingId: o.id, leadId: o.leadId, label: o.label, tier: 'onboarding' }
+    if (o) return { kind: 'onboarding', onboardingId: o.id, offerId: o.offerId, label: o.label, tier: 'onboarding' }
     // stale/invalid onboarding cookie → ignore, fall through to account/default
   }
 
@@ -70,7 +70,7 @@ export function resolveSelectedEntity(params: {
   // 3b. No account or formation, but an onboarding in progress → show it.
   if (inProgressOnboardings.length > 0) {
     const o = inProgressOnboardings[0]
-    return { kind: 'onboarding', onboardingId: o.id, leadId: o.leadId, label: o.label, tier: 'onboarding' }
+    return { kind: 'onboarding', onboardingId: o.id, offerId: o.offerId, label: o.label, tier: 'onboarding' }
   }
 
   // 4. Nothing yet → contact-level / auth tier.

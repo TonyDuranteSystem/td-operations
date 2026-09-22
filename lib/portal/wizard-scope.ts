@@ -11,7 +11,7 @@ import { isContactScopedWizard, isPersonOwnedWizard } from './wizard-map'
  * excludes lead-anchored rows. See dev_task 21fd1f4a.
  */
 export interface WizardProgressScope {
-  col: 'lead_id' | 'account_id' | 'contact_id' | 'service_delivery_id'
+  col: 'lead_id' | 'offer_id' | 'account_id' | 'contact_id' | 'service_delivery_id'
   val: string
   restrictToNoLead: boolean
 }
@@ -44,16 +44,20 @@ export function resolveWizardProgressScope(params: {
    *  to (lib/portal/closure-subject.ts). When set, takes precedence over
    *  every other rule below, including formationLeadId. */
   serviceDeliveryId?: string | null
-  /** Onboarding's own version of formationLeadId (dev job bc2a8f7f,
-   *  2026-09-20) — a verified new-company onboarding lead. Without this, a
-   *  contact with a stale abandoned draft for a DIFFERENT company fell
-   *  through to the contact_id rule below and had that unrelated draft's
-   *  answers silently loaded into the new company's form. Same precedence
-   *  tier as formationLeadId — both mean "this session is verified to be
-   *  about ONE specific new company." */
-  onboardingLeadId?: string | null
+  /** Onboarding's own version of formationLeadId — but keyed on the OFFER,
+   *  not a lead (dev job bc2a8f7f, corrected 2026-09-21). A client's very
+   *  FIRST onboarding starts as a lead, same as formation; every one after
+   *  that has NO lead at all — staff creates it directly on the contact,
+   *  confirmed live and directly by Antonio. The offer's own id is the one
+   *  thing that always exists early enough to anchor on, either way.
+   *  Without this, a contact with a stale abandoned draft for a DIFFERENT
+   *  company fell through to the contact_id rule below and had that
+   *  unrelated draft's answers silently loaded into the new company's
+   *  form. Same precedence tier as formationLeadId — both mean "this
+   *  session is verified to be about ONE specific new company." */
+  onboardingOfferId?: string | null
 }): WizardProgressScope | null {
-  const { wizardType, formationLeadId, accountId, contactId, serviceDeliveryId, onboardingLeadId } = params
+  const { wizardType, formationLeadId, accountId, contactId, serviceDeliveryId, onboardingOfferId } = params
 
   if (wizardType === 'closure' && serviceDeliveryId) {
     return { col: 'service_delivery_id', val: serviceDeliveryId, restrictToNoLead: false }
@@ -61,8 +65,8 @@ export function resolveWizardProgressScope(params: {
   if (formationLeadId) {
     return { col: 'lead_id', val: formationLeadId, restrictToNoLead: false }
   }
-  if (onboardingLeadId) {
-    return { col: 'lead_id', val: onboardingLeadId, restrictToNoLead: false }
+  if (onboardingOfferId) {
+    return { col: 'offer_id', val: onboardingOfferId, restrictToNoLead: false }
   }
   if (isContactScopedWizard(wizardType) && contactId) {
     return { col: 'contact_id', val: contactId, restrictToNoLead: true }

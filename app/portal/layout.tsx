@@ -283,7 +283,7 @@ export default async function PortalLayout({
     contactId: contactId || null,
     selectedAccountId,
     portalTier,
-    onboardingLeadId: selected.kind === 'onboarding' ? selected.leadId : undefined,
+    onboardingOfferId: selected.kind === 'onboarding' ? selected.offerId : undefined,
   })
 
   // Team tab is visible only to the account admin (main person) of the selected company.

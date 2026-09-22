@@ -73,6 +73,10 @@ interface WizardClientProps {
   contactId: string
   /** Set for a formation wizard scoped to a NEW company's lead (no account yet). */
   leadId: string
+  /** Set for an onboarding wizard scoped to a NEW/second company's offer (dev
+   *  job bc2a8f7f, corrected 2026-09-21) — NOT a lead. A returning client's
+   *  second+ onboarding has no lead at all; the offer is the real anchor. */
+  offerId: string
   locale: 'en' | 'it'
   /** Status of a previous submission (if any) */
   initialSubmitStatus?: 'in_progress' | 'submitted' | null
@@ -293,6 +297,7 @@ export function WizardClient({
   accountId,
   contactId,
   leadId,
+  offerId,
   locale,
   initialSubmitStatus,
   isLocked,
@@ -448,9 +453,11 @@ export function WizardClient({
             file_name: file.name,
             file_size: file.size,
             wizard_type: wizardType,
-            // Prefer leadId so a new-company formation's uploads stay in their own
-            // folder (not co-mingled with an existing account or contact).
-            identifier: leadId || accountId || contactId || 'unknown',
+            // Prefer leadId/offerId so a new-company formation's or onboarding's
+            // uploads stay in their own folder (not co-mingled with an existing
+            // account or contact, or a DIFFERENT new/second company's own
+            // uploads — dev job bc2a8f7f).
+            identifier: leadId || offerId || accountId || contactId || 'unknown',
           }),
         })
         if (!res.ok) {
@@ -518,7 +525,7 @@ export function WizardClient({
         return null
       }
     },
-    [wizardType, accountId, contactId, leadId],
+    [wizardType, accountId, contactId, leadId, offerId],
   )
 
   // ✨ AI draft helper for TD Communication brand-audit textareas. POSTs the
@@ -721,6 +728,7 @@ export function WizardClient({
         account_id: accountId || null,
         contact_id: contactId || null,
         lead_id: leadId || null,
+        offer_id: offerId || null,
         progress_id: currentProgressId,
         service_delivery_id: closureServiceDeliveryId || null,
       }
@@ -745,7 +753,7 @@ export function WizardClient({
     } finally {
       if (!silent) setIsSaving(false)
     }
-  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, pickText, closureServiceDeliveryId])
+  }, [wizardType, currentStep, formData, accountId, contactId, leadId, offerId, currentProgressId, pickText, closureServiceDeliveryId])
 
   const handleSave = useCallback(async () => {
     dirtyRef.current = false
@@ -896,6 +904,7 @@ export function WizardClient({
             account_id: accountId || null,
             contact_id: contactId || null,
             lead_id: leadId || null,
+            offer_id: offerId || null,
             progress_id: currentProgressId,
             service_delivery_id: closureServiceDeliveryId || null,
             // Attempt 1 carries the caller's flag; retries force the idempotent
@@ -940,7 +949,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -956,7 +965,7 @@ export function WizardClient({
     setCurrentStep(step)
     // Auto-save in background (only if user has entered data)
     const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
-    if (hasData && (accountId || contactId || leadId)) {
+    if (hasData && (accountId || contactId || leadId || offerId)) {
       fetch('/api/portal/wizard-progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -967,6 +976,7 @@ export function WizardClient({
           account_id: accountId || null,
           contact_id: contactId || null,
           lead_id: leadId || null,
+          offer_id: offerId || null,
           progress_id: currentProgressId,
           service_delivery_id: closureServiceDeliveryId || null,
         }),
@@ -976,7 +986,7 @@ export function WizardClient({
           console.warn('[wizard] Auto-save failed — data preserved in memory')
         })
     }
-  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors, closureServiceDeliveryId])
+  }, [wizardType, formData, accountId, contactId, leadId, offerId, currentProgressId, currentStep, raiseStepErrors, closureServiceDeliveryId])
 
   // ── One-owner / multi-owner question ──────────────────────────────────────
   // Only reached when the signed contract AND the offer both failed to say what
