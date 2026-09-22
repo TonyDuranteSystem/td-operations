@@ -25,6 +25,12 @@ const OFFER_STATUS_COLORS: Record<string, string> = {
 }
 
 export interface OfferData {
+  /** Real primary key — used as the React list key. NEVER key a list of
+   *  offers by `token` alone: there is no DB-level uniqueness constraint on
+   *  it (unlike welcome_tokens/esign_envelopes/closure_submissions, which all
+   *  have one), so two rows sharing a token would silently swap each other's
+   *  card-local dialog/loading state (bug-hunter finding, dev job b1e0cb99). */
+  id: string
   token: string
   status: string
   contract_type: string | null
@@ -41,22 +47,28 @@ export interface OfferData {
   package_locked_at?: string | null
 }
 
+type PendingActivationShape = {
+  status: string | null
+  activated_at: string | null
+  payment_confirmed_at: string | null
+} | null
+
 interface AccountOfferPanelProps {
   accountId: string | null
   companyName: string
   clientEmail: string
   clientLanguage?: string | null
   contactId?: string | null
-  offer: OfferData | null
+  /** EVERY offer for this client — not just one. (dev job b1e0cb99: the old
+   *  single-`offer` shape silently picked "the newest non-draft, or the
+   *  newest" and hid everything else, so a single old expired offer could
+   *  permanently bury brand-new drafts underneath it.) */
+  offers: OfferData[]
   isAdmin: boolean
-  /** Activation state for this offer's contract. Works for both account and
-   *  individual (contact) pages. Used to show "Activate now" vs a persistent
-   *  "Activated · payment pending" reminder. */
-  pendingActivation?: {
-    status: string | null
-    activated_at: string | null
-    payment_confirmed_at: string | null
-  } | null
+  /** Activation state per offer, keyed by offer token. Each card looks up
+   *  its OWN entry — never assume there is only one offer's worth of
+   *  activation state to go around. */
+  pendingActivations?: Record<string, PendingActivationShape>
 }
 
 export function AccountOfferPanel({
@@ -65,12 +77,90 @@ export function AccountOfferPanel({
   clientEmail,
   clientLanguage,
   contactId,
+  offers,
+  isAdmin,
+  pendingActivations = {},
+}: AccountOfferPanelProps) {
+  const [showCreateOffer, setShowCreateOffer] = useState(false)
+
+  // Newest first — matches every other offer listing in the app (Finance,
+  // the lead page's offer history, the lifecycle timeline).
+  const sortedOffers = [...offers].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+
+  return (
+    <div className="bg-white rounded-lg border p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+          <FileText className="h-4 w-4" />
+          Offers{sortedOffers.length > 0 ? ` (${sortedOffers.length})` : ''}
+        </h3>
+        <button
+          onClick={() => {
+            if (!clientEmail) {
+              toast.error('Account needs a contact with an email before creating an offer')
+              return
+            }
+            setShowCreateOffer(true)
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+        >
+          <FileText className="h-3.5 w-3.5" />
+          Create New Offer
+        </button>
+      </div>
+
+      {sortedOffers.length === 0 ? (
+        <p className="text-sm text-zinc-500 text-center py-4">No offer exists for this account</p>
+      ) : (
+        <div className="space-y-3">
+          {sortedOffers.map((offer) => (
+            <OfferCard
+              key={offer.id}
+              accountId={accountId}
+              companyName={companyName}
+              clientEmail={clientEmail}
+              offer={offer}
+              isAdmin={isAdmin}
+              pendingActivation={pendingActivations[offer.token] ?? null}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Create Offer Dialog — one per panel, not one per card. */}
+      <CreateOfferDialog
+        open={showCreateOffer}
+        onClose={() => setShowCreateOffer(false)}
+        accountId={accountId}
+        contactId={contactId}
+        clientName={companyName}
+        clientEmail={clientEmail}
+        clientLanguage={clientLanguage}
+      />
+    </div>
+  )
+}
+
+/** One offer's status, price breakdown, and action buttons. Each card is its
+ *  own component instance, so its dialogs/loading state (all local useState,
+ *  no module-level state — verified) never leak between offers rendered side
+ *  by side (bug-hunter attacked this directly and found nothing). */
+function OfferCard({
+  accountId,
+  companyName,
+  clientEmail,
   offer,
   isAdmin,
-  pendingActivation = null,
-}: AccountOfferPanelProps) {
+  pendingActivation,
+}: {
+  accountId: string | null
+  companyName: string
+  clientEmail: string
+  offer: OfferData
+  isAdmin: boolean
+  pendingActivation: PendingActivationShape
+}) {
   const router = useRouter()
-  const [showCreateOffer, setShowCreateOffer] = useState(false)
   const [showConfirmPayment, setShowConfirmPayment] = useState(false)
   const [activatingNow, setActivatingNow] = useState(false)
   const [sendingOffer, setSendingOffer] = useState(false)
@@ -81,24 +171,20 @@ export function AccountOfferPanel({
   const [resendingEmail, setResendingEmail] = useState(false)
   const welcomeLinkRef = useRef<WelcomeLinkButtonHandle | null>(null)
 
-  // Offer panel visible to all dashboard users (admin + team)
-
-  const hasOffer = !!offer
-  const isOfferDraft = hasOffer && offer.status === 'draft'
-  const isOfferClosed = hasOffer && (offer.status === 'expired' || offer.status === 'completed' || offer.contract_type === 'renewal')
+  const isOfferDraft = offer.status === 'draft'
 
   // Multi-option offers: which option (if any) the client picked, so staff
   // can see it without opening the database directly.
-  const packageOptions: OfferPackageOption[] = Array.isArray(offer?.packages) ? offer.packages : []
+  const packageOptions: OfferPackageOption[] = Array.isArray(offer.packages) ? offer.packages : []
   const hasPackages = packageOptions.length > 0
-  const pickedPackage = hasPackages && offer?.selected_package_key
+  const pickedPackage = hasPackages && offer.selected_package_key
     ? packageOptions.find((p) => p.key === offer.selected_package_key) ?? null
     : null
   // The key is set but no package in the array matches it — shouldn't happen
   // (packages are frozen once a pick locks) but if the data ever drifts,
   // staff should see a plain explanation, not a blank label.
-  const pickIsUnresolved = hasPackages && !!offer?.selected_package_key && !pickedPackage
-  const canUndoPick = hasOffer && hasPackages && !!offer?.selected_package_key && canResetPackagePick(offer.status)
+  const pickIsUnresolved = hasPackages && !!offer.selected_package_key && !pickedPackage
+  const canUndoPick = hasPackages && !!offer.selected_package_key && canResetPackagePick(offer.status)
 
   // Activation state (decoupled from payment). "Activated · payment pending"
   // is the persistent reminder that the contract was turned on before the
@@ -107,10 +193,9 @@ export function AccountOfferPanel({
   const isPaid = !!pendingActivation?.payment_confirmed_at
   const activatedAwaitingPayment = isActivated && !isPaid
   // "Activate now" only makes sense before activation, on a signed contract.
-  const canActivateNow = isAdmin && hasOffer && offer.status === 'signed' && !isActivated
+  const canActivateNow = isAdmin && offer.status === 'signed' && !isActivated
 
   const handleActivateNow = async () => {
-    if (!offer?.token) return
     if (!confirm(
       `Activate ${companyName} now?\n\n` +
       `This turns their contract on immediately — WITHOUT requiring payment. ` +
@@ -145,7 +230,6 @@ export function AccountOfferPanel({
   const appBaseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://app.tonydurante.us'
 
   const doSendOffer = async () => {
-    if (!offer?.token) return
     setSendingOffer(true)
     try {
       const res = await fetch('/api/crm/admin-actions/send-offer', {
@@ -175,7 +259,7 @@ export function AccountOfferPanel({
   }
 
   const doResendEmail = async () => {
-    if (!offer?.token || resendingEmail) return
+    if (resendingEmail) return
     setResendingEmail(true)
     try {
       const res = await fetch('/api/crm/admin-actions/resend-offer', {
@@ -202,7 +286,6 @@ export function AccountOfferPanel({
   }
 
   const doDeleteOffer = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
-    if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
       const res = await fetch('/api/crm/admin-actions/delete-offer', {
         method: 'POST',
@@ -218,7 +301,6 @@ export function AccountOfferPanel({
   }
 
   const doUndoPackagePick = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
-    if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
       const res = await fetch('/api/crm/admin-actions/reset-package-pick', {
         method: 'POST',
@@ -234,7 +316,6 @@ export function AccountOfferPanel({
   }
 
   const doResetOffer = async (): Promise<{ success: boolean; error?: string; message?: string }> => {
-    if (!offer?.token) return { success: false, error: 'No offer token' }
     try {
       const res = await fetch('/api/crm/admin-actions/reset-offer', {
         method: 'POST',
@@ -251,282 +332,224 @@ export function AccountOfferPanel({
 
   return (
     <>
-      <div className="bg-white rounded-lg border p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <FileText className="h-4 w-4" />
-            Offer
-          </h3>
+      <div className="rounded-lg border border-zinc-200 p-3 space-y-3">
+        {/* Status row */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="font-mono text-sm text-blue-600 font-medium">{offer.token}</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded ${OFFER_STATUS_COLORS[offer.status] || 'bg-zinc-100 text-zinc-700'}`}>
+            {offer.status}
+          </span>
+          {offer.contract_type && (
+            <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">
+              {offer.contract_type}
+            </span>
+          )}
+          {offer.view_count > 0 && (
+            <span className="text-xs text-zinc-500 flex items-center gap-1">
+              <Eye className="h-3 w-3" /> {offer.view_count} views
+            </span>
+          )}
+          {activatedAwaitingPayment && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-100 text-amber-700 flex items-center gap-1" title="The contract was activated before payment. It stays marked as owed until a payment is linked.">
+              <Clock className="h-3 w-3" /> Activated · payment pending
+            </span>
+          )}
+          {isActivated && isPaid && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-1">
+              <CheckCircle2 className="h-3 w-3" /> Activated
+            </span>
+          )}
+          {hasPackages && (
+            <span className="text-xs text-zinc-500">
+              {!offer.selected_package_key
+                ? "Awaiting the client's pick"
+                : pickIsUnresolved
+                  ? 'Picked option details not found — check the offer directly'
+                  : `Picked: ${pickedPackage!.label}`}
+            </span>
+          )}
         </div>
 
-        {!hasOffer ? (
-          /* No offer -- show create button */
-          <div className="text-center py-4">
-            <p className="text-sm text-zinc-500 mb-3">No offer exists for this account</p>
-            <button
-              onClick={() => {
-                if (!clientEmail) {
-                  toast.error('Account needs a contact with an email before creating an offer')
-                  return
-                }
-                setShowCreateOffer(true)
-              }}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-            >
-              <FileText className="h-4 w-4" />
-              Create Offer
-            </button>
-          </div>
-        ) : (
-          /* Offer exists -- show details + actions */
-          <div className="space-y-3">
-            {/* Status row */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="font-mono text-sm text-blue-600 font-medium">{offer.token}</span>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded ${OFFER_STATUS_COLORS[offer.status] || 'bg-zinc-100 text-zinc-700'}`}>
-                {offer.status}
-              </span>
-              {offer.contract_type && (
-                <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">
-                  {offer.contract_type}
-                </span>
-              )}
-              {offer.view_count > 0 && (
-                <span className="text-xs text-zinc-500 flex items-center gap-1">
-                  <Eye className="h-3 w-3" /> {offer.view_count} views
-                </span>
-              )}
-              {activatedAwaitingPayment && (
-                <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-100 text-amber-700 flex items-center gap-1" title="The contract was activated before payment. It stays marked as owed until a payment is linked.">
-                  <Clock className="h-3 w-3" /> Activated · payment pending
-                </span>
-              )}
-              {isActivated && isPaid && (
-                <span className="text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" /> Activated
-                </span>
-              )}
-              {hasPackages && (
-                <span className="text-xs text-zinc-500">
-                  {!offer!.selected_package_key
-                    ? "Awaiting the client's pick"
-                    : pickIsUnresolved
-                      ? 'Picked option details not found — check the offer directly'
-                      : `Picked: ${pickedPackage!.label}`}
-                </span>
-              )}
-            </div>
-
-            {/* Cost summary */}
-            {offer.cost_summary && offer.cost_summary.length > 0 && (
-              <div className="bg-zinc-50 rounded-lg p-3 text-sm">
-                {offer.cost_summary.map((group, i) => (
-                  <div key={i}>
-                    {group.items?.map((item, j) => (
-                      <div key={j} className="flex justify-between text-xs">
-                        <span className="text-zinc-600">{item.name}</span>
-                        <span className="font-medium">{item.price}</span>
-                      </div>
-                    ))}
-                    {group.total && (
-                      <div className="flex justify-between mt-1 pt-1 border-t border-zinc-200">
-                        <span className="text-xs font-medium">{group.label}</span>
-                        <span className="text-sm font-bold">{group.total}</span>
-                      </div>
-                    )}
+        {/* Cost summary */}
+        {offer.cost_summary && offer.cost_summary.length > 0 && (
+          <div className="bg-zinc-50 rounded-lg p-3 text-sm">
+            {offer.cost_summary.map((group, i) => (
+              <div key={i}>
+                {group.items?.map((item, j) => (
+                  <div key={j} className="flex justify-between text-xs">
+                    <span className="text-zinc-600">{item.name}</span>
+                    <span className="font-medium">{item.price}</span>
                   </div>
                 ))}
-              </div>
-            )}
-
-            {/* Required documents */}
-            {offer.required_documents && offer.required_documents.length > 0 && (
-              <div className="bg-orange-50 rounded-lg p-3">
-                <p className="text-xs font-medium text-orange-800 mb-1">Required Documents:</p>
-                <div className="flex flex-wrap gap-1">
-                  {offer.required_documents.map((doc) => (
-                    <span key={doc.id} className="text-xs px-2 py-0.5 rounded bg-orange-100 text-orange-700">
-                      {doc.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Create New Offer (when current offer is completed/expired) */}
-            {isOfferClosed && (
-              <div className="pt-1 pb-1">
-                <button
-                  onClick={() => {
-                    if (!clientEmail) {
-                      toast.error('Account needs a contact with an email before creating an offer')
-                      return
-                    }
-                    setShowCreateOffer(true)
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                >
-                  <FileText className="h-4 w-4" />
-                  Create New Offer
-                </button>
-              </div>
-            )}
-
-            {/* Action buttons */}
-            <div className="flex flex-wrap gap-2 pt-2">
-              {/* View Offer */}
-              <a
-                href={`${appBaseUrl}/offer/${offer.token}?preview=td`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 transition-colors"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                View Offer
-              </a>
-
-              {/* Copy Welcome Link — only for published offers that created a welcome token (new portal users) */}
-              <WelcomeLinkButton
-                ref={welcomeLinkRef}
-                offerToken={offer.token}
-                offerStatus={offer.status}
-                size="sm"
-              />
-
-
-              {/* Resend Email — non-draft offers only. Sends a portal reminder
-                  email and refreshes the welcome-link state from the response. */}
-              {hasOffer && !isOfferDraft && clientEmail && (
-                <FastTooltip label="Re-send the portal reminder email. Status is unchanged.">
-                  <button
-                    onClick={doResendEmail}
-                    disabled={resendingEmail}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
-                    aria-label="Re-send the portal reminder email. Status is unchanged."
-                  >
-                    {resendingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                    Resend Email
-                  </button>
-                </FastTooltip>
-              )}
-
-              {/* Publish Offer (draft only) — inline confirm avoids browser dialog suppression */}
-              {isOfferDraft && clientEmail && (
-                showSendConfirm ? (
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs text-zinc-600">Publish to {clientEmail}?</span>
-                    <button
-                      onClick={doSendOffer}
-                      disabled={sendingOffer}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
-                    >
-                      {sendingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                      Yes, publish
-                    </button>
-                    <button
-                      onClick={() => setShowSendConfirm(false)}
-                      disabled={sendingOffer}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                      Cancel
-                    </button>
+                {group.total && (
+                  <div className="flex justify-between mt-1 pt-1 border-t border-zinc-200">
+                    <span className="text-xs font-medium">{group.label}</span>
+                    <span className="text-sm font-bold">{group.total}</span>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => setShowSendConfirm(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 transition-colors"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                    Publish Offer
-                  </button>
-                )
-              )}
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
-              {/* Confirm Payment (signed, awaiting wire/manual confirm).
-                  Wire fallback path for existing-account offers when the
-                  auto-match cron didn't match (or the client paid by a
-                  channel we don't auto-detect). */}
-              {offer.status === 'signed' && (
-                <button
-                  onClick={() => setShowConfirmPayment(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-                >
-                  <CreditCard className="h-3.5 w-3.5" />
-                  Confirm Payment
-                </button>
-              )}
-
-              {/* Activate now — turn the contract on without requiring payment
-                  (owner decides; link the money later). Works for account and
-                  individual since it resolves by offer token. */}
-              {canActivateNow && (
-                <FastTooltip label="Turn this contract on now, without requiring payment. Link the money later.">
-                  <button
-                    onClick={handleActivateNow}
-                    disabled={activatingNow}
-                    aria-label="Turn this contract on now, without requiring payment. Link the money later."
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
-                  >
-                    {activatingNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-                    Activate now
-                  </button>
-                </FastTooltip>
-              )}
-
-              {/* Undo the client's package pick — only while there's a pick
-                  to undo and the deal isn't already closed (same rule the
-                  server enforces; this just avoids showing a button that
-                  would always fail). */}
-              {canUndoPick && (
-                <button
-                  onClick={() => setShowUndoPickConfirm(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Undo Pick
-                </button>
-              )}
-
-              {/* Reset Offer (not draft) */}
-              {offer.status !== 'draft' && (
-                <button
-                  onClick={() => setShowResetConfirm(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reset to Draft
-                </button>
-              )}
-
-              {/* Delete Offer */}
-              <button
-                onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Delete Offer
-              </button>
+        {/* Required documents */}
+        {offer.required_documents && offer.required_documents.length > 0 && (
+          <div className="bg-orange-50 rounded-lg p-3">
+            <p className="text-xs font-medium text-orange-800 mb-1">Required Documents:</p>
+            <div className="flex flex-wrap gap-1">
+              {offer.required_documents.map((doc) => (
+                <span key={doc.id} className="text-xs px-2 py-0.5 rounded bg-orange-100 text-orange-700">
+                  {doc.name}
+                </span>
+              ))}
             </div>
           </div>
         )}
+
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-2 pt-1">
+          {/* View Offer */}
+          <a
+            href={`${appBaseUrl}/offer/${offer.token}?preview=td`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 transition-colors"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            View Offer
+          </a>
+
+          {/* Copy Welcome Link — only for published offers that created a welcome token (new portal users) */}
+          <WelcomeLinkButton
+            ref={welcomeLinkRef}
+            offerToken={offer.token}
+            offerStatus={offer.status}
+            size="sm"
+          />
+
+          {/* Resend Email — non-draft offers only. Sends a portal reminder
+              email and refreshes the welcome-link state from the response. */}
+          {!isOfferDraft && clientEmail && (
+            <FastTooltip label="Re-send the portal reminder email. Status is unchanged.">
+              <button
+                onClick={doResendEmail}
+                disabled={resendingEmail}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                aria-label="Re-send the portal reminder email. Status is unchanged."
+              >
+                {resendingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Resend Email
+              </button>
+            </FastTooltip>
+          )}
+
+          {/* Publish Offer (draft only) — inline confirm avoids browser dialog suppression */}
+          {isOfferDraft && clientEmail && (
+            showSendConfirm ? (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs text-zinc-600">Publish to {clientEmail}?</span>
+                <button
+                  onClick={doSendOffer}
+                  disabled={sendingOffer}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 transition-colors"
+                >
+                  {sendingOffer ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Yes, publish
+                </button>
+                <button
+                  onClick={() => setShowSendConfirm(false)}
+                  disabled={sendingOffer}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowSendConfirm(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Publish Offer
+              </button>
+            )
+          )}
+
+          {/* Confirm Payment (signed, awaiting wire/manual confirm).
+              Wire fallback path for existing-account offers when the
+              auto-match cron didn't match (or the client paid by a
+              channel we don't auto-detect). Correctly scoped to THIS
+              card's own offer — never "the newest offer" (dev job b1e0cb99;
+              see the separate fix in contact-detail.tsx's QuickActionsBar,
+              which had exactly that bug for its own, different Confirm
+              Payment entry point). */}
+          {offer.status === 'signed' && (
+            <button
+              onClick={() => setShowConfirmPayment(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+            >
+              <CreditCard className="h-3.5 w-3.5" />
+              Confirm Payment
+            </button>
+          )}
+
+          {/* Activate now — turn the contract on without requiring payment
+              (owner decides; link the money later). Works for account and
+              individual since it resolves by offer token. */}
+          {canActivateNow && (
+            <FastTooltip label="Turn this contract on now, without requiring payment. Link the money later.">
+              <button
+                onClick={handleActivateNow}
+                disabled={activatingNow}
+                aria-label="Turn this contract on now, without requiring payment. Link the money later."
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+              >
+                {activatingNow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Activate now
+              </button>
+            </FastTooltip>
+          )}
+
+          {/* Undo the client's package pick — only while there's a pick
+              to undo and the deal isn't already closed (same rule the
+              server enforces; this just avoids showing a button that
+              would always fail). */}
+          {canUndoPick && (
+            <button
+              onClick={() => setShowUndoPickConfirm(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Undo Pick
+            </button>
+          )}
+
+          {/* Reset Offer (not draft) */}
+          {offer.status !== 'draft' && (
+            <button
+              onClick={() => setShowResetConfirm(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset to Draft
+            </button>
+          )}
+
+          {/* Delete Offer */}
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 transition-colors"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete Offer
+          </button>
+        </div>
       </div>
 
-      {/* Create Offer Dialog */}
-      <CreateOfferDialog
-        open={showCreateOffer}
-        onClose={() => setShowCreateOffer(false)}
-        accountId={accountId}
-        contactId={contactId}
-        clientName={companyName}
-        clientEmail={clientEmail}
-        clientLanguage={clientLanguage}
-      />
-
-      {/* Confirm Payment Dialog — only mounted when an offer exists in
-          'signed' status. Routes via account_id + offer_token (no lead
-          needed for the existing-account re-entry case). */}
-      {showConfirmPayment && offer && (
+      {/* Confirm Payment Dialog — routes via account_id + offer_token (no
+          lead needed for the existing-account re-entry case). */}
+      {showConfirmPayment && (
         <ConfirmPaymentDialog
           open={showConfirmPayment}
           onClose={() => setShowConfirmPayment(false)}
@@ -559,7 +582,7 @@ export function AccountOfferPanel({
         open={showResetConfirm}
         onClose={() => setShowResetConfirm(false)}
         title="Reset offer to draft?"
-        description={`This will delete any contracts and pending activations for offer ${offer?.token ?? ''}. The offer will return to draft status.`}
+        description={`This will delete any contracts and pending activations for offer ${offer.token}. The offer will return to draft status.`}
         severity="amber"
         confirmLabel="Yes, reset to draft"
         onConfirm={doResetOffer}
@@ -571,7 +594,7 @@ export function AccountOfferPanel({
         open={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
         title="Delete this offer?"
-        description={`This will permanently delete offer ${offer?.token ?? ''} along with any associated contracts and activations. This cannot be undone.`}
+        description={`This will permanently delete offer ${offer.token} along with any associated contracts and activations. This cannot be undone.`}
         severity="red"
         confirmLabel="Yes, delete offer"
         onConfirm={doDeleteOffer}

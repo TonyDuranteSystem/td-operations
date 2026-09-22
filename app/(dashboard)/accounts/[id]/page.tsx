@@ -62,7 +62,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   }
 
   // Fetch related data in parallel
-  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, offerResult, , wizardProgressResult, signerResult, currentMembersResult] = await Promise.all([
+  const [contactsResult, servicesResult, paymentsResult, dealsResult, taxReturnsResult, documentsResult, , , wizardProgressResult, signerResult, currentMembersResult] = await Promise.all([
     // Contacts via junction table
     supabase
       .from('account_contacts')
@@ -106,16 +106,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
       .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size, portal_visible')
       .eq('account_id', params.id)
       .order('processed_at', { ascending: false }),
-    // Offer (latest for this account)
-    supabase
-      .from('offers')
-      // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
-      .select('token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents, packages, selected_package_key, package_locked_at' as never)
-      .eq('account_id', params.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    // Pending activation (for journey tracker — fetched after offer token is known)
+    // Offer placeholder — fetched separately below, AFTER contacts resolve
+    // (the widened query needs linked-contact ids first; see below).
+    Promise.resolve({ data: null }),
+    // Pending activations placeholder — fetched separately below, per offer token.
     Promise.resolve({ data: null }),
     // Wizard progress (for journey tracker — fetch ALL wizards)
     supabaseAdmin
@@ -185,7 +179,8 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const deals: Deal[] = (dealsResult.data ?? []).map(d => ({ ...d, account_id: params.id })) as Deal[]
   const taxReturns: TaxReturn[] = (taxReturnsResult.data ?? []) as TaxReturn[]
   const documents = (documentsResult.data ?? []) as DocumentRecord[]
-  const offer = offerResult.data as unknown as {
+  type AccountOfferRow = {
+    id: string
     token: string
     status: string
     contract_type: string | null
@@ -198,24 +193,52 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     packages: OfferPackageOption[] | null
     selected_package_key: string | null
     package_locked_at: string | null
-  } | null
+  }
 
-  // Fetch pending activation for this offer (if exists)
-  let pendingActivation: {
+  // EVERY offer belonging to this company — not just the newest one (dev
+  // job b1e0cb99: a single old expired offer used to permanently bury
+  // brand-new drafts created afterward). This means offers filed directly
+  // on the account, PLUS offers filed on a linked person that are NOT
+  // already tied to a DIFFERENT company.
+  //
+  // The second half is deliberately narrow (bug-hunter blocker, same dev
+  // job): widening this to "any offer belonging to any linked contact"
+  // would leak a different company's real, actionable contract onto this
+  // page whenever the same person owns more than one company (11.6% of
+  // contacts do, confirmed live 2026-09-22) — a referral credit note's
+  // origin, "Adam Mihaly owns both LUMA Beauty Global LLC and THW Global
+  // LLC", is the exact shape of client this guards. `account_id.is.null` on
+  // the contact-branch is the guard: a contact's offer only surfaces on a
+  // company's page when it isn't already claimed by some other company.
+  const contactIdsForOffers = contacts.map((c) => c.id).filter(Boolean) as string[]
+  const offerOrFilter = contactIdsForOffers.length > 0
+    ? `account_id.eq.${params.id},and(account_id.is.null,contact_id.in.(${contactIdsForOffers.join(',')}))`
+    : `account_id.eq.${params.id}`
+  const { data: offersRaw } = await supabaseAdmin
+    .from('offers')
+    // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
+    .select('id, token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents, packages, selected_package_key, package_locked_at' as never)
+    .or(offerOrFilter)
+    .order('created_at', { ascending: false })
+  const offers = (offersRaw ?? []) as unknown as AccountOfferRow[]
+
+  // Activation state for EVERY offer above, keyed by token — not just one.
+  const offerTokens = offers.map((o) => o.token)
+  const pendingActivations: Record<string, {
     signed_at: string | null
     payment_confirmed_at: string | null
     payment_method: string | null
     activated_at: string | null
     status: string | null
-  } | null = null
-
-  if (offer?.token) {
-    const { data: pa } = await supabaseAdmin
+  } | null> = {}
+  if (offerTokens.length > 0) {
+    const { data: paRows } = await supabaseAdmin
       .from('pending_activations')
-      .select('signed_at, payment_confirmed_at, payment_method, activated_at, status')
-      .eq('offer_token', offer.token)
-      .maybeSingle()
-    pendingActivation = pa
+      .select('offer_token, signed_at, payment_confirmed_at, payment_method, activated_at, status')
+      .in('offer_token', offerTokens)
+    for (const pa of (paRows ?? []) as Array<{ offer_token: string | null } & Record<string, unknown>>) {
+      if (pa.offer_token) pendingActivations[pa.offer_token] = pa as never
+    }
   }
 
   const allWizardEntries = (wizardProgressResult.data ?? []) as Array<{
@@ -650,9 +673,9 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         documents={documents}
         today={today}
         isAdmin={admin}
-        offer={offer}
+        offers={offers}
         partnerName={partnerName}
-        pendingActivation={pendingActivation}
+        pendingActivations={pendingActivations}
         wizardProgress={wizardProgress}
         serviceDeliveriesRaw={serviceDeliveriesRaw}
         allWizards={allWizardEntries}

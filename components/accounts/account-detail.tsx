@@ -161,15 +161,17 @@ interface AccountDetailProps {
   documents?: DocumentRecord[]
   today: string
   isAdmin?: boolean
-  offer?: OfferData | null
+  /** EVERY offer for this account — not just one (dev job b1e0cb99). */
+  offers?: OfferData[]
   partnerName?: string | null
-  pendingActivation?: {
+  /** Activation state per offer, keyed by offer token. */
+  pendingActivations?: Record<string, {
     signed_at: string | null
     payment_confirmed_at: string | null
     payment_method: string | null
     activated_at: string | null
     status: string | null
-  } | null
+  } | null>
   wizardProgress?: {
     status: string
     current_step: number
@@ -603,9 +605,19 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offer = null, partnerName = null, pendingActivation = null, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
+  // ONE reference offer, not a list — the same "most recent non-draft, or
+  // most recent" rule used everywhere else in the app for this exact
+  // purpose (contact-detail.tsx's journey steps, the lead page's "current
+  // offer"). Deliberately NOT just offers[0]: a brand-new draft created for
+  // an add-on/renewal deal must never flip an already-signed, already-paid
+  // contract's tracker back to "pending" just because it's newer
+  // (bug-hunter finding, dev job b1e0cb99).
+  const journeyOffer = offers.find((o) => o.status !== 'draft') ?? offers[0] ?? null
+  const journeyPendingActivation = journeyOffer ? (pendingActivations[journeyOffer.token] ?? null) : null
   // Deep-link support: a `?tab=<key>` param (e.g. from the What's New "Open"
   // button) selects that tab on load. Falls back to overview for missing/unknown
   // keys so a bad param never blanks the page.
@@ -746,8 +758,8 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
 
       {/* Account Journey Tracker — TOP priority, shows current lifecycle state */}
       <AccountJourney
-        offer={offer ? { token: offer.token, status: offer.status, contract_type: offer.contract_type, created_at: offer.created_at, view_count: offer.view_count, viewed_at: offer.viewed_at, cost_summary: offer.cost_summary } : null}
-        pendingActivation={pendingActivation}
+        offer={journeyOffer ? { token: journeyOffer.token, status: journeyOffer.status, contract_type: journeyOffer.contract_type, created_at: journeyOffer.created_at, view_count: journeyOffer.view_count, viewed_at: journeyOffer.viewed_at, cost_summary: journeyOffer.cost_summary } : null}
+        pendingActivation={journeyPendingActivation}
         wizardProgress={wizardProgress}
         serviceDeliveries={serviceDeliveriesRaw}
         accountType={account.account_type ?? null}
@@ -767,9 +779,9 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         clientEmail={primaryContact?.email || ''}
         clientLanguage={primaryContact?.language}
         contactId={primaryContact?.id}
-        offer={offer}
+        offers={offers}
         isAdmin={isAdmin}
-        pendingActivation={pendingActivation}
+        pendingActivations={pendingActivations}
       />
 
       {/* Documents to Sign Panel */}
