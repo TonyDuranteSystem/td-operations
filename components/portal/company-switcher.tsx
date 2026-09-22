@@ -208,7 +208,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
         >
           {partnerMode
             ? <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
-            : selectedFormation
+            : (selectedFormation || selectedOnboarding)
               ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
               : <Building2 className="h-4 w-4 text-blue-700 shrink-0" />}
           <span className="flex flex-col items-start min-w-0 leading-tight">
@@ -232,7 +232,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
       >
         {partnerMode
           ? <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
-          : selectedFormation
+          : (selectedFormation || selectedOnboarding)
             ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
             : <Building2 className="h-4 w-4 text-blue-600 shrink-0" />}
         <span className="text-sm font-medium text-zinc-900 truncate flex-1 text-left">

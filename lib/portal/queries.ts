@@ -518,12 +518,20 @@ export async function getInProgressOnboardings(contactId: string): Promise<InPro
 
   // Which of these leads already became a real, staff-confirmed account?
   // Those are done — they belong in `accounts`, not this in-progress list.
+  // Checked two ways, not just status='reviewed': the onboarding_setup job
+  // sets account_id on this row the MOMENT the account is created (early in
+  // the job), but doesn't flip status to 'reviewed' until much later (~1000
+  // lines of Drive/tax/renewal-date work later). Status-only would leave the
+  // brand-new account showing HERE as "in onboarding" AND in the real
+  // accounts list at the same time for however long that gap takes
+  // (bug-hunter finding, dev job bc2a8f7f round 8) — account_id is the
+  // earlier, more reliable signal that the graduation already happened.
   const leadIds = withLead.map(o => o.lead_id)
   const { data: reviewed } = await supabaseAdmin
     .from('onboarding_submissions')
     .select('lead_id')
     .in('lead_id', leadIds)
-    .eq('status', 'reviewed')
+    .or('status.eq.reviewed,account_id.not.is.null')
   const reviewedLeadIds = new Set((reviewed ?? []).map(r => r.lead_id))
 
   // One entry per lead (a lead can have at most one onboarding offer in
