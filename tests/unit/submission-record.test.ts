@@ -30,6 +30,7 @@ const MAXIMAL_INPUT: SubmissionRecordInput = {
   contact_id: "00000000-0000-0000-0000-000000000001",
   account_id: "00000000-0000-0000-0000-000000000002",
   lead_id: "00000000-0000-0000-0000-000000000003",
+  offer_id: "00000000-0000-0000-0000-000000000004",
   entity_type: "MMLLC",
   submitted_data: { llc_name_1: "Test LLC" },
   upload_paths: ["a/b.pdf"],

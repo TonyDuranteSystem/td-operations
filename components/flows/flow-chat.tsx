@@ -4,7 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Send } from 'lucide-react'
 
 interface FlowChatProps {
-  serviceDeliveryId: string
+  /** Either this (the normal case, backs /api/flows/[id]/chat) or apiPath
+   *  must be given. */
+  serviceDeliveryId?: string
+  /** Override the endpoint entirely — used by the Onboarding Workspace's
+   *  pre-review stage, which has no service_delivery yet to key on and
+   *  instead posts to a contact-scoped sibling route
+   *  (app/api/onboarding-review/[id]/chat/route.ts). Same GET/POST shape. */
+  apiPath?: string
   label?: string
 }
 
@@ -29,7 +36,8 @@ interface ChatMessage {
  * chat and notifies them. Client replies that reply to a flow message thread back
  * here. Messages render oldest-first (chronological).
  */
-export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
+export function FlowChat({ serviceDeliveryId, apiPath, label }: FlowChatProps) {
+  const endpoint = apiPath || `/api/flows/${serviceDeliveryId}/chat`
   const [loading, setLoading] = useState(true)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -39,7 +47,7 @@ export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/chat`, { cache: 'no-store' })
+      const res = await fetch(endpoint, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data.success === false) {
         throw new Error(data.error || 'Could not load messages.')
@@ -50,7 +58,7 @@ export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
     } finally {
       setLoading(false)
     }
-  }, [serviceDeliveryId])
+  }, [endpoint])
 
   useEffect(() => {
     load()
@@ -67,7 +75,7 @@ export function FlowChat({ serviceDeliveryId, label }: FlowChatProps) {
     setSending(true)
     setError(null)
     try {
-      const res = await fetch(`/api/flows/${serviceDeliveryId}/chat`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),

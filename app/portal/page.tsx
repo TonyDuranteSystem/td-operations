@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalServices, getPortalDeadlines, getPortalPayments, getPortalPaymentsByContact, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows } from '@/lib/portal/queries'
 import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { TaxProgressTracker } from '@/components/portal/tax-progress-tracker'
@@ -176,6 +176,75 @@ export default async function PortalDashboardPage() {
     }
   }
 
+  // Per-entity: an explicitly selected in-progress ONBOARDING (set by the
+  // company switcher) renders the same welcome/progress landing page a
+  // genuinely new client sees, regardless of any OTHER account the client
+  // already owns — mirrors the formation block above exactly. Without this,
+  // a returning client mid-onboarding for a second company who selects it
+  // in the switcher just sees their EXISTING company's normal dashboard
+  // (portalTier resolves from selectedAccountId, which is that existing
+  // company, not 'onboarding'), with no landing-page "Complete Setup" CTA
+  // at all — only the sidebar link (Antonio, 2026-09-22: "I want to see
+  // it in the first page where the client lands, not just the sidebar").
+  const cookieOnboarding = (await cookieStore).get('portal_onboarding')?.value
+  if (contactId && cookieOnboarding) {
+    const inProgressOnb = await getInProgressOnboardings(contactId)
+    const selectedOnboarding = inProgressOnb.find(o => o.id === cookieOnboarding)
+    if (selectedOnboarding) {
+      const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.app_metadata?.full_name?.split(' ')[0] || user.email?.split('@')[0] || 'Client'
+      let offerData = null
+      const { data: offer } = await supabaseAdmin
+        .from('offers')
+        .select('id, token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
+        .eq('id', selectedOnboarding.offerId)
+        .maybeSingle()
+      offerData = offer
+
+      // Scoped to THIS specific offer — a contact-wide check would leak a
+      // different, already-submitted company's status onto this one (same
+      // bug class as wizard-visibility.ts's onboardingOfferId scoping).
+      const { data: wp } = await supabaseAdmin
+        .from('wizard_progress')
+        .select('id')
+        .eq('offer_id', selectedOnboarding.offerId)
+        .eq('wizard_type', 'onboarding')
+        .eq('status', 'submitted')
+        .limit(1)
+        .maybeSingle()
+      let wizardSubmitted = !!wp
+      if (!wizardSubmitted) {
+        const { data: os } = await supabaseAdmin
+          .from('onboarding_submissions')
+          .select('id')
+          .eq('offer_id', selectedOnboarding.offerId)
+          .in('status', ['completed', 'reviewed'])
+          .limit(1)
+          .maybeSingle()
+        wizardSubmitted = !!os
+      }
+
+      let wizardReviewed = false
+      const { data: reviewedOs } = await supabaseAdmin
+        .from('onboarding_submissions')
+        .select('id')
+        .eq('offer_id', selectedOnboarding.offerId)
+        .eq('status', 'reviewed')
+        .limit(1)
+        .maybeSingle()
+      wizardReviewed = !!reviewedOs
+
+      return (
+        <WelcomeDashboard
+          tier="onboarding"
+          firstName={firstName}
+          offerData={offerData}
+          wizardSubmitted={wizardSubmitted}
+          wizardReviewed={wizardReviewed}
+        />
+      )
+    }
+  }
+
   // Check tier
   const portalTier = selectedAccountId
     ? await getPortalTier(selectedAccountId)
@@ -196,7 +265,7 @@ export default async function PortalDashboardPage() {
     if (emailArr.length > 0) {
       const { data: offer } = await supabaseAdmin
         .from('offers')
-        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+        .select('id, token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
         .in('client_email', emailArr)
         .not('status', 'eq', 'expired')
         .order('created_at', { ascending: false })
@@ -216,7 +285,7 @@ export default async function PortalDashboardPage() {
         if (leads?.length) {
           const { data: leadOffer } = await supabaseAdmin
             .from('offers')
-            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+            .select('id, token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
             .eq('lead_id', leads[0].id)
             .not('status', 'eq', 'expired')
             .order('created_at', { ascending: false })
@@ -404,15 +473,40 @@ export default async function PortalDashboardPage() {
       // pre-existing limitation, not currently exercised by any real
       // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const { data: os } = await supabaseAdmin
+        // Scope to THIS offer's lead when we have one — a contact with a
+        // PAST reviewed onboarding for a different company must not have
+        // that old row read as "this new company is already submitted"
+        // (dev job bc2a8f7f, found live 2026-09-21: the contact-only query
+        // below leaked across companies). Falls back to contact-only when no
+        // lead_id is available (the older manual-token tool, or an offer
+        // that predates lead_id being recorded on the submission).
+        let osQuery = supabaseAdmin
           .from('onboarding_submissions')
           .select('id')
           .eq('contact_id', contactId)
           .in('status', ['completed', 'reviewed'])
-          .limit(1)
-          .maybeSingle()
+        osQuery = offerData?.lead_id ? osQuery.eq('lead_id', offerData.lead_id) : osQuery
+        const { data: os } = await osQuery.limit(1).maybeSingle()
         wizardSubmitted = !!os
       }
+    }
+
+    // Has staff actually reviewed the submission yet? wizardSubmitted above
+    // is true for BOTH 'completed' (awaiting review) and 'reviewed' statuses,
+    // and the portal tier stays 'onboarding' either way (Tier Model B), so
+    // neither signal alone told the client review had already happened — the
+    // dashboard kept showing "Under Review" minutes after staff confirmed
+    // (dev job bc2a8f7f, found live 2026-09-21).
+    let wizardReviewed = false
+    if (contactId) {
+      let reviewedQuery = supabaseAdmin
+        .from('onboarding_submissions')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('status', 'reviewed')
+      reviewedQuery = offerData?.lead_id ? reviewedQuery.eq('lead_id', offerData.lead_id) : reviewedQuery
+      const { data: reviewedOs } = await reviewedQuery.limit(1).maybeSingle()
+      wizardReviewed = !!reviewedOs
     }
 
     // Pending actions for clients who have a portal account but no active
@@ -474,6 +568,7 @@ export default async function PortalDashboardPage() {
           firstName={firstName}
           offerData={offerData}
           wizardSubmitted={wizardSubmitted}
+          wizardReviewed={wizardReviewed}
         />
       </>
     )
@@ -573,7 +668,7 @@ export default async function PortalDashboardPage() {
     if (emailArr.length > 0) {
       const { data: offer } = await supabaseAdmin
         .from('offers')
-        .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+        .select('id, token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
         .in('client_email', emailArr)
         .not('status', 'eq', 'expired')
         .order('created_at', { ascending: false })
@@ -593,7 +688,7 @@ export default async function PortalDashboardPage() {
         if (leads?.length) {
           const { data: leadOffer } = await supabaseAdmin
             .from('offers')
-            .select('token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type')
+            .select('id, token, client_name, status, services, cost_summary, recurring_costs, bundled_pipelines, contract_type, language, payment_links, bank_details, payment_type, lead_id')
             .eq('lead_id', leads[0].id)
             .not('status', 'eq', 'expired')
             .order('created_at', { ascending: false })
@@ -644,15 +739,32 @@ export default async function PortalDashboardPage() {
       // pre-existing limitation, not currently exercised by any real
       // client (verified live during this investigation).
       if (!wizardSubmitted) {
-        const { data: os } = await supabaseAdmin
+        // Scope to THIS offer's lead when we have one — see the matching
+        // block above for why a contact-only query leaks a past company's
+        // reviewed submission onto a brand-new one (dev job bc2a8f7f).
+        let osQuery = supabaseAdmin
           .from('onboarding_submissions')
           .select('id')
           .eq('contact_id', contactId)
           .in('status', ['completed', 'reviewed'])
-          .limit(1)
-          .maybeSingle()
+        osQuery = offerData?.lead_id ? osQuery.eq('lead_id', offerData.lead_id) : osQuery
+        const { data: os } = await osQuery.limit(1).maybeSingle()
         wizardSubmitted = !!os
       }
+    }
+
+    // Has staff actually reviewed the submission yet? See the matching block
+    // above for why wizardSubmitted alone can't tell (dev job bc2a8f7f).
+    let wizardReviewed = false
+    if (contactId) {
+      let reviewedQuery = supabaseAdmin
+        .from('onboarding_submissions')
+        .select('id')
+        .eq('contact_id', contactId)
+        .eq('status', 'reviewed')
+      reviewedQuery = offerData?.lead_id ? reviewedQuery.eq('lead_id', offerData.lead_id) : reviewedQuery
+      const { data: reviewedOs } = await reviewedQuery.limit(1).maybeSingle()
+      wizardReviewed = !!reviewedOs
     }
 
     // Pending actions (signatures, invoices, wizards) for pre-active tier clients.
@@ -673,6 +785,7 @@ export default async function PortalDashboardPage() {
           firstName={firstName}
           offerData={offerData}
           wizardSubmitted={wizardSubmitted}
+          wizardReviewed={wizardReviewed}
         />
       </>
     )

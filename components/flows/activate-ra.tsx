@@ -15,6 +15,12 @@ interface ActivateRaProps {
  * the HC sync. Only meaningful once the company exists (Articles received), so
  * it's disabled until the SD has an account_id. Surfaces the server's real
  * message (R099) rather than a generic toast.
+ *
+ * Company Formation only. Client Onboarding's Registered Agent step is
+ * different in kind — an existing company's RA is a manual switch staff do
+ * ON Harbor Compliance's own site, not an API push — see
+ * components/flows/onboarding-ra-switch-step.tsx (Antonio, 2026-09-22:
+ * "that fucking button must open the website for us to do switch").
  */
 export function ActivateRa({ serviceDeliveryId, accountId }: ActivateRaProps) {
   const [loading, setLoading] = useState(false)

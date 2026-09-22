@@ -36,12 +36,19 @@ const CL = {
     accountNumber: 'Account Number', routingNumber: 'Routing Number',
     receiptTitle: 'Upload Wire Transfer Receipt',
     receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
+    // Onboarding has a staff-review step between payment and activation — see
+    // afterPaymentOnboarding below (dev job bc2a8f7f).
+    receiptDescOnboarding: 'Once you complete the transfer, upload the receipt so our team can verify your payment and move your onboarding forward.',
     receiptLabel: 'Click to upload receipt (PDF or image)',
     receiptBtn: 'Upload Receipt',
     receiptUploading: 'Uploading...',
     receiptDone: 'Receipt uploaded successfully! We will verify your payment shortly.',
     receiptFail: 'Upload failed',
     afterPayment: 'Once payment is received and verified, we will activate your services immediately.',
+    // Onboarding clients go through a staff review after payment before
+    // anything is set up — "immediately" is no longer accurate for this
+    // contract type (dev job bc2a8f7f, 2026-09-21).
+    afterPaymentOnboarding: 'Once payment is received and verified, our team will review your submission and set up your services.',
     backToOffer: '&larr; Back to Offer',
     signed: 'Contract signed and submitted! Tony Durante will contact you shortly.',
     uploaded: 'Uploaded',
@@ -59,12 +66,14 @@ const CL = {
     accountNumber: 'Numero Conto', routingNumber: 'Routing Number',
     receiptTitle: 'Carica Ricevuta Bonifico',
     receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
+    receiptDescOnboarding: 'Una volta completato il bonifico, carica la ricevuta: il nostro team verificherà il pagamento e procederà con il tuo onboarding.',
     receiptLabel: 'Clicca per caricare la ricevuta (PDF o immagine)',
     receiptBtn: 'Carica Ricevuta',
     receiptUploading: 'Caricamento...',
     receiptDone: 'Ricevuta caricata con successo! Verificheremo il pagamento a breve.',
     receiptFail: 'Caricamento fallito',
     afterPayment: 'Una volta ricevuto e verificato il pagamento, attiveremo i servizi immediatamente.',
+    afterPaymentOnboarding: 'Una volta ricevuto e verificato il pagamento, il nostro team esaminerà i tuoi dati e configurerà i servizi.',
     backToOffer: '&larr; Torna all&#39;Offerta',
     signed: 'Contratto firmato e inviato! Tony Durante ti contatterà a breve.',
     uploaded: 'Caricata',
@@ -471,7 +480,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           sh += '</div>'
           sh += '<div class="contract-receipt-upload">'
           sh += `<h3 style="font-size:11pt;margin-bottom:8px;">${cl.receiptTitle}</h3>`
-          sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">${cl.receiptDesc}</p>`
+          sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-bottom:12px;">${isOnboarding ? cl.receiptDescOnboarding : cl.receiptDesc}</p>`
           sh += '<div class="contract-receipt-drop" id="receipt-drop" onclick="document.getElementById(\'receipt-input\').click()">'
           sh += '<input type="file" id="receipt-input" accept="image/*,.pdf" style="display:none" />'
           sh += `<p id="receipt-label">${cl.receiptLabel}</p>`
@@ -481,7 +490,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           sh += '</div></div></div>'
         }
 
-        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${cl.afterPayment}</p>`
+        sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${isOnboarding ? cl.afterPaymentOnboarding : cl.afterPayment}</p>`
         sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
         sh += '</div>'
         successEl.innerHTML = sh
@@ -523,7 +532,19 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
                 headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
                 body: receiptFile
               })
-              if (!uploadRes.ok) throw new Error(cl.receiptFail)
+              if (!uploadRes.ok) {
+                // Surface the real reason instead of a generic string (R099) —
+                // this silently hid a missing storage bucket in sandbox that a
+                // hardcoded "Upload failed" would never have revealed.
+                let detail = ''
+                try {
+                  const body = await uploadRes.json()
+                  detail = body?.message || body?.error || ''
+                } catch {
+                  // response wasn't JSON — fall through with no extra detail
+                }
+                throw new Error(detail || cl.receiptFail)
+              }
               await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
               receiptStatus.innerHTML = `<span style="color:var(--c-green);font-weight:600">${cl.receiptDone}</span>`
               receiptBtn.textContent = cl.uploaded

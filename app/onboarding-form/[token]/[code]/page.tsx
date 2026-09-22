@@ -491,6 +491,45 @@ export default function OnboardingFormCodePage() {
               </div>
             </div>
 
+            {/* ITIN Letter - optional, only if the owner has one */}
+            <div className="tf-doc-item">
+              <span>{L.itinUpload}</span>
+              <div className="tf-doc-upload">
+                <span className="tf-doc-optional">{L.uploadOptional}</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={e => setUploadFiles(prev => ({ ...prev, itin_document: e.target.files?.[0] || null }))}
+                />
+              </div>
+            </div>
+
+            {/* Previous year tax return - optional, only if filed */}
+            <div className="tf-doc-item">
+              <span>{L.taxReturnPreviousUpload}</span>
+              <div className="tf-doc-upload">
+                <span className="tf-doc-optional">{L.uploadOptional}</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={e => setUploadFiles(prev => ({ ...prev, tax_return_previous_year: e.target.files?.[0] || null }))}
+                />
+              </div>
+            </div>
+
+            {/* Current year tax return - optional, only if filed */}
+            <div className="tf-doc-item">
+              <span>{L.taxReturnCurrentUpload}</span>
+              <div className="tf-doc-upload">
+                <span className="tf-doc-optional">{L.uploadOptional}</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={e => setUploadFiles(prev => ({ ...prev, tax_return_current_year: e.target.files?.[0] || null }))}
+                />
+              </div>
+            </div>
+
             {/* Member passport uploads for MMLLC */}
             {submission.entity_type === 'MMLLC' && members.map((m, i) => (
               <div key={`passport_member_${i}`} className="tf-doc-item">

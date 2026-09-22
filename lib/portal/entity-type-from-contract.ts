@@ -134,6 +134,16 @@ export async function resolveEntityTypeForFormation(input: {
   contactId: string
   /** wizard_progress.lead_id when known — pins the lookup to THIS formation. */
   leadId?: string | null
+  /**
+   * The specific onboarding offer, when known (dev job bc2a8f7f, 2026-09-21).
+   * A returning client's second+ onboarding has NO lead at all — staff
+   * creates that offer directly on the contact, confirmed live and directly
+   * by Antonio. The offer's own id pins the lookup even more precisely than
+   * leadId does (straight to one offer's token, no lead-to-offer gathering
+   * step) and is the only thing that ever applies to that case. Takes
+   * precedence over leadId when both are somehow passed.
+   */
+  offerId?: string | null
   adminOverride?: 'SMLLC' | 'MMLLC' | null
   submissionEntityType?: string | null
   wizardEntityType?: string | null
@@ -159,27 +169,57 @@ export async function resolveEntityTypeForFormation(input: {
   //    contact-wide fallback only trusts the contract when all signed
   //    contracts agree on llc_type.
   try {
-    let leadIds: string[] = []
-    if (input.leadId) {
-      leadIds = [input.leadId]
-    } else {
-      const { data: leads } = await supabaseAdmin
-        .from('leads')
-        .select('id')
-        .eq('converted_to_contact_id', input.contactId)
-      leadIds = (leads ?? []).map(l => l.id)
-    }
+    let tokens: string[] = []
 
-    let offersQuery = supabaseAdmin.from('offers').select('token, lead_id, contact_id')
-    if (leadIds.length > 0) {
-      offersQuery = offersQuery.or(
-        `lead_id.in.(${leadIds.join(',')}),contact_id.eq.${input.contactId}`
-      )
+    if (input.offerId) {
+      // Pinned straight to ONE offer — the returning-client onboarding case,
+      // which has no lead at all to gather from. Maximally precise: no
+      // ambiguity is even possible, since this is the exact transaction.
+      const { data: offer } = await supabaseAdmin
+        .from('offers')
+        .select('token')
+        .eq('id', input.offerId)
+        .maybeSingle()
+      if (offer?.token) tokens = [offer.token]
     } else {
-      offersQuery = offersQuery.eq('contact_id', input.contactId)
+      let leadIds: string[] = []
+      if (input.leadId) {
+        leadIds = [input.leadId]
+      } else {
+        const { data: leads } = await supabaseAdmin
+          .from('leads')
+          .select('id')
+          .eq('converted_to_contact_id', input.contactId)
+        leadIds = (leads ?? []).map(l => l.id)
+      }
+
+      // Bug found live, 2026-09-20/21 (dev job bc2a8f7f, extending this
+      // resolver to onboarding): when `input.leadId` is given, this used to
+      // STILL broaden the search with `OR contact_id.eq.X` — directly
+      // contradicting this function's own comment above ("when leadId is
+      // known the lookup is pinned to it"). A client with two signed
+      // contracts for two different new companies then hit the "all signed
+      // contracts agree" check below with genuinely DIFFERENT llc_types
+      // across those two unrelated companies, which correctly refused to
+      // resolve — and fell through to the offer-fallback below, which is
+      // ALSO not lead-scoped, and picked up whichever of the client's other
+      // offers happened to be most recent with a non-null entity_type — the
+      // wrong company's answer. When a specific lead is known, trust ONLY
+      // that lead's own offer(s); the contact-wide broadening is for the
+      // genuinely-unknown-lead case only.
+      let offersQuery = supabaseAdmin.from('offers').select('token, lead_id, contact_id')
+      if (input.leadId) {
+        offersQuery = offersQuery.eq('lead_id', input.leadId)
+      } else if (leadIds.length > 0) {
+        offersQuery = offersQuery.or(
+          `lead_id.in.(${leadIds.join(',')}),contact_id.eq.${input.contactId}`
+        )
+      } else {
+        offersQuery = offersQuery.eq('contact_id', input.contactId)
+      }
+      const { data: offers } = await offersQuery
+      tokens = (offers ?? []).map(o => o.token).filter(Boolean)
     }
-    const { data: offers } = await offersQuery
-    const tokens = (offers ?? []).map(o => o.token).filter(Boolean)
 
     if (tokens.length > 0) {
       const { data: contracts } = await supabaseAdmin

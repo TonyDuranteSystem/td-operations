@@ -8,12 +8,40 @@ describe('welcome-package-setup handler', () => {
 })
 
 describe('portal_members step logic', () => {
-  it('uses active tier (post-EIN / state-confirmed)', () => {
-    // Tier chosen here is 'active' — welcome-package-setup only runs when EIN exists,
-    // meaning the LLC is state-confirmed. Members should see services, docs, deadlines.
-    const EXPECTED_TIER = 'active'
+  // Dev job bc2a8f7f (2026-09-20): this used to hardcode "active" for every
+  // linked member, unconditionally — which silently defeated the onboarding
+  // review gate (an account deliberately held at 'onboarding' pending staff
+  // activation got force-upgraded to full 'active' access the moment this
+  // job ran, seconds after Confirm, via this same shared job). Found live
+  // in a sandbox end-to-end test: the account's OWN step explicitly logged
+  // "stays at onboarding" while this loop silently overrode it seconds later.
+  //
+  // Fix: members are created at the account's OWN current tier, falling
+  // back to "active" only when it's missing/invalid. This preserves the
+  // Formation flow's real behavior unchanged (record-ein-received already
+  // sets the account to 'active' BEFORE enqueueing this job, so reading the
+  // current tier there still yields 'active') while no longer fighting the
+  // onboarding review gate (the account stays 'onboarding' until something
+  // else explicitly activates it).
+  const resolveMemberTier = (accountPortalTier: string | null): string => {
     const validTiers = ['lead', 'formation', 'onboarding', 'active']
-    expect(validTiers).toContain(EXPECTED_TIER)
+    return accountPortalTier && validTiers.includes(accountPortalTier) ? accountPortalTier : 'active'
+  }
+
+  it('formation flow: account already active post-EIN → members created active (unchanged)', () => {
+    expect(resolveMemberTier('active')).toBe('active')
+  })
+
+  it('onboarding review-gate flow: account held at onboarding → members created onboarding, NOT force-upgraded', () => {
+    expect(resolveMemberTier('onboarding')).toBe('onboarding')
+  })
+
+  it('falls back to active when the account has no tier set yet', () => {
+    expect(resolveMemberTier(null)).toBe('active')
+  })
+
+  it('falls back to active on an invalid/unexpected tier value rather than propagating garbage', () => {
+    expect(resolveMemberTier('bogus')).toBe('active')
   })
 
   it('portal step summary format is correct', () => {

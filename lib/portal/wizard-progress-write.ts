@@ -8,6 +8,7 @@ export interface MarkWizardProgressSubmittedParams {
   accountId: string | null
   contactId: string | null
   leadId: string | null
+  offerId?: string | null
   serviceDeliveryId?: string | null
 }
 
@@ -23,7 +24,7 @@ export interface MarkWizardProgressSubmittedParams {
 export async function markWizardProgressSubmitted(
   params: MarkWizardProgressSubmittedParams,
 ): Promise<{ error: { message: string } | null }> {
-  const { progressId, wizardType, data, accountId, contactId, leadId, serviceDeliveryId } = params
+  const { progressId, wizardType, data, accountId, contactId, leadId, offerId, serviceDeliveryId } = params
   const jsonData = data as unknown as Json
   return progressId
     ? await supabaseAdmin
@@ -38,6 +39,7 @@ export async function markWizardProgressSubmitted(
           account_id: accountId || null,
           contact_id: contactId || null,
           lead_id: leadId || null,
+          offer_id: offerId || null,
           service_delivery_id: serviceDeliveryId ?? null,
           status: "submitted",
           current_step: 99,

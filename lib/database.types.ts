@@ -9054,11 +9054,13 @@ export type Database = {
           id: string
           language: string
           lead_id: string | null
+          offer_id: string | null
           opened_at: string | null
           prefilled_data: Json | null
           reviewed_at: string | null
           reviewed_by: string | null
           sent_at: string | null
+          source: string | null
           state: string
           status: string
           submitted_data: Json | null
@@ -9079,12 +9081,14 @@ export type Database = {
           id?: string
           language?: string
           lead_id?: string | null
+          offer_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
           reviewed_at?: string | null
           reviewed_by?: string | null
           sent_at?: string | null
           state?: string
+          source?: string | null
           status?: string
           submitted_data?: Json | null
           token: string
@@ -9104,6 +9108,7 @@ export type Database = {
           id?: string
           language?: string
           lead_id?: string | null
+          offer_id?: string | null
           opened_at?: string | null
           prefilled_data?: Json | null
           reviewed_at?: string | null
@@ -9111,6 +9116,7 @@ export type Database = {
           sent_at?: string | null
           state?: string
           status?: string
+          source?: string | null
           submitted_data?: Json | null
           token?: string
           updated_at?: string | null
@@ -9122,6 +9128,13 @@ export type Database = {
             columns: ["account_id"]
             isOneToOne: false
             referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_submissions_offer_id_fkey"
+            columns: ["offer_id"]
+            isOneToOne: false
+            referencedRelation: "offers"
             referencedColumns: ["id"]
           },
           {
@@ -13032,6 +13045,7 @@ export type Database = {
           data: Json | null
           id: string
           lead_id: string | null
+          offer_id: string | null
           service_delivery_id: string | null
           status: string | null
           updated_at: string | null
@@ -13045,6 +13059,7 @@ export type Database = {
           data?: Json | null
           id?: string
           lead_id?: string | null
+          offer_id?: string | null
           service_delivery_id?: string | null
           status?: string | null
           updated_at?: string | null
@@ -13058,6 +13073,7 @@ export type Database = {
           data?: Json | null
           id?: string
           lead_id?: string | null
+          offer_id?: string | null
           service_delivery_id?: string | null
           status?: string | null
           updated_at?: string | null
@@ -13111,6 +13127,13 @@ export type Database = {
             columns: ["lead_id"]
             isOneToOne: false
             referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wizard_progress_offer_id_fkey"
+            columns: ["offer_id"]
+            isOneToOne: false
+            referencedRelation: "offers"
             referencedColumns: ["id"]
           },
         ]

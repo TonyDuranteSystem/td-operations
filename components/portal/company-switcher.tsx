@@ -6,7 +6,7 @@ import { Building2, ChevronDown, Check, Sparkles, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import type { PortalAccount } from '@/lib/types'
-import type { InProgressFormation } from '@/lib/portal/queries'
+import type { InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 
 interface CompanySwitcherProps {
   accounts: PortalAccount[]
@@ -15,6 +15,10 @@ interface CompanySwitcherProps {
   inProgress?: InProgressFormation[]
   /** Set when an in-progress formation is the current selection. */
   selectedFormationId?: string
+  /** Companies onboarding (existing LLC joining TD) not yet staff-confirmed. Selectable. */
+  inProgressOnboardings?: InProgressOnboarding[]
+  /** Set when an in-progress onboarding is the current selection. */
+  selectedOnboardingId?: string
   userName?: string
   /** When the viewer is ALSO a partner — adds a "Partner" entry to this switcher. */
   dualRole?: boolean
@@ -40,19 +44,20 @@ interface CompanySwitcherProps {
  * Tier-independent: the parent renders this whenever there is more than one
  * entity, so a client viewing a formation can always switch back.
  */
-export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], selectedFormationId, userName, dualRole = false, partnerMode = false, partnerHref = '/portal/partner/clients', variant = 'sidebar' }: CompanySwitcherProps) {
+export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, userName, dualRole = false, partnerMode = false, partnerHref = '/portal/partner/clients', variant = 'sidebar' }: CompanySwitcherProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const { t } = useLocale()
   const changeCompanyLabel = t('company.changeCompany')
 
-  const totalEntities = accounts.length + inProgress.length
+  const totalEntities = accounts.length + inProgress.length + inProgressOnboardings.length
   const selectedAccount = accounts.find(a => a.id === selectedAccountId)
   const selectedFormation = inProgress.find(f => f.id === selectedFormationId)
+  const selectedOnboarding = inProgressOnboardings.find(o => o.id === selectedOnboardingId)
   const selectedLabel = partnerMode
     ? 'Partner — My Referrals'
-    : (selectedFormation?.label ?? selectedAccount?.company_name ?? userName ?? 'My Account')
+    : (selectedFormation?.label ?? selectedOnboarding?.label ?? selectedAccount?.company_name ?? userName ?? 'My Account')
 
   // Close on outside click
   useEffect(() => {
@@ -72,8 +77,9 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
 
   const selectAccount = (accountId: string) => {
     document.cookie = `portal_account_id=${accountId}; path=/portal; max-age=31536000; SameSite=Lax`
-    // Clear any in-progress-formation selection so the account view takes over.
+    // Clear any in-progress-formation/-onboarding selection so the account view takes over.
     document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+    document.cookie = `portal_onboarding=; path=/portal; max-age=0; SameSite=Lax`
     exitPartnerMode()
     setOpen(false)
     if (partnerMode) router.push('/portal')
@@ -82,6 +88,16 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
 
   const selectFormation = (formationId: string) => {
     document.cookie = `portal_formation=${formationId}; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_onboarding=; path=/portal; max-age=0; SameSite=Lax`
+    exitPartnerMode()
+    setOpen(false)
+    if (partnerMode) router.push('/portal')
+    else router.refresh()
+  }
+
+  const selectOnboarding = (onboardingId: string) => {
+    document.cookie = `portal_onboarding=${onboardingId}; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
     exitPartnerMode()
     setOpen(false)
     if (partnerMode) router.push('/portal')
@@ -100,7 +116,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     if (variant === 'topbar') {
       return (
         <div className="flex items-center gap-2 min-w-0">
-          {selectedFormation
+          {(selectedFormation || selectedOnboarding)
             ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
             : <Building2 className="h-4 w-4 text-blue-700 shrink-0" />}
           <span className="text-sm font-semibold text-zinc-900 truncate">{selectedLabel}</span>
@@ -109,7 +125,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     }
     return (
       <div className="flex items-center gap-2 px-3 py-2">
-        {selectedFormation
+        {(selectedFormation || selectedOnboarding)
           ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
           : <Building2 className="h-4 w-4 text-blue-600 shrink-0" />}
         <span className="text-sm font-medium text-zinc-900 truncate">{selectedLabel}</span>
@@ -130,7 +146,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
         >
           <Building2 className="h-4 w-4 text-zinc-400 shrink-0" />
           <span className="truncate flex-1">{account.company_name}</span>
-          {!selectedFormationId && account.id === selectedAccountId && (
+          {!selectedFormationId && !selectedOnboardingId && account.id === selectedAccountId && (
             <Check className="h-4 w-4 text-blue-600 shrink-0" />
           )}
         </button>
@@ -147,6 +163,22 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
             in formation
           </span>
           {f.id === selectedFormationId && (
+            <Check className="h-4 w-4 text-blue-600 shrink-0" />
+          )}
+        </button>
+      ))}
+      {inProgressOnboardings.map(o => (
+        <button
+          key={o.id}
+          onClick={() => selectOnboarding(o.id)}
+          className="flex items-center gap-2 w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 transition-colors"
+        >
+          <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+          <span className="truncate flex-1">{o.label}</span>
+          <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 py-px shrink-0">
+            in onboarding
+          </span>
+          {o.id === selectedOnboardingId && (
             <Check className="h-4 w-4 text-blue-600 shrink-0" />
           )}
         </button>
@@ -176,7 +208,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
         >
           {partnerMode
             ? <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
-            : selectedFormation
+            : (selectedFormation || selectedOnboarding)
               ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
               : <Building2 className="h-4 w-4 text-blue-700 shrink-0" />}
           <span className="flex flex-col items-start min-w-0 leading-tight">
@@ -200,7 +232,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
       >
         {partnerMode
           ? <Share2 className="h-4 w-4 text-violet-600 shrink-0" />
-          : selectedFormation
+          : (selectedFormation || selectedOnboarding)
             ? <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
             : <Building2 className="h-4 w-4 text-blue-600 shrink-0" />}
         <span className="text-sm font-medium text-zinc-900 truncate flex-1 text-left">

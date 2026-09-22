@@ -73,6 +73,10 @@ interface WizardClientProps {
   contactId: string
   /** Set for a formation wizard scoped to a NEW company's lead (no account yet). */
   leadId: string
+  /** Set for an onboarding wizard scoped to a NEW/second company's offer (dev
+   *  job bc2a8f7f, corrected 2026-09-21) — NOT a lead. A returning client's
+   *  second+ onboarding has no lead at all; the offer is the real anchor. */
+  offerId: string
   locale: 'en' | 'it'
   /** Status of a previous submission (if any) */
   initialSubmitStatus?: 'in_progress' | 'submitted' | null
@@ -129,6 +133,21 @@ function belowFieldMin(field: { min?: number }, val: unknown): boolean {
   if (val === undefined || val === null || val === '' || typeof val === 'boolean') return false
   const n = Number(val)
   return !Number.isNaN(n) && n < field.min
+}
+
+// A filled EIN that isn't 9 digits blocks the step it's actually ON, not the
+// final Review step — this was previously ONLY checked server-side (the
+// background job, after full submission), so a malformed EIN surfaced its
+// error several steps later than where the client typed it (Antonio,
+// 2026-09-22, live testing). Mirrors lib/jobs/validation.ts::normalizeEIN's
+// exact rule (strip non-digits, must be exactly 9) so client and server
+// never disagree. Empty values are the required-check's business, not this
+// one's — an optional, blank EIN is not a format error.
+function malformedEin(field: { format?: string }, val: unknown): boolean {
+  if (field.format !== 'ein') return false
+  if (val === undefined || val === null || val === '') return false
+  const digits = String(val).replace(/\D/g, '')
+  return digits.length !== 9
 }
 
 type BankGuide = { name: string; matchTerms: string[]; stepsEn: string[]; stepsIt: string[]; noteEn: string; noteIt: string }
@@ -293,6 +312,7 @@ export function WizardClient({
   accountId,
   contactId,
   leadId,
+  offerId,
   locale,
   initialSubmitStatus,
   isLocked,
@@ -448,9 +468,11 @@ export function WizardClient({
             file_name: file.name,
             file_size: file.size,
             wizard_type: wizardType,
-            // Prefer leadId so a new-company formation's uploads stay in their own
-            // folder (not co-mingled with an existing account or contact).
-            identifier: leadId || accountId || contactId || 'unknown',
+            // Prefer leadId/offerId so a new-company formation's or onboarding's
+            // uploads stay in their own folder (not co-mingled with an existing
+            // account or contact, or a DIFFERENT new/second company's own
+            // uploads — dev job bc2a8f7f).
+            identifier: leadId || offerId || accountId || contactId || 'unknown',
           }),
         })
         if (!res.ok) {
@@ -518,7 +540,7 @@ export function WizardClient({
         return null
       }
     },
-    [wizardType, accountId, contactId, leadId],
+    [wizardType, accountId, contactId, leadId, offerId],
   )
 
   // ✨ AI draft helper for TD Communication brand-audit textareas. POSTs the
@@ -572,6 +594,7 @@ export function WizardClient({
   // so there is ONE source of truth for step completeness.
   const reqMsg = pickText('Required field', 'Campo obbligatorio')!
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
+  const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
 
   const getStepErrors = useCallback((): Record<string, string> => {
     const errs: Record<string, string> = {}
@@ -602,6 +625,7 @@ export function WizardClient({
           const key = `member_${idx}_${field.name}`
           if (field.required && isEmptyValue(formData[key])) errs[key] = reqMsg
           else if (belowFieldMin(field, formData[key])) errs[key] = minMsg
+          else if (malformedEin(field, formData[key])) errs[key] = einMsg
         }
       }
       if (wizardType === 'tax' && isMMLLC) {
@@ -647,15 +671,17 @@ export function WizardClient({
               String(formData[`${field.name}_${idx}_bank_name`] ?? '').trim().length > 0
             if ((rf.required || modeRequired) && isEmptyValue(formData[key])) errs[key] = reqMsg
             else if (belowFieldMin(rf, formData[key])) errs[key] = minMsg
+            else if (malformedEin(rf, formData[key])) errs[key] = einMsg
           }
         }
         continue
       }
       if (field.required && isEmptyValue(formData[field.name])) errs[field.name] = reqMsg
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
+      else if (malformedEin(field, formData[field.name])) errs[field.name] = einMsg
     }
     return errs
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, institutions, pickText])
+  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText])
 
   const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
 
@@ -721,6 +747,7 @@ export function WizardClient({
         account_id: accountId || null,
         contact_id: contactId || null,
         lead_id: leadId || null,
+        offer_id: offerId || null,
         progress_id: currentProgressId,
         service_delivery_id: closureServiceDeliveryId || null,
       }
@@ -745,7 +772,7 @@ export function WizardClient({
     } finally {
       if (!silent) setIsSaving(false)
     }
-  }, [wizardType, currentStep, formData, accountId, contactId, leadId, currentProgressId, pickText, closureServiceDeliveryId])
+  }, [wizardType, currentStep, formData, accountId, contactId, leadId, offerId, currentProgressId, pickText, closureServiceDeliveryId])
 
   const handleSave = useCallback(async () => {
     dirtyRef.current = false
@@ -896,6 +923,7 @@ export function WizardClient({
             account_id: accountId || null,
             contact_id: contactId || null,
             lead_id: leadId || null,
+            offer_id: offerId || null,
             progress_id: currentProgressId,
             service_delivery_id: closureServiceDeliveryId || null,
             // Attempt 1 carries the caller's flag; retries force the idempotent
@@ -940,7 +968,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -956,7 +984,7 @@ export function WizardClient({
     setCurrentStep(step)
     // Auto-save in background (only if user has entered data)
     const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
-    if (hasData && (accountId || contactId || leadId)) {
+    if (hasData && (accountId || contactId || leadId || offerId)) {
       fetch('/api/portal/wizard-progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -967,6 +995,7 @@ export function WizardClient({
           account_id: accountId || null,
           contact_id: contactId || null,
           lead_id: leadId || null,
+          offer_id: offerId || null,
           progress_id: currentProgressId,
           service_delivery_id: closureServiceDeliveryId || null,
         }),
@@ -976,7 +1005,7 @@ export function WizardClient({
           console.warn('[wizard] Auto-save failed — data preserved in memory')
         })
     }
-  }, [wizardType, formData, accountId, contactId, leadId, currentProgressId, currentStep, raiseStepErrors, closureServiceDeliveryId])
+  }, [wizardType, formData, accountId, contactId, leadId, offerId, currentProgressId, currentStep, raiseStepErrors, closureServiceDeliveryId])
 
   // ── One-owner / multi-owner question ──────────────────────────────────────
   // Only reached when the signed contract AND the offer both failed to say what
@@ -1057,6 +1086,21 @@ export function WizardClient({
             body: pickText(
               'We have started work on your company, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
               'Abbiamo iniziato a lavorare sulla tua società, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.',
+            ),
+            cta: pickText('Message us in chat', 'Vai alla chat'),
+            href: '/portal/chat',
+          }
+        : wizardType === 'onboarding'
+        ? {
+            // Same rule as formation, worded for onboarding (dev job bc2a8f7f,
+            // 2026-09-20): once staff clicks Confirm, the account-setup chain
+            // is running or already done — the same "isLocked hardcoded to
+            // the wrong wizard's copy" mistake formation already made once
+            // (see comment above this ternary).
+            title: pickText('Your details are with us', 'Dati già inviati'),
+            body: pickText(
+              'We have started setting up your account, so this form can no longer be edited. If something needs correcting, send us a message in chat and we will take care of it.',
+              'Abbiamo iniziato a configurare il tuo account, quindi questo modulo non è più modificabile. Se qualcosa deve essere corretto, scrivicelo in chat e ce ne occupiamo noi.',
             ),
             cta: pickText('Message us in chat', 'Vai alla chat'),
             href: '/portal/chat',

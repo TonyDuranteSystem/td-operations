@@ -34,6 +34,7 @@ export function buildWizardJobDedupeKey(input: {
   accountId?: string | null
   contactId?: string | null
   leadId?: string | null
+  offerId?: string | null
   data: Record<string, unknown>
 }): string {
   const material = JSON.stringify({
@@ -41,6 +42,7 @@ export function buildWizardJobDedupeKey(input: {
     a: input.accountId || null,
     c: input.contactId || null,
     l: input.leadId || null,
+    o: input.offerId || null,
     d: input.data,
   })
   return createHash("sha256").update(material).digest("hex")

@@ -1,8 +1,13 @@
 /**
- * Activate the Registered Agent on Harbor Compliance for a Company Formation
- * flow. Backs the Workspace "Activate RA on Harbor Compliance" button on the
- * "Articles Received" stage — RA activation only happens once the company is
- * confirmed (Articles received), never at filing time.
+ * Push a company's info to Harbor Compliance — the Registered Agent host.
+ * Backs the Company Formation Workspace's "Activate RA on Harbor Compliance"
+ * button (Articles Received stage — a brand-new company that never had an
+ * RA yet). Only runs once the CRM account exists.
+ *
+ * NOT used by Client Onboarding — that RA step is a manual switch staff do
+ * directly on Harbor Compliance's own site (Antonio, 2026-09-22: "that
+ * fucking button must open the website for us to do switch"), not an API
+ * push; see components/flows/onboarding-ra-switch-step.tsx.
  *
  * Resolves the SD → account, then pushes the company to Harbor Compliance
  * (mirrors the hc_sync_company MCP tool): updates the linked HC company when

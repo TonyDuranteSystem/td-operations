@@ -461,6 +461,97 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
   }))
 }
 
+export interface InProgressOnboarding {
+  /** Synthetic switcher id — namespaced so it never collides with a real account id. */
+  id: string
+  /** Display name: the offer's client_name, or a generic label. */
+  label: string
+  /** Portal stage used for tier-gating when this entity is selected. */
+  stage: 'onboarding'
+  /**
+   * The offer this onboarding is anchored on — NOT a lead (dev job bc2a8f7f,
+   * corrected 2026-09-21). A client's very FIRST onboarding starts as a
+   * lead, same as formation; every one after that has NO lead at all —
+   * staff creates it directly on the client's own contact record, confirmed
+   * live against production and directly by Antonio. The offer's own id is
+   * the one thing that always exists early enough to anchor on, either way.
+   * Every CTA that opens this onboarding's wizard MUST carry it — otherwise
+   * a returning client who already owns an account falls through to that
+   * account's wizard, either silently defaulting entity type wrong or, for
+   * an existing account, risking the new company's data landing on it.
+   */
+  offerId: string
+}
+
+/**
+ * In-progress onboardings for a contact — companies that have signed and paid
+ * for onboarding but do NOT yet exist as a confirmed account, because (unlike
+ * formation) NOTHING is created for onboarding until staff reviews and
+ * confirms the client's submitted wizard data. There is no service_delivery
+ * to key off the way formation does; "not yet confirmed" is read directly
+ * from whether this offer's onboarding_submissions row (if any) has reached
+ * status='reviewed'.
+ *
+ * Mirrors getInProgressFormations' contact/lead resolution exactly (direct
+ * offers.contact_id, or via a lead that converted to this contact) so a
+ * returning client's second onboarding surfaces in the same switcher a
+ * second formation would. Deliberately does NOT require lead_id (that was
+ * the actual bug, found live 2026-09-21 by Antonio: the query already
+ * fetched contact-direct offers correctly, but a filter right after it
+ * threw every one of them away before they ever reached the switcher,
+ * because it only kept offers that HAD a lead — exactly backwards from a
+ * returning client's real, lead-less second company).
+ */
+export async function getInProgressOnboardings(contactId: string): Promise<InProgressOnboarding[]> {
+  const { data: convertedLeads } = await supabaseAdmin
+    .from('leads')
+    .select('id')
+    .eq('converted_to_contact_id', contactId)
+  const convertedLeadIds = (convertedLeads ?? []).map(l => l.id)
+
+  const offerOr = [`contact_id.eq.${contactId}`]
+  if (convertedLeadIds.length > 0) offerOr.push(`lead_id.in.(${convertedLeadIds.join(',')})`)
+  const { data: offers } = await supabaseAdmin
+    .from('offers')
+    .select('id, token, lead_id, contact_id, client_name, client_email, created_at')
+    .eq('contract_type', 'onboarding')
+    .or(offerOr.join(','))
+    .in('status', ['signed', 'completed'])
+    .order('created_at', { ascending: false })
+
+  if (!offers || offers.length === 0) return []
+
+  // Which of these offers already became a real, staff-confirmed account?
+  // Those are done — they belong in `accounts`, not this in-progress list.
+  // Checked two ways, not just status='reviewed': the onboarding_setup job
+  // sets account_id on this row the MOMENT the account is created (early in
+  // the job), but doesn't flip status to 'reviewed' until much later (~1000
+  // lines of Drive/tax/renewal-date work later). Status-only would leave the
+  // brand-new account showing HERE as "in onboarding" AND in the real
+  // accounts list at the same time for however long that gap takes
+  // (bug-hunter finding, dev job bc2a8f7f round 8) — account_id is the
+  // earlier, more reliable signal that the graduation already happened.
+  const offerIds = offers.map(o => o.id)
+  const { data: reviewed } = await supabaseAdmin
+    .from('onboarding_submissions')
+    .select('offer_id')
+    .in('offer_id', offerIds)
+    .or('status.eq.reviewed,account_id.not.is.null')
+  const reviewedOfferIds = new Set((reviewed ?? []).map(r => r.offer_id))
+
+  const result: InProgressOnboarding[] = []
+  for (const o of offers) {
+    if (reviewedOfferIds.has(o.id)) continue
+    result.push({
+      id: `onboarding:${o.id}`,
+      label: o.client_name || 'New company (in onboarding)',
+      stage: 'onboarding',
+      offerId: o.id,
+    })
+  }
+  return result
+}
+
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')

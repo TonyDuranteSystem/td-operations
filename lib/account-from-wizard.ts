@@ -94,6 +94,22 @@ export async function createAccountFromWizard(
     }
   }
 
+  // The `accounts` table defaults portal_tier to 'active' at the database
+  // level on any INSERT that doesn't set it explicitly — bypassing R102's
+  // "all writes MUST go through syncTier()" rule and giving a brand-new,
+  // not-yet-set-up account live full portal access the instant it's
+  // created. Same bug class already found and fixed in the manual
+  // token-link flow (lib/operations/onboarding-review.ts); this is the real
+  // wizard flow's own account-creation path, so it needs the same fix,
+  // mirroring the established pattern in lib/operations/formation-materialize.ts.
+  const { syncTier } = await import("@/lib/operations/sync-tier")
+  await syncTier({
+    accountId: newAcct.id,
+    newTier: "onboarding",
+    allowDowngrade: true,
+    reason: "onboarding wizard — account created, awaiting staff setup",
+  })
+
   // 3. Link contact → account
   const { error: linkErr } = await supabaseAdmin
     .from("account_contacts")

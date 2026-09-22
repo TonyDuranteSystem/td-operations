@@ -18,11 +18,12 @@
  * and pass the data in.
  */
 import type { PortalAccount } from '@/lib/types'
-import type { InProgressFormation } from '@/lib/portal/queries'
+import type { InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 
 export type SelectedEntity =
   | { kind: 'account'; accountId: string; tier: string; account: PortalAccount }
   | { kind: 'formation'; formationId: string; sdId: string; label: string; tier: 'formation' }
+  | { kind: 'onboarding'; onboardingId: string; offerId: string; label: string; tier: 'onboarding' }
   | { kind: 'none'; tier: string }
 
 export function resolveSelectedEntity(params: {
@@ -30,16 +31,28 @@ export function resolveSelectedEntity(params: {
   inProgress: InProgressFormation[]
   accountCookie?: string | null
   formationCookie?: string | null
-  /** Tier to use when the contact has neither an account nor an in-progress formation. */
+  /** Companies onboarding (existing LLC joining TD) not yet staff-confirmed —
+   *  the onboarding equivalent of `inProgress` (dev job bc2a8f7f, 2026-09-21). */
+  inProgressOnboardings?: InProgressOnboarding[]
+  /** Set only via the company switcher, mirroring `formationCookie`. */
+  onboardingCookie?: string | null
+  /** Tier to use when the contact has neither an account nor an in-progress formation/onboarding. */
   fallbackTier: string
 }): SelectedEntity {
-  const { accounts, inProgress, accountCookie, formationCookie, fallbackTier } = params
+  const { accounts, inProgress, accountCookie, formationCookie, inProgressOnboardings = [], onboardingCookie, fallbackTier } = params
 
   // 1. Explicit in-progress-formation selection wins (only set via the switcher).
   if (formationCookie) {
     const f = inProgress.find(x => x.id === formationCookie)
     if (f) return { kind: 'formation', formationId: f.id, sdId: f.sdId, label: f.label, tier: 'formation' }
     // stale/invalid formation cookie → ignore, fall through to account/default
+  }
+
+  // 1b. Explicit in-progress-onboarding selection wins the same way.
+  if (onboardingCookie) {
+    const o = inProgressOnboardings.find(x => x.id === onboardingCookie)
+    if (o) return { kind: 'onboarding', onboardingId: o.id, offerId: o.offerId, label: o.label, tier: 'onboarding' }
+    // stale/invalid onboarding cookie → ignore, fall through to account/default
   }
 
   // 2. Real company selection (cookie match, else first account).
@@ -52,6 +65,12 @@ export function resolveSelectedEntity(params: {
   if (inProgress.length > 0) {
     const f = inProgress[0]
     return { kind: 'formation', formationId: f.id, sdId: f.sdId, label: f.label, tier: 'formation' }
+  }
+
+  // 3b. No account or formation, but an onboarding in progress → show it.
+  if (inProgressOnboardings.length > 0) {
+    const o = inProgressOnboardings[0]
+    return { kind: 'onboarding', onboardingId: o.id, offerId: o.offerId, label: o.label, tier: 'onboarding' }
   }
 
   // 4. Nothing yet → contact-level / auth tier.

@@ -18,8 +18,8 @@ export interface RenewalActionLink {
   label: string
 }
 
-const HARBOR: RenewalActionLink = {
-  url: "https://www.harborcompliance.com",
+export const HARBOR: RenewalActionLink = {
+  url: "https://www.harborcompliance.com/dashboard",
   label: "Harbor Compliance",
 }
 

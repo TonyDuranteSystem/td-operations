@@ -12,7 +12,7 @@ import { isClient } from '@/lib/auth'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
-import { formationLeadOwned } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 
 /**
@@ -43,6 +43,31 @@ async function ownsLeadScopedRow(
   return formationLeadOwned(leadOffer, ctcId, ownerEmails)
 }
 
+/**
+ * Same re-proof as ownsLeadScopedRow, for the onboarding-for-a-returning-client
+ * case: no lead exists, so the offer itself (offers.id) is the scope. Mirrors
+ * the wizard-submit 0b2 check.
+ */
+async function ownsOfferScopedRow(
+  identity: Awaited<ReturnType<typeof resolvePortalIdentity>>,
+  user: { email?: string | null },
+  offerId: string,
+): Promise<boolean> {
+  const ctcId = identity.kind === 'contact' ? identity.contactId : null
+  const ownerEmails = new Set<string>()
+  if (user.email) ownerEmails.add(user.email.toLowerCase())
+  if (ctcId) {
+    const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
+    if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
+  }
+  const { data: theOffer } = await supabaseAdmin
+    .from('offers')
+    .select('client_email, contract_type, contact_id')
+    .eq('id', offerId)
+    .maybeSingle()
+  return onboardingOfferOwned(theOffer, ctcId, ownerEmails)
+}
+
 export async function POST(req: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -51,7 +76,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { wizard_type, current_step, data, account_id: rawAccountId, contact_id, lead_id, progress_id, service_delivery_id: rawServiceDeliveryId } = body
+  const { wizard_type, current_step, data, account_id: rawAccountId, contact_id, lead_id, offer_id, progress_id, service_delivery_id: rawServiceDeliveryId } = body
 
   if (!wizard_type) {
     return NextResponse.json({ error: 'wizard_type is required' }, { status: 400 })
@@ -59,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   // A formation never carries an account_id (lives on contact+lead until the
   // Articles materialize the account). Same backstop as wizard-submit.
-  const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
+  let account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
 
   const identity = await resolvePortalIdentity(user)
 
@@ -73,7 +98,7 @@ export async function POST(req: NextRequest) {
       // and verify the caller owns its subject before writing.
       const { data: existing, error: fetchErr } = await supabaseAdmin
         .from('wizard_progress')
-        .select('id, account_id, contact_id, lead_id')
+        .select('id, account_id, contact_id, lead_id, offer_id')
         .eq('id', progress_id)
         .maybeSingle()
 
@@ -85,6 +110,7 @@ export async function POST(req: NextRequest) {
       const rowAccountId = (existing.account_id as string | null) ?? null
       const rowContactId = (existing.contact_id as string | null) ?? null
       const rowLeadId = (existing.lead_id as string | null) ?? null
+      const rowOfferId = (existing.offer_id as string | null) ?? null
 
       let allowed = false
       if (rowAccountId || rowContactId) {
@@ -93,6 +119,9 @@ export async function POST(req: NextRequest) {
       } else if (rowLeadId) {
         // Lead-scoped formation row → re-prove lead ownership.
         allowed = await ownsLeadScopedRow(identity, user, rowLeadId)
+      } else if (rowOfferId) {
+        // Offer-scoped onboarding row (returning client, no lead) → re-prove offer ownership.
+        allowed = await ownsOfferScopedRow(identity, user, rowOfferId)
       }
       // No scope at all (orphan row) → deny.
 
@@ -123,6 +152,17 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 })
         }
       }
+      if (offer_id && wizard_type === 'onboarding') {
+        if (!(await ownsOfferScopedRow(identity, user, offer_id))) {
+          return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+        }
+        // Same hijack backstop as wizard-submit (THW Global, dev_task
+        // 358e8cbe): never trust a client-carried account_id for a verified
+        // offer draft — the page already blanks it client-side, but this is
+        // the server-side guarantee. Must run after the ownership check
+        // above and before the INSERT below.
+        account_id = null
+      }
 
       // Closure only (dev job fbbf4abe): re-verify the client-supplied record
       // server-side rather than trust it — it names WHICH closure this draft
@@ -145,6 +185,7 @@ export async function POST(req: NextRequest) {
           account_id: account_id || null,
           contact_id: contact_id || null,
           lead_id: lead_id || null,
+          offer_id: offer_id || null,
           service_delivery_id: closureServiceDeliveryId,
           status: 'in_progress',
         })

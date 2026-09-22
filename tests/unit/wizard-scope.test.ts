@@ -58,6 +58,42 @@ describe('resolveWizardProgressScope', () => {
     ).toEqual({ col: 'lead_id', val: L, restrictToNoLead: false })
   })
 
+  // ── Onboarding's own new-company scope, keyed on the OFFER (dev job
+  // bc2a8f7f, corrected 2026-09-21) — a client's first onboarding is a lead
+  // (see formationLeadId-style cases above); every one after that has NO
+  // lead at all, since staff creates it directly on the contact. Without
+  // this, an abandoned draft for a DIFFERENT company (keyed on contact_id,
+  // the fallback rule) silently loaded into the new company's blank form —
+  // found live in sandbox QA, not merely theoretical.
+  const OFFER = 'offer-1'
+
+  it('Scenario: new-company onboarding via ?offer= → keyed on offer_id, not a lead', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: null, accountId: null, contactId: C, onboardingOfferId: OFFER }),
+    ).toEqual({ col: 'offer_id', val: OFFER, restrictToNoLead: false })
+  })
+
+  it('onboardingOfferId wins over a stale accountId (the exact hijack shape)', () => {
+    // accountId here represents an existing company the contact already
+    // owns — resolveWizardProgressScope must still key on the NEW offer, not
+    // fall back to that existing account's draft.
+    expect(
+      resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: null, accountId: A, contactId: C, onboardingOfferId: OFFER }),
+    ).toEqual({ col: 'offer_id', val: OFFER, restrictToNoLead: false })
+  })
+
+  it('formationLeadId takes precedence over onboardingOfferId if somehow both were set (defensive)', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: L, accountId: null, contactId: C, onboardingOfferId: 'offer-2' }),
+    ).toEqual({ col: 'lead_id', val: L, restrictToNoLead: false })
+  })
+
+  it('no onboardingOfferId (existing-company onboarding, the common case) falls through to account_id unchanged', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: null, accountId: A, contactId: C, onboardingOfferId: null }),
+    ).toEqual({ col: 'account_id', val: A, restrictToNoLead: false })
+  })
+
   // ── Person-owned (ITIN) — the ITIN belongs to the person, never the company.
   // Regression cover for Pietro De Pellegrino (2026-07-21): a standalone ITIN
   // buyer who ALSO owns a company. Before this, an account holder's ITIN

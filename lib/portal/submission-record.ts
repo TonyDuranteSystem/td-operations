@@ -40,11 +40,23 @@ export const TABLES_WITHOUT_ACCOUNT_ID = new Set(["formation_submissions"])
 /** Tables that HAVE a `tax_year` column. */
 export const TABLES_WITH_TAX_YEAR = new Set(["tax_return_submissions"])
 
+/** Tables that HAVE a `source` column (dev job bc2a8f7f, 2026-09-20). */
+export const TABLES_WITH_SOURCE = new Set(["onboarding_submissions"])
+
+/** Tables that HAVE an `offer_id` column (dev job bc2a8f7f, 2026-09-21) —
+ * the real "which company" anchor for onboarding, since a returning
+ * client's second+ company has no lead at all. Only onboarding_submissions
+ * has it today; add a table here alongside its own migration if that ever
+ * changes. */
+export const TABLES_WITH_OFFER_ID = new Set(["onboarding_submissions"])
+
 export interface SubmissionRecordInput {
   token: string | null
   contact_id: string | null
   account_id: string | null
   lead_id: string | null
+  /** The specific offer this submission is for — see TABLES_WITH_OFFER_ID. */
+  offer_id?: string | null
   /** Written as-is on tables that carry entity_type — NULL when genuinely
    * unknown. It used to fall back to 'SMLLC', which poisoned the downstream
    * resolver: formation materialization reads this column back as one of its
@@ -55,6 +67,10 @@ export interface SubmissionRecordInput {
   upload_paths: string[]
   /** Only emitted on tables that have the column AND when non-null. */
   tax_year: number | null
+  /** Only emitted on tables that have the column. 'portal_wizard' marks the
+   * real client portal wizard path vs. NULL for the manual token-link tool
+   * (onboarding_submissions only, dev job bc2a8f7f). */
+  source?: string | null
 }
 
 /**
@@ -100,6 +116,12 @@ export function buildSubmissionRecord(
   }
   if (TABLES_WITH_TAX_YEAR.has(table) && input.tax_year !== null) {
     record.tax_year = input.tax_year
+  }
+  if (TABLES_WITH_SOURCE.has(table)) {
+    record.source = input.source ?? null
+  }
+  if (TABLES_WITH_OFFER_ID.has(table)) {
+    record.offer_id = input.offer_id ?? null
   }
 
   return record

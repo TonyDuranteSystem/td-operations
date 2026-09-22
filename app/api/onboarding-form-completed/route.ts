@@ -2,17 +2,26 @@
  * POST /api/onboarding-form-completed
  *
  * Called by the onboarding form frontend after the client submits.
- * Auto-chain per Client Onboarding SOP v5.0:
  *
+ * REVISED per Antonio's 2026-09-20 decision: staff must review the submitted
+ * data and documents BEFORE anything gets written to the client's CRM
+ * record — this reverses the old SOP v7.4 "no review, trust the client"
+ * rule (dev job bc2a8f7f). This route is now staging + notification ONLY —
+ * it must NEVER create or update a `contacts` row, and must NEVER create the
+ * "Client Onboarding" service_delivery. That all happens later, only when a
+ * staff member reviews and confirms the submission (onboarding_form_review
+ * with apply_changes=true), which does its own contact/account/SD creation
+ * from `submitted_data` independently of anything this route does.
+ *
+ * What this route still does:
  * 1. Validate submission
- * 2. Apply form data to CRM (update contact: DOB, nationality, address, passport)
- * 3. Create Leads/{name}/ folder in Drive, upload data PDF + documents
+ * 2. Look up (read-only) an existing contact by email, for linking tasks only
+ * 3. Archive the raw submission to a Leads/{name}/ staging folder in Drive
  * 4. Check passport uploaded, flag if missing
  * 5. Check referral on lead -> create QB credit note task for Antonio
  * 6. Send Luca detailed email with all data + specific next steps
- * 7. Create task for Luca: "Review onboarding data + verify LLC info" (linked to delivery_id)
- * 8. Update service delivery stage_history
- * 9. Log everything (action_log)
+ * 7. Create task for Luca: "Review onboarding data + verify LLC info"
+ * 8. Log everything (action_log)
  *
  * Body: { submission_id: string, token: string }
  * No auth required (public endpoint -- only triggers internal notifications)
@@ -25,7 +34,7 @@ export const maxDuration = 60
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
-import { createSD } from "@/lib/operations/service-delivery"
+import { emitOnboardingWizardSubmittedEvent } from "@/lib/portal/chat-events"
 import type { Json } from "@/lib/database.types"
 
 export async function POST(req: NextRequest) {
@@ -61,7 +70,6 @@ export async function POST(req: NextRequest) {
     // Get lead info
     let leadName = ""
     let leadEmail = ""
-    let leadLanguage = "en"
     let referrerName = ""
     let contactId: string | null = null
 
@@ -75,113 +83,29 @@ export async function POST(req: NextRequest) {
       if (lead) {
         leadName = lead.full_name || ""
         leadEmail = lead.email || ""
-        leadLanguage = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
         referrerName = lead.referrer_name || ""
       }
 
-      // Find contact linked to this lead
+      // Read-only lookup of an existing contact, for linking the review task
+      // only. Deliberately NEVER auto-creates or updates a contact here —
+      // that write belongs to staff review/confirm (onboarding_form_review),
+      // not to this pre-review notification step (Antonio, 2026-09-20).
       const { data: contacts } = await supabaseAdmin
         .from("contacts")
         .select("id")
-        .ilike("email", leadEmail || "noemail")
+        .eq("email", leadEmail || "noemail")
         .limit(1)
 
       if (contacts?.length) {
         contactId = contacts[0].id
-      } else if (lead) {
-        // AUTO-CREATE contact from lead data
-        try {
-          const newContact = await dbWrite(
-            supabaseAdmin
-              .from("contacts")
-              .insert({
-                full_name: lead.full_name,
-                email: lead.email,
-                phone: lead.phone,
-                language: leadLanguage,
-              })
-              .select("id")
-              .single(),
-            "contacts.insert"
-          )
-
-          if (newContact) {
-            contactId = newContact.id
-            results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
-          }
-        } catch (e) {
-          results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
-        }
       }
     }
 
-    // ---- STEP 1B: Ensure Service Delivery exists ----
-    let deliveryId: string | null = null
-    try {
-      const orFilters = [`notes.ilike.%${token}%`]
-      if (contactId) orFilters.push(`contact_id.eq.${contactId}`)
-
-      const { data: existingSd } = await supabaseAdmin
-        .from("service_deliveries")
-        .select("id")
-        .eq("service_type", "Client Onboarding")
-        .or(orFilters.join(","))
-        .eq("status", "active")
-        .limit(1)
-
-      if (existingSd?.length) {
-        deliveryId = existingSd[0].id
-      } else {
-        const companyName = submittedData.company_name || "Existing LLC"
-        const newSd = await createSD({
-          service_type: "Client Onboarding",
-          service_name: `Client Onboarding - ${leadName} (${companyName})`,
-          contact_id: contactId,
-          notes: `Auto-created from onboarding form ${token}`,
-        })
-        deliveryId = newSd.id
-        results.push({ step: "sd_created", status: "ok", detail: `SD auto-created: ${deliveryId}` })
-      }
-    } catch (e) {
-      results.push({ step: "sd_check", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
-
-    // ---- STEP 2: Apply form data to CRM (update contact) ----
-    if (contactId) {
-      try {
-        const updates: Record<string, unknown> = {}
-        if (submittedData.owner_dob) updates.date_of_birth = submittedData.owner_dob
-        if (submittedData.owner_nationality) updates.citizenship = submittedData.owner_nationality
-        if (submittedData.owner_phone) updates.phone = submittedData.owner_phone
-
-        const addressParts = [
-          submittedData.owner_street,
-          submittedData.owner_city,
-          submittedData.owner_state,
-          submittedData.owner_zip,
-          submittedData.owner_country,
-        ].filter(Boolean)
-        if (addressParts.length > 0) updates.residency = addressParts.join(", ")
-
-        const hasPassport = uploadPaths.some(p => p.toLowerCase().includes("passport"))
-        if (hasPassport) updates.passport_on_file = true
-
-        if (Object.keys(updates).length > 0) {
-          updates.updated_at = new Date().toISOString()
-          await dbWrite(
-            supabaseAdmin
-              .from("contacts")
-              .update(updates)
-              .eq("id", contactId),
-            "contacts.update"
-          )
-
-          results.push({ step: "crm_update", status: "ok", detail: `Contact updated: ${Object.keys(updates).join(", ")}` })
-        }
-      } catch (e) {
-        results.push({ step: "crm_update", status: "error", detail: e instanceof Error ? e.message : String(e) })
-      }
-    }
+    // No service_delivery is created here either — the "Client Onboarding"
+    // SD (and the account it belongs to) is created only once a staff
+    // member reviews and confirms the submission. deliveryId stays null
+    // until then; every use of it below already tolerates null.
+    const deliveryId: string | null = null
 
     // ---- STEP 3: Create Leads/{name}/ folder in Drive + save data PDF ----
     try {
@@ -263,6 +187,7 @@ export async function POST(req: NextRequest) {
 
         if (refCompanyName) {
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             supabaseAdmin
               .from("tasks")
               .insert({
@@ -358,10 +283,16 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
     }
 
     // ---- STEP 7: Create task for Luca ----
+    // Two independent try/catch blocks (2026-09-20, bug-hunter finding on dev
+    // job bc2a8f7f): a failure inserting the review task must never silently
+    // skip the more urgent passport-missing task — that coupling is exactly
+    // what let the "Onboarding" invalid-category bug also swallow the
+    // passport task on every submission without anyone noticing.
     try {
       const companyName = submittedData.company_name || "Existing LLC"
 
       const task = await dbWrite(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin
           .from("tasks")
           .insert({
@@ -369,7 +300,7 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
             description: `Onboarding form completed for ${leadName}.\n\nCompany: ${companyName}\nState: ${submittedData.state || sub.state || "N/A"}\nEIN: ${submittedData.ein || "N/A"}\n${!hasPassport ? "\n** PASSPORT MISSING - request from client **\n" : ""}\nSteps:\n1. Verify data is correct\n2. Run onboarding_form_review(token="${token}", apply_changes=true)\n3. Start RA change on Harbor Compliance\n4. Mark this task as Done when CRM setup is complete`,
             assigned_to: "Luca",
             priority: "High",
-            category: "Onboarding" as never,
+            category: "CRM Update",
             status: "To Do",
             due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
             delivery_id: deliveryId || null,
@@ -382,9 +313,14 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
       )
 
       results.push({ step: "luca_task", status: "ok", detail: `Task created: ${task?.id}. Delivery: ${deliveryId || "none"}` })
+    } catch (e) {
+      results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
 
-      if (!hasPassport) {
+    if (!hasPassport) {
+      try {
         await dbWriteSafe(
+          // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
           supabaseAdmin
             .from("tasks")
             .insert({
@@ -402,9 +338,9 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
           "tasks.insert"
         )
         results.push({ step: "passport_task", status: "ok", detail: "Urgent task created to request passport" })
+      } catch (e) {
+        results.push({ step: "passport_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
-    } catch (e) {
-      results.push({ step: "luca_task", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // ---- STEP 8: Update service delivery history ----
@@ -419,6 +355,7 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
         if (sd) {
           const currentNotes = sd.notes || ""
           await dbWriteSafe(
+            // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
             supabaseAdmin
               .from("service_deliveries")
               .update({
@@ -435,6 +372,26 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
       }
     }
 
+    // ---- STEP 8b: "What's New" staff notification (dev job bc2a8f7f, 2026-09-20) ----
+    // Real visibility in the portal-chat / What's New feed, alongside the
+    // task+email above — only when a contact is already known (see the
+    // function's own doc comment for why a brand-new lead can't get one yet).
+    try {
+      const emitResult = await emitOnboardingWizardSubmittedEvent({
+        onboarding_submission_id: submission_id,
+        contact_id: contactId,
+      })
+      results.push({
+        step: "whats_new",
+        status: emitResult.emitted ? "ok" : "skipped",
+        detail: emitResult.emitted
+          ? `Message posted: ${emitResult.message_id}`
+          : `Not emitted (${emitResult.reason || "unknown"})`,
+      })
+    } catch (e) {
+      results.push({ step: "whats_new", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    }
+
     // ---- STEP 9: Log action ----
     try {
       await dbWriteSafe(
@@ -442,7 +399,7 @@ ${taxPrevYear === "no" || taxCurrYear === "no" ? `<li style="color:#d97706"><str
           action_type: "onboarding_form_completed",
           table_name: "onboarding_submissions",
           record_id: submission_id,
-          summary: `Onboarding form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
+          summary: `Onboarding form completed: ${leadName}. Submission staged, Luca notified. CRM setup pending staff review.`,
           details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
         }),
         "action_log.insert"
