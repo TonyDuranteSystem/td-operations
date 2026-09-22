@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   // A formation never carries an account_id (lives on contact+lead until the
   // Articles materialize the account). Same backstop as wizard-submit.
-  const account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
+  let account_id = accountIdForWizardSubmission(wizard_type, rawAccountId)
 
   const identity = await resolvePortalIdentity(user)
 
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
       // and verify the caller owns its subject before writing.
       const { data: existing, error: fetchErr } = await supabaseAdmin
         .from('wizard_progress')
-        .select('id, account_id, contact_id, lead_id')
+        .select('id, account_id, contact_id, lead_id, offer_id')
         .eq('id', progress_id)
         .maybeSingle()
 
@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
       const rowAccountId = (existing.account_id as string | null) ?? null
       const rowContactId = (existing.contact_id as string | null) ?? null
       const rowLeadId = (existing.lead_id as string | null) ?? null
+      const rowOfferId = (existing.offer_id as string | null) ?? null
 
       let allowed = false
       if (rowAccountId || rowContactId) {
@@ -118,6 +119,9 @@ export async function POST(req: NextRequest) {
       } else if (rowLeadId) {
         // Lead-scoped formation row → re-prove lead ownership.
         allowed = await ownsLeadScopedRow(identity, user, rowLeadId)
+      } else if (rowOfferId) {
+        // Offer-scoped onboarding row (returning client, no lead) → re-prove offer ownership.
+        allowed = await ownsOfferScopedRow(identity, user, rowOfferId)
       }
       // No scope at all (orphan row) → deny.
 
@@ -152,6 +156,12 @@ export async function POST(req: NextRequest) {
         if (!(await ownsOfferScopedRow(identity, user, offer_id))) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 })
         }
+        // Same hijack backstop as wizard-submit (THW Global, dev_task
+        // 358e8cbe): never trust a client-carried account_id for a verified
+        // offer draft — the page already blanks it client-side, but this is
+        // the server-side guarantee. Must run after the ownership check
+        // above and before the INSERT below.
+        account_id = null
       }
 
       // Closure only (dev job fbbf4abe): re-verify the client-supplied record
