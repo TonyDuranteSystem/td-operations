@@ -1,12 +1,13 @@
 /**
  * Push a company's info to Harbor Compliance — the Registered Agent host.
- * Backs two Workspace buttons that both do the identical thing:
- *   - Company Formation, "Activate RA on Harbor Compliance" (Articles
- *     Received stage — a brand-new company that never had an RA yet).
- *   - Client Onboarding, "Switch RA to Harbor Compliance" (once staff has
- *     reviewed the client's submission — an already-existing company whose
- *     RA is being moved to TD, dev job bc2a8f7f, Antonio 2026-09-22).
- * Either way this only runs once the CRM account exists.
+ * Backs the Company Formation Workspace's "Activate RA on Harbor Compliance"
+ * button (Articles Received stage — a brand-new company that never had an
+ * RA yet). Only runs once the CRM account exists.
+ *
+ * NOT used by Client Onboarding — that RA step is a manual switch staff do
+ * directly on Harbor Compliance's own site (Antonio, 2026-09-22: "that
+ * fucking button must open the website for us to do switch"), not an API
+ * push; see components/flows/onboarding-ra-switch-step.tsx.
  *
  * Resolves the SD → account, then pushes the company to Harbor Compliance
  * (mirrors the hc_sync_company MCP tool): updates the linked HC company when
@@ -42,9 +43,9 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     if (sdErr || !sd) {
       return NextResponse.json({ success: false, error: 'Flow (service delivery) not found' }, { status: 404 })
     }
-    if (sd.service_type !== 'Company Formation' && sd.service_type !== 'Client Onboarding') {
+    if (sd.service_type !== 'Company Formation') {
       return NextResponse.json(
-        { success: false, error: 'Registered Agent activation only applies to Company Formation or Client Onboarding flows.' },
+        { success: false, error: 'Registered Agent activation only applies to Company Formation flows.' },
         { status: 400 },
       )
     }
@@ -53,9 +54,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         {
           success: false,
           error:
-            sd.service_type === 'Client Onboarding'
-              ? 'The CRM account is not created yet. Confirm the onboarding review first, then switch the Registered Agent.'
-              : 'The CRM account is not created yet. Upload the Articles of Organization to materialize the company first, then activate the Registered Agent.',
+            'The CRM account is not created yet. Upload the Articles of Organization to materialize the company first, then activate the Registered Agent.',
         },
         { status: 400 },
       )

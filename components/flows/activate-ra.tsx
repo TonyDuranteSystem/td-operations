@@ -5,25 +5,26 @@ import { ShieldCheck, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
 interface ActivateRaProps {
   serviceDeliveryId: string
-  /** SD's account_id — empty until the company is materialized at Articles Received
-   *  (formation) or the onboarding review is confirmed (onboarding). */
+  /** SD's account_id — empty until the company is materialized at Articles Received. */
   accountId?: string | null
-  /** 'switch' (Client Onboarding — an existing company's RA is moving to TD) vs
-   *  the default 'activate' (Company Formation — a brand-new company's first RA). */
-  mode?: 'activate' | 'switch'
 }
 
 /**
- * "Activate/Switch Registered Agent on Harbor Compliance" — pushes the (now
- * real) company to Harbor Compliance via POST /api/flows/[id]/activate-ra,
- * which calls the HC sync. Only meaningful once the company exists, so it's
- * disabled until the SD has an account_id. Surfaces the server's real
+ * "Activate Registered Agent on Harbor Compliance" — pushes the (now real)
+ * company to Harbor Compliance via POST /api/flows/[id]/activate-ra, which calls
+ * the HC sync. Only meaningful once the company exists (Articles received), so
+ * it's disabled until the SD has an account_id. Surfaces the server's real
  * message (R099) rather than a generic toast.
+ *
+ * Company Formation only. Client Onboarding's Registered Agent step is
+ * different in kind — an existing company's RA is a manual switch staff do
+ * ON Harbor Compliance's own site, not an API push — see
+ * components/flows/onboarding-ra-switch-step.tsx (Antonio, 2026-09-22:
+ * "that fucking button must open the website for us to do switch").
  */
-export function ActivateRa({ serviceDeliveryId, accountId, mode = 'activate' }: ActivateRaProps) {
+export function ActivateRa({ serviceDeliveryId, accountId }: ActivateRaProps) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
-  const isSwitch = mode === 'switch'
 
   const hasAccount = !!accountId
 
@@ -36,11 +37,11 @@ export function ActivateRa({ serviceDeliveryId, accountId, mode = 'activate' }: 
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not activate the Registered Agent on Harbor Compliance.')
       }
-      setResult({ ok: true, message: data.message || (isSwitch ? 'Registered Agent switched to Harbor Compliance.' : 'Registered Agent activated on Harbor Compliance.') })
+      setResult({ ok: true, message: data.message || 'Registered Agent activated on Harbor Compliance.' })
     } catch (err) {
       setResult({
         ok: false,
-        message: err instanceof Error && err.message ? err.message : `Could not ${isSwitch ? 'switch' : 'activate'} the Registered Agent.`,
+        message: err instanceof Error && err.message ? err.message : 'Could not activate the Registered Agent.',
       })
     } finally {
       setLoading(false)
@@ -54,16 +55,13 @@ export function ActivateRa({ serviceDeliveryId, accountId, mode = 'activate' }: 
         <h3 className="text-sm font-semibold text-zinc-900">Registered Agent</h3>
       </div>
       <p className="mb-3 text-sm text-zinc-500">
-        {isSwitch
-          ? "Switch this company's Registered Agent to Harbor Compliance now that the review is confirmed."
-          : 'Activate the Registered Agent on Harbor Compliance now that the company exists.'}
+        Activate the Registered Agent on Harbor Compliance now that the company exists.
       </p>
 
       {!hasAccount ? (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          {isSwitch
-            ? "The CRM account isn't created yet — confirm the onboarding review first, then switch the Registered Agent."
-            : "The CRM account isn't created yet — upload the Articles of Organization to materialize the company first, then activate the Registered Agent."}
+          The CRM account isn&apos;t created yet — upload the Articles of Organization to materialize the company first,
+          then activate the Registered Agent.
         </p>
       ) : (
         <button
@@ -72,7 +70,7 @@ export function ActivateRa({ serviceDeliveryId, accountId, mode = 'activate' }: 
           className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-          {isSwitch ? 'Switch RA to Harbor Compliance' : 'Activate RA on Harbor Compliance'}
+          Activate RA on Harbor Compliance
         </button>
       )}
 
