@@ -10,6 +10,16 @@ const CLIENT_PREFIXES = ["owner_", "personal_"]
 const CLIENT_BARE_FIELDS = new Set(["first_name", "last_name", "email", "phone", "disclaimer_accepted"])
 const CLIENT_DOC_PREFIXES = ["passport"]
 
+/** A field whose VALUE is a storage path (not real answer data) — the
+ *  wizard stores the uploaded file's own path under the same key as the
+ *  document type (e.g. `passport_owner: "onboarding/<offer>/passport_owner_..."`).
+ *  These are already rendered as clickable document links; showing the raw
+ *  path a second time in the plain-text field grid just overflows the page
+ *  with an unreadable string (found live, Antonio 2026-09-22). */
+export function isStoragePathValue(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith("onboarding/")
+}
+
 export interface CategorizedFields {
   client: [string, unknown][]
   company: [string, unknown][]
@@ -22,6 +32,7 @@ export function categorizeSubmittedFields(
   const company: [string, unknown][] = []
   for (const [key, value] of Object.entries(submittedData)) {
     if (key === "additional_members") continue
+    if (isStoragePathValue(value)) continue
     const isClient = CLIENT_PREFIXES.some((p) => key.startsWith(p)) || CLIENT_BARE_FIELDS.has(key)
     ;(isClient ? client : company).push([key, value])
   }

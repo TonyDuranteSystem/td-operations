@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, ChevronRight, FileText, ExternalLink, Loader2, CheckCircle2 } from 'lucide-react'
 import type { OnboardingReviewEntry } from '../page'
+import { isStoragePathValue } from '@/lib/flows/onboarding-field-categories'
 
 interface OnboardingReviewListProps {
   entries: OnboardingReviewEntry[]
@@ -118,7 +119,7 @@ export function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry
   }, [entry.id])
 
   const fields = Object.entries(entry.submitted_data).filter(
-    ([key]) => key !== 'additional_members',
+    ([key, value]) => key !== 'additional_members' && !isStoragePathValue(value),
   )
   const members = (entry.submitted_data.additional_members as Array<Record<string, string>>) || []
 
@@ -132,7 +133,7 @@ export function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry
             return (
               <div key={key}>
                 <span className="text-zinc-500">{key.replace(/_/g, ' ')}: </span>
-                <span className="font-medium">{String(value ?? '—')}</span>
+                <span className="break-words font-medium">{String(value ?? '—')}</span>
                 {changed && (
                   <span className="text-amber-600 text-xs ml-1">(was: {String(changed.old ?? '—')})</span>
                 )}

@@ -108,7 +108,7 @@ function FieldSection({
             return (
               <div key={key}>
                 <span className="text-zinc-500">{key.replace(/_/g, ' ')}: </span>
-                <span className="font-medium">{String(value ?? '—')}</span>
+                <span className="break-words font-medium">{String(value ?? '—')}</span>
                 {changed && (
                   <span className="ml-1 text-xs text-amber-600">(was: {String(changed.old ?? '—')})</span>
                 )}
