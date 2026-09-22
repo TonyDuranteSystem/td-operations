@@ -54,6 +54,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   itin_data_collection: 'ITIN',
   lease_signed: 'Lease',
   formation_wizard_submitted: 'Formation',
+  onboarding_wizard_submitted: 'Onboarding',
 }
 
 /** Deep-link target for a note's source entity. Returns null when there's no
