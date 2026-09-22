@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { categorizeSubmittedFields } from '@/lib/flows/onboarding-field-categories'
 import { OnboardingWorkspaceDetail } from './components/onboarding-workspace-detail'
 import { OnboardingRaSwitchStep } from '@/components/flows/onboarding-ra-switch-step'
+import { FlowChat } from '@/components/flows/flow-chat'
 import type { OnboardingReviewEntry } from '../page'
 
 export const dynamic = 'force-dynamic'
@@ -23,8 +24,12 @@ export const dynamic = 'force-dynamic'
  *      must open the website for us to do switch. once is done, we will
  *      confirm in the workspace and the system will update the crm")
  *   7. everything with stages            → the 3-dot stepper below
- * Message-the-client link at the top is visible regardless of stage
- * (Antonio: "add the chat in every stage").
+ * Message-the-client affordance sits DOWN THE PAGE, in every stage's own
+ * content block — not a floating top button (Antonio corrected this too:
+ * "the chat must be down the page in every stage as in other workspace").
+ * Post-review it's the real embedded FlowChat panel other workspaces use
+ * (scoped to the now-existing SD); pre-review there is no SD yet to scope an
+ * embedded panel to, so it deep-links straight into the real thread instead.
  * [id] = onboarding_submissions.id. Reached from the compact
  * OnboardingWorkspaceBanner on the account/contact page, and from the
  * global /onboarding-review inbox.
@@ -108,9 +113,14 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
       ? `/contacts/${sub.contact_id}`
       : '/onboarding-review'
 
-  // Message the client — visible at every stage of this workspace, not just
-  // at the end (Antonio, 2026-09-22: "add the chat in every stage"). Deep-links
-  // straight into this client's real portal-chat thread.
+  // Message the client — down the page, in every stage, same as the other
+  // workspaces (Antonio, 2026-09-22, correcting the earlier top-right button).
+  // Once the 'Client Onboarding' SD exists (post-review) this is the SAME
+  // embedded chat panel Formation/ITIN/Tax Return use, scoped to that SD —
+  // real parity, not a link-out. Before that (nothing created yet), there is
+  // no SD to scope an embedded panel to, so this deep-links straight into the
+  // client's real portal-chat thread instead — the fastest safe option;
+  // flagged to Antonio as a deliberate scope choice, not silently downgraded.
   const chatHref = sub.account_id
     ? `/portal-chats?account=${sub.account_id}`
     : sub.contact_id
@@ -119,24 +129,13 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
 
   return (
     <div className="mx-auto max-w-4xl p-6 lg:p-8">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <Link
-          href={backHref}
-          className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {companyName}
-        </Link>
-        {chatHref && (
-          <Link
-            href={chatHref}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
-          >
-            <MessageCircle className="h-4 w-4" />
-            Message {entry.lead_name !== 'Unknown' ? entry.lead_name : 'the client'}
-          </Link>
-        )}
-      </div>
+      <Link
+        href={backHref}
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {companyName}
+      </Link>
 
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-zinc-900">Onboarding — {companyName}</h1>
@@ -172,7 +171,19 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
       </div>
 
       {!reviewed ? (
-        <OnboardingWorkspaceDetail entry={entry} clientFields={clientFields} companyFields={companyFields} />
+        <div className="space-y-4">
+          <OnboardingWorkspaceDetail entry={entry} clientFields={clientFields} companyFields={companyFields} />
+          {chatHref && (
+            <Link
+              href={chatHref}
+              className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700 hover:bg-blue-100"
+            >
+              <MessageCircle className="h-4 w-4" />
+              Message {entry.lead_name !== 'Unknown' ? entry.lead_name : 'the client'} — no service record exists
+              yet to attach an in-page chat to, so this opens their real conversation directly.
+            </Link>
+          )}
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -191,6 +202,7 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
               Setting up the account&apos;s services — refresh in a moment to switch the Registered Agent.
             </p>
           ) : null}
+          {onboardingSd && <FlowChat serviceDeliveryId={onboardingSd.id} label="Chat with client" />}
         </div>
       )}
     </div>
