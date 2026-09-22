@@ -1,25 +1,27 @@
 /**
  * Per-client Onboarding Workspace data — the account/contact page's data-fetch
- * side of components/flows/onboarding-workspace-banner.tsx (dev job bc2a8f7f,
- * Antonio 2026-09-22: review must happen on the client's own page, not only
- * the global /onboarding-review inbox).
+ * side of components/flows/onboarding-workspace-banner.tsx and the workspace
+ * page at app/(dashboard)/onboarding-review/[id]/page.tsx (dev job bc2a8f7f,
+ * Antonio 2026-09-22: a real workspace on the client's own page, banner →
+ * dedicated page → stages, matching Formation/ITIN/Tax Return exactly).
  *
  * Two independent signals, since onboarding deliberately creates nothing
  * until staff confirms (staff-review-first design):
  *   - PENDING: onboarding_submissions rows for this contact, completed but
  *     not yet reviewed. Mirrors app/(dashboard)/onboarding-review/page.tsx's
  *     entry-building exactly, scoped to one contact instead of everyone.
- *   - REVIEWED: 'Client Onboarding' service_deliveries for this contact still
- *     sitting at the "Review & CRM Setup" stage (stage_order 2 — the stage
- *     the SD is created into the moment staff confirms). Staff manually
- *     advancing the SD past this stage once the Registered Agent is switched
- *     is what retires this card — no extra DB flag needed.
+ *   - REVIEWED: onboarding_submissions rows already reviewed whose 'Client
+ *     Onboarding' SD is still sitting at the "Review & CRM Setup" stage
+ *     (stage_order 2 — the stage the SD is created into the moment staff
+ *     confirms). Staff manually advancing the SD past this stage once the
+ *     Registered Agent is switched is what retires this card.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { OnboardingReviewEntry } from "@/app/(dashboard)/onboarding-review/page"
 
 export interface ReviewedOnboarding {
+  submissionId: string
   companyName: string | null
   serviceDeliveryId: string
   accountId: string | null
@@ -35,7 +37,7 @@ export const EMPTY_ONBOARDING_WORKSPACE: OnboardingWorkspaceData = { pendingEntr
 export async function resolveOnboardingWorkspaceForContact(
   contactId: string,
 ): Promise<OnboardingWorkspaceData> {
-  const [{ data: submissions }, { data: contact }, { data: sds }] = await Promise.all([
+  const [{ data: submissions }, { data: contact }, { data: reviewedSubs }] = await Promise.all([
     supabaseAdmin
       .from("onboarding_submissions")
       .select(
@@ -47,12 +49,11 @@ export async function resolveOnboardingWorkspaceForContact(
       .order("created_at", { ascending: true }),
     supabaseAdmin.from("contacts").select("full_name, email").eq("id", contactId).maybeSingle(),
     supabaseAdmin
-      .from("service_deliveries")
-      .select("id, service_name, account_id")
+      .from("onboarding_submissions")
+      .select("id, account_id")
       .eq("contact_id", contactId)
-      .eq("service_type", "Client Onboarding")
-      .eq("stage_order", 2)
-      .eq("status", "active"),
+      .not("reviewed_at", "is", null)
+      .not("account_id", "is", null),
   ])
 
   const pendingEntries: OnboardingReviewEntry[] = (submissions || []).map((s) => {
@@ -72,11 +73,25 @@ export async function resolveOnboardingWorkspaceForContact(
     }
   })
 
-  const reviewed: ReviewedOnboarding[] = (sds || []).map((sd) => ({
-    companyName: (sd.service_name as string | null)?.replace(/^Client Onboarding - /, "") ?? null,
-    serviceDeliveryId: sd.id,
-    accountId: sd.account_id,
-  }))
+  const reviewed: ReviewedOnboarding[] = []
+  for (const s of reviewedSubs || []) {
+    const { data: sd } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id, account_id, service_name")
+      .eq("account_id", s.account_id as string)
+      .eq("service_type", "Client Onboarding")
+      .eq("stage_order", 2)
+      .eq("status", "active")
+      .maybeSingle()
+    if (sd) {
+      reviewed.push({
+        submissionId: s.id,
+        companyName: (sd.service_name as string | null)?.replace(/^Client Onboarding - /, "") ?? null,
+        serviceDeliveryId: sd.id,
+        accountId: sd.account_id,
+      })
+    }
+  }
 
   return { pendingEntries, reviewed }
 }

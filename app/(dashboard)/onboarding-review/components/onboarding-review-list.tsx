@@ -209,7 +209,9 @@ export function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry
   )
 }
 
-function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
+/** Exported for the same reason as OnboardingReviewDetail — reused directly
+ *  by the per-client Onboarding Workspace page. */
+export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
   const router = useRouter()
   const [acknowledged, setAcknowledged] = useState(false)
   const [confirming, setConfirming] = useState(false)
