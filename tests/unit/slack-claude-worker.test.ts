@@ -201,7 +201,23 @@ describe("SLACK_WORKER_SYSTEM_PROMPT", () => {
     // switch. Drafted at ~660 chars and cut by 70% to the trigger + the refusal it
     // exists to stop; the detail lives in the tool's own description, not here.
     // Trim elsewhere before raising this again.)
-    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(12400)
+    // → 13300 (2026-09-22, worker-conversation-flexibility: (1) the "when Antonio pushes
+    // back, re-check with a different tool" rule is narrowed to an actual factual dispute
+    // — an emphatic repeated instruction to proceed is not a correction to re-verify, it's
+    // his decision; (2) SOURCES FIRST gained a carve-out so it no longer gates a direct
+    // instruction — flag an unconfirmed policy claim ONCE, then do what was asked, never
+    // re-argue it; (3) MEMORY dropped the ASK-BEFORE-YOU-SAVE confirmation step (2026-07-17)
+    // — memory_save never touches client/business data and never sends, so it now saves
+    // automatically with a one-line note instead of waiting for "yes". Root cause: a real
+    // Portal Chats conversation (Vanquish Group LLC/Milan Magyaródi) where Antonio told the
+    // worker to add a line to a client draft, it correctly flagged the line wasn't
+    // documented policy, then re-ran the same SOP/KB check two more times even after being
+    // told twice, increasingly angrily, to just do it. Antonio's rule going forward: the
+    // worker may flag once that something isn't documented, but must then do what it's told
+    // — the only things that stay gated behind his explicit "go" are sending a message/email
+    // and any other autonomous action.
+    // Trim elsewhere before raising this again.)
+    expect(SLACK_WORKER_SYSTEM_PROMPT.length).toBeLessThan(13300)
   })
 
   it("makes consulting the sources before answering MANDATORY (not a fallback)", () => {
