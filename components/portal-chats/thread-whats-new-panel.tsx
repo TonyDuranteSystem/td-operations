@@ -59,7 +59,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
 /** Deep-link target for a note's source entity. Returns null when there's no
  *  meaningful destination (the button is then not rendered). The account detail
  *  page reads the `?tab=` param to land on the right tab. */
-function deepLinkFor(src: string | null, accountId: string | null): string | null {
+function deepLinkFor(src: string | null, accountId: string | null, contactId: string | null): string | null {
   if (!src) return null
   const [table, id] = src.split(':')
   if (!table || !id) return null
@@ -69,6 +69,12 @@ function deepLinkFor(src: string | null, accountId: string | null): string | nul
     // No dedicated "formation" tab — the signed SS-4 lives under Documents.
     case 'ss4_applications': return accountId ? `/accounts/${accountId}?tab=documents` : null
     case 'lease_agreements': return accountId ? `/accounts/${accountId}?tab=documents` : null
+    // A submission this early has no account yet — the Onboarding Workspace
+    // banner lives on the contact's own page (dev job bc2a8f7f, Antonio
+    // 2026-09-22: review happens on the client's page, not a separate inbox).
+    // Fall back to the account page only if we genuinely have no contact.
+    case 'onboarding_submissions':
+      return contactId ? `/contacts/${contactId}` : accountId ? `/accounts/${accountId}` : null
     // Offers have no standalone page (viewed via the embedded panel on the
     // account/contact); a deep-link would 404, so omit it.
     case 'offers': return null
@@ -229,7 +235,7 @@ export function ThreadWhatsNewPanel({
                     </p>
                   </div>
                   {(() => {
-                    const deepLink = deepLinkFor(note.src, cardAccountId ?? accountId)
+                    const deepLink = deepLinkFor(note.src, cardAccountId ?? accountId, contactId)
                     return (
                       <div className="shrink-0 flex items-center gap-1">
                         {/* Deep-link to the related entity (payment / document / SS-4).

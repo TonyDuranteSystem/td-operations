@@ -13,6 +13,8 @@ import { getBankReferralsForAccount } from '@/lib/bank-referrals'
 import { resolveFlows } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { TaxWorkspaceBanner } from '@/components/flows/tax-workspace-banner'
+import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
+import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type OnboardingWorkspaceData } from '@/lib/flows/resolve-onboarding-workspace'
 import { HARBOR } from '@/lib/renewal-links'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
@@ -511,6 +513,20 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     .map((tr) => tr.tax_year)
     .sort((a, b) => b - a)[0] ?? null
 
+  // Onboarding workspace — a linked contact's submitted data awaiting review,
+  // and/or a just-reviewed company (this one, or a SECOND one still pending
+  // its own account) still needing its Registered Agent switched. Onboarding
+  // is contact-scoped pre-review (no account exists for a brand-new second
+  // company yet), so this merges across every contact linked to THIS account
+  // — the natural place staff actually look (dev job bc2a8f7f, Antonio
+  // 2026-09-22).
+  const onboardingWorkspace: OnboardingWorkspaceData = contactIds.length > 0
+    ? await Promise.all(contactIds.map((id) => resolveOnboardingWorkspaceForContact(id))).then((results) => ({
+        pendingEntries: results.flatMap((r) => r.pendingEntries),
+        reviewed: results.flatMap((r) => r.reviewed),
+      }))
+    : EMPTY_ONBOARDING_WORKSPACE
+
   // Primary contact for the e-sign prefill: the resolved signer if the shared
   // resolver found one unambiguously, else the owner-role link (case-insensitive
   // — production holds BOTH 'owner' and 'Owner'), else the first contact in the
@@ -610,6 +626,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
           companyName={(account as Account).company_name}
         />
       )}
+      <OnboardingWorkspaceBanner
+        pendingEntries={onboardingWorkspace.pendingEntries}
+        reviewed={onboardingWorkspace.reviewed}
+      />
       {taxSd && (
         <TaxWorkspaceBanner
           serviceDeliveryId={taxSd.id}

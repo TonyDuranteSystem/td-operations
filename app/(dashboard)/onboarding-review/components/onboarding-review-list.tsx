@@ -76,7 +76,11 @@ function OnboardingReviewRow({ entry }: { entry: OnboardingReviewEntry }) {
         </div>
       </button>
 
-      {expanded && <OnboardingReviewDetail entry={entry} />}
+      {expanded && (
+        <div className="px-4 pb-4 pl-11">
+          <OnboardingReviewDetail entry={entry} />
+        </div>
+      )}
     </div>
   )
 }
@@ -87,7 +91,12 @@ interface DocumentRow {
   url: string | null
 }
 
-function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry }) {
+/** Exported so the per-client Onboarding Workspace banner can embed the same
+ *  submitted-data + documents + Confirm review UI directly on the client's
+ *  own page (account/contact), not just in the global review inbox list
+ *  above — Antonio, 2026-09-22: staff must review a submission from the
+ *  client's own page, the same way Tax Return/ITIN work. */
+export function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry }) {
   const [documents, setDocuments] = useState<DocumentRow[] | null>(null)
   const [docsError, setDocsError] = useState<string | null>(null)
 
@@ -114,7 +123,7 @@ function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry }) {
   const members = (entry.submitted_data.additional_members as Array<Record<string, string>>) || []
 
   return (
-    <div className="px-4 pb-4 pl-11 space-y-4">
+    <div className="space-y-4">
       <div>
         <h4 className="text-xs font-semibold text-zinc-500 uppercase mb-2">Submitted information</h4>
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm bg-zinc-50 rounded p-3">

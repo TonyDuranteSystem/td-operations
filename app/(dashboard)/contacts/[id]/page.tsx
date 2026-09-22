@@ -8,6 +8,8 @@ import { ContactCallsSection } from '@/components/contacts/contact-calls-section
 import { resolveFlowsByContact } from '@/lib/flows/resolve-flows'
 import { FormationWorkspaceBanner } from '@/components/flows/formation-workspace-banner'
 import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
+import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
+import { resolveOnboardingWorkspaceForContact } from '@/lib/flows/resolve-onboarding-workspace'
 import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
@@ -255,6 +257,9 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   const itinFlow = contactFlows.find(
     (f) => f.flow_type === 'ITIN' && f.status === 'active' && f.service_delivery_id,
   )
+  // Onboarding workspace — the client's submitted data awaiting review, and/or
+  // a just-reviewed company still needing its Registered Agent switched.
+  const onboardingWorkspace = await resolveOnboardingWorkspaceForContact(params.id)
 
   return (
     <div className="p-6 lg:p-8">
@@ -283,6 +288,10 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
           stage={itinFlow.stage_name}
         />
       )}
+      <OnboardingWorkspaceBanner
+        pendingEntries={onboardingWorkspace.pendingEntries}
+        reviewed={onboardingWorkspace.reviewed}
+      />
       <ContactDetail
         contact={contact}
         accounts={accounts}
