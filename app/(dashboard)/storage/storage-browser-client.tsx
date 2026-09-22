@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { createClient } from '@/lib/supabase/client'
 import { CRM_STORAGE_BUCKET } from '@/lib/crm-storage/constants'
+import { FilePreviewModal } from '@/components/storage/file-preview-modal'
+import { ShareFileModal } from '@/components/storage/share-file-modal'
 
 interface FolderNode {
   id: string
@@ -83,6 +85,8 @@ export function StorageBrowserClient() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<{ folders: (FolderRow & { path: string })[]; files: (FileRow & { path: string })[] } | null>(null)
   const [movePicker, setMovePicker] = useState<{ folderIds: string[]; fileIds: string[] } | null>(null)
+  const [previewFile, setPreviewFile] = useState<FileRow | null>(null)
+  const [shareFile, setShareFile] = useState<FileRow | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadTree = useCallback(async () => {
@@ -664,7 +668,7 @@ export function StorageBrowserClient() {
                 </button>
               ))}
               {favoritesList?.files.map(f => (
-                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => handleDownload(f.id, f.file_name)}>
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => setPreviewFile(f)}>
                   <span aria-hidden>★</span>
                   <span aria-hidden>📄</span>
                   <span className="flex-1 min-w-0 truncate text-sm">{f.file_name}</span>
@@ -686,7 +690,7 @@ export function StorageBrowserClient() {
                 </button>
               ))}
               {searchResults.files.map(f => (
-                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => handleDownload(f.id, f.file_name)}>
+                <button key={f.id} type="button" className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50" onClick={() => setPreviewFile(f)}>
                   <span aria-hidden>📄</span>
                   <span className="flex-1 min-w-0 truncate text-sm">{f.file_name}</span>
                   <span className="text-xs text-gray-400 truncate max-w-[40%]">{f.path}</span>
@@ -792,7 +796,7 @@ export function StorageBrowserClient() {
                         autoFocus
                       />
                     ) : (
-                      <button type="button" className="flex-1 min-w-0 text-left text-sm truncate hover:text-blue-600" onClick={() => handleDownload(file.id, file.file_name)}>{file.file_name}</button>
+                      <button type="button" className="flex-1 min-w-0 text-left text-sm truncate hover:text-blue-600" onClick={() => setPreviewFile(file)}>{file.file_name}</button>
                     )}
                     <span className="text-xs text-gray-400 shrink-0">{formatSize(file.file_size)}</span>
                     <FastTooltip label={favFiles.has(file.id) ? 'Unstar' : 'Star'}>
@@ -800,6 +804,8 @@ export function StorageBrowserClient() {
                         {favFiles.has(file.id) ? '★' : '☆'}
                       </button>
                     </FastTooltip>
+                    <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => handleDownload(file.id, file.file_name)}>Download</button>
+                    <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => setShareFile(file)}>Share</button>
                     <button type="button" className="px-2 py-1 text-xs text-gray-500 hover:text-gray-900" onClick={() => setRenaming({ kind: 'file', id: file.id, value: file.file_name })}>Rename</button>
                     <button type="button" className="px-2 py-1 text-xs text-red-500 hover:text-red-700" onClick={() => deleteFile(file.id, file.file_name)}>Delete</button>
                   </div>
@@ -819,6 +825,20 @@ export function StorageBrowserClient() {
           {contextMenu.kind === 'folder' && (
             <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { goToFolder(contextMenu.id); setContextMenu(null) }}>Open</button>
           )}
+          {contextMenu.kind === 'file' && (() => {
+            const file = contents?.files.find(f => f.id === contextMenu.id)
+            return (
+              <>
+                {file && (
+                  <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { setPreviewFile(file); setContextMenu(null) }}>Preview</button>
+                )}
+                <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { handleDownload(contextMenu.id, contextMenu.name); setContextMenu(null) }}>Download</button>
+                {file && (
+                  <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { setShareFile(file); setContextMenu(null) }}>Share</button>
+                )}
+              </>
+            )
+          })()}
           <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-gray-100" onClick={() => { setRenaming({ kind: contextMenu.kind, id: contextMenu.id, value: contextMenu.name }); setContextMenu(null) }}>Rename</button>
           <button
             type="button"
@@ -886,6 +906,19 @@ export function StorageBrowserClient() {
           </div>
         )
       })()}
+
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          onClose={() => setPreviewFile(null)}
+          onDownload={() => handleDownload(previewFile.id, previewFile.file_name)}
+          onShare={() => { setShareFile(previewFile); setPreviewFile(null) }}
+        />
+      )}
+
+      {shareFile && (
+        <ShareFileModal file={shareFile} onClose={() => setShareFile(null)} />
+      )}
     </div>
   )
 }
