@@ -875,9 +875,20 @@ function QuickActionsBar({
   // grabbing offers[0] would confirm payment against the wrong one, leaving
   // the real awaiting-payment deal untouched. Falls back to offers[0] only
   // if the named offer isn't in this contact's list for some reason.
-  const paymentOffer = awaitingPayment
-    ? offers.find(o => o.token === awaitingPayment.offer_token) ?? offers[0]
-    : offers[0]
+  const namedAwaitingOffer = awaitingPayment
+    ? offers.find(o => o.token === awaitingPayment.offer_token)
+    : undefined
+  if (awaitingPayment && !namedAwaitingOffer) {
+    // This should be unreachable — pendingActivations on this page is
+    // derived from these same offers' own tokens — but if it's ever hit,
+    // silently falling back to "newest offer" is exactly the bug this line
+    // exists to prevent. Warn loudly rather than fail quietly.
+    console.warn(
+      `[ContactDetail] awaiting-payment activation names offer token "${awaitingPayment.offer_token}", ` +
+      `which is not in this contact's offer list — falling back to the newest offer instead.`,
+    )
+  }
+  const paymentOffer = namedAwaitingOffer ?? offers[0]
   // Show the button when an offer is awaiting payment AND we have either a
   // lead (classic funnel) OR a signed offer in scope (existing-account /
   // existing-contact re-entry, e.g. Mojo Labs LLC).
@@ -1077,16 +1088,24 @@ function QuickActionsBar({
           open={showConfirmPayment}
           onClose={() => setShowConfirmPayment(false)}
           // The route's own priority order is offer_token > lead_id >
-          // account_id > contact_id (its resolution re-derives lead/account
-          // linkage FROM the offer, per its own comment). A resolved
-          // paymentOffer is always the most specific identifier available,
-          // so it always wins here — sending leadId instead whenever a lead
-          // happened to exist was the exact "confirm payment against
-          // whichever offer is newest for this lead" bug this dialog was
-          // just fixed to avoid, just reappearing on a different branch
-          // (dev job b1e0cb99, bug-hunter finding). Only fall back to
-          // leadId/contactId when there is no resolved offer to point at.
-          leadId={paymentOffer ? undefined : lead?.id}
+          // account_id > contact_id, checked as an if/else-if chain — so
+          // offerToken always wins server-side the moment it's present,
+          // regardless of what else is also sent. Passing leadId alongside
+          // it is therefore safe: it can never make the server resolve the
+          // wrong offer (that was the bug — sending ONLY leadId, with no
+          // offerToken, let the server fall through to "pick whichever
+          // offer is newest for this lead"). Sending both, with offerToken
+          // present, keeps that resolution correct AND keeps the dialog's
+          // own "Convert lead to contact" checklist line accurate for a
+          // lead-linked contact — that line reads the leadId prop directly,
+          // so suppressing it whenever an offer resolved made the checklist
+          // describe the wrong action even though the real one performed by
+          // the server was still correct (dev job b1e0cb99, bug-hunter
+          // finding). contactId stays suppressed once an offer resolves —
+          // that identifier is only for the account/contact re-entry mode,
+          // which offerToken makes redundant, and it has no matching
+          // display text depending on it.
+          leadId={lead?.id}
           contactId={paymentOffer ? undefined : (lead ? undefined : contact.id)}
           offerToken={paymentOffer?.token}
           clientName={contact.full_name ?? lead?.full_name ?? 'Client'}
