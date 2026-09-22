@@ -1076,9 +1076,19 @@ function QuickActionsBar({
         <ConfirmPaymentDialog
           open={showConfirmPayment}
           onClose={() => setShowConfirmPayment(false)}
-          leadId={lead?.id}
-          contactId={lead ? undefined : contact.id}
-          offerToken={lead ? undefined : paymentOffer?.token}
+          // The route's own priority order is offer_token > lead_id >
+          // account_id > contact_id (its resolution re-derives lead/account
+          // linkage FROM the offer, per its own comment). A resolved
+          // paymentOffer is always the most specific identifier available,
+          // so it always wins here — sending leadId instead whenever a lead
+          // happened to exist was the exact "confirm payment against
+          // whichever offer is newest for this lead" bug this dialog was
+          // just fixed to avoid, just reappearing on a different branch
+          // (dev job b1e0cb99, bug-hunter finding). Only fall back to
+          // leadId/contactId when there is no resolved offer to point at.
+          leadId={paymentOffer ? undefined : lead?.id}
+          contactId={paymentOffer ? undefined : (lead ? undefined : contact.id)}
+          offerToken={paymentOffer?.token}
           clientName={contact.full_name ?? lead?.full_name ?? 'Client'}
           offer={paymentOffer ? {
             token: paymentOffer.token,
