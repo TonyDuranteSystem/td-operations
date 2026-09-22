@@ -31,7 +31,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   try {
     const { data: sub, error } = await supabaseAdmin
       .from('onboarding_submissions')
-      .select('token, contact_id, account_id, upload_paths')
+      .select('token, contact_id, account_id, offer_id, lead_id, upload_paths')
       .eq('id', params.id)
       .single()
 
@@ -51,18 +51,22 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // submission.
     //
     // The real upload path's identifier (app/portal/wizard/wizard-client.tsx)
-    // is `leadId || accountId || contactId` — for the onboarding wizard,
-    // onboarding has no leadId, so it's accountId whenever the client
-    // already has ANY account (a returning client onboarding an additional
-    // company — a real, common case, not an edge case), falling back to
-    // contactId only for a genuinely brand-new client with no account yet.
-    // Missing the accountId case here meant every real document for a
-    // returning client was silently filtered out with zero indication to
-    // staff (found live in sandbox QA, 2026-09-20: "Documents (3)" heading,
-    // zero documents rendered, no error shown).
+    // is `leadId || offerId || accountId || contactId` — account_id is always
+    // forced null pre-review (staff-review-first), so in practice this is
+    // leadId for a first-time onboarding, offerId for a returning client's
+    // second+ company (no lead — dev job bc2a8f7f, corrected 2026-09-21), or
+    // contactId as the final fallback. Missing ANY of these here means every
+    // real document for that case is silently filtered out with zero
+    // indication to staff (found live in sandbox QA, 2026-09-20 for the
+    // accountId case, then again 2026-09-22 for the offer_id case: "3
+    // documents uploaded but none could be shown" — lead_id was never in this
+    // list at all and is added here from the same audit, before it could bite
+    // the far more common first-time-onboarding path the same way).
     const ownedPrefixes = [
       `${sub.token}/`,
       sub.account_id ? `onboarding/${sub.account_id}/` : null,
+      sub.lead_id ? `onboarding/${sub.lead_id}/` : null,
+      sub.offer_id ? `onboarding/${sub.offer_id}/` : null,
       sub.contact_id ? `onboarding/${sub.contact_id}/` : null,
     ].filter((p): p is string => !!p)
     const uploadPaths = allPaths.filter((p) => ownedPrefixes.some((prefix) => p.startsWith(prefix)))
