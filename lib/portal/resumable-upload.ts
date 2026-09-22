@@ -34,6 +34,21 @@ export interface ResumableUploadParams {
   file: File
   /** Progress callback, 0–100 */
   onProgress?: (percent: number) => void
+  /**
+   * Overrides tus-js-client's default fingerprint (file name + size + type +
+   * last-modified) with a caller-supplied one. Needed by any caller that
+   * mints a BRAND-NEW `path` on every attempt (not a stable one reused
+   * across retries of the same field): with the default fingerprint, two
+   * different attempts to upload "the same file" (by name/size) resolve to
+   * the same local fingerprint, so the second attempt tries to resume the
+   * first attempt's upload session — which points at a DIFFERENT server
+   * path than the one just minted for this attempt, and Supabase correctly
+   * rejects it ("Invalid key"). Passing a fingerprint derived from `path`
+   * itself guarantees every attempt is treated as new. Omit this to keep
+   * the existing behavior (a stable path reused across retries resumes
+   * correctly, as the portal wizard relies on).
+   */
+  fingerprint?: (file: File) => Promise<string>
 }
 
 /** Supabase requires resumable uploads to use exactly 6MB chunks. */
@@ -42,7 +57,7 @@ const CHUNK_SIZE = 6 * 1024 * 1024
 /** Upload a file resumably. Resolves when the upload completes, rejects on a
  *  non-recoverable error (after the retry schedule is exhausted). */
 export function uploadResumable(params: ResumableUploadParams): Promise<void> {
-  const { supabaseUrl, anonKey, accessToken, bucket, path, file, onProgress } = params
+  const { supabaseUrl, anonKey, accessToken, bucket, path, file, onProgress, fingerprint } = params
 
   return new Promise<void>((resolve, reject) => {
     const upload = new tus.Upload(file, {
@@ -63,6 +78,7 @@ export function uploadResumable(params: ResumableUploadParams): Promise<void> {
         contentType: file.type || 'application/octet-stream',
         cacheControl: '3600',
       },
+      ...(fingerprint ? { fingerprint } : {}),
       onError: err => reject(err),
       onProgress: (sent, total) => {
         if (onProgress && total > 0) onProgress(Math.round((sent / total) * 100))

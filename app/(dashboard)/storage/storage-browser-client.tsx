@@ -223,6 +223,13 @@ export function StorageBrowserClient() {
           path: mint.path,
           file,
           onProgress: percent => setUploadProgress({ fileName: file.name, percent }),
+          // A fresh destination is minted every single attempt here (unlike
+          // the portal wizard, which reuses one stable path across retries
+          // of the same field) — so the fingerprint must be tied to THIS
+          // attempt's destination, not to the file's own name/size, or a
+          // retry of "the same file" wrongly tries to resume a previous
+          // attempt's upload against today's different destination.
+          fingerprint: async () => `crm-storage:${mint.path}`,
         })
 
         await jsonOrThrow(await fetch('/api/crm-storage/files/register', {
