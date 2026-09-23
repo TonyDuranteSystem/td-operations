@@ -1,6 +1,14 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-17 — Claude (**Three unread indicators on
+_Last verified against code: 2026-09-23 — Claude (**The same three unread
+indicators now exclude chat-event notices (wizard submitted, signed, paid,
+etc.) entirely** — Antonio found a client action badging both the Topic pill
+and What's New at once confusing; What's New is now the only surface where a
+chat-event contributes an unread count. Read/unread badge logic, not composer
+behavior — full detail in `docs/systems/portal-chat-unread.md`, not
+duplicated here. Noted in this doc's changelog only because it touches this
+same file (`app/(dashboard)/portal-chats/page.tsx`).)_
+_Prior: 2026-09-17 — Claude (**Three unread indicators on
 this page — the topic-pill badges, the "Jump to latest" floating counter, and
 the per-message system-notice pill — no longer get permanently stuck on an
 already-handled or retired client-action notice.** This is read/unread badge

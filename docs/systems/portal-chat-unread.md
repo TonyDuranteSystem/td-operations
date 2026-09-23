@@ -1,5 +1,5 @@
 # Portal Chat — Read/Unread State
-_Last verified against code: 2026-09-17 — Claude (handled_at-aware unread indicators)_
+_Last verified against code: 2026-09-23 — Claude (chat-events excluded from the three staff-facing display indicators; What's New is now their only unread signal)_
 
 ## What it is
 Tracks, per message in `portal_messages`, whether staff has "seen" it — drives
@@ -25,12 +25,26 @@ using the same column with roles reversed — not covered here.
   that still needs a human response must not silently disappear just because
   someone opened the conversation for an unrelated reason. **`read_at` is
   never set on these rows by any mark-as-read path — that part is permanent,
-  not a bug.** What changed 2026-09-17: the three DISPLAY-layer indicators in
-  `page.tsx` (see "How it's built" below) now also accept `handled_at` as an
-  alternate "stop showing this as needing attention" signal, so a chat-event
-  notice that's already been handled doesn't stay visually stuck forever. The
-  read-marking ROUTES (`read/route.ts`, `mark-thread-read.ts`) are unchanged
-  and still correctly never touch these rows.
+  not a bug.** The read-marking ROUTES (`read/route.ts`, `mark-thread-read.ts`)
+  never touch these rows, unchanged since 2026-09-17.
+  **What changed 2026-09-23 (Antonio):** the three staff-facing DISPLAY
+  indicators below now EXCLUDE chat-event rows entirely, regardless of
+  `handled_at` — Antonio found the same notice showing an unread count on
+  both the Topic pill and the What's New tab at once confusing. What's New is
+  now the ONLY surface where a chat-event notice contributes an unread count
+  or highlight; the Topic pill, the "Jump to latest" counter, and the
+  message's own amber pill all stay fully quiet for chat-event rows from the
+  moment they're created, whether handled or not. This is a narrower reading
+  of the original 2026-05-18 requirement ("every client action must produce a
+  topic with a red unread badge") — the topic still gets created and is still
+  visible in the conversation, it just no longer double-signals unread once
+  What's New already owns that signal. **Known, accepted trade-off:** a topic
+  whose only content is an un-handled chat-event no longer sorts to the front
+  of the topic-tab strip (`adminTopicOrder` treats it as read) — staff finds
+  it via What's New or the sidebar's purple dot, not via tab order. (The
+  2026-09-17 handled_at-aware logic described below is now superseded by this
+  simpler exclude-always rule for these three indicators — the history is
+  kept for context, not because the mechanism still applies.)
 
 ## How it's built
 - **Table/columns:** `portal_messages.read_at` (staff-unread signal for
@@ -64,9 +78,12 @@ using the same column with roles reversed — not covered here.
     directly (not a server aggregate): `adminUnreadByTopic` (topic-pill
     badges), `recomputeJumpState`/`unreadBelowCount` (the "Jump to latest ↓N"
     floating badge), and the per-message amber pill on system-notice bubbles
-    (`isUnread` inside the `isSystem` render branch). All three are
-    `handled_at`-aware as of 2026-09-17 (see Gotchas below) via the shared
-    `isChatEventMessage()` helper in `lib/portal/chat-scope.ts`. These are
+    (`isUnread` inside the `isSystem` render branch). As of 2026-09-23, all
+    three unconditionally EXCLUDE any row matching `isChatEventMessage()`
+    (shared helper in `lib/portal/chat-scope.ts`) — chat-events never
+    contribute to these three, handled or not; What's New is their only
+    unread signal now (see Gotchas below for why this changed from the prior
+    2026-09-17 `handled_at`-aware version). These are
     SEPARATE from the sidebar `threads` query (`get_portal_chat_threads_v2`,
     filters `sender_type='client'` only) and the global nav badge (below) —
     don't assume fixing one fixes the others.

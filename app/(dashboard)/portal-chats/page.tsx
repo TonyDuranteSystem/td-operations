@@ -944,8 +944,8 @@ export default function PortalChatsPage() {
     let count = 0
     for (const m of adminFilteredMessages) {
       if (m.sender_type === 'admin' || m.read_at || m.deleted_at) continue
-      // Same handled-chat-event exclusion as adminUnreadByTopic above.
-      if (isChatEventMessage(m.message) && m.handled_at) continue
+      // Same chat-event exclusion as adminUnreadByTopic above (2026-09-23).
+      if (isChatEventMessage(m.message)) continue
       const el = document.getElementById(`pc-msg-${m.id}`)
       if (el && el.getBoundingClientRect().top >= contBottom) count++
     }
@@ -1050,20 +1050,20 @@ export default function PortalChatsPage() {
     return () => clearTimeout(timer)
   }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
-  // Unread count per topic tab (client + system messages not yet read by admin).
-  // System messages are auto-emitted on client actions (wizard submitted,
-  // document uploaded, payment received, etc.) — they must count toward the
-  // red badge so staff sees the topic immediately.
+  // Unread count per topic tab (client + plain-system messages not yet read
+  // by admin). Chat-event notices (wizard submitted, document uploaded,
+  // payment received, etc.) are deliberately EXCLUDED here (2026-09-23,
+  // Antonio) — they're already tracked with their own badge in What's New,
+  // and counting them here too duplicated the same notice on two surfaces.
+  // What's New remains the only place a chat-event contributes an unread
+  // count; this pill only reflects genuine unread chat text.
   const adminUnreadByTopic = combinedMessages.reduce<Record<string, number>>((acc, m) => {
     // deleted_at: a retired chat-event note (e.g. client resubmitted before
     // staff handled the original) must not count — it can never be cleared
     // any other way, since it's invisible to both the read-clear queries and
     // the What's New feed once deleted. Matches unreadBelowCount below.
     if (m.sender_type === 'admin' || m.read_at || m.deleted_at) return acc
-    // Chat-event rows never get read_at (by design) — once staff has
-    // explicitly handled one in What's New, it must stop counting here too,
-    // or the badge is stuck red forever regardless of what staff does.
-    if (isChatEventMessage(m.message) && m.handled_at) return acc
+    if (isChatEventMessage(m.message)) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
     return acc
@@ -3736,10 +3736,10 @@ export default function PortalChatsPage() {
                   // bubble. Strip the embedded idempotency marker before display.
                   if (isSystem) {
                     const displayBody = msg.message.replace(/<!--[\s\S]*?-->/g, '').trim()
-                    // Chat-event rows never get read_at (by design) — once
-                    // staff has handled one in What's New, it must stop
-                    // rendering as unread here too.
-                    const isUnread = !msg.read_at && !(isChatEventMessage(msg.message) && msg.handled_at)
+                    // Chat-event rows never get read_at (by design) and are
+                    // tracked exclusively in What's New (2026-09-23) — never
+                    // render as unread here, regardless of handled_at.
+                    const isUnread = !msg.read_at && !isChatEventMessage(msg.message)
                     return (
                       <div key={msg.id} id={`pc-msg-${msg.id}`} className="flex justify-center my-1.5 scroll-mt-4">
                         <div className={cn(
