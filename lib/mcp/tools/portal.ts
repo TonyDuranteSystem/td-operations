@@ -842,11 +842,14 @@ Supports both:
 - **Account-level chat** (pass account_id): Messages about a specific LLC
 - **Contact-level chat** (pass contact_id): Messages to a person (may not have an LLC yet)
 
-The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
+The sender is set to 'admin' (staff). The client sees it in their portal chat.
+
+TOPIC (2026-09-23): the portal chat is organized into topic tabs (e.g. "Mailing Address") — use portal_chat_read or the CRM to see which topic the message you're answering came in under, and pass that same string back as "topic" so your reply lands in the same tab, not a separate General tab. Omit topic for a proactive message that isn't answering anything specific — it then falls back to whatever topic the client's own last message in this thread was under.`,
     {
       account_id: z.string().uuid().optional().describe("Account UUID for LLC-related messages. At least one of account_id or contact_id required."),
       contact_id: z.string().uuid().optional().describe("Contact UUID for person-level messages. At least one of account_id or contact_id required."),
       message: z.string().describe("Message text to send"),
+      topic: z.string().optional().describe("The exact topic tag of the client message you're answering (see portal_chat_read). Omit for a proactive message — it then defaults to the client's last topic in this thread, or General if there is none."),
       attachment_url: z.string().optional().describe("Optional single attachment URL (legacy, for backward compat)"),
       attachment_name: z.string().optional().describe("Optional single attachment filename (legacy, for backward compat)"),
       attachments: z.array(z.object({
@@ -856,7 +859,7 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         size: z.number().optional(),
       })).optional().describe("Array of file attachments. Preferred over attachment_url for one or more files."),
     },
-    async ({ account_id, contact_id, message: msgText, attachment_url, attachment_name, attachments }) => {
+    async ({ account_id, contact_id, message: msgText, topic: explicitTopic, attachment_url, attachment_name, attachments }) => {
       try {
         if (!account_id && !contact_id) {
           return { content: [{ type: "text" as const, text: "Error: At least one of account_id or contact_id is required." }] }
@@ -912,6 +915,18 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
           resolvedContactId = await resolveAdminReplyContact(account_id, null)
         }
 
+        // Topic (2026-09-23): prefer the caller-supplied topic; otherwise fall
+        // back to whatever topic the client's own last message in this thread
+        // was under. Same scope resolution the read-clear below uses, so they
+        // can never disagree about which thread this reply landed in.
+        const { markClientMessagesReadForStaffReply, resolveFallbackReplyTopic } = await import("@/lib/portal/mark-thread-read")
+        const resolvedTopic = explicitTopic?.trim()
+          ? explicitTopic.trim()
+          : await resolveFallbackReplyTopic({
+              account_id: account_id || null,
+              contact_id: resolvedContactId || null,
+            }).catch(() => null)
+
         const { data: msg, error } = await supabaseAdmin
           .from("portal_messages")
           .insert({
@@ -923,6 +938,7 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
             attachment_url: attachment_url || null,
             attachment_name: attachment_name || null,
             attachments: attachments ?? [],
+            topic: resolvedTopic,
           })
           .select("id, created_at")
           .single()
@@ -940,13 +956,12 @@ The sender is set to 'admin' (staff). The client sees it in their portal chat.`,
         // Staff reply = read (WhatsApp semantics): clear this conversation's
         // client unread so the staff red dot goes away. Same helper the reply
         // API uses, so every send surface behaves identically.
-        const { markClientMessagesReadForStaffReply } = await import("@/lib/portal/mark-thread-read")
         await markClientMessagesReadForStaffReply({
           account_id: account_id || null,
           contact_id: resolvedContactId || null,
-          // This tool never tags its own insert with a topic — the message
-          // always lands in General, so the read-clear must match (2026-08-30).
-          topic: null,
+          // Matches the topic this reply was just tagged with (2026-09-23) —
+          // previously always null/General regardless of what the client asked.
+          topic: resolvedTopic,
         }).catch(() => 0)
 
         // In-app notification + email to client (fire-and-forget)
