@@ -50,6 +50,13 @@ export function EmailHtmlFrame({ html }: { html: string }) {
       style={{ height }}
       className="w-full border-0 bg-white"
       title="Email content"
+      // Lets the Capture tool find this iframe and render it separately
+      // (lib/captures/email-frame-composite.ts) — html2canvas's own
+      // cross-frame clone-and-paint silently produces a near-blank render
+      // for some emails' HTML otherwise. Must be a dedicated attribute, not
+      // the `title` above: that's decorative copy with no contract, and a
+      // future wording change to it must never silently break detection.
+      data-capture-email-frame="true"
     />
   )
 }
