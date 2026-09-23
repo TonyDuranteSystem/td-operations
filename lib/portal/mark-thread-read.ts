@@ -64,6 +64,106 @@ export function buildStaffReplyReadPlan(params: {
 }
 
 /**
+ * Resolve the SAME thread scope `markClientMessagesReadForStaffReply` uses,
+ * from just account_id/contact_id. Shared so the read-clear and the
+ * fallback-topic lookup below can never disagree about "which thread is
+ * this reply landing in" (they used to be two separate ad-hoc queries).
+ */
+async function resolveThreadScopePlan(
+  account_id: string | null,
+  contact_id: string | null,
+): Promise<StaffReplyReadStep[]> {
+  let linkedAccountIds: string[] = []
+  let mm: string[] = []
+  if (!account_id && contact_id) {
+    const { data: acRows } = await supabaseAdmin
+      .from("account_contacts")
+      .select("account_id")
+      .eq("contact_id", contact_id)
+    linkedAccountIds = (acRows ?? []).map((r) => r.account_id as string)
+    mm = await multiMemberAccountIds(linkedAccountIds)
+  }
+  return buildStaffReplyReadPlan({
+    account_id,
+    contact_id,
+    linkedAccountIds,
+    multiMemberAccountIds: mm,
+  })
+}
+
+/**
+ * Fallback topic for a reply that wasn't told which topic it belongs to
+ * (2026-09-23 — the MCP send tool and the AI worker's send tool gained an
+ * optional `topic` param so the AI can pass back the exact tag it saw on
+ * `search_portal_messages`; this is the safety net for when it doesn't,
+ * e.g. a proactive staff-initiated message with nothing to reply to).
+ *
+ * Returns the topic of the most recent CLIENT-sent message in the SAME
+ * thread scope a reply here would land in (reusing
+ * `buildStaffReplyReadPlan` so this can't disagree with the read-clear about
+ * which thread that is — see `resolveThreadScopePlan`). System/auto-reply
+ * rows are excluded: they don't represent a client's own topic choice.
+ * Returns null (General) when there's no prior client message to inherit
+ * from, which matches today's existing default for a fresh/proactive thread.
+ */
+export async function resolveFallbackReplyTopic(params: {
+  account_id: string | null
+  contact_id: string | null
+}): Promise<string | null> {
+  const { account_id, contact_id } = params
+  if (!account_id && !contact_id) return null
+
+  const plan = await resolveThreadScopePlan(account_id, contact_id)
+  if (plan.length === 0) return null
+
+  const candidates: Array<{ topic: string | null; created_at: string } | null> = []
+  for (const step of plan) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- chained Supabase query builder, shape varies per branch below
+    let q: any = supabaseAdmin
+      .from("portal_messages")
+      .select("topic, created_at")
+      .eq("sender_type", "client")
+      .order("created_at", { ascending: false })
+      .limit(1)
+
+    if (step.kind === "account") {
+      q = q.eq("account_id", step.account_id)
+    } else if (step.kind === "contact_tagged") {
+      q = q.eq("contact_id", step.contact_id)
+      if (step.excludeAccountIds.length > 0) {
+        q = q.or(`account_id.is.null,account_id.not.in.(${step.excludeAccountIds.join(",")})`)
+      }
+    } else {
+      q = q.is("contact_id", null).in("account_id", step.accountIds)
+    }
+
+    const { data } = await q.maybeSingle()
+    candidates.push(data ? { topic: data.topic ?? null, created_at: data.created_at } : null)
+  }
+
+  return pickLatestTopic(candidates)
+}
+
+/**
+ * PURE. Given one "most recent client message" candidate per thread-scope
+ * step (null where a step found none), return the topic of whichever
+ * candidate is actually most recent. Split out from
+ * `resolveFallbackReplyTopic` so this pick logic is unit-testable without a
+ * database — the multi-step case (a person thread with a company-only arm)
+ * is exactly where a naive "first non-null wins" would pick a stale topic
+ * over a fresher one from the other arm.
+ */
+export function pickLatestTopic(
+  candidates: Array<{ topic: string | null; created_at: string } | null>,
+): string | null {
+  let best: { topic: string | null; created_at: string } | null = null
+  for (const c of candidates) {
+    if (c && (!best || c.created_at > best.created_at)) best = c
+  }
+  return best?.topic ?? null
+}
+
+/**
  * Execute the plan for a staff reply. Best-effort: marks the client's unread
  * messages in the reply's thread as read. Never touches rows the client
  * explicitly kept unread. Returns the number of rows marked (cosmetic).
@@ -83,23 +183,7 @@ export async function markClientMessagesReadForStaffReply(params: {
   const { account_id, contact_id, topic } = params
   if (!account_id && !contact_id) return 0
 
-  let linkedAccountIds: string[] = []
-  let mm: string[] = []
-  if (!account_id && contact_id) {
-    const { data: acRows } = await supabaseAdmin
-      .from("account_contacts")
-      .select("account_id")
-      .eq("contact_id", contact_id)
-    linkedAccountIds = (acRows ?? []).map((r) => r.account_id as string)
-    mm = await multiMemberAccountIds(linkedAccountIds)
-  }
-
-  const plan = buildStaffReplyReadPlan({
-    account_id,
-    contact_id,
-    linkedAccountIds,
-    multiMemberAccountIds: mm,
-  })
+  const plan = await resolveThreadScopePlan(account_id, contact_id)
 
   const now = new Date().toISOString()
   let marked = 0

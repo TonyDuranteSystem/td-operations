@@ -405,6 +405,7 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
     "Use this to deliver a reply to a client AFTER the staff member has explicitly approved the draft in THIS conversation ('send it', 'go', 'send', or similar). Show the draft first, wait for their OK, then call this ONCE.",
     "LANGUAGE: write the message in the CLIENT'S CRM language (contacts.language) — an Italian client gets an Italian message, automatically. A server-side check refuses a clearly-English draft to an Italian-language client.",
     "Recipient: on a client-scoped surface (the CRM panels, a client-linked team thread) the recipient is FIXED SERVER-SIDE to that client — pass only the message; ids you supply are ignored, so never tell the staff member you can send this to a different client from there (offer to open that client's screen instead, or use email, which can go to anyone). On an unscoped surface provide account_id for an LLC-related message OR contact_id for a person without an LLC. The message posts as the Tony Durante team and the client is notified by in-portal alert + email automatically.",
+    "TOPIC (2026-09-23): the client's portal chat is organized into topic tabs — if you looked up this conversation with search_portal_messages, each message there carries its own `topic` field. When your reply answers a specific message, pass that SAME topic string back here verbatim so your reply lands in the same tab the client is looking at, instead of a separate General tab. Omit topic (or pass nothing) only for a proactive message that isn't answering anything specific — it then falls back to whatever topic the client's own last message in this thread was under.",
     "Do NOT call this speculatively, without an explicit approval in the conversation, or for a team-only note (clients see portal chat).",
   ].join("\n"),
   parameters: {
@@ -413,6 +414,7 @@ export const SEND_PORTAL_MESSAGE_TOOL: ToolDef = {
       account_id: { type: "string", description: "Account (LLC) UUID to message. Provide this OR contact_id." },
       contact_id: { type: "string", description: "Contact (person) UUID to message. Provide this OR account_id." },
       message: { type: "string", description: "The exact message text to send to the client." },
+      topic: { type: "string", description: "The exact topic tag (from search_portal_messages) of the client message you're answering. Omit for a proactive message — it then defaults to the client's last topic in this thread, or General if there is none." },
     },
     required: ["message"],
   },
@@ -1643,6 +1645,13 @@ export async function sendPortalMessageFromWorker(input: {
   contact_id?: unknown
   message?: unknown
   /**
+   * The topic tag (verbatim, from search_portal_messages) this reply belongs
+   * to. Omitted/empty → falls back to the client's last topic in this thread
+   * (resolveFallbackReplyTopic), General if there is none. See
+   * SEND_PORTAL_MESSAGE_TOOL's description for the model-facing contract.
+   */
+  topic?: unknown
+  /**
    * EXACT RECIPIENT — do not narrow a company down to one member.
    *
    * Antonio, 2026-07-31 (verbatim): "If Luca will choose company, the message will go
@@ -1667,6 +1676,7 @@ export async function sendPortalMessageFromWorker(input: {
   // Hard sanitizer (belt-and-suspenders with the DRAFTS prompt rule): strip any
   // markdown/asterisks so a client never sees "an AI wrote this" formatting.
   const message = typeof input.message === "string" ? stripDraftMarkdown(input.message.trim()).trim() : ""
+  const explicitTopic = typeof input.topic === "string" && input.topic.trim().length > 0 ? input.topic.trim() : null
 
   if (!accountId && !contactId) {
     return "❌ send_portal_message needs an account_id (LLC) or a contact_id (person) — which client to message."
@@ -1734,6 +1744,17 @@ export async function sendPortalMessageFromWorker(input: {
     return "✅ Already sent (this turn was re-run) — no duplicate posted."
   }
 
+  // Topic (2026-09-23): prefer the topic the model explicitly gave us (it saw
+  // this on search_portal_messages); otherwise fall back to whatever topic
+  // the client's own last message in this thread was under. Same scope
+  // resolution the read-clear below uses, so they can never disagree about
+  // which thread this reply landed in.
+  const { markClientMessagesReadForStaffReply, resolveFallbackReplyTopic } = await import("@/lib/portal/mark-thread-read")
+  const topic = explicitTopic ?? await resolveFallbackReplyTopic({
+    account_id: accountId ?? null,
+    contact_id: resolvedContactId ?? null,
+  }).catch(() => null)
+
   const { data: msg, error } = await db
     .from("portal_messages")
     .insert({
@@ -1743,6 +1764,7 @@ export async function sendPortalMessageFromWorker(input: {
       sender_id: ADMIN_PORTAL_SENDER_ID,
       message,
       attachments: [],
+      topic,
     })
     .select("id, created_at")
     .single()
@@ -1753,13 +1775,12 @@ export async function sendPortalMessageFromWorker(input: {
   // Staff reply = read (WhatsApp semantics): the assistant answering on our
   // behalf is a reply, so clear this conversation's client unread and drop the
   // staff red dot. Same helper the dashboard reply and the MCP send tool use.
-  const { markClientMessagesReadForStaffReply } = await import("@/lib/portal/mark-thread-read")
   await markClientMessagesReadForStaffReply({
     account_id: accountId ?? null,
     contact_id: resolvedContactId ?? null,
-    // The AI worker never tags its own insert with a topic — the message
-    // always lands in General, so the read-clear must match (2026-08-30).
-    topic: null,
+    // Matches the topic this reply was just tagged with (2026-09-23) —
+    // previously always null/General regardless of what the client asked.
+    topic,
   }).catch(() => 0)
 
   // Resolve the recipient's display name for the confirmation, so staff always
