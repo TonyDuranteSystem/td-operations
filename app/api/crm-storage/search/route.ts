@@ -15,18 +15,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { buildFolderPathMap } from "@/lib/crm-storage/folder-path"
+import { escapeIlikePattern } from "@/lib/crm-storage/name-guard"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
-
-// ILIKE treats %, _, and \ as pattern-control characters, not literal
-// text. Without escaping them, searching for a name that happens to
-// contain a percent sign or underscore silently returns unrelated
-// results (a bare "%" matches EVERYTHING) instead of what was actually
-// typed — wrong, and with no indication anything unusual happened.
-function escapeIlikePattern(input: string): string {
-  return input.replace(/[\\%_]/g, char => `\\${char}`)
-}
 
 export async function GET(req: NextRequest) {
   const denied = await requireStaffRoute()

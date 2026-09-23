@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { validateStorageName } from "@/lib/crm-storage/name-guard"
+import { validateStorageName, escapeIlikePattern } from "@/lib/crm-storage/name-guard"
 
 describe("validateStorageName", () => {
   it("accepts an ordinary name", () => {
@@ -82,5 +82,38 @@ describe("validateStorageName", () => {
 
   it("accepts a percent sign in the name", () => {
     expect(validateStorageName("50% Complete")).toEqual({ error: null, name: "50% Complete" })
+  })
+})
+
+describe("escapeIlikePattern", () => {
+  it("leaves an ordinary name unchanged", () => {
+    expect(escapeIlikePattern("Tax Returns")).toBe("Tax Returns")
+  })
+
+  it("escapes an underscore so it can't match any single character", () => {
+    expect(escapeIlikePattern("test_1")).toBe("test\\_1")
+  })
+
+  it("escapes a percent sign so it can't match everything", () => {
+    expect(escapeIlikePattern("50%")).toBe("50\\%")
+  })
+
+  it("escapes a literal backslash", () => {
+    expect(escapeIlikePattern("a\\b")).toBe("a\\\\b")
+  })
+
+  it("escapes every occurrence, not just the first", () => {
+    expect(escapeIlikePattern("a_b_c%d")).toBe("a\\_b\\_c\\%d")
+  })
+
+  it("regression: the bug this closes — an unescaped underscore was a wildcard for any character", () => {
+    // "test_1" as a RAW (unescaped) ILIKE pattern matches "testA1" too,
+    // because unescaped `_` means "any one character" in SQL LIKE syntax —
+    // producing a false "already exists" against a name that isn't actually
+    // a duplicate. Once escaped, the `_` is a literal backslash-escaped
+    // character in the pattern, not a wildcard.
+    const escaped = escapeIlikePattern("test_1")
+    expect(escaped).toBe("test\\_1")
+    expect(escaped).not.toBe("test_1")
   })
 })

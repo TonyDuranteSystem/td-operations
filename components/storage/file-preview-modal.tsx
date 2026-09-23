@@ -12,22 +12,13 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Download, FileQuestion, Loader2, Send, X } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { previewKind } from '@/lib/crm-storage/preview-kind'
 
 export interface PreviewableFile {
   id: string
   file_name: string
   mime_type: string | null
   file_size: number | null
-}
-
-function previewKind(mimeType: string | null): 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'none' {
-  if (!mimeType) return 'none'
-  if (mimeType.startsWith('image/')) return 'image'
-  if (mimeType === 'application/pdf') return 'pdf'
-  if (mimeType.startsWith('video/')) return 'video'
-  if (mimeType.startsWith('audio/')) return 'audio'
-  if (mimeType.startsWith('text/')) return 'text'
-  return 'none'
 }
 
 export function FilePreviewModal({
@@ -43,6 +34,8 @@ export function FilePreviewModal({
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [loadError, setLoadError] = useState(false)
+  const [textContent, setTextContent] = useState<string | null>(null)
+  const [textError, setTextError] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -63,6 +56,28 @@ export function FilePreviewModal({
   }, [file.id])
 
   const kind = previewKind(file.mime_type)
+
+  // Text files are classified as previewable but need their own fetch — the
+  // signed URL alone isn't enough to render text inline, unlike img/video/
+  // audio/iframe which can point straight at it (senior-engineer review,
+  // 2026-09-23: this branch was previously classified but never rendered).
+  useEffect(() => {
+    if (kind !== 'text' || !url) return
+    let cancelled = false
+    setTextError(false)
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error('load failed')
+        return r.text()
+      })
+      .then(t => {
+        if (!cancelled) setTextContent(t)
+      })
+      .catch(() => {
+        if (!cancelled) setTextError(true)
+      })
+    return () => { cancelled = true }
+  }, [kind, url])
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
@@ -100,11 +115,28 @@ export function FilePreviewModal({
             // eslint-disable-next-line @next/next/no-img-element -- a private signed URL, not a Next-optimizable remote URL
             <img src={url} alt={file.file_name} className="max-h-[80vh] w-full object-contain" />
           ) : kind === 'pdf' ? (
-            <iframe src={url} title={file.file_name} className="h-[80vh] w-full rounded-md bg-white" />
+            // sandbox with no `allow-same-origin`/`allow-scripts` — the PDF
+            // is served from Supabase's own storage origin, not the CRM's,
+            // but a sandboxed frame is the standard, free hardening for any
+            // embedded document viewer (security review, 2026-09-23).
+            <iframe src={url} title={file.file_name} sandbox="" className="h-[80vh] w-full rounded-md bg-white" />
           ) : kind === 'video' ? (
             <video src={url} controls className="max-h-[80vh] w-full" />
           ) : kind === 'audio' ? (
             <audio src={url} controls className="w-full px-8" />
+          ) : kind === 'text' ? (
+            textError ? (
+              <div className="flex flex-col items-center gap-2 p-8 text-center text-zinc-300">
+                <AlertCircle className="h-8 w-8" />
+                <p className="text-sm">Could not load this file.</p>
+              </div>
+            ) : textContent === null ? (
+              <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+            ) : (
+              <pre className="max-h-[80vh] w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-4 text-left text-sm text-zinc-800">
+                {textContent}
+              </pre>
+            )
           ) : (
             <div className="flex flex-col items-center gap-2 p-8 text-center text-zinc-300">
               <FileQuestion className="h-8 w-8" />

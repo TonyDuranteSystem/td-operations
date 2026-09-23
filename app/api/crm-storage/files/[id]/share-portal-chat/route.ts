@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffUser } from "@/lib/auth"
 import { CRM_STORAGE_BUCKET } from "@/lib/crm-storage/constants"
 import { CHAT_SHARE_MAX_BYTES, CHAT_SHARE_MAX_MB } from "@/lib/crm-storage/share-limits"
+import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 import { ACTIVE_ACCOUNT_STATUSES } from "@/lib/captures/portal-destinations"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { NextRequest, NextResponse } from "next/server"
@@ -35,9 +36,9 @@ const db = supabaseAdmin as any
  * No "already shared" claim/resend flag — see lib/crm-storage/share-
  * actions.ts for why: a stored document may legitimately be sent to the
  * same or a different client more than once, unlike a one-shot capture.
- * The client disables its Send button for the duration of the request,
- * which is the same posture captures' own "resend" path deliberately
- * relies on instead of a server-side atomic claim.
+ * The genuinely-concurrent case (two requests in flight at once) is still
+ * closed, though — see DUPLICATE_SEND_WINDOW_SECONDS and the
+ * crm_storage_send_locks claim below (AI Architect + Bug-Hunter, 2026-09-23).
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const supabase = createClient()
@@ -67,12 +68,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (Number(file.file_size) > CHAT_SHARE_MAX_BYTES) {
     return NextResponse.json({ error: `That file is too large for chat. Maximum: ${CHAT_SHARE_MAX_MB} MB.` }, { status: 400 })
   }
+  // This is the one CLIENT-FACING destination, so an active-content file
+  // reaching it matters most here — see the identical comment in
+  // share-team-chat/route.ts (security review, 2026-09-23).
+  const attachmentError = validateChatAttachment(file.file_name, Number(file.file_size), file.mime_type || "")
+  if (attachmentError) return NextResponse.json({ error: attachmentError }, { status: 400 })
 
-  // Duplicate-send guard — see DUPLICATE_SEND_WINDOW_SECONDS above. Checked
-  // here, before any validation work that follows, so a rapid-fire repeat of
-  // an already-rejected send doesn't even re-run the eligibility queries.
-  // This is the one CLIENT-FACING destination — a double-click or a second
-  // open tab must not put the same document in front of a real client twice.
+  // Duplicate-send guard, part 1 — checks the real message log, catching
+  // "sent a few seconds ago, in an earlier request that already finished."
   {
     const recentCutoff = new Date(Date.now() - DUPLICATE_SEND_WINDOW_SECONDS * 1000).toISOString()
     let dupQuery = db
@@ -94,124 +97,148 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
   }
 
-  // Validate the send BEFORE touching Storage.
-  if (contactId) {
-    const { data: contact } = await db.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
-    if (!contact?.email || !contact.portal_email_sent_at) {
-      return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
-    }
+  // Duplicate-send guard, part 2 — a real atomic claim for the genuinely
+  // concurrent case part 1 cannot catch (two requests in flight at once,
+  // both passing that SELECT before either has written a message row, since
+  // the copy-then-send round trip below is multi-second). Released in the
+  // `finally` below whether the send succeeds or fails, so a real later
+  // resend is never permanently blocked — only a genuine concurrent
+  // duplicate. This is the one client-facing destination, so it matters
+  // most here (AI Architect: blocker; Bug-Hunter: same finding).
+  const lockTarget = `portal_chat:${contactId ?? accountId}`
+  const { data: claimed } = await db
+    .from("crm_storage_send_locks")
+    .upsert({ file_id: fileId, target: lockTarget }, { onConflict: "file_id,target", ignoreDuplicates: true })
+    .select()
+  if (!claimed || claimed.length === 0) {
+    return NextResponse.json({ error: "This is already being sent to them — check before sending again." }, { status: 429 })
   }
-  if (accountId) {
+
+  try {
+    // Validate the send BEFORE touching Storage.
     if (contactId) {
-      const { data: link } = await db.from("account_contacts").select("contact_id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle()
-      if (!link) return NextResponse.json({ error: "That company doesn't belong to this person anymore. Please search again." }, { status: 400 })
+      const { data: contact } = await db.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
+      if (!contact?.email || !contact.portal_email_sent_at) {
+        return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+      }
     }
-    const { data: account } = await db.from("accounts").select("status").eq("id", accountId).maybeSingle()
-    if (!account || !ACTIVE_ACCOUNT_STATUSES.has(account.status)) {
-      return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+    if (accountId) {
+      if (contactId) {
+        const { data: link } = await db.from("account_contacts").select("contact_id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle()
+        if (!link) return NextResponse.json({ error: "That company doesn't belong to this person anymore. Please search again." }, { status: 400 })
+      }
+      const { data: account } = await db.from("accounts").select("status").eq("id", accountId).maybeSingle()
+      if (!account || !ACTIVE_ACCOUNT_STATUSES.has(account.status)) {
+        return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+      }
+      if (!contactId) {
+        const { count } = await db
+          .from("account_contacts")
+          .select("contacts!inner(id)", { count: "exact", head: true })
+          .eq("account_id", accountId)
+          .not("contacts.portal_email_sent_at", "is", null)
+        if (!count) return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
+      }
     }
-    if (!contactId) {
-      const { count } = await db
-        .from("account_contacts")
-        .select("contacts!inner(id)", { count: "exact", head: true })
-        .eq("account_id", accountId)
-        .not("contacts.portal_email_sent_at", "is", null)
-      if (!count) return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
-    }
-  }
 
-  // Copy: download from the private crm-files bucket, upload into the SAME
-  // public bucket + path convention the existing chat-attachment proxy
-  // already expects.
-  const { data: blob, error: dlErr } = await db.storage.from(file.storage_bucket || CRM_STORAGE_BUCKET).download(file.storage_path)
-  if (dlErr || !blob) {
-    console.error("[crm-storage/share-portal-chat] download error:", dlErr)
-    return NextResponse.json({ error: "Could not read the file. Please try again." }, { status: 500 })
-  }
-  const buffer = Buffer.from(await blob.arrayBuffer())
-  const ext = (file.file_name?.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "bin"
-  const dir = accountId ?? contactId
-  const objectPath = `chat-attachments/${dir}/${randomUUID()}.${ext}`
-  const { error: upErr } = await db.storage
-    .from("assets")
-    .upload(objectPath, buffer, { contentType: file.mime_type || "application/octet-stream", upsert: false })
-  if (upErr) {
-    console.error("[crm-storage/share-portal-chat] upload error:", upErr)
-    return NextResponse.json({ error: "Could not share the file. Please try again." }, { status: 500 })
-  }
-  const attachmentUrl = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=${encodeURIComponent(objectPath)}`
-
-  // Re-check right before sending, not just at the top of this request.
-  if (contactId) {
-    const { data: freshContact } = await db.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
-    if (!freshContact?.email || !freshContact.portal_email_sent_at) {
-      return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+    // Copy: download from the private crm-files bucket, upload into the SAME
+    // public bucket + path convention the existing chat-attachment proxy
+    // already expects.
+    const { data: blob, error: dlErr } = await db.storage.from(file.storage_bucket || CRM_STORAGE_BUCKET).download(file.storage_path)
+    if (dlErr || !blob) {
+      console.error("[crm-storage/share-portal-chat] download error:", dlErr)
+      return NextResponse.json({ error: "Could not read the file. Please try again." }, { status: 500 })
     }
-  }
-  if (accountId) {
-    const { data: freshAccount } = await db.from("accounts").select("status").eq("id", accountId).maybeSingle()
-    if (!freshAccount || !ACTIVE_ACCOUNT_STATUSES.has(freshAccount.status)) {
-      return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+    const buffer = Buffer.from(await blob.arrayBuffer())
+    const ext = (file.file_name?.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "bin"
+    const dir = accountId ?? contactId
+    const objectPath = `chat-attachments/${dir}/${randomUUID()}.${ext}`
+    const { error: upErr } = await db.storage
+      .from("assets")
+      .upload(objectPath, buffer, { contentType: file.mime_type || "application/octet-stream", upsert: false })
+    if (upErr) {
+      console.error("[crm-storage/share-portal-chat] upload error:", upErr)
+      return NextResponse.json({ error: "Could not share the file. Please try again." }, { status: 500 })
     }
-    if (!contactId) {
-      const { count } = await db
-        .from("account_contacts")
-        .select("contacts!inner(id)", { count: "exact", head: true })
-        .eq("account_id", accountId)
-        .not("contacts.portal_email_sent_at", "is", null)
-      if (!count) return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
+    const attachmentUrl = `${PORTAL_BASE_URL}/api/portal/chat/attachment?path=${encodeURIComponent(objectPath)}`
+
+    // Re-check right before sending, not just at the top of this request.
+    if (contactId) {
+      const { data: freshContact } = await db.from("contacts").select("email, portal_email_sent_at").eq("id", contactId).maybeSingle()
+      if (!freshContact?.email || !freshContact.portal_email_sent_at) {
+        return NextResponse.json({ error: "This person doesn't have portal access yet. Please try again." }, { status: 400 })
+      }
     }
-  }
+    if (accountId) {
+      const { data: freshAccount } = await db.from("accounts").select("status").eq("id", accountId).maybeSingle()
+      if (!freshAccount || !ACTIVE_ACCOUNT_STATUSES.has(freshAccount.status)) {
+        return NextResponse.json({ error: "That company's account is closed — nothing was sent." }, { status: 400 })
+      }
+      if (!contactId) {
+        const { count } = await db
+          .from("account_contacts")
+          .select("contacts!inner(id)", { count: "exact", head: true })
+          .eq("account_id", accountId)
+          .not("contacts.portal_email_sent_at", "is", null)
+        if (!count) return NextResponse.json({ error: "Nobody at that company has portal access yet. Please try again." }, { status: 400 })
+      }
+    }
 
-  // Deliver through the real staff send route — same identity, notifications,
-  // and audit log every other staff portal-chat reply already gets. Forwards
-  // the caller's own IP so the send route's rate limit is scoped per staff
-  // member, not shared across everyone using this feature.
-  const forwardedFor = request.headers.get("x-forwarded-for")
-  const realIp = request.headers.get("x-real-ip")
-  let sendRes: Response
-  try {
-    sendRes = await fetch(`${request.nextUrl.origin}/api/portal/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: request.headers.get("cookie") || "",
-        ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
-        ...(realIp ? { "x-real-ip": realIp } : {}),
-      },
-      body: JSON.stringify({
-        ...(contactId
-          ? { contact_id: contactId, account_id: accountId || undefined, sender_context: accountId ? "company" : "person" }
-          : { account_id: accountId, addressed_to_company: true }),
-        message: `Shared a file: ${file.file_name}`,
-        attachment_url: attachmentUrl,
-        attachment_name: file.file_name,
-      }),
-    })
-  } catch (err) {
-    console.error("[crm-storage/share-portal-chat] send route unreachable:", err)
-    return NextResponse.json({ error: "Could not reach the client's chat. Please try again." }, { status: 500 })
-  }
-  if (!sendRes.ok) {
-    const d = await sendRes.json().catch(() => ({}))
-    return NextResponse.json({ error: d.error || "Could not send to the client." }, { status: sendRes.status })
-  }
-  const sendData = await sendRes.json().catch(() => ({}))
+    // Deliver through the real staff send route — same identity, notifications,
+    // and audit log every other staff portal-chat reply already gets. Forwards
+    // the caller's own IP so the send route's rate limit is scoped per staff
+    // member, not shared across everyone using this feature.
+    const forwardedFor = request.headers.get("x-forwarded-for")
+    const realIp = request.headers.get("x-real-ip")
+    let sendRes: Response
+    try {
+      sendRes = await fetch(`${request.nextUrl.origin}/api/portal/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: request.headers.get("cookie") || "",
+          ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
+          ...(realIp ? { "x-real-ip": realIp } : {}),
+        },
+        body: JSON.stringify({
+          ...(contactId
+            ? { contact_id: contactId, account_id: accountId || undefined, sender_context: accountId ? "company" : "person" }
+            : { account_id: accountId, addressed_to_company: true }),
+          message: `Shared a file: ${file.file_name}`,
+          attachment_url: attachmentUrl,
+          attachment_name: file.file_name,
+        }),
+      })
+    } catch (err) {
+      console.error("[crm-storage/share-portal-chat] send route unreachable:", err)
+      return NextResponse.json({ error: "Could not reach the client's chat. Please try again." }, { status: 500 })
+    }
+    if (!sendRes.ok) {
+      const d = await sendRes.json().catch(() => ({}))
+      return NextResponse.json({ error: d.error || "Could not send to the client." }, { status: sendRes.status })
+    }
+    const sendData = await sendRes.json().catch(() => ({}))
 
-  // Instant alert: every send through this client-facing path pings staff
-  // immediately — even a caught mistake can't recall the email/push the
-  // send route just fired.
-  try {
-    const { sendPushToStaff } = await import("@/lib/team/notify")
-    await sendPushToStaff({
-      title: "File sent to client",
-      body: `${file.file_name} was shared in the portal chat.`,
-      url: accountId ? `/portal-chats?account=${accountId}` : `/portal-chats?contact=${contactId}`,
-      tag: `crm-storage-portal-chat-${fileId}`,
-    })
-  } catch {
-    // never block the send on an alert failure
-  }
+    // Instant alert: every send through this client-facing path pings staff
+    // immediately — even a caught mistake can't recall the email/push the
+    // send route just fired.
+    try {
+      const { sendPushToStaff } = await import("@/lib/team/notify")
+      await sendPushToStaff({
+        title: "File sent to client",
+        body: `${file.file_name} was shared in the portal chat.`,
+        url: accountId ? `/portal-chats?account=${accountId}` : `/portal-chats?contact=${contactId}`,
+        tag: `crm-storage-portal-chat-${fileId}`,
+      })
+    } catch {
+      // never block the send on an alert failure
+    }
 
-  return NextResponse.json({ ok: true, message_id: sendData.message?.id ?? null })
+    return NextResponse.json({ ok: true, message_id: sendData.message?.id ?? null })
+  } finally {
+    // Release the claim whether this send succeeded or failed — a real
+    // later resend (or a retry after a failure) must never be permanently
+    // blocked, only a genuinely concurrent duplicate.
+    await db.from("crm_storage_send_locks").delete().eq("file_id", fileId).eq("target", lockTarget)
+  }
 }

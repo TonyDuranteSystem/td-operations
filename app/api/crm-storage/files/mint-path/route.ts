@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { validateStorageName } from "@/lib/crm-storage/name-guard"
+import { validateStorageName, escapeIlikePattern } from "@/lib/crm-storage/name-guard"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     if (!folder) return NextResponse.json({ error: "Destination folder not found" }, { status: 404 })
   }
 
-  let dupeQuery = db.from("crm_storage_files").select("id", { count: "exact", head: true }).ilike("file_name", nameCheck.name).is("deleted_at", null)
+  let dupeQuery = db.from("crm_storage_files").select("id", { count: "exact", head: true }).ilike("file_name", escapeIlikePattern(nameCheck.name)).is("deleted_at", null)
   dupeQuery = folderId ? dupeQuery.eq("folder_id", folderId) : dupeQuery.is("folder_id", null)
   const { count: dupeCount } = await dupeQuery
   if (dupeCount && dupeCount > 0) {

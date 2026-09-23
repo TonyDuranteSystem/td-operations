@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { validateStorageName } from "@/lib/crm-storage/name-guard"
+import { validateStorageName, escapeIlikePattern } from "@/lib/crm-storage/name-guard"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -79,7 +79,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const effectiveName = (update.name as string | undefined) ?? current.name
   const effectiveParentId = update.parent_id !== undefined ? (update.parent_id as string | null) : current.parent_id
-  let dupeQuery = db.from("crm_storage_folders").select("id", { count: "exact", head: true }).ilike("name", effectiveName).is("deleted_at", null).neq("id", id)
+  let dupeQuery = db.from("crm_storage_folders").select("id", { count: "exact", head: true }).ilike("name", escapeIlikePattern(effectiveName)).is("deleted_at", null).neq("id", id)
   dupeQuery = effectiveParentId ? dupeQuery.eq("parent_id", effectiveParentId) : dupeQuery.is("parent_id", null)
   const { count: dupeCount } = await dupeQuery
   if (dupeCount && dupeCount > 0) {
