@@ -35,7 +35,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Crop, Loader2, X } from 'lucide-react'
 import { useCapture } from '@/components/captures/capture-provider'
-import { captureWholePage, captureRegion, canvasToPngFile, generateCaptureTitle, CAPTURE_TOOL_IGNORE_ATTR } from '@/lib/captures/render'
+import {
+  captureWholePage,
+  captureRegion,
+  canvasToPngFile,
+  generateCaptureTitle,
+  CAPTURE_TOOL_IGNORE_ATTR,
+  type CaptureResult,
+} from '@/lib/captures/render'
 import { rectFromTwoPoints, isSelectionLargeEnough, type Point, type CaptureRect } from '@/lib/captures/selection'
 import { uploadCapture } from '@/lib/captures/upload'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
@@ -64,6 +71,12 @@ export default function CaptureLayer() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [doneMessage, setDoneMessage] = useState<string | null>(null)
   const [extraFilesNotice, setExtraFilesNotice] = useState(false)
+  // Set when captureRegion had to drop part of the picture rather than risk
+  // it being wrong (an Inbox email that changed or disappeared between the
+  // two render passes it needs — see lib/captures/email-frame-composite.ts).
+  // Shown as a dismissible notice on the markup screen, never a hard error —
+  // the picture is still real and usable, just possibly missing a piece.
+  const [incompleteNotice, setIncompleteNotice] = useState(false)
   // Bumped every time a NEW file starts its journey through this stage
   // machine (a fresh capture, a paste, or a drop) — handleMarkupDone reads it
   // back after its await to make sure the upload it's about to act on is
@@ -96,6 +109,7 @@ export default function CaptureLayer() {
     setErrorMessage(null)
     setDoneMessage(null)
     setExtraFilesNotice(false)
+    setIncompleteNotice(false)
   }, [])
 
   const handleClose = useCallback(() => {
@@ -110,14 +124,15 @@ export default function CaptureLayer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
 
-  const runCapture = useCallback(async (fn: () => Promise<HTMLCanvasElement>) => {
+  const runCapture = useCallback(async (fn: () => Promise<CaptureResult>) => {
     setStage('capturing')
     try {
-      const canvas = await fn()
+      const { canvas, incomplete } = await fn()
       const file = await canvasToPngFile(canvas, `capture-${Date.now()}.png`)
       uploadTokenRef.current += 1
       setCaptureGeneration(uploadTokenRef.current)
       setCapturedFile(file)
+      setIncompleteNotice(incomplete)
       setStage('markup')
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Could not capture that. Please try again.')
@@ -156,6 +171,7 @@ export default function CaptureLayer() {
     uploadTokenRef.current += 1
     setCaptureGeneration(uploadTokenRef.current)
     setCapturedFile(file)
+    setIncompleteNotice(false)
     setStage('markup')
   }, [])
 
@@ -230,6 +246,7 @@ export default function CaptureLayer() {
   const handleRetake = useCallback(() => {
     setCapturedFile(null)
     setNote('')
+    setIncompleteNotice(false)
     setStage('mode')
   }, [])
 
@@ -362,6 +379,13 @@ export default function CaptureLayer() {
                 <Loader2 className="h-6 w-6 animate-spin" />
                 Capturing...
               </div>
+            )}
+
+            {stage === 'markup' && incompleteNotice && (
+              <p className="mb-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                Part of this picture may be missing — an email on the page changed or closed while it was being
+                captured. Check it below, or select the area again.
+              </p>
             )}
 
             {stage === 'markup' && capturedFile && (
