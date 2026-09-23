@@ -115,6 +115,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [whats-new.md](whats-new.md) | What's New — per-client chat-event feed (`portal_messages` markers), distinct from the Notification Center board (todo-board.md) | ✅ written |
 | [portal-chats.md](portal-chats.md) | Portal Chats staff composer — client + internal Team chat panels, per-conversation draft memory, AI Suggest/Polish | ✅ written |
 | [captures.md](captures.md) | Capture/Share — screenshot, markup, send to one destination (sticky note, team chat, or a client's portal chat) | ✅ written |
+| [storage.md](storage.md) | CRM Storage — general-purpose staff file library, separate from Drive; preview + share to email/portal chat/team chat/fax | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
 | _billing-invoicing.md_ | payments / client_invoices / client_expenses / td_expenses | ⬜ to seed |
