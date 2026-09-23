@@ -54,3 +54,4 @@ docs/systems/portal-chat-unread.md|app/api/portal/chat/read/route.ts,lib/portal/
 docs/systems/portal-chats.md|app/(dashboard)/portal-chats/page.tsx
 docs/systems/captures.md|lib/captures/,app/api/captures/,components/captures/,app/(dashboard)/captures/
 docs/systems/storage.md|app/(dashboard)/storage/,app/api/crm-storage/,lib/crm-storage/,components/storage/,scripts/migrations/20260920-2300-crm-storage-v2-desktop.sql,scripts/migrations/20260921-1230-crm-storage-unique-names.sql,scripts/migrations/20260923-1411-crm-storage-council-hardening.sql
+docs/systems/portal-translation.md|lib/portal/translation-generator.ts,lib/jobs/handlers/translate-language.ts,lib/jobs/translation-watchdog.ts,app/api/cron/portal-translation-topup/,lib/portal/language-cap.ts,lib/portal/translation-exclusions.ts

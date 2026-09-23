@@ -27,6 +27,7 @@ import {
   seedPendingTranslations,
   kickoffMissingTranslationWork,
   getEstablishedLanguageCodes,
+  translationLooksValid,
 } from "@/lib/portal/translation-generator"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
@@ -284,7 +285,7 @@ describe("generateTranslationsForLanguage", () => {
           {
             type: "tool_use",
             name: "submit_translations",
-            input: { translations: { [quotedKey]: "翻訳済み" } },
+            input: { translations: { [quotedKey]: "先月分の申告書が未提出の場合は、後から遅れて提出（バックファイリング）することで状況を整理できます。" } },
           },
         ],
       }),
@@ -677,5 +678,215 @@ describe("getEstablishedLanguageCodes", () => {
     const result = await getEstablishedLanguageCodes()
     expect(result.sort()).toEqual(["es", "hu"])
     expect(listUsersMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ── 2026-09-23 incident: one wizard sentence looped ~576 paid jobs/day for
+// weeks. The model returned its tool-call KEY with straight apostrophes where
+// the source had curly ones, so the exact-key lookup missed, nothing was saved,
+// and the failure was masked as a harmless "continue". Matching by opaque id,
+// releasing unsaved rows, and validating answers close that path.
+const CURLY_KEY =
+  "Only have a PDF? Please still download the CSV from your bank — it’s the most reliable and fastest option. You’ll upload the files in the final step."
+
+function stubFetchWithTranslations(translations: Record<string, string>) {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      content: [{ type: "tool_use", name: "submit_translations", input: { translations } }],
+    }),
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
+describe("generateTranslationsForLanguage — id matching (2026-09-23 curly-apostrophe loop)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.ANTHROPIC_API_KEY = "test-key"
+  })
+
+  it("REGRESSION: a sentence with curly apostrophes is saved when the model answers by id, and the request never uses the sentence as a key", async () => {
+    const fetchMock = stubFetchWithTranslations({
+      k0: "Sie haben nur ein PDF? Laden Sie trotzdem bitte die CSV-Datei Ihrer Bank herunter, denn das ist die zuverlässigste und schnellste Option.",
+    })
+    const chains = [
+      makeChain([{ data: [] }]), // recoverStuckRows
+      makeChain([{ data: [] }]), // existing rows
+      makeChain([{ data: null }]), // upsert
+      makeChain([{ data: [{ key: CURLY_KEY }] }]), // claim won
+      makeChain([{ data: null }]), // update -> done
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("de", "German", { [CURLY_KEY]: CURLY_KEY })
+
+    expect(result.generated).toBe(1)
+    expect(result.failed).toBe(0)
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const sent = JSON.parse(body.messages[0].content.split("\n\n").slice(1).join("\n\n"))
+    expect(sent).toEqual([{ id: "k0", text: CURLY_KEY }])
+    expect(body.tools[0].input_schema.properties.translations.description).toMatch(/ids/i)
+  })
+
+  it("passes the dictionary key along as context (not as the answer key) so short labels keep their meaning", async () => {
+    const fetchMock = stubFetchWithTranslations({ k0: "Chat", k1: "Profil" })
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: null }]),
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    await generateTranslationsForLanguage("de", "German", TEST_DICT)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const sent = JSON.parse(body.messages[0].content.split("\n\n").slice(1).join("\n\n"))
+    expect(sent).toEqual([
+      { id: "k0", context: "nav.chat", text: "Chat" },
+      { id: "k1", context: "nav.profile", text: "Profile" },
+    ])
+  })
+
+  it("maps reordered answers correctly and ignores ids it never asked for", async () => {
+    stubFetchWithTranslations({ k1: "Profil-de", k9: "junk for nobody", k0: "Chat-de" })
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+      makeChain([{ data: null }]), // done, nav.chat
+      makeChain([{ data: null }]), // done, nav.profile
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("de", "German", TEST_DICT)
+
+    expect(result.generated).toBe(2)
+    expect(result.failed).toBe(0)
+    const doneUpdate = (chain: unknown) => vi.mocked((chain as { update: ReturnType<typeof vi.fn> }).update).mock.calls[0][0]
+    expect(doneUpdate(chains[5])).toMatchObject({ status: "done", translated_text: "Chat-de" })
+    expect(doneUpdate(chains[6])).toMatchObject({ status: "done", translated_text: "Profil-de" })
+    expect(call).toBe(7) // no extra DB call for the junk id
+  })
+
+  it("does NOT accept an answer keyed by a normalized version of the sentence (no fuzzy matching) — it fails the key and hands the row back to 'pending'", async () => {
+    stubFetchWithTranslations({ [CURLY_KEY.replace(/’/g, "'")]: "irgendein Text der lang genug ist, damit er nicht am Längenvergleich scheitert." })
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: CURLY_KEY }] }]),
+      makeChain([{ data: null }]), // release -> pending
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("de", "German", { [CURLY_KEY]: CURLY_KEY })
+
+    expect(result.generated).toBe(0)
+    expect(result.failedKeys).toEqual([CURLY_KEY])
+  })
+})
+
+describe("generateTranslationsForLanguage — unsaved keys are released, not left locked", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.ANTHROPIC_API_KEY = "test-key"
+  })
+
+  it("REGRESSION: a key the model answered badly goes straight back to 'pending' (one .eq update, only if still 'generating') instead of sitting 'generating' for 5 minutes", async () => {
+    stubFetchWithTranslations({ k0: "Chat-de" }) // k1 missing entirely
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+      makeChain([{ data: null }]), // done, nav.chat
+      makeChain([{ data: null }]), // release, nav.profile
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("de", "German", TEST_DICT)
+
+    expect(result.generated).toBe(1)
+    expect(result.failedKeys).toEqual(["nav.profile"])
+    const release = chains[6] as { update: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; in: ReturnType<typeof vi.fn> }
+    expect(release.update.mock.calls[0][0]).toEqual({ status: "pending", generating_started_at: null })
+    const eqs = release.eq.mock.calls.map(a => `${a[0]}=${a[1]}`)
+    expect(eqs).toContain("key=nav.profile")
+    expect(eqs).toContain("status=generating")
+    expect(release.in.mock.calls.length).toBe(0) // never an .in() list (BUG #2)
+  })
+
+  it("rejects an answer that dropped a {placeholder} and releases the row", async () => {
+    stubFetchWithTranslations({ k0: "Bonjour, bienvenue dans le portail, nous sommes ravis de vous voir ici." })
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: "greet" }] }]),
+      makeChain([{ data: null }]), // release
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("fr", "French", { greet: "Hello {name}, welcome to the portal, we are glad you are here." })
+
+    expect(result.generated).toBe(0)
+    expect(result.failed).toBe(1)
+    const release = chains[4] as { update: ReturnType<typeof vi.fn> }
+    expect(release.update.mock.calls[0][0]).toEqual({ status: "pending", generating_started_at: null })
+  })
+
+  it("leaves rows alone (no release) when the whole AI call throws — a dead API keeps the 5-minute natural backoff", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Claude API error 529: overloaded")))
+    const chains = [
+      makeChain([{ data: [] }]),
+      makeChain([{ data: [] }]),
+      makeChain([{ data: null }]),
+      makeChain([{ data: [{ key: "nav.chat" }] }]),
+      makeChain([{ data: [{ key: "nav.profile" }] }]),
+    ]
+    let call = 0
+    vi.mocked(supabaseAdmin.from).mockImplementation(() => chains[call++] as never)
+
+    const result = await generateTranslationsForLanguage("de", "German", TEST_DICT)
+
+    expect(result.batchesFailed).toBe(1)
+    expect(result.lastBatchError).toMatch(/529/)
+    expect(call).toBe(5) // recover, existing, upsert, 2 claims — nothing after
+  })
+})
+
+describe("translationLooksValid", () => {
+  it("accepts an ordinary translation, including short labels", () => {
+    expect(translationLooksValid("Chat", "Chat")).toBe(true)
+    expect(translationLooksValid("OK", "D'accord")).toBe(true)
+  })
+  it("rejects empty or whitespace-only text", () => {
+    expect(translationLooksValid("Hello there", "")).toBe(false)
+    expect(translationLooksValid("Hello there", "   ")).toBe(false)
+  })
+  it("requires the same {placeholders}, in any order", () => {
+    expect(translationLooksValid("Hi {name}, your {plan} plan", "Hallo {plan}, {name} — Ihr Plan")).toBe(true)
+    expect(translationLooksValid("Hi {name}", "Hallo")).toBe(false)
+    expect(translationLooksValid("Hi {name}", "Hallo {nom}")).toBe(false)
+  })
+  it("rejects an absurd length ratio only for longer sources", () => {
+    const long = "This is a reasonably long sentence about the annual report that must be translated."
+    expect(translationLooksValid(long, "Ja")).toBe(false)
+    expect(translationLooksValid(long, "x".repeat(long.length * 9))).toBe(false)
+    expect(translationLooksValid("Save", "Speichern und fortfahren mit dem Vorgang")).toBe(true)
   })
 })

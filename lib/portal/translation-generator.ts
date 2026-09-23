@@ -154,6 +154,34 @@ async function recoverStuckRows(languageCode: string): Promise<void> {
 }
 
 /**
+ * Give claimed rows back ('generating' → 'pending') once we know the model's
+ * answer for them was unusable. One UPDATE per key with `.eq` — never `.in()`,
+ * which corrupts matching for the whole list when a value contains a quote
+ * (BUG #2 in generateTranslationsForLanguage). Only flips rows still
+ * 'generating', so it can't undo a concurrent success. Never throws: releasing
+ * is best-effort, and recoverStuckRows() still backstops it after 5 minutes.
+ */
+async function releaseClaims(languageCode: string, keys: string[]): Promise<void> {
+  try {
+    for (const group of chunk(keys, CLAIM_CONCURRENCY)) {
+      await Promise.all(
+        group.map(key =>
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- portal_translations not yet in generated types (regenerated on production promotion)
+          (supabaseAdmin as any)
+            .from("portal_translations")
+            .update({ status: "pending", generating_started_at: null })
+            .eq("language_code", languageCode)
+            .eq("key", key)
+            .eq("status", "generating"),
+        ),
+      )
+    }
+  } catch (e) {
+    console.error("[translation-generator] releaseClaims failed (recoverStuckRows will backstop):", e)
+  }
+}
+
+/**
  * Ask Claude to translate one batch of {key: englishText} pairs, forced
  * through tool-use so the response is real, parseable JSON rather than
  * free text this function would have to guess how to parse. Same raw
@@ -214,17 +242,24 @@ async function translateBatch(
           // completed Spanish/French translations with no live mechanism
           // that would ever re-check them against a changed source string.
           "Never use literal quotation mark characters (\" or any curly/typographic quote variant) anywhere in a translated value, even if the English source text contains a quoted phrase — rephrase around it instead (e.g. drop the quotes, or reword) so the output never contains a quote character that could break JSON encoding. " +
-          "Call the submit_translations tool exactly once with every key filled in.",
+          // Entries are identified by short opaque ids (k0, k1, ...), NOT by the
+          // English sentence itself. For the wizard/guide sources the row key IS
+          // the sentence, and the model does not echo a long sentence back
+          // byte-for-byte: for a sentence with curly apostrophes it returned the
+          // key with straight ones (reproduced 6/6, 2026-09-23), so the lookup
+          // missed, the row was never saved, and the chain looped for weeks.
+          "Each entry has an id. Return each translation under that exact id (k0, k1, ...). The optional `context` field only tells you where the phrase appears — use it as a hint, never translate or return it. " +
+          "Call the submit_translations tool exactly once with every id filled in.",
         tools: [
           {
             name: "submit_translations",
-            description: "Submit the translated text for every key given, one-to-one.",
+            description: "Submit the translated text for every id given, one-to-one.",
             input_schema: {
               type: "object",
               properties: {
                 translations: {
                   type: "object",
-                  description: "Map of the exact same keys given in the request to their translated text.",
+                  description: "Map of the exact same ids given in the request (k0, k1, ...) to their translated text.",
                   additionalProperties: { type: "string" },
                 },
               },
@@ -238,8 +273,12 @@ async function translateBatch(
             role: "user",
             content:
               `Translate these ${entries.length} UI phrases into ${languageName} (ISO code: ${languageCode}). ` +
-              `Return them via submit_translations, keyed by the same identifier:\n\n` +
-              JSON.stringify(Object.fromEntries(entries.map(e => [e.key, e.text])), null, 2),
+              `Return them via submit_translations, keyed by each entry's id:\n\n` +
+              JSON.stringify(
+                entries.map((e, i) => (e.key === e.text ? { id: `k${i}`, text: e.text } : { id: `k${i}`, context: e.key, text: e.text })),
+                null,
+                2,
+              ),
           },
         ],
       }),
@@ -273,10 +312,41 @@ async function translateBatch(
     if (!translations || typeof translations !== "object") {
       throw new Error("Model did not return submit_translations with a translations object")
     }
-    return translations as Record<string, string>
+    // Map back by id. Ids the request never asked for are ignored (a stray
+    // "k151" must never write to another row). A model that ignored the ids and
+    // echoed the exact original key is still accepted, but ONLY as an exact
+    // match — no fuzzy/normalized matching, which could merge two different
+    // source strings that differ only by an apostrophe style.
+    const byId = translations as Record<string, unknown>
+    const out: Record<string, string> = {}
+    entries.forEach((e, i) => {
+      const v = Object.prototype.hasOwnProperty.call(byId, `k${i}`) ? byId[`k${i}`] : byId[e.key]
+      if (typeof v === "string") out[e.key] = v
+    })
+    return out
   } finally {
     clearTimeout(timeout)
   }
+}
+
+/**
+ * Cheap sanity check before a model answer is stored as 'done'. Matching by
+ * id removes the loud "key not found" failure, so this guards the quiet one:
+ * a translation attached to the wrong sentence, or a placeholder the model
+ * dropped/renamed (which would break interpolation in the live UI). Kept
+ * deliberately conservative — a false rejection would recreate the very
+ * no-progress loop this exists to prevent, so only clear-cut damage fails:
+ * a `{placeholder}` set that doesn't match, or a wildly different length.
+ */
+export function translationLooksValid(source: string, translated: string): boolean {
+  if (typeof translated !== "string" || !translated.trim()) return false
+  const tokens = (s: string) => (s.match(/\{[^{}\s]+\}/g) ?? []).sort().join("|")
+  if (tokens(source) !== tokens(translated)) return false
+  if (source.length >= 30) {
+    const ratio = translated.length / source.length
+    if (ratio < 0.1 || ratio > 8) return false
+  }
+  return true
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -441,11 +511,13 @@ export async function generateTranslationsForLanguage(
       const entries = wonKeys.map(key => ({ key, text: englishDict[key] }))
       const translated = await translateBatch(entries, languageCode, languageName)
 
+      const notSaved: string[] = []
       for (const key of wonKeys) {
         const text = translated[key]
-        if (typeof text !== "string" || !text.trim()) {
+        if (typeof text !== "string" || !translationLooksValid(englishDict[key], text)) {
           result.failed++
           result.failedKeys.push(key)
+          notSaved.push(key)
           continue
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -457,10 +529,17 @@ export async function generateTranslationsForLanguage(
         if (error) {
           result.failed++
           result.failedKeys.push(key)
+          notSaved.push(key)
         } else {
           result.generated++
         }
       }
+      // The model answered but these keys weren't saved. Hand them straight
+      // back to 'pending' instead of leaving them 'generating' for 5 minutes:
+      // a stuck lock made the very next attempt lose its claim, look like a
+      // harmless "come back later", and turn one bad key into a self-requeuing
+      // loop that never failed terminally (weeks of silent spend, 2026-09-23).
+      await releaseClaims(languageCode, notSaved)
     } catch (e) {
       // Whole batch failed (API error, timeout, malformed response) — leave
       // these rows at 'generating'; recoverStuckRows() resets them to
