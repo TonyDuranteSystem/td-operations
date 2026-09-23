@@ -64,19 +64,23 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .eq('contact_id', params.id)
       .order('category', { ascending: true })
       .order('file_name', { ascending: true }),
-    // Offers — by client_email or lead_id
+    // Offers — by contact_id OR client_email (dev job b1e0cb99: contact_id is
+    // the reliable key — unlike email it never drifts if the client's email is
+    // later corrected — but older offers may only carry client_email, so this
+    // is a widening OR, never a narrowing, to avoid hiding anything the email
+    // match already found).
     supabase
       .from('offers')
       // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
       .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, view_count, required_documents, created_at, viewed_at, expires_at, packages, selected_package_key, package_locked_at' as never)
-      .eq('client_email', contact.email ?? '__no_match__')
+      .or(`contact_id.eq.${params.id},client_email.eq.${contact.email ?? '__no_match__'}`)
       .order('created_at', { ascending: false }),
-    // Pending activations — by client_email
-    supabase
-      .from('pending_activations')
-      .select('id, offer_token, client_email, status, signed_at, payment_confirmed_at, activated_at, payment_method, amount, currency')
-      .eq('client_email', contact.email ?? '__no_match__')
-      .order('created_at', { ascending: false }),
+    // Pending activations placeholder — fetched below, by the offer tokens
+    // actually resolved above. `pending_activations` has no contact_id column
+    // of its own, so tying it to the widened offers list (rather than a
+    // second, independent client_email lookup) keeps the two in sync by
+    // construction instead of by coincidence.
+    Promise.resolve({ data: null }),
     // Wizard progress — by contact_id
     supabase
       .from('wizard_progress')
@@ -170,7 +174,19 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     created_at: string; viewed_at: string | null; expires_at: string | null
     packages: OfferPackageOption[] | null; selected_package_key: string | null; package_locked_at: string | null
   }>
-  const pendingActivations = (pendingActivationsResult.data ?? []) as Array<{
+  // Pending activations for exactly the offers resolved above — never a
+  // second, independent client_email lookup that could disagree with which
+  // offers this page just decided belong to this contact.
+  void pendingActivationsResult
+  const offerTokensForActivations = offers.map((o) => o.token).filter(Boolean)
+  const pendingActivationsData = offerTokensForActivations.length > 0
+    ? (await supabaseAdmin
+        .from('pending_activations')
+        .select('id, offer_token, client_email, status, signed_at, payment_confirmed_at, activated_at, payment_method, amount, currency')
+        .in('offer_token', offerTokensForActivations)
+        .order('created_at', { ascending: false })).data
+    : []
+  const pendingActivations = (pendingActivationsData ?? []) as Array<{
     id: string; offer_token: string | null; client_email: string; status: string; signed_at: string | null
     payment_confirmed_at: string | null; activated_at: string | null
     payment_method: string | null; amount: number | null; currency: string | null

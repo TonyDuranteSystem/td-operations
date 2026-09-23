@@ -868,6 +868,27 @@ function QuickActionsBar({
   const showWizardReminder = contact.portal_tier === 'onboarding' && !hasWizard && (hasPaidOffer || pendingActivations.some(pa => pa.payment_confirmed_at))
   const showAdvanceStage = activeSds.length > 0
   const awaitingPayment = pendingActivations.find(pa => pa.status === 'awaiting_payment')
+  // The offer this Confirm Payment button actually acts on: the SPECIFIC
+  // offer the awaiting-payment activation names, never just "the newest
+  // offer" — a contact can hold more than one offer at once (an old signed
+  // deal actually awaiting payment, plus an unrelated newer draft), and
+  // grabbing offers[0] would confirm payment against the wrong one, leaving
+  // the real awaiting-payment deal untouched. Falls back to offers[0] only
+  // if the named offer isn't in this contact's list for some reason.
+  const namedAwaitingOffer = awaitingPayment
+    ? offers.find(o => o.token === awaitingPayment.offer_token)
+    : undefined
+  if (awaitingPayment && !namedAwaitingOffer) {
+    // This should be unreachable — pendingActivations on this page is
+    // derived from these same offers' own tokens — but if it's ever hit,
+    // silently falling back to "newest offer" is exactly the bug this line
+    // exists to prevent. Warn loudly rather than fail quietly.
+    console.warn(
+      `[ContactDetail] awaiting-payment activation names offer token "${awaitingPayment.offer_token}", ` +
+      `which is not in this contact's offer list — falling back to the newest offer instead.`,
+    )
+  }
+  const paymentOffer = namedAwaitingOffer ?? offers[0]
   // Show the button when an offer is awaiting payment AND we have either a
   // lead (classic funnel) OR a signed offer in scope (existing-account /
   // existing-contact re-entry, e.g. Mojo Labs LLC).
@@ -1062,19 +1083,37 @@ function QuickActionsBar({
             - No lead, but contact has a signed offer: pass contactId +
               offerToken (account/contact re-entry case, e.g. Mojo Labs LLC).
               The server-side route resolves account_id from offer.account_id. */}
-      {showConfirmPayment && (lead || offers[0]) && (
+      {showConfirmPayment && (lead || paymentOffer) && (
         <ConfirmPaymentDialog
           open={showConfirmPayment}
           onClose={() => setShowConfirmPayment(false)}
+          // The route's own priority order is offer_token > lead_id >
+          // account_id > contact_id, checked as an if/else-if chain — so
+          // offerToken always wins server-side the moment it's present,
+          // regardless of what else is also sent. Passing leadId alongside
+          // it is therefore safe: it can never make the server resolve the
+          // wrong offer (that was the bug — sending ONLY leadId, with no
+          // offerToken, let the server fall through to "pick whichever
+          // offer is newest for this lead"). Sending both, with offerToken
+          // present, keeps that resolution correct AND keeps the dialog's
+          // own "Convert lead to contact" checklist line accurate for a
+          // lead-linked contact — that line reads the leadId prop directly,
+          // so suppressing it whenever an offer resolved made the checklist
+          // describe the wrong action even though the real one performed by
+          // the server was still correct (dev job b1e0cb99, bug-hunter
+          // finding). contactId stays suppressed once an offer resolves —
+          // that identifier is only for the account/contact re-entry mode,
+          // which offerToken makes redundant, and it has no matching
+          // display text depending on it.
           leadId={lead?.id}
-          contactId={lead ? undefined : contact.id}
-          offerToken={lead ? undefined : offers[0]?.token}
+          contactId={paymentOffer ? undefined : (lead ? undefined : contact.id)}
+          offerToken={paymentOffer?.token}
           clientName={contact.full_name ?? lead?.full_name ?? 'Client'}
-          offer={offers[0] ? {
-            token: offers[0].token,
-            contract_type: offers[0].contract_type,
-            bundled_pipelines: offers[0].bundled_pipelines,
-            cost_summary: (offers[0].cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+          offer={paymentOffer ? {
+            token: paymentOffer.token,
+            contract_type: paymentOffer.contract_type,
+            bundled_pipelines: paymentOffer.bundled_pipelines,
+            cost_summary: (paymentOffer.cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
           } : null}
         />
       )}
@@ -1388,9 +1427,8 @@ function OfferStatusCard({
   contactLanguage?: string | null
   pendingActivations?: PendingActivationRecord[]
 }) {
-  const primaryOffer = offers.find(o => o.status !== 'draft') ?? offers[0] ?? null
-
-  // Spread rather than list every field by hand: primaryOffer already carries
+  // EVERY offer for this contact — not just one (dev job b1e0cb99). Spread
+  // rather than list every field by hand: each OfferRecord already carries
   // everything OfferData needs (plus a few extras this panel doesn't use,
   // which spreading through is harmless). A field-by-field copy is exactly
   // the pattern that silently dropped packages/selected_package_key/
@@ -1398,12 +1436,12 @@ function OfferStatusCard({
   // review) — spreading means a FUTURE new field reaches the panel without
   // this file needing to be remembered and touched again. Only the two
   // fields OfferRecord types as `unknown` need an explicit cast.
-  const offerData: OfferData | null = primaryOffer ? {
-    ...primaryOffer,
-    view_count: primaryOffer.view_count ?? 0,
-    cost_summary: primaryOffer.cost_summary as OfferData['cost_summary'],
-    required_documents: primaryOffer.required_documents as OfferData['required_documents'],
-  } : null
+  const offersData: OfferData[] = offers.map((o) => ({
+    ...o,
+    view_count: o.view_count ?? 0,
+    cost_summary: o.cost_summary as OfferData['cost_summary'],
+    required_documents: o.required_documents as OfferData['required_documents'],
+  }))
 
   // Always pre-populate with the person's name — staff can edit it in the dialog
   // before creating. The company name is irrelevant for individual services (ITIN etc.)
@@ -1414,11 +1452,12 @@ function OfferStatusCard({
   // dev_task 262be11c.
   const accountId = null
 
-  // Match this offer's activation (by offer token) so the panel can show
-  // "Activate now" vs the persistent "Activated · payment pending" reminder.
-  const offerActivation = offerData
-    ? (pendingActivations.find(a => a.offer_token === offerData.token) ?? null)
-    : null
+  // Activation state per offer, keyed by token — each card in the panel
+  // looks up its OWN entry rather than sharing one across every offer.
+  const activationsByToken: Record<string, PendingActivationRecord | null> = {}
+  for (const a of pendingActivations) {
+    if (a.offer_token) activationsByToken[a.offer_token] = a
+  }
 
   return (
     <div className="space-y-2">
@@ -1428,9 +1467,9 @@ function OfferStatusCard({
         clientEmail={contactEmail}
         clientLanguage={contactLanguage}
         contactId={contactId}
-        offer={offerData}
+        offers={offersData}
         isAdmin={true}
-        pendingActivation={offerActivation}
+        pendingActivations={activationsByToken}
       />
     </div>
   )
