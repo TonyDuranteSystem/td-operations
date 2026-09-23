@@ -81,7 +81,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 
 ## Appendix A — MCP tools
 <!-- GENERATED:mcp-tools -->
-_Regenerated 2026-09-22. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
+_Regenerated 2026-09-23. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
 **49 active tool groups**, **219 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
@@ -90,7 +90,7 @@ _Regenerated 2026-09-22. Source of truth: uncommented `register*Tools(server)` i
 
 ## Appendix B — Hooks & guardrails
 <!-- GENERATED:hooks -->
-_Regenerated 2026-09-22. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
+_Regenerated 2026-09-23. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
 **26 hook scripts**, of which **24 are registered** in settings.
 
@@ -101,12 +101,12 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 
 ## Appendix C — Surface area
 <!-- GENERATED:surface -->
-_Regenerated 2026-09-22 by directory scan._
+_Regenerated 2026-09-23 by directory scan._
 
-- CRM dashboard pages (49): `accounts` `addresses` `audit` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
+- CRM dashboard pages (50): `accounts` `addresses` `audit` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
-- API route groups (89)
-- Code modules (67): `ai-agent` `audit` `auth` `billing` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `code-tasks` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
+- API route groups (90)
+- Code modules (68): `ai-agent` `audit` `auth` `billing` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `code-tasks` `crm-storage` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
 - Database tables: 172 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-09-22 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
+_Regenerated 2026-09-23 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -176,7 +176,7 @@ _Regenerated 2026-09-22 from the R-rule list in CLAUDE.md — **42 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-09-22. Every subsystem doc under `docs/systems/` (42 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-09-23. Every subsystem doc under `docs/systems/` (42 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-08-30)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-22)_
