@@ -126,7 +126,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // own wizard uploads already use (confirmed working live, 2026-09-22).
     // This is the record's real proof from this point on; Drive below is a
     // bonus copy, never the only copy.
-    const storagePath = `onboarding-ra-receipts/${sub.account_id}/${Date.now()}_${receipt.name}`
+    //
+    // Storage object keys reject spaces and most punctuation (confirmed live,
+    // 2026-09-22 — a plain "Screenshot 2026-09-21 at 9.54.15 AM.png" receipt
+    // failed the whole confirm with "Invalid key"). Sanitize just the on-disk
+    // name; fileName above (Drive/display) keeps the original for readability.
+    const safeReceiptName = receipt.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const storagePath = `onboarding-ra-receipts/${sub.account_id}/${Date.now()}_${safeReceiptName}`
     const { error: storageErr } = await supabaseAdmin.storage
       .from('onboarding-uploads')
       .upload(storagePath, buffer, { contentType: mimeType })
