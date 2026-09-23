@@ -1,5 +1,6 @@
 # Portal Chat — Read/Unread State
-_Last verified against code: 2026-09-23 — Claude (chat-events excluded from the three staff-facing display indicators; What's New is now their only unread signal)_
+_Last verified against code: 2026-09-23 — Claude (**AI/admin replies now inherit the client's topic instead of always landing in General — dev job `c4a4f7b0`, Antonio-reported: an AI reply to a "Mailing Address"-tagged client message on ShoppyVerse LLC landed under General instead.** Both send paths that write an admin reply into `portal_messages` — `portal_chat_send` (MCP tool) and `sendPortalMessageFromWorker` (Slack + in-CRM AI worker, see `agent-bridge.md`/`ai-agent.md`) — previously always inserted with no topic (the 2026-08-30 entry below explains why that was, at the time, deliberately matched by the read-clear). Both now accept an optional `topic` from the caller (the AI can pass back the exact tag it saw via `search_portal_messages`) and, when omitted, fall back to the topic of the CLIENT's own most recent message in that thread. That fallback lookup (`resolveFallbackReplyTopic` + its pure picker `pickLatestTopic`, both in `lib/portal/mark-thread-read.ts`) reuses `buildStaffReplyReadPlan` — the SAME thread-scope resolution `markClientMessagesReadForStaffReply` already used below — via a new shared `resolveThreadScopePlan`, so the topic a reply is tagged with and the topic its read-clear targets can never diverge, including on multi-member company accounts. The resolved topic is passed into `markClientMessagesReadForStaffReply`'s `topic` param at both call sites, replacing the previous hardcoded `null`. Unit-tested (`pickLatestTopic`, 6 new cases covering the multi-arm stale-vs-fresh scenario) — full suite green. Build clean. Deployed sandbox, shipped production same day.)_
+_Prior: 2026-09-23 — Claude (chat-events excluded from the three staff-facing display indicators; What's New is now their only unread signal — landed on main the same day, merged in alongside this entry, not superseded by it; see the Business rules and How it's built sections below for both changes together.)_
 
 ## What it is
 Tracks, per message in `portal_messages`, whether staff has "seen" it — drives
@@ -68,11 +69,17 @@ using the same column with roles reversed — not covered here.
     the reply was sent in — `markClientMessagesReadForStaffReply` takes a
     required `topic: string | null` param (`null` = General), applied as
     `.is('topic', null)` or `.eq('topic', topic)` on every query branch. All
-    three callers must pass it: the dashboard reply route (computes `topic`
-    once and reuses it for both the insert and the read-clear, so the two can
-    never drift), the MCP portal-message-send tool, and the AI worker's
-    portal-message-send path — the latter two always pass `null` because
-    neither ever tags its own insert with a topic.
+    three callers pass it, each computing `topic` once and reusing it for
+    both the insert and the read-clear so the two can never drift: the
+    dashboard reply route (the topic the staff member's UI tab is on), and
+    (since 2026-09-23) the MCP `portal_chat_send` tool and the AI worker's
+    `sendPortalMessageFromWorker` — both now resolve a real topic (caller-
+    supplied, or `resolveFallbackReplyTopic`'s fallback to the client's last
+    topic in that thread) instead of always passing `null`. The fallback
+    lookup shares its thread-scope resolution (`resolveThreadScopePlan`,
+    same file) with this function's own `buildStaffReplyReadPlan`, so the
+    topic a reply gets tagged with and the topic its read-clear targets can
+    never point at different threads.
   - `app/(dashboard)/portal-chats/page.tsx` — THREE separate staff-facing
     "unread" indicators live in this one file, all reading `combinedMessages`
     directly (not a server aggregate): `adminUnreadByTopic` (topic-pill
