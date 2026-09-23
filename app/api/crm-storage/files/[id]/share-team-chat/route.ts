@@ -1,9 +1,21 @@
+import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { isStaffUser } from "@/lib/auth"
 import { CRM_STORAGE_BUCKET } from "@/lib/crm-storage/constants"
 import { CHAT_SHARE_MAX_BYTES, CHAT_SHARE_MAX_MB } from "@/lib/crm-storage/share-limits"
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
+
+/** A duplicate send within this window is almost certainly a double-click or
+ *  a second browser tab, not a deliberate resend — see the header comment on
+ *  lib/crm-storage/share-actions.ts for why this route has no permanent
+ *  "already shared" claim (a stored document is legitimately resendable,
+ *  unlike a one-shot capture), and why a short window guard is still needed
+ *  on top of that: bug-hunter, 2026-09-23 — the client-side `disabled={busy}`
+ *  button guard protects nothing across two tabs or two closely-spaced
+ *  clicks, and the slow copy-then-send round trip (download + re-upload +
+ *  deliver) gives a real multi-second window for exactly that. */
+const DUPLICATE_SEND_WINDOW_SECONDS = 15
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -21,8 +33,11 @@ const db = supabaseAdmin as any
  * document is a reusable library item, not a one-shot capture.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireStaffRoute()
-  if (denied) return denied
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 })
+  }
   const { id: fileId } = await params
 
   const body = await request.json().catch(() => ({}))
@@ -36,12 +51,40 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .is("deleted_at", null)
     .maybeSingle()
   if (fileErr || !file) return NextResponse.json({ error: "That file is gone. Please try again." }, { status: 404 })
-  if (file.file_size != null && Number(file.file_size) > CHAT_SHARE_MAX_BYTES) {
+  // Fail CLOSED on an unverifiable size, not open — a null/invalid file_size
+  // must never silently skip the cap (bug-hunter, 2026-09-23: reachable only
+  // via a direct API call today, since the shipped UI always sends a real
+  // size, but the server must not rely on that holding forever).
+  if (file.file_size == null || Number.isNaN(Number(file.file_size))) {
+    return NextResponse.json({ error: "This file's size couldn't be verified. Please try again." }, { status: 400 })
+  }
+  if (Number(file.file_size) > CHAT_SHARE_MAX_BYTES) {
     return NextResponse.json({ error: `That file is too large for chat. Maximum: ${CHAT_SHARE_MAX_MB} MB.` }, { status: 400 })
   }
 
   const { data: thread } = await db.from("internal_threads").select("id").eq("id", threadId).single()
   if (!thread) return NextResponse.json({ error: "That conversation is gone. Please try again." }, { status: 404 })
+
+  // Duplicate-send guard — see DUPLICATE_SEND_WINDOW_SECONDS above. Checks
+  // the actual message log (not an in-memory flag, which wouldn't survive
+  // across two different serverless invocations anyway), so it also catches
+  // two different staff members racing each other, not just one person's
+  // double-click.
+  const recentCutoff = new Date(Date.now() - DUPLICATE_SEND_WINDOW_SECONDS * 1000).toISOString()
+  const { data: recentMessages } = await db
+    .from("internal_messages")
+    .select("attachments")
+    .eq("thread_id", threadId)
+    .gte("created_at", recentCutoff)
+    .order("created_at", { ascending: false })
+    .limit(20)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const alreadySentJustNow = (recentMessages || []).some((m: any) =>
+    Array.isArray(m.attachments) && m.attachments.some((a: any) => a?.name === file.file_name),
+  )
+  if (alreadySentJustNow) {
+    return NextResponse.json({ error: "This was just sent to that conversation — check before sending again." }, { status: 429 })
+  }
 
   // Copy: download from the private crm-files bucket, upload into the
   // public `assets` bucket team chat already uses — same shape as the

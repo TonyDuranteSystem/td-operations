@@ -1,11 +1,18 @@
+import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { isStaffUser } from "@/lib/auth"
 import { CRM_STORAGE_BUCKET } from "@/lib/crm-storage/constants"
 import { CHAT_SHARE_MAX_BYTES, CHAT_SHARE_MAX_MB } from "@/lib/crm-storage/share-limits"
 import { ACTIVE_ACCOUNT_STATUSES } from "@/lib/captures/portal-destinations"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
+
+/** See the identical comment in share-team-chat/route.ts — the reasoning is
+ *  the same, but this window matters MORE here: this is the one CLIENT-
+ *  FACING destination, so a double-send here means a real client sees the
+ *  same document twice, not just a teammate. Bug-hunter, 2026-09-23. */
+const DUPLICATE_SEND_WINDOW_SECONDS = 15
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -33,8 +40,11 @@ const db = supabaseAdmin as any
  * relies on instead of a server-side atomic claim.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireStaffRoute()
-  if (denied) return denied
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 })
+  }
   const { id: fileId } = await params
 
   const body = await request.json().catch(() => ({}))
@@ -49,8 +59,39 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     .is("deleted_at", null)
     .maybeSingle()
   if (fileErr || !file) return NextResponse.json({ error: "That file is gone. Please try again." }, { status: 404 })
-  if (file.file_size != null && Number(file.file_size) > CHAT_SHARE_MAX_BYTES) {
+  // Fail CLOSED on an unverifiable size, not open (bug-hunter, 2026-09-23) —
+  // see the identical comment in share-team-chat/route.ts.
+  if (file.file_size == null || Number.isNaN(Number(file.file_size))) {
+    return NextResponse.json({ error: "This file's size couldn't be verified. Please try again." }, { status: 400 })
+  }
+  if (Number(file.file_size) > CHAT_SHARE_MAX_BYTES) {
     return NextResponse.json({ error: `That file is too large for chat. Maximum: ${CHAT_SHARE_MAX_MB} MB.` }, { status: 400 })
+  }
+
+  // Duplicate-send guard — see DUPLICATE_SEND_WINDOW_SECONDS above. Checked
+  // here, before any validation work that follows, so a rapid-fire repeat of
+  // an already-rejected send doesn't even re-run the eligibility queries.
+  // This is the one CLIENT-FACING destination — a double-click or a second
+  // open tab must not put the same document in front of a real client twice.
+  {
+    const recentCutoff = new Date(Date.now() - DUPLICATE_SEND_WINDOW_SECONDS * 1000).toISOString()
+    let dupQuery = db
+      .from("portal_messages")
+      .select("id")
+      .eq("attachment_name", file.file_name)
+      .gte("created_at", recentCutoff)
+    // A specific-contact send always stores that contact_id, so match on it
+    // exactly. A whole-company send (no contactId given here) has NO
+    // predictable contact_id to match — the real send route always resolves
+    // one itself server-side (see the header comment above and the send
+    // route's own resolveAdminReplyContact) — so match on account_id alone
+    // instead; matching on `contact_id IS NULL` here would never hit and
+    // silently disable this guard for every whole-company send.
+    dupQuery = contactId ? dupQuery.eq("contact_id", contactId) : dupQuery.eq("account_id", accountId)
+    const { data: recent } = await dupQuery.limit(1)
+    if (recent && recent.length > 0) {
+      return NextResponse.json({ error: "This was just sent to them — check their chat before sending again." }, { status: 429 })
+    }
   }
 
   // Validate the send BEFORE touching Storage.

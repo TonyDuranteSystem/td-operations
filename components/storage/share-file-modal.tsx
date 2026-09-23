@@ -37,10 +37,18 @@ export function ShareFileModal({ file, onClose }: { file: ShareableFile; onClose
   const [emailFile, setEmailFile] = useState<File | null>(null)
   const [preparingEmail, setPreparingEmail] = useState(false)
 
-  const size = file.file_size ?? 0
+  const size = file.file_size
 
   const pick = async (next: Exclude<Mode, 'choose' | 'done'>) => {
     setError(null)
+    // A missing size must BLOCK every destination, not pass every check —
+    // `?? 0` here used to mean "no size on file → treat as 0 bytes → every
+    // limit check trivially passes" (bug-hunter, 2026-09-23). Email and fax
+    // have no server-side size check of their own to catch this afterward.
+    if (size == null) {
+      setError("This file's size is unknown — try re-uploading it before sharing.")
+      return
+    }
     if (next === 'email' && size > EMAIL_SHARE_MAX_BYTES) {
       setError(`That file is ${formatMb(size)} MB — too large to email. Maximum: ${EMAIL_SHARE_MAX_MB} MB.`)
       return
