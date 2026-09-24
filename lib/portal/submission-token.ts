@@ -56,3 +56,33 @@ export function buildSubmissionToken(p: BuildSubmissionTokenParams): string {
   const scope = scopeId ? `-${String(scopeId).slice(0, 8)}` : ""
   return `portal-${slug}-${period}${scope}`
 }
+
+/**
+ * Closure re-send: reuse the token of the submission ALREADY saved for this
+ * exact closure, instead of the freshly built one (Antonio, 2026-09-24).
+ *
+ * buildSubmissionToken bakes the client's name slug and the calendar year into
+ * the token. The submission upsert keys on token, so a client who re-sends
+ * the closure form after correcting their name — or after New Year — got a
+ * brand-new token → a SECOND closure_submissions row for the same closure,
+ * and staff a second "submitted" note instead of a "resubmitted" one (the
+ * resubmission logic reads the row's own last_processed_hash, which a new row
+ * doesn't have). closure_submissions has no service_delivery_id column; the
+ * closure's id is only carried as the token's `-<first 8 chars>` suffix, so
+ * that suffix is the match key.
+ *
+ * `existingTokens` must already be restricted to this contact/account and
+ * ordered newest first. Only portal tokens (`portal-…`) are considered — a
+ * legacy emailed-link row is never adopted. Returns `freshToken` when nothing
+ * matches (first send) or when no closure id is known.
+ */
+export function pickClosureSubmissionToken(p: {
+  freshToken: string
+  closureServiceDeliveryId: string | null | undefined
+  existingTokens: string[]
+}): string {
+  if (!p.closureServiceDeliveryId) return p.freshToken
+  const suffix = `-${String(p.closureServiceDeliveryId).slice(0, 8)}`
+  const match = p.existingTokens.find((t) => t.startsWith("portal-") && t.endsWith(suffix))
+  return match ?? p.freshToken
+}

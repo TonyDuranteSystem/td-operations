@@ -40,6 +40,7 @@ const EVENT_KEY_LABELS: Record<string, string> = {
   formation_progress: 'Formation',
   onboarding_progress: 'Onboarding',
   closure_progress: 'Closure',
+  closure_wizard_submitted: 'Closure',
   banking_review_payset: 'Banking',
   banking_review_relay: 'Banking',
   banking_physical_progress: 'Banking',

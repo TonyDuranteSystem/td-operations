@@ -37,6 +37,23 @@ export const WIZARD_SERVICE_TYPES = [
   "Tax Return",
 ] as const
 
+/**
+ * Company Closure is deliberately NOT a sidebar "Complete Setup" trigger
+ * (Antonio, 2026-09-24 — DoctorGut / Patrick Covelli): the generic sidebar
+ * label never said WHICH form it opened, so a client whose own company was
+ * fully set up saw "Completa Registrazione" and an unlabelled 3-step form for
+ * the OLD company being closed, and — because an active closure stays active
+ * for months after the form is sent — it never went away. A pending closure
+ * form is surfaced instead by the named home-page card
+ * (components/portal/closure-banner.tsx, driven by
+ * lib/portal/pending-closures.ts), which also hides once the form is sent.
+ */
+export const SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES = ["Company Closure"] as const
+
+const SIDEBAR_WIZARD_SERVICE_TYPES: string[] = (WIZARD_SERVICE_TYPES as readonly string[]).filter(
+  (t) => !(SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES as readonly string[]).includes(t),
+)
+
 export interface ComputeHasWizardPendingParams {
   contactId: string | null
   selectedAccountId: string
@@ -63,7 +80,7 @@ export async function computeHasWizardPending(
       .select("service_type")
       .eq("account_id", selectedAccountId)
       .in("status", ["active"])
-      .in("service_type", WIZARD_SERVICE_TYPES as unknown as string[])
+      .in("service_type", SIDEBAR_WIZARD_SERVICE_TYPES)
       .limit(1)
     if ((data?.length ?? 0) > 0) return true
   } else if (contactId) {
@@ -73,7 +90,7 @@ export async function computeHasWizardPending(
       .eq("contact_id", contactId)
       .is("account_id", null)
       .in("status", ["active"])
-      .in("service_type", WIZARD_SERVICE_TYPES as unknown as string[])
+      .in("service_type", SIDEBAR_WIZARD_SERVICE_TYPES)
       .limit(1)
     if ((data?.length ?? 0) > 0) return true
   }
@@ -88,7 +105,9 @@ export async function computeHasWizardPending(
   // ITIN standalone gets no "Complete Setup" entrance at all (Pietro De
   // Pellegrino, 2026-07-21).
   if (contactId) {
-    const flexibleTypes = getContactScopedDiscoveryServiceTypes()
+    const flexibleTypes = getContactScopedDiscoveryServiceTypes().filter(
+      (t) => !(SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES as readonly string[]).includes(t),
+    )
     if (flexibleTypes.length > 0) {
       const { data: flex } = await supabaseAdmin
         .from("service_deliveries")
@@ -98,14 +117,19 @@ export async function computeHasWizardPending(
         .in("status", ["active"])
         .in("service_type", flexibleTypes)
         .limit(10)
-      const found = flex ?? []
+      // Belt-and-braces: the query above already excludes closure, but keep the
+      // exclusion here too so a future change to the query can't reintroduce it.
+      const found = (flex ?? []).filter(
+        (r) => !(SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES as readonly string[]).includes(r.service_type),
+      )
       // An ITIN service delivery stays `active` for the whole application — it
       // is only marked complete when the IRS letter arrives, months later. So
       // "an active ITIN exists" does NOT mean "the client still owes us the
       // questionnaire": once they have submitted it, keeping the entrance up
       // nags them forever and lets them re-open their own filed application.
       // Suppress the person-owned SDs whose wizard is already submitted, and
-      // decide on what remains. Flexible (closure) behaviour is unchanged.
+      // decide on what remains. (Closure is excluded above — its entrance is
+      // the home-page closure card, not this sidebar item.)
       const personOwnedServiceTypes = new Set(getPersonOwnedServiceTypes())
       const stillPending = found.filter((r) => !personOwnedServiceTypes.has(r.service_type))
       if (found.length > stillPending.length) {

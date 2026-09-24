@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest"
-import { buildSubmissionToken, slugifyClientName } from "@/lib/portal/submission-token"
+import { buildSubmissionToken, slugifyClientName, pickClosureSubmissionToken } from "@/lib/portal/submission-token"
 
 const base = { clientName: "Uxio Test", calendarYear: 2026 }
 
@@ -62,3 +62,36 @@ describe("buildSubmissionToken", () => {
     expect(slugifyClientName("x".repeat(60)).length).toBe(40)
   })
 })
+
+describe("pickClosureSubmissionToken — closure re-send keeps the same saved submission", () => {
+  const SD = "871acf5d-a077-4f4f-bbba-49bac75b2508"
+  it("first send (nothing saved) → fresh token", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-uxio-test-2026-871acf5d", closureServiceDeliveryId: SD, existingTokens: [] }))
+      .toBe("portal-uxio-test-2026-871acf5d")
+  })
+  it("name changed on re-send → reuses the token already saved for this closure", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-uxio-testone-2026-871acf5d", closureServiceDeliveryId: SD, existingTokens: ["portal-uxio-test-2026-871acf5d"] }))
+      .toBe("portal-uxio-test-2026-871acf5d")
+  })
+  it("new calendar year on re-send → reuses the saved token", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-uxio-test-2027-871acf5d", closureServiceDeliveryId: SD, existingTokens: ["portal-uxio-test-2026-871acf5d"] }))
+      .toBe("portal-uxio-test-2026-871acf5d")
+  })
+  it("a different closure's saved token is never adopted", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-uxio-test-2026-871acf5d", closureServiceDeliveryId: SD, existingTokens: ["portal-uxio-test-2026-d823ca68"] }))
+      .toBe("portal-uxio-test-2026-871acf5d")
+  })
+  it("a legacy emailed-link token is never adopted", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-x-2026-871acf5d", closureServiceDeliveryId: SD, existingTokens: ["legacy-x-871acf5d"] }))
+      .toBe("portal-x-2026-871acf5d")
+  })
+  it("no closure id → fresh token unchanged", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-x-2026-abc", closureServiceDeliveryId: null, existingTokens: ["portal-x-2025-abc"] }))
+      .toBe("portal-x-2026-abc")
+  })
+  it("newest saved token wins when several exist (caller orders newest first)", () => {
+    expect(pickClosureSubmissionToken({ freshToken: "portal-z-2027-871acf5d", closureServiceDeliveryId: SD, existingTokens: ["portal-b-2026-871acf5d", "portal-a-2026-871acf5d"] }))
+      .toBe("portal-b-2026-871acf5d")
+  })
+})
+

@@ -28,6 +28,7 @@ import { buildTdCommWizardConfig, type TdCommWizardConfig } from '@/lib/td-commu
 import { isClientEditable, type ReviewStatus } from '@/lib/tax/review-status'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import { resolveClosureSubject } from '@/lib/portal/closure-subject'
+import { getPendingClosures, type PendingClosure } from '@/lib/portal/pending-closures'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -41,7 +42,7 @@ import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed
 export default async function WizardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string; lead?: string; offer?: string }>
+  searchParams: Promise<{ type?: string; lead?: string; offer?: string; sd?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -55,6 +56,14 @@ export default async function WizardPage({
   }
 
   const contactId = getClientContactId(user)
+  // Closures whose form is still owed — computed at most once per render, only
+  // when a closure is actually involved (tab list or closure subject below).
+  let owedClosuresPromise: Promise<PendingClosure[]> | null = null
+  const getOwedClosures = (): Promise<PendingClosure[]> => {
+    if (!contactId) return Promise.resolve([])
+    owedClosuresPromise ??= getPendingClosures(contactId)
+    return owedClosuresPromise
+  }
   const locale = getLocale(user)
   const translations = await loadTranslationsForLocale(locale)
 
@@ -78,7 +87,7 @@ export default async function WizardPage({
   // and ?offer= scope (onboarding for a NEW/second company — see
   // onboardingOfferId below; NOT a lead, since a returning client's second+
   // onboarding has none at all).
-  const { type: typeParam, lead: leadParam, offer: offerParam } = await searchParams
+  const { type: typeParam, lead: leadParam, offer: offerParam, sd: sdParam } = await searchParams
   const forcedType = isValidWizardType(typeParam) ? typeParam : null
 
   // When the company switcher has an in-progress formation selected (the
@@ -335,7 +344,12 @@ export default async function WizardPage({
       pendingWizardTypes.push({ type: 'banking_payset', ...wizardLabels('banking_payset'), serviceType: 'Banking Fintech' })
       pendingWizardTypes.push({ type: 'banking_relay', ...wizardLabels('banking_relay'), serviceType: 'Banking Fintech' })
     }
-    if (types.includes('Company Closure')) {
+    // Closure tab only while a closure form is still OWED (per closure — see
+    // lib/portal/pending-closures.ts). A closure SD stays active for months
+    // after its form is sent; listing it here whenever ANOTHER pending form
+    // made the sidebar show re-opened the exact confusion the home-page
+    // closure card replaced (council QA, 2026-09-24 — Patrick Covelli).
+    if (types.includes('Company Closure') && contactId && (await getOwedClosures()).length > 0) {
       pendingWizardTypes.push({ type: 'closure', ...wizardLabels('closure'), serviceType: 'Company Closure' })
     }
     if (types.includes('ITIN Renewal')) {
@@ -460,10 +474,24 @@ export default async function WizardPage({
   // wizard-client.tsx — rather than resolved without telling the client.
   let closureOtherPendingCount: number | null = null
   if (wizardType === 'closure' && contactId) {
-    const subject = await resolveClosureSubject(contactId)
+    // Which closure to open (council QA, 2026-09-24):
+    //  - an explicit ?sd naming a closure whose form is still OWED (the home
+    //    card) → exactly that one, no banner (the card already named it);
+    //  - otherwise (tab / bookmark / stale sd) prefer an OWED closure — the
+    //    selected company's first — over "the newest active", so the client
+    //    is never dropped onto an already-sent closure while another is due;
+    //    and when 2+ are owed, keep the "other pending closures" disclosure;
+    //  - nothing owed → honour ?sd if given (e.g. reviewing a sent one), else
+    //    the resolver's normal rule.
+    const owed = await getOwedClosures()
+    const sdIsOwed = !!sdParam && owed.some(c => c.serviceDeliveryId === sdParam)
+    const owedPick = owed.find(c => c.accountId === (accountId || null)) ?? owed[0]
+    const preferredClosureId = sdIsOwed ? sdParam! : (owedPick?.serviceDeliveryId ?? sdParam ?? null)
+    const subject = await resolveClosureSubject(contactId, { preferServiceDeliveryId: preferredClosureId })
     if (subject.kind === 'resolved' || subject.kind === 'ambiguous') {
       const resolved = subject.kind === 'ambiguous' ? subject.chosen : subject
       if (subject.kind === 'ambiguous') closureOtherPendingCount = subject.otherCount
+      else if (!sdIsOwed && owed.length > 1) closureOtherPendingCount = owed.length - 1
       closureServiceDeliveryId = resolved.serviceDeliveryId
       accountId = resolved.accountId ?? ''
       account = resolved.companyName

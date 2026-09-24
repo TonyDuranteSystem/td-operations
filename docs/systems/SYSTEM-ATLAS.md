@@ -207,7 +207,7 @@ _Regenerated 2026-09-24. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-23)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-23)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-09-24)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
@@ -220,6 +220,6 @@ _Regenerated 2026-09-24. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-08-23)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-09)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-08-26)_
-- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-22)_
+- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-24)_
 - [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-07-22)_
 <!-- /GENERATED:deep-docs -->

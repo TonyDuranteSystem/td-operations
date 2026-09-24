@@ -27,6 +27,10 @@ interface WizardShellProps {
   submitLabel?: string
   /** Subtle autosave confirmation shown next to Save draft (e.g. "Saved 14:32") */
   autosaveStatus?: string | null
+  /** Optional heading naming what this form is for (e.g. the Company Closure
+   *  form — which otherwise opens with no indication of its purpose). */
+  title?: string | null
+  subtitle?: string | null
 }
 
 export function WizardShell({
@@ -42,6 +46,8 @@ export function WizardShell({
   children,
   submitLabel,
   autosaveStatus,
+  title,
+  subtitle,
 }: WizardShellProps) {
   const isLastStep = currentStep === steps.length - 1
   const isFirstStep = currentStep === 0
@@ -66,6 +72,12 @@ export function WizardShell({
 
   return (
     <div className="max-w-3xl mx-auto">
+      {title && (
+        <div className="mb-6">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{title}</h1>
+          {subtitle && <p className="text-sm text-zinc-500 mt-1">{subtitle}</p>}
+        </div>
+      )}
       {/* Progress bar */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-2">

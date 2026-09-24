@@ -66,6 +66,15 @@ export type ClosureSubjectResolution =
 
 export async function resolveClosureSubject(
   contactId: string,
+  opts: {
+    /** A specific closure SD the caller was sent for — the home-page closure
+     *  card links with it (components/portal/closure-banner.tsx), so the form
+     *  opens the exact closure the card named rather than "the newest active"
+     *  (council, 2026-09-24). Honoured ONLY when it is one of this contact's
+     *  own active closures (the candidate list below is already scoped to
+     *  them); anything else is ignored and the normal rule applies. */
+    preferServiceDeliveryId?: string | null
+  } = {},
 ): Promise<ClosureSubjectResolution> {
   const { data: links } = await supabaseAdmin
     .from("account_contacts")
@@ -118,6 +127,13 @@ export async function resolveClosureSubject(
       stateOfFormation,
     }
   }
+
+  const preferred = opts.preferServiceDeliveryId
+    ? candidates.find((c) => c.id === opts.preferServiceDeliveryId)
+    : undefined
+  // Explicitly chosen by the caller → resolved, not ambiguous: the client
+  // clicked a card that named this specific closure.
+  if (preferred) return await resolveOne(preferred)
 
   const chosen = await resolveOne(candidates[0])
   if (candidates.length === 1) return chosen

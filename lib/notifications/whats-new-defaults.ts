@@ -19,6 +19,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   formation_progress: 'Verify the formation data + check the LLC name',
   onboarding_progress: 'Verify onboarding + RA change on Harbor',
   closure_progress: 'Begin the closure / dissolution steps',
+  closure_wizard_submitted: 'Review the closure form, then start the state compliance check',
   members_updated: 'Review the updated member details and reconcile the account',
   contact_updated: 'Review the contact details the client submitted',
   plan_referrer_ready_to_release: 'Open the account page and click "Release commission"',

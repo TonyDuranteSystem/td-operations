@@ -1226,6 +1226,13 @@ export function WizardClient({
       isSaving={isSaving}
       locale={locale}
       submitLabel={isResubmitMode ? pickText('Re-submit', 'Aggiorna invio') : undefined}
+      /* The closure form used to open with no heading at all, so a client whose
+         own company was already set up couldn't tell it was for the OLD company
+         being closed (Antonio, 2026-09-24 — DoctorGut / Patrick Covelli). */
+      title={wizardType === 'closure' ? pickText('Complete Registration — Company Closure', 'Completa Registrazione — Chiusura Società') : null}
+      subtitle={wizardType === 'closure'
+        ? pickText('Details of the company you are closing', 'Dati della società che stai chiudendo')
+        : null}
       autosaveStatus={autosavedAt
         ? `${pickText('Saved', 'Salvato')} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
         : null}
@@ -1239,12 +1246,12 @@ export function WizardClient({
           <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
           <div className="text-sm">
             <p className="font-semibold text-amber-900">
-              {pickText('This form is for your most recent closure request', 'Questo modulo riguarda la tua richiesta di chiusura più recente')}
+              {pickText('You have more than one company closure in progress', 'Hai più di una chiusura societaria in corso')}
             </p>
             <p className="text-amber-700 mt-0.5">
               {pickText(
-                "You have more than one company closure in progress with us. This form is for the most recently started one — if that isn't the one you meant, please tell us in chat before submitting.",
-                "Hai più di una chiusura societaria in corso con noi. Questo modulo riguarda quella iniziata più di recente: se non è quella che intendevi, faccelo sapere in chat prima di inviare.",
+                "This form is for one of them — check the company details below. If it isn't the one you meant, please tell us in chat before submitting.",
+                "Questo modulo riguarda una di esse: controlla i dati della società qui sotto. Se non è quella che intendevi, faccelo sapere in chat prima di inviare.",
               )}
             </p>
           </div>

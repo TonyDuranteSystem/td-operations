@@ -158,6 +158,33 @@ describe("resolveClosureSubject", () => {
     }
   })
 
+  it("honours an explicit closure the caller was sent for (home-page card) — resolves THAT one, not the newest", async () => {
+    accountContactsRows = [{ account_id: "acct-a" }, { account_id: "acct-b" }]
+    sdRows = [
+      { id: "sd-newer", account_id: "acct-b", contact_id: null, created_at: "2026-08-01" },
+      { id: "sd-older", account_id: "acct-a", contact_id: null, created_at: "2026-06-01" },
+    ]
+    accountRows = {
+      "acct-a": { company_name: "Old Co LLC", ein_number: null },
+      "acct-b": { company_name: "New Co LLC", ein_number: null },
+    }
+    const result = await resolveClosureSubject("contact-1", { preferServiceDeliveryId: "sd-older" })
+    expect(result.kind).toBe("resolved")
+    if (result.kind === "resolved") {
+      expect(result.serviceDeliveryId).toBe("sd-older")
+      expect(result.companyName).toBe("Old Co LLC")
+    }
+  })
+
+  it("ignores a preferred id that is not one of this contact's own active closures (tampered link) — normal rule applies", async () => {
+    accountContactsRows = [{ account_id: "acct-a" }]
+    sdRows = [{ id: "sd-mine", account_id: "acct-a", contact_id: null, created_at: "2026-06-01" }]
+    accountRows = { "acct-a": { company_name: "Mine LLC", ein_number: null } }
+    const result = await resolveClosureSubject("contact-1", { preferServiceDeliveryId: "sd-someone-else" })
+    expect(result.kind).toBe("resolved")
+    if (result.kind === "resolved") expect(result.serviceDeliveryId).toBe("sd-mine")
+  })
+
   it("checks membership via the raw account_contacts link, not a status-filtered account list", async () => {
     accountContactsRows = [{ account_id: "acct-delinquent" }]
     sdRows = [{ id: "sd-3", account_id: "acct-delinquent", contact_id: null, created_at: "2026-06-01" }]
