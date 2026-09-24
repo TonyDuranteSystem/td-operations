@@ -397,7 +397,8 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
     // identical content just re-emits, which the marker dedup makes a no-op.
     // Must run BEFORE the hash stamp below (it reads the PRIOR hash).
     const whatsNew = decideClosureWhatsNew({
-      sdWasNewlyCreated: sdWasNewlyCreated || sdCreatedFromThisSubmission,
+      sdWasNewlyCreated,
+      sdCreatedFromThisSubmission,
       dedupeKey,
       priorHash: sub.last_processed_hash as string | null,
       isGenuineChange,
