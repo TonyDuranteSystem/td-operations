@@ -135,7 +135,13 @@ export default function ServiceDetailPage() {
   }
   const currentStage = service.timeline.find(s => s.status === 'current')
   const isDataCollection = currentStage?.name?.toLowerCase().includes('data collection')
-  const wizardUrl = isDataCollection ? WIZARD_URL_MAP[service.service_type] ?? null : null
+  const baseWizardUrl = isDataCollection ? WIZARD_URL_MAP[service.service_type] ?? null : null
+  // Closure: open THIS closure's form, not "the newest active closure"
+  // (resolveClosureSubject honours sd only for the client's own closures and
+  // ignores anything else, e.g. a legacy services-table id).
+  const wizardUrl = baseWizardUrl && service.service_type === 'Company Closure'
+    ? `${baseWizardUrl}&sd=${encodeURIComponent(service.id)}`
+    : baseWizardUrl
 
   const statusConfig = STATUS_CONFIG[service.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG['Not Started']
   const completedStages = service.timeline.filter(s => s.status === 'completed').length

@@ -406,8 +406,10 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       results.push({ step: "whats_new", status: "skipped", detail: "new SD — createSD's workflow note already covers it" })
     } else try {
       const { emitClosureWizardSubmittedEvent, retireClosureWizardSubmittedNote } = await import("@/lib/portal/chat-events")
+      let retiredOk = true
       if (whatsNew.retireFirst) {
-        await retireClosureWizardSubmittedNote({ closureSubmissionId: submission_id })
+        const r = await retireClosureWizardSubmittedNote({ closureSubmissionId: submission_id })
+        retiredOk = r.retired > 0
       }
       const ev = await emitClosureWizardSubmittedEvent({
         closure_submission_id: submission_id,
@@ -422,7 +424,10 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       // email — a notification hiccup must not duplicate that email.
       // missing_recipient is expected for a lead-only legacy submission (no
       // contact/account yet → no staff thread to post into); not an error.
-      if (!ev.emitted && ev.reason !== "already_emitted" && ev.reason !== "missing_recipient") {
+      // Also report a resubmission whose old note could not be retired: the
+      // emit then dedups against it and staff get no fresh alert.
+      const resubmissionSwallowed = whatsNew.retireFirst && !retiredOk && ev.reason === "already_emitted"
+      if (resubmissionSwallowed || (!ev.emitted && ev.reason !== "already_emitted" && ev.reason !== "missing_recipient")) {
         reportSystemError({
           source: "server",
           route: "/api/closure-form-completed",
