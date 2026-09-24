@@ -3,22 +3,17 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { describeExpiry } from "@/lib/esign/expiry"
+import { EnvelopeList, type EnvelopeListRow } from "@/components/esign/envelope-list"
 
 export const dynamic = "force-dynamic"
 
-/** Only an in-flight document has a deadline worth showing. */
-const ACTIVE_STATUSES = ["sent", "in_progress"]
-
-const STATUS_STYLE: Record<string, string> = {
-  draft: "bg-zinc-100 text-zinc-600",
-  sent: "bg-blue-100 text-blue-700",
-  in_progress: "bg-amber-100 text-amber-700",
-  completed: "bg-green-100 text-green-700",
-  declined: "bg-red-100 text-red-700",
-  voided: "bg-zinc-200 text-zinc-500",
-  expired: "bg-zinc-200 text-zinc-500",
-}
+/**
+ * Every staff envelope — no row cap. The old `.limit(50)` silently hid older
+ * documents, including expired ones still waiting on a Reopen (td-bug
+ * 2026-09-24). Tabs + search live client-side in EnvelopeList.
+ */
+const PAGE_SIZE = 1000
+const ACCOUNT_CHUNK = 100
 
 export default async function EsignLandingPage() {
   const supabase = createClient()
@@ -27,15 +22,50 @@ export default async function EsignLandingPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabaseAdmin as any
-  const { data: envelopes } = await db
-    .from("esign_envelopes")
-    .select("id, document_name, status, total_signers, signed_count, created_at, expires_at")
-    .eq("origin", "staff")
-    .order("created_at", { ascending: false })
-    .limit(50)
 
+  // Page through explicitly: PostgREST caps a single response, and a silent
+  // cap is exactly the bug this page had.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows: any[] = envelopes ?? []
+  const envelopes: any[] = []
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await db
+      .from("esign_envelopes")
+      .select("id, document_name, status, total_signers, signed_count, created_at, expires_at, owner_account_id")
+      .eq("origin", "staff")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + PAGE_SIZE - 1)
+    if (error) {
+      console.error("[esign list] envelope query failed", error)
+      break
+    }
+    envelopes.push(...(data ?? []))
+    if (!data || data.length < PAGE_SIZE) break
+  }
+
+  // No FK from envelopes to accounts, so resolve company names separately
+  // (chunked to keep the id list out of URL-length trouble).
+  const accountIds = Array.from(new Set(envelopes.map(e => e.owner_account_id).filter(Boolean))) as string[]
+  const companyById = new Map<string, string>()
+  for (let i = 0; i < accountIds.length; i += ACCOUNT_CHUNK) {
+    const { data, error } = await db
+      .from("accounts")
+      .select("id, company_name")
+      .in("id", accountIds.slice(i, i + ACCOUNT_CHUNK))
+    if (error) console.error("[esign list] account lookup failed", error)
+    for (const a of data ?? []) companyById.set(a.id, a.company_name)
+  }
+
+  const rows: EnvelopeListRow[] = envelopes.map(e => ({
+    id: e.id,
+    document_name: e.document_name,
+    status: e.status,
+    total_signers: e.total_signers,
+    signed_count: e.signed_count,
+    created_at: e.created_at,
+    expires_at: e.expires_at,
+    company_name: e.owner_account_id ? companyById.get(e.owner_account_id) ?? null : null,
+  }))
 
   return (
     <div className="space-y-6 p-6 lg:p-8">
@@ -54,58 +84,7 @@ export default async function EsignLandingPage() {
           No envelopes yet. Create your first one.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-white">
-          <table className="w-full min-w-[560px] text-sm">
-            <thead className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="px-4 py-2.5">Document</th>
-                <th className="px-4 py-2.5">Status</th>
-                <th className="px-4 py-2.5">Progress</th>
-                <th className="px-4 py-2.5">Deadline</th>
-                <th className="px-4 py-2.5">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(e => (
-                <tr key={e.id} className="border-b last:border-0 hover:bg-zinc-50">
-                  <td className="px-4 py-2.5 font-medium">
-                    <Link href={`/tools/esign/${e.id}`} className="text-zinc-800 hover:text-blue-700 hover:underline">
-                      {e.document_name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[e.status] ?? "bg-zinc-100 text-zinc-600"}`}>
-                      {String(e.status).replace("_", " ")}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-zinc-600">{e.signed_count}/{e.total_signers} signed</td>
-                  <td className="px-4 py-2.5">
-                    {ACTIVE_STATUSES.includes(e.status) ? (
-                      (() => {
-                        const x = describeExpiry(e.expires_at)
-                        if (x.tone === "none") return <span className="text-zinc-400">—</span>
-                        return (
-                          <span
-                            className={
-                              x.tone === "warning" || x.tone === "past"
-                                ? "font-medium text-amber-600"
-                                : "text-zinc-500"
-                            }
-                          >
-                            {x.short}
-                          </span>
-                        )
-                      })()
-                    ) : (
-                      <span className="text-zinc-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-zinc-500">{e.created_at ? new Date(e.created_at).toLocaleDateString() : ""}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <EnvelopeList rows={rows} />
       )}
     </div>
   )
