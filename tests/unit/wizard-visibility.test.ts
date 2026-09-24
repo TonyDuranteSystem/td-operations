@@ -32,6 +32,10 @@ let onboardingSubmissionsFixture: WizardRow[] = []
 /** The formation SD-stage fallback fixture — distinct from sdAccount/sdContact (different query shape: .eq('service_type','Company Formation') + .eq('status','active'), never .in()). */
 let sdFormationStageFixture: SDStageRow[] = []
 
+/** Every service_type list passed to .in() on service_deliveries — lets tests
+ *  assert what the real DB query would filter on (the fixture router ignores it). */
+const serviceTypeInCalls: string[][] = []
+
 // Track query shape so we can route the fixture per branch.
 let lastFromTable = ""
 let chainState: { isAccountQuery: boolean; isContactQuery: boolean; isFormationStageQuery: boolean } = {
@@ -53,7 +57,12 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (col === "service_type" && val === "Company Formation") chainState.isFormationStageQuery = true
           return chain
         }),
-        in: vi.fn().mockReturnThis(),
+        in: vi.fn((col: string, vals: unknown) => {
+          if (lastFromTable === "service_deliveries" && col === "service_type") {
+            serviceTypeInCalls.push(vals as string[])
+          }
+          return chain
+        }),
         is: vi.fn().mockReturnThis(),
         order: vi.fn().mockReturnThis(),
         limit: vi.fn(() => {
@@ -82,7 +91,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-import { computeHasWizardPending } from "@/lib/portal/wizard-visibility"
+import { computeHasWizardPending, SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES } from "@/lib/portal/wizard-visibility"
 
 beforeEach(() => {
   sdAccountFixture = []
@@ -278,7 +287,7 @@ describe("computeHasWizardPending — person-owned ITIN with a company selected"
     expect(result).toBe(false)
   })
 
-  it("a submitted ITIN does NOT suppress a genuinely pending flexible wizard (closure)", async () => {
+  it("a pending closure no longer turns on the sidebar entry — its entrance is the named home-page card (2026-09-24, DoctorGut)", async () => {
     sdAccountFixture = []
     sdContactFixture = [{ service_type: "ITIN" }, { service_type: "Company Closure" }]
     wizardProgressFixture = [{ id: "wp-itin" }]
@@ -287,7 +296,51 @@ describe("computeHasWizardPending — person-owned ITIN with a company selected"
       selectedAccountId: "acc-1",
       portalTier: "active",
     })
+    expect(result).toBe(false)
+  })
+
+  it("Patrick Covelli shape: active-tier account holder whose only wizard-type SD is a contact-scoped closure → no sidebar entry", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "Company Closure" }]
+    wizardProgressFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
+    expect(result).toBe(false)
+  })
+
+  it("a still-unsubmitted ITIN keeps the sidebar entry even when a closure is also open", async () => {
+    sdAccountFixture = []
+    sdContactFixture = [{ service_type: "ITIN" }, { service_type: "Company Closure" }]
+    wizardProgressFixture = []
+    itinSubmissionsFixture = []
+    const result = await computeHasWizardPending({
+      contactId: "contact-1",
+      selectedAccountId: "acc-1",
+      portalTier: "active",
+    })
     expect(result).toBe(true)
+  })
+})
+
+describe("SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES", () => {
+  it("excludes Company Closure from the sidebar trigger list", () => {
+    expect(SIDEBAR_EXCLUDED_WIZARD_SERVICE_TYPES).toContain("Company Closure")
+  })
+
+  it("no service_deliveries query the sidebar check runs asks for Company Closure (account, contact and flexible branches)", async () => {
+    serviceTypeInCalls.length = 0
+    sdAccountFixture = []
+    sdContactFixture = []
+    await computeHasWizardPending({ contactId: "contact-1", selectedAccountId: "acc-1", portalTier: "active" })
+    await computeHasWizardPending({ contactId: "contact-1", selectedAccountId: "", portalTier: "active" })
+    expect(serviceTypeInCalls.length).toBeGreaterThanOrEqual(3)
+    for (const list of serviceTypeInCalls) expect(list).not.toContain("Company Closure")
+    // Still asks for the other wizard types — the exclusion is closure-only.
+    expect(serviceTypeInCalls.flat()).toContain("ITIN")
+    expect(serviceTypeInCalls.flat()).toContain("Banking Fintech")
   })
 })
 

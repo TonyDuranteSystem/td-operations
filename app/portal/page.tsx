@@ -29,6 +29,8 @@ import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
 import { RenewalBanner } from '@/components/portal/renewal-banner'
 import { MemberInfoBanner } from '@/components/portal/member-info-banner'
+import { ClosureBanner } from '@/components/portal/closure-banner'
+import { getPendingClosures } from '@/lib/portal/pending-closures'
 import { OfferBanner } from '@/components/portal/offer-banner'
 import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { APP_BASE_URL } from '@/lib/config'
@@ -127,6 +129,21 @@ export default async function PortalDashboardPage() {
   // Get accounts (may be empty for leads)
   const accounts = contactId ? await getPortalAccounts(contactId) : []
 
+  // Company Closure forms this client still owes (per closure — hides the
+  // moment the form is sent). The named card below is the ONLY client
+  // entrance to the closure form: it replaced the generic sidebar
+  // "Completa Registrazione" item, the generic "Start form" action item and
+  // the formation dashboard's own closure CTA (Antonio, 2026-09-24, DoctorGut
+  // / Patrick Covelli). Rendered on EVERY home-page branch below.
+  const pendingClosures = contactId ? await getPendingClosures(contactId) : []
+  const closureBanners = pendingClosures.length > 0 ? (
+    <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0 space-y-3">
+      {pendingClosures.map(closure => (
+        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} />
+      ))}
+    </div>
+  ) : null
+
   // Get selected account
   const cookieStore = cookies()
   const cookieAccountId = (await cookieStore).get('portal_account_id')?.value
@@ -153,6 +170,7 @@ export default async function PortalDashboardPage() {
       const itinFlows = await loadItinFlows()
       return (
         <div className="space-y-4">
+          {closureBanners}
           {itinFlows.length > 0 && (
             <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
               <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
@@ -234,13 +252,16 @@ export default async function PortalDashboardPage() {
       wizardReviewed = !!reviewedOs
 
       return (
-        <WelcomeDashboard
-          tier="onboarding"
-          firstName={firstName}
-          offerData={offerData}
-          wizardSubmitted={wizardSubmitted}
-          wizardReviewed={wizardReviewed}
-        />
+        <>
+          {closureBanners}
+          <WelcomeDashboard
+            tier="onboarding"
+            firstName={firstName}
+            offerData={offerData}
+            wizardSubmitted={wizardSubmitted}
+            wizardReviewed={wizardReviewed}
+          />
+        </>
       )
     }
   }
@@ -332,18 +353,11 @@ export default async function PortalDashboardPage() {
       authTier !== 'formation' && inProgressFormations.length > 0
     if ((authTier === 'formation' || hasActiveFormation) && contactId) {
       const formationAccount = await getFormationAccount(contactId)
-      // Contact-scoped Company Closure SD — surfaces a Closure CTA on the
-      // formation dashboard when the same client also has an external LLC
-      // being closed alongside the new formation. Patrick Covelli pattern.
-      const { data: closureSd } = await supabaseAdmin
-        .from('service_deliveries')
-        .select('id')
-        .eq('contact_id', contactId)
-        .is('account_id', null)
-        .eq('service_type', 'Company Closure')
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle()
+      // Closure: the formation dashboard's own closure CTA used to be fed an
+      // "any active closure SD" lookup here and nagged for months after the
+      // form was sent (Patrick Covelli, 2026-09-24). It is no longer passed —
+      // the shared, per-closure-gated `closureBanners` above is rendered
+      // instead, same as every other home-page branch.
       if (formationAccount) {
         const [wizardRes, ss4Res, oaRes, leaseRes] = await Promise.all([
           supabaseAdmin
@@ -383,6 +397,7 @@ export default async function PortalDashboardPage() {
         const itinFlows = await loadItinFlows()
         return (
           <div className="space-y-4">
+            {closureBanners}
             {itinFlows.length > 0 && (
               <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
                 <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
@@ -396,7 +411,6 @@ export default async function PortalDashboardPage() {
               ss4Data={ss4Res.data}
               oaData={oaRes.data}
               leaseData={leaseRes.data}
-              closureData={closureSd}
               trackerSteps={trackerSteps}
               formationLeadId={soleInProgressLeadId}
               sdStage={tracker?.currentStage ?? null}
@@ -415,6 +429,7 @@ export default async function PortalDashboardPage() {
       const itinFlows = await loadItinFlows()
       return (
         <div className="space-y-4">
+          {closureBanners}
           {itinFlows.length > 0 && (
             <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
               <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
@@ -428,7 +443,6 @@ export default async function PortalDashboardPage() {
             ss4Data={ctx.ss4}
             oaData={ctx.oa}
             leaseData={ctx.lease}
-            closureData={closureSd}
             trackerSteps={trackerSteps}
             formationLeadId={soleInProgressLeadId}
             sdStage={tracker?.currentStage ?? null}
@@ -527,6 +541,7 @@ export default async function PortalDashboardPage() {
 
     return (
       <>
+        {closureBanners}
         {noAccountActionItems.items.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
             <ActionItems data={noAccountActionItems} />
@@ -617,6 +632,7 @@ export default async function PortalDashboardPage() {
     const itinFlows = await loadItinFlows()
     return (
       <div className="space-y-4">
+        {closureBanners}
         {itinFlows.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
             <PortalFlowStatusSection flows={itinFlows} locale={locale} translations={translations} />
@@ -775,6 +791,7 @@ export default async function PortalDashboardPage() {
 
     return (
       <>
+        {closureBanners}
         {actionItems.items.length > 0 && (
           <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto pb-0">
             <ActionItems data={actionItems} />
@@ -922,6 +939,11 @@ export default async function PortalDashboardPage() {
           {account.state_of_formation && `${account.state_of_formation}`}
         </p>
       </div>
+
+      {/* Company Closure form still owed — named card, not a generic sidebar item */}
+      {pendingClosures.map(closure => (
+        <ClosureBanner key={closure.serviceDeliveryId} closure={closure} locale={locale} />
+      ))}
 
       {/* What's New - one-time (per device) feature announcement, dismissed via localStorage */}
       <WhatsNewBanner />

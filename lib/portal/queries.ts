@@ -1433,6 +1433,17 @@ function daysUntil(dateStr: string): number {
  * Get all pending action items for a client.
  * Aggregates: unfilled wizard forms, unpaid invoices, unsigned documents.
  */
+/**
+ * Wizard types whose home-page entrance is a dedicated, named card rather than
+ * a generic action item. Closure: components/portal/closure-banner.tsx, gated
+ * per closure by lib/portal/pending-closures.ts (Antonio, 2026-09-24 —
+ * DoctorGut / Patrick Covelli). The generic "Start/Complete form" item for a
+ * closure was both unnamed and wrongly scoped (its "already submitted" check
+ * is per account, but a contact-only closure's submission has no account), so
+ * it kept nagging after the form was sent — and would now duplicate the card.
+ */
+export const ACTION_ITEMS_EXCLUDED_WIZARD_TYPES: ReadonlySet<string> = new Set(['closure'])
+
 export async function getPortalActionItems(
   accountId: string,
   contactId?: string
@@ -1566,6 +1577,7 @@ export async function getPortalActionItems(
   const inProgressWizardTypes = new Set<string>()
 
   for (const w of wizardRes.data ?? []) {
+    if (ACTION_ITEMS_EXCLUDED_WIZARD_TYPES.has(w.wizard_type)) continue
     const requiredSd = WIZARD_SD_REQUIRED[w.wizard_type]
     if (requiredSd && !activeWizardSdTypes.has(requiredSd)) continue
     if ((w.wizard_type === 'tax' || w.wizard_type === 'tax_return') && !taxWizardActionable) continue
@@ -1667,6 +1679,7 @@ export async function getPortalActionItems(
   for (const sd of candidateSds) {
     const wt = wizardTypeForServiceType(sd.service_type)
     if (!wt) continue
+    if (ACTION_ITEMS_EXCLUDED_WIZARD_TYPES.has(wt)) continue
     if (wt === 'tax' && !taxWizardActionable) continue
     if (inProgressWizardTypes.has(wt)) continue
     // Bare ITIN only: check the contact-scoped submission (see the query
@@ -1930,6 +1943,7 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
   // service_deliveries.account_id. Trust the wizard_progress row exists.
   const inProgressWizardTypesByContact = new Set<string>()
   for (const w of wizardRes.data ?? []) {
+    if (ACTION_ITEMS_EXCLUDED_WIZARD_TYPES.has(w.wizard_type)) continue
     inProgressWizardTypesByContact.add(w.wizard_type)
     const age = daysSince(w.created_at)
     const priority: ActionItem['priority'] = age > 7 ? 'red' : age > 3 ? 'orange' : 'blue'
@@ -1970,6 +1984,7 @@ export async function getPortalActionItemsByContact(contactId: string): Promise<
   for (const sd of contactSdsRes.data ?? []) {
     let wt = wizardTypeForServiceType(sd.service_type)
     if (!wt) continue
+    if (ACTION_ITEMS_EXCLUDED_WIZARD_TYPES.has(wt)) continue
     // ── Tax, for a client with no company yet, is ALWAYS company_info ────────
     // This loop is accountless by construction (the query above filters
     // `account_id IS NULL`), and `decideTaxWizardEligibility` returns

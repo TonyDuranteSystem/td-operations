@@ -1226,6 +1226,13 @@ export function WizardClient({
       isSaving={isSaving}
       locale={locale}
       submitLabel={isResubmitMode ? pickText('Re-submit', 'Aggiorna invio') : undefined}
+      /* The closure form used to open with no heading at all, so a client whose
+         own company was already set up couldn't tell it was for the OLD company
+         being closed (Antonio, 2026-09-24 — DoctorGut / Patrick Covelli). */
+      title={wizardType === 'closure' ? pickText('Complete Registration — Company Closure', 'Completa Registrazione — Chiusura Società') : null}
+      subtitle={wizardType === 'closure'
+        ? pickText('Details of the company you are closing', 'Dati della società che stai chiudendo')
+        : null}
       autosaveStatus={autosavedAt
         ? `${pickText('Saved', 'Salvato')} ${autosavedAt.toLocaleTimeString(locale === 'it' ? 'it-IT' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
         : null}

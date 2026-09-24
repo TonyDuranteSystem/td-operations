@@ -26,6 +26,7 @@ import { dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
+import { decideClosureWhatsNew } from "@/lib/portal/closure-whats-new"
 
 export async function POST(req: NextRequest) {
   try {
@@ -205,6 +206,7 @@ export async function POST(req: NextRequest) {
     // created, so unconditionally also inserting the plain task below produced
     // two tasks for one event (AI architect finding, dev job fbbf4abe).
     let sdWasNewlyCreated = false
+    let sdCreatedFromThisSubmission = false
     try {
       // dev job fbbf4abe root-cause fix: when the caller (the portal wizard,
       // via wizard-submit's server-side verification) already knows exactly
@@ -214,7 +216,7 @@ export async function POST(req: NextRequest) {
       // source rather than patching the heuristics that caused it. The
       // legacy lookup remains the fallback for the OLD emailed-link flow,
       // which has no explicit id to send.
-      let existingSd: { id: string }[] | null = null
+      let existingSd: { id: string; source_closure_token?: string | null }[] | null = null
       if (explicitServiceDeliveryId) {
         existingSd = [{ id: explicitServiceDeliveryId }]
       } else if (accountId) {
@@ -223,7 +225,7 @@ export async function POST(req: NextRequest) {
         // confirmed this scoping is correct as-is).
         const { data } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id")
+          .select("id, source_closure_token")
           .eq("service_type", "Company Closure")
           .eq("account_id", accountId)
           .eq("status", "active")
@@ -248,7 +250,7 @@ export async function POST(req: NextRequest) {
         // two new closures for the same contact can never both be NULL.
         const { data } = await supabaseAdmin
           .from("service_deliveries")
-          .select("id")
+          .select("id, source_closure_token")
           .eq("service_type", "Company Closure")
           .eq("contact_id", contactId)
           .or(`source_closure_token.eq.${token},source_closure_token.is.null`)
@@ -260,6 +262,9 @@ export async function POST(req: NextRequest) {
 
       if (existingSd?.length) {
         deliveryId = existingSd[0].id
+        // A retry of the pass that CREATED this SD from this very submission
+        // (legacy link): createSD's note already announced it (step 5b).
+        sdCreatedFromThisSubmission = existingSd[0].source_closure_token === token
       } else {
         const newSd = await createSD({
           service_type: "Company Closure",
@@ -382,6 +387,65 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
           ? "createSD's own workflow dispatch already created a task for the new SD"
           : "identical content already processed for this submission — not a genuine resubmission",
       })
+    }
+
+    // ---- STEP 5b: What's New note for staff (Antonio, 2026-09-24) ----
+    // Closure submissions used to produce only the email + task above —
+    // nothing in What's New. Resubmission-aware via the same content hash as
+    // step 5: a genuine change AFTER a previously processed pass retires the
+    // old note and posts a fresh "resubmitted" one; a mechanical retry of
+    // identical content just re-emits, which the marker dedup makes a no-op.
+    // Must run BEFORE the hash stamp below (it reads the PRIOR hash).
+    const whatsNew = decideClosureWhatsNew({
+      sdWasNewlyCreated: sdWasNewlyCreated || sdCreatedFromThisSubmission,
+      dedupeKey,
+      priorHash: sub.last_processed_hash as string | null,
+      isGenuineChange,
+    })
+    if (whatsNew.action === "skip") {
+      results.push({ step: "whats_new", status: "skipped", detail: "new SD — createSD's workflow note already covers it" })
+    } else try {
+      const { emitClosureWizardSubmittedEvent, retireClosureWizardSubmittedNote } = await import("@/lib/portal/chat-events")
+      if (whatsNew.retireFirst) {
+        await retireClosureWizardSubmittedNote({ closureSubmissionId: submission_id })
+      }
+      const ev = await emitClosureWizardSubmittedEvent({
+        closure_submission_id: submission_id,
+        contact_id: contactId,
+        account_id: accountId,
+        llc_name: llcName === "Unknown LLC" ? null : llcName,
+        llc_state: llcState === "N/A" ? null : llcState,
+        is_resubmission: whatsNew.isResubmission,
+      })
+      // A failed note is reported, never returned as "error": an "error" step
+      // fails the closure_setup job, and its retry re-sends the step-4 staff
+      // email — a notification hiccup must not duplicate that email.
+      // missing_recipient is expected for a lead-only legacy submission (no
+      // contact/account yet → no staff thread to post into); not an error.
+      if (!ev.emitted && ev.reason !== "already_emitted" && ev.reason !== "missing_recipient") {
+        reportSystemError({
+          source: "server",
+          route: "/api/closure-form-completed",
+          method: "POST",
+          message: `closure What's New note not posted for submission ${submission_id}: ${ev.reason ?? ""} ${ev.error ?? ""}`.trim(),
+          context: { submission_id },
+        }).catch(() => {})
+      }
+      results.push({
+        step: "whats_new",
+        status: ev.emitted ? "ok" : "skipped",
+        detail: ev.emitted ? `note ${ev.message_id}` : `not posted: ${ev.reason ?? ev.error ?? "unknown"}`,
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      reportSystemError({
+        source: "server",
+        route: "/api/closure-form-completed",
+        method: "POST",
+        message: `closure What's New note threw for submission ${submission_id}: ${msg}`,
+        context: { submission_id },
+      }).catch(() => {})
+      results.push({ step: "whats_new", status: "skipped", detail: `not posted: ${msg}` })
     }
 
     // Stamp the content hash AFTER deciding step 5 above, so a genuine retry

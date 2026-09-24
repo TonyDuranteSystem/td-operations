@@ -41,7 +41,7 @@ import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed
 export default async function WizardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string; lead?: string; offer?: string }>
+  searchParams: Promise<{ type?: string; lead?: string; offer?: string; sd?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -78,7 +78,7 @@ export default async function WizardPage({
   // and ?offer= scope (onboarding for a NEW/second company — see
   // onboardingOfferId below; NOT a lead, since a returning client's second+
   // onboarding has none at all).
-  const { type: typeParam, lead: leadParam, offer: offerParam } = await searchParams
+  const { type: typeParam, lead: leadParam, offer: offerParam, sd: sdParam } = await searchParams
   const forcedType = isValidWizardType(typeParam) ? typeParam : null
 
   // When the company switcher has an in-progress formation selected (the
@@ -460,7 +460,7 @@ export default async function WizardPage({
   // wizard-client.tsx — rather than resolved without telling the client.
   let closureOtherPendingCount: number | null = null
   if (wizardType === 'closure' && contactId) {
-    const subject = await resolveClosureSubject(contactId)
+    const subject = await resolveClosureSubject(contactId, { preferServiceDeliveryId: sdParam ?? null })
     if (subject.kind === 'resolved' || subject.kind === 'ambiguous') {
       const resolved = subject.kind === 'ambiguous' ? subject.chosen : subject
       if (subject.kind === 'ambiguous') closureOtherPendingCount = subject.otherCount

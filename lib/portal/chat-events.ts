@@ -51,6 +51,7 @@ export type ChatEventKind =
   | "lease_signed" // client signed their CMRA lease agreement
   | "formation_wizard_submitted" // client submitted the Company Formation wizard via the portal
   | "onboarding_wizard_submitted" // client submitted the Client Onboarding data form (existing-LLC clients)
+  | "closure_wizard_submitted" // client submitted the Company Closure form (portal wizard or legacy link)
 
 export interface ChatEventSource {
   /** Origin table — e.g. 'tasks', 'payments', 'documents', 'ss4_applications' */
@@ -618,6 +619,86 @@ export async function emitOnboardingWizardSubmittedEvent(params: {
     source: { table: "onboarding_submissions", id: params.onboarding_submission_id },
     event_kind: "onboarding_wizard_submitted",
   })
+}
+
+/**
+ * Company Closure form submitted (Antonio, 2026-09-24 — DoctorGut / Patrick
+ * Covelli). Before this, a closure submission produced only the
+ * "[TASK] Closure request received" email + a plain task — nothing in What's
+ * New, the same gap formation had before dev job 9a9c5cf5. Staff-only, like
+ * every other chat-event note. Wired in app/api/closure-form-completed/route.ts,
+ * the single funnel both the portal wizard (via the closure_setup job) and the
+ * legacy emailed-link flow go through.
+ *
+ * `closure_submissions` rows can be updated in place and re-processed (job
+ * retries), so the caller decides resubmission from the row's own content hash
+ * (`last_processed_hash`): a genuine change after a previous successful pass →
+ * call `retireClosureWizardSubmittedNote` first, then emit with
+ * `is_resubmission: true`; a mechanical retry of identical content → just emit,
+ * and the marker dedup makes it a no-op.
+ */
+export async function emitClosureWizardSubmittedEvent(params: {
+  closure_submission_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  llc_name?: string | null
+  llc_state?: string | null
+  is_resubmission?: boolean
+}): Promise<EmitResult> {
+  const company = params.llc_name
+    ? ` for ${params.llc_name}${params.llc_state ? ` (${params.llc_state})` : ""}`
+    : ""
+  // No "via the portal": this route also serves the legacy emailed-link form.
+  const message = params.is_resubmission
+    ? `Client resubmitted the Company Closure form${company}.`
+    : `Client submitted the Company Closure form${company}.`
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Closure",
+    message,
+    source: { table: "closure_submissions", id: params.closure_submission_id },
+    event_kind: "closure_wizard_submitted",
+  })
+}
+
+/**
+ * Retire the "closure form submitted" note for a `closure_submissions` row so
+ * a genuine resubmission produces a fresh, unread note. Same soft-delete
+ * rationale as `retireBankingWizardSubmittedNote`.
+ */
+export async function retireClosureWizardSubmittedNote(params: {
+  closureSubmissionId: string
+  deletedBy?: string | null
+}): Promise<{ retired: number }> {
+  const marker = buildMarker({ table: "closure_submissions", id: params.closureSubmissionId }, "closure_wizard_submitted")
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("portal_messages")
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: params.deletedBy ?? SYSTEM_ACTOR_ID,
+      })
+      .eq("sender_type", "system")
+      .like("message", `%${marker}%`)
+      .is("deleted_at", null)
+      .select("id")
+
+    if (error) {
+      console.error(
+        `[retireClosureWizardSubmittedNote] could not retire the note for closure_submissions ${params.closureSubmissionId}:`,
+        error.message,
+      )
+      return { retired: 0 }
+    }
+    return { retired: (data ?? []).length }
+  } catch (err) {
+    console.error(
+      `[retireClosureWizardSubmittedNote] non-fatal for ${params.closureSubmissionId}:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    return { retired: 0 }
+  }
 }
 
 /**
