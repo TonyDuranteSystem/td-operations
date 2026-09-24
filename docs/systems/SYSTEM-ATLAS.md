@@ -191,7 +191,7 @@ _Regenerated 2026-09-24. Every subsystem doc under `docs/systems/` (43 docs), wi
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-09-15)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
-- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-08-23)_
+- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-24)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-22)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-16)_
