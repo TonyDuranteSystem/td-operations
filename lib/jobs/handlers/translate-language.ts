@@ -38,6 +38,7 @@ interface TranslateLanguagePayload {
   language_name: string
   source?: Source
   chunk_index?: number
+  auto_retry?: number
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -104,11 +105,19 @@ export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Pr
         const nextChunkIndex = r.batchesSent > 0 ? chunkIndex + 1 : chunkIndex
         const { error } = await db.from("job_queue").insert({
           job_type: "translate_language",
-          // auto_retry: 0 — this is a handler-driven continuation (real
-          // progress or a normal deadline stop), not a watchdog retry after a
-          // terminal failure. Only translation-watchdog.ts increments this,
-          // the same convention recategorize-ai.ts already uses.
-          payload: { language_code: p.language_code, language_name: p.language_name, source, chunk_index: nextChunkIndex, auto_retry: 0 },
+          // auto_retry is carried forward, and reset to 0 only on real progress.
+          // This is a handler-driven continuation, not a watchdog retry, so it
+          // never increments it (only translation-watchdog.ts does) — but
+          // hard-coding 0 here wiped the watchdog's retry ladder on every hop,
+          // so a chain making no progress could never reach "exhausted" and
+          // the staff alert never fired (2026-09-23, weeks of silent looping).
+          payload: {
+            language_code: p.language_code,
+            language_name: p.language_name,
+            source,
+            chunk_index: nextChunkIndex,
+            auto_retry: r.generated > 0 ? 0 : (p.auto_retry ?? 0),
+          },
           priority: AI_CHAIN_JOB_PRIORITY,
           created_by: "chain",
         })
@@ -220,6 +229,12 @@ export async function handleTranslateLanguage(job: Job, ctx?: JobRunContext): Pr
 
   if (followup === "halt_no_progress") {
     result.ok = false
+    // Terminal: end this chain now instead of burning the queue's immediate
+    // retries. The watchdog ladder (15m → 12h backoff, then ONE staff alert)
+    // owns retries for a no-progress chain — see decideChunkFollowup. An
+    // immediate retry could only re-hit the same answer, and it used to be
+    // what disguised the failure as a harmless "continue".
+    result.terminal = true
     result.summary = `translate_language made no progress (${r.batchesSent} batches, ${r.batchesFailed} failed) — halted (${p.language_code}, ${source})${r.lastBatchError ? `: ${r.lastBatchError}` : ""}`
     return result
   }

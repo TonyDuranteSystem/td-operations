@@ -252,3 +252,46 @@ describe("handleTranslateLanguage", () => {
     expect(supabaseState.insertedRows).toHaveLength(0)
   })
 })
+
+// 2026-09-23 incident: a chain making no progress looped for weeks because the
+// no-progress halt was retried immediately (and disguised as "continue"), and
+// every continuation reset the watchdog's retry ladder to 0 so the staff alert
+// could never fire.
+describe("handleTranslateLanguage — loop guard (2026-09-23)", () => {
+  const stuck = {
+    languageCode: "de", requested: 516, alreadyDone: 515, generated: 0, failed: 1, failedKeys: ["k"],
+    noCandidates: false, stoppedOnDeadline: false, batchesSent: 1, batchesFailed: 0,
+  }
+
+  it("REGRESSION: a no-progress halt is TERMINAL, so the queue does not burn an immediate retry and the watchdog ladder + staff alert take over", async () => {
+    generateMock.mockResolvedValueOnce(stuck)
+    const r = await handleTranslateLanguage(job({ language_code: "de", language_name: "German", source: "guide" }))
+    expect(r.ok).toBe(false)
+    expect(r.terminal).toBe(true)
+  })
+
+  it("carries the watchdog's auto_retry forward on a continuation that made no progress (late-claim relay)", async () => {
+    generateMock.mockResolvedValueOnce({
+      languageCode: "de", requested: 516, alreadyDone: 400, generated: 0, failed: 0, failedKeys: [],
+      noCandidates: false, stoppedOnDeadline: true, batchesSent: 0, batchesFailed: 0,
+    })
+    await handleTranslateLanguage(job({ language_code: "de", language_name: "German", source: "wizard", chunk_index: 0, auto_retry: 3 }))
+    expect(supabaseState.insertedRows).toHaveLength(1)
+    expect(supabaseState.insertedRows[0]).toMatchObject({ payload: { source: "wizard", auto_retry: 3 } })
+  })
+
+  it("resets auto_retry to 0 only when the chunk really progressed", async () => {
+    generateMock.mockResolvedValueOnce({
+      languageCode: "de", requested: 1000, alreadyDone: 0, generated: 150, failed: 0, failedKeys: [],
+      noCandidates: false, stoppedOnDeadline: true, batchesSent: 1, batchesFailed: 0,
+    })
+    await handleTranslateLanguage(job({ language_code: "de", language_name: "German", source: "wizard", chunk_index: 0, auto_retry: 3 }))
+    expect(supabaseState.insertedRows[0]).toMatchObject({ payload: { chunk_index: 1, auto_retry: 0 } })
+  })
+
+  it("a normal finished chunk (done) still ends without terminal", async () => {
+    const r = await handleTranslateLanguage(job({ language_code: "cy", language_name: "Welsh", source: "guide" }))
+    expect(r.ok).not.toBe(false)
+    expect(r.terminal).toBeUndefined()
+  })
+})
