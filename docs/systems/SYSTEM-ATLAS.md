@@ -201,7 +201,7 @@ _Regenerated 2026-09-24. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-23)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-22)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-22)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-24)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-23)_
