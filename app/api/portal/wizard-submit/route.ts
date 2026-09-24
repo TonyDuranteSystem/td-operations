@@ -27,6 +27,7 @@ import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType, isBankingInlineType } from '@/lib/portal/wizard-map'
 import { buildSubmissionRecord, preserveReviewedStatus } from '@/lib/portal/submission-record'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
+import { resolveClosureSubmissionToken } from '@/lib/portal/closure-submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
@@ -472,6 +473,18 @@ export async function POST(req: NextRequest) {
           // token scheme's own header already documents for two companies.
           explicitScopeId: closureServiceDeliveryId || (wizard_type === 'onboarding' ? offer_id || null : null),
         })
+
+        // Closure re-send → keep updating the SAME saved submission for this
+        // closure even if the client changed their name or it's a new year
+        // (both are baked into the fresh token). See pickClosureSubmissionToken.
+        if (wizard_type === 'closure' && closureServiceDeliveryId) {
+          submissionToken = await resolveClosureSubmissionToken({
+            freshToken: submissionToken,
+            closureServiceDeliveryId,
+            contactId: contact_id || null,
+            accountId: account_id || null,
+          })
+        }
 
         // The submission tables do NOT share one column set (formation has no
         // account_id, tax_return has no lead_id, itin/closure have no entity_type,
