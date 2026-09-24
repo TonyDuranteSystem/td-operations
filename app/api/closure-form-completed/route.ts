@@ -249,12 +249,18 @@ export async function POST(req: NextRequest) {
         // shape working; it does NOT reopen the multi-LLC conflation, because
         // every row created FROM NOW ON always gets a real, distinct token —
         // two new closures for the same contact can never both be NULL.
+        //
+        // dev job 77b66080: a closure created at PAYMENT from a formation
+        // contract (source_offer_token set, source_closure_token NULL) must
+        // never be adopted by a token-less legacy submission — it could be for a
+        // DIFFERENT old LLC. The NULL branch therefore also requires
+        // source_offer_token IS NULL (the one hand-made legacy shape).
         const { data } = await supabaseAdmin
           .from("service_deliveries")
           .select("id, source_closure_token")
           .eq("service_type", "Company Closure")
           .eq("contact_id", contactId)
-          .or(`source_closure_token.eq.${token},source_closure_token.is.null`)
+          .or(`source_closure_token.eq.${token},and(source_closure_token.is.null,source_offer_token.is.null)`)
           .is("account_id", null)
           .eq("status", "active")
           .limit(1)
@@ -267,6 +273,30 @@ export async function POST(req: NextRequest) {
         // (legacy link): createSD's note already announced it (step 5b).
         sdCreatedFromThisSubmission = existingSd[0].source_closure_token === token
       } else {
+        // A legacy (token-less) submission is about to create a NEW closure SD
+        // while a payment-created one already exists for this person — likely
+        // the same old LLC. Created anyway (it can't be safely merged), but
+        // staff must know (dev job 77b66080).
+        if (!explicitServiceDeliveryId && !accountId && contactId) {
+          const { data: offerClosure } = await supabaseAdmin
+            .from("service_deliveries")
+            .select("id, source_offer_token")
+            .eq("service_type", "Company Closure")
+            .eq("contact_id", contactId)
+            .is("account_id", null)
+            .eq("status", "active")
+            .not("source_offer_token", "is", null)
+            .limit(1)
+          if (offerClosure?.length) {
+            reportSystemError({
+              source: "server",
+              route: "/api/closure-form-completed",
+              method: "POST",
+              message: `closure form for ${clientName} (${llcName}) created a SECOND closure next to the one created at payment from offer ${offerClosure[0].source_offer_token} — check for a duplicate`,
+              context: { submission_id, existingSdId: offerClosure[0].id },
+            }).catch(() => {})
+          }
+        }
         const newSd = await createSD({
           service_type: "Company Closure",
           service_name: `Company Closure - ${llcName}`,
