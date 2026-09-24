@@ -37,10 +37,17 @@ vi.mock('@/lib/portal/tier-config', () => ({
   TIER_ORDER: { lead: 0, formation: 1, onboarding: 2, active: 3 },
 }))
 vi.mock('@/lib/gmail', () => ({ gmailPost: vi.fn() }))
+vi.mock('@/lib/services', () => ({ getStartAtActivationServiceTypes: vi.fn(async () => ['Company Closure']) }))
+vi.mock('@/lib/system-errors', () => ({ reportSystemError: vi.fn(async () => null) }))
+vi.mock('@/lib/operations/activation-start-services', async (orig) => ({
+  ...(await orig<object>()),
+  createStartAtActivationSDs: vi.fn(async () => [{ step: 'start_at_activation', status: 'created', detail: 'mock' }]),
+}))
 
 import { runActivation, triggerActivationIfPending } from '@/lib/operations/activate-service'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { autoCreatePortalUser } from '@/lib/portal/auto-create'
+import { createStartAtActivationSDs } from '@/lib/operations/activation-start-services'
 
 // Returns a fully chainable Supabase query mock.
 // All builder methods return the same chain. Direct await resolves to { data, error: null }.
@@ -185,6 +192,64 @@ describe('runActivation', () => {
     expect(result.steps).toEqual(expect.arrayContaining([
       expect.objectContaining({ step: 'lead_converted', status: 'done', detail: expect.stringContaining('already Converted') }),
     ]))
+  })
+
+  // Dev job 77b66080: a paid formation contract that bundles a Company Closure
+  // must create the closure SD at payment (Milan's closure was silently dropped).
+  describe('start-at-payment bundled services (Company Closure)', () => {
+    const wire = (offer: Record<string, unknown>) => {
+      vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+        if (table === 'pending_activations') return makeChain(activationFixture) as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'offers') return makeChain(offer) as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'leads') return makeChain(leadFixture) as ReturnType<typeof supabaseAdmin.from>
+        if (table === 'contacts') return makeChain(contactFixture) as ReturnType<typeof supabaseAdmin.from>
+        return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+      })
+      vi.mocked(autoCreatePortalUser).mockResolvedValue(
+        { success: false, alreadyExists: true, email: 'test@x.com' } as Awaited<ReturnType<typeof autoCreatePortalUser>>
+      )
+    }
+
+    it('formation + bought closure → the closure step runs with the contact, token and selection', async () => {
+      wire({
+        ...offerFixture,
+        bundled_pipelines: ['Company Formation', 'Company Closure'],
+        services: [
+          { name: 'Company Formation', pipeline_type: 'Company Formation' },
+          { name: 'Company Closure', price: '$0', pipeline_type: 'Company Closure' },
+        ],
+      })
+      const result = await runActivation('pa-id')
+      expect(result.ok).toBe(true)
+      expect(createStartAtActivationSDs).toHaveBeenCalledWith(expect.objectContaining({
+        offerToken: 'tok',
+        contactId: 'contact-id',
+        selection: expect.objectContaining({ pipelines: ['Company Closure'] }),
+      }))
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({ step: 'start_at_activation', status: 'created' }),
+      ]))
+    })
+
+    it('catalog lookup failure → error step + report, activation still ok', async () => {
+      const services = await import('@/lib/services')
+      const errs = await import('@/lib/system-errors')
+      vi.mocked(services.getStartAtActivationServiceTypes).mockRejectedValueOnce(new Error('catalog down'))
+      wire({ ...offerFixture, bundled_pipelines: ['Company Formation', 'Company Closure'], services: [{ name: 'Company Closure', pipeline_type: 'Company Closure' }] })
+      const result = await runActivation('pa-id')
+      expect(result.ok).toBe(true)
+      expect(result.steps).toEqual(expect.arrayContaining([expect.objectContaining({ step: 'start_at_activation', status: 'error' })]))
+      expect(createStartAtActivationSDs).not.toHaveBeenCalled()
+      expect(errs.reportSystemError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('offer tok') }))
+    })
+
+    it('formation without a closure → nothing to create', async () => {
+      wire({ ...offerFixture, bundled_pipelines: ['Company Formation'], services: [{ name: 'Company Formation', pipeline_type: 'Company Formation' }] })
+      await runActivation('pa-id')
+      expect(createStartAtActivationSDs).toHaveBeenCalledWith(expect.objectContaining({
+        selection: { pipelines: [], mismatches: [], multiQuantity: [] },
+      }))
+    })
   })
 
   // Council QA (dev job 3c1bb5fa follow-up): a live Florida pick still produced

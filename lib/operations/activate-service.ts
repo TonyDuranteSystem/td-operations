@@ -13,6 +13,9 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
+import { selectStartAtActivationPipelines, createStartAtActivationSDs } from "@/lib/operations/activation-start-services"
+import { getStartAtActivationServiceTypes } from "@/lib/services"
+import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
@@ -571,7 +574,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // stays at 'active'; the tier-based wizard-visibility fallback cannot fire
   // for them) can reach the wizard. formation-setup.ts dedupes at wizard submit
   // (contact_id + service_type + status='active') so no double-create.
-  // Banking Fintech SD is still created at EIN received (record-ein-received).
+  // Banking Fintech is NOT created at EIN (formation ends at EIN; banking is
+  // client self-service). Bundled services tagged start_at_activation (Company
+  // Closure) ARE created right here at payment — see below.
   //
   // Onboarding: SDs created by wizard submit / closing per SOP v7.2.
   //   - Phase 1 Auto-Chain step 6: wizard creates Client Onboarding SD
@@ -660,6 +665,48 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         status: "skipped",
         detail: "formation — no contactId available; cannot create contact-scoped Company Formation SD",
       })
+    }
+
+    // Bundled services that START AT PAYMENT (catalog tag start_at_activation —
+    // today Company Closure). Without this, a paid "Formation + Closure"
+    // contract silently never got its closure (dev job 77b66080). Never throws;
+    // every skip/error is also reported — see lib/operations/activation-start-services.ts.
+    try {
+      let startTypes: string[] = []
+      try {
+        startTypes = await getStartAtActivationServiceTypes()
+      } catch (tagErr) {
+        steps.push({ step: "start_at_activation", status: "error", detail: `catalog lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}` })
+        reportSystemError({
+          source: "server",
+          route: "lib/operations/activate-service",
+          message: `start-at-payment services NOT checked for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): catalog lookup failed`,
+          context: { offerToken: activation.offer_token },
+        }).catch(() => {})
+      }
+      if (startTypes.length > 0) {
+        const selection = selectStartAtActivationPipelines({
+          services: offer?.services,
+          selectedServices: offer?.selected_services,
+          bundledPipelines: offer?.bundled_pipelines,
+          startAtActivationTypes: startTypes,
+        })
+        steps.push(...await createStartAtActivationSDs({
+          offerToken: activation.offer_token,
+          clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
+          contactId,
+          selection,
+        }))
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      steps.push({ step: "start_at_activation", status: "error", detail: msg })
+      reportSystemError({
+        source: "server",
+        route: "lib/operations/activate-service",
+        message: `start-at-payment services failed for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): ${msg} — check the contract's bundled services by hand`,
+        context: { offerToken: activation.offer_token },
+      }).catch(() => {})
     }
   } else if (contractType === "onboarding") {
     steps.push({

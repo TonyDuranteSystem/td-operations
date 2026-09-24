@@ -274,6 +274,28 @@ export async function getStartAtWizardServiceTypes(): Promise<string[]> {
 }
 
 /**
+ * Pipeline / `service_type` names tagged `start_at_activation` — services whose
+ * SD must be created the moment a FORMATION contract is paid, in parallel with
+ * the formation itself, instead of being silently dropped (the formation branch
+ * of activate-service otherwise creates only the Company Formation SD).
+ * Today: Company Closure (closing the client's OLD LLC does not wait for the new
+ * one). Antonio, 2026-09-24 — dev job 77b66080. Data-driven like
+ * start_at_wizard: a new start-at-payment service is a catalog tag, not code.
+ * Tagged via scripts/migrations/20260924-2100-closure-start-at-activation.sql.
+ */
+export async function getStartAtActivationServiceTypes(): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all
+      .filter((e) => e.status === "active" && e.tags.includes("start_at_activation"))
+      .map((e) => e.slug),
+  )
+  return Object.entries(SERVICE_TYPE_TO_SLUG)
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
+}
+
+/**
  * Pipeline / `service_type` names tagged `per_person` — services a single
  * PERSON can only ever hold ONE live instance of, because the real-world thing
  * being delivered is unique to that person. ITIN is the canonical case:
