@@ -794,6 +794,9 @@ describe("generateTranslationsForLanguage — id matching (2026-09-23 curly-apos
 
     expect(result.generated).toBe(0)
     expect(result.failedKeys).toEqual([CURLY_KEY])
+    // The title promises the row is handed back to 'pending' — assert it.
+    const release = chains[4] as { update: ReturnType<typeof vi.fn> }
+    expect(release.update.mock.calls[0][0]).toEqual({ status: "pending", generating_started_at: null })
   })
 })
 
