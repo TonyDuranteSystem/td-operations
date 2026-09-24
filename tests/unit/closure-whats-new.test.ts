@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { decideClosureWhatsNew } from "@/lib/portal/closure-whats-new"
+import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
 
 /** Step 5b of closure-form-completed: when to post / re-post / skip the staff What's New note. */
 describe("decideClosureWhatsNew", () => {
@@ -36,5 +36,28 @@ describe("decideClosureWhatsNew", () => {
   it("closure SD auto-created by this very submission → skip (createSD's own note covers it)", () => {
     expect(decideClosureWhatsNew({ sdWasNewlyCreated: true, dedupeKey: "h2", priorHash: "h1", isGenuineChange: true }).action)
       .toBe("skip")
+  })
+})
+
+describe("shouldReportSwallowedResubmission", () => {
+  const passStartedAt = new Date("2026-09-24T12:00:00Z")
+  const base = { retireFirst: true, retiredCount: 0, emitReason: "already_emitted", passStartedAt }
+
+  it("old note could not be retired and still stands (predates this pass) → report", () => {
+    expect(shouldReportSwallowedResubmission({ ...base, survivingNoteCreatedAt: "2026-09-20T09:00:00Z" })).toBe(true)
+  })
+
+  it("concurrent pass already retired + posted the fresh note during this pass → no false alarm", () => {
+    expect(shouldReportSwallowedResubmission({ ...base, survivingNoteCreatedAt: "2026-09-24T12:00:01Z" })).toBe(false)
+  })
+
+  it("unknown surviving-note time → report (fail loud)", () => {
+    expect(shouldReportSwallowedResubmission({ ...base, survivingNoteCreatedAt: null })).toBe(true)
+  })
+
+  it("not a resubmission, retire worked, or a fresh note was posted → never report", () => {
+    expect(shouldReportSwallowedResubmission({ ...base, retireFirst: false, survivingNoteCreatedAt: null })).toBe(false)
+    expect(shouldReportSwallowedResubmission({ ...base, retiredCount: 1, survivingNoteCreatedAt: null })).toBe(false)
+    expect(shouldReportSwallowedResubmission({ ...base, emitReason: undefined, survivingNoteCreatedAt: null })).toBe(false)
   })
 })

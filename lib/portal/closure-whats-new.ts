@@ -39,3 +39,25 @@ export function decideClosureWhatsNew(params: {
   }
   return { action: "emit", retireFirst: isResubmission, isResubmission }
 }
+
+/**
+ * Should a "resubmission note swallowed" system error be reported? True only
+ * when this pass wanted to replace the old note (retireFirst), retired nothing,
+ * and the emit was deduped against a note that PREDATES this pass. If the
+ * surviving note was posted after this pass started, a concurrent pass (e.g. an
+ * overlapping job retry) already retired the old note and posted the fresh one
+ * — staff were alerted, so reporting would be a false alarm (council round 3).
+ * An unknown note timestamp is treated as "predates" → report (fail loud).
+ */
+export function shouldReportSwallowedResubmission(params: {
+  retireFirst: boolean
+  retiredCount: number
+  emitReason: string | null | undefined
+  survivingNoteCreatedAt: string | null | undefined
+  passStartedAt: Date
+}): boolean {
+  if (!params.retireFirst || params.retiredCount > 0 || params.emitReason !== "already_emitted") return false
+  const noteTime = params.survivingNoteCreatedAt ? new Date(params.survivingNoteCreatedAt).getTime() : NaN
+  if (!Number.isFinite(noteTime)) return true
+  return noteTime < params.passStartedAt.getTime()
+}

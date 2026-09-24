@@ -26,9 +26,10 @@ import { dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 import { reportSystemError } from "@/lib/system-errors"
-import { decideClosureWhatsNew } from "@/lib/portal/closure-whats-new"
+import { decideClosureWhatsNew, shouldReportSwallowedResubmission } from "@/lib/portal/closure-whats-new"
 
 export async function POST(req: NextRequest) {
+  const passStartedAt = new Date()
   try {
     const body = await req.json()
     const { submission_id, token, service_delivery_id: explicitServiceDeliveryId, dedupe_key: dedupeKey } = body as {
@@ -407,10 +408,10 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       results.push({ step: "whats_new", status: "skipped", detail: "new SD — createSD's workflow note already covers it" })
     } else try {
       const { emitClosureWizardSubmittedEvent, retireClosureWizardSubmittedNote } = await import("@/lib/portal/chat-events")
-      let retiredOk = true
+      let retiredCount = 0
       if (whatsNew.retireFirst) {
         const r = await retireClosureWizardSubmittedNote({ closureSubmissionId: submission_id })
-        retiredOk = r.retired > 0
+        retiredCount = r.retired
       }
       const ev = await emitClosureWizardSubmittedEvent({
         closure_submission_id: submission_id,
@@ -426,15 +427,35 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       // missing_recipient is expected for a lead-only legacy submission (no
       // contact/account yet → no staff thread to post into); not an error.
       // Also report a resubmission whose old note could not be retired: the
-      // emit then dedups against it and staff get no fresh alert.
-      const resubmissionSwallowed = whatsNew.retireFirst && !retiredOk && ev.reason === "already_emitted"
+      // emit then dedups against it and staff get no fresh alert — unless the
+      // surviving note was posted DURING this pass by a concurrent run, in
+      // which case staff were alerted and reporting would be a false alarm.
+      let survivingNoteCreatedAt: string | null = null
+      if (whatsNew.retireFirst && retiredCount === 0 && ev.reason === "already_emitted" && ev.message_id) {
+        const { data: surviving } = await supabaseAdmin
+          .from("portal_messages")
+          .select("created_at")
+          .eq("id", ev.message_id)
+          .maybeSingle()
+        survivingNoteCreatedAt = (surviving?.created_at as string | null) ?? null
+      }
+      const resubmissionSwallowed = shouldReportSwallowedResubmission({
+        retireFirst: whatsNew.retireFirst,
+        retiredCount,
+        emitReason: ev.reason,
+        survivingNoteCreatedAt,
+        passStartedAt,
+      })
       if (resubmissionSwallowed || (!ev.emitted && ev.reason !== "already_emitted" && ev.reason !== "missing_recipient")) {
         reportSystemError({
           source: "server",
           route: "/api/closure-form-completed",
           method: "POST",
           message: `closure What's New note not posted for submission ${submission_id}: ${ev.reason ?? ""} ${ev.error ?? ""}`.trim(),
-          context: { submission_id },
+          context: {
+            submission_id,
+            ...(resubmissionSwallowed ? { blocking_note_id: ev.message_id ?? null, blocking_note_created_at: survivingNoteCreatedAt } : {}),
+          },
         }).catch(() => {})
       }
       results.push({
