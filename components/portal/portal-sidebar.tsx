@@ -511,20 +511,18 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       if (selected?.leadId) navHref = `/portal/wizard?type=formation&lead=${encodeURIComponent(selected.leadId)}`
     }
 
+    // NavItemHint renders a real <button> (for its "i" popover) — nesting a
+    // button inside this row's <Link> is invalid HTML (interactive content
+    // inside interactive content), and a click landing on or near that
+    // button calls preventDefault() on the SAME click event the anchor would
+    // otherwise navigate on, silently swallowing the row's own navigation
+    // (found live 2026-09-23: "Complete Setup" did nothing on click). Fixed
+    // by making the hint a SIBLING of the Link, not a descendant — the outer
+    // row's background/active styling moves to this wrapper so the two still
+    // look like one continuous row.
     return (
-      <Link
+      <div
         key={item.href}
-        href={navHref}
-        onClick={() => {
-          setMobileOpen(false)
-          // Clear the Team "NEW" badge once the admin opens the Team page,
-          // even if they never saw the home announcement banner.
-          if (item.key === 'nav.team' && showTeamNew) {
-            try { localStorage.setItem('td-team-access-announce-v1', '1') } catch { /* no-op */ }
-            setShowTeamNew(false)
-          }
-        }}
-        aria-current={isActive(item.href) ? 'page' : undefined}
         className={cn(
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
           isActive(item.href)
@@ -533,20 +531,35 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           (docsPulse || signPulse || billingPulse) && 'animate-pulse'
         )}
       >
-        <item.icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{navLabel}</span>
-        {badge > 0 && (
-          <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
-            {badge > 99 ? '99+' : badge}
-          </span>
-        )}
-        {item.key === 'nav.team' && showTeamNew && (
-          <span className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
-            NEW
-          </span>
-        )}
+        <Link
+          href={navHref}
+          onClick={() => {
+            setMobileOpen(false)
+            // Clear the Team "NEW" badge once the admin opens the Team page,
+            // even if they never saw the home announcement banner.
+            if (item.key === 'nav.team' && showTeamNew) {
+              try { localStorage.setItem('td-team-access-announce-v1', '1') } catch { /* no-op */ }
+              setShowTeamNew(false)
+            }
+          }}
+          aria-current={isActive(item.href) ? 'page' : undefined}
+          className="flex items-center gap-3 flex-1 min-w-0"
+        >
+          <item.icon className="h-4 w-4 shrink-0" />
+          <span className="flex-1">{navLabel}</span>
+          {badge > 0 && (
+            <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
+              {badge > 99 ? '99+' : badge}
+            </span>
+          )}
+          {item.key === 'nav.team' && showTeamNew && (
+            <span className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
+              NEW
+            </span>
+          )}
+        </Link>
         <NavItemHint itemKey={item.key} text={navHintText(item)} label={navLabel} />
-      </Link>
+      </div>
     )
   }
 
