@@ -3628,6 +3628,12 @@ export interface CallWorkerOptions {
    */
   enableClientThreadRead?: boolean
   /**
+   * Tool names to REMOVE from the final list, applied after every enable* flag has added
+   * its tools. Used by surfaces that read stranger-written text and must not hold a tool
+   * the base list carries (e.g. memory_save). Unset = no change for any other caller.
+   */
+  excludeTools?: readonly string[]
+  /**
    * Phase 3 — per-client brain. When set (a tagged client thread), the worker
    * recalls memories scoped to this client and prepends "WHAT WE KNOW ABOUT
    * <clientName>" before answering. clientKey = "account|contact|lead:<id>".
@@ -4926,7 +4932,7 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
         err instanceof Error ? err.message : String(err),
       )
       tools = WORKER_TOOLS
-      systemPrompt = WORKER_SYSTEM_PROMPT
+      systemPrompt = opts.systemPromptOverride ?? WORKER_SYSTEM_PROMPT
     }
   }
 
@@ -5051,6 +5057,11 @@ export async function callWorker(userBody: string, opts: CallWorkerOptions = {})
   }
   if (opts.enableClientThreadRead && !tools.some((t) => t.name === FIND_CLIENT_THREADS_TOOL.name)) {
     tools = [...tools, FIND_CLIENT_THREADS_TOOL]
+  }
+
+  if (opts.excludeTools?.length) {
+    const blocked = new Set(opts.excludeTools)
+    tools = tools.filter((t) => !blocked.has(t.name))
   }
 
   // Multimodal user turn: when images are attached (Slack screenshots), send

@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
+import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -27,6 +28,12 @@ interface WhatsAppMessage {
 
 interface WhatsappThreadProps {
   groupId: string
+  /**
+   * Lets the Worker side panel drop a draft into this message box. Called with the insert
+   * function on mount and with null on unmount; the function returns false when it refuses
+   * (a send is in flight).
+   */
+  registerInsertDraft?: (fn: ((draft: string) => boolean) | null) => void
 }
 
 interface StagedFile {
@@ -50,7 +57,7 @@ function formatTimestamp(dateStr: string) {
   })
 }
 
-export function WhatsappThread({ groupId }: WhatsappThreadProps) {
+export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -152,6 +159,21 @@ export function WhatsappThread({ groupId }: WhatsappThreadProps) {
     }
     saveWhatsAppDraft('reply', groupId, text)
   }, [groupId, text])
+
+  // A draft from the Worker panel goes through the same box the staff member types in and
+  // still needs their own press of Send. Adds below anything already typed (never overwrites),
+  // and drops the confirm screen so what Confirm sends is always what is visibly in the box.
+  useEffect(() => {
+    if (!registerInsertDraft) return
+    registerInsertDraft((draft: string) => {
+      if (sendingRef.current) return false
+      setText((prev) => mergeDraftIntoComposer(prev, draft))
+      setConfirming(false)
+      textareaRef.current?.focus()
+      return true
+    })
+    return () => registerInsertDraft(null)
+  }, [registerInsertDraft])
 
   const sendMutation = useMutation({
     mutationFn: async () => {

@@ -19,6 +19,7 @@ import { ComposeReply } from './compose-reply'
 import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
+import { WhatsAppWorkerPanel } from './whatsapp-worker-panel'
 import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
@@ -134,6 +135,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [restoreToOpen, setRestoreToOpen] = useState(false)
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [workerOpen, setWorkerOpen] = useState(false)
+  const [waWorkerOpen, setWaWorkerOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [shareFromBulk, setShareFromBulk] = useState(false)
@@ -235,6 +237,13 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // ComposeReply only at the moment it freezes a target — never pushed, so
   // MessageThread's 15s poll can't force a re-render here.
   const defaultReplyTargetRef = useRef<(() => Omit<ReplyTarget, 'mode'> | null) | null>(null)
+
+  // The Worker panel beside an open WhatsApp chat hands its drafts to THAT chat's message box
+  // through this registration (same pattern as printRef). The panel closes on ANY change of
+  // selection, including the paths that clear it, so it can never sit open over another chat.
+  const waInsertDraftRef = useRef<((draft: string) => boolean) | null>(null)
+  const registerWaInsertDraft = useCallback((fn: ((draft: string) => boolean) | null) => { waInsertDraftRef.current = fn }, [])
+  useEffect(() => { setWaWorkerOpen(false) }, [selected?.id])
 
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
@@ -1651,9 +1660,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   </p>
                 </div>
 
-                {/* Action buttons — WhatsApp gets Reply only for now; the
-                    AI worker and CRM quick-create actions stay Gmail/Telegram-only
-                    until WhatsApp has its own reviewed assist flow (dev job f331cd43). */}
+                {/* Action buttons — WhatsApp gets Reply plus its own read-only Worker
+                    (dev job 6668385e); the email Worker and the CRM quick-create actions
+                    stay Gmail/Telegram-only. */}
                 <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
                   {!isWhatsApp && (
                     <>
@@ -1695,6 +1704,18 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                       Reply
                     </button>
                   </HoverHint>
+
+                  {selected.channel === 'whatsapp' && whatsappGroupId && (
+                    <HoverHint label="AI worker — reads this chat and the CRM, drafts replies. It cannot send.">
+                      <button
+                        onClick={() => setWaWorkerOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
+                      >
+                        <Bot className="h-3.5 w-3.5" />
+                        Worker
+                      </button>
+                    </HoverHint>
+                  )}
 
                   {!isWhatsApp && (
                     <>
@@ -1911,16 +1932,27 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
               {/* Thread body */}
               {selected.channel === 'whatsapp' && whatsappGroupId ? (
-                <>
-                  <WhatsAppContactMatchBanner
-                    key={whatsappGroupId}
-                    groupId={whatsappGroupId}
-                    onSaved={() => {
-                      queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
-                    }}
-                  />
-                  <WhatsappThread groupId={whatsappGroupId} />
-                </>
+                <div className="flex flex-1 min-h-0">
+                  <div className="flex-1 flex flex-col min-w-0 min-h-0">
+                    <WhatsAppContactMatchBanner
+                      key={whatsappGroupId}
+                      groupId={whatsappGroupId}
+                      onSaved={() => {
+                        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+                      }}
+                    />
+                    <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} />
+                  </div>
+                  {/* Keyed per chat, like WorkerChatPanel below: no state may survive a chat switch. */}
+                  {waWorkerOpen && (
+                    <WhatsAppWorkerPanel
+                      key={whatsappGroupId}
+                      groupId={whatsappGroupId}
+                      onClose={() => setWaWorkerOpen(false)}
+                      onUseDraft={(draft) => waInsertDraftRef.current?.(draft) ?? false}
+                    />
+                  )}
+                </div>
               ) : (
                 <div className="flex flex-1 min-h-0">
                   <div className="flex-1 flex flex-col min-w-0">
