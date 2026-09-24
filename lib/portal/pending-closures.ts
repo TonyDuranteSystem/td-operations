@@ -121,6 +121,16 @@ export function isClosureFormSubmitted(params: {
 }
 
 export async function getPendingClosures(contactId: string): Promise<PendingClosure[]> {
+  return (await getPendingClosuresOrNull(contactId)) ?? []
+}
+
+/**
+ * Same as getPendingClosures, but returns NULL when the closures themselves
+ * could not be looked up (instead of an empty list). For callers that must
+ * tell "nothing owed" apart from "don't know" — e.g. the services page, which
+ * keeps its old button rather than hiding it on a transient DB error.
+ */
+export async function getPendingClosuresOrNull(contactId: string): Promise<PendingClosure[] | null> {
   try {
     const { data: links, error: linksErr } = await supabaseAdmin
       .from("account_contacts")
@@ -154,7 +164,7 @@ export async function getPendingClosures(contactId: string): Promise<PendingClos
         message: `closure SD lookup failed (home-page closure card hidden): ${sdErr.message}`,
         context: { contactId },
       }).catch(() => {})
-      return []
+      return null
     }
     const closures = (sds ?? []) as ClosureSdForCheck[]
     if (closures.length === 0) return []
@@ -216,7 +226,14 @@ export async function getPendingClosures(contactId: string): Promise<PendingClos
       companyName: sd.account_id ? nameById.get(sd.account_id) ?? null : null,
     }))
   } catch (err) {
-    console.error("[getPendingClosures] failed:", err instanceof Error ? err.message : String(err))
-    return []
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error("[getPendingClosures] failed:", msg)
+    reportSystemError({
+      source: "server",
+      route: "lib/portal/pending-closures",
+      message: `getPendingClosures threw (closure card/button state unknown): ${msg}`,
+      context: { contactId },
+    }).catch(() => {})
+    return null
   }
 }

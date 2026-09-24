@@ -32,6 +32,8 @@ interface ServiceDoc {
 
 interface ServiceDetail {
   id: string
+  /** Company Closure only: is this closure's form still owed? null for other types. */
+  closure_form_owed?: boolean | null
   service_name: string
   service_type: string
   status: string
@@ -135,7 +137,10 @@ export default function ServiceDetailPage() {
   }
   const currentStage = service.timeline.find(s => s.status === 'current')
   const isDataCollection = currentStage?.name?.toLowerCase().includes('data collection')
-  const baseWizardUrl = isDataCollection ? WIZARD_URL_MAP[service.service_type] ?? null : null
+  // A closure whose form was already sent shows no "Start Application" button,
+  // even though its stage is still Data Collection (see the API route).
+  const closureAlreadySent = service.service_type === 'Company Closure' && service.closure_form_owed === false
+  const baseWizardUrl = isDataCollection && !closureAlreadySent ? WIZARD_URL_MAP[service.service_type] ?? null : null
   // Closure: open THIS closure's form, not "the newest active closure"
   // (resolveClosureSubject honours sd only for the client's own closures and
   // ignores anything else, e.g. a legacy services-table id).

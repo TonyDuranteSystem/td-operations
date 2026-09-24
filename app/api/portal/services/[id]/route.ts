@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { NextRequest, NextResponse } from 'next/server'
+import { getPendingClosuresOrNull } from '@/lib/portal/pending-closures'
 
 /**
  * GET /api/portal/services/[id] — Get service detail with pipeline stages + timeline
@@ -147,10 +148,25 @@ export async function GET(
     }
   })
 
+  // Company Closure: the closure SD stays in its first stage for months after
+  // the client sends the form, so the page's stage-based "Start Application"
+  // button kept inviting a client to redo a form already sent. Tell the page
+  // whether THIS closure's form is still owed (same per-closure rule as the
+  // home-page closure card — lib/portal/pending-closures.ts).
+  // Only for a real service delivery id (the legacy services-table fallback
+  // has no SD to check → null → the page keeps its old behaviour).
+  // A failed lookup gives null too (unknown → keep the button), never false.
+  let closureFormOwed: boolean | null = null
+  if (sd && serviceBase.service_type === 'Company Closure') {
+    const owed = await getPendingClosuresOrNull(contactId)
+    closureFormOwed = owed === null ? null : owed.some(c => c.serviceDeliveryId === serviceBase.id)
+  }
+
   return NextResponse.json({
     ...serviceBase,
     delivery,
     timeline,
     documents: documents ?? [],
+    closure_form_owed: closureFormOwed,
   })
 }
