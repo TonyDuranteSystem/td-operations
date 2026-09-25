@@ -5,6 +5,7 @@ import { isOwnerOnly } from "@/lib/auth"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { classifyBridge, describeBridgeProblem, type BridgeProblem } from "@/lib/messaging/wabridge-health"
 import { visibleLinkCode } from "@/lib/messaging/wabridge-link"
+import { normalizeSendMode } from "@/lib/messaging/wabridge-outbox"
 
 export const dynamic = "force-dynamic"
 
@@ -55,8 +56,25 @@ export async function GET() {
     )
     const text = worst.health !== "ok" && worst.health !== "unmonitored" ? describeBridgeProblem(worst.health as BridgeProblem) : null
 
+    // Owner only: the pause switch's current position and the numbers allowed while live (never shown to other staff).
+    const sendState = states?.[0] ?? null
+    const send = isOwner && sendState
+      ? {
+          mode: normalizeSendMode(sendState.send_mode),
+          allowlist: sendState.send_allowlist ?? [],
+          pacing: {
+            minGapSeconds: sendState.send_min_gap_seconds,
+            hourlyCap: sendState.send_hourly_cap,
+            dailyCap: sendState.send_daily_cap,
+            distinctPerHour: sendState.send_distinct_per_hour,
+            sameBodyPerHour: sendState.send_same_body_per_hour,
+          },
+        }
+      : null
+
     return NextResponse.json(
       {
+        send,
         health: worst.health,
         isOwner,
         reason: text?.reason ?? null,

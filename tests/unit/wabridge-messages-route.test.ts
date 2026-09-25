@@ -97,6 +97,17 @@ describe("GET /api/inbox/whatsapp/messages/[groupId]", () => {
     expect(r.body.messages.map((m: { id: string }) => m.id)).toEqual(["m1"])
     expect(r.body.send).toBeNull()
   })
+  it("a claimed reply shows as 'sending' for under 2 minutes, then 'unknown' with its id so a person can decide", async () => {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+    st.outbox = [
+      { id: "o1", body: "in flight", status: "unknown", created_at: "2026-09-25T10:04:00Z", claimed_at: ago(20_000), error: null },
+      { id: "o2", body: "never confirmed", status: "unknown", created_at: "2026-09-25T10:05:00Z", claimed_at: ago(10 * 60_000), error: null },
+    ]
+    const r = await get()
+    const byId = Object.fromEntries(r.body.messages.map((m: { id: string }) => [m.id, m]))
+    expect(byId["outbox:o1"]).toMatchObject({ outbox_status: "sending", outbox_id: "o1" })
+    expect(byId["outbox:o2"]).toMatchObject({ outbox_status: "unknown", outbox_id: "o2" })
+  })
   it("a failure reading the queue never hides the chat itself", async () => {
     st.outboxThrows = true
     const r = await get()

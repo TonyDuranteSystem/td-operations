@@ -13100,6 +13100,11 @@ export type Database = {
           names_synced_at: string | null
           reachable: boolean | null
           send_allowlist: string[]
+          send_daily_cap: number
+          send_distinct_per_hour: number
+          send_hourly_cap: number
+          send_min_gap_seconds: number
+          send_same_body_per_hour: number
           send_mode: string
           updated_at: string
         }
@@ -13118,6 +13123,11 @@ export type Database = {
           names_synced_at?: string | null
           reachable?: boolean | null
           send_allowlist?: string[]
+          send_daily_cap?: number
+          send_distinct_per_hour?: number
+          send_hourly_cap?: number
+          send_min_gap_seconds?: number
+          send_same_body_per_hour?: number
           send_mode?: string
           updated_at?: string
         }
@@ -13136,6 +13146,11 @@ export type Database = {
           names_synced_at?: string | null
           reachable?: boolean | null
           send_allowlist?: string[]
+          send_daily_cap?: number
+          send_distinct_per_hour?: number
+          send_hourly_cap?: number
+          send_min_gap_seconds?: number
+          send_same_body_per_hour?: number
           send_mode?: string
           updated_at?: string
         }
@@ -14256,6 +14271,14 @@ export type Database = {
         Returns: boolean
       }
       wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
+      wabridge_claim_send: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_finish_send: {
+        Args: { p_channel_id: string; p_error: string | null; p_message_id: string | null; p_ok: boolean; p_outbox_id: string }
+        Returns: Json
+      }
+      wabridge_resolve_outbox: { Args: { p_action: string; p_outbox_id: string; p_user: string | null }; Returns: Json }
+      wabridge_set_send_allowlist: { Args: { p_channel_id: string; p_digits: string[] }; Returns: Json }
+      wabridge_set_send_mode: { Args: { p_allow_all?: boolean; p_channel_id: string; p_mode: string }; Returns: Json }
       wabridge_enqueue_reply: {
         Args: { p_body: string; p_client_msg_id: string; p_created_by: string | null; p_group_id: string }
         Returns: Json

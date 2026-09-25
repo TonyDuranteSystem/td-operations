@@ -21,6 +21,7 @@ import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { WhatsAppWorkerPanel } from './whatsapp-worker-panel'
 import { WhatsAppBridgeBanner } from './whatsapp-bridge-banner'
+import { WhatsAppSendSwitch } from './whatsapp-send-switch'
 import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
@@ -1420,6 +1421,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
       {/* Self-hosted WhatsApp link health + owner-only Reconnect (pairing code). Renders nothing while healthy. */}
       {isWhatsApp && <WhatsAppBridgeBanner />}
+      {/* Owner-only pause switch + approved numbers for CRM replies (renders nothing for anyone else). */}
+      {isWhatsApp && <WhatsAppSendSwitch />}
 
       {/* Search + Read/Unread filter — WhatsApp. Client-side only (no Gmail-style
           operator search): filters the already-loaded conversations by name or

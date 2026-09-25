@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { OUTBOX_TEAM_LABEL, normalizeSendMode, type SendMode } from "@/lib/messaging/wabridge-outbox"
+import { OUTBOX_TEAM_LABEL, normalizeSendMode, outboxDisplayStatus, type SendMode } from "@/lib/messaging/wabridge-outbox"
 
 export const dynamic = "force-dynamic"
 
@@ -45,7 +45,7 @@ export async function GET(
           const [{ data: rows }, { data: state }] = await Promise.all([
             supabaseAdmin
               .from("wa_outbox")
-              .select("id, body, status, created_at, error")
+              .select("id, body, status, created_at, claimed_at, error")
               .eq("group_id", groupId)
               .neq("status", "sent")
               .order("created_at", { ascending: true }),
@@ -60,7 +60,9 @@ export async function GET(
             created_at: o.created_at,
             content_type: "text",
             media_url: null,
-            outbox_status: o.status,
+            // 'unknown' claimed < 2 min ago is "sending"; older = the Mac never confirmed (a person decides)
+            outbox_status: outboxDisplayStatus(o.status, o.claimed_at, new Date()),
+            outbox_id: o.id,
           }))
           send = {
             mode: normalizeSendMode(state?.send_mode),

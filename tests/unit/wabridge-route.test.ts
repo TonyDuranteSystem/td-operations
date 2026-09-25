@@ -372,3 +372,71 @@ describe("bridge.linkcode (Reconnect from the CRM)", () => {
     expect(JSON.stringify(r.body)).not.toContain("boom")
   })
 })
+
+
+describe("bridge.send.claim / bridge.send.result (the Mac's reply sender)", () => {
+  const OB = "9c1a2b3c-0000-4000-8000-0000000000aa"
+  const claimEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.send.claim", ts: Date.now(), ...over })
+  const resultEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.send.result", ts: Date.now(), outbox_id: OB, ok: true, message_id: "3EB0ABCDEF123456", ...over })
+
+  it("a signed claim asks the database for ONE reply and returns exactly what it answered", async () => {
+    state.rpcOverrides.wabridge_claim_send = { data: { claimed: true, id: OB, to_digits: "17274234285", body: "Ciao!", group_id: "g1" }, error: null }
+    const r = await call(claimEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, claimed: true, id: OB, to_digits: "17274234285", body: "Ciao!", group_id: "g1" })
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_claim_send")?.args).toEqual({ p_channel_id: CHANNEL })
+    expect(state.groupCalls).toHaveLength(0)
+  })
+  it("a refusal (paused, gap, caps…) is a normal 200 with the reason, so the Mac just waits", async () => {
+    state.rpcOverrides.wabridge_claim_send = { data: { claimed: false, reason: "gap", wait_seconds: 42 }, error: null }
+    const r = await call(claimEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, claimed: false, reason: "gap", wait_seconds: 42 })
+  })
+  it("an UNSIGNED or REPLAYED claim never reaches the database (the reply text is only for a signed caller)", async () => {
+    expect((await call(claimEvent(), { sig: null })).status).toBe(401)
+    expect((await call(claimEvent({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_claim_send")).toHaveLength(0)
+  })
+  it("a database failure on a claim is a generic 500 that leaks nothing", async () => {
+    state.rpcOverrides.wabridge_claim_send = { data: null, error: { message: "secret internals" } }
+    const r = await call(claimEvent())
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).not.toContain("secret")
+  })
+
+  it("a signed result is recorded through the database function with the program's message id", async () => {
+    state.rpcOverrides.wabridge_finish_send = { data: { ok: true, status: "sent" }, error: null }
+    const r = await call(resultEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, status: "sent" })
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_finish_send")?.args).toEqual({
+      p_channel_id: CHANNEL, p_outbox_id: OB, p_ok: true, p_message_id: "3EB0ABCDEF123456", p_error: null,
+    })
+  })
+  it("a failed result carries the error and no message id", async () => {
+    state.rpcOverrides.wabridge_finish_send = { data: { ok: true, status: "failed" }, error: null }
+    await call(resultEvent({ ok: false, message_id: undefined, error: "no LID found" }))
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_finish_send")?.args).toEqual({
+      p_channel_id: CHANNEL, p_outbox_id: OB, p_ok: false, p_message_id: null, p_error: "no LID found",
+    })
+  })
+  it("rejects a 'sent' result without a real message id, a bad outbox id, and an unsigned result — before the database", async () => {
+    expect((await call(resultEvent({ message_id: "" }))).status).toBe(400)
+    expect((await call(resultEvent({ outbox_id: "nope" }))).status).toBe(400)
+    expect((await call(resultEvent(), { sig: null })).status).toBe(401)
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_finish_send")).toHaveLength(0)
+  })
+  it("relays the database's refusal (e.g. a row a person discarded cannot be flipped to sent)", async () => {
+    state.rpcOverrides.wabridge_finish_send = { data: { ok: false, code: "not_in_flight", status: "failed" }, error: null }
+    const r = await call(resultEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ ok: false, code: "not_in_flight" })
+  })
+  it("a database error recording a result is a generic 500 (the Mac keeps the message 'unconfirmed', never retries)", async () => {
+    state.rpcOverrides.wabridge_finish_send = { data: null, error: { message: "boom" } }
+    const r = await call(resultEvent())
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).not.toContain("boom")
+  })
+})
