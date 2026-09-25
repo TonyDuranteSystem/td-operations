@@ -6,6 +6,7 @@ import {
   describeOutboxStatus,
   isOutboxPending,
   normalizeSendMode,
+  parseAllowlistInput,
   outboxDisplayStatus,
   parseEnqueueResult,
   parseSendClaim,
@@ -145,5 +146,21 @@ describe("claimBackoffSeconds", () => {
     expect(claimBackoffSeconds("unhealthy")).toBe(30)
     for (const r of ["hourly_cap", "daily_cap", "held"]) expect(claimBackoffSeconds(r)).toBe(60)
     for (const r of ["gap", "in_flight", "nothing_to_send", undefined, "something_new"]) expect(claimBackoffSeconds(r as string | undefined)).toBe(5)
+  })
+})
+
+describe("parseAllowlistInput (the approved-numbers box)", () => {
+  it("keeps numbers typed with spaces, plus signs, brackets and dashes as ONE number each", () => {
+    expect(parseAllowlistInput("+1 727 423 4285")).toEqual(["17274234285"])
+    expect(parseAllowlistInput("(727) 423-4285")).toEqual(["7274234285"])
+    expect(parseAllowlistInput("+1 727 423 4285, +1 727 452 1093")).toEqual(["17274234285", "17274521093"])
+  })
+  it("splits on commas, semicolons and new lines only", () => {
+    expect(parseAllowlistInput("17274234285;17274521093\n393331234567")).toEqual(["17274234285", "17274521093", "393331234567"])
+  })
+  it("drops junk (too short / too long / no digits) and duplicates", () => {
+    expect(parseAllowlistInput("12, abc, 17274234285, 17274234285, +1 727 423 4285, 1234567890123456")).toEqual(["17274234285"])
+    expect(parseAllowlistInput("")).toEqual([])
+    expect(parseAllowlistInput("   ,, ;; ")).toEqual([])
   })
 })

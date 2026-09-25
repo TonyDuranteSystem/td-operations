@@ -51,7 +51,8 @@ export async function GET(
               .order("created_at", { ascending: true }),
             supabaseAdmin.from("wa_bridge_state").select("send_mode").eq("channel_id", group.channel_id).maybeSingle(),
           ])
-          outbox = (rows ?? []).map((o) => ({
+          // a reply a person themselves discarded ("It was not sent") is a decision, not a problem — it does not stay in the chat
+          outbox = (rows ?? []).filter((o) => !(o.status === "failed" && o.error === "discarded by staff")).map((o) => ({
             id: `outbox:${o.id}`,
             content_text: o.body,
             direction: "outbound",

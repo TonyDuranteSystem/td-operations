@@ -177,3 +177,17 @@ export function sendNotice(input: { mode: SendMode; hasInbound: boolean }): { te
   if (input.mode === "shadow") return { text: "Test mode: replies are recorded here but NOT sent to WhatsApp.", tone: "neutral" }
   return null
 }
+
+/**
+ * The approved-numbers box: numbers are typed the way people write them ("+1 727 423 4285", "(727) 423-4285"), so the list is split on
+ * commas, semicolons and new lines ONLY — never on spaces. Each entry is reduced to digits; entries with fewer than 6 or more than 15 digits
+ * are dropped, and duplicates removed. (The database function applies the same rule again; this is what the screen sends.)
+ */
+export function parseAllowlistInput(text: string): string[] {
+  const out: string[] = []
+  for (const part of String(text ?? "").split(/[,;\n]+/)) {
+    const digits = part.replace(/\D/g, "")
+    if (digits.length >= 6 && digits.length <= 15 && !out.includes(digits)) out.push(digits)
+  }
+  return out
+}

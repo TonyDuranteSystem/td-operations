@@ -108,6 +108,15 @@ describe("GET /api/inbox/whatsapp/messages/[groupId]", () => {
     expect(byId["outbox:o1"]).toMatchObject({ outbox_status: "sending", outbox_id: "o1" })
     expect(byId["outbox:o2"]).toMatchObject({ outbox_status: "unknown", outbox_id: "o2" })
   })
+  it("a reply staff discarded is hidden, but a genuine failure stays visible", async () => {
+    st.outbox = [
+      { id: "d1", body: "discarded by a person", status: "failed", created_at: "2026-09-25T10:04:00Z", claimed_at: null, error: "discarded by staff" },
+      { id: "f1", body: "the program said no", status: "failed", created_at: "2026-09-25T10:05:00Z", claimed_at: null, error: "no LID found" },
+    ]
+    const r = await get()
+    expect(r.body.messages.map((m: { id: string }) => m.id)).toEqual(["m1", "outbox:f1"])
+    expect(r.body.messages[1].outbox_status).toBe("failed")
+  })
   it("a failure reading the queue never hides the chat itself", async () => {
     st.outboxThrows = true
     const r = await get()

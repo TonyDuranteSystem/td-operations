@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Send } from 'lucide-react'
+import { parseAllowlistInput } from '@/lib/messaging/wabridge-outbox'
 
 type Mode = 'paused' | 'shadow' | 'live'
 
@@ -78,7 +79,7 @@ export function WhatsAppSendSwitch() {
     }
   }
 
-  const listFromText = () => listText.split(/[\s,;]+/).map((x) => x.replace(/\D/g, '')).filter((x) => x.length >= 6)
+  const listFromText = () => parseAllowlistInput(listText)
 
   return (
     <div className="border-b bg-white px-4 py-2 text-xs">
@@ -138,7 +139,7 @@ export function WhatsAppSendSwitch() {
           </div>
           <div className="space-y-1">
             <label className="block font-medium text-zinc-600" htmlFor="wa-allowlist">
-              Approved numbers (only these can be messaged while Live; digits with country code, separated by commas)
+              Approved numbers (only these can be messaged while Live; with country code, separated by commas)
             </label>
             <div className="flex gap-2">
               <input
