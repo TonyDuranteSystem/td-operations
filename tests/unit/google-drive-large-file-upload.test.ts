@@ -26,10 +26,14 @@ vi.mock('jose', () => ({
 
 const ORIGINAL_SANDBOX = process.env.SANDBOX_MODE
 const ORIGINAL_SA_KEY = process.env.GOOGLE_SA_KEY
+const ORIGINAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 
 beforeEach(() => {
   // driveMocked() must be false so the real upload path runs.
   delete process.env.SANDBOX_MODE
+  // these tests exercise the PRODUCTION upload path; outside the production database the
+  // production-Drive guard (lib/google-drive-guard.ts) would refuse the write first
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://ydzipybqeebtpcvsbtvs.supabase.co'
   process.env.GOOGLE_SA_KEY = Buffer.from(
     JSON.stringify({ client_email: 'test@test.iam.gserviceaccount.com', private_key: 'fake', token_uri: 'https://oauth2.googleapis.com/token' }),
   ).toString('base64')
@@ -38,6 +42,8 @@ beforeEach(() => {
 afterEach(() => {
   if (ORIGINAL_SANDBOX === undefined) delete process.env.SANDBOX_MODE
   else process.env.SANDBOX_MODE = ORIGINAL_SANDBOX
+  if (ORIGINAL_SUPABASE_URL === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+  else process.env.NEXT_PUBLIC_SUPABASE_URL = ORIGINAL_SUPABASE_URL
   if (ORIGINAL_SA_KEY === undefined) delete process.env.GOOGLE_SA_KEY
   else process.env.GOOGLE_SA_KEY = ORIGINAL_SA_KEY
   vi.unstubAllGlobals()
