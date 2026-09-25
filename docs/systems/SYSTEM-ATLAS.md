@@ -189,11 +189,11 @@ _Regenerated 2026-09-25. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-18)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-15)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-25)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-24)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-22)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-25)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-25)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-24)_

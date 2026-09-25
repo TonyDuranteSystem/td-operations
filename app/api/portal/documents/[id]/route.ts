@@ -4,6 +4,7 @@ import { downloadFileBinary } from '@/lib/google-drive'
 import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 
 /**
  * GET /api/portal/documents/[id]
@@ -25,7 +26,7 @@ export async function GET(
   // Get the document
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, account_id, contact_id, drive_file_id')
+    .select('id, file_name, account_id, contact_id, category, drive_file_id')
     .eq('id', params.id)
     .single()
 
@@ -44,6 +45,11 @@ export async function GET(
   const hasAccountAccess = doc.account_id ? await canAccessAccount(user, doc.account_id, 'documents') : false
   const hasContactAccess = !doc.account_id && !!contactId && doc.contact_id === contactId
   if (!hasAccountAccess && !hasContactAccess) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+  // Company access is not enough for a PERSONAL document (passport/ID/ITIN…): only
+  // its own person may open it — never a co-member or a teammate (Master Rules MM6).
+  if (isPersonalDocumentHiddenFrom(doc, contactId)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

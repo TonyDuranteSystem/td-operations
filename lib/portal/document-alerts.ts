@@ -77,6 +77,12 @@ export async function notifyClientsOfNewDocument(documentId: string): Promise<{ 
   if (!doc.portal_visible) return { notified: false, reason: 'not_visible' }
   if (doc.notify_client === false) return { notified: false, reason: 'notify_disabled' }
   if (doc.client_notified_at) return { notified: false, reason: 'already_notified' }
+  // A personal document with no confirmed owner is shown to nobody — so nobody is alerted
+  // (an account-wide alert would put its name in front of every member). Checked BEFORE the
+  // claim below, so the real owner still gets the alert once staff confirm whose it is.
+  if (doc.category === PERSONAL_CATEGORY && !doc.contact_id) {
+    return { notified: false, reason: 'no_recipient' }
+  }
 
   // Mark notified FIRST (TOCTOU guard) — only the call that flips NULL -> now()
   // proceeds, so concurrent uploads/retries can't double-send.
@@ -114,7 +120,9 @@ export async function notifyClientsOfNewDocument(documentId: string): Promise<{ 
   // without an account skip chat (the contact-scoped notification still fires).
   // Best-effort: a chat failure must never undo the alert above.
   try {
-    if (doc.account_id && (await isNewDocumentChatEnabled())) {
+    // Never for a personal document (passport/ID/ITIN…): the company chat is read by every
+    // member, so even the file name would leak — its owner already got the alert above.
+    if (doc.account_id && doc.category !== PERSONAL_CATEGORY && (await isNewDocumentChatEnabled())) {
       const { error: chatError } = await db.from('portal_messages').insert({
         account_id: doc.account_id,
         contact_id: doc.contact_id || null,
