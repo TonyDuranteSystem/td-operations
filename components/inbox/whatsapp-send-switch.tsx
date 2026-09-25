@@ -139,7 +139,7 @@ export function WhatsAppSendSwitch() {
           </div>
           <div className="space-y-1">
             <label className="block font-medium text-zinc-600" htmlFor="wa-allowlist">
-              Approved numbers (only these can be messaged while Live; with country code, separated by commas)
+              Approved numbers (only these can be messaged while Live; with the country code — US numbers start with 1 — separated by commas)
             </label>
             <div className="flex gap-2">
               <input
