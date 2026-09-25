@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   group: { id: "g1" } as { id: string } | { error: string },
   rpcResult: { data: true as unknown, error: null as null | { message: string } },
   rpcOverrides: {} as Record<string, { data: unknown; error: null | { message: string } }>,
+  rpcThrow: {} as Record<string, boolean>,
   rpcCalls: [] as Array<{ fn: string; args: Record<string, unknown> }>,
   groupCalls: [] as Array<Record<string, unknown>>,
   channelLookups: 0,
@@ -28,6 +29,7 @@ vi.mock("@/lib/supabase-admin", () => ({
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
       state.rpcCalls.push({ fn, args })
+      if (state.rpcThrow[fn]) throw new Error("rpc exploded")
       return state.rpcOverrides[fn] ?? state.rpcResult
     },
   },
@@ -52,6 +54,8 @@ const call = async (payload: unknown, opts: { sig?: string | null; raw?: string;
   return { status: res.status, body: await res.json() }
 }
 
+const ingestCall = () => state.rpcCalls.find((c) => c.fn === "wabridge_ingest_message")!
+
 const goodMessage = (over: Record<string, unknown> = {}) => ({
   event: "message",
   device_id: "17274521093@s.whatsapp.net",
@@ -70,6 +74,7 @@ beforeEach(() => {
   state.group = { id: "g1" }
   state.rpcResult = { data: true, error: null }
   state.rpcOverrides = {}
+  state.rpcThrow = {}
   state.rpcCalls = []
   state.groupCalls = []
   state.channelLookups = 0
@@ -79,9 +84,9 @@ describe("POST /api/wa-bridge/[channelId] — live messages", () => {
   it("saves an inbound message through the atomic function (not a backfill)", async () => {
     const r = await call(goodMessage())
     expect(r).toEqual({ status: 200, body: { ok: true } })
-    expect(state.rpcCalls).toHaveLength(1)
-    expect(state.rpcCalls[0].fn).toBe("wabridge_ingest_message")
-    expect(state.rpcCalls[0].args).toMatchObject({
+    // an unlinked chat is offered to the auto-link first, then the message is saved
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_link_chat", "wabridge_ingest_message"])
+    expect(ingestCall().args).toMatchObject({
       p_group_id: "g1", p_channel_id: CHANNEL, p_external_id: "M1", p_direction: "inbound",
       p_sender_phone: "+393331234567", p_content_type: "text", p_content_text: "Ciao",
       p_created_at: "2026-09-24T17:59:00.000Z", p_backfill: false,
@@ -91,7 +96,7 @@ describe("POST /api/wa-bridge/[channelId] — live messages", () => {
 
   it("a phone-typed message is stored outbound, with no sender phone and no group rename", async () => {
     await call(goodMessage({ is_from_me: true, from_name: "Antonio" }))
-    expect(state.rpcCalls[0].args).toMatchObject({ p_direction: "outbound", p_sender_phone: null })
+    expect(ingestCall().args).toMatchObject({ p_direction: "outbound", p_sender_phone: null })
     expect(state.groupCalls[0].groupName).toBeNull()
   })
 
@@ -122,6 +127,42 @@ describe("POST /api/wa-bridge/[channelId] — live messages", () => {
     expect((await call(goodMessage())).status).toBe(500)
     state.group = { error: "group failed" }
     expect((await call(goodMessage())).status).toBe(500)
+  })
+})
+
+describe("POST /api/wa-bridge/[channelId] — automatic linking to a lead/contact", () => {
+  it("offers a live message's UNLINKED chat to the auto-link, with that chat's id", async () => {
+    await call(goodMessage())
+    expect(state.rpcCalls[0]).toEqual({ fn: "wabridge_link_chat", args: { p_group_id: "g1" } })
+  })
+
+  it("does NOT touch a chat that is already linked to a lead, a contact or a company (never overwrite)", async () => {
+    for (const link of [{ lead_id: "L1" }, { contact_id: "C1" }, { account_id: "A1" }]) {
+      state.rpcCalls = []
+      state.group = { id: "g1", ...link } as never
+      await call(goodMessage({ id: "M-" + Object.keys(link)[0] }))
+      expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_ingest_message"])
+    }
+  })
+
+  it("does not auto-link during a history download (the 1-minute sweep does that)", async () => {
+    await call({ event: "bridge.backfill", ts: Date.now(), items: [{ id: "H9", chat: "393339980702", from_me: false, ts: "2026-09-20T10:00:00Z", text: "x", media_type: "", chat_name: "S" }] })
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_ingest_message"])
+  })
+
+  it("links once per chat per request, not once per message", async () => {
+    await call({ event: "bridge.backfill", ts: Date.now(), live: true, items: [1, 2, 3].map((n) => ({ id: "L" + n, chat: "393339980702", from_me: false, ts: "2026-09-24T10:0" + n + ":00Z", text: "m" + n, media_type: "", chat_name: "S" })) })
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_link_chat")).toHaveLength(1)
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_ingest_message")).toHaveLength(3)
+  })
+
+  it("a failing or throwing link attempt NEVER stops the message from being saved", async () => {
+    state.rpcOverrides.wabridge_link_chat = { data: null, error: { message: "link down" } }
+    expect((await call(goodMessage({ id: "F1" }))).body).toEqual({ ok: true })
+    state.rpcOverrides = {}
+    state.rpcThrow.wabridge_link_chat = true
+    expect((await call(goodMessage({ id: "F2" }))).body).toEqual({ ok: true })
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_ingest_message")).toHaveLength(2)
   })
 })
 
@@ -237,10 +278,10 @@ describe("POST /api/wa-bridge/[channelId] — history download (backfill)", () =
 
   it("a catch-up batch marked live:true is saved as LIVE (missed recent messages must count as unread)", async () => {
     await call(batch([item({ id: "CU1" })], { live: true }))
-    expect(state.rpcCalls[0].args).toMatchObject({ p_external_id: "CU1", p_backfill: false })
+    expect(ingestCall().args).toMatchObject({ p_external_id: "CU1", p_backfill: false })
     state.rpcCalls = []
     await call(batch([item({ id: "CU2" })], { live: "true" })) // only a real boolean true counts
-    expect(state.rpcCalls[0].args).toMatchObject({ p_backfill: true })
+    expect(ingestCall().args).toMatchObject({ p_backfill: true })
   })
 
   it("makes ONE chat lookup per distinct chat in a batch, not one per message", async () => {
