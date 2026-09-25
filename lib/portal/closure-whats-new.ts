@@ -4,12 +4,11 @@
  * Antonio, 2026-09-24). Kept out of the route file (Next.js route modules may
  * only export handlers) so every branch is unit-tested.
  *
- *  - skip:        step 3 just auto-created the closure SD, so createSD's own
- *                 workflow_spawned note already announces this same event —
- *                 or this is a REPLAY (retry) of the submission that created
- *                 it. A genuine correction of that same submission is NOT
- *                 skipped (council round 3: it would create a staff task
- *                 with no What's New note).
+ *  - never skipped any more (dev job e2fee7e7, 2026-09-24): creating a
+ *                 service no longer posts ANY What's New note, so the client's
+ *                 own closure submission is always the one that lights the
+ *                 purple dot — even when this submission itself created the
+ *                 SD. A replay is made a no-op by the marker dedup.
  *  - resubmission: the row was processed before (a prior content hash exists)
  *                 AND this content differs → retire the old note, post a
  *                 fresh "resubmitted" one.
@@ -19,7 +18,7 @@
  *  resubmission — there is no way to tell a correction from a replay.
  */
 export interface ClosureWhatsNewDecision {
-  action: "skip" | "emit"
+  action: "emit"
   retireFirst: boolean
   isResubmission: boolean
 }
@@ -33,10 +32,8 @@ export function decideClosureWhatsNew(params: {
   isGenuineChange: boolean
 }): ClosureWhatsNewDecision {
   const isResubmission = !!params.dedupeKey && !!params.priorHash && params.isGenuineChange
-  if (params.sdWasNewlyCreated) return { action: "skip", retireFirst: false, isResubmission: false }
-  if (params.sdCreatedFromThisSubmission && !isResubmission) {
-    return { action: "skip", retireFirst: false, isResubmission: false }
-  }
+  // sdWasNewlyCreated / sdCreatedFromThisSubmission no longer suppress the
+  // note (kept in the signature for callers/tests; see header).
   return { action: "emit", retireFirst: isResubmission, isResubmission }
 }
 

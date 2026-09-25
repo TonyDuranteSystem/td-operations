@@ -8,6 +8,8 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { createSD, deactivateSD, reactivateSD } from "@/lib/operations/service-delivery"
+import { promptClientForClosureForm } from "@/lib/portal/closure-client-prompt"
+import { getServiceBySlugStatic } from "@/lib/services"
 
 export function registerOperationsTools(server: McpServer) {
 
@@ -960,8 +962,18 @@ export function registerOperationsTools(server: McpServer) {
       amount: z.number().optional().describe("Service amount"),
       amount_currency: z.string().optional().default("USD").describe("Currency (default: USD)"),
       notes: z.string().optional(),
+      notify_client: z.boolean().optional().default(false).describe("Company Closure only. true = SENDS the client a portal chat message + bell + EMAIL asking them to fill in the closure form. Default false. This is a client-facing send: show Antonio the intent and get his explicit OK before passing true. If the closure already exists, passing true (re)sends the prompt for the existing one."),
+      force: z.boolean().optional().default(false).describe("Company Closure + notify_client only. Send even though an older closure form of this client's is on file (the prompt is otherwise HELD in case it is the same company)."),
     },
-    async ({ service_type, account_id, contact_id, deal_id, service_name, assigned_to, amount, amount_currency, notes }) => {
+    async ({ service_type, account_id, contact_id, deal_id, service_name, assigned_to, amount, amount_currency, notes, notify_client, force }) => {
+      const isClosure = service_type === getServiceBySlugStatic("closure")?.display_name
+      const promptLine = async (sdId: string): Promise<string | null> => {
+        if (!isClosure) return null
+        if (!notify_client) return "📭 Client NOT notified (notify_client=false). Pass notify_client=true (after Antonio's OK) to ask them to fill in the closure form."
+        const o = await promptClientForClosureForm({ serviceDeliveryId: sdId, force })
+        const icon = o.status === "sent" ? "📨" : o.status === "failed" ? "❌" : "⏸️"
+        return `${icon} Client prompt (${o.status}): ${o.reason}${o.canForce ? " — re-run with notify_client=true, force=true to send anyway." : ""}`
+      }
       try {
         if (!account_id && !contact_id) {
           return { content: [{ type: "text" as const, text: "❌ Either account_id or contact_id is required. Use account_id for LLC services, contact_id for individual clients." }] }
@@ -1032,7 +1044,8 @@ export function registerOperationsTools(server: McpServer) {
         const { data: existingSD } = await idempotencyQuery
 
         if (existingSD?.length) {
-          return { content: [{ type: "text" as const, text: `⚠️ Active "${service_type}" delivery already exists for this account:\n  ID: ${existingSD[0].id}\n  Name: ${existingSD[0].service_name}\n  Stage: ${existingSD[0].stage}\n\nUse sd_advance_stage to progress it, or complete/cancel it before creating a new one.` }] }
+          const existingPrompt = notify_client ? await promptLine(existingSD[0].id) : null
+          return { content: [{ type: "text" as const, text: `⚠️ Active "${service_type}" delivery already exists for this account:\n  ID: ${existingSD[0].id}\n  Name: ${existingSD[0].service_name}\n  Stage: ${existingSD[0].stage}\n\nUse sd_advance_stage to progress it, or complete/cancel it before creating a new one.${existingPrompt ? `\n\n${existingPrompt}` : ""}` }] }
         }
 
         // Get first pipeline stage
@@ -1121,6 +1134,8 @@ export function registerOperationsTools(server: McpServer) {
           lines.push(`\n📝 Auto-created ${createdTasks.length} tasks:`)
           for (const t of createdTasks) lines.push(`  • ${t}`)
         }
+        const prompt = await promptLine(delivery.id)
+        if (prompt) lines.push(`\n${prompt}`)
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
       } catch (error) {

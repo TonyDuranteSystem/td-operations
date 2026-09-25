@@ -23,9 +23,10 @@ describe("decideClosureWhatsNew", () => {
       .toEqual({ action: "emit", retireFirst: false, isResubmission: false })
   })
 
-  it("retry of the submission that CREATED the SD (identical content / legacy no-key) → skip", () => {
-    expect(decideClosureWhatsNew({ sdWasNewlyCreated: false, sdCreatedFromThisSubmission: true, dedupeKey: "h1", priorHash: "h1", isGenuineChange: false }).action).toBe("skip")
-    expect(decideClosureWhatsNew({ sdWasNewlyCreated: false, sdCreatedFromThisSubmission: true, dedupeKey: null, priorHash: null, isGenuineChange: true }).action).toBe("skip")
+  it("retry of the submission that CREATED the SD → emit (the marker dedup makes a replay a no-op); never retires", () => {
+    expect(decideClosureWhatsNew({ sdWasNewlyCreated: false, sdCreatedFromThisSubmission: true, dedupeKey: "h1", priorHash: "h1", isGenuineChange: false }))
+      .toEqual({ action: "emit", retireFirst: false, isResubmission: false })
+    expect(decideClosureWhatsNew({ sdWasNewlyCreated: false, sdCreatedFromThisSubmission: true, dedupeKey: null, priorHash: null, isGenuineChange: true }).action).toBe("emit")
   })
 
   it("genuine CORRECTION of the submission that created the SD → emit as resubmission (council round 3)", () => {
@@ -33,9 +34,9 @@ describe("decideClosureWhatsNew", () => {
       .toEqual({ action: "emit", retireFirst: true, isResubmission: true })
   })
 
-  it("closure SD auto-created by this very submission → skip (createSD's own note covers it)", () => {
-    expect(decideClosureWhatsNew({ sdWasNewlyCreated: true, dedupeKey: "h2", priorHash: "h1", isGenuineChange: true }).action)
-      .toBe("skip")
+  it("closure SD auto-created by this very submission → still emits (creating a service posts no What's New note any more)", () => {
+    expect(decideClosureWhatsNew({ sdWasNewlyCreated: true, dedupeKey: null, priorHash: null, isGenuineChange: true }))
+      .toEqual({ action: "emit", retireFirst: false, isResubmission: false })
   })
 })
 

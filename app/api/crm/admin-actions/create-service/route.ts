@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createTDInvoice } from '@/lib/portal/td-invoice'
+import { promptClientForClosureForm, type ClosurePromptOutcome } from '@/lib/portal/closure-client-prompt'
+import { getServiceBySlugStatic } from '@/lib/services'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -77,7 +79,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json()
-  const { account_id, contact_id, service_type, notes, skip_invoice } = body
+  const { account_id, contact_id, service_type, notes, skip_invoice, notify_client } = body
 
   if (!service_type) {
     return NextResponse.json({ error: 'service_type is required' }, { status: 400 })
@@ -126,7 +128,18 @@ export async function POST(request: NextRequest) {
           contactId: data.contact_id ?? null,
         })
 
-    return NextResponse.json({ success: true, data, invoice })
+    // Staff-opened Company Closure → ask the client to fill in the closure form
+    // (dev job e2fee7e7). Only when the dialog's "Notify client" box was ticked:
+    // an absent flag means NO message (older callers, scripts). The helper never
+    // throws and never posts to What's New — the client's own submission does.
+    let client_prompt: ClosurePromptOutcome | null = null
+    if (service_type === getServiceBySlugStatic('closure')?.display_name) {
+      client_prompt = notify_client === true
+        ? await promptClientForClosureForm({ serviceDeliveryId: data.id })
+        : { status: 'skipped', reason: 'Client not notified ("Notify client" was unticked).' }
+    }
+
+    return NextResponse.json({ success: true, data, invoice, client_prompt })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ error: msg }, { status: 500 })
