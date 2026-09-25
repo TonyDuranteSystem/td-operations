@@ -47,6 +47,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/hermes-bridge": "*/5 * * * *",
   "/api/cron/approval-executor": "*/5 * * * *",
   "/api/cron/hermes-health": "*/5 * * * *",
+  // Self-hosted WhatsApp bridge watchdog (dev job 907b2535) — emails once when the bridge stops reporting.
+  "/api/cron/wa-bridge-watch": "*/5 * * * *",
   "/api/cron/invoice-overdue": "0 9 * * *",
   // Monthly IRS yearly-average FX rate import (2026-07-06) — insert-only,
   // fail-closed; see lib/tax/irs-fx-import.ts.

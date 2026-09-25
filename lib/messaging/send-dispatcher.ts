@@ -102,10 +102,24 @@ async function sendVia2Chat(
   return { ok: true, result }
 }
 
+// Self-hosted linked-device bridge (GOWA on the Mac Mini). Receive-only for now — a send needs the
+// bridge's outbox, which is a later phase. Fail loudly rather than silently pretend to send.
+async function sendViaWabridge(
+  _chatId: string,
+  _message: string,
+  _channelId: string,
+  _options: SendOptions
+): Promise<SendResult> {
+  throw new Error(
+    "Sending from the CRM is not switched on for the self-hosted WhatsApp link yet — reply from the phone for now."
+  )
+}
+
 const PROVIDER_HANDLERS: Record<string, ProviderHandler> = {
   meta: sendViaMeta,
   twilio: sendViaTwilio,
   twochat: sendVia2Chat,
+  wabridge: sendViaWabridge,
 }
 
 export interface DispatchParams {

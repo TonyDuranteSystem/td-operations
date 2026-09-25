@@ -10,6 +10,8 @@
  * failed alert must never break the webhook response 2Chat is waiting on.
  */
 
+import { escapeHtml } from "@/lib/html-escape"
+
 const FROM_HEADER = "Tony Durante CRM <support@tonydurante.us>"
 const DEFAULT_ALERT_EMAIL = "support@tonydurante.us"
 
@@ -17,7 +19,13 @@ export interface DisconnectAlertParams {
   channelName: string
   reason: string
   notifyEmail?: string
+  /** What to do about it. Defaults to the 2Chat re-scan wording (the original caller). */
+  hint?: string
+  /** Footer attribution. Defaults to the 2Chat webhook. */
+  source?: string
 }
+
+const DEFAULT_HINT = "open 2Chat and re-scan the QR code for this number."
 
 /** Pure — builds the RFC 2822 raw message. Split out so it's unit-testable without Gmail. */
 export function buildDisconnectAlertEmail(params: DisconnectAlertParams): { to: string; raw: string } {
@@ -27,11 +35,11 @@ export function buildDisconnectAlertEmail(params: DisconnectAlertParams): { to: 
     <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#1a1a1a">
       <h2 style="color:#b91c1c;margin:0 0 12px 0">A WhatsApp number disconnected</h2>
       <table style="border-collapse:collapse;margin:12px 0">
-        <tr><td style="padding:4px 8px;font-weight:bold">Number</td><td style="padding:4px 8px">${params.channelName}</td></tr>
-        <tr><td style="padding:4px 8px;font-weight:bold">Reason</td><td style="padding:4px 8px">${params.reason}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:bold">Number</td><td style="padding:4px 8px">${escapeHtml(params.channelName)}</td></tr>
+        <tr><td style="padding:4px 8px;font-weight:bold">Reason</td><td style="padding:4px 8px">${escapeHtml(params.reason)}</td></tr>
       </table>
-      <p>Messages to this number will not be received or sendable until it's reconnected — open 2Chat and re-scan the QR code for this number.</p>
-      <p style="color:#6b7280;font-size:12px">Sent automatically by the 2Chat webhook.</p>
+      <p>Messages to this number will not be received or sendable until it's reconnected — ${escapeHtml(params.hint ?? DEFAULT_HINT)}</p>
+      <p style="color:#6b7280;font-size:12px">Sent automatically by ${escapeHtml(params.source ?? "the 2Chat webhook")}.</p>
     </div>`
   const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
   const raw = [

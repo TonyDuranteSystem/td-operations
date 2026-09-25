@@ -38,6 +38,10 @@ const PUBLIC_PREFIXES = [
   '/api/sync-drive',
   '/api/sync-airtable',
   '/api/webhooks',
+  // Self-hosted WhatsApp bridge (Mac Mini). Public because the bridge has no CRM login; the route
+  // authenticates every call with an HMAC of the body keyed on the channel's own secret. Deliberately
+  // NOT under /api/webhooks, which the sandbox guard below 503s.
+  '/api/wa-bridge',
   '/api/cron',
   // Team @claude worker runner — server-to-server only (direct fire from the
   // send route + Vercel cron rescue). Self-auths via CRON_SECRET Bearer inside
