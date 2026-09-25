@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { InboxConversation } from "@/lib/types"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { resolveChatName } from "@/lib/messaging/chat-name"
 
 export const dynamic = "force-dynamic"
 
@@ -34,7 +35,7 @@ export async function GET() {
     const { data: groups, error: grpErr } = await supabaseAdmin
       .from("messaging_groups")
       .select(
-        "id, group_name, account_id, contact_id, lead_id, last_message_at, unread_count, pinned"
+        "id, group_name, external_group_id, account_id, contact_id, lead_id, last_message_at, unread_count, pinned"
       )
       .in("channel_id", channelIds)
       .eq("is_active", true)
@@ -48,6 +49,22 @@ export async function GET() {
     }
 
     const groupIds = groups.map((g) => g.id)
+
+    // Names of the linked CRM records, read live — the CRM is the source of truth for people it knows, so
+    // renaming a contact/lead there renames the chat here (lib/messaging/chat-name.ts). A chat with no link
+    // falls back to the name saved on the phone, then to the formatted number — never "Unknown".
+    const uniq = (xs: Array<string | null>) => Array.from(new Set(xs.filter((x): x is string => !!x)))
+    const contactIds = uniq(groups.map((g) => g.contact_id))
+    const leadIds = uniq(groups.map((g) => g.lead_id))
+    const accountIds = uniq(groups.map((g) => g.account_id))
+    const [contactRows, leadRows, accountRows] = await Promise.all([
+      contactIds.length ? supabaseAdmin.from("contacts").select("id, full_name").in("id", contactIds) : Promise.resolve({ data: [] }),
+      leadIds.length ? supabaseAdmin.from("leads").select("id, full_name").in("id", leadIds) : Promise.resolve({ data: [] }),
+      accountIds.length ? supabaseAdmin.from("accounts").select("id, company_name").in("id", accountIds) : Promise.resolve({ data: [] }),
+    ])
+    const contactNames = new Map((contactRows.data ?? []).map((r) => [r.id, r.full_name as string | null]))
+    const leadNames = new Map((leadRows.data ?? []).map((r) => [r.id, r.full_name as string | null]))
+    const accountNames = new Map((accountRows.data ?? []).map((r) => [r.id, r.company_name as string | null]))
 
     // Step 3: get latest message preview per group
     // Fetch the most recent messages and pick first per group client-side
@@ -76,7 +93,13 @@ export async function GET() {
       return {
         id: `whatsapp:${group.id}`,
         channel: "whatsapp" as const,
-        name: group.group_name ?? "Unknown",
+        name: resolveChatName({
+          contactName: group.contact_id ? contactNames.get(group.contact_id) : null,
+          leadName: group.lead_id ? leadNames.get(group.lead_id) : null,
+          accountName: group.account_id ? accountNames.get(group.account_id) : null,
+          savedName: group.group_name,
+          externalGroupId: group.external_group_id,
+        }),
         preview: preview?.content_text ?? "",
         lastMessageAt: group.last_message_at ?? new Date(0).toISOString(),
         unread: group.unread_count ?? 0,

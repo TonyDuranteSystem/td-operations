@@ -147,4 +147,48 @@ describe("findOrCreateWhatsAppGroup", () => {
     expect("group" in result).toBe(true)
     expect((result as { group: typeof existing }).group).toEqual(existing)
   })
+
+  it("reuses a LEGACY bare-digit chat when the canonical key has none — no second thread (bridge cutover)", async () => {
+    const legacy = { id: "old1", channel_id: "ch1", external_group_id: "17274521093", group_name: "Old import" }
+    const maybeSingle = vi.fn().mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: legacy, error: null })
+    const eq2 = vi.fn(() => ({ maybeSingle }))
+    const eq1 = vi.fn(() => ({ eq: eq2 }))
+    const select = vi.fn(() => ({ eq: eq1 }))
+    const upsert = vi.fn()
+    ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockReturnValue({ select, upsert })
+
+    const result = await findOrCreateWhatsAppGroup({ channelId: "ch1", remoteIdentifier: "+1 (727) 452-1093" })
+
+    expect((result as { group: typeof legacy }).group).toEqual(legacy)
+    expect(upsert).not.toHaveBeenCalled() // nothing created
+    // canonical lookup first, then the bare-digit key
+    expect(eq2).toHaveBeenNthCalledWith(1, "external_group_id", "17274521093@c.us")
+    expect(eq2).toHaveBeenNthCalledWith(2, "external_group_id", "17274521093")
+  })
+
+  it("the canonical chat wins when BOTH keys exist (an already-split thread is not made worse)", async () => {
+    const canonical = { id: "new1", channel_id: "ch1", external_group_id: "17274521093@c.us", group_name: "Canon" }
+    const maybeSingle = vi.fn().mockResolvedValueOnce({ data: canonical, error: null })
+    const eq2 = vi.fn(() => ({ maybeSingle }))
+    const eq1 = vi.fn(() => ({ eq: eq2 }))
+    const select = vi.fn(() => ({ eq: eq1 }))
+    ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockReturnValue({ select, upsert: vi.fn() })
+
+    const result = await findOrCreateWhatsAppGroup({ channelId: "ch1", remoteIdentifier: "17274521093" })
+    expect((result as { group: typeof canonical }).group).toEqual(canonical)
+    expect(maybeSingle).toHaveBeenCalledTimes(1) // no second lookup needed
+  })
+
+  it("returns an error when the LEGACY-key lookup fails (never falls through to create a duplicate)", async () => {
+    const maybeSingle = vi.fn().mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: null, error: { message: "legacy lookup down" } })
+    const eq2 = vi.fn(() => ({ maybeSingle }))
+    const eq1 = vi.fn(() => ({ eq: eq2 }))
+    const select = vi.fn(() => ({ eq: eq1 }))
+    const upsert = vi.fn()
+    ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockReturnValue({ select, upsert })
+
+    const result = await findOrCreateWhatsAppGroup({ channelId: "ch1", remoteIdentifier: "17274521093" })
+    expect((result as { error: string }).error).toContain("legacy lookup down")
+    expect(upsert).not.toHaveBeenCalled()
+  })
 })

@@ -97,6 +97,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/wa-bridge-watch",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     },

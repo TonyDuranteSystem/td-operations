@@ -27,4 +27,25 @@ describe("buildDisconnectAlertEmail", () => {
     })
     expect(to).toBe("luca@tonydurante.us")
   })
+
+  it("escapes HTML in the channel name, reason and hint (the reason now comes from a remote bridge)", () => {
+    const { raw } = buildDisconnectAlertEmail({ channelName: "<b>x</b>", reason: "<script>alert(1)</script>", hint: "<img src=x onerror=1>" })
+    const decoded = Buffer.from(raw, "base64url").toString("utf-8")
+    const html = Buffer.from(decoded.split("\r\n\r\n")[1], "base64").toString("utf-8")
+    expect(html).not.toContain("<script>")
+    expect(html).not.toContain("<img")
+    expect(html).toContain("&lt;script&gt;")
+  })
+
+  it("keeps the 2Chat wording by default and uses a custom hint and source when given", () => {
+    const dec = (p: Parameters<typeof buildDisconnectAlertEmail>[0]) => {
+      const d = Buffer.from(buildDisconnectAlertEmail(p).raw, "base64url").toString("utf-8")
+      return Buffer.from(d.split("\r\n\r\n")[1], "base64").toString("utf-8")
+    }
+    expect(dec({ channelName: "n", reason: "r" })).toContain("re-scan the QR code")
+    const custom = dec({ channelName: "n", reason: "r", hint: "Check the Mac Mini.", source: "the bridge watchdog" })
+    expect(custom).toContain("Check the Mac Mini.")
+    expect(custom).toContain("the bridge watchdog")
+    expect(custom).not.toContain("2Chat")
+  })
 })

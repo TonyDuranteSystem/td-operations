@@ -10,7 +10,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { toWhatsAppJid } from "@/lib/messaging/phone"
+import { digitsOnly, toWhatsAppJid } from "@/lib/messaging/phone"
 
 export interface FindOrCreateGroupParams {
   channelId: string
@@ -50,7 +50,7 @@ export async function findOrCreateWhatsAppGroup(
 ): Promise<{ group: MessagingGroupRow } | { error: string }> {
   const externalGroupId = toWhatsAppJid(params.remoteIdentifier)
 
-  const { data: existing, error: lookupError } = await supabaseAdmin
+  const { data: canonical, error: lookupError } = await supabaseAdmin
     .from("messaging_groups")
     .select("id, channel_id, external_group_id, group_name, account_id, contact_id, lead_id")
     .eq("channel_id", params.channelId)
@@ -59,6 +59,24 @@ export async function findOrCreateWhatsAppGroup(
 
   if (lookupError) {
     return { error: `messaging_groups lookup failed: ${lookupError.message}` }
+  }
+
+  // The historical import wrote a BARE-DIGIT key (~169 production chats). If the canonical key has no chat but
+  // the legacy key does, that is the SAME conversation — reuse it, or the first message after the cutover would
+  // open a second, empty thread next to the imported history (the exact split this helper was written to prevent).
+  // The legacy key is left as it is: normalizing stored keys touches real client data and needs Antonio's own go.
+  let existing = canonical
+  if (!existing) {
+    const { data: legacy, error: legacyError } = await supabaseAdmin
+      .from("messaging_groups")
+      .select("id, channel_id, external_group_id, group_name, account_id, contact_id, lead_id")
+      .eq("channel_id", params.channelId)
+      .eq("external_group_id", digitsOnly(params.remoteIdentifier))
+      .maybeSingle()
+    if (legacyError) {
+      return { error: `messaging_groups lookup failed: ${legacyError.message}` }
+    }
+    existing = legacy
   }
   if (existing) {
     const row = existing as MessagingGroupRow

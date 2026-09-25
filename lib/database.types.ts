@@ -13036,6 +13036,53 @@ export type Database = {
         }
         Relationships: []
       }
+      wa_bridge_state: {
+        Row: {
+          alerted_state: string | null
+          bad_beats: number
+          channel_id: string
+          connected: boolean | null
+          dropped_lid_count: number
+          last_dropped_at: string | null
+          last_heartbeat_at: string | null
+          logged_in: boolean | null
+          reachable: boolean | null
+          updated_at: string
+        }
+        Insert: {
+          alerted_state?: string | null
+          bad_beats?: number
+          channel_id: string
+          connected?: boolean | null
+          dropped_lid_count?: number
+          last_dropped_at?: string | null
+          last_heartbeat_at?: string | null
+          logged_in?: boolean | null
+          reachable?: boolean | null
+          updated_at?: string
+        }
+        Update: {
+          alerted_state?: string | null
+          bad_beats?: number
+          channel_id?: string
+          connected?: boolean | null
+          dropped_lid_count?: number
+          last_dropped_at?: string | null
+          last_heartbeat_at?: string | null
+          logged_in?: boolean | null
+          reachable?: boolean | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_bridge_state_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: true
+            referencedRelation: "messaging_channels"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       wizard_progress: {
         Row: {
           account_id: string | null
@@ -14119,6 +14166,40 @@ export type Database = {
       update_client_health: { Args: never; Returns: number }
       viewas_restore_last_sign_in: {
         Args: { p_ts: string; p_user_id: string }
+        Returns: undefined
+      }
+      wabridge_apply_names: {
+        Args: { p_channel_id: string; p_names: Json }
+        Returns: number
+      }
+      wabridge_count_dropped: { Args: { p_channel_id: string }; Returns: undefined }
+      wabridge_ingest_message: {
+        Args: {
+          p_backfill?: boolean
+          p_channel_id: string
+          p_content_text: string
+          p_content_type: string
+          p_created_at: string
+          p_direction: string
+          p_external_id: string
+          p_group_id: string
+          p_metadata: Json
+          p_sender_name: string | null
+          p_sender_phone: string | null
+        }
+        Returns: boolean
+      }
+      wabridge_record_heartbeat: {
+        Args: {
+          p_channel_id: string
+          p_connected: boolean
+          p_logged_in: boolean
+          p_reachable: boolean
+        }
+        Returns: undefined
+      }
+      wabridge_set_alerted: {
+        Args: { p_channel_id: string; p_state: string | null }
         Returns: undefined
       }
     }
