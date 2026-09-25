@@ -8,8 +8,10 @@
 
 export const OUTBOX_TEAM_LABEL = "TD Team"
 
-export type OutboxStatus = "shadow" | "queued" | "sent" | "failed" | "unknown"
-const STATUSES: readonly string[] = ["shadow", "queued", "sent", "failed", "unknown"]
+/** Every value wa_outbox.status may hold — registered against the database CHECK in lib/db-contract.ts. */
+export const OUTBOX_STATUSES = ["shadow", "queued", "sent", "failed", "unknown"] as const
+export type OutboxStatus = (typeof OUTBOX_STATUSES)[number]
+const STATUSES: readonly string[] = OUTBOX_STATUSES
 
 export type EnqueueResult =
   | { ok: true; id: string; status: OutboxStatus; duplicate: boolean }
@@ -83,7 +85,9 @@ export function isOutboxPending(status: string): boolean {
   return status === "queued"
 }
 
-export type SendMode = "paused" | "shadow" | "live"
+/** Every value wa_bridge_state.send_mode may hold — registered against the database CHECK in lib/db-contract.ts. */
+export const SEND_MODES = ["paused", "shadow", "live"] as const
+export type SendMode = (typeof SEND_MODES)[number]
 
 /** Fail closed: anything that is not exactly 'shadow' or 'live' is paused. */
 export function normalizeSendMode(value: unknown): SendMode {
