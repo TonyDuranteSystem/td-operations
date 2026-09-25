@@ -41,6 +41,7 @@ import { AccountOfferPanel, type OfferData } from '@/components/offers/account-o
 import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -2922,6 +2923,7 @@ function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
   const [notes, setNotes] = useState('')
   const [creating, setCreating] = useState(false)
   const [skipInvoice, setSkipInvoice] = useState(false)
+  const [notifyClient, setNotifyClient] = useState(true)
   const [options, setOptions] = useState<ServiceCatalogOption[]>([])
   const [loadingOptions, setLoadingOptions] = useState(false)
 
@@ -2963,22 +2965,24 @@ function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
     const res = await fetch('/api/crm/admin-actions/create-service', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_id: accountId, service_type: serviceType, notes: notes.trim() || undefined, skip_invoice: skipInvoice }),
+      body: JSON.stringify({ account_id: accountId, service_type: serviceType, notes: notes.trim() || undefined, skip_invoice: skipInvoice, notify_client: isClosureServiceType(serviceType) ? notifyClient : undefined }),
     })
     const data = await res.json()
     setCreating(false)
     if (data.success) {
       toast.success(skipInvoice ? `${serviceType} created (no invoice)` : `${serviceType} created`)
+      showClosurePromptToast(data.client_prompt, data.data?.id)
       setServiceType('')
       setNotes('')
       setSkipInvoice(false)
+      setNotifyClient(true)
       onClose()
     } else {
       toast.error(data.error ?? 'Failed to create service')
     }
   }
 
-  const handleClose = () => { setServiceType(''); setNotes(''); setSkipInvoice(false); onClose() }
+  const handleClose = () => { setServiceType(''); setNotes(''); setSkipInvoice(false); setNotifyClient(true); onClose() }
 
   return (
     <>
@@ -3026,6 +3030,9 @@ function AddServiceDialog({ open, onClose, accountId, existingTypes }: {
                 <span className="block text-xs text-muted-foreground">Tick this when the service was already paid (e.g. bundled into another offer). Otherwise a draft invoice is auto-created.</span>
               </span>
             </label>
+            {isClosureServiceType(serviceType) && (
+              <ClosureNotifyCheckbox checked={notifyClient} onChange={setNotifyClient} />
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={handleClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
               <button onClick={handleCreate} disabled={creating || !serviceType}

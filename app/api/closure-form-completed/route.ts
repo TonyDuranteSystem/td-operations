@@ -434,9 +434,7 @@ ${taxFiled === "no" ? `<li style="color:#d97706"><strong>FINAL TAX RETURN may be
       priorHash: sub.last_processed_hash as string | null,
       isGenuineChange,
     })
-    if (whatsNew.action === "skip") {
-      results.push({ step: "whats_new", status: "skipped", detail: "new SD — createSD's workflow note already covers it" })
-    } else try {
+    try {
       const { emitClosureWizardSubmittedEvent, retireClosureWizardSubmittedNote } = await import("@/lib/portal/chat-events")
       let retiredCount = 0
       if (whatsNew.retireFirst) {

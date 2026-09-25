@@ -620,18 +620,16 @@ async function dispatchWorkflowForSdCreatedInner(
     }
   }
 
-  // Emit portal-chat topic message (red unread dot) — non-fatal.
-  await emitTopicForWorkflow({
-    matched,
-    contact_id: delivery.contact_id ?? null,
-    account_id: delivery.account_id ?? null,
-    task_id: spawn.task_id,
-    context: {
-      service_name: delivery.service_name ?? delivery.service_type,
-      service_type: delivery.service_type,
-      stage: delivery.stage ?? undefined,
-    },
-  })
+  // NO What's New note here (Antonio, 2026-09-24 — dev job e2fee7e7).
+  // What's New / the purple dot means "the CLIENT did something" — Luca works
+  // from it. Creating a service is never itself a client action: staff adding
+  // one by hand is a staff action (the old default note read "Client triggered
+  // Company Closure", which was false), and at payment the client's action is
+  // already announced by the payment_received note ("Client paid …"). Every
+  // client FORM that creates a service posts its own "Client submitted …" note
+  // (formation / onboarding / banking / tax / closure / ITIN review). The
+  // workflow TASK above is still created. form_submission workflows still emit
+  // their note (dispatchWorkflowForFormCompletion → emitTopicForWorkflow).
 
   return {
     spawned: true,

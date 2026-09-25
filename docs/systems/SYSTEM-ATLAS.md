@@ -194,7 +194,7 @@ _Regenerated 2026-09-25. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-24)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-22)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-09-24)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-09-25)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-24)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
@@ -207,7 +207,7 @@ _Regenerated 2026-09-25. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-23)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-23)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-24)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-09-25)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
@@ -220,6 +220,6 @@ _Regenerated 2026-09-25. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-09-24)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-09)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-08-26)_
-- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-24)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-07-22)_
+- [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-25)_
 <!-- /GENERATED:deep-docs -->

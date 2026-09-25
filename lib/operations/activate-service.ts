@@ -14,14 +14,16 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { selectStartAtActivationPipelines, createStartAtActivationSDs } from "@/lib/operations/activation-start-services"
-import { getStartAtActivationServiceTypes } from "@/lib/services"
+import { getStartAtActivationServiceTypes, getServiceBySlugStatic } from "@/lib/services"
 import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
-import { getWelcomeMessage, renderTemplate } from "@/lib/portal/welcome-message"
+import { getWelcomeMessage, renderTemplate, getClosureWelcomeAddendum, shouldAppendClosureAddendum } from "@/lib/portal/welcome-message"
+import { getPendingClosuresOrNull } from "@/lib/portal/pending-closures"
+import { localeFromLanguage } from "@/lib/locale"
 import { creditReferrerForLead, decideReferralAutoCredit, issueReferralCreditNote, resolveOfferCommission, shouldRecoverReferralCredit } from "@/lib/operations/referral"
 import { shouldRunReferralCredit, buildPartnerDeal } from "@/lib/partners/partner-deal"
 import { findTaxReturnService } from "@/lib/tax-return-context"
@@ -1048,8 +1050,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         }
         if (!companyName) companyName = activation.client_name || undefined
 
-        const language: "it" | "en" =
-          contact?.language === "it" || contact?.language === "Italian" ? "it" : "en"
+        const language: "it" | "en" = localeFromLanguage(contact?.language)
 
         // ONE combined welcome per offer (Antonio's locked decision): for
         // bundled offers, getWelcomeMessage picks the highest-priority template
@@ -1098,7 +1099,36 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             wizardUrl: appendOffer(template.wizardPath ?? "/portal/wizard"),
           }
           const title = renderTemplate(template.title, vars)
-          const body = renderTemplate(template.body, vars)
+          let body = renderTemplate(template.body, vars)
+
+          // Closure line (dev job e2fee7e7): only one welcome goes out, and
+          // closure's template has the lowest priority, so a paid contract that
+          // also includes a Company Closure never told the client a closure
+          // form is waiting. Decided from what the client actually owes NOW —
+          // the same check as the portal home card — after the start-at-payment
+          // step above created the closure. Best-effort: never blocks the welcome.
+          // Only when THIS contract bought a closure (bundled list or a bought
+          // line) — an old, unrelated owed closure must not leak into e.g. a
+          // Tax Return welcome.
+          const closureType = getServiceBySlugStatic("closure")?.display_name ?? "Company Closure"
+          const contractHasClosure =
+            pipelines.includes(closureType) ||
+            selectStartAtActivationPipelines({
+              services: offer?.services,
+              selectedServices: offer?.selected_services,
+              bundledPipelines: offer?.bundled_pipelines,
+              startAtActivationTypes: [closureType],
+            }).pipelines.length > 0
+          if (template.slug !== "closure" && contractHasClosure) {
+            try {
+              const owed = await getPendingClosuresOrNull(contactId)
+              if (shouldAppendClosureAddendum({ winnerSlug: template.slug, contractHasClosure, closureOwed: !!owed && owed.length > 0 })) {
+                body = `${body}\n\n${await getClosureWelcomeAddendum(language)}`
+              }
+            } catch (e) {
+              console.error("[activate-service] closure welcome line failed:", e)
+            }
+          }
           const link = appendOffer(template.wizardPath ?? "/portal")
 
           createPortalNotification({

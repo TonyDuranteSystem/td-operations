@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { Briefcase, FileText, X, Loader2 } from 'lucide-react'
 import { InvoiceDialog } from '@/components/shared/invoice-dialog'
 import { createInvoice } from '@/app/(dashboard)/shared/invoice-actions'
@@ -133,6 +134,7 @@ function ServicePicker({
   const [serviceType, setServiceType] = useState('')
   const [notes, setNotes] = useState('')
   const [creating, setCreating] = useState(false)
+  const [notifyClient, setNotifyClient] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -161,18 +163,19 @@ function ServicePicker({
       const res = await fetch('/api/crm/admin-actions/create-service', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, contact_id: contactId, service_type: serviceType, notes: notes.trim() || undefined }),
+        body: JSON.stringify({ account_id: accountId, contact_id: contactId, service_type: serviceType, notes: notes.trim() || undefined, notify_client: isClosureServiceType(serviceType) ? notifyClient : undefined }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || !d.success) throw new Error(d.error || 'Could not create the service')
       toast.success(`${serviceType} created`)
+      showClosurePromptToast(d.client_prompt, d.data?.id)
       onCreated()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create the service')
     } finally {
       setCreating(false)
     }
-  }, [serviceType, notes, accountId, contactId, creating, onCreated])
+  }, [serviceType, notes, accountId, contactId, creating, onCreated, notifyClient])
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
@@ -205,6 +208,9 @@ function ServicePicker({
             <label className="block text-[11px] font-medium text-zinc-500 mb-1">Note (optional)</label>
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full text-sm border rounded px-2 py-1.5 resize-none" />
           </div>
+          {isClosureServiceType(serviceType) && (
+            <ClosureNotifyCheckbox checked={notifyClient} onChange={setNotifyClient} />
+          )}
           <button
             disabled={!serviceType || creating}
             onClick={create}
