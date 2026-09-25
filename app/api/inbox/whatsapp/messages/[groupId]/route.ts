@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { OUTBOX_TEAM_LABEL, normalizeSendMode, type SendMode } from "@/lib/messaging/wabridge-outbox"
 
 export const dynamic = "force-dynamic"
 
@@ -31,7 +32,48 @@ export async function GET(
 
     if (error) throw error
 
-    return NextResponse.json({ messages: data ?? [] })
+    // Self-hosted WhatsApp line only: replies still waiting / in test mode / not confirmed / failed live in wa_outbox until the Mac has
+    // sent them (a SENT reply becomes an ordinary message row). They are shown in the chat labelled "TD Team", with their state.
+    // `send` tells the screen whether replying is allowed. Everything here is best-effort: a failure must not hide the chat itself.
+    let outbox: Array<Record<string, unknown>> = []
+    let send: { mode: SendMode; hasInbound: boolean } | null = null
+    try {
+      const { data: group } = await supabaseAdmin.from("messaging_groups").select("channel_id").eq("id", groupId).maybeSingle()
+      if (group?.channel_id) {
+        const { data: channel } = await supabaseAdmin.from("messaging_channels").select("provider").eq("id", group.channel_id).maybeSingle()
+        if (channel?.provider === "wabridge") {
+          const [{ data: rows }, { data: state }] = await Promise.all([
+            supabaseAdmin
+              .from("wa_outbox")
+              .select("id, body, status, created_at, error")
+              .eq("group_id", groupId)
+              .neq("status", "sent")
+              .order("created_at", { ascending: true }),
+            supabaseAdmin.from("wa_bridge_state").select("send_mode").eq("channel_id", group.channel_id).maybeSingle(),
+          ])
+          outbox = (rows ?? []).map((o) => ({
+            id: `outbox:${o.id}`,
+            content_text: o.body,
+            direction: "outbound",
+            sender_name: OUTBOX_TEAM_LABEL,
+            sender_phone: null,
+            created_at: o.created_at,
+            content_type: "text",
+            media_url: null,
+            outbox_status: o.status,
+          }))
+          send = {
+            mode: normalizeSendMode(state?.send_mode),
+            hasInbound: (data ?? []).some((m) => m.direction === "inbound"),
+          }
+        }
+      }
+    } catch (outboxErr) {
+      console.warn("WhatsApp outbox overlay failed (chat still loads):", outboxErr instanceof Error ? outboxErr.message : String(outboxErr))
+    }
+
+    const messages = [...(data ?? []), ...outbox].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    return NextResponse.json({ messages, send })
   } catch (error) {
     console.error("WhatsApp messages error:", error)
     return NextResponse.json(

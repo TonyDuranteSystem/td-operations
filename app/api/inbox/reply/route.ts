@@ -6,6 +6,9 @@ import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging"
+import { createClient } from "@/lib/supabase/server"
+import { isStaffUser } from "@/lib/auth"
+import { parseEnqueueResult, refusalHttpStatus } from "@/lib/messaging/wabridge-outbox"
 import {
   parseStagedAttachmentInputs,
   loadStagedEmailAttachments,
@@ -31,13 +34,15 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath, clientMsgId } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
       mailbox?: string
       /** Staged WhatsApp attachment path (whatsapp-new/<uuid>.<ext>) — see lib/messaging/attachment-staging.ts. */
       attachmentPath?: string
+      /** Self-hosted WhatsApp line only: one id per composed draft, so a retry / double click / second tab never sends twice. */
+      clientMsgId?: string
       /** "gala" | "hat" | "text". Replies default to text-only. */
       signature_variant?: string
       /** Which specific Gmail message this replies to — always sent by the
@@ -262,6 +267,47 @@ export async function POST(req: NextRequest) {
     // Edge Function below no longer exists in this repo (docs/systems/messaging.md)
     // and every WhatsApp reply through this route failed until this branch existed.
     if (channel === "whatsapp") {
+      // The self-hosted link (provider 'wabridge') never sends inline: the reply is checked by the database rules and QUEUED for the
+      // Mac's sender. Reply-only (the person must have written to this number), text only, paused by default, "TD Team" label.
+      // The dispatcher below is deliberately NOT used for this line — it records a message as sent the moment the provider answers.
+      const { data: ch } = await supabaseAdmin
+        .from("messaging_channels")
+        .select("provider")
+        .eq("id", group.channel_id)
+        .maybeSingle()
+      if (ch?.provider === "wabridge") {
+        // requireStaffRoute above lets a PARTNER through (isDashboardUser = "not a client"); a send to a client must be staff only.
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!isStaffUser(user)) {
+          return NextResponse.json({ error: "Only the TD team can send WhatsApp replies from the CRM." }, { status: 403 })
+        }
+        if (attachmentPath) {
+          return NextResponse.json(
+            { error: "Attachments cannot be sent from the CRM on this WhatsApp line yet — text only." },
+            { status: 400 }
+          )
+        }
+        const { data: enq, error: enqError } = await supabaseAdmin.rpc("wabridge_enqueue_reply", {
+          p_group_id: conversationId,
+          p_body: message,
+          p_client_msg_id: typeof clientMsgId === "string" ? clientMsgId : "",
+          p_created_by: user?.id ?? null,
+        })
+        const result = enqError ? parseEnqueueResult(null) : parseEnqueueResult(enq)
+        if (result.ok === false) {
+          return NextResponse.json({ error: result.message }, { status: refusalHttpStatus(result.code) })
+        }
+        return NextResponse.json({
+          success: true,
+          channel: "whatsapp",
+          queued: true,
+          status: result.status,
+          outboxId: result.id,
+          duplicate: result.duplicate,
+        })
+      }
+
       let mediaUrl: string | undefined
       if (attachmentPath) {
         const resolved = await resolveWhatsAppAttachmentUrl(attachmentPath)
