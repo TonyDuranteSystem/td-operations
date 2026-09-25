@@ -10,6 +10,7 @@
  * All calls target the "Tony Durante LLC" Shared Drive.
  */
 
+import { assertDriveWriteAllowed, type DriveWriteTarget } from "./google-drive-guard"
 import { SignJWT, importPKCS8 } from "jose"
 
 // ─── Configuration ──────────────────────────────────────────
@@ -72,6 +73,22 @@ const OWNER_DRIVE_ROOT_FOLDER_ID = () =>
  */
 function driveMocked(): boolean {
   return process.env.SANDBOX_MODE === "1" && process.env.GOOGLE_DRIVE_LIVE !== "1"
+}
+
+/**
+ * Hard guard for every LIVE write: outside the production database, the write target
+ * must sit inside the configured TEST Shared Drive (never the production drive, never
+ * My Drive). See lib/google-drive-guard.ts. Called right after each write's mock check.
+ */
+const driveIdCache = new Map<string, string | null>()
+async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
+  await assertDriveWriteAllowed(target, async (id) => {
+    if (driveIdCache.has(id)) return driveIdCache.get(id) ?? null
+    const meta = (await driveGet(`/files/${id}`, { fields: "id,driveId" })) as { driveId?: string }
+    const driveId = meta.driveId ?? null
+    driveIdCache.set(id, driveId)
+    return driveId
+  })
 }
 
 // ─── Token Management ───────────────────────────────────────
@@ -392,6 +409,7 @@ export async function uploadFile(
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFile', fileName })
     return { id: 'sandbox-mock', name: fileName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   return driveUpload(fileName, content, mimeType, parentFolderId)
 }
 
@@ -409,6 +427,7 @@ export async function updateFileContent(
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateFileContent', fileId })
     return { id: fileId, name: newName ?? 'sandbox-mock' }
   }
+  await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
 
   const boundary = "----DriveUpdateBoundary"
@@ -457,6 +476,7 @@ export async function renameFile(fileId: string, newName: string) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'renameFile', fileId })
     return { id: fileId, name: newName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -489,6 +509,7 @@ export async function createFolder(parentFolderId: string, folderName: string) {
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolder', folderName })
     return { id: 'sandbox-mock', name: folderName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -529,6 +550,7 @@ export async function moveFile(
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'moveFile', fileId, newParentId })
     return { id: fileId }
   }
+  await guardDriveWrite({ kind: "shared", ids: [fileId, newParentId] })
   const token = await getAccessToken()
 
   // Get current parents
@@ -598,6 +620,7 @@ export async function createFolderMyDrive(parentFolderId: string, folderName: st
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'createFolderMyDrive', folderName })
     return { id: 'sandbox-mock', name: folderName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
   const res = await fetch(
@@ -640,6 +663,7 @@ export async function uploadFileMyDrive(
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadFileMyDrive', fileName })
     return { id: 'sandbox-mock', name: fileName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
   const boundary = "----DriveUploadBoundary"
@@ -692,6 +716,7 @@ export async function ensureDrivePath(rootFolderId: string, pathSegments: string
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'ensureDrivePath', pathSegments })
     return 'sandbox-mock-folder-id'
   }
+  await guardDriveWrite({ kind: "shared", ids: [rootFolderId] })
   let currentParent = rootFolderId
 
   for (const segment of pathSegments) {
@@ -804,6 +829,7 @@ export async function uploadBinaryToDrive(
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'uploadBinaryToDrive', fileName })
     return { id: 'sandbox-mock', name: fileName }
   }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
   const token = await getAccessToken()
 
   if (data.length > MULTIPART_SAFE_MAX_BYTES) {
@@ -922,6 +948,7 @@ export async function updateBinaryFile(fileId: string, data: Buffer, mimeType: s
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'updateBinaryFile', fileId })
     return { id: fileId, name: 'sandbox-mock' }
   }
+  await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
   const boundary = "----DriveUpdateBinaryBoundary"
 
@@ -1111,6 +1138,7 @@ export async function trashFile(fileId: string): Promise<{ id: string; name: str
     console.warn('[SANDBOX] Drive write blocked:', { operation: 'trashFile', fileId })
     return { id: fileId, name: 'sandbox-blocked' }
   }
+  await guardDriveWrite({ kind: "shared", ids: [fileId] })
   const token = await getAccessToken()
 
   const res = await fetch(
