@@ -13046,6 +13046,7 @@ export type Database = {
           last_dropped_at: string | null
           last_heartbeat_at: string | null
           logged_in: boolean | null
+          names_synced_at: string | null
           reachable: boolean | null
           updated_at: string
         }
@@ -13058,6 +13059,7 @@ export type Database = {
           last_dropped_at?: string | null
           last_heartbeat_at?: string | null
           logged_in?: boolean | null
+          names_synced_at?: string | null
           reachable?: boolean | null
           updated_at?: string
         }
@@ -13070,6 +13072,7 @@ export type Database = {
           last_dropped_at?: string | null
           last_heartbeat_at?: string | null
           logged_in?: boolean | null
+          names_synced_at?: string | null
           reachable?: boolean | null
           updated_at?: string
         }
@@ -14189,6 +14192,10 @@ export type Database = {
         }
         Returns: boolean
       }
+      wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
+      wabridge_link_unlinked: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_name_tokens: { Args: { n: string }; Returns: string[] }
+      wabridge_names_agree: { Args: { a: string; b: string }; Returns: boolean | null }
       wabridge_record_heartbeat: {
         Args: {
           p_channel_id: string

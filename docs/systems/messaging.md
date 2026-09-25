@@ -194,6 +194,34 @@ phone <-WhatsApp-> GOWA (127.0.0.1:3001, launchd com.td.wa-bridge, ~/wa-bridge)
   Everything dedupes on the WhatsApp message id, so both are safe to re-run. What the store holds is what the phone synced at
   pairing (measured 2026-09-24: 224 one-to-one chats, 552 messages — the most recent few per chat); older history would need
   per-chat on-demand requests to the phone (`POST /chat/:jid/history`), not built.
+- **Automatic chat → lead/contact linking (2026-09-25, Antonio: "recognize the phone number, not Unknown … immediately").** Migration
+  `20260925-0100-wabridge-auto-link.sql`: `wabridge_link_chat(group)` links ONE chat, `wabridge_link_unlinked(channel)` sweeps a channel and
+  returns jsonb counts per outcome, `wabridge_names_agree(a,b)` / `wabridge_name_tokens(n)` are the name check. Rules (deliberately
+  conservative — a wrong link puts a real person's messages under someone else's name): NEVER overwrite an existing lead/contact/account
+  link; match on the FULL number (all digits equal, any stored format — the 2026-09-18 ruling, never last-N digits); exactly ONE person must
+  match (a lead and the contact it was converted into, `leads.converted_to_contact_id`, are one person; two different people sharing a
+  number = `ambiguous` = left for a human); test leads and merged contacts ignored. SECOND SIGNAL, the NAME (added after a sandbox check
+  found 5 of 45 same-number links pointing at a person with a completely different name, and tightened after the bug-hunter review): when
+  the chat carries a comparable name (the phone-saved name, or the sender's WhatsApp name), one name must be FULLY CONTAINED in the other,
+  word for word — accents/case ignored, words under 3 letters ignored. "Barnabas" ⊂ "Barnabás Zahola" agrees; "Maria Rossi" vs "Marco Rossi"
+  does NOT (a shared surname is not enough); a nickname like "Ste" vs "Stefano" does NOT (goes to a person); a disagreement = `mismatch` =
+  left unlinked. A chat with NO comparable name on either side (null, "Unknown", just a number, non-Latin script such as Arabic, initials
+  only) can only be matched on the number — allowed ONLY once the phone's names have been synced into that channel at least once
+  (`wa_bridge_state.names_synced_at`, stamped by `wabridge_apply_names`) AND the chat is at least 3 minutes old, so a recycled number cannot be
+  linked to its old owner in the window before the real name arrives; until then the outcome is `waiting`. Two triggers: (1) a LIVE message for
+  a still-unlinked chat calls `wabridge_link_chat` inside the receiver's `ingest()` (best-effort, failures logged as a warning — it can never
+  fail or delay the save; not run for history downloads); (2) `/api/cron/wa-bridge-link` (every minute, CRON_SECRET fail-closed) runs the sweep,
+  which is what makes "I saved the number on the lead" take effect within about a minute WITHOUT a trigger on the core lead/contact tables. The
+  cron logs the per-outcome counts (`linked` / `mismatch` / `ambiguous` / `waiting` / `none`) so held-back chats are visible in the cron log.
+  Measured 2026-09-25 on the sandbox copy of the 180 real chats (one clean pass, then undone): 40 would link, 5 mismatch, 3 ambiguous, 132 have
+  no CRM record with that number. A wrong link is undone by clearing the chat's link (existing link UI); the functions never touch a chat that
+  already has one. NOT built: a staff-facing list of held-back chats and a "possible match by name" suggestion for CRM records with no phone
+  number (needs UI); numbers stored without a country code (e.g. a 10-digit US number) or with a leading 0 do not match by design.
+- **Names every minute:** `~/wa-bridge/names-cycle.sh` (launchd `com.td.wa-bridge-names`, 60 s) runs `sync.mjs names`, which reads the
+  phone's saved names LOCALLY and only contacts the CRM when they changed (hash in `storages/names.hash`; `--force` bypasses it); the
+  15-minute job keeps only the live-message catch-up. Scheduled jobs MUST be registered with `launchctl bootstrap gui/$UID <plist>` — jobs
+  loaded with the legacy `launchctl load` from a tool shell showed `runs = 0 / uninitialized` and never fired (found 2026-09-24; the
+  heartbeat and sync jobs had not been running on their own).
 - **Production cutover runbook (rehearsed in sandbox 2026-09-24 — NOT yet run in production; each step needs Antonio's per-item "ship it"):**
   1. Merge the code and get a production deploy READY (auto-deploy from main is unreliable — verify, then `vercel deploy --prod` from a
      clean clone). Safe before the switch: the receiver 404s any channel that is not `provider='wabridge'` and the watchdog finds none.

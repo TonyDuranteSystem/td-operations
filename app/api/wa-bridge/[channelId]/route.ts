@@ -165,6 +165,18 @@ async function ingest(
     if ("error" in groupResult) return "error"
     groupId = groupResult.group.id
     groupCache.set(m.remoteDigits, groupId)
+
+    // A LIVE message for a chat that is not yet linked to a lead/contact/company: try to link it on the spot (exact number,
+    // one person, names agree — rules in wabridge_link_chat). Never blocks or fails the save: the 1-minute sweep is the safety net.
+    const g = groupResult.group
+    if (!backfill && !g.lead_id && !g.contact_id && !g.account_id) {
+      try {
+        const { error: linkError } = await supabaseAdmin.rpc("wabridge_link_chat", { p_group_id: groupId })
+        if (linkError) console.warn("[wa-bridge] auto-link failed (the 1-minute sweep will retry):", linkError.message)
+      } catch (err) {
+        console.warn("[wa-bridge] auto-link threw (the 1-minute sweep will retry):", err instanceof Error ? err.message : String(err))
+      }
+    }
   }
 
   const { data: inserted, error } = await supabaseAdmin.rpc("wabridge_ingest_message", {
