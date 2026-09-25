@@ -147,6 +147,13 @@ export const NOT_A_VOCABULARY = new Set([
   // Shape rule, not a vocabulary: an invoice belonging to an offer's payment plan must carry BOTH
   // the offer and the part number, or neither. A part number without an offer identifies nothing.
   "payments_tranche_pair_check",
+  // TEMPORARY (2026-09-25, WhatsApp replies from the CRM, stage 1): these two ARE value lists, not shape rules. They cannot be registered in
+  // CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not contain them until Antonio runs migration
+  // 20260925-2000-wabridge-outbox.sql in production, and registering them first makes "PRODUCTION accepts every value the code can write"
+  // fail. Once production has the migration and the snapshot is refreshed, MOVE both into CONSTRAINT_CONTRACTS using OUTBOX_STATUSES and
+  // SEND_MODES (already exported from lib/messaging/wabridge-outbox.ts) and delete these two lines. Tracked on dev job e23343a6.
+  "wa_bridge_state_send_mode_check",
+  "wa_outbox_status_check",
 ])
 
 /**

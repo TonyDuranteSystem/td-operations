@@ -13036,6 +13036,54 @@ export type Database = {
         }
         Relationships: []
       }
+      wa_outbox: {
+        Row: {
+          body: string
+          channel_id: string
+          claimed_at: string | null
+          client_msg_id: string
+          created_at: string
+          created_by: string | null
+          error: string | null
+          external_message_id: string | null
+          group_id: string
+          id: string
+          sent_at: string | null
+          status: string
+          to_digits: string
+        }
+        Insert: {
+          body: string
+          channel_id: string
+          claimed_at?: string | null
+          client_msg_id: string
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          external_message_id?: string | null
+          group_id: string
+          id?: string
+          sent_at?: string | null
+          status: string
+          to_digits: string
+        }
+        Update: {
+          body?: string
+          channel_id?: string
+          claimed_at?: string | null
+          client_msg_id?: string
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          external_message_id?: string | null
+          group_id?: string
+          id?: string
+          sent_at?: string | null
+          status?: string
+          to_digits?: string
+        }
+        Relationships: []
+      }
       wa_bridge_state: {
         Row: {
           alerted_state: string | null
@@ -13051,6 +13099,8 @@ export type Database = {
           link_code_at: string | null
           names_synced_at: string | null
           reachable: boolean | null
+          send_allowlist: string[]
+          send_mode: string
           updated_at: string
         }
         Insert: {
@@ -13067,6 +13117,8 @@ export type Database = {
           link_code_at?: string | null
           names_synced_at?: string | null
           reachable?: boolean | null
+          send_allowlist?: string[]
+          send_mode?: string
           updated_at?: string
         }
         Update: {
@@ -13083,6 +13135,8 @@ export type Database = {
           link_code_at?: string | null
           names_synced_at?: string | null
           reachable?: boolean | null
+          send_allowlist?: string[]
+          send_mode?: string
           updated_at?: string
         }
         Relationships: [
@@ -14202,6 +14256,10 @@ export type Database = {
         Returns: boolean
       }
       wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
+      wabridge_enqueue_reply: {
+        Args: { p_body: string; p_client_msg_id: string; p_created_by: string | null; p_group_id: string }
+        Returns: Json
+      }
       wabridge_link_unlinked: { Args: { p_channel_id: string }; Returns: Json }
       wabridge_set_link_code: { Args: { p_channel_id: string; p_code: string }; Returns: boolean }
       wabridge_name_tokens: { Args: { n: string }; Returns: string[] }

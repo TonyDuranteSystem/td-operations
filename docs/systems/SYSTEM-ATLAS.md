@@ -107,7 +107,7 @@ _Regenerated 2026-09-25 by directory scan._
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
 - API route groups (91)
 - Code modules (68): `ai-agent` `audit` `auth` `billing` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `code-tasks` `crm-storage` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
-- Database tables: 173 _(ground truth: `lib/database.types.ts`)_
+- Database tables: 174 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
 ## Seed priority — write these deep docs first
@@ -195,7 +195,7 @@ _Regenerated 2026-09-25. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-25)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-25)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-08-02)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-25)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-25)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_

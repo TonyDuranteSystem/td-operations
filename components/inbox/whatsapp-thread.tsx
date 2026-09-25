@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  OUTBOX_TEAM_LABEL,
+  describeOutboxStatus,
+  isOutboxPending,
+  sendNotice,
+  type SendMode,
+} from '@/lib/messaging/wabridge-outbox'
 import { Send, Loader2, Paperclip, Sparkles, X, Smile } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -24,6 +31,8 @@ interface WhatsAppMessage {
   created_at: string
   content_type: string | null
   media_url: string | null
+  /** Self-hosted line only: a reply still in the CRM's queue (waiting / test mode / not confirmed / failed). */
+  outbox_status?: string | null
 }
 
 interface WhatsappThreadProps {
@@ -60,6 +69,14 @@ function formatTimestamp(dateStr: string) {
 export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
+  // One id per composed draft: a retry, double click or second tab of the SAME draft can never send twice (the server dedupes on it).
+  const clientMsgRef = useRef<{ groupId: string; id: string } | null>(null)
+  const getClientMsgId = () => {
+    if (!clientMsgRef.current || clientMsgRef.current.groupId !== groupId) {
+      clientMsgRef.current = { groupId, id: crypto.randomUUID() }
+    }
+    return clientMsgRef.current.id
+  }
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
@@ -118,13 +135,15 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showEmojiPicker])
 
-  const { data, isLoading, error } = useQuery<{ messages: WhatsAppMessage[] }>({
+  const { data, isLoading, error } = useQuery<{ messages: WhatsAppMessage[]; send?: { mode: SendMode; hasInbound: boolean } | null }>({
     queryKey: ['whatsapp-messages', groupId],
     queryFn: () =>
       fetch(`/api/inbox/whatsapp/messages/${encodeURIComponent(groupId)}`).then((r) =>
         r.json()
       ),
-    refetchInterval: 60_000,
+    // 5 s while one of our replies is still waiting to be sent, otherwise the usual minute
+    refetchInterval: (query) =>
+      query.state.data?.messages?.some((m) => m.outbox_status && isOutboxPending(m.outbox_status)) ? 5_000 : 60_000,
   })
 
   useEffect(() => {
@@ -185,6 +204,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           message: text,
           channel: 'whatsapp',
           attachmentPath: file?.path,
+          clientMsgId: getClientMsgId(),
         }),
       })
       if (!res.ok) {
@@ -193,7 +213,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
       }
       return res.json()
     },
-    onSuccess: () => {
+    onSuccess: (result: { status?: string }) => {
+      clientMsgRef.current = null // the next draft gets a fresh id
+      if (result?.status === 'shadow') toast.info('Test mode: your reply was recorded but NOT sent to WhatsApp.')
       setText('')
       setFile(null)
       setConfirming(false)
@@ -265,7 +287,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   }
 
   const handleOpenConfirm = () => {
-    if (!text.trim()) return
+    if (!text.trim() || !canSend) return
     if (uploading) {
       toast.error('Wait for the attachment to finish uploading.')
       return
@@ -284,6 +306,10 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   }
 
   const messages = data?.messages ?? []
+  // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
+  const notice = data?.send ? sendNotice(data.send) : null
+  const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
+  const textOnly = !!data?.send
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -349,8 +375,18 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                       {msg.content_text}
                     </p>
                   )}
+                  {msg.outbox_status && describeOutboxStatus(msg.outbox_status) && (
+                    <p
+                      className={cn(
+                        'text-[11px] mt-1 font-medium',
+                        describeOutboxStatus(msg.outbox_status)?.tone === 'bad' ? 'text-red-600' : describeOutboxStatus(msg.outbox_status)?.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500'
+                      )}
+                    >
+                      {describeOutboxStatus(msg.outbox_status)?.label}
+                    </p>
+                  )}
                   <p className="text-[10px] text-zinc-400 mt-1 text-right">
-                    {msg.sender_name ?? msg.sender_phone ?? (isOutbound ? 'Antonio' : 'Contact')}
+                    {msg.sender_name ?? msg.sender_phone ?? (isOutbound ? OUTBOX_TEAM_LABEL : 'Contact')}
                     {' · '}
                     {formatTimestamp(msg.created_at)}
                   </p>
@@ -367,6 +403,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           sending, so replying from an open conversation isn't a different,
           thinner experience than starting one (Antonio, 2026-09-17). */}
       <div className="border-t bg-white shrink-0">
+        {notice && (
+          <p className={cn('text-xs px-3 pt-2', notice.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500')}>{notice.text}</p>
+        )}
         {sendMutation.isError && (
           <p className="text-xs text-red-600 px-3 pt-2">
             Failed to send: {sendMutation.error.message}
@@ -438,9 +477,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               />
               <button
                 onClick={handlePickFile}
-                disabled={!!file}
+                disabled={!!file || textOnly}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
-                aria-label="Attach a file"
+                aria-label={textOnly ? 'Attachments are not available on this WhatsApp line yet — text only' : 'Attach a file'}
               >
                 <Paperclip className="h-4 w-4" />
               </button>
@@ -454,7 +493,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               </button>
               <button
                 onClick={handleOpenConfirm}
-                disabled={!text.trim() || uploading}
+                disabled={!text.trim() || uploading || !canSend}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg bg-green-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-green-700 transition-colors"
                 aria-label="Send"
               >
