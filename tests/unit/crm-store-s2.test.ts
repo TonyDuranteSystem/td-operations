@@ -100,7 +100,7 @@ describe("saveBytesToStore", () => {
     const [path] = st.upload.mock.calls[0] as unknown as [string]
     expect(path.startsWith("o1/")).toBe(true)
     expect(path).not.toContain("Summary")
-    const args = (vi.mocked(supabaseAdmin.rpc).mock.calls[0][1] as { p: Record<string, unknown> }).p
+    const args = (vi.mocked(supabaseAdmin.rpc).mock.calls[0][1] as unknown as { p: Record<string, unknown> }).p
     expect(args.sha256).toBe(sha256Hex(Buffer.from("hello")))
     expect(args.size).toBe(5)
     expect(args.caller_key).toBe("k1")
@@ -162,7 +162,7 @@ describe("registerNow", () => {
     const r = await registerNow({ intentId: "i1", actor: "u1", links: [{ kind: "service_case", recordId: "sd1", stage: "Filed with State" }] })
     expect(r.status).toBe("created")
     expect(st.move).toHaveBeenCalledWith("u1/i1/x", "o1/dest", { destinationBucket: "crm-store" })
-    const p = (vi.mocked(supabaseAdmin.rpc).mock.calls[1][1] as { p: Record<string, unknown> }).p
+    const p = (vi.mocked(supabaseAdmin.rpc).mock.calls[1][1] as unknown as { p: Record<string, unknown> }).p
     expect(p.sha256).toBe(sha256Hex(Buffer.from("hello")))
     expect(p.path).toBe("o1/dest")
     expect(p.links).toEqual([{ kind: "service_case", record_id: "sd1", stage: "Filed with State", tax_year: null }])

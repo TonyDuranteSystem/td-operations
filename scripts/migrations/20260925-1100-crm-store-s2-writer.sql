@@ -98,10 +98,51 @@ RETURNS void LANGUAGE sql AS $$
    WHERE id = p_intent_id AND consumed_at IS NULL
 $$;
 
+-- ─────────────────────────────────────────────────────────────── record links must belong to the file's owner
+-- (a file can never be tied to another client's case, return or signature)
+CREATE OR REPLACE FUNCTION public.store_link_belongs(p_owner_id uuid, p_kind text, p_record_id uuid)
+RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  o record;
+BEGIN
+  IF p_record_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.catalog_entries
+                                          WHERE catalog_id = 'storage_link_kinds' AND slug = p_kind AND status = 'active') THEN
+    RETURN false;
+  END IF;
+  SELECT * INTO o FROM public.store_owners WHERE id = p_owner_id;
+  IF NOT FOUND OR o.kind = 'unfiled' THEN RETURN false; END IF;
+  IF p_kind = 'service_case' THEN
+    RETURN EXISTS (SELECT 1 FROM public.service_deliveries sd WHERE sd.id = p_record_id AND (
+             (o.kind = 'company' AND sd.account_id = o.account_id)
+          OR (o.kind = 'person' AND sd.contact_id = o.contact_id)
+          OR (o.kind = 'formation' AND sd.id = o.service_delivery_id)));
+  ELSIF p_kind = 'tax_return' THEN
+    RETURN EXISTS (SELECT 1 FROM public.tax_returns t WHERE t.id = p_record_id AND (
+             (o.kind = 'company' AND t.account_id = o.account_id) OR (o.kind = 'person' AND t.contact_id = o.contact_id)));
+  ELSIF p_kind = 'signature_request' THEN
+    RETURN EXISTS (SELECT 1 FROM public.signature_requests r WHERE r.id = p_record_id AND (
+             (o.kind = 'company' AND r.account_id = o.account_id) OR (o.kind = 'person' AND r.contact_id = o.contact_id)
+          OR (o.kind = 'formation' AND r.service_delivery_id = o.service_delivery_id)));
+  ELSIF p_kind = 'esign_envelope' THEN
+    RETURN EXISTS (SELECT 1 FROM public.esign_envelopes e WHERE e.id = p_record_id AND (
+             (o.kind = 'company' AND e.owner_account_id = o.account_id) OR (o.kind = 'person' AND e.contact_id = o.contact_id)
+          OR (o.kind = 'formation' AND e.service_delivery_id = o.service_delivery_id)));
+  ELSIF p_kind = 'fax_transmission' THEN
+    -- no fax table: the record is another stored file (the one that was faxed) of the same owner
+    RETURN EXISTS (SELECT 1 FROM public.store_files f WHERE f.id = p_record_id AND f.owner_id = p_owner_id);
+  END IF;
+  RETURN false;
+END $$;
+
 -- ─────────────────────────────────────────────────────────────── the one write step
 -- p jsonb keys: owner_id, folder_id, caller_key (nullable = always a new file), name, document_type,
 -- period_year, filing_status, bucket, path, sha256, size, mime, actor, content_changed (default true;
 -- false = a re-rendered document whose meaningful content did not change → never a new version),
+-- published (NEW files only; default = the document type's default_published, or true when the file is
+-- created in a client-safe stage of its REAL service case), supersedes_file_id (NEW files only: an amended
+-- return points at the LIVE file it replaces — same owner, same type and year when both are set).
+-- Links are validated: the kind must be an active storage_link_kinds row and the record must belong to
+-- the file's owner; a service-case link's stage is read from the case itself, never from the caller.
 -- links[] {kind, record_id, stage, tax_year}, subjects[] {kind: person|company, contact_id, account_id, role},
 -- facts[] {key, value, source}.
 CREATE OR REPLACE FUNCTION public.store_write(p jsonb)
@@ -127,6 +168,10 @@ DECLARE
   v_rank_old int;
   v_rank_new int;
   v_found   boolean := false;
+  v_type    record;
+  v_pub     boolean;
+  v_sup     uuid := nullif(p->>'supersedes_file_id','')::uuid;
+  v_link_owner uuid;
   l jsonb;
 BEGIN
   IF v_owner IS NULL OR v_folder IS NULL OR v_name = '' OR v_sha IS NULL THEN
@@ -191,8 +236,39 @@ BEGIN
       IF v_n > 500 THEN RAISE EXCEPTION 'store: too many files named % in this folder', v_name; END IF;
     END LOOP;
 
-    INSERT INTO public.store_files (owner_id, folder_id, name, document_type, period_year, filing_status, caller_key, created_by)
-    VALUES (v_owner, v_folder, v_try, nullif(p->>'document_type',''), (p->>'period_year')::int, 'none', v_key, v_actor)
+    -- type defaults apply to NEW files only (plan 8.4): published default; a "draft never visible"
+    -- type (the prepared return) starts as a draft unless the caller states a status
+    SELECT coalesce((metadata->>'default_published')::boolean, false) AS def_pub,
+           coalesce((metadata->>'draft_never_visible')::boolean, false) AS dnv
+      INTO v_type FROM public.catalog_entries
+     WHERE catalog_id = 'storage_document_types' AND slug = nullif(p->>'document_type','');
+    -- a flow that states neither a status nor a visibility for a "draft never visible" type (the prepared
+    -- return) gets a draft; a migration that passes the real status / published flag keeps them
+    IF v_fs IS NULL AND p->'published' IS NULL AND coalesce(v_type.dnv, false) THEN v_fs := 'draft'; END IF;
+    v_pub := coalesce((p->>'published')::boolean,
+                      CASE WHEN coalesce(v_type.dnv, false) AND coalesce(v_fs,'none') = 'draft' THEN false END,
+                      nullif(coalesce(v_type.def_pub, false), false),
+                      -- created in a client-safe stage of its real service case → shown (today's rule, fixed at creation)
+                      EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(p->'links','[]'::jsonb)) AS lk(v)
+                                JOIN public.service_deliveries sd ON sd.id = (lk.v->>'record_id')::uuid
+                                JOIN public.catalog_entries cs ON cs.catalog_id = 'storage_client_safe_stages' AND cs.status = 'active'
+                                 AND cs.metadata->>'service_type' = sd.service_type
+                               WHERE lk.v->>'kind' = 'service_case' AND cs.metadata->'stages' ? sd.stage),
+                      false);
+    IF v_sup IS NOT NULL THEN
+      SELECT id, document_type, period_year INTO v_cur FROM public.store_files
+       WHERE id = v_sup AND owner_id = v_owner AND state = 'live';
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'store: the file being superseded must be a live file of the same owner';
+      END IF;
+      IF (v_cur.document_type IS NOT NULL AND nullif(p->>'document_type','') IS NOT NULL AND v_cur.document_type <> p->>'document_type')
+         OR (v_cur.period_year IS NOT NULL AND (p->>'period_year') IS NOT NULL AND v_cur.period_year <> (p->>'period_year')::int) THEN
+        RAISE EXCEPTION 'store: an amendment must have the same document type and year as the file it replaces';
+      END IF;
+      v_cur := NULL;
+    END IF;
+    INSERT INTO public.store_files (owner_id, folder_id, name, document_type, period_year, filing_status, caller_key, created_by, published, supersedes_file_id)
+    VALUES (v_owner, v_folder, v_try, nullif(p->>'document_type',''), (p->>'period_year')::int, 'none', v_key, v_actor, v_pub, v_sup)
     RETURNING id INTO v_file_id;
     INSERT INTO public.store_file_versions (file_id, version_no, storage_bucket, storage_path, sha256, size_bytes, mime_type, created_by)
     VALUES (v_file_id, 1, p->>'bucket', p->>'path', v_sha, (p->>'size')::bigint, p->>'mime', v_actor)
@@ -200,14 +276,25 @@ BEGIN
     UPDATE public.store_files SET current_version_id = v_ver_id, filing_status = coalesce(v_fs, 'none') WHERE id = v_file_id;
     INSERT INTO public.store_events (event, actor, owner_id, file_id, folder_id, name_snapshot, details)
     VALUES ('created', v_actor, v_owner, v_file_id, v_folder, v_try,
-            jsonb_build_object('version_id', v_ver_id, 'sha256', v_sha, 'size', (p->>'size')::bigint, 'caller_key', v_key));
+            jsonb_build_object('version_id', v_ver_id, 'sha256', v_sha, 'size', (p->>'size')::bigint, 'caller_key', v_key,
+                               'published', v_pub, 'supersedes_file_id', v_sup));
+    IF v_sup IS NOT NULL THEN
+      INSERT INTO public.store_events (event, actor, owner_id, file_id, folder_id, name_snapshot, details)
+      VALUES ('superseded', v_actor, v_owner, v_sup, NULL, NULL, jsonb_build_object('by_file_id', v_file_id));
+    END IF;
     v_status := 'created';
   END IF;
 
   -- links / subjects / facts: idempotent, same transaction, on created / versioned / unchanged
+  SELECT owner_id INTO v_link_owner FROM public.store_files WHERE id = v_file_id;
   FOR l IN SELECT * FROM jsonb_array_elements(coalesce(p->'links', '[]'::jsonb)) LOOP
+    IF NOT public.store_link_belongs(v_link_owner, l->>'kind', (l->>'record_id')::uuid) THEN
+      RAISE EXCEPTION 'store: % link % does not belong to this file''s owner', l->>'kind', l->>'record_id' USING ERRCODE = 'check_violation';
+    END IF;
     INSERT INTO public.store_record_links (file_id, link_kind, record_id, stage_at_creation, tax_year)
-    VALUES (v_file_id, l->>'kind', (l->>'record_id')::uuid, nullif(l->>'stage',''), (l->>'tax_year')::int)
+    VALUES (v_file_id, l->>'kind', (l->>'record_id')::uuid,
+            CASE WHEN l->>'kind' = 'service_case' THEN (SELECT stage FROM public.service_deliveries WHERE id = (l->>'record_id')::uuid) END,
+            (l->>'tax_year')::int)
     ON CONFLICT DO NOTHING;
   END LOOP;
   FOR l IN SELECT * FROM jsonb_array_elements(coalesce(p->'subjects', '[]'::jsonb)) LOOP
@@ -257,6 +344,7 @@ $$;
 REVOKE ALL ON FUNCTION public.store_claim_intent(uuid, uuid, interval) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_finalize_intent(uuid, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_write(jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.store_link_belongs(uuid, text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_object_referenced(text, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_abandoned_intents(integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_orphan_objects(interval, integer) FROM PUBLIC, anon, authenticated;

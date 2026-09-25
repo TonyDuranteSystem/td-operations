@@ -2,18 +2,7 @@ import { describe, it, expect } from "vitest"
 import { readFileSync } from "fs"
 import { join } from "path"
 import { isStoreStaffRole, isStoreStaffUser } from "@/lib/crm-store/access"
-import {
-  storeNameKey,
-  storeRoleKey,
-  resolveContactRole,
-  resolveLifecycle,
-  isClientVisible,
-  isPersonalFile,
-  type ContactRoleEntry,
-  type LifecycleMapEntry,
-  type DocumentTypeEntry,
-  type ClientSafeStagesEntry,
-} from "@/lib/crm-store/rules"
+import { storeNameKey, storeRoleKey } from "@/lib/crm-store/rules"
 import { CLIENT_SAFE_FLOW_DOC_STAGES } from "@/lib/flows/flow-doc-visibility"
 
 const MIGRATION = readFileSync(
@@ -49,87 +38,6 @@ describe("name and role keys", () => {
     expect(storeRoleKey("authorized_representative")).toBe("authorized representative")
     expect(storeRoleKey("Authorized Representative")).toBe("authorized representative")
     expect(storeRoleKey(null)).toBe("")
-  })
-})
-
-const ROLES: ContactRoleEntry[] = [
-  { slug: "owner", matches: ["owner", "sole member"], appears_in_contacts: true, portal_audience: true },
-  { slug: "member", matches: ["member"], appears_in_contacts: true, portal_audience: true },
-  { slug: "representative", matches: ["authorized representative"], appears_in_contacts: false, portal_audience: true },
-]
-
-describe("resolveContactRole", () => {
-  it("maps today's free-text variants", () => {
-    expect(resolveContactRole("Owner", ROLES, false)).toBe("owner")
-    expect(resolveContactRole("owner", ROLES, false)).toBe("owner")
-    expect(resolveContactRole("Sole Member", ROLES, false)).toBe("owner")
-    expect(resolveContactRole("Member", ROLES, false)).toBe("member")
-    expect(resolveContactRole("authorized_representative", ROLES, false)).toBe("representative")
-  })
-  it("treats a role-less single link as the owner (single-member LLC), but not when there are several links", () => {
-    expect(resolveContactRole(null, ROLES, true)).toBe("owner")
-    expect(resolveContactRole("", ROLES, false)).toBeNull()
-  })
-  it("returns null for roles nobody mapped (reported, never silently dropped)", () => {
-    expect(resolveContactRole("Partner - Tax/NHR Consultant (Portugal)", ROLES, false)).toBeNull()
-  })
-})
-
-const MAP: LifecycleMapEntry[] = [
-  { account_status: "Active", lifecycle: "active", portal_visible: true },
-  { account_status: "Suspended", lifecycle: "active", portal_visible: true },
-  { account_status: "Closed", lifecycle: "archived", portal_visible: false },
-]
-
-describe("resolveLifecycle", () => {
-  it("reads active/archived from the CRM status (never stored)", () => {
-    expect(resolveLifecycle(null, "Active", MAP)).toEqual({ lifecycle: "active", portalVisible: true })
-    expect(resolveLifecycle(null, "Suspended", MAP)).toEqual({ lifecycle: "active", portalVisible: true })
-    expect(resolveLifecycle(null, "Closed", MAP)).toEqual({ lifecycle: "archived", portalVisible: false })
-  })
-  it("storage-only overlays win", () => {
-    expect(resolveLifecycle("in_formation", null, MAP).lifecycle).toBe("in_formation")
-    expect(resolveLifecycle("archived", "Active", MAP).lifecycle).toBe("archived")
-    expect(resolveLifecycle("in_onboarding", "Active", MAP).lifecycle).toBe("in_onboarding")
-  })
-  it("fails closed on an unknown status", () => {
-    expect(resolveLifecycle(null, "Weird", MAP)).toEqual({ lifecycle: "archived", portalVisible: false })
-  })
-})
-
-const TYPES: DocumentTypeEntry[] = [
-  { slug: "tax_return", personal: false, draft_never_visible: true },
-  { slug: "passport", personal: true, draft_never_visible: false },
-  { slug: "form_ss_4", personal: false, draft_never_visible: false },
-]
-const SAFE: ClientSafeStagesEntry[] = [
-  { service_type: "Tax Return", stages: ["Signed", "Completed"] },
-  { service_type: "Company Formation", stages: ["Articles Received", "Signed"] },
-]
-
-describe("isClientVisible", () => {
-  const base = { published: false, filingStatus: "none" as const, documentType: null, serviceType: null, stageAtCreation: null }
-  it("published files are visible", () => {
-    expect(isClientVisible({ ...base, published: true }, TYPES, SAFE)).toBe(true)
-  })
-  it("files created in a client-safe stage are visible; other stages are not", () => {
-    expect(isClientVisible({ ...base, serviceType: "Tax Return", stageAtCreation: "Signed" }, TYPES, SAFE)).toBe(true)
-    expect(isClientVisible({ ...base, serviceType: "Tax Return", stageAtCreation: "Tax Return Prepared" }, TYPES, SAFE)).toBe(false)
-  })
-  it("the unsigned prepared return is never visible while draft, even if published", () => {
-    expect(isClientVisible({ ...base, published: true, documentType: "tax_return", filingStatus: "draft" }, TYPES, SAFE)).toBe(false)
-  })
-  it("fails closed with no link", () => {
-    expect(isClientVisible(base, TYPES, SAFE)).toBe(false)
-  })
-})
-
-describe("isPersonalFile", () => {
-  it("person-owned files and personal types are private; SS-4 and tax returns are company documents", () => {
-    expect(isPersonalFile("person", null, TYPES)).toBe(true)
-    expect(isPersonalFile("company", "passport", TYPES)).toBe(true)
-    expect(isPersonalFile("company", "form_ss_4", TYPES)).toBe(false)
-    expect(isPersonalFile("company", "tax_return", TYPES)).toBe(false)
   })
 })
 

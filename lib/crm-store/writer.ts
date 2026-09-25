@@ -66,6 +66,10 @@ export interface SaveMeta {
   documentType?: string | null
   periodYear?: number | null
   filingStatus?: "none" | "draft" | "filed" | "amended" | null
+  /** NEW files only. Omitted = the document type's default (plan 8.4). */
+  published?: boolean | null
+  /** NEW files only: the file this one replaces (an amended return). Same owner required. */
+  supersedesFileId?: string | null
   actor?: string | null
   links?: StoreLink[]
   subjects?: StoreSubject[]
@@ -89,6 +93,8 @@ function writePayload(m: SaveMeta, path: string, sha256: string, size: number) {
     document_type: m.documentType ?? null,
     period_year: m.periodYear ?? null,
     filing_status: m.filingStatus ?? null,
+    published: m.published ?? null,
+    supersedes_file_id: m.supersedesFileId ?? null,
     bucket: STORE_BUCKET,
     path,
     sha256,
@@ -203,7 +209,7 @@ export async function streamSha256(bucket: string, path: string): Promise<{ sha2
   return { sha256: hash.digest("hex"), bytes }
 }
 
-export type RegisterMeta = Pick<SaveMeta, "documentType" | "periodYear" | "filingStatus" | "links" | "subjects" | "facts">
+export type RegisterMeta = Pick<SaveMeta, "documentType" | "periodYear" | "filingStatus" | "published" | "supersedesFileId" | "links" | "subjects" | "facts">
 
 /** Register a staff browser upload: small ones now, large ones in a background job. */
 export async function registerStagedUpload(p: { intentId: string; actor: string } & RegisterMeta):
@@ -249,6 +255,7 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
     ownerId: i.owner_id, folderId: i.folder_id, name: i.file_name, mimeType: i.mime_type,
     callerKey: i.caller_key, contentChanged: true, actor: p.actor,
     documentType: p.documentType, periodYear: p.periodYear, filingStatus: p.filingStatus,
+    published: p.published, supersedesFileId: p.supersedesFileId,
     links: p.links, subjects: p.subjects, facts: p.facts,
   }, i.dest_path, sha256, size))
   const { error: finErr } = await db().rpc("store_finalize_intent", { p_intent_id: p.intentId, p_file_id: result.fileId })

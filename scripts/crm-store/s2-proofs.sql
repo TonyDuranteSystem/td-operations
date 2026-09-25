@@ -17,7 +17,7 @@ BEGIN
   INSERT INTO accounts (company_name, status) VALUES ('ZZ S2 Co Two', 'Active') RETURNING id INTO a2;
   INSERT INTO contacts (full_name) VALUES ('ZZ S2 Person A') RETURNING id INTO p1;
   INSERT INTO contacts (full_name) VALUES ('ZZ S2 Person B') RETURNING id INTO p2;
-  INSERT INTO service_deliveries (service_name, service_type, account_id, status) VALUES ('Tax', 'Tax Return', a1, 'active') RETURNING id INTO sd;
+  INSERT INTO service_deliveries (service_name, service_type, account_id, stage, status) VALUES ('Tax', 'Tax Return', a1, 'Tax Return Prepared', 'active') RETURNING id INTO sd;  -- the link's stage is read from here
   o1 := store_ensure_owner('company', a1); PERFORM store_apply_template(o1, 'company_standard', 'ZZ S2 Co One');
   o2 := store_ensure_owner('company', a2); PERFORM store_apply_template(o2, 'company_standard', 'ZZ S2 Co Two');
   op1 := store_ensure_owner('person', p1); PERFORM store_apply_template(op1, 'person_standard', 'ZZ S2 Person A');
