@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { getNewDocumentIds } from '@/lib/portal/document-alerts'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
 import { CorrespondenceList } from '@/components/portal/correspondence-list'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -124,7 +125,7 @@ export default async function PortalDocumentsPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: flowData } = await (supabaseAdmin as any)
       .from('documents')
-      .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
+      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
       .eq('account_id', selectedAccountId)
       .not('service_delivery_id', 'is', null)
       .order('created_at', { ascending: false })
@@ -135,14 +136,14 @@ export default async function PortalDocumentsPage() {
     const { data: contactFlowData } = contactId
       ? await (supabaseAdmin as any)
           .from('documents')
-          .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
+          .select('id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible')
           .is('account_id', null)
           .eq('contact_id', contactId)
           .not('service_delivery_id', 'is', null)
           .order('created_at', { ascending: false })
           .limit(100)
       : { data: [] }
-    const flowDocsRaw = ([...(flowData ?? []), ...(contactFlowData ?? [])]) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null })[]
+    const flowDocsRaw = ([...(flowData ?? []), ...(contactFlowData ?? [])]) as (DocRow & { flow_stage: string | null; portal_visible: boolean | null; contact_id: string | null })[]
 
     if (flowDocsRaw.length > 0) {
       // Resolve each SD's type + a client-facing title ("Tax Return 2025").
@@ -164,6 +165,8 @@ export default async function PortalDocumentsPage() {
       const flowDocs = flowDocsRaw.filter(d => {
         const meta = d.service_delivery_id ? sdMeta.get(d.service_delivery_id) : undefined
         return isClientSafeFlowDoc(meta?.serviceType, d.flow_stage, d.portal_visible)
+          // never another member's personal document (passport/ID/ITIN…) in a flow group
+          && !isPersonalDocumentHiddenFrom(d, contactId)
       })
 
       const flowIds = new Set(flowDocs.map(d => d.id))

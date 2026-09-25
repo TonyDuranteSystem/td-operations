@@ -114,7 +114,9 @@ export async function notifyClientsOfNewDocument(documentId: string): Promise<{ 
   // without an account skip chat (the contact-scoped notification still fires).
   // Best-effort: a chat failure must never undo the alert above.
   try {
-    if (doc.account_id && (await isNewDocumentChatEnabled())) {
+    // Never for a personal document (passport/ID/ITIN…): the company chat is read by every
+    // member, so even the file name would leak — its owner already got the alert above.
+    if (doc.account_id && doc.category !== PERSONAL_CATEGORY && (await isNewDocumentChatEnabled())) {
       const { error: chatError } = await db.from('portal_messages').insert({
         account_id: doc.account_id,
         contact_id: doc.contact_id || null,

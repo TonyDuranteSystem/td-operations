@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { EnhancedSearchResult } from '@/lib/types'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -37,14 +38,16 @@ export async function GET(request: NextRequest) {
   async function searchDocuments(): Promise<EnhancedSearchResult[]> {
     const { data } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category')
+      .select('id, file_name, document_type_name, category, contact_id')
       .eq('account_id', accountId)
       .or(`file_name.ilike.${pattern},document_type_name.ilike.${pattern}`)
       .order('created_at', { ascending: false })
-      .limit(limit)
+      .limit(limit * 4)
 
     const catLabels: Record<number, string> = { 1: 'Company', 2: 'Contacts', 3: 'Tax', 4: 'Banking', 5: 'Correspondence' }
-    return (data ?? []).map((d: any) => ({
+    // Never surface another member's personal document (passport/ID/ITIN…), not even by name.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (data ?? []).filter((d: any) => !isPersonalDocumentHiddenFrom(d, contactId)).slice(0, limit).map((d: any) => ({
       id: d.id,
       title: d.file_name,
       subtitle: d.document_type_name ?? 'Document',
