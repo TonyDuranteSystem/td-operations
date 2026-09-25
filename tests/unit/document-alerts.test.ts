@@ -258,6 +258,18 @@ describe('notifyClientsOfNewDocument — chat message', () => {
     expect(messages.insert).not.toHaveBeenCalled()
   })
 
+  it('alerts nobody for a personal doc with NO confirmed owner — and does not mark it notified', async () => {
+    const messages = chain({})
+    const docs = chain({ single: { ...companyDoc, file_name: 'Passport.pdf', account_id: 'acct-1', contact_id: null, category: 2 }, updated: { id: 'd' } })
+    mockTables({ documents: docs, portal_messages: messages })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: false, reason: 'no_recipient' })
+    expect(createPortalNotification).not.toHaveBeenCalled()
+    expect(messages.insert).not.toHaveBeenCalled()
+    // not claimed: the real owner still gets the alert once staff confirm whose it is
+    expect(docs.update).not.toHaveBeenCalled()
+  })
+
   it('still reports notified:true when the chat insert throws (best-effort chat)', async () => {
     const messages = chain({})
     ;(messages.insert as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('boom') })

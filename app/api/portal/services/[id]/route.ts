@@ -125,8 +125,9 @@ export async function GET(
         .from('documents')
         .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at')
         .eq('account_id', accountId)
+        .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
         .order('created_at', { ascending: false })
-        .limit(60)
+        .limit(20)
     : { data: [] }
   // Never list another member's personal document (passport/ID/ITIN…), not even by name.
   const documents = (rawDocuments ?? [])

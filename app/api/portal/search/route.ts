@@ -41,8 +41,9 @@ export async function GET(request: NextRequest) {
       .select('id, file_name, document_type_name, category, contact_id')
       .eq('account_id', accountId)
       .or(`file_name.ilike.${pattern},document_type_name.ilike.${pattern}`)
+      .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
       .order('created_at', { ascending: false })
-      .limit(limit * 4)
+      .limit(limit)
 
     const catLabels: Record<number, string> = { 1: 'Company', 2: 'Contacts', 3: 'Tax', 4: 'Banking', 5: 'Correspondence' }
     // Never surface another member's personal document (passport/ID/ITIN…), not even by name.

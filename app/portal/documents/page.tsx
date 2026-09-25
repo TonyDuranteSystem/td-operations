@@ -184,7 +184,8 @@ export default async function PortalDocumentsPage() {
       flowGroups = order.map(id => ({
         id,
         title: sdMeta.get(id)?.title ?? 'Service',
-        docs: byId.get(id)!,
+        // contact_id was needed only for the personal-document check — never send it to the browser
+        docs: byId.get(id)!.map(d => { const { contact_id: _omit, ...rest } = d as DocRow & { contact_id?: string | null }; return rest as DocRow }),
       }))
     }
   } else {

@@ -84,8 +84,9 @@ export default async function PortalActivityPage() {
       .select('id, file_name, document_type_name, created_at, category, contact_id')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
+      .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
       .order('created_at', { ascending: false })
-      .limit(30)
+      .limit(10)
     // Never show another member's personal document (passport/ID/ITIN…), not even by name.
     for (const d of (documents ?? []).filter(doc => !isPersonalDocumentHiddenFrom(doc, contactId)).slice(0, 10)) {
       activities.push({
