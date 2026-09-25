@@ -41,7 +41,9 @@ interface Signer {
   company: string | null
 }
 
+/** One picker row per (person × company), plus a personal row — see lib/esign/signer-rows.ts. */
 type ClientResult = {
+  key: string
   contact_id: string
   full_name: string
   email: string | null
@@ -59,7 +61,7 @@ let fieldSeq = 0
  * search lives here so each row owns its own query/results state.
  */
 function SignerRow({
-  signer, index, color, active, canRemove, onPatch, onRemove, onActivate, onCrmPick,
+  signer, index, color, active, canRemove, onPatch, onRemove, onActivate, onCrmPick, onCrmClear,
 }: {
   signer: Signer
   index: number
@@ -70,6 +72,7 @@ function SignerRow({
   onRemove: () => void
   onActivate: () => void
   onCrmPick: (c: ClientResult) => void
+  onCrmClear: () => void
 }) {
   const [q, setQ] = useState("")
   const [results, setResults] = useState<ClientResult[]>([])
@@ -103,9 +106,13 @@ function SignerRow({
           {(["crm", "third_party"] as const).map(k => (
             <button
               key={k}
-              onClick={() => onPatch(k === "crm"
-                ? { kind: "crm", contact_id: null, name: "", email: "", company: null }
-                : { kind: "third_party", contact_id: null, company: null })}
+              onClick={() => {
+                onPatch(k === "crm"
+                  ? { kind: "crm", contact_id: null, name: "", email: "", company: null }
+                  : { kind: "third_party", contact_id: null, company: null })
+                // The CRM pick is gone either way — drop any company it had auto-filled.
+                onCrmClear()
+              }}
               className={`rounded px-2 py-0.5 text-[11px] font-medium ${signer.kind === k ? "bg-blue-600 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}
             >
               {k === "crm" ? "CRM client" : "Third party"}
@@ -117,12 +124,16 @@ function SignerRow({
 
       {signer.kind === "crm" ? (
         signer.contact_id ? (
-          <div className="mt-1 flex items-center justify-between rounded-md border bg-blue-50 px-2 py-1.5 text-sm">
-            <span className="truncate text-blue-800">
-              {signer.name}{signer.company ? ` · ${signer.company}` : ""}{signer.email ? ` · ${signer.email}` : ""}
+          <div className="mt-1 flex items-start justify-between rounded-md border bg-blue-50 px-2 py-1.5 text-sm">
+            <span className="min-w-0 text-blue-800">
+              <span className="block truncate font-semibold">{signer.name}</span>
+              {signer.company
+                ? <span className="block truncate">{signer.company}</span>
+                : <span className="block truncate text-amber-700">Personal (no company)</span>}
+              {signer.email ? <span className="block truncate text-[11px] text-blue-700/80">{signer.email}</span> : null}
             </span>
             <button
-              onClick={() => { onPatch({ contact_id: null, name: "", email: "", company: null }); setQ(""); setResults([]) }}
+              onClick={() => { onPatch({ contact_id: null, name: "", email: "", company: null }); onCrmClear(); setQ(""); setResults([]) }}
               className="ml-2 shrink-0 text-xs text-zinc-400 hover:text-red-500"
             >
               ✕
@@ -137,16 +148,18 @@ function SignerRow({
               className="h-8 w-full rounded border px-2 text-sm"
             />
             {(results.length > 0 || searching) && (
-              <div className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border bg-white shadow-lg">
+              <div className="absolute z-10 mt-1 max-h-80 w-full overflow-auto rounded-md border bg-white shadow-lg">
                 {searching && results.length === 0 && <div className="px-2 py-1.5 text-xs text-zinc-400">Searching…</div>}
                 {results.map(c => (
                   <button
-                    key={c.contact_id}
+                    key={c.key}
                     onClick={() => { onCrmPick(c); setQ(""); setResults([]) }}
-                    className="block w-full px-2 py-1.5 text-left text-sm hover:bg-blue-50"
+                    className="block w-full border-b px-2 py-1.5 text-left text-sm last:border-b-0 hover:bg-blue-50"
                   >
-                    <span className="font-medium">{c.full_name || "(no name)"}</span>
-                    {c.company_name ? <span className="text-zinc-500"> · {c.company_name}</span> : null}
+                    <span className="block font-semibold text-zinc-900">{c.full_name || "(no name)"}</span>
+                    {c.account_id
+                      ? <span className="block text-zinc-700">{c.company_name || "(unnamed company)"}</span>
+                      : <span className="block text-amber-700">Personal (no company)</span>}
                     {c.email
                       ? <span className="block text-[11px] text-zinc-400">{c.email}</span>
                       : <span className="block text-[11px] text-amber-600">no email on file</span>}
@@ -320,6 +333,67 @@ function PlacedFieldBox({
   )
 }
 
+/**
+ * "Are you sure?" step before an envelope is created and sent. Names the document,
+ * every signer (name + email) and the company it will be filed under — or warns in
+ * red that it will not be filed under any company.
+ */
+function SendConfirmDialog({ documentName, signers, companyName, onCancel, onConfirm }: {
+  documentName: string
+  signers: Signer[]
+  companyName: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel() }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [onCancel])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="esign-confirm-title"
+        className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <h2 id="esign-confirm-title" className="text-base font-semibold text-zinc-900">Send this document?</h2>
+        <p className="mt-2 text-sm text-zinc-700">
+          You are about to send <span className="font-semibold">{documentName}</span> for signature to:
+        </p>
+        <ul className="mt-2 space-y-1.5">
+          {signers.map((s, i) => (
+            <li key={i} className="rounded-md border bg-zinc-50 px-3 py-1.5 text-sm">
+              <span className="block font-semibold text-zinc-900">{s.name}</span>
+              <span className="block text-xs text-zinc-600">
+                {s.email || (s.kind === "crm" ? "no email on file — signs in the portal" : "no email")}
+                {s.kind === "third_party" ? " · third party" : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {companyName ? (
+          <p className="mt-3 text-sm text-zinc-700">
+            Filed under company: <span className="font-semibold text-zinc-900">{companyName}</span>
+          </p>
+        ) : (
+          <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+            This will not be filed under any company. The signed copy will not be saved in any client&apos;s documents.
+          </p>
+        )}
+        <p className="mt-3 text-sm text-zinc-700">Are you sure?</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onCancel} className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-zinc-50">Cancel</button>
+          <button onClick={onConfirm} autoFocus className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Yes, send</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   initialAccount?: { id: string; company_name: string } | null
   initialSigner?: { contact_id: string; full_name: string; email: string | null; company: string | null } | null
@@ -350,6 +424,11 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
 
   // Optional CRM account link — so the signed doc files into the client's records.
   const [account, setAccount] = useState<{ id: string; company_name: string } | null>(initialAccount)
+  // Which signer row auto-filled `account` (null = set by hand / on load). Lets a
+  // re-pick or clear of THAT signer replace the company it filled, while a company
+  // chosen by hand — or filled by signer 1 — is never overwritten by a later signer.
+  const [accountFromSigner, setAccountFromSigner] = useState<number | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [acctQuery, setAcctQuery] = useState("")
   const [acctResults, setAcctResults] = useState<Array<{ id: string; company_name: string }>>([])
   const acctTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -395,6 +474,8 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
       setDocumentName(t.name || "")
       setResult(null)
       setAccount(null)
+      setAccountFromSigner(null)
+      setConfirmOpen(false)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setFields((t.fields ?? []).map((tf: any) => ({
         id: `f${++fieldSeq}`,
@@ -487,24 +568,51 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     setSigners(prev => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
   }, [])
 
-  // Pick a CRM client as a signer: link contact_id + name/email, and auto-file the
-  // signed doc into their account if no filing account is set yet.
+  // Pick a CRM client row (person × company) as a signer. The row's company becomes
+  // the filing company when none is set yet, or when this same signer had filled it
+  // (a re-pick replaces its own choice). Never overwrites a hand-picked company or
+  // one filled by another signer.
   const onCrmPick = useCallback((i: number, c: ClientResult) => {
     updateSigner(i, { kind: "crm", contact_id: c.contact_id, name: c.full_name, email: c.email || "", company: c.company_name })
-    setAccount(prev => (prev || !c.account_id ? prev : { id: c.account_id, company_name: c.company_name || "Account" }))
-  }, [updateSigner])
+    if (!account || accountFromSigner === i) {
+      if (c.account_id) {
+        setAccount({ id: c.account_id, company_name: c.company_name || "Account" })
+        setAccountFromSigner(i)
+      } else {
+        setAccount(null)
+        setAccountFromSigner(null)
+      }
+    }
+  }, [updateSigner, account, accountFromSigner])
+
+  // Clearing a signer drops the company it had auto-filled (not a hand-picked one).
+  const onCrmClear = useCallback((i: number) => {
+    if (accountFromSigner === i) {
+      setAccount(null)
+      setAccountFromSigner(null)
+    }
+  }, [accountFromSigner])
 
   const addSigner = useCallback(() => {
     setSigners(prev => (prev.length >= SIGNER_COLORS.length ? prev : [...prev, emptySigner()]))
   }, [])
 
   const removeSigner = useCallback((i: number) => {
+    if (accountFromSigner === i) {
+      setAccount(null)
+      setAccountFromSigner(null)
+    } else if (accountFromSigner !== null && accountFromSigner > i) {
+      setAccountFromSigner(accountFromSigner - 1)
+    }
     setSigners(prev => prev.filter((_, idx) => idx !== i))
     setFields(prev => prev.filter(f => f.signer_index !== i).map(f => (f.signer_index > i ? { ...f, signer_index: f.signer_index - 1 } : f)))
     setActiveSigner(0)
-  }, [])
+  }, [accountFromSigner])
 
-  const create = useCallback(async () => {
+  // Step 1 of Create & send: validate, then open the confirmation pop-up. Nothing
+  // is created or sent until staff confirm who it goes to and which company it
+  // files under.
+  const requestCreate = useCallback(() => {
     setError("")
     if (!file) return setError("Upload a PDF first.")
     if (!documentName.trim()) return setError("Give the document a name.")
@@ -521,7 +629,13 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
         return setError(`Third-party signer "${s.name}" needs an email address — that's how they receive the document.`)
       }
     }
+    setConfirmOpen(true)
+  }, [file, documentName, signers, fields])
 
+  // Step 2: staff confirmed in the pop-up — create the envelope and send invites.
+  const create = useCallback(async () => {
+    setConfirmOpen(false)
+    if (!file) return setError("Upload a PDF first.")
     setCreating(true)
     try {
       const payload = {
@@ -606,7 +720,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
             </div>
           ))}
         </div>
-        <button onClick={() => { setResult(null); setFile(null); setPdfBytes(null); setFields([]); setDocumentName(""); setSigners([emptySigner()]) }} className="text-sm text-blue-600 hover:underline">
+        <button onClick={() => { setResult(null); setFile(null); setPdfBytes(null); setFields([]); setDocumentName(""); setSigners([emptySigner()]); setAccount(null); setAccountFromSigner(null) }} className="text-sm text-blue-600 hover:underline">
           Create another
         </button>
       </div>
@@ -656,15 +770,15 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
           <div className="relative mt-2">
             {account ? (
               <div className="flex items-center justify-between rounded-md border bg-blue-50 px-3 py-1.5 text-sm">
-                <span className="truncate text-blue-800">{account.company_name}</span>
-                <button onClick={() => { setAccount(null); setAcctQuery(""); setAcctResults([]) }} className="text-xs text-zinc-400 hover:text-red-500">✕</button>
+                <span className="truncate text-blue-800"><span className="text-blue-600/80">Filed under: </span>{account.company_name}</span>
+                <button onClick={() => { setAccount(null); setAccountFromSigner(null); setAcctQuery(""); setAcctResults([]) }} className="text-xs text-zinc-400 hover:text-red-500">✕</button>
               </div>
             ) : (
               <>
                 <input
                   value={acctQuery}
                   onChange={e => onAcctQuery(e.target.value)}
-                  placeholder="Link to client account (optional)"
+                  placeholder="File under company (optional)"
                   className="h-9 w-full rounded-md border px-3 text-sm focus:ring-2 focus:ring-blue-500"
                 />
                 {acctResults.length > 0 && (
@@ -672,7 +786,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
                     {acctResults.map(a => (
                       <button
                         key={a.id}
-                        onClick={() => { setAccount({ id: a.id, company_name: a.company_name }); setAcctResults([]); setAcctQuery("") }}
+                        onClick={() => { setAccount({ id: a.id, company_name: a.company_name }); setAccountFromSigner(null); setAcctResults([]); setAcctQuery("") }}
                         className="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-blue-50"
                       >
                         {a.company_name}
@@ -700,6 +814,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
                 onRemove={() => removeSigner(i)}
                 onActivate={() => setActiveSigner(i)}
                 onCrmPick={c => onCrmPick(i, c)}
+                onCrmClear={() => onCrmClear(i)}
               />
             ))}
             <button onClick={addSigner} className="text-xs text-blue-600 hover:underline">+ add signer</button>
@@ -755,7 +870,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
         {error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>}
 
         <button
-          onClick={create}
+          onClick={requestCreate}
           disabled={creating || !file}
           className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
@@ -789,6 +904,16 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
           </div>
         )}
       </div>
+
+      {confirmOpen && (
+        <SendConfirmDialog
+          documentName={documentName.trim()}
+          signers={signers.filter(s => s.name.trim())}
+          companyName={account?.company_name ?? null}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={create}
+        />
+      )}
 
       {/* Document — no longer height-clamped/overflow-boxed; it flows at its natural
           height and the page (<main>) scrolls normally, which is what lets the sticky
