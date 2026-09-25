@@ -10,6 +10,7 @@ import {
   type WabridgeMessage,
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
+import { parseLinkCode } from "@/lib/messaging/wabridge-link"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -32,6 +33,7 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
  *  - {event:"bridge.names", ts, names:[{digits,name}]}                the phone's saved contact names
+ *  - {event:"bridge.linkcode", ts, code}                             a pairing code the Mac fetched while the device is unlinked (shown to the owner only)
  *
  * Response contract with GOWA (it retries a non-2xx up to 5 times over ~30s, then DROPS the event):
  *  - 404 unknown/malformed/non-bridge channel, 401 bad signature → not worth retrying
@@ -94,6 +96,21 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     })
     if (hbError) return NextResponse.json({ error: hbError.message }, { status: 500 })
     return NextResponse.json({ ok: true, heartbeat: true })
+  }
+
+  // ─── A pairing code from the Mac while the device is unlinked (Reconnect from the CRM) ───
+  // The code is a credential-equivalent: never echoed in a response, never logged, refused when the device is logged in
+  // or after the outage cap (wabridge_set_link_code).
+  if (kind === "bridge.linkcode") {
+    const lc = parseLinkCode(body, now)
+    if (!lc) return NextResponse.json({ error: "bad linkcode" }, { status: 400 })
+    if (lc.ok === false) return NextResponse.json({ error: lc.reason }, { status: 400 })
+    const { data: stored, error: lcError } = await supabaseAdmin.rpc("wabridge_set_link_code", {
+      p_channel_id: channel.id,
+      p_code: lc.code,
+    })
+    if (lcError) return NextResponse.json({ error: "could not store code" }, { status: 500 })
+    return NextResponse.json({ ok: true, stored: stored === true })
   }
 
   // ─── The phone's saved contact names → chat names ───
