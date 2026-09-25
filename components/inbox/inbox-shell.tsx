@@ -20,6 +20,7 @@ import { ComposeDialog, type PrefillAttachmentSource } from './compose-dialog'
 import { CreateFromEmailDialog } from './create-from-email-dialog'
 import { WorkerChatPanel } from './worker-chat-panel'
 import { WhatsAppWorkerPanel } from './whatsapp-worker-panel'
+import { WhatsAppBridgeBanner } from './whatsapp-bridge-banner'
 import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
@@ -1416,6 +1417,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           </div>
         </div>
       )}
+
+      {/* Self-hosted WhatsApp link health + owner-only Reconnect (pairing code). Renders nothing while healthy. */}
+      {isWhatsApp && <WhatsAppBridgeBanner />}
 
       {/* Search + Read/Unread filter — WhatsApp. Client-side only (no Gmail-style
           operator search): filters the already-loaded conversations by name or

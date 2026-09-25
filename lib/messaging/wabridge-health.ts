@@ -65,12 +65,17 @@ const TEXT: Record<BridgeProblem, { reason: string; hint: string }> = {
   },
   unlinked: {
     reason: "WhatsApp unlinked this device (logged out from the phone, or the phone was not used for 14 days).",
-    hint: "Messages are NOT being received. Re-link the number: WhatsApp on the phone → Settings → Linked devices → Link a device, using a fresh code from the bridge.",
+    hint: "Messages are NOT being received. Re-link the number: open the CRM Inbox → WhatsApp tab (owner only), then on the phone go to WhatsApp → Settings → Linked devices → Link a device → Link with phone number and type the code the CRM shows.",
   },
   disconnected: {
     reason: "The bridge has been unable to reach WhatsApp for several minutes (still linked, but not connected).",
     hint: "Usually the Mac Mini's internet connection or a WhatsApp outage. Check the Mac Mini's network; if it persists, restart the bridge: launchctl kickstart -k gui/$(id -u)/com.td.wa-bridge",
   },
+}
+
+/** Plain wording for a problem state (used by the alert email and the CRM banner so they never disagree). */
+export function describeBridgeProblem(health: BridgeProblem): { reason: string; hint: string } {
+  return TEXT[health]
 }
 
 export function decideBridgeAlert(bridge: BridgeState | null | undefined, now: Date): AlertDecision | null {

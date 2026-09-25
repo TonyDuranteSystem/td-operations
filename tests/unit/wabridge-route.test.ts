@@ -336,3 +336,39 @@ describe("POST /api/wa-bridge/[channelId] — saved contact names", () => {
     expect((await call(names([{ digits: "393339980702", name: "x" }]))).status).toBe(500)
   })
 })
+
+describe("bridge.linkcode (Reconnect from the CRM)", () => {
+  const linkcode = (over: Record<string, unknown> = {}) => ({ event: "bridge.linkcode", ts: Date.now(), code: "AB12-CD34", ...over })
+  it("stores a fresh, signed, well-formed code through the atomic function and never echoes it back", async () => {
+    const r = await call(linkcode())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, stored: true })
+    expect(JSON.stringify(r.body)).not.toContain("AB12")
+    const c = state.rpcCalls.find((x) => x.fn === "wabridge_set_link_code")!
+    expect(c.args).toEqual({ p_channel_id: CHANNEL, p_code: "AB12-CD34" })
+    expect(state.groupCalls).toHaveLength(0) // saves no message
+  })
+  it("reports stored:false when the database refuses (device logged in, or the outage cap reached) — still a 200", async () => {
+    state.rpcOverrides.wabridge_set_link_code = { data: false, error: null }
+    const r = await call(linkcode())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, stored: false })
+  })
+  it("rejects an UNSIGNED code and a REPLAYED (old) one, and never touches the database", async () => {
+    expect((await call(linkcode(), { sig: null })).status).toBe(401)
+    expect((await call(linkcode({ ts: Date.now() - 5 * 60_000 }))).status).toBe(400)
+    expect(state.rpcCalls.filter((x) => x.fn === "wabridge_set_link_code")).toHaveLength(0)
+  })
+  it("rejects a malformed code with a 400 that does not contain the code", async () => {
+    const r = await call(linkcode({ code: "NOT-A-CODE!" }))
+    expect(r.status).toBe(400)
+    expect(JSON.stringify(r.body)).not.toContain("NOT-A-CODE")
+  })
+  it("500s (without leaking the code or the database message) when the code cannot be stored", async () => {
+    state.rpcOverrides.wabridge_set_link_code = { data: null, error: { message: "boom AB12-CD34" } }
+    const r = await call(linkcode())
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).not.toContain("AB12")
+    expect(JSON.stringify(r.body)).not.toContain("boom")
+  })
+})
