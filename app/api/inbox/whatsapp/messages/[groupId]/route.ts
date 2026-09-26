@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { OUTBOX_TEAM_LABEL, normalizeSendMode, outboxDisplayStatus, type SendMode } from "@/lib/messaging/wabridge-outbox"
+import { createClient } from "@/lib/supabase/server"
+import { isStaffUser } from "@/lib/auth"
 
 export const dynamic = "force-dynamic"
 
@@ -75,7 +77,38 @@ export async function GET(
       console.warn("WhatsApp outbox overlay failed (chat still loads):", outboxErr instanceof Error ? outboxErr.message : String(outboxErr))
     }
 
-    const messages = [...(data ?? []), ...outbox].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    // Voice notes (self-hosted line): audio state + machine transcript. STAFF ONLY — a partner login passes requireStaffRoute but must not
+    // hear or read a lead's voice note (Antonio 2026-09-26). Best-effort like the outbox: a failure never hides the chat.
+    const voiceIds = (data ?? []).filter((m) => m.content_type === "voice").map((m) => m.id)
+    const voiceByMessage = new Map<string, Record<string, unknown>>()
+    if (voiceIds.length > 0) {
+      try {
+        const { data: { user } } = await createClient().auth.getUser()
+        if (isStaffUser(user)) {
+          const { data: media } = await supabaseAdmin
+            .from("message_media")
+            .select("message_id, status, transcript, duration_seconds, audio_deleted_at")
+            .in("message_id", voiceIds)
+          for (const x of media ?? []) {
+            voiceByMessage.set(x.message_id, {
+              status: x.status,
+              transcript: x.transcript,
+              duration_seconds: x.duration_seconds,
+              audio_deleted: x.audio_deleted_at !== null,
+            })
+          }
+          // a note the Mac has not picked up yet has no row: staff still see it as "preparing" (and the chat refreshes faster)
+          for (const id of voiceIds) {
+            if (!voiceByMessage.has(id)) voiceByMessage.set(id, { status: "waiting", transcript: null, duration_seconds: null, audio_deleted: false })
+          }
+        }
+      } catch (voiceErr) {
+        console.warn("WhatsApp voice overlay failed (chat still loads):", voiceErr instanceof Error ? voiceErr.message : String(voiceErr))
+      }
+    }
+    const withVoice = (data ?? []).map((m) => (m.content_type === "voice" && voiceByMessage.has(m.id) ? { ...m, voice: voiceByMessage.get(m.id) } : m))
+
+    const messages = [...withVoice, ...outbox].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
     return NextResponse.json({ messages, send })
   } catch (error) {
     console.error("WhatsApp messages error:", error)

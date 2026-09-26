@@ -17,6 +17,8 @@ import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
+import { isMediaPending } from '@/lib/messaging/wabridge-media'
+import { WhatsAppVoiceNote, type VoiceInfo } from './whatsapp-voice-note'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
@@ -35,6 +37,8 @@ interface WhatsAppMessage {
   outbox_status?: string | null
   /** Self-hosted line: the queue row id (needed to resolve a reply the Mac could not confirm). */
   outbox_id?: string | null
+  /** Self-hosted line, staff only: the voice note's audio state + machine transcript. */
+  voice?: VoiceInfo
 }
 
 interface WhatsappThreadProps {
@@ -143,9 +147,13 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
       fetch(`/api/inbox/whatsapp/messages/${encodeURIComponent(groupId)}`).then((r) =>
         r.json()
       ),
-    // 5 s while one of our replies is still waiting to be sent, otherwise the usual minute
+    // 5 s while one of our replies is still waiting to be sent or a voice note is still being prepared, otherwise the usual minute
     refetchInterval: (query) =>
-      query.state.data?.messages?.some((m) => m.outbox_status && isOutboxPending(m.outbox_status)) ? 5_000 : 60_000,
+      query.state.data?.messages?.some(
+        (m) => (m.outbox_status && isOutboxPending(m.outbox_status)) || (m.voice && isMediaPending(m.voice.status, m.voice.audio_deleted))
+      )
+        ? 5_000
+        : 60_000,
   })
 
   useEffect(() => {
@@ -387,6 +395,8 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                         className="max-w-full rounded-lg mb-1"
                       />
                     </a>
+                  ) : msg.content_type === 'voice' && msg.voice ? (
+                    <WhatsAppVoiceNote messageId={msg.id} voice={msg.voice} />
                   ) : isOtherMedia ? (
                     <a
                       href={msg.media_url ?? undefined}
