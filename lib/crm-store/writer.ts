@@ -179,6 +179,10 @@ export async function createUploadIntent(p: {
   callerKey?: string | null; actor: string; actorRole: unknown
 }): Promise<UploadIntent> {
   if (!isStoreStaffRole(p.actorRole)) throw new Error("store: only staff (admin/team) can upload to the store")
+  const { data: folder } = await db().from("store_folders").select("owner_id, trashed_at").eq("id", p.folderId).maybeSingle()
+  if (!folder || folder.owner_id !== p.ownerId || folder.trashed_at) {
+    throw new Error("store: upload into a live folder of the same client only")
+  }
   const id = randomUUID()
   const stagingPath = `${p.actor}/${id}/${randomUUID()}`
   const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MINUTES * 60_000).toISOString()

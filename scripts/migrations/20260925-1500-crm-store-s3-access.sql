@@ -169,15 +169,16 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
 $$;
 
 -- Shown = visible on its own AND not replaced by any visible amendment further down its chain
--- (A ← B ← C: C visible hides A and B). Cycle-safe and depth-limited.
+-- (A ← B ← C: C visible hides A and B). The walk passes THROUGH trashed / purged amendments (trashing
+-- B must not bring A back while C is shown). Cycle-safe and depth-limited.
 CREATE OR REPLACE FUNCTION public.store_file_client_visible(p_file_id uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
   WITH RECURSIVE chain(id, depth, path) AS (
     SELECT n.id, 1, ARRAY[p_file_id, n.id] FROM public.store_files n
-     WHERE n.supersedes_file_id = p_file_id AND n.state = 'live'
+     WHERE n.supersedes_file_id = p_file_id
     UNION ALL
     SELECT n.id, c.depth + 1, c.path || n.id FROM public.store_files n JOIN chain c ON n.supersedes_file_id = c.id
-     WHERE n.state = 'live' AND c.depth < 20 AND NOT n.id = ANY (c.path)
+     WHERE c.depth < 20 AND NOT n.id = ANY (c.path)
   )
   SELECT public.store_file_self_visible(p_file_id)
      AND NOT EXISTS (SELECT 1 FROM chain WHERE public.store_file_self_visible(chain.id))

@@ -265,6 +265,9 @@ BEGIN
          OR (v_cur.period_year IS NOT NULL AND (p->>'period_year') IS NOT NULL AND v_cur.period_year <> (p->>'period_year')::int) THEN
         RAISE EXCEPTION 'store: an amendment must have the same document type and year as the file it replaces';
       END IF;
+      IF EXISTS (SELECT 1 FROM public.store_files n WHERE n.supersedes_file_id = v_sup AND n.state = 'live') THEN
+        RAISE EXCEPTION 'store: that file has already been amended — amend the latest amendment instead';
+      END IF;
       v_cur := NULL;
     END IF;
     INSERT INTO public.store_files (owner_id, folder_id, name, document_type, period_year, filing_status, caller_key, created_by, published, supersedes_file_id)
