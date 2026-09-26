@@ -164,3 +164,20 @@ describe("store folder names", () => {
     expect(storeSafeFolderName("x".repeat(300))).toHaveLength(255)
   })
 })
+
+describe("new-store browser labels", async () => {
+  const { ownerLabel, ownerStatus } = await import("@/lib/crm-store/browse")
+  it("names each owner the way staff know it", () => {
+    expect(ownerLabel({ kind: "company", company: "Acme LLC", root: "x" })).toBe("Acme LLC")
+    expect(ownerLabel({ kind: "person", person: "Maria Rossi" })).toBe("Maria Rossi")
+    expect(ownerLabel({ kind: "formation", root: "Maria Rossi — company in formation" })).toBe("Maria Rossi — company in formation")
+    expect(ownerLabel({ kind: "formation" })).toBe("Company being formed")
+    expect(ownerLabel({ kind: "unfiled" })).toBe("Unfiled")
+    expect(ownerLabel({ kind: "company", company: null, root: null })).toBe("Company")
+  })
+  it("status badge", () => {
+    expect(ownerStatus("in_formation")).toBe("being formed")
+    expect(ownerStatus("archived")).toBe("archived")
+    expect(ownerStatus(null)).toBeNull()
+  })
+})
