@@ -33,6 +33,8 @@ interface WhatsAppMessage {
   media_url: string | null
   /** Self-hosted line only: a reply still in the CRM's queue (waiting / test mode / not confirmed / failed). */
   outbox_status?: string | null
+  /** Self-hosted line: the queue row id (needed to resolve a reply the Mac could not confirm). */
+  outbox_id?: string | null
 }
 
 interface WhatsappThreadProps {
@@ -299,6 +301,30 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     setConfirming(true)
   }
 
+  // A reply the Mac could not confirm ("Not confirmed — check the phone"): a person looks at the phone and decides. Never retried automatically.
+  const [resolving, setResolving] = useState<string | null>(null)
+  const resolveOutbox = async (outboxId: string, action: 'sent' | 'discard') => {
+    if (resolving) return
+    setResolving(outboxId)
+    try {
+      const res = await fetch('/api/inbox/whatsapp/outbox/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outboxId, action }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not save your decision — please try again.')
+      }
+      toast.success(action === 'sent' ? 'Marked as sent.' : 'Discarded — it was not sent.')
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not save your decision — please try again.')
+    } finally {
+      setResolving(null)
+    }
+  }
+
   const handleConfirmSend = () => {
     if (sendingRef.current || sendMutation.isPending) return
     sendingRef.current = true
@@ -384,6 +410,26 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                     >
                       {describeOutboxStatus(msg.outbox_status)?.label}
                     </p>
+                  )}
+                  {msg.outbox_status === 'unknown' && msg.outbox_id && (
+                    <div className="flex gap-2 mt-1.5">
+                      <button
+                        type="button"
+                        disabled={resolving === msg.outbox_id}
+                        onClick={() => resolveOutbox(msg.outbox_id as string, 'sent')}
+                        className="rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        It was sent
+                      </button>
+                      <button
+                        type="button"
+                        disabled={resolving === msg.outbox_id}
+                        onClick={() => resolveOutbox(msg.outbox_id as string, 'discard')}
+                        className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                      >
+                        It was not sent — discard
+                      </button>
+                    </div>
                   )}
                   <p className="text-[10px] text-zinc-400 mt-1 text-right">
                     {msg.sender_name ?? msg.sender_phone ?? (isOutbound ? OUTBOX_TEAM_LABEL : 'Contact')}

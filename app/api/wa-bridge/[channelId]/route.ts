@@ -11,6 +11,7 @@ import {
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
+import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -33,6 +34,8 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
  *  - {event:"bridge.names", ts, names:[{digits,name}]}                the phone's saved contact names
+ *  - {event:"bridge.send.claim", ts}                                  the Mac's sender asks for its NEXT reply (pacing + pause switch enforced in the database)
+ *  - {event:"bridge.send.result", ts, outbox_id, ok, message_id?, error?}   what the Mac's WhatsApp program answered for that reply
  *  - {event:"bridge.linkcode", ts, code}                             a pairing code the Mac fetched while the device is unlinked (shown to the owner only)
  *
  * Response contract with GOWA (it retries a non-2xx up to 5 times over ~30s, then DROPS the event):
@@ -111,6 +114,37 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     })
     if (lcError) return NextResponse.json({ error: "could not store code" }, { status: 500 })
     return NextResponse.json({ ok: true, stored: stored === true })
+  }
+
+  // ─── Reply sender (stage 2): the Mac claims ONE queued reply at a time, sends it through its own program, then reports ───
+  // Every rule (paused / test mode, health, one in flight, ~1 minute gap, hourly + daily caps, distinct people, identical text, allowlist,
+  // reply-only) is enforced INSIDE wabridge_claim_send. The reply text is only ever returned to a correctly SIGNED caller.
+  if (kind === "bridge.send.claim") {
+    const c = parseSendClaim(body, now)
+    if (!c) return NextResponse.json({ error: "bad claim" }, { status: 400 })
+    if (c.ok === false) return NextResponse.json({ error: c.reason }, { status: 400 })
+    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_send", { p_channel_id: channel.id })
+    if (claimError || typeof claimed !== "object" || claimed === null) {
+      return NextResponse.json({ error: "could not claim" }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, ...(claimed as Record<string, unknown>) })
+  }
+
+  if (kind === "bridge.send.result") {
+    const r = parseSendResult(body, now)
+    if (!r) return NextResponse.json({ error: "bad result" }, { status: 400 })
+    if (r.ok === false) return NextResponse.json({ error: r.reason }, { status: 400 })
+    const { data: finished, error: finishError } = await supabaseAdmin.rpc("wabridge_finish_send", {
+      p_channel_id: channel.id,
+      p_outbox_id: r.outboxId,
+      p_ok: r.sent,
+      p_message_id: r.messageId,
+      p_error: r.error,
+    })
+    if (finishError || typeof finished !== "object" || finished === null) {
+      return NextResponse.json({ error: "could not record the result" }, { status: 500 })
+    }
+    return NextResponse.json(finished)
   }
 
   // ─── The phone's saved contact names → chat names ───

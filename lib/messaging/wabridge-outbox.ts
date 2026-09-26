@@ -6,6 +6,8 @@
  * Antonio 2026-09-25: messages carry no personal name — every outbound CRM reply is labelled "TD Team".
  */
 
+import { HEARTBEAT_MAX_SKEW_MS } from "./wabridge-health"
+
 export const OUTBOX_TEAM_LABEL = "TD Team"
 
 /** Every value wa_outbox.status may hold — registered against the database CHECK in lib/db-contract.ts. */
@@ -71,6 +73,8 @@ export function describeOutboxStatus(status: string): OutboxStatusView | null {
       return { label: "Test mode — recorded, NOT sent", tone: "warn" }
     case "queued":
       return { label: "Waiting to be sent…", tone: "neutral" }
+    case "sending":
+      return { label: "Sending…", tone: "neutral" }
     case "unknown":
       return { label: "Not confirmed — check the phone before sending again", tone: "warn" }
     case "failed":
@@ -82,7 +86,77 @@ export function describeOutboxStatus(status: string): OutboxStatusView | null {
 
 /** True while a message can still change state on its own (drives the faster refresh of the chat). */
 export function isOutboxPending(status: string): boolean {
-  return status === "queued"
+  return status === "queued" || status === "sending"
+}
+
+/** A claimed message is "Sending…" for this long; after that, with no result from the Mac, it is "Not confirmed" (needs a person). */
+export const SENDING_WINDOW_MS = 120_000
+
+/**
+ * What the screen calls a message. The database has no 'sending' state: a claimed message is 'unknown' with a claim time.
+ * Claimed less than 2 minutes ago = still being sent; older = the Mac never reported (a person must check the phone).
+ */
+export function outboxDisplayStatus(status: string, claimedAt: string | null | undefined, now: Date): string {
+  if (status !== "unknown") return status
+  const at = claimedAt ? Date.parse(claimedAt) : NaN
+  if (!Number.isNaN(at) && now.getTime() - at >= 0 && now.getTime() - at < SENDING_WINDOW_MS) return "sending"
+  return "unknown"
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export type SendClaimParse = null | { ok: false; reason: string } | { ok: true }
+
+/** {event:"bridge.send.claim", ts}: the Mac asks for its next message. Only a fresh signed timestamp is needed. */
+export function parseSendClaim(body: unknown, now: Date): SendClaimParse {
+  if (typeof body !== "object" || body === null) return null
+  const b = body as Record<string, unknown>
+  if (b.event !== "bridge.send.claim") return null
+  if (typeof b.ts !== "number" || !Number.isFinite(b.ts) || Math.abs(now.getTime() - b.ts) > HEARTBEAT_MAX_SKEW_MS) {
+    return { ok: false, reason: "stale or missing timestamp" }
+  }
+  return { ok: true }
+}
+
+export type SendResultParse =
+  | null
+  | { ok: false; reason: string }
+  | { ok: true; outboxId: string; sent: boolean; messageId: string | null; error: string | null }
+
+/**
+ * {event:"bridge.send.result", ts, outbox_id, ok, message_id?, error?}: what the Mac's WhatsApp program answered.
+ * `ok:true` REQUIRES a real message id (the CRM records the message from it); `ok:false` carries the program's error text.
+ */
+export function parseSendResult(body: unknown, now: Date): SendResultParse {
+  if (typeof body !== "object" || body === null) return null
+  const b = body as Record<string, unknown>
+  if (b.event !== "bridge.send.result") return null
+  if (typeof b.ts !== "number" || !Number.isFinite(b.ts) || Math.abs(now.getTime() - b.ts) > HEARTBEAT_MAX_SKEW_MS) {
+    return { ok: false, reason: "stale or missing timestamp" }
+  }
+  if (typeof b.outbox_id !== "string" || !UUID_RE.test(b.outbox_id)) return { ok: false, reason: "bad outbox id" }
+  if (typeof b.ok !== "boolean") return { ok: false, reason: "ok must be a boolean" }
+  if (b.ok) {
+    if (typeof b.message_id !== "string" || b.message_id.trim().length < 6 || b.message_id.length > 200) return { ok: false, reason: "a sent message needs its message id" }
+    return { ok: true, outboxId: b.outbox_id, sent: true, messageId: b.message_id.trim(), error: null }
+  }
+  const error = typeof b.error === "string" ? b.error.slice(0, 500) : ""
+  return { ok: true, outboxId: b.outbox_id, sent: false, messageId: null, error: error || "send failed" }
+}
+
+/** Refusal reasons from wabridge_claim_send that mean "check back later" vs "nothing will happen until a person acts". */
+export function claimBackoffSeconds(reason: string | undefined): number {
+  switch (reason) {
+    case "paused":
+    case "unhealthy":
+      return 30
+    case "hourly_cap":
+    case "daily_cap":
+    case "held":
+      return 60
+    default:
+      return 5
+  }
 }
 
 /** Every value wa_bridge_state.send_mode may hold — registered against the database CHECK in lib/db-contract.ts. */
@@ -102,4 +176,18 @@ export function sendNotice(input: { mode: SendMode; hasInbound: boolean }): { te
   }
   if (input.mode === "shadow") return { text: "Test mode: replies are recorded here but NOT sent to WhatsApp.", tone: "neutral" }
   return null
+}
+
+/**
+ * The approved-numbers box: numbers are typed the way people write them ("+1 727 423 4285", "(727) 423-4285"), so the list is split on
+ * commas, semicolons and new lines ONLY — never on spaces. Each entry is reduced to digits; entries with fewer than 6 or more than 15 digits
+ * are dropped, and duplicates removed. (The database function applies the same rule again; this is what the screen sends.)
+ */
+export function parseAllowlistInput(text: string): string[] {
+  const out: string[] = []
+  for (const part of String(text ?? "").split(/[,;\n]+/)) {
+    const digits = part.replace(/\D/g, "")
+    if (digits.length >= 6 && digits.length <= 15 && !out.includes(digits)) out.push(digits)
+  }
+  return out
 }

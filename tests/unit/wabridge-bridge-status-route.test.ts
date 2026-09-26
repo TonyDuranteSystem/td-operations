@@ -96,6 +96,23 @@ describe("GET /api/inbox/whatsapp/bridge-status", () => {
     expect(r.body.code).toBeNull()
     expect(r.body.hint).toBeTruthy()
   })
+  it("the OWNER also gets the pause switch position, approved numbers and pacing; other staff never do", async () => {
+    st.states = [{ ...healthy(), send_mode: "live", send_allowlist: ["17274234285"], send_min_gap_seconds: 60, send_hourly_cap: 10, send_daily_cap: 5, send_distinct_per_hour: 6, send_same_body_per_hour: 2 }]
+    const owner = await get()
+    expect(owner.body.send).toEqual({
+      mode: "live",
+      allowlist: ["17274234285"],
+      pacing: { minGapSeconds: 60, hourlyCap: 10, dailyCap: 5, distinctPerHour: 6, sameBodyPerHour: 2 },
+    })
+    st.owner = false
+    const staff = await get()
+    expect(staff.body.send).toBeNull()
+    expect(JSON.stringify(staff.body)).not.toContain("17274234285")
+  })
+  it("an unreadable send mode is shown as paused (fail closed)", async () => {
+    st.states = [{ ...healthy(), send_mode: "LIVE!!", send_allowlist: [] }]
+    expect((await get()).body.send.mode).toBe("paused")
+  })
   it("a database failure is a generic 500 that leaks no detail", async () => {
     st.channelError = { message: "secret db detail" }
     const r = await get()
