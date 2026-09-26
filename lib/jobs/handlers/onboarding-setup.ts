@@ -510,7 +510,20 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
       await updateJobProgress(job.id, result)
     } catch (e) {
-      result.steps.push(step("drive_folder", "error", e instanceof Error ? e.message : String(e)))
+      const { isStoreOwnedRefusal, saveUploadsToStoreForAccount } = await import("@/lib/crm-store/account-uploads")
+      if (isStoreOwnedRefusal(e) && account_id) {
+        // CRM Store pilot company (sandbox only): no Drive folder — uploads go to the new store instead
+        // (a passport to the person's own storage)
+        const ownerName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ")
+        const r = await saveUploadsToStoreForAccount({
+          accountId: account_id, flow: "onboarding", paths: p.upload_paths || [],
+          passportContact: contact_id ? { contactId: contact_id, name: ownerName || "Client" } : null,
+        })
+        result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
+          `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+      } else {
+        result.steps.push(step("drive_folder", "error", e instanceof Error ? e.message : String(e)))
+      }
       await updateJobProgress(job.id, result)
     }
   }

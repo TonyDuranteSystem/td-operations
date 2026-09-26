@@ -148,6 +148,10 @@ async function createDriveFolder(
     }
     return { name: "drive_folder", status: "skipped", detail: `Already exists: ${result.folderId}` }
   } catch (err) {
+    const { isStoreOwnedRefusal } = await import("@/lib/crm-store/account-uploads")
+    if (isStoreOwnedRefusal(err)) {
+      return { name: "drive_folder", status: "skipped", detail: "No Drive folder — this company's files live in the new CRM storage" }
+    }
     return { name: "drive_folder", status: "error", detail: err instanceof Error ? err.message : "Unknown error" }
   }
 }

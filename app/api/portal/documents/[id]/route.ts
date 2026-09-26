@@ -101,8 +101,15 @@ export async function GET(
       fileName = drive.fileName
     }
 
+    // CRM Store bytes carry an uploader-chosen type (untrusted): only script-free types keep it, the rest
+    // are plain bytes — the portal preview builds a blob from this response on the portal's own origin.
+    if (storeFileId) {
+      const { canPreviewInline } = await import('@/lib/crm-store/serve')
+      if (!canPreviewInline(mimeType)) mimeType = 'application/octet-stream'
+    }
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
+        'X-Content-Type-Options': 'nosniff',
         'Content-Type': mimeType || 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName || doc.file_name)}"`,
         'Content-Length': buffer.length.toString(),

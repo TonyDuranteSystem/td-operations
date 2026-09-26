@@ -234,7 +234,8 @@ export async function assertNotStoreOwnedAccount(accountId: string): Promise<voi
   if (!pilotEnvironmentAllowed()) return
   const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).maybeSingle()
   if (error) throw new Error("Could not check where this company's files live — please try again.")
-  if (data) throw new Error("This company's files live in the new CRM storage — it does not get a Google Drive folder.")
+  const { StoreOwnedAccountError } = await import("./account-uploads")
+  if (data) throw new StoreOwnedAccountError("This company's files live in the new CRM storage — it does not get a Google Drive folder.")
   // The window after company creation when the hand-over has not happened (or failed): the company's
   // formation case is store-owned, so its files belong in the store too — still no Drive folder.
   const { data: sds, error: sdErr } = await db().from("service_deliveries").select("id").eq("account_id", accountId)
@@ -243,7 +244,7 @@ export async function assertNotStoreOwnedAccount(accountId: string): Promise<voi
   if (sdIds.length > 0) {
     const { data: fo, error: foErr } = await db().from("store_owners").select("id").eq("kind", "formation").in("service_delivery_id", sdIds).limit(1)
     if (foErr) throw new Error("Could not check where this company's files live — please try again.")
-    if (fo && fo.length > 0) throw new Error("This company's formation files live in the new CRM storage (their hand-over to the company is pending) — it does not get a Google Drive folder.")
+    if (fo && fo.length > 0) throw new StoreOwnedAccountError("This company's formation files live in the new CRM storage (their hand-over to the company is pending) — it does not get a Google Drive folder.")
   }
 }
 
@@ -305,7 +306,7 @@ export async function staffUploadToStore(p: {
     .eq("folder_id", p.folderId).eq("name_key", storeNameKey(p.fileName)).neq("state", "purged")
   if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
-  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — restore it or use another name.")
+  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
   const callerKey = sameLive?.caller_key ?? `staff-upload:${p.folderId}:${storeNameKey(p.fileName)}`
   // Who the CRM row belongs to: the company, the person, or — for a company still being formed — the
@@ -328,7 +329,7 @@ export async function staffUploadToStore(p: {
     documentType: p.documentType, published: false, actor: p.actorId,
   })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
-    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — restore it or use another name." : `The save ended as "${w.status}".`)
+    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)." : `The save ended as "${w.status}".`)
   }
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal
     : FOLDER_KIND_CATEGORY[folder.kind as string] ?? FOLDER_KIND_CATEGORY.correspondence
@@ -374,16 +375,21 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   const { error } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: visible, p_actor: actorId })
   if (error) throw new Error(error.message.replace(/^store: /, ""))
   let crmRowsUpdated = 0
+  const changed: string[] = []
   try {
     const { updateDocument } = await import("@/lib/operations/document")
     for (const r of (rows ?? []) as { id: string }[]) {
       const u = await updateDocument({ id: r.id, patch: { portal_visible: visible } } as never)
       if (!u.success) throw new Error(u.error || "The CRM list could not be updated.")
+      changed.push(r.id)
       crmRowsUpdated++
     }
   } catch (e) {
-    // never leave the store and the CRM list disagreeing: put the store back as it was
-    if (before !== visible) await db().rpc("store_set_published", { p_file_id: fileId, p_published: before, p_actor: actorId })
+    // never leave the store and the CRM list disagreeing: put back the rows already changed AND the store
+    if (changed.length > 0) {
+      await db().from("documents").update({ portal_visible: !visible, updated_at: new Date().toISOString() }).in("id", changed)
+    }
+    await db().rpc("store_set_published", { p_file_id: fileId, p_published: before, p_actor: actorId })
     throw e
   }
   return { visible, crmRowsUpdated }

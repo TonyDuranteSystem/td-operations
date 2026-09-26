@@ -220,6 +220,48 @@ describe("new storage screens — live sandbox", () => {
     await expect(assertNotStoreOwnedAccount(acc)).rejects.toThrow(/hand-over/)
   })
 
+  it("a flow refused a Drive folder (tax intake …) files the client's uploads into the store — passport to the person; a re-run makes no copies", async () => {
+    const paths: string[] = []
+    for (const n of ["bank_statement.pdf", "passport_owner.pdf"]) {
+      const path = `zz-s6b/${tag}/${n}`
+      const { error } = await db.storage.from("onboarding-uploads").upload(path, await pdf(n), { contentType: "application/pdf", upsert: true })
+      if (error) throw new Error(error.message)
+      paths.push(path)
+    }
+    const { saveUploadsToStoreForAccount } = await import("@/lib/crm-store/account-uploads")
+    const r1 = await saveUploadsToStoreForAccount({ accountId: fx.account, flow: "tax-intake", paths, passportContact: { contactId: fx.personB, name: `ZZ B S6B ${tag}` } })
+    expect(r1).toMatchObject({ saved: 2, failed: [] })
+    const { data: inCompany } = await db.from("store_files").select("id, document_type, published").eq("owner_id", fx.owner).eq("name", "bank_statement.pdf")
+    expect(inCompany).toHaveLength(1)
+    expect(inCompany[0]).toMatchObject({ document_type: null, published: false })
+    const { data: inPerson } = await db.from("store_files").select("id, document_type").eq("owner_id", fx.ownerB).eq("name", "passport_owner.pdf")
+    expect(inPerson).toHaveLength(1)
+    expect(inPerson[0].document_type).toBe("passport")
+    const r2 = await saveUploadsToStoreForAccount({ accountId: fx.account, flow: "tax-intake", paths, passportContact: { contactId: fx.personB, name: `ZZ B S6B ${tag}` } })
+    expect(r2.saved).toBe(2)
+    const { data: again } = await db.from("store_files").select("id").eq("owner_id", fx.owner).eq("name", "bank_statement.pdf")
+    expect(again).toHaveLength(1)
+  })
+
+  it("the ensureCompanyFolder refusal is recognisable as 'store-owned' by the flows", async () => {
+    const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")
+    const { isStoreOwnedRefusal } = await import("@/lib/crm-store/account-uploads")
+    const err = await ensureCompanyFolder(fx.account, "x", "Wyoming").then(() => null, (e) => e)
+    expect(isStoreOwnedRefusal(err)).toBe(true)
+  })
+
+  it("sharing from the old list (updateDocument) asks the store first: a passport filed with a company is refused and nothing is written", async () => {
+    const { savePilotFile, upsertStoreDocumentRow } = await import("@/lib/crm-store/formation-pilot")
+    const w = await savePilotFile({ ownerId: fx.owner, folderKind: "company", name: `misfiled passport ${tag}.pdf`, bytes: await pdf("pp"), mimeType: "application/pdf", documentType: "passport", callerKey: `zz-s6b-misfiled:${tag}` })
+    const row = await upsertStoreDocumentRow(w.fileId, { file_name: w.name, account_id: fx.account, contact_id: fx.personA, portal_visible: false, category: 2, category_name: "Contacts" })
+    const { updateDocument } = await import("@/lib/operations/document")
+    const u = await updateDocument({ id: row.id, patch: { portal_visible: true } } as never)
+    expect(u.success).toBe(false)
+    expect(u.error).toMatch(/personal document/)
+    const { data: r } = await db.from("documents").select("portal_visible").eq("id", row.id).single()
+    expect(r.portal_visible).toBe(false)
+  })
+
   it("merging two people who both have their own storage is refused in plain words", async () => {
     const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
     expect(await storeMergeBlocker(fx.personA, fx.personB)).toMatch(/Both contacts/)

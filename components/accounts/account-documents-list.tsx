@@ -62,7 +62,7 @@ export function AccountDocumentsList({
   accountId?: string
 }) {
   const hasStoreRows = (documents ?? []).some((d) => (d.drive_file_id ?? '').startsWith('store:'))
-  const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId && !accountHasDriveFolder && hasStoreRows)
+  const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId && hasStoreRows)
   // A company whose files live in the new store: the files its store view below shows (with preview +
   // sharing) are never listed twice here (the double-listing Luca reported, 2026-07-20). Only THOSE are
   // hidden — the server says which; a store file the view would not show stays listed here.

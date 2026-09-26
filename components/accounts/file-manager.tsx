@@ -635,7 +635,11 @@ const ACCOUNT_UPLOAD_BASE_TYPES = [
 
 const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'] as const
 
-export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
+export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: {
+  accountId: string; driveFolderId: string | null; isAdmin?: boolean
+  /** The account lists new-store (`store:`) documents — then look for its store view even with a Drive folder. */
+  hasStoreRows?: boolean
+}) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
@@ -665,7 +669,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   // A company whose files live in the NEW store (Formation pilot, sandbox only) gets the store view
   // instead of "Create / Link Drive folder". The route answers null outside the pilot environment.
-  const storeOwner = useStoreOwnerForAccount(accountId, !driveFolderId)
+  const storeOwner = useStoreOwnerForAccount(accountId, !driveFolderId || hasStoreRows)
 
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
@@ -903,6 +907,14 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   return (
     <div className="space-y-2">
+      {storeOwner.data?.ownerId && (
+        // a company with BOTH (several open formations at company creation: Drive ran as today, then the
+        // store files were handed over) — its new-storage files are shown here too, never lost
+        <div className="mb-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+          <p className="text-xs text-amber-800">This company also has files in the new CRM storage (pilot):</p>
+          <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+        </div>
+      )}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {/* Validation result banner */}
       {validationResult && (

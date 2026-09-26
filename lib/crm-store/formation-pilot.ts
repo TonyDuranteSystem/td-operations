@@ -119,7 +119,8 @@ export interface PilotSave {
   name: string
   bytes: Buffer
   mimeType: string | null
-  documentType: string
+  /** null = not classified yet (staff choose the type later) */
+  documentType: string | null
   callerKey: string
   contentChanged?: boolean
   published?: boolean | null

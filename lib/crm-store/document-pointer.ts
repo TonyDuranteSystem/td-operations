@@ -105,3 +105,31 @@ export async function staffOnlyStorePointers(values: Array<string | null | undef
   }
   return out
 }
+
+/**
+ * Which of these pointers are store files of a PERSONAL document type (passport, ID …) that are NOT in a
+ * person's own storage (e.g. filed with a company) — sharing those would show one person's document to
+ * every co-owner. Fails CLOSED: any read error → every store pointer counts.
+ */
+export async function personalStoreFilesOutsidePerson(values: Array<string | null | undefined>): Promise<Set<string>> {
+  const ids = Array.from(new Set(values.map((v) => parseStorePointer(v)).filter((x): x is string => !!x)))
+  const out = new Set<string>()
+  if (ids.length === 0) return out
+  try {
+    const { data, error } = await db().from("store_files").select("id, document_type, store_owners!inner(kind)").in("id", ids)
+    if (error) throw error
+    const rows = (data ?? []) as { id: string; document_type: string | null; store_owners: { kind: string } | null }[]
+    const types = Array.from(new Set(rows.map((r) => r.document_type).filter((t): t is string => !!t)))
+    const personal = new Set<string>()
+    if (types.length > 0) {
+      const { data: cat, error: cErr } = await db().from("catalog_entries").select("slug, metadata")
+        .eq("catalog_id", "storage_document_types").in("slug", types)
+      if (cErr) throw cErr
+      for (const c of (cat ?? []) as { slug: string; metadata: { personal?: boolean } | null }[]) if (c.metadata?.personal === true) personal.add(c.slug)
+    }
+    for (const r of rows) if (r.document_type && personal.has(r.document_type) && r.store_owners?.kind !== "person") out.add(storePointer(r.id))
+  } catch {
+    for (const id of ids) out.add(storePointer(id))
+  }
+  return out
+}

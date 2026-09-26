@@ -158,8 +158,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         driveNote = 'also filed to the account\'s Drive folder.'
       }
     } catch (e) {
+      const { isStoreOwnedRefusal, saveUploadsToStoreForAccount } = await import('@/lib/crm-store/account-uploads')
+      if (isStoreOwnedRefusal(e)) {
+        // CRM Store pilot company (sandbox only): file the receipt into the new store instead of Drive
+        const r = await saveUploadsToStoreForAccount({ accountId: sub.account_id, flow: 'ra-switch', paths: [storagePath] })
+        driveNote = r.saved === 1
+          ? 'also filed to the company\'s new CRM storage (1. Company).'
+          : 'kept in the upload area — it could not be filed to the company\'s new CRM storage (staff were alerted).'
+      } else {
       console.error('[confirm-ra-switch] Drive copy failed (non-fatal, receipt is safe in Storage):', e)
       driveNote = 'could not be filed to Drive automatically — Drive is currently having a problem for new accounts (tracked separately). The receipt itself is safely saved either way.'
+      }
     }
 
     const result = await advanceStageIfAt({

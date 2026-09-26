@@ -945,7 +945,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
             accountHasDriveFolder={Boolean(account.drive_folder_id)}
             accountId={account.id}
           />
-          <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
+          <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} hasStoreRows={(documents ?? []).some((d: { drive_file_id: string | null }) => (d.drive_file_id ?? '').startsWith('store:'))} />
         </div>
       )}
       {activeTab === 'emails' && (
