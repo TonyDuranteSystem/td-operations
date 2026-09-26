@@ -230,6 +230,53 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ─── 3-pilot. CRM STORE (sandbox pilot, job 685467b5) ───
+    // A formation whose files live in the new store gets its signed SS-4 there — unpublished, exactly
+    // as today's row (portal_visible false; staff may still share it — Antonio 2026-08-04). Store
+    // failure → the storage fallback below runs as today.
+    if (!signedDocLinked && formationSdId) {
+      try {
+        const { pilotSaveCaseFile, storeOwnerForCase } = await import("@/lib/crm-store/formation-pilot")
+        // Only a store-owned formation reads the file here (always false outside the sandbox).
+        const isStoreOwned = !!(await storeOwnerForCase(formationSdId))
+        const { data: files } = isStoreOwned
+          ? await supabaseAdmin.storage
+              .from("signed-ss4")
+              .list(ss4.token, { limit: 1, sortBy: { column: "created_at", order: "desc" } })
+          : { data: null }
+        const file = files?.[0]
+        const { data: blob } = file
+          ? await supabaseAdmin.storage.from("signed-ss4").download(`${ss4.token}/${file.name}`)
+          : { data: null }
+        if (blob) {
+          const saved = await pilotSaveCaseFile({
+            caseId: formationSdId,
+            folderKind: "company",
+            documentType: "form_ss_4",
+            callerKey: `ss4-signed:${ss4.id}`,
+            name: `Form SS-4 - ${ss4.company_name} - Signed.pdf`,
+            bytes: Buffer.from(await blob.arrayBuffer()),
+            mimeType: "application/pdf",
+            published: false,
+            row: {
+              account_id: ss4.account_id ?? null,
+              contact_id: ss4.contact_id ?? null,
+              service_delivery_id: formationSdId,
+              document_type_name: "Form SS-4 (Signed)",
+              category: 1,
+              portal_visible: false,
+            },
+          })
+          if (saved.status === "saved") {
+            signedDocLinked = true
+            results.push({ step: "signed_doc_store", status: "ok", detail: `Signed SS-4 saved in the CRM Store (${saved.write})` })
+          }
+        }
+      } catch (e) {
+        results.push({ step: "signed_doc_store", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     // ─── 3b. STORAGE FALLBACK — signed doc for the flow Documents section ───
     // When the Drive path above didn't save (no drive_folder_id — e.g. sandbox,
     // or any account without a Drive folder), the signed SS-4 still lives in
@@ -389,7 +436,39 @@ export async function POST(req: NextRequest) {
               results.push({ step: "irs_package_doc", status: "error", detail: e instanceof Error ? e.message : String(e) })
             }
           } else {
-            results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles built (${articlesSource}), not uploaded — account has no Drive folder` })
+            // CRM Store pilot: a store-owned formation keeps its IRS package in the store (unpublished, as today).
+            let storedInStore = false
+            if (formationSdId) {
+              try {
+                const { pilotSaveCaseFile } = await import("@/lib/crm-store/formation-pilot")
+                const saved = await pilotSaveCaseFile({
+                  caseId: formationSdId,
+                  folderKind: "company",
+                  documentType: "irs_fax",
+                  callerKey: `ss4-irs-package:${ss4.id}`,
+                  name: mergedFileName,
+                  bytes: Buffer.from(mergedPdfBytes),
+                  mimeType: "application/pdf",
+                  published: false,
+                  row: {
+                    account_id: ss4.account_id as string,
+                    service_delivery_id: formationSdId,
+                    document_type_name: "SS-4 + Articles (IRS Package)",
+                    category: 1,
+                    portal_visible: false,
+                  },
+                })
+                if (saved.status === "saved") {
+                  storedInStore = true
+                  results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles (${articlesSource}) saved in the CRM Store (${saved.write}, ${ss4Pages.length + articlesPages.length} pages)` })
+                }
+              } catch (e) {
+                results.push({ step: "irs_package_store", status: "error", detail: e instanceof Error ? e.message : String(e) })
+              }
+            }
+            if (!storedInStore) {
+              results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles built (${articlesSource}), not uploaded — account has no Drive folder` })
+            }
           }
         } else if (!ss4Bytes) {
           results.push({ step: "irs_package", status: "error", detail: "Signed SS-4 PDF could not be loaded from Storage — package not built" })

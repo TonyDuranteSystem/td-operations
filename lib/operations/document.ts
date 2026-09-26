@@ -111,6 +111,24 @@ export interface UpdateDocumentsBulkResult {
 
 // ─── updateDocument ────────────────────────────────────────
 
+/** Non-null = a refusal message: at least one target row is a staff-only CRM Store file. */
+async function refuseStaffOnlyShare(target: { ids: string[] } | { driveFileId: string }): Promise<string | null> {
+  const { isStorePointer, staffOnlyStorePointers } = await import("@/lib/crm-store/document-pointer")
+  let pointers: string[]
+  if ("driveFileId" in target) {
+    pointers = [target.driveFileId]
+  } else {
+    const { data, error } = await supabaseAdmin.from("documents").select("drive_file_id").in("id", target.ids)
+    if (error) return `Could not check whether this document may be shared (${error.message}) — please try again.`
+    pointers = (data ?? []).map((r) => r.drive_file_id as string)
+  }
+  if (!pointers.some((p) => isStorePointer(p))) return null
+  const staffOnly = await staffOnlyStorePointers(pointers)
+  return staffOnly.size > 0
+    ? "This document is staff-only (it holds other people's personal data) and can never be shown to the client."
+    : null
+}
+
 export async function updateDocument(
   params: UpdateDocumentParams
 ): Promise<UpdateDocumentResult> {
@@ -120,6 +138,13 @@ export async function updateDocument(
     }
     if (!params.patch || Object.keys(params.patch).length === 0) {
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
+    }
+
+    // CRM Store: a file of a staff-only type (Formation Summary, SS-4, IRS package) is NEVER shown to a
+    // client — refuse the share here, for every caller (contact-page toggle, MCP, process-and-share).
+    if (params.patch.portal_visible === true) {
+      const refusal = await refuseStaffOnlyShare(params.id ? { ids: [params.id] } : { driveFileId: params.drive_file_id! })
+      if (refusal) return { success: false, outcome: "error", error: refusal }
     }
 
     const nowIso = new Date().toISOString()
@@ -232,6 +257,11 @@ export async function updateDocumentsBulk(
     }
     if (!params.patch || Object.keys(params.patch).length === 0) {
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
+    }
+
+    if (params.patch.portal_visible === true) {
+      const refusal = await refuseStaffOnlyShare({ ids: params.ids })
+      if (refusal) return { success: false, outcome: "error", error: refusal }
     }
 
     const nowIso = new Date().toISOString()

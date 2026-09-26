@@ -222,6 +222,18 @@ async function fetchDocumentBytes(
   driveFileId: string,
   fallbackName: string,
 ): Promise<{ bytes: Buffer; name: string; contentType?: string }> {
+  // CRM Store pointer FIRST ("store:" is one letter from "storage:").
+  const { parseStorePointer, readStoreFile, StoreFileUnavailableError } = await import("@/lib/crm-store/document-pointer")
+  const storeFileId = parseStorePointer(driveFileId)
+  if (storeFileId) {
+    try {
+      const f = await readStoreFile(storeFileId)
+      return { bytes: f.bytes, name: fallbackName, contentType: f.mimeType || undefined }
+    } catch (e) {
+      if (e instanceof StoreFileUnavailableError) throw new SendableRefusal(`"${fallbackName}" — ${e.message}`)
+      throw e
+    }
+  }
   if (driveFileId.startsWith("storage:")) {
     const rest = driveFileId.slice("storage:".length)
     const slash = rest.indexOf("/")

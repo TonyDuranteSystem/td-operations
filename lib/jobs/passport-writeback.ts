@@ -15,7 +15,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { ocrDriveFile } from "@/lib/docai"
+import { ocrDriveFile, ocrRawContent } from "@/lib/docai"
 import { parsePassportFromOcr } from "@/lib/passport-processing"
 
 const OCR_SUPPORTED_MIMES = new Set([
@@ -41,7 +41,10 @@ export interface PassportWritebackResult {
 
 export interface PassportWritebackParams {
   contact_id: string
-  drive_file_id: string
+  /** Where the passport is: a Drive file id, OR its bytes in `content` (CRM Store pilot — no Drive copy). */
+  drive_file_id?: string | null
+  content?: ArrayBuffer | null
+  file_name?: string | null
   mime_type: string
   /** If the wizard already captured DOB explicitly, skip overwriting it
    *  from MRZ (wizard is more authoritative — the client typed it). */
@@ -54,7 +57,7 @@ export interface PassportWritebackParams {
 export async function extractAndStorePassportData(
   params: PassportWritebackParams,
 ): Promise<PassportWritebackResult> {
-  const { contact_id, drive_file_id, mime_type, skip_dob, contact_name, account_id } = params
+  const { contact_id, drive_file_id, content, file_name, mime_type, skip_dob, contact_name, account_id } = params
 
   // Unsupported format (HEIC, etc.) — create a task for manual entry.
   if (!OCR_SUPPORTED_MIMES.has(mime_type)) {
@@ -82,7 +85,12 @@ export async function extractAndStorePassportData(
   }
 
   try {
-    const ocrResult = await ocrDriveFile(drive_file_id)
+    const ocrResult = content
+      ? await ocrRawContent(content, mime_type, file_name || "passport")
+      : drive_file_id
+        ? await ocrDriveFile(drive_file_id)
+        : null
+    if (!ocrResult) return { status: "skipped", detail: "No passport file to read", extracted_fields: [] }
     if (!ocrResult.fullText) {
       return { status: "ok", detail: "OCR ran but returned no text", extracted_fields: [] }
     }

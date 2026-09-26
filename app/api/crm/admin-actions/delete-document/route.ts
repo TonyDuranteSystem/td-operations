@@ -43,6 +43,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: 'Document not found' }, { status: 404 })
     }
 
+    // CRM Store files (pilot, sandbox only): deleting the CRM row here would leave the stored file live
+    // and still backed up, outside the store's own trash and legal-hold rules. Refuse, with the reason.
+    const { isStorePointer } = await import('@/lib/crm-store/document-pointer')
+    if (isStorePointer(doc.drive_file_id)) {
+      return NextResponse.json(
+        { success: false, detail: 'This document lives in the new CRM Storage and cannot be deleted from this list yet — its own trash arrives with the storage screens.' },
+        { status: 409 },
+      )
+    }
+
     let driveTrashed = false
 
     // Trash on Google Drive (soft delete — recoverable from trash)

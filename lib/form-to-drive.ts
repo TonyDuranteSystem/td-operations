@@ -177,25 +177,38 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
     driveSubfolder: "1. Company",
     pdfTitle: "LLC Formation Data Collection",
     filePrefix: "Formation_Data",
+    // Legacy standalone-form keys (first_name, street …) AND the portal wizard's keys (owner_*,
+    // entity_type, state_of_formation, member_N_* folded into members_list by
+    // normalizeFormationPayloadForPdf). Absent keys are skipped, so both shapes render.
     sections: [
       {
         title: "Owner Information",
         fields: [
           { key: "first_name", label: "First Name" },
+          { key: "owner_first_name", label: "First Name" },
           { key: "last_name", label: "Last Name" },
+          { key: "owner_last_name", label: "Last Name" },
           { key: "email", label: "Email" },
+          { key: "owner_email", label: "Email" },
           { key: "phone", label: "Phone" },
+          { key: "owner_phone", label: "Phone" },
           { key: "dob", label: "Date of Birth" },
+          { key: "owner_dob", label: "Date of Birth" },
           { key: "citizenship", label: "Citizenship" },
+          { key: "owner_nationality", label: "Citizenship" },
           { key: "passport_number", label: "Passport Number" },
+          { key: "owner_is_signer", label: "Signs the SS-4 (Responsible Party)" },
         ],
       },
       {
         title: "LLC Preferences",
         fields: [
+          { key: "entity_type", label: "Entity Type" },
+          { key: "state_of_formation", label: "State of Formation" },
           { key: "llc_name_1", label: "LLC Name Option 1" },
           { key: "llc_name_2", label: "LLC Name Option 2" },
           { key: "llc_name_3", label: "LLC Name Option 3" },
+          { key: "chosen_name_final", label: "Chosen Name" },
           { key: "business_purpose", label: "Business Purpose" },
         ],
       },
@@ -203,11 +216,20 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
         title: "Address",
         fields: [
           { key: "street", label: "Street" },
+          { key: "owner_street", label: "Street" },
           { key: "city", label: "City" },
+          { key: "owner_city", label: "City" },
           { key: "state_province", label: "State/Province" },
+          { key: "owner_state_province", label: "State/Province" },
           { key: "zip", label: "ZIP" },
+          { key: "owner_zip", label: "ZIP" },
           { key: "country", label: "Country" },
+          { key: "owner_country", label: "Country" },
         ],
+      },
+      {
+        title: "Members",
+        fields: [{ key: "members_list", label: "Additional Members" }],
       },
     ],
   },
@@ -538,9 +560,11 @@ export function wrapByWidth(
 export async function generateFormSummaryPDF(
   config: FormDriveConfig,
   data: Record<string, unknown>,
-  meta: { token: string; submittedAt: string; companyName?: string; uploadCount: number }
+  meta: { token: string; submittedAt: string; companyName?: string; uploadCount: number; deterministic?: boolean }
 ): Promise<Uint8Array> {
-  const pdf = await PDFDocument.create()
+  // deterministic: no creation / modification time or producer stamped in the file, so the SAME
+  // answers always give the SAME bytes (the CRM Store then records "unchanged", not a new version).
+  const pdf = await PDFDocument.create(meta.deterministic ? { updateMetadata: false } : {})
   const font = await pdf.embedFont(StandardFonts.Helvetica)
   const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold)
   const blue = rgb(0.12, 0.23, 0.37)
@@ -1008,6 +1032,40 @@ export function normalizeTaxPayloadForPdf(
     }
   }
 
+  return out
+}
+
+/**
+ * Normalize a portal FORMATION-wizard payload for the summary PDF: fold the flattened
+ * member_N_* keys (member_count authoritative) into members_list, keeping EVERY answer of each
+ * member (unlike the tax fold, which keeps a fixed list — a formation member's nationality or date
+ * of birth would otherwise vanish). Sub-keys lose their `member_N_` / `member_` prefix so the PDF's
+ * label fallback reads "First Name", "Dob"… If nothing folds, the raw keys stay — never hide data.
+ * Pure function — returns a new object, never mutates the input.
+ */
+export function normalizeFormationPayloadForPdf(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...data }
+  if (out.member_count === undefined) return out
+  const count = Number(out.member_count) || 0
+  const members: Record<string, unknown>[] = []
+  const folded: string[] = []
+  for (let i = 0; i < count; i++) {
+    const prefix = `member_${i}_`
+    const item: Record<string, unknown> = {}
+    for (const k of Object.keys(out).sort()) {
+      if (!k.startsWith(prefix)) continue
+      const sub = k.slice(prefix.length).replace(/^member_/, "")
+      item[sub] = out[k]
+      folded.push(k)
+    }
+    if (Object.values(item).some((v) => v !== undefined && v !== null && v !== "")) members.push(item)
+  }
+  if (members.length === 0) return out
+  out.members_list = members
+  delete out.member_count
+  for (const k of folded) delete out[k]
   return out
 }
 

@@ -1293,6 +1293,8 @@ export async function reactivateSD(
 export interface RevertStageParams {
   delivery_id: string
   actor?: string
+  /** The staff member's auth user id — the CRM Store's trash needs a person (pilot rows only). */
+  actor_user_id?: string | null
   /** Free-text note appended to stage_history + action_log. */
   notes?: string
 }
@@ -1421,19 +1423,63 @@ export async function revertServiceDelivery(
     }
   }
 
+  // 3-store. CRM Store pilot (sandbox only, job 685467b5): a document of that stage whose bytes live in
+  // the new store goes to the STORE's trash (recoverable, legal holds apply) before its CRM row is
+  // removed below — never left live and backed up with no CRM listing. A store file that could NOT be
+  // trashed (no staff member known, or an error) keeps its CRM row: it stays listed, never orphaned.
+  const keptStorePointers: string[] = []
+  try {
+    const { data: stageRows } = await supabaseAdmin
+      .from("documents")
+      .select("drive_file_id")
+      .eq("service_delivery_id", sd.id)
+      .eq("flow_stage", previous.stage_name)
+      .like("drive_file_id", "store:%")
+    const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
+    for (const r of stageRows ?? []) {
+      const fileId = parseStorePointer(r.drive_file_id as string)
+      if (!fileId) continue
+      if (!params.actor_user_id) { keptStorePointers.push(r.drive_file_id as string); continue }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+      const { error: trErr } = await (supabaseAdmin as any).rpc("store_trash_file", {
+        p_file_id: fileId, p_actor: params.actor_user_id, p_reason: `Stage reverted to "${previous.stage_name}"`,
+      })
+      if (trErr) {
+        keptStorePointers.push(r.drive_file_id as string)
+        console.error(`[revertServiceDelivery] store file ${fileId} not trashed: ${trErr.message}`)
+      }
+    }
+  } catch (e) {
+    console.error("[revertServiceDelivery] CRM Store trash step failed:", e instanceof Error ? e.message : e)
+  }
+
   // 3. Delete documents stamped with the PREVIOUS (target) stage. documents is
   // not a protected table, so a raw delete is fine; flow_stage is untyped.
   let documentsDeleted = 0
   const adminDocs = supabaseAdmin as unknown as UntypedDocDelete
-  const { data: deletedDocs, error: delErr } = await dbWriteSafe(
-    adminDocs
+  if (keptStorePointers.length === 0) {
+    const { data: deletedDocs, error: delErr } = await dbWriteSafe(
+      adminDocs
+        .from("documents")
+        .delete()
+        .match({ service_delivery_id: sd.id, flow_stage: previous.stage_name })
+        .select("id"),
+      "documents.delete.flow-revert",
+    )
+    if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
+  } else {
+    // pilot only: delete every row of that stage EXCEPT the store files that stayed live
+    const { data: stageDocs } = await supabaseAdmin
       .from("documents")
-      .delete()
-      .match({ service_delivery_id: sd.id, flow_stage: previous.stage_name })
-      .select("id"),
-    "documents.delete.flow-revert",
-  )
-  if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
+      .select("id, drive_file_id")
+      .eq("service_delivery_id", sd.id)
+      .eq("flow_stage", previous.stage_name)
+    const ids = (stageDocs ?? []).filter((d) => !keptStorePointers.includes(d.drive_file_id as string)).map((d) => d.id as string)
+    if (ids.length > 0) {
+      const { data: deletedDocs, error: delErr } = await supabaseAdmin.from("documents").delete().in("id", ids).select("id")
+      if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
+    }
+  }
 
   // 3b. Clear any IRS shipment-tracking record for this case (2026-09-09). A revert is
   // exactly the "this needs to be re-entered" correction — deleting the row means a
