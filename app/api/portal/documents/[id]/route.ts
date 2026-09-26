@@ -67,7 +67,7 @@ export async function GET(
     // CRM Store pointer FIRST ("store:" is one letter from "storage:"). Until Stage 1 the portal is
     // not on the store's own visibility rules: the account/contact check above decides access, exactly
     // as for every other document. ONE store rule is absolute here already: a file of a staff-only type
-    // (Formation Summary, SS-4, IRS package) is never served to a client, whatever its CRM row says.
+    // (the Formation Summary) is never served to a client, whatever its CRM row says.
     const { parseStorePointer, readStoreFile, StoreFileUnavailableError, staffOnlyStorePointers } = await import('@/lib/crm-store/document-pointer')
     const storeFileId = parseStorePointer(doc.drive_file_id)
     if (storeFileId) {

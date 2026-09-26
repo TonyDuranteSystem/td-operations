@@ -140,7 +140,7 @@ export async function updateDocument(
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
     }
 
-    // CRM Store: a file of a staff-only type (Formation Summary, SS-4, IRS package) is NEVER shown to a
+    // CRM Store: a file of a staff-only type (the Formation Summary) is NEVER shown to a
     // client — refuse the share here, for every caller (contact-page toggle, MCP, process-and-share).
     if (params.patch.portal_visible === true) {
       const refusal = await refuseStaffOnlyShare(params.id ? { ids: [params.id] } : { driveFileId: params.drive_file_id! })

@@ -129,15 +129,29 @@ export interface PilotSave {
   actor?: string | null
 }
 
-/** Save one file into the store (throws on any failure — the caller then runs today's path). */
+/**
+ * Save one file into the store (throws on any failure — the caller then runs today's path).
+ * A caller key that points at a file in the TRASH (e.g. staff pressed Go Back, then re-upload the
+ * corrected file under the same name) must never swallow the new upload: it is saved as a NEW file
+ * (the trashed one stays in the trash, restorable). Any result other than created / versioned /
+ * unchanged is a failure.
+ */
 export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
   const folderId = await folderOfKind(p.ownerId, p.folderKind)
-  return saveBytesToStore({
+  const save = (callerKey: string) => saveBytesToStore({
     ownerId: p.ownerId, folderId, name: p.name, mimeType: p.mimeType, bytes: p.bytes,
-    callerKey: p.callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
+    callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
     periodYear: p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
     links: p.links, subjects: p.subjects,
   })
+  let w = await save(p.callerKey)
+  // keyed on the trashed file: the next same-name upload becomes a VERSION of this new file, not a third
+  // file; a replacement that was itself trashed again leads one step further (bounded).
+  for (let hop = 0; w.status === "trashed" && hop < 5; hop++) w = await save(`${p.callerKey}:after-trash:${w.fileId}`)
+  if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
+    throw new Error(`store pilot: the save ended as "${w.status}"`)
+  }
+  return w
 }
 
 export interface DocumentsRow {

@@ -1091,10 +1091,12 @@ export async function materializeFormationCompany(
       for (const mp of pendingMemberPassports) {
         try {
           const cleanPath = mp.storage_path.replace(/^\/+/, "")
-          const { data: blob } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
           if (!blob) {
             // nothing to save anywhere (today's Drive copy reports the same) — never list a missing file
-            steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: "Passport file not found in its upload location" })
+            const reason = dlErr?.message || "Passport file not found in its upload location"
+            steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: reason })
+            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase.owner.id, what: "member passport", member: mp.contact_id, error: reason })
             continue
           }
           const saved = await pilotSavePassport({

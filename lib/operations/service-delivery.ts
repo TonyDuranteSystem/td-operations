@@ -1429,12 +1429,14 @@ export async function revertServiceDelivery(
   // trashed (no staff member known, or an error) keeps its CRM row: it stays listed, never orphaned.
   const keptStorePointers: string[] = []
   try {
-    const { data: stageRows } = await supabaseAdmin
+    const { data: stageRows, error: stageErr } = await supabaseAdmin
       .from("documents")
       .select("drive_file_id")
       .eq("service_delivery_id", sd.id)
       .eq("flow_stage", previous.stage_name)
       .like("drive_file_id", "store:%")
+    // unreadable → treat every store row of the stage as kept (never delete a row whose file stays live)
+    if (stageErr) keptStorePointers.push("store:%")
     const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
     for (const r of stageRows ?? []) {
       const fileId = parseStorePointer(r.drive_file_id as string)
@@ -1474,10 +1476,15 @@ export async function revertServiceDelivery(
       .select("id, drive_file_id")
       .eq("service_delivery_id", sd.id)
       .eq("flow_stage", previous.stage_name)
-    const ids = (stageDocs ?? []).filter((d) => !keptStorePointers.includes(d.drive_file_id as string)).map((d) => d.id as string)
+    const keepAllStore = keptStorePointers.includes("store:%")
+    const ids = (stageDocs ?? [])
+      .filter((d) => !keptStorePointers.includes(d.drive_file_id as string))
+      .filter((d) => !(keepAllStore && String(d.drive_file_id).startsWith("store:")))
+      .map((d) => d.id as string)
     if (ids.length > 0) {
       const { data: deletedDocs, error: delErr } = await supabaseAdmin.from("documents").delete().in("id", ids).select("id")
-      if (!delErr && Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
+      if (delErr) console.error("[revertServiceDelivery] documents delete failed:", delErr.message)
+      else if (Array.isArray(deletedDocs)) documentsDeleted = deletedDocs.length
     }
   }
 

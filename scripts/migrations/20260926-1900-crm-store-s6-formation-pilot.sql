@@ -14,6 +14,7 @@
 --    service_delivery_id and must never go back to "in formation"), only on a real status change, and it
 --    can NEVER block the CRM's own status write (errors are logged, not raised).
 -- 3b. store_attach_formation() now refuses a company the formation case is not linked to.
+-- 5. One CRM documents row per store file (unique index on store: pointers).
 -- 4. store_rename_root(): the idempotent "give the company's root folder its final name" step, separate
 --    from the attach so a company owner created early (auto-attach, no name) still gets its name.
 
@@ -178,6 +179,18 @@ BEGIN
   VALUES ('folder_renamed', p_actor, p_owner_id, v_root.id, btrim(p_name), jsonb_build_object('from', v_root.name));
   RETURN true;
 END $$;
+
+-- ─────────────────────────────────────────────────────────────── 5. one CRM row per store file
+-- The CRM `documents` list points at a store file as drive_file_id = 'store:<file id>'. Two wizard-submit
+-- runs at the same moment both saw "not listed yet" and both inserted (found by the S6 route E2E). One row
+-- per store file is now a database rule — only for store pointers (Drive ids and `storage:` pointers are
+-- untouched). Production has no store rows, so the clean-up below is a no-op there.
+DELETE FROM public.documents d
+ USING public.documents keep
+ WHERE d.drive_file_id LIKE 'store:%' AND keep.drive_file_id = d.drive_file_id
+   AND (keep.created_at, keep.id) < (d.created_at, d.id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_store_pointer
+  ON public.documents (drive_file_id) WHERE drive_file_id LIKE 'store:%';
 
 REVOKE ALL ON FUNCTION public.store_type_staff_only(text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_formation_status_follow() FROM PUBLIC, anon, authenticated;

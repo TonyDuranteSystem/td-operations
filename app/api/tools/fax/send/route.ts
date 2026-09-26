@@ -142,8 +142,14 @@ export async function POST(req: NextRequest) {
     }
     try {
       // CRM Store file (`store:<id>`) first — "store:" must never reach the Drive downloader.
-      const { parseStorePointer, readStoreFile } = await import('@/lib/crm-store/document-pointer')
+      const { parseStorePointer, readStoreFile, staffOnlyStorePointers } = await import('@/lib/crm-store/document-pointer')
       const storeFileId = parseStorePointer(doc.drive_file_id)
+      if (storeFileId && (await staffOnlyStorePointers([doc.drive_file_id])).size > 0) {
+        return NextResponse.json(
+          { success: false, error: 'That document is staff-only (it holds other people\'s personal data) and cannot be faxed.' },
+          { status: 400 },
+        )
+      }
       if (storeFileId) {
         const f = await readStoreFile(storeFileId)
         fileBase64 = f.bytes.toString('base64')
