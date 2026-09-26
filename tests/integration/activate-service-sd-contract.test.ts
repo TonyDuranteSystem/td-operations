@@ -267,8 +267,14 @@ describe("activate-service — onboarding contract_type skips all SD creation", 
     // The formation branch must call createSD with service_type='Company
     // Formation' and account_id: null, before any onboarding/pipelines branch.
     const formationCreatePattern =
-      /if \(contractType === "formation"\)\s*\{[\s\S]{0,2000}?createSD\(\{[\s\S]{0,400}?service_type:\s*"Company Formation"[\s\S]{0,400}?account_id:\s*null/
+      /if \(contractType === "formation"\)\s*\{[\s\S]{0,3000}?createSD\(\{[\s\S]{0,400}?service_type:\s*"Company Formation"[\s\S]{0,400}?account_id:\s*null/
     expect(source).toMatch(formationCreatePattern)
+    // Workspace-only plan S1: a formation-type contract that did NOT buy a
+    // formation (name change / closure / banking sold on the formation
+    // template) must skip the formation SD — the guard sits right before it.
+    expect(source).toMatch(
+      /if \(contractType === "formation"\)\s*\{[\s\S]{0,1200}?if \(formationNotBought\)\s*\{[\s\S]{0,400}?status:\s*"skipped"[\s\S]{0,300}?\}\s*else if \(contactId\)/,
+    )
   })
 
   it("route source skips SD-creation block when contractType === 'onboarding'", async () => {
