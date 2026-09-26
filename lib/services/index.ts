@@ -193,6 +193,8 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   "Client Onboarding": "client_onboarding",
   "Company Closure": "closure",
   DBA: "dba",
+  "Company Change Name": "company_change_name",
+  "EIN Change Name": "ein_change_name",
 }
 
 /**
@@ -288,6 +290,26 @@ export async function getStartAtActivationServiceTypes(): Promise<string[]> {
   const slugs = new Set(
     all
       .filter((e) => e.status === "active" && e.tags.includes("start_at_activation"))
+      .map((e) => e.slug),
+  )
+  return Object.entries(SERVICE_TYPE_TO_SLUG)
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
+}
+
+/**
+ * Pipeline / `service_type` names tagged `contact_eligible` — services that can
+ * live on a PERSON with no company attached (Company Closure of an old LLC we
+ * don't track, ITIN, a formation before its company exists). A start-at-payment
+ * service WITHOUT this tag belongs to an existing company (e.g. Company Change
+ * Name) and is created on the contract's company — workspace-only plan S1,
+ * dev job 9d34e750.
+ */
+export async function getContactEligibleServiceTypes(): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all
+      .filter((e) => e.status === "active" && e.tags.includes("contact_eligible"))
       .map((e) => e.slug),
   )
   return Object.entries(SERVICE_TYPE_TO_SLUG)

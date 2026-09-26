@@ -37,17 +37,22 @@ vi.mock('@/lib/portal/tier-config', () => ({
   TIER_ORDER: { lead: 0, formation: 1, onboarding: 2, active: 3 },
 }))
 vi.mock('@/lib/gmail', () => ({ gmailPost: vi.fn() }))
-vi.mock('@/lib/services', () => ({ getStartAtActivationServiceTypes: vi.fn(async () => ['Company Closure']) }))
+vi.mock('@/lib/services', () => ({
+  getStartAtActivationServiceTypes: vi.fn(async () => ['Company Closure']),
+  getContactEligibleServiceTypes: vi.fn(async () => ['Company Closure', 'Company Formation', 'ITIN']),
+  getServiceBySlugStatic: vi.fn(() => undefined),
+}))
 vi.mock('@/lib/system-errors', () => ({ reportSystemError: vi.fn(async () => null) }))
 vi.mock('@/lib/operations/activation-start-services', async (orig) => ({
   ...(await orig<object>()),
   createStartAtActivationSDs: vi.fn(async () => [{ step: 'start_at_activation', status: 'created', detail: 'mock' }]),
+  createBoughtStartAtActivationServices: vi.fn(async () => [{ step: 'start_at_activation', status: 'created', detail: 'mock' }]),
 }))
 
 import { runActivation, triggerActivationIfPending } from '@/lib/operations/activate-service'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { autoCreatePortalUser } from '@/lib/portal/auto-create'
-import { createStartAtActivationSDs } from '@/lib/operations/activation-start-services'
+import { autoCreatePortalUser, tierForContract } from '@/lib/portal/auto-create'
+import { createBoughtStartAtActivationServices } from '@/lib/operations/activation-start-services'
 
 // Returns a fully chainable Supabase query mock.
 // All builder methods return the same chain. Direct await resolves to { data, error: null }.
@@ -210,45 +215,69 @@ describe('runActivation', () => {
       )
     }
 
-    it('formation + bought closure → the closure step runs with the contact, token and selection', async () => {
-      wire({
+    it('formation + bought closure → the start-at-payment step runs with the offer, token and contact', async () => {
+      const offer = {
         ...offerFixture,
         bundled_pipelines: ['Company Formation', 'Company Closure'],
         services: [
           { name: 'Company Formation', pipeline_type: 'Company Formation' },
           { name: 'Company Closure', price: '$0', pipeline_type: 'Company Closure' },
         ],
-      })
+      }
+      wire(offer)
       const result = await runActivation('pa-id')
       expect(result.ok).toBe(true)
-      expect(createStartAtActivationSDs).toHaveBeenCalledWith(expect.objectContaining({
+      expect(createBoughtStartAtActivationServices).toHaveBeenCalledWith(expect.objectContaining({
         offerToken: 'tok',
         contactId: 'contact-id',
-        selection: expect.objectContaining({ pipelines: ['Company Closure'] }),
+        offer: expect.objectContaining({ bundled_pipelines: ['Company Formation', 'Company Closure'] }),
       }))
       expect(result.steps).toEqual(expect.arrayContaining([
         expect.objectContaining({ step: 'start_at_activation', status: 'created' }),
       ]))
+      // a real formation was bought → the formation SD path is NOT skipped
+      expect(result.steps.some((s) => /without a Company Formation line/.test(s.detail ?? ''))).toBe(false)
     })
 
-    it('catalog lookup failure → error step + report, activation still ok', async () => {
-      const services = await import('@/lib/services')
-      const errs = await import('@/lib/system-errors')
-      vi.mocked(services.getStartAtActivationServiceTypes).mockRejectedValueOnce(new Error('catalog down'))
+    it('start-at-payment step errors flow into the result, activation still ok', async () => {
+      vi.mocked(createBoughtStartAtActivationServices).mockResolvedValueOnce([{ step: 'start_at_activation', status: 'error', detail: 'catalog lookup failed: catalog down' }])
       wire({ ...offerFixture, bundled_pipelines: ['Company Formation', 'Company Closure'], services: [{ name: 'Company Closure', pipeline_type: 'Company Closure' }] })
       const result = await runActivation('pa-id')
       expect(result.ok).toBe(true)
       expect(result.steps).toEqual(expect.arrayContaining([expect.objectContaining({ step: 'start_at_activation', status: 'error' })]))
-      expect(createStartAtActivationSDs).not.toHaveBeenCalled()
-      expect(errs.reportSystemError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('offer tok') }))
     })
 
-    it('formation without a closure → nothing to create', async () => {
+    it('S1: formation-type contract that sells ONLY a name change (DF Commerce) → no fake formation, name change still handled', async () => {
+      wire({ ...offerFixture, bundled_pipelines: ['Company Change Name'], services: [{ name: 'Company Change Name', pipeline_type: 'Company Change Name' }] })
+      const result = await runActivation('pa-id')
+      expect(result.ok).toBe(true)
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({ step: 'service_deliveries', status: 'skipped', detail: expect.stringContaining('without a Company Formation line') }),
+      ]))
+      expect(createBoughtStartAtActivationServices).toHaveBeenCalled()
+      // …and no formation experience: normal portal tier, no formation wizard
+      expect(tierForContract).toHaveBeenCalledWith('service')
+      expect(tierForContract).not.toHaveBeenCalledWith('formation')
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({ step: 'data_form', detail: expect.stringContaining('no formation form') }),
+      ]))
+    })
+
+    it('S1: a REAL formation keeps the formation tier', async () => {
       wire({ ...offerFixture, bundled_pipelines: ['Company Formation'], services: [{ name: 'Company Formation', pipeline_type: 'Company Formation' }] })
       await runActivation('pa-id')
-      expect(createStartAtActivationSDs).toHaveBeenCalledWith(expect.objectContaining({
-        selection: { pipelines: [], mismatches: [], multiQuantity: [] },
-      }))
+      expect(tierForContract).toHaveBeenCalledWith('formation')
+    })
+
+    it('S1: onboarding contract → start-at-payment services (e.g. a bundled closure) are created at payment too', async () => {
+      wire({ ...offerFixture, contract_type: 'onboarding', bundled_pipelines: ['Client Onboarding', 'Company Closure'], services: [{ name: 'Company Closure', pipeline_type: 'Company Closure' }] })
+      const result = await runActivation('pa-id')
+      expect(result.ok).toBe(true)
+      // really the onboarding branch (not the formation one, which also calls it)
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({ step: 'service_deliveries', detail: expect.stringContaining('onboarding') }),
+      ]))
+      expect(createBoughtStartAtActivationServices).toHaveBeenCalledWith(expect.objectContaining({ offerToken: 'tok' }))
     })
   })
 

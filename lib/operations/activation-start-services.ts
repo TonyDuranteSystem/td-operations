@@ -18,8 +18,15 @@
  *    SD. pipeline_type is matched case-insensitively. Any disagreement between
  *    bundled_pipelines and the recomputed selection is REPORTED, never silently
  *    skipped.
- *  - Contact-scoped (account_id NULL): the company being CLOSED is the client's
- *    old LLC, never the one being formed.
+ *  - Scope comes from the catalog (workspace-only plan S1, dev job 9d34e750):
+ *    a type tagged `contact_eligible` (Company Closure) is contact-scoped
+ *    (account_id NULL) — the company being CLOSED is the client's old LLC,
+ *    never the one being formed. A type WITHOUT that tag (Company Change Name)
+ *    belongs to an existing company and is created on the contract's company
+ *    (offers.account_id); with no company on the contract it is NOT guessed —
+ *    it is reported for staff to add by hand.
+ *  - Runs for formation AND onboarding contracts (onboarding used to create
+ *    nothing at payment, so a bundled closure was never created).
  *  - Never a duplicate: skip when (a) an SD of this type already carries this
  *    offer token in ANY status (a staff cancellation is respected on a retry),
  *    or (b) an active/on_hold SD of this type already exists for the contact or
@@ -34,6 +41,7 @@
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
 import { reportSystemError } from "@/lib/system-errors"
+import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes } from "@/lib/services"
 
 export interface ActivationStep {
   step: string
@@ -114,7 +122,78 @@ function report(message: string, context: Record<string, unknown>) {
 }
 
 /**
- * Create the start-at-activation SDs for a paid formation contract.
+ * Pure: did this contract actually BUY `serviceType`? Same rule as the offer
+ * total: a service line with that pipeline_type that is not an unticked
+ * optional, OR the type listed in bundled_pipelines. Used to stop a
+ * formation-type contract that sells only another service (DF Commerce: a
+ * name change; SupraEmerge: a closure) from creating a fake Company Formation.
+ */
+export function contractBoughtService(p: {
+  services: unknown
+  selectedServices: unknown
+  bundledPipelines: unknown
+  serviceType: string
+}): boolean {
+  const target = p.serviceType.trim().toLowerCase()
+  const bundled = Array.isArray(p.bundledPipelines) ? (p.bundledPipelines as unknown[]) : []
+  if (bundled.some((b) => typeof b === "string" && b.trim().toLowerCase() === target)) return true
+  const sel = selectStartAtActivationPipelines({
+    services: p.services,
+    selectedServices: p.selectedServices,
+    bundledPipelines: [],
+    startAtActivationTypes: [p.serviceType],
+  })
+  return sel.pipelines.length > 0
+}
+
+/**
+ * Pure: is this a "formation" contract that CLEARLY sells something other than
+ * a formation (it names services, and none of them is a formation)? Such a
+ * contract must get none of the formation experience (no formation SD, tier,
+ * wizard, welcome or label). A contract that names NO services at all is
+ * ambiguous and is treated as a real formation (safe default — legacy / MCP
+ * offers without a service list keep working exactly as before).
+ */
+export function isFormationContractWithoutFormation(p: {
+  contractType: string | null | undefined
+  services: unknown
+  selectedServices: unknown
+  bundledPipelines: unknown
+}): boolean {
+  if (p.contractType !== "formation") return false
+  const bundled = Array.isArray(p.bundledPipelines) ? (p.bundledPipelines as unknown[]).filter((b) => typeof b === "string" && b.trim()) : []
+  const typedLines = Array.isArray(p.services)
+    ? (p.services as Array<Record<string, unknown> | null>).filter((l) => l && typeof l === "object" && typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim())
+    : []
+  if (bundled.length === 0 && typedLines.length === 0) return false
+  return !contractBoughtService({
+    services: p.services,
+    selectedServices: p.selectedServices,
+    bundledPipelines: p.bundledPipelines,
+    serviceType: "Company Formation",
+  })
+}
+
+export type StartServiceScope =
+  | { kind: "contact" }
+  | { kind: "account"; accountId: string }
+  | { kind: "skip"; reason: string }
+
+/** Pure: where a start-at-payment service is created (see header). */
+export function decideStartServiceScope(p: {
+  serviceType: string
+  contactScopedTypes: string[] | null
+  accountId: string | null
+}): StartServiceScope {
+  // null = catalog scope unknown → legacy behaviour (contact-scoped), which is
+  // what every start-at-payment service did before S1.
+  if (p.contactScopedTypes === null || p.contactScopedTypes.includes(p.serviceType)) return { kind: "contact" }
+  if (p.accountId) return { kind: "account", accountId: p.accountId }
+  return { kind: "skip", reason: `${p.serviceType} belongs to an existing company but the contract has no company linked` }
+}
+
+/**
+ * Create the start-at-activation SDs for a paid formation / onboarding contract.
  * Never throws; returns one step row per decision.
  */
 export async function createStartAtActivationSDs(p: {
@@ -122,6 +201,10 @@ export async function createStartAtActivationSDs(p: {
   clientName: string | null
   contactId: string | null
   selection: StartAtActivationSelection
+  /** The contract's company (offers.account_id) — used for company-scoped types. */
+  accountId?: string | null
+  /** Types tagged contact_eligible. Omitted/null → every type contact-scoped (pre-S1 behaviour). */
+  contactScopedTypes?: string[] | null
 }): Promise<ActivationStep[]> {
   const steps: ActivationStep[] = []
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
@@ -133,7 +216,18 @@ export async function createStartAtActivationSDs(p: {
 
   for (const serviceType of p.selection.pipelines) {
     try {
-      if (!p.contactId) {
+      const scope = decideStartServiceScope({
+        serviceType,
+        contactScopedTypes: p.contactScopedTypes ?? null,
+        accountId: p.accountId ?? null,
+      })
+      if (scope.kind === "skip") {
+        const detail = `${serviceType} not created for ${who}: ${scope.reason} — add it by hand`
+        steps.push({ step: "start_at_activation", status: "skipped", detail })
+        report(detail, { offerToken: p.offerToken, serviceType })
+        continue
+      }
+      if (scope.kind === "contact" && !p.contactId) {
         const detail = `${serviceType} not created for ${who}: no contact linked to the offer — add it by hand`
         steps.push({ step: "start_at_activation", status: "skipped", detail })
         report(detail, { offerToken: p.offerToken, serviceType })
@@ -153,25 +247,33 @@ export async function createStartAtActivationSDs(p: {
         continue
       }
 
-      // (b) an open one already exists for this person or their companies (e.g. added by hand).
-      const { data: links, error: linksErr } = await supabase
-        .from("account_contacts")
-        .select("account_id")
-        .eq("contact_id", p.contactId)
-      if (linksErr) throw new Error(`account links lookup failed: ${linksErr.message}`)
-      const accountIds = (links ?? []).map((l) => l.account_id as string).filter(Boolean)
-      const scope = [`and(contact_id.eq.${p.contactId},account_id.is.null)`]
-      if (accountIds.length) scope.push(`account_id.in.(${accountIds.join(",")})`)
+      // (b) an open one already exists (e.g. added by hand) — for a person-level
+      // service: on the person or any of their companies; for a company
+      // service: on that company.
+      let openFilter: string
+      if (scope.kind === "account") {
+        openFilter = `account_id.eq.${scope.accountId}`
+      } else {
+        const { data: links, error: linksErr } = await supabase
+          .from("account_contacts")
+          .select("account_id")
+          .eq("contact_id", p.contactId as string)
+        if (linksErr) throw new Error(`account links lookup failed: ${linksErr.message}`)
+        const accountIds = (links ?? []).map((l) => l.account_id as string).filter(Boolean)
+        const parts = [`and(contact_id.eq.${p.contactId},account_id.is.null)`]
+        if (accountIds.length) parts.push(`account_id.in.(${accountIds.join(",")})`)
+        openFilter = parts.join(",")
+      }
       const { data: open, error: openErr } = await supabase
         .from("service_deliveries")
         .select("id, status, account_id")
         .eq("service_type", serviceType)
         .in("status", ["active", "on_hold"])
-        .or(scope.join(","))
+        .or(openFilter)
         .limit(1)
       if (openErr) throw new Error(`open ${serviceType} lookup failed: ${openErr.message}`)
       if (open && open.length > 0) {
-        const detail = `${serviceType} NOT created for ${who}: an open one already exists (${open[0].id}${open[0].account_id ? ", on a company" : ""}). If this contract closes a DIFFERENT company, add it by hand.`
+        const detail = `${serviceType} NOT created for ${who}: an open one already exists (${open[0].id}${open[0].account_id ? ", on a company" : ""}). If this contract is for a DIFFERENT company, add it by hand.`
         steps.push({ step: "start_at_activation", status: "existing", detail })
         report(`[info] ${detail}`, { offerToken: p.offerToken, serviceType, existingSdId: open[0].id })
         continue
@@ -182,11 +284,15 @@ export async function createStartAtActivationSDs(p: {
           service_type: serviceType,
           service_name: p.clientName ? `${serviceType} - ${p.clientName}` : serviceType,
           contact_id: p.contactId,
-          account_id: null,
+          account_id: scope.kind === "account" ? scope.accountId : null,
           notes: `Auto-created from offer ${p.offerToken}`,
           source_offer_token: p.offerToken,
         })
-        steps.push({ step: "start_at_activation", status: "created", detail: `${serviceType} SD created (contact-scoped): ${sd.id}` })
+        steps.push({
+          step: "start_at_activation",
+          status: "created",
+          detail: `${serviceType} SD created (${scope.kind === "account" ? `on company ${scope.accountId}` : "contact-scoped"}): ${sd.id}`,
+        })
         if (p.selection.multiQuantity.includes(serviceType)) {
           const detail = `${serviceType} bought with quantity > 1 by ${who}: only ONE was created — add the others by hand`
           steps.push({ step: "start_at_activation", status: "skipped", detail })
@@ -215,4 +321,52 @@ export async function createStartAtActivationSDs(p: {
   }
 
   return steps
+}
+
+/**
+ * Catalog lookup + selection + creation in one call, for any contract whose
+ * payment branch does not create every bundled service itself (formation and
+ * onboarding). Never throws; lookup failures are reported, never silent.
+ */
+export async function createBoughtStartAtActivationServices(p: {
+  offer: { services?: unknown; selected_services?: unknown; bundled_pipelines?: unknown; account_id?: string | null } | null | undefined
+  offerToken: string
+  clientName: string | null
+  contactId: string | null
+}): Promise<ActivationStep[]> {
+  const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
+  let startTypes: string[] = []
+  try {
+    startTypes = await getStartAtActivationServiceTypes()
+  } catch (tagErr) {
+    const detail = `catalog lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}`
+    report(`start-at-payment services NOT checked for ${who}: ${detail}`, { offerToken: p.offerToken })
+    return [{ step: "start_at_activation", status: "error", detail }]
+  }
+  if (startTypes.length === 0) return []
+
+  let contactScopedTypes: string[]
+  try {
+    contactScopedTypes = await getContactEligibleServiceTypes()
+  } catch (tagErr) {
+    // Unknown scope → create nothing rather than risk the wrong person/company.
+    const detail = `scope lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}`
+    report(`start-at-payment services NOT created for ${who}: ${detail} — add them by hand`, { offerToken: p.offerToken })
+    return [{ step: "start_at_activation", status: "error", detail }]
+  }
+
+  const selection = selectStartAtActivationPipelines({
+    services: p.offer?.services,
+    selectedServices: p.offer?.selected_services,
+    bundledPipelines: p.offer?.bundled_pipelines,
+    startAtActivationTypes: startTypes,
+  })
+  return createStartAtActivationSDs({
+    offerToken: p.offerToken,
+    clientName: p.clientName,
+    contactId: p.contactId,
+    selection,
+    accountId: p.offer?.account_id ?? null,
+    contactScopedTypes,
+  })
 }

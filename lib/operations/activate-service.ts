@@ -13,9 +13,8 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
-import { selectStartAtActivationPipelines, createStartAtActivationSDs } from "@/lib/operations/activation-start-services"
-import { getStartAtActivationServiceTypes, getServiceBySlugStatic } from "@/lib/services"
-import { reportSystemError } from "@/lib/system-errors"
+import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
+import { getServiceBySlugStatic } from "@/lib/services"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
@@ -221,6 +220,19 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     .single()
 
   const contractType = offer?.contract_type || "formation"
+  // A "formation" contract that clearly sells something else (DF Commerce: a
+  // name change; SupraEmerge: a closure) gets NONE of the formation experience
+  // — no formation SD, tier, wizard, welcome or label (workspace-only plan S1,
+  // dev job 9d34e750). It keeps the formation branch for everything else
+  // (account deferred, start-at-payment services), exactly as before.
+  const formationNotBought = isFormationContractWithoutFormation({
+    contractType,
+    services: offer?.services,
+    selectedServices: offer?.selected_services,
+    bundledPipelines: offer?.bundled_pipelines,
+  })
+  /** Contract type for the formation-only experience (tier, wizard, welcome, labels). */
+  const experienceType = formationNotBought ? "service" : contractType
 
   // Defense-in-depth: refuse renewals.
   //
@@ -590,7 +602,18 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // formation)" — required for returning active clients whose contact tier
     // stays at 'active' (the tier-based wizard fallback in wizard-visibility.ts
     // cannot fire for them). formation-setup.ts dedupes at wizard submit.
-    if (contactId) {
+    //
+    // ONLY when the contract actually bought a formation (workspace-only plan
+    // S1, dev job 9d34e750): formation-type contracts have been used to sell
+    // just a name change (DF Commerce), a closure (SupraEmerge) or banking —
+    // each would otherwise get a fake "company in formation".
+    if (formationNotBought) {
+      steps.push({
+        step: "service_deliveries",
+        status: "skipped",
+        detail: "formation-type contract without a Company Formation line — no formation SD created",
+      })
+    } else if (contactId) {
       // Dedup key = the originating offer token, now a first-class column.
       // The partial unique index uq_formation_sd_active_per_offer is the REAL
       // guard against the concurrent/retried-activation race (Michele Cotti got
@@ -670,52 +693,31 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
 
     // Bundled services that START AT PAYMENT (catalog tag start_at_activation —
-    // today Company Closure). Without this, a paid "Formation + Closure"
-    // contract silently never got its closure (dev job 77b66080). Never throws;
-    // every skip/error is also reported — see lib/operations/activation-start-services.ts.
-    try {
-      let startTypes: string[] = []
-      try {
-        startTypes = await getStartAtActivationServiceTypes()
-      } catch (tagErr) {
-        steps.push({ step: "start_at_activation", status: "error", detail: `catalog lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}` })
-        reportSystemError({
-          source: "server",
-          route: "lib/operations/activate-service",
-          message: `start-at-payment services NOT checked for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): catalog lookup failed`,
-          context: { offerToken: activation.offer_token },
-        }).catch(() => {})
-      }
-      if (startTypes.length > 0) {
-        const selection = selectStartAtActivationPipelines({
-          services: offer?.services,
-          selectedServices: offer?.selected_services,
-          bundledPipelines: offer?.bundled_pipelines,
-          startAtActivationTypes: startTypes,
-        })
-        steps.push(...await createStartAtActivationSDs({
-          offerToken: activation.offer_token,
-          clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
-          contactId,
-          selection,
-        }))
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      steps.push({ step: "start_at_activation", status: "error", detail: msg })
-      reportSystemError({
-        source: "server",
-        route: "lib/operations/activate-service",
-        message: `start-at-payment services failed for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): ${msg} — check the contract's bundled services by hand`,
-        context: { offerToken: activation.offer_token },
-      }).catch(() => {})
-    }
+    // Company Closure, Company Change Name). Without this, a paid "Formation +
+    // Closure" contract silently never got its closure (dev job 77b66080).
+    // Never throws; every skip/error is also reported — see
+    // lib/operations/activation-start-services.ts.
+    steps.push(...await createBoughtStartAtActivationServices({
+      offer,
+      offerToken: activation.offer_token,
+      clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
+      contactId,
+    }))
   } else if (contractType === "onboarding") {
     steps.push({
       step: "service_deliveries",
       status: "skipped",
       detail: "onboarding — SDs created by wizard submit / closing per SOP v7.2",
     })
+    // Start-at-payment services still start now (workspace-only plan S1): a
+    // bundled Company Closure of an OLD company doesn't wait for the new one,
+    // and onboarding never created it at all before.
+    steps.push(...await createBoughtStartAtActivationServices({
+      offer,
+      offerToken: activation.offer_token,
+      clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
+      contactId,
+    }))
   } else if (pipelines.length > 0) {
     // Get first pipeline stage for each type (including auto_tasks for task creation)
     const { data: allStages } = await supabase
@@ -930,7 +932,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
   // Upgrade portal tier from lead → tierForContract(contractType) after payment.
   // formation → formation, onboarding → onboarding, everything else → active.
-  const targetTier: PortalTier = tierForContract(contractType)
+  const targetTier: PortalTier = tierForContract(experienceType)
   if (autoAccountId) {
     // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
     const { syncTier } = await import("@/lib/operations/sync-tier")
@@ -1058,7 +1060,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // empty (e.g. onboarding/formation where the SD is created later by
         // the wizard, not at payment).
         const template = await getWelcomeMessage({
-          contractType,
+          contractType: experienceType,
           pipelines,
           language,
         })
@@ -1309,11 +1311,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     try {
       const today = new Date().toISOString().split("T")[0]
       const amount = Number(activation.amount)
-      const serviceLabel = contractType === "formation" ? "LLC Formation"
-        : contractType === "onboarding" ? "LLC Onboarding"
-        : contractType === "tax_return" ? "Tax Return"
-        : contractType === "itin" ? "ITIN Application"
-        : "Service"
+      const serviceLabel = experienceType === "formation" ? "LLC Formation"
+        : experienceType === "onboarding" ? "LLC Onboarding"
+        : experienceType === "tax_return" ? "Tax Return"
+        : experienceType === "itin" ? "ITIN Application"
+        : pipelines.length ? pipelines.join(", ") : "Service"
 
       const invoiceResult = await createTDInvoice({
         account_id: autoAccountId || undefined,
@@ -1803,7 +1805,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 4: Data Collection Form (SUPERVISED) ──────────
-  const formConfig = FORM_CONFIG[contractType]
+  // No formation wizard for a formation-type contract that sold no formation.
+  const formConfig = formationNotBought ? undefined : FORM_CONFIG[contractType]
   if (formConfig && leadId) {
     const { data: lead } = await supabase
       .from("leads")
@@ -1873,7 +1876,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       }
     }
   } else if (!formConfig) {
-    steps.push({ step: "data_form", status: "skipped", detail: `No form config for contract_type: ${contractType}` })
+    steps.push({ step: "data_form", status: "skipped", detail: formationNotBought ? "formation-type contract without a Company Formation line — no formation form" : `No form config for contract_type: ${contractType}` })
   } else {
     steps.push({ step: "data_form", status: "skipped", detail: "No lead_id available" })
   }
@@ -1982,11 +1985,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       : ""
 
     const paidDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
-    const serviceLabel = contractType === "formation" ? "LLC Formation"
-      : contractType === "onboarding" ? "LLC Onboarding"
-      : contractType === "tax_return" ? "Tax Return"
-      : contractType === "itin" ? "ITIN Application"
-      : contractType
+    const serviceLabel = experienceType === "formation" ? "LLC Formation"
+      : experienceType === "onboarding" ? "LLC Onboarding"
+      : experienceType === "tax_return" ? "Tax Return"
+      : experienceType === "itin" ? "ITIN Application"
+      : pipelines.length ? pipelines.join(", ") : contractType
 
     const paymentSection = section("Payment", [
       row("Client", activation.client_name),

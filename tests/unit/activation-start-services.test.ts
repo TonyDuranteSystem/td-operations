@@ -53,7 +53,7 @@ vi.mock("@/lib/supabase-admin", () => {
 const listEntries = vi.fn()
 vi.mock("@/lib/catalog/framework", async (orig) => ({ ...(await orig<object>()), listEntries: (...a: unknown[]) => listEntries(...a) }))
 
-import { selectStartAtActivationPipelines, createStartAtActivationSDs } from "@/lib/operations/activation-start-services"
+import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
 import { getStartAtActivationServiceTypes, _resetServicesCache } from "@/lib/services"
 
 const TYPES = ["Company Closure"]
@@ -268,3 +268,156 @@ describe("closure-form-completed legacy lookup", () => {
     expect(src).toContain(expected)
   })
 })
+
+// ── S1 (workspace-only plan, dev job 9d34e750) ─────────────────────────────
+
+describe("contractBoughtService — no fake formation", () => {
+  const formationLine = { name: "Company Formation", pipeline_type: "Company Formation" }
+  it("formation in the bundled list → bought", () => {
+    expect(contractBoughtService({ services: [], selectedServices: null, bundledPipelines: ["Company Formation"], serviceType: "Company Formation" })).toBe(true)
+  })
+  it("formation line only (bundled list empty) → bought", () => {
+    expect(contractBoughtService({ services: [formationLine], selectedServices: null, bundledPipelines: [], serviceType: "Company Formation" })).toBe(true)
+  })
+  it("DF Commerce shape: formation-type contract selling only a name change → NOT a formation", () => {
+    expect(contractBoughtService({ services: [{ name: "Company Change Name", pipeline_type: "Company Change Name" }], selectedServices: null, bundledPipelines: ["Company Change Name"], serviceType: "Company Formation" })).toBe(false)
+  })
+  it("SupraEmerge shape: closure only → NOT a formation", () => {
+    expect(contractBoughtService({ services: [closureLine], selectedServices: null, bundledPipelines: ["Company Closure"], serviceType: "Company Formation" })).toBe(false)
+  })
+  it("an UNTICKED optional formation line is not bought", () => {
+    expect(contractBoughtService({ services: [{ ...formationLine, optional: true }], selectedServices: ["Other"], bundledPipelines: [], serviceType: "Company Formation" })).toBe(false)
+  })
+  it("empty / malformed contract → not bought, never throws", () => {
+    expect(contractBoughtService({ services: null, selectedServices: null, bundledPipelines: null, serviceType: "Company Formation" })).toBe(false)
+  })
+})
+
+describe("decideStartServiceScope", () => {
+  it("contact_eligible type (Closure) → on the person", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: ["Company Closure", "ITIN"], accountId: "acc1" })).toEqual({ kind: "contact" })
+  })
+  it("company type (Change Name) with the contract's company → on that company", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Change Name", contactScopedTypes: ["Company Closure"], accountId: "acc1" })).toEqual({ kind: "account", accountId: "acc1" })
+  })
+  it("company type with NO company on the contract → skipped (never guessed)", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Change Name", contactScopedTypes: ["Company Closure"], accountId: null }).kind).toBe("skip")
+  })
+  it("scope lookup failed (null) → legacy person-level behaviour", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Change Name", contactScopedTypes: null, accountId: null })).toEqual({ kind: "contact" })
+  })
+})
+
+describe("createStartAtActivationSDs — company-scoped service", () => {
+  const sel = { pipelines: ["Company Change Name"], mismatches: [], multiQuantity: [] }
+  beforeEach(() => {
+    byOfferRows = []; byOfferAfterCreateRows = null; openRows = []; linkRows = []; openErr = null
+    createAttempted = false; orFilters.length = 0; reported.length = 0
+    createSD.mockReset()
+    createSD.mockImplementation(async () => { createAttempted = true; return { id: "sd-cn" } })
+  })
+  it("DF Commerce: name change created ON the contract's company, carrying the offer token", async () => {
+    const steps = await createStartAtActivationSDs({ offerToken: "df-commerce-llc-2026", clientName: "DF Commerce LLC", contactId: "c1", selection: sel, accountId: "acc-df", contactScopedTypes: ["Company Closure"] })
+    expect(createSD).toHaveBeenCalledWith(expect.objectContaining({ service_type: "Company Change Name", account_id: "acc-df", contact_id: "c1", source_offer_token: "df-commerce-llc-2026" }))
+    expect(steps[0]).toMatchObject({ status: "created" })
+    expect(orFilters).toEqual(["account_id.eq.acc-df"])
+  })
+  it("company service with NO contact still created on the company", async () => {
+    await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: null, selection: sel, accountId: "acc-df", contactScopedTypes: ["Company Closure"] })
+    expect(createSD).toHaveBeenCalledWith(expect.objectContaining({ account_id: "acc-df", contact_id: null }))
+  })
+  it("no company on the contract → not created, reported for staff", async () => {
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel, accountId: null, contactScopedTypes: ["Company Closure"] })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("skipped")
+    expect(reported[0]).toMatch(/no company linked/)
+  })
+  it("an open name change already on that company → not duplicated", async () => {
+    openRows = [{ id: "sd-old", status: "active", account_id: "acc-df" }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel, accountId: "acc-df", contactScopedTypes: ["Company Closure"] })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("existing")
+  })
+})
+
+describe("createBoughtStartAtActivationServices — catalog-driven, formation AND onboarding", () => {
+  beforeEach(() => {
+    _resetServicesCache(); listEntries.mockReset()
+    byOfferRows = []; byOfferAfterCreateRows = null; openRows = []; linkRows = []; openErr = null
+    createAttempted = false; orFilters.length = 0; reported.length = 0
+    createSD.mockReset()
+    createSD.mockImplementation(async () => { createAttempted = true; return { id: "sd-x" } })
+    listEntries.mockResolvedValue([
+      { slug: "closure", status: "active", tags: ["sd", "contact_eligible", "start_at_activation"] },
+      { slug: "company_change_name", status: "active", tags: ["sd", "start_at_activation"] },
+      { slug: "itin", status: "active", tags: ["contact_eligible", "start_at_wizard"] },
+    ])
+  })
+  it("closure → on the person; change name → on the contract's company; ITIN untouched (starts at the form)", async () => {
+    await createBoughtStartAtActivationServices({
+      offer: {
+        services: [closureLine, { name: "Company Change Name", pipeline_type: "Company Change Name" }, { name: "ITIN", pipeline_type: "ITIN" }],
+        selected_services: null,
+        bundled_pipelines: ["Company Closure", "Company Change Name", "ITIN"],
+        account_id: "acc1",
+      },
+      offerToken: "t", clientName: "X", contactId: "c1",
+    })
+    const calls = createSD.mock.calls.map((c) => c[0] as { service_type: string; account_id: string | null })
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ service_type: "Company Closure", account_id: null }),
+      expect.objectContaining({ service_type: "Company Change Name", account_id: "acc1" }),
+    ]))
+    expect(calls.some((c) => c.service_type === "ITIN")).toBe(false)
+  })
+  it("nothing tagged → nothing created, no noise", async () => {
+    listEntries.mockResolvedValue([{ slug: "closure", status: "active", tags: ["sd"] }])
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [closureLine], bundled_pipelines: ["Company Closure"] }, offerToken: "t", clientName: "X", contactId: "c1" })
+    expect(steps).toEqual([])
+    expect(createSD).not.toHaveBeenCalled()
+  })
+  it("catalog lookup fails → error step + report, never throws", async () => {
+    listEntries.mockRejectedValue(new Error("db down"))
+    const steps = await createBoughtStartAtActivationServices({ offer: null, offerToken: "t", clientName: "X", contactId: "c1" })
+    expect(steps[0].status).toBe("error")
+    expect(reported[0]).toMatch(/NOT checked/)
+  })
+})
+
+describe("isFormationContractWithoutFormation — who gets the formation experience", () => {
+  const base = { selectedServices: null }
+  it("DF Commerce (formation type, only a name change) → true", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "Company Change Name", pipeline_type: "Company Change Name" }], bundledPipelines: ["Company Change Name"] })).toBe(true)
+  })
+  it("real formation → false", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "Company Formation", pipeline_type: "Company Formation" }], bundledPipelines: ["Company Formation"] })).toBe(false)
+  })
+  it("AMBIGUOUS (no services named at all — legacy / MCP offer) → false: still treated as a formation", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [], bundledPipelines: [] })).toBe(false)
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "LLC Formation" }], bundledPipelines: null })).toBe(false)
+  })
+  it("other contract types → always false", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "tax_return", services: [{ name: "Tax", pipeline_type: "Tax Return" }], bundledPipelines: ["Tax Return"] })).toBe(false)
+  })
+})
+
+describe("createBoughtStartAtActivationServices — scope lookup failure", () => {
+  it("creates NOTHING (never guesses person vs company), reports it", async () => {
+    _resetServicesCache(); listEntries.mockReset(); reported.length = 0; createSD.mockReset()
+    let call = 0
+    listEntries.mockImplementation(async () => {
+      call++
+      if (call === 1) return [{ slug: "closure", status: "active", tags: ["contact_eligible", "start_at_activation"] }]
+      throw new Error("db down")
+    })
+    // first helper call loads + caches; force the second lookup to fail by resetting the cache in between
+    const services = await import("@/lib/services")
+    const spy = vi.spyOn(services, "getContactEligibleServiceTypes").mockRejectedValueOnce(new Error("db down"))
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [closureLine], bundled_pipelines: ["Company Closure"] }, offerToken: "t", clientName: "X", contactId: "c1" })
+    spy.mockRestore()
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("error")
+    expect(reported.some((m) => /NOT created/.test(m))).toBe(true)
+  })
+})
+
