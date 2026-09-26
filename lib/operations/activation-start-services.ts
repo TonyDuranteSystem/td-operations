@@ -166,6 +166,13 @@ export function isFormationContractWithoutFormation(p: {
     ? (p.services as Array<Record<string, unknown> | null>).filter((l) => l && typeof l === "object" && typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim())
     : []
   if (bundled.length === 0 && typedLines.length === 0) return false
+  // A line with no pipeline_type can't be read (legacy / hand-made offers name
+  // the formation "LLC Single Member — Florida" etc.) — when in doubt it IS a
+  // formation, the legacy default. Only an offer whose every line is typed can
+  // prove formation was not bought.
+  const untypedLine = Array.isArray(p.services)
+    && (p.services as Array<Record<string, unknown> | null>).some((l) => l && typeof l === "object" && !(typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim()))
+  if (untypedLine) return false
   return !contractBoughtService({
     services: p.services,
     selectedServices: p.selectedServices,
@@ -329,6 +336,26 @@ export async function createStartAtActivationSDs(p: {
  * onboarding). Never throws; lookup failures are reported, never silent.
  */
 export async function createBoughtStartAtActivationServices(p: {
+  offer: { services?: unknown; selected_services?: unknown; bundled_pipelines?: unknown; account_id?: string | null } | null | undefined
+  offerToken: string
+  clientName: string | null
+  contactId: string | null
+  /** The contract bought nothing else (a formation-template contract without a
+   *  formation): if no service ends up created or already there, say so
+   *  loudly instead of activating an empty contract (e.g. the catalog tag is
+   *  missing in this environment). */
+  mustCreateSomething?: boolean
+}): Promise<ActivationStep[]> {
+  const steps = await createBoughtStartAtActivationServicesInner(p)
+  if (p.mustCreateSomething && !steps.some((s) => s.status === "created" || s.status === "existing")) {
+    const detail = "this contract did not buy a formation and no other service was created from it — add the bought service by hand"
+    report(`${detail}: ${p.clientName || "unknown client"} (offer ${p.offerToken})`, { offerToken: p.offerToken })
+    steps.push({ step: "start_at_activation", status: "error", detail })
+  }
+  return steps
+}
+
+async function createBoughtStartAtActivationServicesInner(p: {
   offer: { services?: unknown; selected_services?: unknown; bundled_pipelines?: unknown; account_id?: string | null } | null | undefined
   offerToken: string
   clientName: string | null

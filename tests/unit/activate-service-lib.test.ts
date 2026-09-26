@@ -235,6 +235,7 @@ describe('runActivation', () => {
       expect(result.steps).toEqual(expect.arrayContaining([
         expect.objectContaining({ step: 'start_at_activation', status: 'created' }),
       ]))
+      expect(createBoughtStartAtActivationServices).toHaveBeenCalledWith(expect.objectContaining({ mustCreateSomething: false }))
       // a real formation was bought → the formation SD path is NOT skipped
       expect(result.steps.some((s) => /without a Company Formation line/.test(s.detail ?? ''))).toBe(false)
     })
@@ -254,7 +255,8 @@ describe('runActivation', () => {
       expect(result.steps).toEqual(expect.arrayContaining([
         expect.objectContaining({ step: 'service_deliveries', status: 'skipped', detail: expect.stringContaining('without a Company Formation line') }),
       ]))
-      expect(createBoughtStartAtActivationServices).toHaveBeenCalled()
+      // nothing else bought → the orchestrator must shout if it creates nothing
+      expect(createBoughtStartAtActivationServices).toHaveBeenCalledWith(expect.objectContaining({ mustCreateSomething: true }))
       // …and no formation experience: normal portal tier, no formation wizard
       expect(tierForContract).toHaveBeenCalledWith('service')
       expect(tierForContract).not.toHaveBeenCalledWith('formation')

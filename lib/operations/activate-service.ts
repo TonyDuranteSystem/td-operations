@@ -702,6 +702,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       offerToken: activation.offer_token,
       clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
       contactId,
+      mustCreateSomething: formationNotBought,
     }))
   } else if (contractType === "onboarding") {
     steps.push({

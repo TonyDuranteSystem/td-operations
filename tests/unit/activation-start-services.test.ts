@@ -376,6 +376,24 @@ describe("createBoughtStartAtActivationServices — catalog-driven, formation AN
     expect(steps).toEqual([])
     expect(createSD).not.toHaveBeenCalled()
   })
+  it("mustCreateSomething + name change untagged in this environment → error step + report, not a silent empty activation", async () => {
+    listEntries.mockResolvedValue([{ slug: "closure", status: "active", tags: ["sd", "contact_eligible", "start_at_activation"] }, { slug: "company_change_name", status: "active", tags: [] }])
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [{ name: "Company Change Name", pipeline_type: "Company Change Name" }], bundled_pipelines: ["Company Change Name"], account_id: "acc1" }, offerToken: "t", clientName: "X", contactId: "c1", mustCreateSomething: true })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps.at(-1)).toEqual(expect.objectContaining({ step: "start_at_activation", status: "error" }))
+    expect(reported.some((m) => /did not buy a formation and no other service was created/.test(m))).toBe(true)
+  })
+  it("mustCreateSomething + nothing tagged at all → still reported", async () => {
+    listEntries.mockResolvedValue([{ slug: "closure", status: "active", tags: ["sd"] }])
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [closureLine], bundled_pipelines: ["Company Closure"] }, offerToken: "t", clientName: "X", contactId: "c1", mustCreateSomething: true })
+    expect(steps).toEqual([expect.objectContaining({ status: "error" })])
+    expect(reported).toHaveLength(1)
+  })
+  it("mustCreateSomething + the service is created → no extra report", async () => {
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [closureLine], bundled_pipelines: ["Company Closure"] }, offerToken: "t", clientName: "X", contactId: "c1", mustCreateSomething: true })
+    expect(steps.some((st) => st.status === "created")).toBe(true)
+    expect(steps.some((st) => st.status === "error")).toBe(false)
+  })
   it("catalog lookup fails → error step + report, never throws", async () => {
     listEntries.mockRejectedValue(new Error("db down"))
     const steps = await createBoughtStartAtActivationServices({ offer: null, offerToken: "t", clientName: "X", contactId: "c1" })
@@ -395,6 +413,14 @@ describe("isFormationContractWithoutFormation — who gets the formation experie
   it("AMBIGUOUS (no services named at all — legacy / MCP offer) → false: still treated as a formation", () => {
     expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [], bundledPipelines: [] })).toBe(false)
     expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "LLC Formation" }], bundledPipelines: null })).toBe(false)
+  })
+  it("an UNTYPED line next to typed ones (hand-named formation + typed ITIN) → false: can't prove formation wasn't bought", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "LLC Formation" }, { name: "ITIN", pipeline_type: "ITIN" }], bundledPipelines: ["ITIN"] })).toBe(false)
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "LLC Single Member — Florida", pipeline_type: "  " }, { name: "Company Closure", pipeline_type: "Company Closure" }], bundledPipelines: ["Company Closure"] })).toBe(false)
+  })
+  it("SupraEmerge / Stefano Pretto shapes (every line typed, none a formation) → true", () => {
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "Account Closure", pipeline_type: "Company Closure" }], bundledPipelines: ["Company Closure"] })).toBe(true)
+    expect(isFormationContractWithoutFormation({ ...base, contractType: "formation", services: [{ name: "Banking Setup", pipeline_type: "Banking Fintech" }], bundledPipelines: ["Banking Fintech"] })).toBe(true)
   })
   it("other contract types → always false", () => {
     expect(isFormationContractWithoutFormation({ ...base, contractType: "tax_return", services: [{ name: "Tax", pipeline_type: "Tax Return" }], bundledPipelines: ["Tax Return"] })).toBe(false)
