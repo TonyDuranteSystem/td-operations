@@ -111,6 +111,18 @@ export interface UpdateDocumentsBulkResult {
 
 // ─── updateDocument ────────────────────────────────────────
 
+/** Mirror a CRM share / unshare onto the CRM Store's own "published" flag for `store:` rows (best-effort). */
+async function syncStorePublished(pointers: string[], visible: boolean): Promise<void> {
+  const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
+  for (const p of pointers) {
+    const fileId = parseStorePointer(p)
+    if (!fileId) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+    const { error } = await (supabaseAdmin as any).rpc("store_set_published", { p_file_id: fileId, p_published: visible, p_actor: null })
+    if (error) console.error(`[updateDocument] store file ${fileId} published=${visible} not mirrored: ${error.message}`)
+  }
+}
+
 /** Non-null = a refusal message: at least one target row is a staff-only CRM Store file. */
 async function refuseStaffOnlyShare(target: { ids: string[] } | { driveFileId: string }): Promise<string | null> {
   const { isStorePointer, staffOnlyStorePointers } = await import("@/lib/crm-store/document-pointer")
@@ -224,6 +236,12 @@ export async function updateDocument(
     // Fire-and-forget: alert delivery must never fail the document write.
     fireNewDocumentAlerts(data.map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
 
+    // CRM Store: a share / unshare of a `store:` row is mirrored onto the store's own flag, so the two
+    // never disagree (Stage 1 reads the store's flag). Never fails the document write.
+    if (typeof params.patch.portal_visible === "boolean") {
+      await syncStorePublished(data.map((r) => r.drive_file_id as string), params.patch.portal_visible)
+    }
+
     return {
       success: true,
       outcome: "updated",
@@ -284,7 +302,7 @@ export async function updateDocumentsBulk(
       .from("documents")
       .update(updates)
       .in("id", params.ids)
-      .select("id")
+      .select("id, drive_file_id")
 
     if (error) {
       return { success: false, outcome: "error", error: error.message }
@@ -309,6 +327,9 @@ export async function updateDocumentsBulk(
 
     // Alert only rows that actually transitioned hidden→visible (opt-in).
     fireNewDocumentAlerts((data ?? []).map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
+    if (typeof params.patch.portal_visible === "boolean") {
+      await syncStorePublished((data ?? []).map((r) => r.drive_file_id as string), params.patch.portal_visible)
+    }
 
     return { success: true, outcome: "updated", count }
   } catch (err) {

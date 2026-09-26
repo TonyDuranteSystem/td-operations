@@ -138,3 +138,105 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
   if (dl || !data) throw new Error("store browse: content could not be read")
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: f.name }
 }
+
+/** The company's owner in the NEW store (only in the pilot environment; anything else → null). */
+export async function storeOwnerForAccount(accountId: string): Promise<string | null> {
+  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
+  if (!pilotEnvironmentAllowed()) return null
+  try {
+    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).maybeSingle()
+    return (data?.id as string | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+export interface BrowseDocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
+
+export async function listDocumentTypes(): Promise<BrowseDocType[]> {
+  const { data, error } = await db().from("catalog_entries").select("slug, display_name, metadata")
+    .eq("catalog_id", "storage_document_types").eq("status", "active").order("display_name")
+  if (error) throw new Error(`store browse: ${error.message}`)
+  return (data ?? []).map((t: { slug: string; display_name: string; metadata: { staff_only?: boolean; personal?: boolean } | null }) => ({
+    slug: t.slug, name: t.display_name, staffOnly: t.metadata?.staff_only === true, personal: t.metadata?.personal === true,
+  }))
+}
+
+/** Folder kind → the CRM documents list's category (same numbers as today's company upload). */
+export const FOLDER_KIND_CATEGORY: Record<string, { num: number; name: string }> = {
+  company: { num: 1, name: "Company" },
+  contacts: { num: 2, name: "Contacts" },
+  personal: { num: 2, name: "Contacts" },
+  tax: { num: 3, name: "Tax" },
+  tax_year: { num: 3, name: "Tax" },
+  banking: { num: 4, name: "Banking" },
+  correspondence: { num: 5, name: "Correspondence" },
+}
+
+/**
+ * A staff upload into a NEW-store folder. The same name in the same folder = a new version of that file.
+ * Listed in the CRM documents list, hidden from the client until staff share it.
+ */
+export async function staffUploadToStore(p: {
+  ownerId: string; folderId: string; storagePath: string; fileName: string; mimeType: string | null; documentType: string; actorId: string | null
+}): Promise<{ fileId: string; write: string; name: string }> {
+  const { saveBytesToStore } = await import("./writer")
+  const { storeNameKey } = await import("./rules")
+  const { upsertStoreDocumentRow } = await import("./formation-pilot")
+  const { data: folder } = await db().from("store_folders").select("id, owner_id, kind, trashed_at").eq("id", p.folderId).maybeSingle()
+  if (!folder || folder.owner_id !== p.ownerId || folder.trashed_at) throw new Error("Upload into a live folder of this company or person only.")
+  if (folder.kind === "contacts") throw new Error("\"2. Contacts\" shows the people's own documents — upload a personal document into the person's own storage.")
+  const { data: types } = await db().from("catalog_entries").select("slug").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
+  if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
+  const { data: owner } = await db().from("store_owners").select("kind, account_id, contact_id").eq("id", p.ownerId).single()
+  const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(p.storagePath)
+  if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
+  const bytes = Buffer.from(await blob.arrayBuffer())
+  const mimeType = p.mimeType || blob.type || "application/octet-stream"
+  const w = await saveBytesToStore({
+    ownerId: p.ownerId, folderId: p.folderId, name: p.fileName, mimeType, bytes,
+    callerKey: `staff-upload:${p.folderId}:${storeNameKey(p.fileName)}`, contentChanged: true,
+    documentType: p.documentType, published: false, actor: p.actorId,
+  })
+  if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
+    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — restore it or use another name." : `The save ended as "${w.status}".`)
+  }
+  const cat = FOLDER_KIND_CATEGORY[folder.kind as string] ?? FOLDER_KIND_CATEGORY.correspondence
+  const { data: typeRow } = await db().from("catalog_entries").select("display_name").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).single()
+  await upsertStoreDocumentRow(w.fileId, {
+    file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow?.display_name ?? null,
+    category: cat.num, category_name: cat.name,
+    account_id: owner.kind === "company" ? owner.account_id : null,
+    contact_id: owner.kind === "person" ? owner.contact_id : null,
+    portal_visible: false,
+  }, w.status)
+  await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+  return { fileId: w.fileId, write: w.status, name: w.name }
+}
+
+/**
+ * Show / hide a NEW-store file for the client: the store's own flag FIRST (it refuses a staff-only type or
+ * a never-visible draft), then the CRM documents row(s) the portal reads today — through the shared share
+ * step, so the client's "new document" alert and the audit log work exactly as for any other share.
+ */
+export async function setClientVisibility(fileId: string, visible: boolean): Promise<{ visible: boolean; crmRowsUpdated: number }> {
+  const { storePointer } = await import("./document-pointer")
+  const { data: f } = await db().from("store_files").select("document_type, state").eq("id", fileId).maybeSingle()
+  if (!f) throw new Error("File not found.")
+  if (f.state !== "live") throw new Error("Restore the file from the trash first.")
+  const { data: so } = await db().rpc("store_type_staff_only", { p_document_type: f.document_type })
+  if (visible && so === true) throw new Error("This document is staff-only (it holds other people's personal data) and can never be shown to the client.")
+  const { error } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: visible, p_actor: null })
+  if (error) throw new Error(error.message.replace(/^store: /, ""))
+  const { data: rows } = await db().from("documents").select("id").eq("drive_file_id", storePointer(fileId))
+  let crmRowsUpdated = 0
+  if (rows && rows.length > 0) {
+    const { updateDocument } = await import("@/lib/operations/document")
+    for (const r of rows as { id: string }[]) {
+      const u = await updateDocument({ id: r.id, patch: { portal_visible: visible } } as never)
+      if (!u.success) throw new Error(u.error || "The CRM list could not be updated.")
+      crmRowsUpdated++
+    }
+  }
+  return { visible, crmRowsUpdated }
+}
