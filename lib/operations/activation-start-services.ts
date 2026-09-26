@@ -347,7 +347,9 @@ export async function createBoughtStartAtActivationServices(p: {
   mustCreateSomething?: boolean
 }): Promise<ActivationStep[]> {
   const steps = await createBoughtStartAtActivationServicesInner(p)
-  if (p.mustCreateSomething && !steps.some((s) => s.status === "created" || s.status === "existing")) {
+  // Silent = nothing created AND nothing already reported (a skip/error step
+  // has its own report — e.g. a name change with no company on the contract).
+  if (p.mustCreateSomething && !steps.some((s) => ["created", "existing", "skipped", "error"].includes(s.status))) {
     const detail = "this contract did not buy a formation and no other service was created from it — add the bought service by hand"
     report(`${detail}: ${p.clientName || "unknown client"} (offer ${p.offerToken})`, { offerToken: p.offerToken })
     steps.push({ step: "start_at_activation", status: "error", detail })

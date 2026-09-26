@@ -389,6 +389,11 @@ describe("createBoughtStartAtActivationServices — catalog-driven, formation AN
     expect(steps).toEqual([expect.objectContaining({ status: "error" })])
     expect(reported).toHaveLength(1)
   })
+  it("mustCreateSomething + a skip already reported (name change, no company on the contract) → no second report", async () => {
+    const steps = await createBoughtStartAtActivationServices({ offer: { services: [{ name: "Company Change Name", pipeline_type: "Company Change Name" }], bundled_pipelines: ["Company Change Name"], account_id: null }, offerToken: "t", clientName: "X", contactId: "c1", mustCreateSomething: true })
+    expect(steps).toEqual([expect.objectContaining({ status: "skipped" })])
+    expect(reported).toHaveLength(1)
+  })
   it("mustCreateSomething + the service is created → no extra report", async () => {
     const steps = await createBoughtStartAtActivationServices({ offer: { services: [closureLine], bundled_pipelines: ["Company Closure"] }, offerToken: "t", clientName: "X", contactId: "c1", mustCreateSomething: true })
     expect(steps.some((st) => st.status === "created")).toBe(true)
