@@ -222,3 +222,27 @@ describe("contact merge vs the new store", async () => {
     expect(await storeMergeBlocker(L, W, deps({ error: "boom" }))).toMatch(/Could not check/)
   })
 })
+
+describe("serving a stored file to staff — only script-free types open inside the CRM", async () => {
+  const { staffFileHeaders, canPreviewInline } = await import("@/lib/crm-store/serve")
+  it("PDF and images inline, with nosniff", () => {
+    for (const t of ["application/pdf", "image/png", "image/jpeg", "IMAGE/JPEG; charset=x"]) {
+      const h = staffFileHeaders(t, "a.pdf")
+      expect(h["Content-Disposition"]).toMatch(/^inline/)
+      expect(h["X-Content-Type-Options"]).toBe("nosniff")
+      expect(canPreviewInline(t)).toBe(true)
+    }
+  })
+  it("HTML, SVG, JS, unknown and missing types download as plain bytes", () => {
+    for (const t of ["text/html", "image/svg+xml", "application/javascript", "application/xhtml+xml", "", null, undefined]) {
+      const h = staffFileHeaders(t as string, "x")
+      expect(h["Content-Type"]).toBe("application/octet-stream")
+      expect(h["Content-Disposition"]).toMatch(/^attachment/)
+      expect(canPreviewInline(t as string)).toBe(false)
+    }
+  })
+  it("a file name cannot break the header", () => {
+    const h = staffFileHeaders("application/pdf", 'bad"; name\r\nX-Evil: 1.pdf')
+    expect(h["Content-Disposition"]).not.toMatch(/[\r\n"]/)
+  })
+})

@@ -111,16 +111,30 @@ export interface UpdateDocumentsBulkResult {
 
 // ─── updateDocument ────────────────────────────────────────
 
-/** Mirror a CRM share / unshare onto the CRM Store's own "published" flag for `store:` rows (best-effort). */
-async function syncStorePublished(pointers: string[], visible: boolean): Promise<void> {
+/**
+ * Mirror a CRM share / unshare onto the CRM Store's own "published" flag for `store:` rows. Returns the
+ * ids of rows whose SHARE the store refused: those rows are put back to hidden here (before any client
+ * alert fires), so the CRM row never says "visible" while the store says no. An unshare the store
+ * refuses is only logged — the row is already hidden, which is the safe side.
+ */
+async function syncStorePublished(rows: { id: string; drive_file_id: string | null }[], visible: boolean): Promise<string[]> {
   const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
-  for (const p of pointers) {
-    const fileId = parseStorePointer(p)
+  const refused: string[] = []
+  for (const r of rows) {
+    const fileId = parseStorePointer(r.drive_file_id)
     if (!fileId) continue
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
     const { error } = await (supabaseAdmin as any).rpc("store_set_published", { p_file_id: fileId, p_published: visible, p_actor: null })
-    if (error) console.error(`[updateDocument] store file ${fileId} published=${visible} not mirrored: ${error.message}`)
+    if (error) {
+      console.error(`[updateDocument] store file ${fileId} published=${visible} not mirrored: ${error.message}`)
+      if (visible) refused.push(r.id)
+    }
   }
+  if (refused.length > 0) {
+    const { error } = await supabaseAdmin.from("documents").update({ portal_visible: false, updated_at: new Date().toISOString() }).in("id", refused)
+    if (error) console.error(`[updateDocument] could not put refused store rows back to hidden: ${error.message}`)
+  }
+  return refused
 }
 
 /** Non-null = a refusal message: at least one target row is a staff-only CRM Store file. */
@@ -232,15 +246,18 @@ export async function updateDocument(
       details: params.details || { fields: changedFields, patch: params.patch },
     })
 
+    // CRM Store: a share / unshare of a `store:` row is mirrored onto the store's own flag FIRST, so the
+    // two never disagree (Stage 1 reads the store's flag); a share the store refuses is undone here.
+    const storeRefused = typeof params.patch.portal_visible === "boolean"
+      ? await syncStorePublished(data as { id: string; drive_file_id: string | null }[], params.patch.portal_visible)
+      : []
+    if (storeRefused.length > 0) {
+      return { success: false, outcome: "error", error: "The new CRM storage does not allow this document to be shown to the client — it was kept hidden." }
+    }
+
     // Fire the client alert for rows that actually transitioned hidden→visible.
     // Fire-and-forget: alert delivery must never fail the document write.
     fireNewDocumentAlerts(data.map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
-
-    // CRM Store: a share / unshare of a `store:` row is mirrored onto the store's own flag, so the two
-    // never disagree (Stage 1 reads the store's flag). Never fails the document write.
-    if (typeof params.patch.portal_visible === "boolean") {
-      await syncStorePublished(data.map((r) => r.drive_file_id as string), params.patch.portal_visible)
-    }
 
     return {
       success: true,
@@ -325,10 +342,14 @@ export async function updateDocumentsBulk(
       },
     })
 
+    // CRM Store mirror FIRST; a share the store refused is undone (and never alerted).
+    const storeRefused = new Set(typeof params.patch.portal_visible === "boolean"
+      ? await syncStorePublished((data ?? []) as { id: string; drive_file_id: string | null }[], params.patch.portal_visible)
+      : [])
     // Alert only rows that actually transitioned hidden→visible (opt-in).
-    fireNewDocumentAlerts((data ?? []).map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
-    if (typeof params.patch.portal_visible === "boolean") {
-      await syncStorePublished((data ?? []).map((r) => r.drive_file_id as string), params.patch.portal_visible)
+    fireNewDocumentAlerts((data ?? []).map((r) => r.id).filter((id) => wasHiddenIds.has(id) && !storeRefused.has(id)))
+    if (storeRefused.size > 0) {
+      return { success: false, outcome: "error", error: `${storeRefused.size} document(s) are not allowed to be shown by the new CRM storage and were kept hidden; the rest were updated.` }
     }
 
     return { success: true, outcome: "updated", count }

@@ -188,9 +188,20 @@ export async function upsertStoreDocumentRow(fileId: string, row: DocumentsRow, 
     }
     return { id: existing[0].id as string, inserted: false }
   }
+  // The store's own "client can see it" flag must say the same as the CRM row (the portal reads the row
+  // today; the store is the truth from Stage 1). Set it FIRST: if the store refuses (a staff-only type),
+  // the row is listed hidden — never visible in the CRM while the store says no.
+  // Both directions: a document type's default ("articles are client-visible") must not leave the store
+  // saying "shown" for a row the CRM lists hidden (Stage 1 would then show it).
+  let portalVisible = row.portal_visible
+  const { error: pubErr } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: portalVisible, p_actor: null })
+  if (pubErr) {
+    await raisePilotAlarm("store_publish_refused", { fileId, wanted: portalVisible, error: pubErr.message })
+    portalVisible = false
+  }
   const id = randomUUID()
   const { error } = await db().from("documents").insert({
-    id, drive_file_id: pointer, drive_link: storeDocumentLink(id), status: row.status ?? "classified", ...row,
+    id, drive_file_id: pointer, drive_link: storeDocumentLink(id), status: row.status ?? "classified", ...row, portal_visible: portalVisible,
   })
   if (error) {
     // a concurrent run may have inserted the same pointer a moment ago
@@ -420,6 +431,7 @@ export type PilotAlarmKind =
   | "formation_attach_failed"      // the company was created but its files could not be handed over
   | "formation_case_not_linked"    // the company was created but no single formation case was linked
   | "store_save_failed"            // a store save failed; today's path was used instead
+  | "store_publish_refused"        // the store refused "client can see it" for a new file; its CRM row was listed hidden
   | "formation_owner_failed"       // a pilot formation's store owner could not be set up
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after

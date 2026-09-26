@@ -63,11 +63,12 @@ export function AccountDocumentsList({
 }) {
   const hasStoreRows = (documents ?? []).some((d) => (d.drive_file_id ?? '').startsWith('store:'))
   const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId && !accountHasDriveFolder && hasStoreRows)
-  const storeViewShown = !!storeOwner.data?.ownerId
-  // A company whose files live in the new store: its store files are shown (with preview + sharing) by the
-  // store view below — never listed twice here (the double-listing Luca reported, 2026-07-20).
+  // A company whose files live in the new store: the files its store view below shows (with preview +
+  // sharing) are never listed twice here (the double-listing Luca reported, 2026-07-20). Only THOSE are
+  // hidden — the server says which; a store file the view would not show stays listed here.
+  const shown = new Set((storeOwner.data?.ownerId ? storeOwner.data.shownFileIds ?? [] : []).map((id) => `store:${id}`))
   const homeless = filterDocumentsNeedingFlatListing(documents, accountHasDriveFolder)
-    .filter((d) => !(storeViewShown && (d.drive_file_id ?? '').startsWith('store:')))
+    .filter((d) => !shown.has(d.drive_file_id ?? ''))
   if (homeless.length === 0) return null
   const allStore = homeless.every((d) => (d.drive_file_id ?? '').startsWith('store:'))
 

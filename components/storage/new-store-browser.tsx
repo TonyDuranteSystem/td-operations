@@ -18,6 +18,7 @@ interface Fold { id: string; name: string; kind: string; trashed: boolean }
 interface File_ {
   id: string; name: string; documentType: string | null; state: string; published: boolean; clientVisible: boolean
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
+  listed: boolean; personName: string | null
 }
 interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[] }
 interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
@@ -27,11 +28,11 @@ interface DocType { slug: string; name: string; staffOnly: boolean; personal: bo
  * flat documents list so both agree (same cache key). The route answers null outside the pilot environment.
  */
 export function useStoreOwnerForAccount(accountId: string, enabled: boolean) {
-  return useQuery<{ ownerId: string | null }>({
+  return useQuery<{ ownerId: string | null; shownFileIds?: string[] }>({
     queryKey: ['crm-store-owner-for-account', accountId],
     queryFn: async () => {
       const r = await fetch(`/api/crm-store/browse/owner-for-account?account=${encodeURIComponent(accountId)}`)
-      if (!r.ok) return { ownerId: null }
+      if (!r.ok) return { ownerId: null, shownFileIds: [] }
       return r.json()
     },
     enabled,
@@ -41,6 +42,9 @@ export function useStoreOwnerForAccount(accountId: string, enabled: boolean) {
 
 /** Must match STAFF_STORE_UPLOAD_PREFIX in lib/crm-store/browse.ts (server refuses anything else). */
 const STAGING_PREFIX = 'crm-uploads/store-staging/'
+
+/** Mirrors INLINE_SAFE_TYPES in lib/crm-store/serve.ts — anything else downloads instead of opening. */
+const INLINE_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'text/plain'])
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' })
@@ -71,7 +75,9 @@ function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 
 
 function PreviewPanel({ file, onClose }: { file: File_; onClose: () => void }) {
   const src = `/api/crm-store/browse/file/${file.id}`
-  const isImage = (file.mimeType ?? '').startsWith('image/')
+  const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
+  const inline = INLINE_TYPES.has(mime)
+  const isImage = inline && mime.startsWith('image/')
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -88,7 +94,12 @@ function PreviewPanel({ file, onClose }: { file: File_; onClose: () => void }) {
           </button>
         </div>
         <div className="flex-1 bg-zinc-50">
-          {isImage ? (
+          {!inline ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+              <p>This kind of file cannot be shown inside the CRM.</p>
+              <a href={src} className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-blue-700 hover:bg-zinc-50">Download it</a>
+            </div>
+          ) : isImage ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={file.name} className="mx-auto h-full max-h-full object-contain" />
           ) : (
@@ -107,7 +118,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
   const [contents, setContents] = useState<Contents | null>(null)
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
-  const [busyFile, setBusyFile] = useState<string | null>(null)
+  const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('')
@@ -141,7 +152,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
   }, [ownerId, contents, open])
 
   const toggleVisible = async (f: File_) => {
-    setBusyFile(f.id)
+    if (busyFiles.has(f.id)) return
+    setBusyFiles((b) => new Set(b).add(f.id))
     try {
       await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: !f.clientVisible }, 'Could not change who can see this file — please try again.')
       toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client`)
@@ -149,7 +161,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not change who can see this file.')
     } finally {
-      setBusyFile(null)
+      setBusyFiles((b) => { const n = new Set(b); n.delete(f.id); return n })
     }
   }
 
@@ -245,7 +257,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
                 <FileText className="h-4 w-4 text-zinc-400" />
                 <button type="button" onClick={() => setPreview(f)}
                   className={`min-w-0 flex-1 truncate text-left hover:underline ${f.state === 'trashed' ? 'text-zinc-400 line-through' : ''}`}>
-                  {f.name}
+                  {f.personName && <span className="text-zinc-500">{f.personName} · </span>}{f.name}
                 </button>
                 {f.state === 'trashed' && <Badge tone="red"><Trash2 className="h-3 w-3" />in trash</Badge>}
                 {f.staffOnly ? (
@@ -256,12 +268,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
                   <Badge tone="gray"><EyeOff className="h-3 w-3" />hidden from client</Badge>
                 )}
                 {f.personal && <Badge tone="blue">personal</Badge>}
+                {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
                 {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
                 <span className="text-xs text-zinc-400">{f.size != null ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
-                {!f.staffOnly && f.state === 'live' && (
-                  <button type="button" onClick={() => toggleVisible(f)} disabled={busyFile === f.id}
+                {!f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible) && (
+                  <button type="button" onClick={() => toggleVisible(f)} disabled={busyFiles.has(f.id)}
                     className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">
-                    {busyFile === f.id ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {busyFiles.has(f.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                     {f.clientVisible ? 'Hide from client' : 'Show to client'}
                   </button>
                 )}

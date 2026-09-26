@@ -78,6 +78,11 @@ export async function GET(
       mimeType = mimeType || drive.mimeType
     }
 
+    if (storeFileId) {
+      // store bytes: the stored type is untrusted — only script-free types inline (lib/crm-store/serve.ts)
+      const { staffFileHeaders } = await import("@/lib/crm-store/serve")
+      return new NextResponse(new Uint8Array(bytes), { headers: staffFileHeaders(mimeType, (doc.file_name as string) || "document") })
+    }
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "Content-Type": mimeType || "application/pdf",

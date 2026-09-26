@@ -9,6 +9,8 @@ export async function GET(req: NextRequest) {
   if (denied) return denied
   const account = req.nextUrl.searchParams.get("account")
   if (!account) return NextResponse.json({ error: "account is required" }, { status: 400 })
-  const { storeOwnerForAccount } = await import("@/lib/crm-store/browse")
-  return NextResponse.json({ ownerId: await storeOwnerForAccount(account) }, { headers: { "Cache-Control": "no-store" } })
+  const { storeOwnerForAccount, storeFilesShownForAccount } = await import("@/lib/crm-store/browse")
+  const ownerId = await storeOwnerForAccount(account)
+  const shownFileIds = ownerId ? await storeFilesShownForAccount(account, ownerId) : null
+  return NextResponse.json({ ownerId, shownFileIds: shownFileIds ?? [] }, { headers: { "Cache-Control": "no-store" } })
 }
