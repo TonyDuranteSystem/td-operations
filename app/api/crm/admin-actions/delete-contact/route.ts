@@ -133,6 +133,11 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Merge target contact not found" }, { status: 404 })
       }
 
+      // CRM Store pilot: two people who BOTH have their own new-store storage cannot be merged yet.
+      const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
+      const storeBlock = await storeMergeBlocker(contact_id, merge_into_contact_id)
+      if (storeBlock) return NextResponse.json({ error: storeBlock }, { status: 409 })
+
       const { data: mergeResult, error: mergeErr } = await supabaseAdmin.rpc("merge_contacts", {
         p_loser: contact_id,
         p_winner: merge_into_contact_id,

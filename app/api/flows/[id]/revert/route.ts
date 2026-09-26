@@ -52,6 +52,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       documents_deleted: result.documents_deleted,
       status_reset: result.status_reset,
       renewal_date_reverted: result.renewal_date_reverted,
+      warnings: result.warnings ?? [],
     })
   } catch (e) {
     return NextResponse.json(

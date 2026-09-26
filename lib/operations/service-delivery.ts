@@ -1313,6 +1313,8 @@ export interface RevertStageResult {
   status_reset?: boolean
   /** Set when reverting OUT of a "Closed" renewal stage undid the +1y bump. */
   renewal_date_reverted?: { column: string; from: string; to: string } | null
+  /** Plain-English notes for staff (e.g. a CRM Store file that was deliberately kept). */
+  warnings?: string[]
   error?: string
 }
 
@@ -1428,6 +1430,7 @@ export async function revertServiceDelivery(
   // removed below — never left live and backed up with no CRM listing. A store file that could NOT be
   // trashed (no staff member known, or an error) keeps its CRM row: it stays listed, never orphaned.
   const keptStorePointers: string[] = []
+  const warnings: string[] = []
   try {
     const { data: stageRows, error: stageErr } = await supabaseAdmin
       .from("documents")
@@ -1442,6 +1445,19 @@ export async function revertServiceDelivery(
       const fileId = parseStorePointer(r.drive_file_id as string)
       if (!fileId) continue
       if (!params.actor_user_id) { keptStorePointers.push(r.drive_file_id as string); continue }
+      // Once the company exists (the file was handed over to the company's own storage), going back a
+      // step must not pull its document out of the company: keep the file AND its CRM row, and say so.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+      const { data: fo, error: foErr } = await (supabaseAdmin as any).from("store_files")
+        .select("name, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
+      const ownerKind = (fo?.store_owners as { kind?: string } | null)?.kind
+      if (foErr || !fo || ownerKind === "company") {
+        keptStorePointers.push(r.drive_file_id as string)
+        warnings.push(foErr || !fo
+          ? `A stored document of "${previous.stage_name}" could not be checked, so it was kept.`
+          : `"${fo.name}" was kept in the company's storage — the company already exists. Upload the corrected file with the same name to replace it (it becomes a new version).`)
+        continue
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
       const { error: trErr } = await (supabaseAdmin as any).rpc("store_trash_file", {
         p_file_id: fileId, p_actor: params.actor_user_id, p_reason: `Stage reverted to "${previous.stage_name}"`,
@@ -1604,6 +1620,7 @@ export async function revertServiceDelivery(
     documents_deleted: documentsDeleted,
     status_reset: statusReset,
     renewal_date_reverted: renewalDateReverted,
+    ...(warnings.length > 0 ? { warnings } : {}),
   }
 }
 

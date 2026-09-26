@@ -3,6 +3,7 @@
 import { FileText, ExternalLink, Globe, EyeOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { filterDocumentsNeedingFlatListing } from '@/lib/documents/list-visibility'
+import { useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 
 interface AccountDocument {
   id: string
@@ -52,19 +53,29 @@ function formatDate(d: string | null): string {
 export function AccountDocumentsList({
   documents,
   accountHasDriveFolder,
+  accountId,
 }: {
   documents: AccountDocument[]
   /** Whether FileManager below can render anything (account has a Drive folder). */
   accountHasDriveFolder: boolean
+  /** The account — to know whether its files live in the NEW CRM store (then the store view shows them). */
+  accountId?: string
 }) {
+  const hasStoreRows = (documents ?? []).some((d) => (d.drive_file_id ?? '').startsWith('store:'))
+  const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId && !accountHasDriveFolder && hasStoreRows)
+  const storeViewShown = !!storeOwner.data?.ownerId
+  // A company whose files live in the new store: its store files are shown (with preview + sharing) by the
+  // store view below — never listed twice here (the double-listing Luca reported, 2026-07-20).
   const homeless = filterDocumentsNeedingFlatListing(documents, accountHasDriveFolder)
+    .filter((d) => !(storeViewShown && (d.drive_file_id ?? '').startsWith('store:')))
   if (homeless.length === 0) return null
+  const allStore = homeless.every((d) => (d.drive_file_id ?? '').startsWith('store:'))
 
   return (
     <div className="rounded-lg border bg-white">
       <div className="flex items-center gap-2 px-4 py-3 border-b">
         <FileText className="h-4 w-4" />
-        <h3 className="text-sm font-semibold">Not in Google Drive</h3>
+        <h3 className="text-sm font-semibold">{allStore ? 'In the new CRM storage' : 'Not in Google Drive'}</h3>
         <span className="text-xs text-muted-foreground">{homeless.length}</span>
       </div>
 

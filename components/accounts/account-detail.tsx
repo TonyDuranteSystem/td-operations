@@ -943,6 +943,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
           <AccountDocumentsList
             documents={documents}
             accountHasDriveFolder={Boolean(account.drive_folder_id)}
+            accountId={account.id}
           />
           <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
         </div>

@@ -15,6 +15,7 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
+import { NewStoreBrowser, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -662,6 +663,10 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
     return Array.from(base).sort((a, b) => a.localeCompare(b))
   })()
 
+  // A company whose files live in the NEW store (Formation pilot, sandbox only) gets the store view
+  // instead of "Create / Link Drive folder". The route answers null outside the pilot environment.
+  const storeOwner = useStoreOwnerForAccount(accountId, !driveFolderId)
+
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
     queryFn: () => fetch(`/api/accounts/${accountId}/files`).then(r => r.json()),
@@ -781,6 +786,19 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
       toast.error('Failed to move file')
     }
   }, [data, accountId, handleRefresh])
+
+  if (!driveFolderId && storeOwner.isLoading) {
+    return <div className="py-12 text-center text-sm text-zinc-400">Loading…</div>
+  }
+
+  if (!driveFolderId && storeOwner.data?.ownerId) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-zinc-500">This company&apos;s files live in the new CRM storage (pilot).</p>
+        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+      </div>
+    )
+  }
 
   if (!driveFolderId) {
     const handleCreate = async () => {

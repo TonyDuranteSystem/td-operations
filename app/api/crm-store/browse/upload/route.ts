@@ -8,10 +8,10 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { denyUnlessStoreStaff } from "../_auth"
+import { denyUnlessStoreStaff, denyUnlessStorePilotEnv } from "../_auth"
 
 export async function POST(req: NextRequest) {
-  const denied = await denyUnlessStoreStaff()
+  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
   if (denied) return denied
   const body = await req.json().catch(() => ({}))
   const { ownerId, folderId, storagePath, fileName, mimeType, documentType } = body as Record<string, string | undefined>

@@ -181,3 +181,44 @@ describe("new-store browser labels", async () => {
     expect(ownerStatus(null)).toBeNull()
   })
 })
+
+describe("OCR reads a store document from the store — never from Drive", async () => {
+  const { ocrByPointer } = await import("@/lib/crm-store/ocr")
+  const fake = (text: string) => ({ fullText: text, pages: [], pageCount: 1, fileName: "x", mimeType: "application/pdf", confidence: 0.9, documentPageCount: 1, windowStart: 1 })
+  it("store: pointer → store bytes → OCR of those bytes", async () => {
+    const ocrDrive = vi.fn(async () => fake("drive"))
+    const readStore = vi.fn(async () => ({ bytes: Buffer.from("PDFBYTES"), mimeType: "application/pdf", name: "Passport.pdf" }))
+    const ocrBytes = vi.fn(async (ab: ArrayBuffer) => fake(Buffer.from(ab).toString()))
+    const r = await ocrByPointer(`store:${ID}`, { ocrDrive, readStore, ocrBytes })
+    expect(r.fullText).toBe("PDFBYTES")
+    expect(readStore).toHaveBeenCalledWith(ID)
+    expect(ocrDrive).not.toHaveBeenCalled()
+  })
+  it("a Drive id still goes to Drive", async () => {
+    const ocrDrive = vi.fn(async () => fake("drive"))
+    const r = await ocrByPointer("1AbCdEfGh", { ocrDrive, readStore: vi.fn(), ocrBytes: vi.fn() } as never)
+    expect(r.fullText).toBe("drive")
+  })
+  it("a malformed store: value is refused, not sent to Drive", async () => {
+    const ocrDrive = vi.fn(async () => fake("drive"))
+    await expect(ocrByPointer("store:not-a-uuid", { ocrDrive, readStore: vi.fn(), ocrBytes: vi.fn() } as never)).rejects.toThrow()
+    expect(ocrDrive).not.toHaveBeenCalled()
+  })
+})
+
+describe("contact merge vs the new store", async () => {
+  const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
+  const L = "loser", W = "winner"
+  const deps = (ids: string[] | { error: string }) => ({ personOwners: async () => (Array.isArray(ids) ? { contactIds: ids } : ids) })
+  it("both people have their own storage → refused in plain words", async () => {
+    expect(await storeMergeBlocker(L, W, deps([L, W]))).toMatch(/Both contacts/)
+  })
+  it("only one (or neither) has storage → allowed", async () => {
+    expect(await storeMergeBlocker(L, W, deps([L]))).toBeNull()
+    expect(await storeMergeBlocker(L, W, deps([W]))).toBeNull()
+    expect(await storeMergeBlocker(L, W, deps([]))).toBeNull()
+  })
+  it("cannot check → refused (fails closed)", async () => {
+    expect(await storeMergeBlocker(L, W, deps({ error: "boom" }))).toMatch(/Could not check/)
+  })
+})
