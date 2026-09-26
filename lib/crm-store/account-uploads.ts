@@ -19,7 +19,13 @@ export function isStoreOwnedRefusal(e: unknown): boolean {
   return e instanceof StoreOwnedAccountError || (e instanceof Error && e.name === "StoreOwnedAccountError")
 }
 
-export interface FallbackResult { saved: number; failed: { path: string; error: string }[]; ownerId: string | null }
+export interface FallbackResult {
+  saved: number
+  failed: { path: string; error: string }[]
+  ownerId: string | null
+  /** the passport that went to the person's own storage — its bytes, for the passport-data read */
+  passport?: { content: ArrayBuffer; mimeType: string; fileName: string } | null
+}
 
 export async function saveUploadsToStoreForAccount(p: {
   accountId: string
@@ -39,6 +45,7 @@ export async function saveUploadsToStoreForAccount(p: {
     return out
   }
   const bucket = p.bucket ?? "onboarding-uploads"
+  let newlyAdded = 0
   for (const raw of p.paths) {
     const path = raw.replace(/^\/+/, "")
     try {
@@ -48,15 +55,20 @@ export async function saveUploadsToStoreForAccount(p: {
       const name = path.split("/").pop() || "upload"
       const isPassport = !!p.passportContact && /passport/i.test(name)
       const target = isPassport ? await ensurePersonOwner(p.passportContact!.contactId, p.passportContact!.name) : ownerId
-      await savePilotFile({
+      if (isPassport) {
+        out.passport = { content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, mimeType: blob.type || "application/pdf", fileName: name }
+      }
+      const w = await savePilotFile({
         ownerId: target, folderKind: isPassport ? "personal" : "company", name, bytes, mimeType: blob.type || null,
         documentType: isPassport ? "passport" : null, callerKey: `${p.flow}-upload:${p.accountId}:${path}`, published: false,
       })
       out.saved++
+      if (w.status === "created" || w.status === "versioned") newlyAdded++
     } catch (e) {
       out.failed.push({ path, error: e instanceof Error ? e.message : String(e) })
     }
   }
-  await raisePilotAlarm("store_unmapped_upload", { ownerId, accountId: p.accountId, what: `${p.flow} uploads saved to the new store without a document type — classify them`, saved: out.saved, failed: out.failed })
+  // one alarm when something new landed (or failed) — a re-run that changed nothing stays quiet
+  if (newlyAdded > 0 || out.failed.length > 0) await raisePilotAlarm("store_unmapped_upload", { ownerId, accountId: p.accountId, what: `${p.flow} uploads saved to the new store without a document type — classify them`, saved: out.saved, failed: out.failed })
   return out
 }

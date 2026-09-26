@@ -246,3 +246,13 @@ describe("serving a stored file to staff — only script-free types open inside 
     expect(h["Content-Disposition"]).not.toMatch(/[\r\n"]/)
   })
 })
+
+describe("store upload retry — only on a passing storage hiccup", async () => {
+  const { isTransientStorageError } = await import("@/lib/crm-store/writer")
+  it("retries gateway / unavailable / timeout", () => {
+    for (const m of ["Bad Gateway", "Gateway Timeout", "503 Service Unavailable", "fetch failed", "request timed out"]) expect(isTransientStorageError(m)).toBe(true)
+  })
+  it("never retries a refusal", () => {
+    for (const m of ["The resource already exists", "Invalid key", "new row violates row-level security policy", "Payload too large", null]) expect(isTransientStorageError(m as string)).toBe(false)
+  })
+})

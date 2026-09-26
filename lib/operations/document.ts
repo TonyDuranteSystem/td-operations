@@ -374,6 +374,7 @@ export async function updateDocumentsBulk(
     }
 
     const count = data?.length ?? 0
+    if (count === 0) await pre.undo() // the rows vanished between the store check and the write
     const changedFields = Object.keys(params.patch)
 
     logAction({

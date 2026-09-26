@@ -521,6 +521,15 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         })
         result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
           `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+        // the same passport-data read as the Drive path, from the stored bytes
+        if (r.passport && contact_id) {
+          const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+          const passportResult = await extractAndStorePassportData({
+            contact_id, content: r.passport.content, file_name: r.passport.fileName, mime_type: r.passport.mimeType,
+            skip_dob: !!submitted.owner_dob, contact_name: ownerName || undefined, account_id,
+          })
+          result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
+        }
       } else {
         result.steps.push(step("drive_folder", "error", e instanceof Error ? e.message : String(e)))
       }

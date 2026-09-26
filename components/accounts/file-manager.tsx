@@ -880,23 +880,39 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
     )
   }
 
+  // a company with BOTH (several open formations at company creation: Drive ran as today, then the store
+  // files were handed over) — its new-storage files are shown in every state of the Drive view (loading,
+  // Drive error, loaded), because the flat list above hides them
+  const storeSection = storeOwner.data?.ownerId ? (
+    <div className="mb-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+      <p className="text-xs text-amber-800">This company also has files in the new CRM storage (pilot):</p>
+      <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+    </div>
+  ) : null
+
   if (isLoading) {
     return (
+      <>
+      {storeSection}
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
         <span className="ml-2 text-sm text-zinc-400">Loading files from Drive...</span>
       </div>
+      </>
     )
   }
 
   if (error || data?.error) {
     return (
+      <>
+      {storeSection}
       <div className="text-center py-12 text-zinc-400">
         <p>Failed to load files</p>
         <button onClick={handleRefresh} className="mt-2 text-sm text-blue-600 hover:underline">
           Try again
         </button>
       </div>
+      </>
     )
   }
 
@@ -907,14 +923,7 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
 
   return (
     <div className="space-y-2">
-      {storeOwner.data?.ownerId && (
-        // a company with BOTH (several open formations at company creation: Drive ran as today, then the
-        // store files were handed over) — its new-storage files are shown here too, never lost
-        <div className="mb-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
-          <p className="text-xs text-amber-800">This company also has files in the new CRM storage (pilot):</p>
-          <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
-        </div>
-      )}
+      {storeSection}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {/* Validation result banner */}
       {validationResult && (

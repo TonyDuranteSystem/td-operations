@@ -356,7 +356,7 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   if (fErr) throw new Error(`Could not read the file — please try again (${fErr.message}).`)
   if (!f) throw new Error("File not found.")
   if (f.state !== "live") throw new Error("Restore the file from the trash first.")
-  const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id").eq("drive_file_id", storePointer(fileId))
+  const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
   if (visible) {
     // every check BEFORE anything changes, each failing closed
@@ -378,7 +378,8 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   const changed: string[] = []
   try {
     const { updateDocument } = await import("@/lib/operations/document")
-    for (const r of (rows ?? []) as { id: string }[]) {
+    for (const r of (rows ?? []) as { id: string; portal_visible: boolean }[]) {
+      if (r.portal_visible === visible) { crmRowsUpdated++; continue } // already so — nothing to change or undo
       const u = await updateDocument({ id: r.id, patch: { portal_visible: visible } } as never)
       if (!u.success) throw new Error(u.error || "The CRM list could not be updated.")
       changed.push(r.id)

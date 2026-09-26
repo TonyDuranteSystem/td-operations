@@ -144,14 +144,27 @@ export async function storedSize(bucket: string, path: string): Promise<number> 
   return size
 }
 
+/** A storage error worth ONE retry (gateway / unavailable / timeout), never a refusal or a bad request. */
+export function isTransientStorageError(message: string | null | undefined): boolean {
+  return /bad gateway|gateway time-?out|service unavailable|\b50[234]\b|timed? ?out|ECONNRESET|fetch failed/i.test(message ?? "")
+}
+
 /** Save server-side bytes. */
 export async function saveBytesToStore(input: SaveMeta & { bytes: Buffer }): Promise<WriteResult> {
   const sha = sha256Hex(input.bytes)
   const path = storeObjectPath(input.ownerId)
-  const { error: upErr } = await db().storage.from(STORE_BUCKET).upload(path, input.bytes, {
+  const put = () => db().storage.from(STORE_BUCKET).upload(path, input.bytes, {
     contentType: input.mimeType ?? "application/octet-stream",
     upsert: false,
   })
+  let { error: upErr } = await put()
+  // one retry on a passing storage-service hiccup (502 / 503 / timeout seen live on the sandbox); if the
+  // first attempt had in fact landed, the retry reports "already exists" and the size check below decides
+  if (upErr && isTransientStorageError(upErr.message)) {
+    await new Promise((r) => setTimeout(r, 750))
+    const again = await put()
+    upErr = again.error && !/already exists|Duplicate/i.test(again.error.message) ? again.error : null
+  }
   if (upErr) throw new Error(`store: upload failed — ${upErr.message}`)
 
   let result: WriteResult
