@@ -51,6 +51,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/wa-bridge-watch": "*/5 * * * *",
   // Links WhatsApp chats to their lead/contact by phone number every minute (dev job 907b2535).
   "/api/cron/wa-bridge-link": "*/1 * * * *",
+  // WhatsApp voice notes: delete audio older than 180 days, keep the transcript (dev job 907b2535, child 06674723).
+  "/api/cron/wa-media-retention": "30 6 * * *",
   "/api/cron/invoice-overdue": "0 9 * * *",
   // Monthly IRS yearly-average FX rate import (2026-07-06) — insert-only,
   // fail-closed; see lib/tax/irs-fx-import.ts.
