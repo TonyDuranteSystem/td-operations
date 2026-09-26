@@ -262,6 +262,22 @@ describe("new storage screens — live sandbox", () => {
     expect(r.portal_visible).toBe(false)
   })
 
+  it("Go Back on a company that already exists KEEPS its stored file (and row) and says so; a formation-stage file is still trashed", async () => {
+    const sd = await insert("service_deliveries", { service_type: "Company Formation", service_name: `ZZ S6B goback ${tag}`, contact_id: fx.personA, account_id: fx.account, status: "active", stage: "Articles Received", stage_order: 4 })
+    const { savePilotFile, upsertStoreDocumentRow } = await import("@/lib/crm-store/formation-pilot")
+    const w = await savePilotFile({ ownerId: fx.owner, folderKind: "company", name: `Filed Articles ${tag}.pdf`, bytes: await pdf("filed"), mimeType: "application/pdf", documentType: "articles_of_organization", callerKey: `zz-s6b-goback:${tag}` })
+    await upsertStoreDocumentRow(w.fileId, { file_name: w.name, account_id: fx.account, service_delivery_id: sd, flow_stage: "Filed with State", portal_visible: false, category: 1, category_name: "Company" })
+    const { revertServiceDelivery } = await import("@/lib/operations/service-delivery")
+    const r = await revertServiceDelivery({ delivery_id: sd, actor: "zz-test", actor_user_id: currentUser!.id, notes: "zz test" })
+    expect(r.success).toBe(true)
+    expect(r.to_stage).toBe("Filed with State")
+    expect((r.warnings ?? []).join(" ")).toMatch(/kept in the company's storage/)
+    const { data: f } = await db.from("store_files").select("state").eq("id", w.fileId).single()
+    expect(f.state).toBe("live")
+    const { data: rows } = await db.from("documents").select("id").eq("drive_file_id", `store:${w.fileId}`)
+    expect(rows).toHaveLength(1)
+  })
+
   it("merging two people who both have their own storage is refused in plain words", async () => {
     const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
     expect(await storeMergeBlocker(fx.personA, fx.personB)).toMatch(/Both contacts/)
