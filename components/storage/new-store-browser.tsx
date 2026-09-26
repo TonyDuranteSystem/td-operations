@@ -18,7 +18,7 @@ interface Fold { id: string; name: string; kind: string; trashed: boolean }
 interface File_ {
   id: string; name: string; documentType: string | null; state: string; published: boolean; clientVisible: boolean
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
-  listed: boolean; personName: string | null
+  listed: boolean; personName: string | null; inPersonStorage: boolean
 }
 interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[] }
 interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
@@ -267,11 +267,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
                 ) : (
                   <Badge tone="gray"><EyeOff className="h-3 w-3" />hidden from client</Badge>
                 )}
-                {f.personal && <Badge tone="blue">personal</Badge>}
+                {!f.documentType ? <Badge tone="amber">no document type yet</Badge> : f.personal && <Badge tone="blue">personal</Badge>}
                 {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
                 {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
                 <span className="text-xs text-zinc-400">{f.size != null ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
-                {!f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible) && (
+                {!f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible)
+                  && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage))) && (
                   <button type="button" onClick={() => toggleVisible(f)} disabled={busyFiles.has(f.id)}
                     className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">
                     {busyFiles.has(f.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}

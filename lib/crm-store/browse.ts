@@ -34,6 +34,8 @@ export interface BrowseFile {
   listed: boolean
   /** Set when the file belongs to one of the company's people (shown in the company's "2. Contacts"). */
   personName: string | null
+  /** The file is in a PERSON's own storage (a personal document may be shown only from there). */
+  inPersonStorage: boolean
   staffOnly: boolean
   personal: boolean
   versions: number
@@ -147,6 +149,8 @@ export async function folderContents(ownerId: string, folderId: string | null): 
       rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || r.portal_visible === true)
     }
   }
+  const { data: curOwner } = await db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle()
+  const currentIsPerson = curOwner?.kind === "person"
   const files: BrowseFile[] = []
   for (const f of all) {
     const [{ data: pers }, { data: so }, { count }] = await Promise.all([
@@ -161,6 +165,7 @@ export async function folderContents(ownerId: string, folderId: string | null): 
       staffOnly: so === true, personal: pers === true, versions: count ?? 0,
       size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at,
       personName: f.owner_id !== ownerId ? personName.get(f.owner_id as string) ?? null : null,
+      inPersonStorage: f.owner_id !== ownerId ? personName.has(f.owner_id as string) : currentIsPerson,
     })
   }
   return {
