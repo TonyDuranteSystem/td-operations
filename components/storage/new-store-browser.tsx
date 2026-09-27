@@ -90,8 +90,8 @@ function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 
   return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${t}`}>{children}</span>
 }
 
-function PreviewPanel({ file, onClose }: { file: File_; onClose: () => void }) {
-  const src = `/api/crm-store/browse/file/${file.id}`
+function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_; onClose: () => void; src?: string; title?: string }) {
+  const src = srcOverride ?? `/api/crm-store/browse/file/${file.id}`
   const mime = (file.mimeType ?? '').split(';')[0].trim().toLowerCase()
   const inline = INLINE_TYPES.has(mime)
   const isImage = inline && mime.startsWith('image/')
@@ -105,7 +105,7 @@ function PreviewPanel({ file, onClose }: { file: File_; onClose: () => void }) {
       <div className="flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-2">
           <FileText className="h-4 w-4 text-zinc-400" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{file.name}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{title ?? file.name}</span>
           <button type="button" onClick={onClose} aria-label="Close preview" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">
             <X className="h-4 w-4" />
           </button>
@@ -149,6 +149,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
+  // "2 versions": every saved copy, openable (an old copy nobody can open would be pointless)
+  const [versionsFor, setVersionsFor] = useState<string | null>(null)
+  const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }[] | null>(null)
+  const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string } | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
   // upload panel (today's "Upload Document"): folder, whose (2. Contacts), type, display name, show to client
@@ -244,6 +248,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.error(e instanceof Error && e.message ? e.message : 'Could not refresh.')
     }
   }, [ownerId, fetchFolder])
+
+  const openVersions = async (fileId: string) => {
+    if (versionsFor === fileId) { setVersionsFor(null); return }
+    setMenuFor(null)
+    setVersionsFor(fileId)
+    setVersions(null)
+    try {
+      setVersions((await getJson<{ versions: NonNullable<typeof versions> }>(`/api/crm-store/browse/file/${fileId}/versions`)).versions)
+    } catch (e) {
+      setVersionsFor(null)
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not load the versions.')
+    }
+  }
 
   const withBusy = async (id: string, fn: () => Promise<void>) => {
     if (busyFiles.has(id)) return
@@ -431,7 +448,34 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             personal document can no longer be saved anywhere else */}
         {!f.documentType && <Badge tone="amber">no document type yet</Badge>}
         {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
-        {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
+        {f.versions > 1 && (
+          <div className="relative">
+            <FastTooltip label="See and open every saved copy">
+              <button type="button" onClick={(e) => { e.stopPropagation(); openVersions(f.id) }}
+                className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100">
+                <Layers className="h-3 w-3" />{f.versions} versions
+              </button>
+            </FastTooltip>
+            {versionsFor === f.id && (
+              <div className="absolute left-0 z-20 mt-1 w-80 rounded-md border border-zinc-200 bg-white py-1 text-xs shadow-lg" onClick={(e) => e.stopPropagation()}>
+                <p className="px-3 py-1 text-[11px] text-zinc-500">Each time a file with this name was uploaded again (newest first):</p>
+                {versions === null && <p className="px-3 py-1.5 text-zinc-500">Loading…</p>}
+                {(versions ?? []).map((v) => (
+                  <div key={v.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-50">
+                    <span className="font-medium">v{v.versionNo}</span>
+                    <span className="text-zinc-500">{fmtDate(v.createdAt)} · {fmtSize(v.size)}{v.by ? ` · ${v.by}` : ''}</span>
+                    {v.current && <Badge tone="green">current</Badge>}
+                    <span className="flex-1" />
+                    <button type="button" className="text-blue-700 hover:underline"
+                      onClick={() => { setVersionsFor(null); setPreviewVersion({ file: { ...f, mimeType: v.mimeType ?? f.mimeType }, src: `/api/crm-store/browse/file/${f.id}/versions?open=${v.id}`, title: `${f.name} — version ${v.versionNo}${v.current ? ' (current)' : ''}` }) }}>
+                      View
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <span className="text-xs text-zinc-400">{[fmtSize(f.size), fmtDate(f.updatedAt)].filter(Boolean).join(' · ')}</span>
         <FastTooltip label="Preview"><button type="button" aria-label="Preview" onClick={() => setPreview(f)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><Search className="h-3.5 w-3.5" /></button></FastTooltip>
         {f.docId && (
@@ -530,7 +574,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const totalFiles = (root?.files.length ?? 0) + topFolders.reduce((n, f) => n + (loaded[f.id]?.files.length ?? 0), 0)
 
   const right = (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4" onClick={() => { if (menuFor) setMenuFor(null) }}>
+    <div className="rounded-xl border border-zinc-200 bg-white p-4" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a company or person on the left to see its folders and files.'}</p>}
       {root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
@@ -614,6 +658,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         </>
       )}
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
+      {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
     </div>
   )

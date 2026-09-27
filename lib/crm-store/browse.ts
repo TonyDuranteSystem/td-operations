@@ -213,6 +213,41 @@ export async function storeOwnerForAccount(accountId: string): Promise<string | 
   }
 }
 
+export interface BrowseVersion { id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }
+
+/** Every saved copy of a file, newest first — so an older copy can be opened (and a wrong replacement spotted). */
+export async function listFileVersions(fileId: string): Promise<BrowseVersion[]> {
+  const { data: f, error: fErr } = await db().from("store_files").select("current_version_id, state").eq("id", fileId).maybeSingle()
+  if (fErr) throw new Error(`store browse: ${fErr.message}`)
+  if (!f || f.state === "purged") throw new Error("File not found.")
+  const { data, error } = await db().from("store_file_versions").select("id, version_no, created_at, size_bytes, mime_type, created_by")
+    .eq("file_id", fileId).order("version_no", { ascending: false })
+  if (error) throw new Error(`store browse: ${error.message}`)
+  const ids: string[] = Array.from(new Set(((data ?? []) as { created_by: string | null }[]).map((v) => v.created_by).filter((x): x is string => !!x)))
+  const names = new Map<string, string>()
+  for (const id of ids) {
+    const { data: u } = await supabaseAdmin.auth.admin.getUserById(id)
+    const email = u?.user?.email ?? null
+    if (email) names.set(id, email.split("@")[0])
+  }
+  return (data ?? []).map((v: { id: string; version_no: number; created_at: string; size_bytes: number | null; mime_type: string | null; created_by: string | null }) => ({
+    id: v.id, versionNo: v.version_no, createdAt: v.created_at, size: v.size_bytes, mimeType: v.mime_type,
+    current: v.id === f.current_version_id, by: v.created_by ? names.get(v.created_by) ?? "staff" : null,
+  }))
+}
+
+/** One saved copy's bytes (staff only) — an older version opens exactly like the current file. */
+export async function readVersionForStaff(fileId: string, versionId: string): Promise<{ bytes: Buffer; mimeType: string | null; name: string }> {
+  const { data: f } = await db().from("store_files").select("name, state").eq("id", fileId).maybeSingle()
+  if (!f || f.state === "purged") throw new Error("store browse: file not available")
+  const { data: v, error } = await db().from("store_file_versions").select("storage_bucket, storage_path, mime_type, version_no")
+    .eq("id", versionId).eq("file_id", fileId).maybeSingle()
+  if (error || !v) throw new Error("store browse: version not found")
+  const { data, error: dl } = await db().storage.from(v.storage_bucket).download(v.storage_path)
+  if (dl || !data) throw new Error("store browse: content could not be read")
+  return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: `v${v.version_no} - ${f.name}` }
+}
+
 /** A person's own storage in the NEW store (pilot environment only), or null. */
 export async function storeOwnerForContact(contactId: string): Promise<string | null> {
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")

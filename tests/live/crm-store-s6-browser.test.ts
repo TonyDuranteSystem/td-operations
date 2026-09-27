@@ -412,6 +412,24 @@ describe("new storage screens — live sandbox", () => {
     expect(u.write).toBe("created")
   }, 60_000)
 
+  it("every saved copy can be listed and opened — version 1 still returns the OLD content; an identical re-upload adds no version", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const corr = await folderOfKind(fx.owner, "correspondence")
+    const one = await pdf(`first ${tag}`)
+    const a = await (await upload(post("http://x", { ownerId: fx.owner, folderId: corr, storagePath: await stage("Letter.pdf", one), fileName: "Letter.pdf", mimeType: "application/pdf", documentType: "receipt", visible: false }))).json()
+    const same = await (await upload(post("http://x", { ownerId: fx.owner, folderId: corr, storagePath: await stage("Letter.pdf", one), fileName: "Letter.pdf", mimeType: "application/pdf", documentType: "receipt", visible: false }))).json()
+    expect(same.write).toBe("unchanged")
+    const b = await (await upload(post("http://x", { ownerId: fx.owner, folderId: corr, storagePath: await stage("Letter.pdf", await pdf(`second ${tag}`)), fileName: "Letter.pdf", mimeType: "application/pdf", documentType: "receipt", visible: false }))).json()
+    expect(b).toMatchObject({ write: "versioned", fileId: a.fileId })
+    const { GET } = await import("@/app/api/crm-store/browse/file/[id]/versions/route")
+    const list = (await (await GET(get(`http://x/api/crm-store/browse/file/${a.fileId}/versions`), { params: { id: a.fileId } })).json()).versions
+    expect(list.map((v: { versionNo: number }) => v.versionNo)).toEqual([2, 1])
+    expect(list[0].current).toBe(true)
+    const old = await GET(get(`http://x/api/crm-store/browse/file/${a.fileId}/versions?open=${list[1].id}`), { params: { id: a.fileId } })
+    expect(Buffer.from(await old.arrayBuffer()).equals(one)).toBe(true)
+  }, 60_000)
+
   it("merging two people who both have their own storage is refused in plain words", async () => {
     const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
     expect(await storeMergeBlocker(fx.personA, fx.personB)).toMatch(/Both contacts/)
