@@ -9,6 +9,8 @@ import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging
 import { createClient } from "@/lib/supabase/server"
 import { isStaffUser } from "@/lib/auth"
 import { parseEnqueueResult, refusalHttpStatus } from "@/lib/messaging/wabridge-outbox"
+import { buildOutboundPath, WA_OUTBOUND_BUCKET, kindForMime } from "@/lib/messaging/wabridge-attachment"
+import { createHash } from "crypto"
 import {
   parseStagedAttachmentInputs,
   loadStagedEmailAttachments,
@@ -24,6 +26,7 @@ import {
 } from "@/lib/email/signature"
 
 export const dynamic = "force-dynamic"
+export const maxDuration = 60 // an attachment/voice send downloads the file server-side to hash + verify it (up to 64 MB)
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,7 +37,7 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath, clientMsgId } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath, clientMsgId, attachmentMimeType } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
@@ -43,6 +46,8 @@ export async function POST(req: NextRequest) {
       attachmentPath?: string
       /** Self-hosted WhatsApp line only: one id per composed draft, so a retry / double click / second tab never sends twice. */
       clientMsgId?: string
+      /** Self-hosted WhatsApp line, attachment sends only: the file's mime type as the browser reported it — re-verified server-side. */
+      attachmentMimeType?: string
       /** "gala" | "hat" | "text". Replies default to text-only. */
       signature_variant?: string
       /** Which specific Gmail message this replies to — always sent by the
@@ -70,7 +75,10 @@ export async function POST(req: NextRequest) {
     }
     const quoteMode = quoteModeRaw === "thread" || quoteModeRaw === "none" ? quoteModeRaw : "message"
 
-    if (!conversationId || !message) {
+    // A WhatsApp attachment/voice send may have no caption at all (the server fills a placeholder like
+    // "[Voice note]") — every other reply kind (text, and every other channel) still requires real text.
+    const isCaptionlessAttachment = channel === "whatsapp" && !!attachmentPath
+    if (!conversationId || (!message && !isCaptionlessAttachment)) {
       return NextResponse.json(
         { error: "conversationId and message are required" },
         { status: 400 }
@@ -283,10 +291,57 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "Only the TD team can send WhatsApp replies from the CRM." }, { status: 403 })
         }
         if (attachmentPath) {
-          return NextResponse.json(
-            { error: "Attachments cannot be sent from the CRM on this WhatsApp line yet — text only." },
-            { status: 400 }
-          )
+          // Sending an attachment/voice note (Antonio 2026-09-27: any file; audio is sent as a voice note).
+          // The upload step (/api/inbox/whatsapp/attachment-upload-url) already picked the storage path
+          // deterministically from (channel, client message id) — verify the object is REALLY there (never
+          // trust the browser's word alone) and read its true size + a content hash from the actual bytes,
+          // since a client-reported size/hash is only ever a pacing heuristic here, never a security check.
+          const kind = kindForMime(typeof attachmentMimeType === "string" ? attachmentMimeType : null)
+          if (!kind) {
+            return NextResponse.json({ error: "That file type is not supported." }, { status: 400 })
+          }
+          if (typeof clientMsgId !== "string" || clientMsgId.length < 8) {
+            return NextResponse.json({ error: "Missing message id — please reload the page and try again." }, { status: 400 })
+          }
+          const expectedPath = buildOutboundPath(group.channel_id, clientMsgId, attachmentMimeType)
+          if (attachmentPath !== expectedPath) {
+            return NextResponse.json({ error: "The attachment does not match this message — please re-attach it." }, { status: 400 })
+          }
+          const folder = expectedPath.slice(0, expectedPath.lastIndexOf("/"))
+          const fileName = expectedPath.slice(expectedPath.lastIndexOf("/") + 1)
+          const { data: listed, error: listError } = await supabaseAdmin.storage.from(WA_OUTBOUND_BUCKET).list(folder, { search: fileName, limit: 5 })
+          if (listError) return NextResponse.json({ error: "Could not verify the upload." }, { status: 500 })
+          const found = listed?.find((f) => f.name === fileName)
+          if (!found) {
+            return NextResponse.json({ error: "The attachment is no longer available — please re-attach it and try again." }, { status: 400 })
+          }
+          const size = typeof found.metadata?.size === "number" ? found.metadata.size : 0
+          const { data: bytes, error: downloadError } = await supabaseAdmin.storage.from(WA_OUTBOUND_BUCKET).download(expectedPath)
+          if (downloadError || !bytes) return NextResponse.json({ error: "Could not verify the upload." }, { status: 500 })
+          const hash = createHash("sha256").update(Buffer.from(await bytes.arrayBuffer())).digest("hex")
+
+          const { data: enq, error: enqError } = await supabaseAdmin.rpc("wabridge_enqueue_send", {
+            p_group_id: conversationId,
+            p_kind: kind,
+            p_caption: message || null,
+            p_client_msg_id: clientMsgId,
+            p_media_mime: attachmentMimeType,
+            p_media_size: size,
+            p_content_hash: hash,
+            p_created_by: user?.id ?? null,
+          })
+          const result = enqError ? parseEnqueueResult(null) : parseEnqueueResult(enq)
+          if (result.ok === false) {
+            return NextResponse.json({ error: result.message }, { status: refusalHttpStatus(result.code) })
+          }
+          return NextResponse.json({
+            success: true,
+            channel: "whatsapp",
+            queued: true,
+            status: result.status,
+            outboxId: result.id,
+            duplicate: result.duplicate,
+          })
         }
         const { data: enq, error: enqError } = await supabaseAdmin.rpc("wabridge_enqueue_reply", {
           p_group_id: conversationId,
