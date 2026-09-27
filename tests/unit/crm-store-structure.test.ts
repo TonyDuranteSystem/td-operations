@@ -81,7 +81,7 @@ describe("suggestTaxYear", () => {
 })
 
 import { folderNameProblem, finalUploadName, keepBothName, cleanNewFileName } from "@/lib/crm-store/names"
-import { shownThroughCompany } from "@/lib/crm-store/browse"
+import { shownThroughCompany, categoryForKind, saveRefusalMessage } from "@/lib/crm-store/browse"
 
 describe("folderNameProblem (the message the screen shows before saving)", () => {
   it("fine name → null; same name as a folder next to it (any case) → message", () => {
@@ -108,11 +108,27 @@ describe("upload names", () => {
 })
 
 describe("shownThroughCompany (catalog: a person's ITIN / Tax never on a company page)", () => {
-  const kinds = new Map<string, { shown_through_company?: boolean }>([["personal", { shown_through_company: true }], ["itin", { shown_through_company: false }], ["person_tax", { shown_through_company: false }], ["custom", {}]])
-  it("follows the catalog; a kind with no setting is shown", () => {
+  const kinds = new Map<string, { shown_through_company?: boolean }>([["personal", { shown_through_company: true }], ["itin", { shown_through_company: false }], ["person_tax", { shown_through_company: false }], ["custom", { shown_through_company: true }], ["new_kind", {}]])
+  it("follows the catalog; a kind WITHOUT the setting is not shown (fails closed)", () => {
     expect(shownThroughCompany("personal", kinds)).toBe(true)
+    expect(shownThroughCompany("custom", kinds)).toBe(true)
     expect(shownThroughCompany("itin", kinds)).toBe(false)
     expect(shownThroughCompany("person_tax", kinds)).toBe(false)
-    expect(shownThroughCompany("custom", kinds)).toBe(true)
+    expect(shownThroughCompany("new_kind", kinds)).toBe(false)
+    expect(shownThroughCompany("unknown", kinds)).toBe(false)
+  })
+})
+
+describe("categoryForKind (one rule for upload, file move, folder move)", () => {
+  it("a person's tax year is Tax; every kind answers; an unknown kind → Correspondence", () => {
+    expect(categoryForKind("person_tax_year")).toEqual({ num: 3, name: "Tax" })
+    expect(categoryForKind("tax_year")).toEqual({ num: 3, name: "Tax" })
+    expect(categoryForKind("banking").num).toBe(4)
+    expect(categoryForKind("root").num).toBe(5)
+    expect(categoryForKind("something_new").num).toBe(5)
+  })
+  it("a refused save says why in plain words", () => {
+    expect(saveRefusalMessage("frozen")).toMatch(/FILED/)
+    expect(saveRefusalMessage("trashed")).toMatch(/trash/)
   })
 })

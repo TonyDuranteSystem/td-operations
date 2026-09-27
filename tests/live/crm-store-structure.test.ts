@@ -216,7 +216,7 @@ describe("storage structure — live sandbox", () => {
     expect(s.shown).toBe(1)
     expect(s.list[0]).toMatchObject({ id: shown.j.fileId, shown: true })
     const del = (await import("@/app/api/crm-store/browse/folder/[id]/delete/route")).POST
-    const r = await del(post("http://x", { hideFirst: true }), { params: { id: bankFolder } })
+    const r = await del(post("http://x", { hide: "all" }), { params: { id: bankFolder } })
     const j = await r.json()
     expect(r.status, JSON.stringify(j)).toBe(200)
     expect(j.files).toBe(s.files)
@@ -270,5 +270,95 @@ describe("storage structure — live sandbox", () => {
     const { folderContents } = await import("@/lib/crm-store/browse")
     expect((await folderContents(fx.closedOwner, null)).owner).toMatchObject({ closed: true, accountStatus: "Closed" })
     expect((await folderContents(fx.owner, null)).owner).toMatchObject({ closed: false, kind: "company" })
+  })
+  it("a REPLACED file follows this upload's answer: unticked hides a shared file; Decide later hides it and marks it red", async () => {
+    const v1 = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Replace me ${tag}.pdf`, documentType: "operating_agreement", visible: true }, "v1")
+    expect(v1.j.visible).toBe(true)
+    const v2 = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Replace me ${tag}.pdf`, documentType: "operating_agreement", visible: false }, "v2")
+    expect(v2.j.write).toBe("versioned")
+    expect(v2.j.fileId).toBe(v1.j.fileId)
+    expect(v2.j.visible).toBe(false)
+    const { data: row } = await db.from("documents").select("portal_visible").eq("drive_file_id", `store:${v1.j.fileId}`).single()
+    expect(row.portal_visible).toBe(false)
+    const { data: f } = await db.from("store_files").select("published").eq("id", v1.j.fileId).single()
+    expect(f.published).toBe(false)
+    // shown again with a ticked replace, then "Decide later" on the next replace hides it
+    const v3 = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Replace me ${tag}.pdf`, documentType: "operating_agreement", visible: true }, "v3")
+    expect(v3.j.visible).toBe(true)
+    const v4 = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Replace me ${tag}.pdf`, documentType: "operating_agreement", visible: true, needsReview: "check" }, "v4")
+    expect(v4.j.visible).toBe(false)
+    // a "Needs review" file cannot be shown until it is marked reviewed
+    const { POST } = await import("@/app/api/crm-store/browse/file/[id]/visibility/route")
+    expect((await (await POST(post("http://x", { visible: true }), { params: { id: v1.j.fileId } })).json()).error).toMatch(/Needs review/)
+  })
+
+  it("from a company page only the person's own documents go into their storage; a company paper there is refused", async () => {
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const personal = await folderOfKind(fx.personOwner, "personal")
+    const bad = await upload({ ownerId: fx.personOwner, folderId: personal, fileName: "Stmt.pdf", documentType: "bank_statement", visible: true, viaCompanyOwnerId: fx.owner })
+    expect(bad.status).toBe(400)
+    expect(bad.j.error).toMatch(/own documents/)
+    const itin = await folderOfKind(fx.personOwner, "itin")
+    const bad2 = await upload({ ownerId: fx.personOwner, folderId: itin, fileName: "W7.pdf", documentType: "form_w_7", viaCompanyOwnerId: fx.owner })
+    expect(bad2.j.error).toMatch(/person's own page/)
+  })
+
+  it("the company's file list never hides a person's ITIN / Tax file (it is not in the company's storage view)", async () => {
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const itin = await folderOfKind(fx.personOwner, "itin")
+    const up = await upload({ ownerId: fx.personOwner, folderId: itin, fileName: `ITIN letter ${tag}.pdf`, documentType: "itin_letter", visible: false })
+    expect(up.status, JSON.stringify(up.j)).toBe(200)
+    const personal = await folderOfKind(fx.personOwner, "personal")
+    const pp = await upload({ ownerId: fx.personOwner, folderId: personal, fileName: `Passport ${tag}.pdf`, documentType: "passport", visible: false })
+    const { storeFilesShownForAccount } = await import("@/lib/crm-store/browse")
+    const shown = await storeFilesShownForAccount(fx.account, fx.owner)
+    expect(shown).toContain(pp.j.fileId)
+    expect(shown).not.toContain(up.j.fileId)
+  })
+
+  it("a private area's folder can't be reached by naming another owner in the same request", async () => {
+    const { ensureArea } = await import("@/lib/crm-store/structure")
+    const other = await ensureArea("private", randomUUID())
+    const { data: root } = await db.from("store_folders").select("id").eq("owner_id", other).is("parent_id", null).single()
+    const { GET } = await import("@/app/api/crm-store/browse/folder/route")
+    expect((await GET(get(`http://x/api/crm-store/browse/folder?owner=${fx.owner}&folder=${root.id}`))).status).toBe(404)
+    const { POST } = await import("@/app/api/crm-store/browse/folder/create/route")
+    expect((await POST(post("http://x", { parentId: root.id, name: "x" }))).status).toBe(404)
+  })
+
+  it("a folder move that is refused hides nothing; a move with 'hide first' hides the visible files and moves", async () => {
+    const { createFolder, moveFolder } = await import("@/lib/crm-store/structure")
+    const a = await createFolder(fx.company1, `Move A ${tag}`, fx.adminId)
+    await createFolder(fx.tax, `Move A ${tag}`, fx.adminId) // same name at the destination → refused
+    const shown = await upload({ ownerId: fx.owner, folderId: a.id, fileName: "Visible.pdf", documentType: "business_license", visible: true })
+    expect(shown.j.visible).toBe(true)
+    await expect(moveFolder(a.id, fx.tax, fx.adminId, "all")).rejects.toThrow(/already has a folder/)
+    const { data: still } = await db.from("documents").select("portal_visible").eq("drive_file_id", `store:${shown.j.fileId}`).single()
+    expect(still.portal_visible).toBe(true)
+    await moveFolder(a.id, fx.banking, fx.adminId, "all")
+    const { data: after } = await db.from("documents").select("portal_visible, category").eq("drive_file_id", `store:${shown.j.fileId}`).single()
+    expect(after).toEqual({ portal_visible: false, category: 4 })
+  })
+
+  it("a tax-year folder can only move inside a Tax folder", async () => {
+    const { moveFolder } = await import("@/lib/crm-store/structure")
+    await expect(moveFolder(yearFolder, fx.company1, fx.adminId)).rejects.toThrow(/tax-year folder/)
+  })
+
+  it("a person's tax-year folder: a non-personal paper there is listed as Tax (a personal type stays Contacts, as today)", async () => {
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const { createTaxYear } = await import("@/lib/crm-store/structure")
+    const ptax = await folderOfKind(fx.personOwner, "person_tax")
+    const y = await createTaxYear(ptax, "2024", fx.adminId)
+    const up = await upload({ ownerId: fx.personOwner, folderId: y.id, fileName: "IRS notice.pdf", documentType: "irs_notice", periodYear: 2024 })
+    expect(up.status, JSON.stringify(up.j)).toBe(200)
+    const { data: row } = await db.from("documents").select("category").eq("drive_file_id", `store:${up.j.fileId}`).single()
+    expect(row.category).toBe(3)
+  })
+
+  it("a filed return can't be replaced — the message says so in plain words", async () => {
+    const r = await upload({ ownerId: fx.owner, folderId: yearFolder, fileName: "1120 filed.pdf", documentType: "form_1120", filingAnswer: "filed", periodYear: 2025 }, "another")
+    expect(r.status).toBe(400)
+    expect(r.j.error).toMatch(/filed and frozen|FILED document/)
   })
 })

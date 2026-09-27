@@ -114,7 +114,7 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
     setLoading((l) => new Set(l).add(key))
     try {
       const r = await getJson<{ folder: PickFolder | null; folders: PickFolder[] }>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`)
-      if (!folderId) { setRootId(r.folder?.id ?? null); setRootFolder(r.folder) }
+      if (!folderId) { setRootId(r.folder?.id ?? null); setRootFolder(r.folder); if (r.folder) setOpen(new Set([r.folder.id])) }
       if (r.folder) setNodes((n) => ({ ...n, [r.folder!.id]: r.folders }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not open the folder.')
@@ -203,7 +203,8 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
             </p>
             <ul className="min-h-0 flex-1 overflow-y-auto">
               {loading.has('root') && <li className="p-2 text-sm text-zinc-500">Loading…</li>}
-              {rootFolder && rootId && (mode === 'folder'
+              {rootFolder && rootId && (mode === 'folder' || rootFolder.kind !== 'root'
+                // a folder can go at the top; a FILE can go at the top of Business / My files (their top takes files)
                 ? node(rootFolder, 0, [owner.label].filter(Boolean))
                 : (nodes[rootId] ?? []).filter((k) => !k.trashed).map((k) => node(k, 0, [owner.label].filter(Boolean))))}
             </ul>

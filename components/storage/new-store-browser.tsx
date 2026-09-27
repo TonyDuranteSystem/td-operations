@@ -438,9 +438,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // ───────────────────────────────────────── folders
 
   /** the questions before a folder move / delete when the client can see files inside (Part 16) */
-  const settleVisibleInside = async (f: Fold, action: 'move' | 'delete'): Promise<{ go: boolean; files: number; shown: number }> => {
+  /**
+   * The question before a folder move / delete when the client sees files inside (Part 16). Nothing changes
+   * here: it returns WHAT to hide; the server hides only after all its own checks pass, in the same request.
+   */
+  const settleVisibleInside = async (f: Fold, action: 'move' | 'delete'): Promise<{ go: boolean; files: number; stillShown: number; hide: 'none' | 'all' | { ids: string[] } }> => {
     const s = await getJson<{ files: number; shown: number; list: { id: string; name: string; shown: boolean }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
-    if (s.shown === 0) return { go: true, files: s.files, shown: 0 }
+    if (s.shown === 0) return { go: true, files: s.files, stillShown: 0, hide: 'none' }
     const visible = s.list.filter((x) => x.shown)
     const a = await ask('folder_with_visible_files', 'The client can see files in this folder',
       <>
@@ -448,17 +452,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs">{visible.slice(0, 40).map((x) => <li key={x.id}>{x.name}</li>)}{visible.length > 40 && <li>… and {visible.length - 40} more</li>}</ul>
       </>,
       [{ key: 'all' }, { key: 'hide_first', tone: 'primary' }, { key: 'pick' }, { key: 'cancel' }])
-    if (a === 'cancel') return { go: false, files: s.files, shown: s.shown }
-    if (a === 'hide_first') await postJson(`/api/crm-store/browse/folder/${f.id}/hide-all`, {}, 'The files could not be hidden, so nothing was done.')
+    if (a === 'cancel') return { go: false, files: s.files, stillShown: s.shown, hide: 'none' }
+    if (a === 'hide_first') return { go: true, files: s.files, stillShown: 0, hide: 'all' }
     if (a === 'pick') {
       const chosen = new Set(visible.map((x) => x.id))
       const b = await ask('folder_with_visible_files_pick', 'Which ones should the client stop seeing?',
         <PickList items={visible} chosen={chosen} />,
         [{ key: 'go', label: 'Hide the ticked ones, then continue', tone: 'primary' }, { key: 'cancel', label: 'Cancel' }])
-      if (b !== 'go' && b !== '__default__') return { go: false, files: s.files, shown: s.shown }
-      await postJson(`/api/crm-store/browse/folder/${f.id}/hide-chosen`, { fileIds: Array.from(chosen) }, 'The files could not be hidden, so nothing was done.')
+      if (b !== 'go' && b !== '__default__') return { go: false, files: s.files, stillShown: s.shown, hide: 'none' }
+      return { go: true, files: s.files, stillShown: s.shown - chosen.size, hide: { ids: Array.from(chosen) } }
     }
-    return { go: true, files: s.files, shown: a === 'all' || a === '__default__' ? s.shown : 0 }
+    return { go: true, files: s.files, stillShown: s.shown, hide: 'none' }
   }
 
   const pickAndMoveFolder = async (f: Fold, parentId: string | null) => {
@@ -471,8 +475,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const v = await settleVisibleInside(f, 'move')
       if (!v.go) return
-      const m = await postJson<{ parentName: string }>(`/api/crm-store/browse/folder/${f.id}/move`, { toFolderId: r.folderId }, 'The folder could not be moved.')
-      toast.success(`Moved "${f.name}" into ${m.parentName}`)
+      const m = await postJson<{ parentName: string }>(`/api/crm-store/browse/folder/${f.id}/move`, { toFolderId: r.folderId, hide: v.hide }, 'The folder could not be moved.')
+      toast.success(`Moved "${f.name}" into ${m.parentName}${v.hide !== 'none' ? ' (the files you chose are now hidden from the client)' : ''}`)
       await refreshAll()
     } catch (e) {
       toast.error(errMsg(e, 'The folder could not be moved.'))
@@ -485,10 +489,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const v = await settleVisibleInside(f, 'delete')
       if (!v.go) return
       const a = await ask('delete_folder', 'Move this folder to the trash?',
-        <p>Move <strong>{f.name}</strong> and its {v.files} {v.files === 1 ? 'file' : 'files'} to the trash?{v.shown > 0 ? ` ${v.shown} ${v.shown === 1 ? 'is' : 'are'} shown to the client and will disappear from their portal.` : ''} Recoverable for 90 days.</p>,
+        <p>Move <strong>{f.name}</strong> and its {v.files} {v.files === 1 ? 'file' : 'files'} to the trash?{v.stillShown > 0 ? ` ${v.stillShown} ${v.stillShown === 1 ? 'is' : 'are'} shown to the client and will disappear from their portal.` : ''} Recoverable for 90 days.</p>,
         [{ key: 'trash', label: 'Move to trash', tone: 'danger' }, { key: 'cancel', label: 'Cancel' }])
       if (a !== 'trash' && a !== '__default__') return
-      const r = await postJson<{ files: number }>(`/api/crm-store/browse/folder/${f.id}/delete`, {}, 'The folder could not be deleted.')
+      const r = await postJson<{ files: number }>(`/api/crm-store/browse/folder/${f.id}/delete`, { hide: v.hide }, 'The folder could not be deleted.')
       toast.success(`"${f.name}" and ${r.files} ${r.files === 1 ? 'file' : 'files'} moved to the trash`)
       await refreshAll()
     } catch (e) {
@@ -584,18 +588,25 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** every folder on screen that can take a file, in tree order, with its depth (the upload's Folder list) */
-  const folderOptions = (): Array<{ f: Fold; depth: number; owner: string }> => {
-    const out: Array<{ f: Fold; depth: number; owner: string }> = []
-    const walk = (list: Fold[], depth: number) => {
+  const folderOptions = (): Array<{ f: Fold; depth: number; owner: string; label: string }> => {
+    const out: Array<{ f: Fold; depth: number; owner: string; label: string }> = []
+    const walk = (list: Fold[], depth: number, prefix = '') => {
       for (const f of list) {
         if (f.trashed) continue
-        out.push({ f, depth, owner: folderOwner.current.get(f.id) ?? ownerId ?? '' })
-        if (f.kind === 'contacts') continue
+        out.push({ f, depth, owner: folderOwner.current.get(f.id) ?? ownerId ?? '', label: `${prefix}${f.name}` })
         const c = loaded[f.id]
-        if (c) walk([...c.folders].sort(sortFolders), depth + 1)
+        if (f.kind === 'contacts') {
+          // each person's own folders opened through the company (the ones the company page may show)
+          for (const p of c?.people ?? []) {
+            const pc = loaded[personKey(p.contactId)]
+            if (pc) walk([...pc.folders].sort(sortFolders), depth + 1, `${p.name} › `)
+          }
+          continue
+        }
+        if (c) walk([...c.folders].sort(sortFolders), depth + 1, prefix)
       }
     }
-    if (root?.folder && root.folder.kind !== 'root') out.push({ f: root.folder, depth: 0, owner: ownerId ?? '' })
+    if (root?.folder && root.folder.kind !== 'root') out.push({ f: root.folder, depth: 0, owner: ownerId ?? '', label: root.folder.name })
     walk(root?.folders ?? [], root?.folder && root.folder.kind !== 'root' ? 1 : 0)
     return out
   }
@@ -604,7 +615,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const upIsContacts = upFolderObj?.kind === 'contacts'
   const ownerKind = root?.owner.kind ?? scopedKind
   const upTargetIsPerson = ownerKind === 'person' || (!!upFolderObj && viaCompany.current.has(upFolderObj.id))
-  const upTypes = (types ?? []).filter((t) => (upTargetIsPerson ? true : upIsContacts ? t.personal : ownerKind === 'private' ? true : !t.personal))
+  const upViaCompany = !!upFolderObj && viaCompany.current.has(upFolderObj.id)
+  // a person's folder opened from a company page takes only the person's own documents (the server refuses the rest)
+  const upTypes = (types ?? []).filter((t) => (upViaCompany ? t.personal : upTargetIsPerson ? true : upIsContacts ? t.personal : ownerKind === 'private' ? true : !t.personal))
   const upPeople = upFolderObj ? loaded[upFolderObj.id]?.people ?? [] : []
 
   /** today's "Custom…" type: added once, then listed for everyone (catalog, with who added it) */
@@ -652,8 +665,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <MiniPreview src={localUrl} mimeType={file.type} label={file.name} sub="the file you are uploading" />
           </>,
           [{ key: 'store_here', tone: 'primary' }, { key: 'other_place' }, { key: 'business' }, { key: 'later' }])
+        if (a === 'cancel') return // closed the question: nothing is saved
         if (a === 'other_place' || a === 'business') {
-          const businessId = (groups ?? []).find((g) => g.key === 'business')?.owners[0]?.id
+          const nav = groups ?? (await getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation')).groups
+          const businessId = nav.find((g) => g.key === 'business')?.owners[0]?.id
+          if (a === 'business' && !businessId) throw new Error('The Business folders could not be found — please try again.')
           const r = await pick({ title: a === 'business' ? 'Where in the Business folders?' : 'Where does it belong?', mode: 'file', chooseOwner: a !== 'business', ownerId: a === 'business' ? businessId : undefined, ownerLabel: a === 'business' ? 'Business' : undefined })
           setPicking(null)
           if (!r) return
@@ -666,7 +682,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       }
       // 2. a tax form put in "Tax" itself, not in a year folder
       if (type && /_year$/.test(type.defaultFolderKind ?? '') && (target.folder.kind === 'tax' || target.folder.kind === 'person_tax')) {
-        const years = (loaded[target.folder.id]?.folders ?? []).filter((f) => isYear(f.name)).sort((x, y) => y.name.localeCompare(x.name))
+        // read the year folders fresh (the target may not be open on screen)
+        const taxNow = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}${target.via ? '&via=company' : ''}`)
+        const years = taxNow.folders.filter((f) => isYear(f.name) && !f.trashed).sort((x, y) => y.name.localeCompare(x.name))
         const suggestion = suggestYear(years.map((y) => y.name))
         const choiceLabel = questions?.tax_year_missing?.choices.year ?? 'Put it in'
         const a = await ask('tax_year_missing', 'Which tax year is this for?',
@@ -706,14 +724,24 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <p>A draft is never shown to the client until it is marked filed.</p>
           </>,
           [{ key: 'filed' }, { key: 'draft', tone: 'primary' }, { key: 'later' }])
+        if (a === 'cancel') return // closed the question: nothing is saved
         if (a === 'filed') filingAnswer = 'filed'
         else if (a === 'later') needsReview = 'Prepared return — filed or draft not decided yet'
         else filingAnswer = 'draft'
       }
       // 4. the same name already in that folder, different content
       const name = finalUploadName(file.name, displayName)
-      const here = target.folder.kind === 'contacts' ? null
-        : await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}${target.via ? '&via=company' : ''}`)
+      // where the file will really land: through "2. Contacts" it goes into that person's "Personal documents"
+      let landsIn = { ownerId: target.ownerId, folderId: target.folder.id, via: target.via }
+      if (target.folder.kind === 'contacts') {
+        const person = (loaded[target.folder.id]?.people ?? []).find((pp) => pp.contactId === upPerson)
+        const top = person?.ownerId ? await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(person.ownerId)}&via=company`) : null
+        const personal = top?.folders.find((x) => x.kind === 'personal')
+        landsIn = person?.ownerId && personal ? { ownerId: person.ownerId, folderId: personal.id, via: true } : { ownerId: '', folderId: '', via: false }
+      }
+      const here = landsIn.folderId
+        ? await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(landsIn.ownerId)}&folder=${encodeURIComponent(landsIn.folderId)}${landsIn.via ? '&via=company' : ''}`)
+        : null
       const sha = await sha256OfFile(file)
       const same = here?.files.find((x) => x.name.toLowerCase() === name.toLowerCase())
       if (same && !(sha && same.sha256 === sha)) {
@@ -730,18 +758,26 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         // 5. the exact same file already stored under another name / somewhere else
         const hits = (await getJson<{ files: { fileId: string; name: string; ownerId: string; where: string; mimeType: string | null }[] }>(`/api/crm-store/browse/identical?sha=${sha}`)).files
         if (hits.length > 0) {
-          const h = hits[0]
+          // the copy in THIS storage first; a copy in another client's storage can never be renamed from here
+          const h = hits.find((x) => x.ownerId === (landsIn.ownerId || target.ownerId)) ?? hits[0]
+          const sameStorage = h.ownerId === (landsIn.ownerId || target.ownerId)
           const a = await ask('identical_elsewhere', 'This exact file is already stored',
             <>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <MiniPreview src={`/api/crm-store/browse/file/${h.fileId}`} mimeType={h.mimeType} label={`Already stored: ${h.name}`} sub={h.where} />
                 <MiniPreview src={localUrl} mimeType={file.type} label={`New: ${name}`} sub={`into ${target.folder.name}`} />
               </div>
-              {hits.length > 1 && <p className="text-xs text-zinc-500">Also stored at: {hits.slice(1, 5).map((x) => x.where).join(' · ')}{hits.length > 5 ? ' …' : ''}</p>}
+              {!sameStorage && <p>The copy already stored belongs to <strong>another storage</strong> ({h.where.split(' › ')[0]}). If this document is also for {target.folder.name}, add it here.</p>}
+              {hits.length > 1 && <p className="text-xs text-zinc-500">Also stored at: {hits.filter((x) => x !== h).slice(0, 4).map((x) => x.where).join(' · ')}{hits.length > 5 ? ' …' : ''}</p>}
             </>,
-            [{ key: 'dont_add', tone: 'primary' }, { key: 'rename_existing', disabled: h.name.toLowerCase() === name.toLowerCase() }, { key: 'second_copy' }, { key: 'cancel' }])
+            [
+              { key: 'dont_add', tone: sameStorage ? 'primary' : 'plain' },
+              ...(sameStorage ? [{ key: 'rename_existing', disabled: h.name.toLowerCase() === name.toLowerCase() }] : []),
+              { key: 'second_copy', tone: sameStorage ? 'plain' as const : 'primary' as const },
+              { key: 'cancel' },
+            ])
           if (a === 'dont_add' || a === 'cancel') { if (a === 'dont_add') toast.message(`Kept the existing copy: ${h.where}`); return }
-          if (a === 'rename_existing') {
+          if (a === 'rename_existing' && sameStorage) {
             const r = await postJson<{ name: string }>(`/api/crm-store/browse/file/${h.fileId}/rename`, { name }, 'The existing file could not be renamed.')
             toast.success(`The existing file is now called "${r.name}" — nothing new was added`)
             setUploadOpen(false)
@@ -765,7 +801,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         ...(target.via && ownerId ? { viaCompanyOwnerId: ownerId } : {}),
       }, 'The upload could not be saved — please try again.')
       toast.success(
-        r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)`
+        r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions) — ${r.visible ? 'the client can see it' : 'hidden from the client'}`
           : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed`
             : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )

@@ -145,4 +145,79 @@ VALUES
    '{"enabled":true,"choices":{"owner_only":"Show it to","keep_hidden":"Keep it hidden"}}')
 ON CONFLICT (catalog_id, slug) DO NOTHING;
 
+-- Every live file under a folder, all levels, in ONE read (no request-size or 1,000-row limits) — for the
+-- folder move / delete questions, the delete itself and the category refresh. Trashed sub-folders are skipped.
+CREATE OR REPLACE FUNCTION public.store_subtree_files(p_folder uuid)
+RETURNS TABLE (id uuid, name text, folder_id uuid, visible boolean)
+LANGUAGE sql STABLE AS $$
+  WITH RECURSIVE t AS (
+    SELECT f.id FROM public.store_folders f WHERE f.id = p_folder
+    UNION ALL
+    SELECT c.id FROM public.store_folders c JOIN t ON c.parent_id = t.id WHERE c.trashed_at IS NULL
+  )
+  SELECT sf.id, sf.name, sf.folder_id,
+         EXISTS (SELECT 1 FROM public.documents d WHERE d.drive_file_id = 'store:' || sf.id::text AND d.portal_visible IS TRUE)
+    FROM public.store_files sf JOIN t ON sf.folder_id = t.id
+   WHERE sf.state = 'live'
+$$;
+REVOKE ALL ON FUNCTION public.store_subtree_files(uuid) FROM PUBLIC, anon, authenticated;
+
+-- A folder's files' facts in ONE call (personal? staff-only type? how many versions?) instead of three
+-- round-trips per file.
+CREATE OR REPLACE FUNCTION public.store_files_facts(p_ids uuid[])
+RETURNS TABLE (id uuid, is_personal boolean, staff_only boolean, version_count integer)
+LANGUAGE sql STABLE AS $$
+  SELECT f.id, public.store_file_is_personal(f.id), public.store_type_staff_only(f.document_type),
+         (SELECT count(*)::int FROM public.store_file_versions v WHERE v.file_id = f.id)
+    FROM public.store_files f WHERE f.id = ANY (p_ids)
+$$;
+REVOKE ALL ON FUNCTION public.store_files_facts(uuid[]) FROM PUBLIC, anon, authenticated;
+
+-- The backup completeness alarm: the Business and "My files" areas are not backed up (not decided yet), so
+-- their files are not "missing" and their names are never listed in the alarm (same bodies as slice 5, plus
+-- the one exclusion).
+CREATE OR REPLACE FUNCTION public.store_backup_gaps(p_late interval DEFAULT interval '6 hours', p_limit_per_kind integer DEFAULT 100)
+RETURNS TABLE (kind text, owner_id uuid, file_id uuid, detail text) LANGUAGE sql STABLE AS $$
+  (SELECT 'owner_failing', s.owner_id, NULL::uuid, s.last_error FROM public.store_backup_state s
+    WHERE s.consecutive_failures >= 3 ORDER BY s.last_error_at DESC LIMIT p_limit_per_kind)
+  UNION ALL
+  (SELECT 'owner_late', s.owner_id, NULL::uuid, 'changes waiting since ' || min(e.occurred_at)::text
+     FROM public.store_backup_state s JOIN public.store_events e ON e.owner_id = s.owner_id AND e.id > s.last_event_id
+    WHERE NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = s.owner_id AND o.kind IN ('business','private'))
+    GROUP BY s.owner_id HAVING min(e.occurred_at) < now() - p_late LIMIT p_limit_per_kind)
+  UNION ALL
+  (SELECT 'no_bytes', f.owner_id, f.id, f.name FROM public.store_files f
+    WHERE f.state = 'live' AND f.current_version_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = f.owner_id AND o.kind IN ('business','private'))
+    LIMIT p_limit_per_kind)
+  UNION ALL
+  (SELECT CASE f.state WHEN 'live' THEN 'missing_file' ELSE 'protected_missing' END, f.owner_id, f.id, f.name
+     FROM public.store_files f
+    WHERE f.state IN ('live','trashed') AND f.current_version_id IS NOT NULL AND NOT public.store_backup_file_ok(f.id)
+      AND NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = f.owner_id AND o.kind IN ('business','private'))
+    LIMIT p_limit_per_kind)
+$$;
+
+CREATE OR REPLACE FUNCTION public.store_backup_gap_counts(p_late interval DEFAULT interval '6 hours')
+RETURNS TABLE (kind text, n bigint) LANGUAGE sql STABLE AS $$
+  SELECT 'missing_file', count(*) FROM public.store_files f
+   WHERE f.state = 'live' AND f.current_version_id IS NOT NULL AND NOT public.store_backup_file_ok(f.id)
+     AND NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = f.owner_id AND o.kind IN ('business','private'))
+  UNION ALL SELECT 'protected_missing', count(*) FROM public.store_files f
+   WHERE f.state = 'trashed' AND NOT public.store_backup_file_ok(f.id)
+     AND NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = f.owner_id AND o.kind IN ('business','private'))
+  UNION ALL SELECT 'no_bytes', count(*) FROM public.store_files f WHERE f.state = 'live' AND f.current_version_id IS NULL
+     AND NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = f.owner_id AND o.kind IN ('business','private'))
+  UNION ALL SELECT 'owner_failing', count(*) FROM public.store_backup_state s WHERE s.consecutive_failures >= 3
+  UNION ALL SELECT 'owner_late', count(*) FROM (
+    SELECT s.owner_id FROM public.store_backup_state s JOIN public.store_events e ON e.owner_id = s.owner_id AND e.id > s.last_event_id
+     WHERE NOT EXISTS (SELECT 1 FROM public.store_owners o WHERE o.id = s.owner_id AND o.kind IN ('business','private'))
+     GROUP BY s.owner_id HAVING min(e.occurred_at) < now() - p_late) x
+$$;
+
+-- Which of a PERSON's folders a company page may show is catalog data and now fails CLOSED (a folder kind without
+-- the setting is not shown): the person's top folder and staff-made folders are marked shown; personal was already.
+UPDATE public.catalog_entries SET metadata = metadata || '{"shown_through_company":true}'::jsonb
+ WHERE catalog_id = 'storage_folder_kinds' AND slug IN ('root','custom') AND (metadata->>'shown_through_company') IS DISTINCT FROM 'true';
+
 COMMIT;

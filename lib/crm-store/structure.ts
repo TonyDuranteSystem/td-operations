@@ -155,10 +155,11 @@ export async function effectiveKind(folderId: string): Promise<string> {
   return "custom"
 }
 
-/** The CRM documents-list category for a file saved in this folder (a year folder in "3. Tax" → Tax). */
+/** The CRM documents-list category for a file saved in this folder (a year folder in "3. Tax" → Tax). ONE rule,
+ *  used by upload, file move and folder move. */
 export async function categoryForFolder(folderId: string): Promise<{ num: number; name: string }> {
-  const { FOLDER_KIND_CATEGORY } = await import("./browse")
-  return FOLDER_KIND_CATEGORY[await effectiveKind(folderId)] ?? FOLDER_KIND_CATEGORY.correspondence
+  const { categoryForKind } = await import("./browse")
+  return categoryForKind(await effectiveKind(folderId))
 }
 
 async function nameTaken(ownerId: string, parentId: string, name: string, exceptId?: string): Promise<boolean> {
@@ -207,7 +208,16 @@ export async function renameFolder(folderId: string, name: string, actorId: stri
   return { name: clean }
 }
 
-export async function moveFolder(folderId: string, toParentId: string, actorId: string | null): Promise<{ parentName: string }> {
+/** What to hide from the client before a folder move / delete: nothing, every visible file, or the chosen files. */
+export type HideChoice = "none" | "all" | { ids: string[] }
+
+async function applyHide(folderId: string, hide: HideChoice | undefined, actorId: string | null): Promise<void> {
+  if (!hide || hide === "none") return
+  if (hide === "all") await hideAllUnder(folderId, actorId)
+  else await hideChosenUnder(folderId, hide.ids, actorId)
+}
+
+export async function moveFolder(folderId: string, toParentId: string, actorId: string | null, hide?: HideChoice): Promise<{ parentName: string }> {
   const f = await folder(folderId)
   const to = await folder(toParentId)
   if (f.trashed_at || to.trashed_at) throw new Error("That folder is in the trash.")
@@ -216,7 +226,14 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
   if (to.kind === "contacts") throw new Error("\"2. Contacts\" shows each person's own storage — a folder can't go there.")
   if (to.id === f.parent_id) return { parentName: to.name }
   if (to.id === f.id) throw new Error("A folder can't go inside itself.")
+  // a year folder keeps its meaning only inside a Tax folder
+  if (f.kind === "tax_year" || f.kind === "person_tax_year") {
+    const want = f.kind === "tax_year" ? "tax" : "person_tax"
+    if ((await effectiveKind(to.id)) !== want) throw new Error(`"${f.name}" is a tax-year folder — it can only go inside a Tax folder.`)
+  }
   if (await nameTaken(f.owner_id, to.id, f.name, f.id)) throw new Error(`"${to.name}" already has a folder called "${f.name}".`)
+  // every check is done — only now hide what staff chose to hide, so a refused move hides nothing
+  await applyHide(folderId, hide, actorId)
   const { error } = await db().from("store_folders").update({ parent_id: to.id }).eq("id", folderId).is("trashed_at", null)
   if (error) throw new Error(/loop/i.test(error.message) ? "A folder can't go inside one of its own sub-folders." : `The folder could not be moved (${error.message}).`)
   // the files inside keep their CRM category in step with the new place
@@ -225,100 +242,109 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
   return { parentName: to.name }
 }
 
-/** Every live file under a folder (all levels) — for the move/delete questions and category refresh. */
-export async function filesUnder(folderId: string): Promise<Array<{ id: string; name: string; folder_id: string }>> {
-  const all: string[] = [folderId]
-  for (let i = 0; i < all.length && i < 5000; i++) {
-    const { data } = await db().from("store_folders").select("id").eq("parent_id", all[i]).is("trashed_at", null)
-    for (const c of data ?? []) all.push(c.id)
-  }
-  const { data: files, error } = await db().from("store_files").select("id, name, folder_id").in("folder_id", all).eq("state", "live")
+/** Every live file under a folder (all levels) and whether the client sees it — ONE database read, no limits. */
+export async function filesUnder(folderId: string): Promise<Array<{ id: string; name: string; folder_id: string; visible: boolean }>> {
+  const { data, error } = await db().rpc("store_subtree_files", { p_folder: folderId })
   if (error) throw new Error(`Could not read the folder's files (${error.message}).`)
-  return (files ?? []) as Array<{ id: string; name: string; folder_id: string }>
+  return (data ?? []) as Array<{ id: string; name: string; folder_id: string; visible: boolean }>
 }
 
+const CHUNK = 200
+const chunks = <T,>(list: T[]): T[][] => { const out: T[][] = []; for (let i = 0; i < list.length; i += CHUNK) out.push(list.slice(i, i + CHUNK)); return out }
+
+/** After a folder move: each file's CRM category from ITS OWN folder (same rule as upload and file move). */
 async function refreshCategories(ownerId: string, folderId: string) {
   const { data: o } = await db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle()
-  if (o?.kind === "person") return
-  const { FOLDER_KIND_CATEGORY } = await import("./browse")
-  const cat = FOLDER_KIND_CATEGORY[await effectiveKind(folderId)]
-  if (!cat) return
+  if (o?.kind === "person" || o?.kind === "business" || o?.kind === "private") return
   const { storePointer } = await import("./document-pointer")
   const files = await filesUnder(folderId)
-  if (!files.length) return
-  const { error } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })
-    .in("drive_file_id", files.map((x) => storePointer(x.id)))
-  if (error) console.error(`[crm-store] folder move: categories not refreshed: ${error.message}`)
+  const byFolder = new Map<string, string[]>()
+  for (const x of files) byFolder.set(x.folder_id, [...(byFolder.get(x.folder_id) ?? []), x.id])
+  const failed: string[] = []
+  for (const [fid, ids] of Array.from(byFolder.entries())) {
+    const cat = await categoryForFolder(fid)
+    for (const part of chunks(ids)) {
+      const { error } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })
+        .in("drive_file_id", part.map((id) => storePointer(id)))
+      if (error) failed.push(error.message)
+    }
+  }
+  if (failed.length) throw new Error(`The folder was moved, but some files' CRM categories were not updated (${failed[0]}) — move it again to retry.`)
 }
 
 /** What a folder delete / move would touch: every file (all levels, first 500 listed) and which the client sees. */
 export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean }>; locked: boolean }> {
   const f = await folder(folderId)
   const files = await filesUnder(folderId)
-  const shownIds = new Set<string>()
-  if (files.length) {
-    const { storePointer } = await import("./document-pointer")
-    for (let i = 0; i < files.length; i += 200) {
-      const chunk = files.slice(i, i + 200)
-      const { data, error } = await db().from("documents").select("drive_file_id")
-        .in("drive_file_id", chunk.map((x) => storePointer(x.id))).eq("portal_visible", true)
-      if (error) throw new Error(`Could not check what the client sees (${error.message}).`)
-      for (const r of data ?? []) shownIds.add(String(r.drive_file_id).slice("store:".length))
+  const list = files.map((x) => ({ id: x.id, name: x.name, shown: x.visible }))
+    .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
+  return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: isLockedFolder(f) }
+}
+
+/** Hide from the client the given files (all must be under the folder); stops at the first failure and says which. */
+async function hideFiles(ids: string[], actorId: string | null): Promise<number> {
+  const { setClientVisibility } = await import("./browse")
+  let n = 0
+  for (const id of ids) {
+    try {
+      await setClientVisibility(id, false, actorId)
+      n++
+    } catch (e) {
+      throw new Error(`${n} file${n === 1 ? "" : "s"} hidden, then one could not be (${e instanceof Error ? e.message : String(e)}) — nothing else was done.`)
     }
   }
-  const list = files.map((x) => ({ id: x.id, name: x.name, shown: shownIds.has(x.id) }))
-    .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
-  return { name: f.name, files: files.length, shown: shownIds.size, list, locked: isLockedFolder(f) }
+  return n
 }
 
 /** Hide from the client only the chosen files under a folder ("Pick which ones to hide"). */
 export async function hideChosenUnder(folderId: string, fileIds: string[], actorId: string | null): Promise<number> {
   const inside = new Set((await filesUnder(folderId)).map((x) => x.id))
-  const { setClientVisibility } = await import("./browse")
-  let n = 0
-  for (const id of fileIds) {
-    if (!inside.has(id)) continue
-    await setClientVisibility(id, false, actorId)
-    n++
-  }
-  return n
+  return hideFiles(fileIds.filter((id) => inside.has(id)), actorId)
 }
 
-/** Hide from the client every file under a folder (the "hide the visible ones first" answer). */
+/** Hide from the client every file under a folder that the client sees today ("hide the visible ones first"). */
 export async function hideAllUnder(folderId: string, actorId: string | null): Promise<number> {
-  const { setClientVisibility } = await import("./browse")
-  const files = await filesUnder(folderId)
-  let n = 0
-  const failed: string[] = []
-  for (const f of files) {
-    try { await setClientVisibility(f.id, false, actorId); n++ } catch (e) {
-      // a file with no CRM listing cannot be seen by the client anyway; anything else is a real failure
-      if (!/not listed in the CRM documents list/i.test(e instanceof Error ? e.message : "")) failed.push(f.name)
-    }
-  }
-  if (failed.length) throw new Error(`These files could not be hidden, so nothing else was done: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? " …" : ""}`)
-  return n
+  return hideFiles((await filesUnder(folderId)).filter((x) => x.visible).map((x) => x.id), actorId)
 }
 
 /** Delete a folder: the folder and everything in it go to the store TRASH as one batch (recoverable 90 days);
  *  the CRM listings of its files are removed so the portal stops showing them. */
-export async function deleteFolder(folderId: string, actorId: string | null): Promise<{ files: number }> {
+export async function deleteFolder(folderId: string, actorId: string | null, hide?: HideChoice): Promise<{ files: number }> {
   if (!actorId) throw new Error("Only a signed-in staff member can delete a folder.")
   const f = await folder(folderId)
   if (f.trashed_at) throw new Error("That folder is already in the trash.")
   if (isLockedFolder(f)) throw new Error(`"${f.name}" is one of the fixed folders and can't be deleted.`)
+  await applyHide(folderId, hide, actorId)
   const files = await filesUnder(folderId)
   const { storePointer } = await import("./document-pointer")
-  const pointers = files.map((x) => storePointer(x.id))
   // listings first (kept in memory) so a refusal by the trash (legal hold …) can put them back
-  const { data: removed, error: dErr } = pointers.length
-    ? await db().from("documents").delete().in("drive_file_id", pointers).select("*")
-    : { data: [], error: null }
-  if (dErr) throw new Error(`The CRM list could not be updated, so the folder was not deleted (${dErr.message}).`)
-  const { error } = await db().rpc("store_trash_folder", { p_folder_id: folderId, p_actor: actorId, p_reason: "Folder deleted by staff from the CRM" })
+  const removed: Record<string, unknown>[] = []
+  for (const part of chunks(files.map((x) => storePointer(x.id)))) {
+    const { data, error } = await db().from("documents").delete().in("drive_file_id", part).select("*")
+    if (error) {
+      if (removed.length) await db().from("documents").insert(removed)
+      throw new Error(`The CRM list could not be updated, so the folder was not deleted (${error.message}).`)
+    }
+    removed.push(...(data ?? []))
+  }
+  const { data: batch, error } = await db().rpc("store_trash_folder", { p_folder_id: folderId, p_actor: actorId, p_reason: "Folder deleted by staff from the CRM" })
   if (error) {
-    if ((removed ?? []).length) await db().from("documents").insert(removed)
-    throw new Error(error.message.replace(/^store: /, ""))
+    const lost: string[] = []
+    for (const part of chunks(removed)) {
+      const { error: iErr } = await db().from("documents").insert(part)
+      if (iErr) lost.push(iErr.message)
+    }
+    if (lost.length) console.error(`[crm-store] folder delete refused AND ${lost.length} CRM listing chunk(s) could not be put back: ${lost[0]}`)
+    throw new Error(`${error.message.replace(/^store: /, "")}${lost.length ? " — and some CRM listings could not be put back; tell the tech team." : ""}`)
+  }
+  // a file saved into the folder while this ran is in the same trash batch — its listing goes too
+  if (batch) {
+    const { data: late } = await db().from("store_files").select("id").eq("trash_batch_id", batch)
+    const extra = ((late ?? []) as { id: string }[]).map((x) => storePointer(x.id)).filter((ptr) => !removed.some((r) => r.drive_file_id === ptr))
+    for (const part of chunks(extra)) {
+      const { error: lErr } = await db().from("documents").delete().in("drive_file_id", part)
+      if (lErr) console.error(`[crm-store] folder delete: a late file's listing was not removed: ${lErr.message}`)
+    }
   }
   return { files: files.length }
 }
@@ -343,23 +369,25 @@ export interface IdenticalFile { fileId: string; name: string; ownerId: string; 
 /** Live files whose CURRENT copy has exactly these bytes (sha256), anywhere this login may open. */
 export async function findIdenticalFiles(sha256: string, userId: string | null): Promise<IdenticalFile[]> {
   if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Bad fingerprint.")
-  const { data, error } = await db().from("store_file_versions").select("id, mime_type, store_files!store_file_versions_file_id_fkey(id, name, owner_id, folder_id, state, current_version_id, store_owners(kind, private_user_id))")
-    .eq("sha256", sha256).limit(50)
+  // only CURRENT copies of LIVE files (the join is on the file's current version), so old versions never crowd them out
+  const { data, error } = await db().from("store_files")
+    .select("id, name, owner_id, folder_id, store_owners(kind, private_user_id), store_file_versions!store_files_current_version_fk!inner(sha256, mime_type)")
+    .eq("state", "live").eq("store_file_versions.sha256", sha256).limit(50)
   if (error) throw new Error(`Could not look for the same file (${error.message}).`)
-  const hits: IdenticalFile[] = []
+  const rows = ((data ?? []) as Array<{ id: string; name: string; owner_id: string; folder_id: string; store_owners: { kind: string; private_user_id: string | null } | null; store_file_versions: { mime_type: string | null } | null }>)
+    // an unreadable owner counts as private (fails closed); a private area only for its own login
+    .filter((f) => !!f.store_owners && (f.store_owners.kind !== "private" || f.store_owners.private_user_id === userId))
+  if (rows.length === 0) return []
+  const { data: nav, error: nErr } = await db().rpc("store_navigation", { p_user: userId })
+  if (nErr) throw new Error(`Could not look for the same file (${nErr.message}).`)
+  const { ownerLabel } = await import("./browse")
   const labels = new Map<string, string>()
-  for (const v of (data ?? []) as Array<{ id: string; mime_type: string | null; store_files: { id: string; name: string; owner_id: string; folder_id: string; state: string; current_version_id: string | null; store_owners: { kind: string; private_user_id: string | null } | null } | null }>) {
-    const f = v.store_files
-    if (!f || f.state !== "live" || f.current_version_id !== v.id) continue
-    if (f.store_owners?.kind === "private" && f.store_owners.private_user_id !== userId) continue
-    if (!labels.has(f.owner_id)) {
-      const { data: nav } = await db().rpc("store_navigation", { p_user: userId })
-      for (const o of (nav ?? []) as Array<{ id: string; kind: string; company_name: string | null; person_name: string | null; root_name: string | null }>) {
-        const { ownerLabel } = await import("./browse")
-        labels.set(o.id, ownerLabel({ kind: o.kind, company: o.company_name, person: o.person_name, root: o.root_name }))
-      }
-    }
-    hits.push({ fileId: f.id, name: f.name, ownerId: f.owner_id, where: [labels.get(f.owner_id) ?? "Storage", ...(await folderPathNames(f.folder_id))].join(" › "), mimeType: v.mime_type })
+  for (const o of (nav ?? []) as Array<{ id: string; kind: string; company_name: string | null; person_name: string | null; root_name: string | null }>) {
+    labels.set(o.id, ownerLabel({ kind: o.kind, company: o.company_name, person: o.person_name, root: o.root_name }))
+  }
+  const hits: IdenticalFile[] = []
+  for (const f of rows) {
+    hits.push({ fileId: f.id, name: f.name, ownerId: f.owner_id, where: [labels.get(f.owner_id) ?? "Storage", ...(await folderPathNames(f.folder_id))].join(" › "), mimeType: f.store_file_versions?.mime_type ?? null })
   }
   return hits
 }

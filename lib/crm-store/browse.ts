@@ -100,9 +100,10 @@ export async function listOwners(): Promise<BrowseOwner[]> {
 export interface BrowsePerson { contactId: string; name: string; ownerId: string | null; companies: string[] }
 export interface BrowseOwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 
-/** Pure: a person's folders that may be shown on a COMPANY's page (catalog: shown_through_company). */
+/** Pure: a person's folders that may be shown on a COMPANY's page (catalog: shown_through_company) — only when
+ *  the catalog says so; a folder kind without the setting is NOT shown (fails closed). */
 export function shownThroughCompany(kind: string, kinds: Map<string, { shown_through_company?: boolean }>): boolean {
-  return kinds.get(kind)?.shown_through_company !== false
+  return kinds.get(kind)?.shown_through_company === true
 }
 
 async function folderKindSettings(): Promise<Map<string, { shown_through_company?: boolean }>> {
@@ -156,10 +157,16 @@ export async function folderContents(ownerId: string, folderId: string | null, o
 
   const { data: subs } = await db().from("store_folders").select(cols).eq("parent_id", current.id).is("trashed_at", null).order("name")
   const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, needs_review_at, needs_review_reason, store_file_versions!store_files_current_version_fk(size_bytes, mime_type, sha256)"
-  // live files only: the trash is its own view — a trashed file must not sit among the live ones
-  const { data: fs, error } = await db().from("store_files").select(fileSelect)
-    .eq("folder_id", current.id).eq("state", "live").order("name")
-  if (error) throw new Error(`store browse: ${error.message}`)
+  // live files only: the trash is its own view — a trashed file must not sit among the live ones (paged: a
+  // folder can hold more than one page of files)
+  const fs: Array<Record<string, unknown> & { id: string; name: string; owner_id: string; document_type: string | null; state: string; published: boolean; updated_at: string; needs_review_at: string | null; needs_review_reason: string | null; store_file_versions: unknown }> = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db().from("store_files").select(fileSelect)
+      .eq("folder_id", current.id).eq("state", "live").order("name").order("id").range(from, from + 999)
+    if (error) throw new Error(`store browse: ${error.message}`)
+    fs.push(...(data ?? []))
+    if ((data ?? []).length < 1000) break
+  }
   // "2. Contacts" of a company: one branch per person — each person's OWN storage (#28), opened through the
   // company (only the folders the catalog lets a company show). Never copied into the company.
   const people: BrowsePerson[] = []
@@ -186,33 +193,40 @@ export async function folderContents(ownerId: string, folderId: string | null, o
   }
   // What the client sees TODAY is decided by the CRM documents row (the portal reads it) — so the badge
   // comes from the row, not from the store's own flag, and a file with no row says so.
-  const all = fs ?? []
+  const all = fs
   const rowsVisible = new Map<string, boolean>()
   const docIdOf = new Map<string, string>()
+  const facts = new Map<string, { is_personal: boolean; staff_only: boolean; version_count: number }>()
   if (all.length > 0) {
     const { storePointer } = await import("./document-pointer")
-    const { data: rows, error: rErr } = await db().from("documents").select("id, drive_file_id, portal_visible")
-      .in("drive_file_id", all.map((f: { id: string }) => storePointer(f.id)))
-    if (rErr) throw new Error(`store browse: ${rErr.message}`)
-    for (const r of rows ?? []) {
-      const fid = String(r.drive_file_id).slice("store:".length)
-      rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || r.portal_visible === true)
-      if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
+    for (let i = 0; i < all.length; i += 200) {
+      const part = all.slice(i, i + 200)
+      const [{ data: rows, error: rErr }, { data: fx, error: fErr }] = await Promise.all([
+        db().from("documents").select("id, drive_file_id, portal_visible").in("drive_file_id", part.map((f) => storePointer(f.id))),
+        // personal? staff-only type? how many versions? — one call for the whole chunk
+        db().rpc("store_files_facts", { p_ids: part.map((f) => f.id) }),
+      ])
+      if (rErr) throw new Error(`store browse: ${rErr.message}`)
+      if (fErr) throw new Error(`store browse: ${fErr.message}`)
+      for (const r of rows ?? []) {
+        const fid = String(r.drive_file_id).slice("store:".length)
+        rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || r.portal_visible === true)
+        if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
+      }
+      for (const x of (fx ?? []) as { id: string; is_personal: boolean; staff_only: boolean; version_count: number }[]) facts.set(x.id, x)
     }
   }
   const isPerson = own.kind === "person"
   const files: BrowseFile[] = []
   for (const f of all) {
-    const [{ data: pers }, { data: so }, { count }] = await Promise.all([
-      db().rpc("store_file_is_personal", { p_file_id: f.id }),
-      db().rpc("store_type_staff_only", { p_document_type: f.document_type }),
-      db().from("store_file_versions").select("id", { count: "exact", head: true }).eq("file_id", f.id),
-    ])
+    const k = facts.get(f.id)
+    // a file whose facts could not be read counts as staff-only (fails closed: never offered to the client)
+    const so = k ? k.staff_only : true
     const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null; sha256: string | null } | null
     files.push({
       id: f.id, name: f.name, documentType: f.document_type, state: f.state, published: !!f.published,
-      clientVisible: so !== true && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
-      staffOnly: so === true, personal: pers === true, versions: count ?? 0,
+      clientVisible: !so && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
+      staffOnly: so, personal: k?.is_personal === true, versions: k?.version_count ?? 0,
       size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at, sha256: v?.sha256 ?? null,
       needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
       personName: opts.throughCompany ? owner.label : null,
@@ -307,9 +321,16 @@ export async function storeOwnerForContact(contactId: string): Promise<string | 
  */
 export async function storeFilesShownForAccount(accountId: string, ownerId: string): Promise<string[] | null> {
   try {
-    const own = await db().from("store_files").select("id").eq("owner_id", ownerId).neq("state", "purged")
-    if (own.error) return null
-    const ids = (own.data ?? []).map((f: { id: string }) => f.id)
+    const ids: string[] = []
+    const page = async (q: () => { range: (a: number, b: number) => Promise<{ data: { id: string }[] | null; error: unknown }> }) => {
+      for (let from = 0; ; from += 1000) {
+        const r = await q().range(from, from + 999)
+        if (r.error) throw r.error
+        ids.push(...(r.data ?? []).map((f) => f.id))
+        if ((r.data ?? []).length < 1000) return
+      }
+    }
+    await page(() => db().from("store_files").select("id").eq("owner_id", ownerId).neq("state", "purged").order("id"))
     const links = await db().from("account_contacts").select("contact_id").eq("account_id", accountId)
     if (links.error) return null
     const cids = (links.data ?? []).map((l: { contact_id: string }) => l.contact_id)
@@ -318,9 +339,23 @@ export async function storeFilesShownForAccount(accountId: string, ownerId: stri
       if (po.error) return null
       const pids = (po.data ?? []).map((o: { id: string }) => o.id)
       if (pids.length > 0) {
-        const pf = await db().from("store_files").select("id").in("owner_id", pids).eq("state", "live")
-        if (pf.error) return null
-        ids.push(...(pf.data ?? []).map((f: { id: string }) => f.id))
+        // only the person folders the company page shows (never a person's ITIN / Tax — those stay on their own page)
+        const kinds = await folderKindSettings()
+        const { data: folders, error: fErr } = await db().from("store_folders").select("id, parent_id, kind").in("owner_id", pids).is("trashed_at", null)
+        if (fErr) return null
+        const byId = new Map(((folders ?? []) as { id: string; parent_id: string | null; kind: string }[]).map((f) => [f.id, f]))
+        const okFolder = (id: string): boolean => {
+          for (let cur = byId.get(id), i = 0; cur && i < 50; cur = cur.parent_id ? byId.get(cur.parent_id) : undefined, i++) {
+            if (!shownThroughCompany(cur.kind, kinds)) return false
+            if (!cur.parent_id) return true
+          }
+          return false
+        }
+        const allowed = Array.from(byId.keys()).filter(okFolder)
+        for (let i = 0; i < allowed.length; i += 200) {
+          const part = allowed.slice(i, i + 200)
+          await page(() => db().from("store_files").select("id").in("folder_id", part).eq("state", "live").order("id"))
+        }
       }
     }
     return ids
@@ -364,17 +399,31 @@ export async function listDocumentTypes(): Promise<BrowseDocType[]> {
   }))
 }
 
-/** Folder kind → the CRM documents list's category (same numbers as today's company upload). */
+/** Folder kind → the CRM documents list's category (same numbers as today's company upload). Every folder kind
+ *  has an explicit answer — nothing falls through by accident. */
 export const FOLDER_KIND_CATEGORY: Record<string, { num: number; name: string }> = {
   company: { num: 1, name: "Company" },
   contacts: { num: 2, name: "Contacts" },
   personal: { num: 2, name: "Contacts" },
+  itin: { num: 2, name: "Contacts" },
   tax: { num: 3, name: "Tax" },
   tax_year: { num: 3, name: "Tax" },
+  person_tax: { num: 3, name: "Tax" },
+  person_tax_year: { num: 3, name: "Tax" },
   banking: { num: 4, name: "Banking" },
   correspondence: { num: 5, name: "Correspondence" },
-  itin: { num: 2, name: "Contacts" },
-  person_tax: { num: 3, name: "Tax" },
+  // a staff folder made directly under the client's top folder, and Unfiled: Correspondence (today's catch-all)
+  root: { num: 5, name: "Correspondence" },
+  unfiled: { num: 5, name: "Correspondence" },
+  custom: { num: 5, name: "Correspondence" },
+  // Business / My files have no CRM rows; listed for completeness
+  business_root: { num: 5, name: "Correspondence" },
+  private_root: { num: 5, name: "Correspondence" },
+}
+
+/** The category for a folder kind; an unknown (new catalog) kind → Correspondence, the catch-all. */
+export function categoryForKind(kind: string): { num: number; name: string } {
+  return FOLDER_KIND_CATEGORY[kind] ?? FOLDER_KIND_CATEGORY.correspondence
 }
 
 /**
@@ -453,6 +502,12 @@ export async function staffUploadToStore(p: {
   }
   if (p.viaCompanyOwnerId && folder.kind !== "contacts") {
     if (owner.kind !== "person" || !owner.contact_id) throw new Error("Upload into the person's folder from the company's \"2. Contacts\".")
+    // only a person's OWN document goes into their storage from a company page — a company paper there would be
+    // listed with the company and shown to every member
+    if (typeRow.metadata?.personal !== true) throw new Error("From a company page only the person's own documents (passport, ID, proof of address …) go into their storage. Company papers go in the company's folders.")
+    try { await folderContents(targetOwnerId, targetFolderId, { throughCompany: true }) } catch {
+      throw new Error("That folder is only shown on the person's own page — upload it there.")
+    }
     const { data: co, error: coErr } = await db().from("store_owners").select("kind, account_id").eq("id", p.viaCompanyOwnerId).maybeSingle()
     if (coErr) throw new Error(`Could not check the company — please try again (${coErr.message}).`)
     if (co?.kind === "company" && co.account_id) {
@@ -494,7 +549,7 @@ export async function staffUploadToStore(p: {
   if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
-  const w = await saveBytesToStore({
+  const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
     callerKey, contentChanged: true,
     // a prepared tax return / 5472 / 1120 … is saved as a DRAFT (never shown until filed); every type starts
@@ -503,9 +558,10 @@ export async function staffUploadToStore(p: {
     ...(p.periodYear ? { periodYear: p.periodYear } : {}),
     // a type that is never shown as a draft is a DRAFT unless staff said it is the filed return
     ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: (p.filingAnswer === "filed" && !p.needsReview ? "filed" : "draft") as "filed" | "draft" } : {}),
-  })
+  }))
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
-    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)." : `The save ended as "${w.status}".`)
+    await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+    throw new Error(saveRefusalMessage(w.status))
   }
   const { categoryForFolder } = await import("./structure")
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal : await categoryForFolder(targetFolderId)
@@ -526,6 +582,15 @@ export async function staffUploadToStore(p: {
     const { markNeedsReview } = await import("./structure")
     await markNeedsReview(w.fileId, p.needsReview, p.actorId)
   }
+  // A REPLACED file (a new version, or the same bytes again) keeps its CRM row — and that row's visibility.
+  // This upload's answer wins: unticked "Show to client" / "Decide later" hide it; ticked shows it (when allowed).
+  if (!row.inserted) {
+    const { data: before } = await db().from("documents").select("portal_visible").eq("id", row.id).maybeSingle()
+    if ((before?.portal_visible === true) !== wantVisible) {
+      if (!wantVisible) await setClientVisibility(w.fileId, false, p.actorId)
+      else await setClientVisibility(w.fileId, true, p.actorId).catch((e: unknown) => console.warn("[crm-store] replaced file kept hidden:", e instanceof Error ? e.message : e))
+    }
+  }
   const { data: rowNow } = await db().from("documents").select("id, portal_visible").eq("id", row.id).maybeSingle()
   const visibleNow = rowNow?.portal_visible === true
   if (row.inserted && visibleNow) {
@@ -544,6 +609,21 @@ export async function staffUploadToStore(p: {
   return { fileId: w.fileId, write: w.status, name: w.name, visible: visibleNow, identity }
 }
 
+/** A save that throws (frozen, refused …) must not leave the staged upload behind. */
+async function removeStagedOnFailure<T>(storagePath: string, fn: () => Promise<T>): Promise<T> {
+  try { return await fn() } catch (e) {
+    await supabaseAdmin.storage.from("onboarding-uploads").remove([storagePath]).catch(() => {})
+    throw e
+  }
+}
+
+/** Plain words for a save the store refused. */
+export function saveRefusalMessage(status: string): string {
+  if (status === "trashed") return "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)."
+  if (status === "frozen") return "A file with this name is a FILED document and can't be replaced — upload the amended one under another name."
+  return `The file was not saved (the storage answered "${status}") — please try again.`
+}
+
 /** A file in the Business area or a private "My files" area: saved in the store only (no CRM row, never shown). */
 async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null; needsReview?: string | null }, fileName: string, documentType: string): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
   const { saveBytesToStore } = await import("./writer")
@@ -558,13 +638,14 @@ async function saveInternalAreaFile(p: { ownerId: string; folderId: string; stor
   const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(p.storagePath)
   if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
   const bytes = Buffer.from(await blob.arrayBuffer())
-  const w = await saveBytesToStore({
+  const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: p.ownerId, folderId: p.folderId, name: fileName, mimeType: p.mimeType || blob.type || "application/octet-stream", bytes,
     callerKey: sameLive?.caller_key ?? `staff-upload:${randomUUID()}`, contentChanged: true,
     documentType, published: false, actor: p.actorId,
-  })
+  }))
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
-    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name." : `The save ended as "${w.status}".`)
+    await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+    throw new Error(saveRefusalMessage(w.status))
   }
   await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
   if (p.needsReview) {
@@ -604,11 +685,12 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
 export async function setClientVisibility(fileId: string, visible: boolean, actorId: string | null = null): Promise<{ visible: boolean; crmRowsUpdated: number }> {
   const { storePointer } = await import("./document-pointer")
   const { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } = await import("@/lib/documents/visibility-guard")
-  const { data: f, error: fErr } = await db().from("store_files").select("document_type, state, published, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
+  const { data: f, error: fErr } = await db().from("store_files").select("document_type, state, published, needs_review_at, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
   if (fErr) throw new Error(`Could not read the file — please try again (${fErr.message}).`)
   if (!f) throw new Error("File not found.")
   if (f.state !== "live") throw new Error("Restore the file from the trash first.")
   const areaKind = (f.store_owners as { kind?: string } | null)?.kind
+  if (visible && f.needs_review_at) throw new Error("This file is marked \"Needs review\" — settle it (and use \"Mark reviewed\") before showing it to the client.")
   if (visible && (areaKind === "business" || areaKind === "private")) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
   const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
