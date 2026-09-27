@@ -165,14 +165,12 @@ export function isFormationContractWithoutFormation(p: {
   const typedLines = Array.isArray(p.services)
     ? (p.services as Array<Record<string, unknown> | null>).filter((l) => l && typeof l === "object" && typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim())
     : []
+  // An offer that names no services at all is a legacy formation (safe default).
   if (bundled.length === 0 && typedLines.length === 0) return false
-  // A line with no pipeline_type can't be read (legacy / hand-made offers name
-  // the formation "LLC Single Member — Florida" etc.) — when in doubt it IS a
-  // formation, the legacy default. Only an offer whose every line is typed can
-  // prove formation was not bought.
-  const untypedLine = Array.isArray(p.services)
-    && (p.services as Array<Record<string, unknown> | null>).some((l) => l && typeof l === "object" && !(typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim()))
-  if (untypedLine) return false
+  // Otherwise THE OFFER'S SERVICE LIST decides (Antonio 2026-09-27): it is a
+  // formation only if it sells Company Formation. Lines without a service type
+  // are catalog add-ons (Public Notary, Shipping, Consulting…) and never make
+  // an offer a formation — checked against every production formation offer.
   return !contractBoughtService({
     services: p.services,
     selectedServices: p.selectedServices,
@@ -224,7 +222,11 @@ export function decideStartServiceScope(p: {
   // what every start-at-payment service did before S1.
   if (p.contactScopedTypes === null || p.contactScopedTypes.includes(p.serviceType)) return { kind: "contact" }
   if (p.accountId) return { kind: "account", accountId: p.accountId }
-  return { kind: "skip", reason: `${p.serviceType} belongs to an existing company but the contract has no company linked` }
+  // The offer lives where it was created (Antonio 2026-09-27): an offer made on
+  // a lead or a contact page belongs to that person, so a company service sold
+  // there is created on the PERSON — never skipped, never guessed onto one of
+  // their companies. Staff connect it to a company in the workspace if needed.
+  return { kind: "contact" }
 }
 
 /**

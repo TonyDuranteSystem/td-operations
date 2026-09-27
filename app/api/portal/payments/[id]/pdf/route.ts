@@ -1,3 +1,4 @@
+import { billingEntityBillTo } from '@/lib/invoice-bill-to'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
@@ -88,6 +89,8 @@ export async function GET(
   const contact = (contactLinkResult.data as unknown as { contacts: { first_name: string; last_name: string; email: string } })?.contacts
     ?? (directContactResult.data as { first_name: string; last_name: string; email: string } | null)
   const isCredit = payment.invoice_status === 'Credit'
+  // "Invoice to" chosen on the offer (S1): a billing entity prints its own name.
+  const entityBillTo = await billingEntityBillTo((payment as { billing_entity_id?: string | null }).billing_entity_id)
 
   const pdfInput: InvoicePdfInput = {
     companyName: TD_COMPANY.name,
@@ -101,11 +104,13 @@ export async function GET(
     issueDate: payment.issue_date ?? new Date().toISOString().split('T')[0],
     dueDate: payment.due_date,
 
-    billTo: {
-      name: account?.company_name ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null) ?? 'Client',
-      email: contact?.email ?? null,
-      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
-    },
+    billTo: entityBillTo
+      ? { name: entityBillTo.name, email: contact?.email ?? null, address: entityBillTo.address, vatNumber: entityBillTo.vatNumber }
+      : {
+          name: account?.company_name ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null) ?? 'Client',
+          email: contact?.email ?? null,
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+        },
 
     items: itemsResult.data ?? [],
     subtotal: Number(payment.subtotal ?? 0),

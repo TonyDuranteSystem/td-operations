@@ -21,6 +21,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
+import { parseBillTo } from "@/lib/offers/bill-to"
 import { isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
@@ -232,6 +233,9 @@ export interface CreateOfferParams {
   // Linkage
   lead_id?: string | null
   account_id?: string | null
+  /** "Invoice to" (S1 2026-09-27) — see lib/offers/bill-to.ts. Null = the
+   *  offer's company if it has one, else the person. */
+  bill_to?: unknown
   deal_id?: string | null
   contact_id?: string | null
 
@@ -495,6 +499,10 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     if (validationError) {
       return { success: false, outcome: "validation_error", error: validationError }
     }
+    const billToParsed = parseBillTo(params.bill_to)
+    if (billToParsed.error) {
+      return { success: false, outcome: "validation_error", error: billToParsed.error }
+    }
 
     // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same
     // reason as the payment plan below: every problem in an incomplete package
@@ -607,7 +615,11 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // company = its own lead), instead of the contact-level dedup blocking a
     // second formation. dev_task 262be11c.
     let effectiveLeadId = params.lead_id ?? null
-    if (!effectiveLeadId && (params.contract_type || "formation") === "formation" && params.contact_id) {
+    // No automatic lead for an offer that sells no formation (Antonio 2026-09-27:
+    // the offer lives where it was created — a contact/company offer is not a
+    // lead). The remaining case (a NEW company for an existing contact) still
+    // needs the lead until the formation flow is anchored on the offer.
+    if (!effectiveLeadId && !formationNotBought && (params.contract_type || "formation") === "formation" && params.contact_id) {
       const { data: c } = await supabaseAdmin
         .from("contacts")
         .select("first_name, last_name, email")
@@ -625,7 +637,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           last_name: lastName,
           email: params.client_email || c?.email || null,
           status: "New",
-          source: formationNotBought ? "Existing client — additional service" : "Existing client — new company",
+          source: "Existing client — new company",
         } as never)
         .select("id")
         .single()
@@ -870,6 +882,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         required_documents: (params.required_documents ?? null) as Json,
         installment_currency: params.installment_currency ?? null,
         bundled_pipelines: params.bundled_pipelines ?? [],
+        bill_to: (billToParsed.billTo ?? null) as unknown as Json,
         entity_type: normalizeEntityType(params.entity_type),
         formation_state: normalizeFormationState(params.formation_state),
         bank_details: bank_details as unknown as Json,

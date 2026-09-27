@@ -10,6 +10,7 @@
  * 'auto' when null, which picks Relay USD or Airwallex EUR by currency).
  */
 
+import { billingEntityBillTo } from "@/lib/invoice-bill-to"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
 import { generateInvoicePdf, type InvoicePdfInput } from "@/lib/pdf/invoice-pdf"
@@ -272,6 +273,9 @@ export async function sendTDInvoice(
   )
   const sanitizedMessage = sanitizeInvoiceMessage(payment.message, audience)
 
+  // "Invoice to" chosen on the offer (S1): a billing entity prints its own name.
+  const entityBillTo = await billingEntityBillTo((payment as { billing_entity_id?: string | null }).billing_entity_id)
+
   // Generate PDF
   const pdfInput: InvoicePdfInput = {
     companyName: TD_COMPANY.name,
@@ -283,11 +287,13 @@ export async function sendTDInvoice(
     currency,
     issueDate: payment.issue_date ?? new Date().toISOString().split("T")[0],
     dueDate: payment.due_date,
-    billTo: {
-      name: account?.company_name ?? "Client",
-      email: recipientEmail,
-      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
-    },
+    billTo: entityBillTo
+      ? { name: entityBillTo.name, email: recipientEmail, address: entityBillTo.address, vatNumber: entityBillTo.vatNumber }
+      : {
+          name: account?.company_name ?? "Client",
+          email: recipientEmail,
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+        },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),
     discount: Number(payment.discount ?? 0),
@@ -479,6 +485,9 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
   )
   const sanitizedMessage = sanitizeInvoiceMessage(payment.message, audience)
 
+  // "Invoice to" chosen on the offer (S1): a billing entity prints its own name.
+  const entityBillTo = await billingEntityBillTo((payment as { billing_entity_id?: string | null }).billing_entity_id)
+
   // Generate the PAID PDF (reuses the same template; the document is
   // marked Paid in the payment record by now so the PDF's status line
   // reflects it).
@@ -492,11 +501,13 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
     currency,
     issueDate: payment.issue_date ?? new Date().toISOString().split("T")[0],
     dueDate: payment.due_date,
-    billTo: {
-      name: account?.company_name ?? "Client",
-      email: recipientEmail,
-      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
-    },
+    billTo: entityBillTo
+      ? { name: entityBillTo.name, email: recipientEmail, address: entityBillTo.address, vatNumber: entityBillTo.vatNumber }
+      : {
+          name: account?.company_name ?? "Client",
+          email: recipientEmail,
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+        },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),
     discount: Number(payment.discount ?? 0),

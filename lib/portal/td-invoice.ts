@@ -25,6 +25,10 @@ import { getOfficeDateString } from '@/lib/portal/office-hours'
 export interface TDInvoiceInput {
   account_id?: string
   contact_id?: string
+  /** Who the invoice is addressed to when it is neither the company nor the
+   *  person's own name — one of the contact's billing entities ("Invoice to"
+   *  chosen on the offer, S1 2026-09-27). Printed as the invoice's Bill To. */
+  billing_entity_id?: string | null
   line_items: Array<{
     description: string
     unit_price: number
@@ -208,6 +212,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   const {
     account_id,
     contact_id,
+    billing_entity_id,
     line_items,
     currency = 'USD',
     due_date,
@@ -513,6 +518,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       .insert({
         account_id: account_id || null,
         contact_id: contact_id || null,
+        billing_entity_id: billing_entity_id || null,
         invoice_number: invoiceNumber,
         idempotency_key: idempotency_key || null,
         installment: installment || null,

@@ -16,7 +16,8 @@ import { createSD } from "@/lib/operations/service-delivery"
 import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
 import { getServiceBySlugStatic } from "@/lib/services"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
-import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
+import { invoiceTargetForOffer, offerBillTo } from "@/lib/offers/bill-to-server"
+import { autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
@@ -467,26 +468,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           detail: "Business Tax Return — account deferred to company_info intake",
         })
       } else {
-        // Other standalone business services (EIN, banking, closure, etc.)
-        // The LLC exists in the real world but not in our system — create a One-Time account
-        const accountResult = await ensureMinimalAccount({
-          contactId,
-          clientName: activation.client_name,
-          contractType,
-          offerToken: activation.offer_token,
-          leadId: leadId || undefined,
-          isStandaloneBusiness: true,
+        // Other standalone business services sold on a LEAD or CONTACT page.
+        // The offer lives where it was created (Antonio 2026-09-27): it belongs
+        // to the person, so the services stay on the person — the system no
+        // longer guesses the client's "first" company or invents a One-Time
+        // "Pending Company" (which also swept the person's other invoices onto
+        // it). A company-page offer carries its company and never reaches here.
+        steps.push({
+          step: "ensure_account",
+          status: "skipped",
+          detail: "offer made on a lead/contact page — services stay on the person (no company assumed)",
         })
-        if (accountResult.accountId) {
-          autoAccountId = accountResult.accountId
-          steps.push({
-            step: "ensure_account",
-            status: accountResult.created ? "created" : "existing",
-            detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created One-Time" : "already linked"})`,
-          })
-        } else {
-          steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
-        }
       }
     } else if (leadId) {
       // Individual-context service — try to resolve from lead (legacy fallback)
@@ -1318,9 +1310,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         : experienceType === "itin" ? "ITIN Application"
         : pipelines.length ? pipelines.join(", ") : "Service"
 
+      // "Invoice to" (S1 2026-09-27) — same rule as signing / Confirm Payment.
+      const fallbackTarget = await invoiceTargetForOffer({
+        billTo: await offerBillTo(activation.offer_token),
+        offerAccountId: autoAccountId,
+        contactId,
+      })
       const invoiceResult = await createTDInvoice({
-        account_id: autoAccountId || undefined,
+        account_id: fallbackTarget.account_id || undefined,
         contact_id: contactId || undefined,
+        billing_entity_id: fallbackTarget.billing_entity_id,
         line_items: [{
           description: `${serviceLabel} Package - ${activation.client_name}`,
           unit_price: amount,

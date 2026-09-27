@@ -244,6 +244,34 @@ export function CreateOfferDialog({
   const [paymentType, setPaymentType] = useState('both')
   const [paymentGateway, setPaymentGateway] = useState('stripe')
   const [bankPreference, setBankPreference] = useState('auto')
+  // "Invoice to" (S1 2026-09-27): by default the invoice goes where the offer is
+  // made — the company on a company page, the person on a lead/contact page.
+  // Staff can pick another payer (one of the person's companies, a saved
+  // billing entity, or a company typed here, e.g. a lead's own company).
+  const defaultBillTo = accountId ? `company:${accountId}` : 'person'
+  const [billToChoice, setBillToChoice] = useState<string>(defaultBillTo)
+  const [billToOptions, setBillToOptions] = useState<{ companies: Array<{ id: string; name: string }>; entities: Array<{ id: string; name: string }> }>({ companies: [], entities: [] })
+  const [newPayer, setNewPayer] = useState({ name: '', address: '', country: '', vat_number: '' })
+  useEffect(() => {
+    if (!open) return
+    setBillToChoice(accountId ? `company:${accountId}` : 'person')
+    setNewPayer({ name: '', address: '', country: '', vat_number: '' })
+    if (!contactId && !accountId) { setBillToOptions({ companies: [], entities: [] }); return }
+    const qs = new URLSearchParams()
+    if (contactId) qs.set('contact_id', contactId)
+    if (accountId) qs.set('account_id', accountId)
+    fetch(`/api/crm/admin-actions/offer-bill-to-options?${qs.toString()}`)
+      .then(r => (r.ok ? r.json() : { companies: [], entities: [] }))
+      .then(d => setBillToOptions({ companies: d.companies ?? [], entities: d.entities ?? [] }))
+      .catch(() => setBillToOptions({ companies: [], entities: [] }))
+  }, [open, contactId, accountId])
+  const billToPayload = (): Record<string, unknown> | null => {
+    if (billToChoice === 'person') return { type: 'person' }
+    if (billToChoice.startsWith('company:')) return { type: 'company', account_id: billToChoice.slice(8) }
+    if (billToChoice.startsWith('entity:')) return { type: 'entity', billing_entity_id: billToChoice.slice(7) }
+    if (billToChoice === 'new') return { type: 'entity', entity: { name: newPayer.name.trim(), address: newPayer.address.trim() || null, country: newPayer.country.trim() || null, vat_number: newPayer.vat_number.trim() || null } }
+    return null
+  }
   const [currency, setCurrency] = useState('EUR')
   const [installmentCurrency, setInstallmentCurrency] = useState('USD')
   // Entity type — drives formation form shape (SMLLC vs MMLLC collects members),
@@ -920,6 +948,11 @@ export function CreateOfferDialog({
       return
     }
 
+    if (billToChoice === 'new' && !newPayer.name.trim()) {
+      toast.error('Invoice to: enter the company name')
+      return
+    }
+
     if (splitBlockReason) {
       toast.error(splitBlockReason)
       return
@@ -947,11 +980,13 @@ export function CreateOfferDialog({
 
     startTransition(async () => {
       try {
+        // Every ticked service is sold. No price = free / gift (Antonio 2026-09-27):
+        // it stays on the offer as a €0 line, so the client sees it as included and
+        // the service is created at payment like any other.
         const servicesJson = selected
-          .filter(s => s.price.trim())
           .map(s => {
             const svc_cat = catalog.find(c => c.id === s.id)
-            const unitPrice = s.price.replace(/[^0-9.]/g, '')
+            const unitPrice = s.price.replace(/[^0-9.]/g, '') || '0'
             const qty = s.quantity ?? 1
             const totalPrice = (parseFloat(unitPrice) * qty).toLocaleString('en-US')
             const svc: Record<string, unknown> = {
@@ -1115,6 +1150,7 @@ export function CreateOfferDialog({
             payment_type: paymentType === 'both' ? 'checkout' : paymentType,
             payment_gateway: paymentGateway,
             bank_preference: bankPreference,
+            bill_to: billToPayload(),
             currency,
             installment_currency: showAnnual ? installmentCurrency : null,
             // Reached only when `splitBlockReason` is null (both submit gates return
@@ -1615,6 +1651,35 @@ export function CreateOfferDialog({
                 <p className="text-xs text-zinc-400 mt-0.5">Picks default bank from Invoice Settings</p>
               ) : null}
             </div>
+          </div>
+
+          {/* Invoice to — S1 2026-09-27 */}
+          <div>
+            <label className="block text-xs font-medium mb-1">Invoice to</label>
+            <select
+              value={billToChoice}
+              onChange={e => setBillToChoice(e.target.value)}
+              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="person">{clientNameValue || 'The client'} (person)</option>
+              {billToOptions.companies.map(c => (
+                <option key={c.id} value={`company:${c.id}`}>{c.name} (company)</option>
+              ))}
+              {billToOptions.entities.map(b => (
+                <option key={b.id} value={`entity:${b.id}`}>{b.name} (billing entity)</option>
+              ))}
+              <option value="new">Another company — type its details…</option>
+            </select>
+            {billToChoice === 'new' ? (
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <input value={newPayer.name} onChange={e => setNewPayer(p => ({ ...p, name: e.target.value }))} placeholder="Company name *" className="px-3 py-2 text-sm border rounded-md col-span-2" />
+                <input value={newPayer.address} onChange={e => setNewPayer(p => ({ ...p, address: e.target.value }))} placeholder="Address" className="px-3 py-2 text-sm border rounded-md col-span-2" />
+                <input value={newPayer.country} onChange={e => setNewPayer(p => ({ ...p, country: e.target.value }))} placeholder="Country" className="px-3 py-2 text-sm border rounded-md" />
+                <input value={newPayer.vat_number} onChange={e => setNewPayer(p => ({ ...p, vat_number: e.target.value }))} placeholder="VAT / tax code" className="px-3 py-2 text-sm border rounded-md" />
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-400 mt-0.5">The invoice is addressed to this payer. Default: where this offer is made.</p>
+            )}
           </div>
 
           {/* Entity Type — formation and onboarding offers */}

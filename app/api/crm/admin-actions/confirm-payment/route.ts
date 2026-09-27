@@ -41,6 +41,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { runActivation } from "@/lib/operations/activate-service"
 import { confirmedPaymentInvoiceLabel } from "@/lib/operations/activation-start-services"
+import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { normalizeFormationState } from "@/lib/formation/states"
 
 interface ConfirmPaymentBody {
@@ -130,12 +131,13 @@ export async function POST(request: Request) {
       client_name: string | null
       services: unknown
       selected_services: unknown
+      bill_to: unknown
       account_id: string | null
       lead_id: string | null
       formation_state: string | null
     }
     const offerSelect =
-      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, account_id, lead_id, formation_state"
+      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, bill_to, account_id, lead_id, formation_state"
     let offer: ResolvedOffer | null = null
 
     if (offer_token) {
@@ -429,7 +431,6 @@ export async function POST(request: Request) {
     // 5. Resolve account + contact for the payment record.
     // Priority: offer.account_id (most specific) > body.account_id > resolved
     // via email lookup. Contact: lookup by clientEmail.
-    let resolvedAccountId: string | null = offer?.account_id || account_id || null
     let resolvedContactId: string | null = contact_id || null
     if (clientEmail) {
       const { data: contact } = await supabaseAdmin
@@ -438,18 +439,25 @@ export async function POST(request: Request) {
         .ilike("email", clientEmail)
         .limit(1)
         .maybeSingle()
-      if (contact) {
-        if (!resolvedContactId) resolvedContactId = contact.id
-        if (!resolvedAccountId) {
-          const { data: ac } = await supabaseAdmin
-            .from("account_contacts")
-            .select("account_id")
-            .eq("contact_id", contact.id)
-            .limit(1)
-            .maybeSingle()
-          resolvedAccountId = ac?.account_id || null
-        }
-      }
+      if (contact && !resolvedContactId) resolvedContactId = contact.id
+    }
+    // "Invoice to" (S1 2026-09-27): the offer decides — its chosen payer, else
+    // the company it was made under, else the person. The old fallback to the
+    // client's FIRST linked company is gone (it billed a new-company formation
+    // or a personal ITIN to an unrelated existing company). Without an offer
+    // (legacy lead path) only an explicitly passed company is used.
+    let resolvedAccountId: string | null = null
+    let resolvedBillingEntityId: string | null = null
+    if (offer) {
+      const target = await invoiceTargetForOffer({
+        billTo: offer.bill_to ?? null,
+        offerAccountId: offer.account_id,
+        contactId: resolvedContactId,
+      })
+      resolvedAccountId = target.account_id
+      resolvedBillingEntityId = target.billing_entity_id
+    } else {
+      resolvedAccountId = account_id || null
     }
 
     // Skip when an existing draft invoice is already linked to the activation
@@ -484,6 +492,7 @@ export async function POST(request: Request) {
         const invoiceResult = await createTDInvoice({
           account_id: resolvedAccountId || undefined,
           contact_id: resolvedContactId || undefined,
+          billing_entity_id: resolvedBillingEntityId,
           line_items: [{
             description: confirmedPaymentInvoiceLabel({
               contractType: contract_type,

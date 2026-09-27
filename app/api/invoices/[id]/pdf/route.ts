@@ -1,3 +1,4 @@
+import { billingEntityBillTo } from '@/lib/invoice-bill-to'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
@@ -89,7 +90,10 @@ export async function GET(
     : null
   const bankDetails = gateBankDetailsForAudience(rawBankDetails, audience)
 
-  const billToName = account?.company_name
+  // "Invoice to" chosen on the offer (S1): a billing entity prints its own name.
+  const entityBillTo = await billingEntityBillTo((payment as { billing_entity_id?: string | null }).billing_entity_id)
+  const billToName = entityBillTo?.name
+    ?? account?.company_name
     ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null)
     ?? 'Client'
 
@@ -108,7 +112,8 @@ export async function GET(
     billTo: {
       name: billToName,
       email: contact?.email ?? null,
-      address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+      address: entityBillTo ? entityBillTo.address : resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+      ...(entityBillTo?.vatNumber ? { vatNumber: entityBillTo.vatNumber } : {}),
     },
 
     items: items ?? [],

@@ -383,6 +383,45 @@ describe("createOffer — auto-anchor lead for new-company formation (dev_task 2
     expect(insert?.account_id).toBeNull()
   })
 
+  it("S1: does NOT auto-create a lead for a name change / closure offer (formation-type, no formation sold)", async () => {
+    accountExists = true
+    leadInserts.length = 0
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Existing Co LLC",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Change Name", price: "$350", pipeline_type: "Company Change Name" }],
+      bundled_pipelines: ["Company Change Name"],
+      cost_summary: [{ label: "Total", total: "$350" }],
+      token: "test-cn-no-lead",
+      contact_id: "existing-contact-1",
+    })
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-cn-no-lead")
+    expect(insert?.lead_id ?? null).toBeNull()
+    expect(insert?.contact_id).toBe("existing-contact-1")
+  })
+
+  it("S1: 'Invoice to' is validated and saved on the offer", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    const bad = await createOffer({
+      client_name: "X", language: "en", payment_type: "bank_transfer", contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-billto-bad", account_id: "existing-account-123", bill_to: { type: "entity", entity: { name: " " } },
+    })
+    expect(bad.outcome).toBe("validation_error")
+    await createOffer({
+      client_name: "X", language: "en", payment_type: "bank_transfer", contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-billto-ok", account_id: "existing-account-123", bill_to: { type: "entity", entity: { name: "Rossi Srl" } },
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-billto-ok")
+    expect(insert?.bill_to).toMatchObject({ type: "entity", entity: { name: "Rossi Srl" } })
+  })
+
   it("does NOT auto-create a lead for a non-formation contact-only offer (e.g. ITIN)", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")

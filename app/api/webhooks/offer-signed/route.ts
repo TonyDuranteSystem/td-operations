@@ -7,6 +7,7 @@
  * If bank transfer → cron check-wire-payments will match it.
  */
 
+import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
@@ -282,8 +283,18 @@ export async function POST(req: NextRequest) {
         // Same engine-detected currency as the activation (one source, no drift).
         const currency = offerCurrency
 
+        // "Invoice to" (S1 2026-09-27): the company when the offer was made on a
+        // company page (or staff chose one), the person otherwise, or the payer
+        // chosen on the offer — never a guessed company.
+        const invoiceTarget = await invoiceTargetForOffer({
+          billTo: (offer as { bill_to?: unknown }).bill_to ?? null,
+          offerAccountId: (offer as { account_id?: string | null }).account_id ?? null,
+          contactId,
+        })
         const invoiceResult = await createTDInvoice({
-          contact_id: contactId,
+          account_id: invoiceTarget.account_id ?? undefined,
+          contact_id: contactId ?? undefined,
+          billing_entity_id: invoiceTarget.billing_entity_id,
           line_items: [{
             description: signingBill.description,
             unit_price: signingBill.amount,
