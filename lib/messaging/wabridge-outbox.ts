@@ -52,6 +52,7 @@ export function refusalHttpStatus(code: string): number {
     case "empty":
     case "too_long":
     case "bad_request":
+    case "bad_reply_to":
       return 400
     case "not_found":
       return 404
