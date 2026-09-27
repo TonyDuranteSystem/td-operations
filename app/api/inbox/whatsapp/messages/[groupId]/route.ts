@@ -4,6 +4,7 @@ import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { OUTBOX_TEAM_LABEL, normalizeSendMode, outboxDisplayStatus, type SendMode } from "@/lib/messaging/wabridge-outbox"
 import { createClient } from "@/lib/supabase/server"
 import { isStaffUser } from "@/lib/auth"
+import { jidToE164 } from "@/lib/messaging/phone"
 
 export const dynamic = "force-dynamic"
 
@@ -37,6 +38,33 @@ export async function GET(
     // Self-hosted WhatsApp line only: replies still waiting / in test mode / not confirmed / failed live in wa_outbox until the Mac has
     // sent them (a SENT reply becomes an ordinary message row). They are shown in the chat labelled "TD Team", with their state.
     // `send` tells the screen whether replying is allowed. Everything here is best-effort: a failure must not hide the chat itself.
+    // The confirm-before-send screen needs to show WHO the message is going to (name + number), the same way the
+    // Portal Chats Worker card already does — never assume the open chat is the intended recipient (R101 lesson,
+    // 2026-09-26: staff opened the wrong chat once during testing). Best-effort: a lookup failure must not hide
+    // the chat, it only means the confirm screen falls back to the bare number.
+    let chat: { name: string | null; phone: string | null; language: string | null } | null = null
+    try {
+      const { data: g } = await supabaseAdmin
+        .from("messaging_groups")
+        .select("group_name, external_group_id, lead_id, contact_id, account_id")
+        .eq("id", groupId)
+        .maybeSingle()
+      if (g) {
+        const [lead, contact, account] = await Promise.all([
+          g.lead_id ? supabaseAdmin.from("leads").select("full_name").eq("id", g.lead_id).maybeSingle() : Promise.resolve({ data: null }),
+          g.contact_id ? supabaseAdmin.from("contacts").select("full_name, language").eq("id", g.contact_id).maybeSingle() : Promise.resolve({ data: null }),
+          g.account_id ? supabaseAdmin.from("accounts").select("company_name").eq("id", g.account_id).maybeSingle() : Promise.resolve({ data: null }),
+        ])
+        chat = {
+          name: contact.data?.full_name ?? lead.data?.full_name ?? account.data?.company_name ?? g.group_name ?? null,
+          phone: g.external_group_id ? jidToE164(g.external_group_id) : null,
+          language: (contact.data as { language?: string } | null)?.language ?? null,
+        }
+      }
+    } catch (chatErr) {
+      console.warn("WhatsApp chat identity lookup failed (chat still loads):", chatErr instanceof Error ? chatErr.message : String(chatErr))
+    }
+
     let outbox: Array<Record<string, unknown>> = []
     let send: { mode: SendMode; hasInbound: boolean } | null = null
     try {
@@ -109,7 +137,7 @@ export async function GET(
     const withVoice = (data ?? []).map((m) => (m.content_type === "voice" && voiceByMessage.has(m.id) ? { ...m, voice: voiceByMessage.get(m.id) } : m))
 
     const messages = [...withVoice, ...outbox].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-    return NextResponse.json({ messages, send })
+    return NextResponse.json({ messages, send, chat })
   } catch (error) {
     console.error("WhatsApp messages error:", error)
     return NextResponse.json(
