@@ -40,6 +40,7 @@ import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { findTaxReturnService } from "@/lib/tax-return-context"
 import { runActivation } from "@/lib/operations/activate-service"
+import { confirmedPaymentInvoiceLabel } from "@/lib/operations/activation-start-services"
 import { normalizeFormationState } from "@/lib/formation/states"
 
 interface ConfirmPaymentBody {
@@ -128,12 +129,13 @@ export async function POST(request: Request) {
       client_email: string | null
       client_name: string | null
       services: unknown
+      selected_services: unknown
       account_id: string | null
       lead_id: string | null
       formation_state: string | null
     }
     const offerSelect =
-      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, account_id, lead_id, formation_state"
+      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, account_id, lead_id, formation_state"
     let offer: ResolvedOffer | null = null
 
     if (offer_token) {
@@ -483,7 +485,13 @@ export async function POST(request: Request) {
           account_id: resolvedAccountId || undefined,
           contact_id: resolvedContactId || undefined,
           line_items: [{
-            description: `${contract_type} - ${clientName} (admin confirmed)`,
+            description: confirmedPaymentInvoiceLabel({
+              contractType: contract_type,
+              clientName,
+              services: offer?.services,
+              selectedServices: offer?.selected_services,
+              bundledPipelines: offer?.bundled_pipelines,
+            }),
             unit_price: amount,
             quantity: 1,
           }],

@@ -21,6 +21,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
+import { isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
@@ -555,7 +556,16 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // never carry an existing account_id. Server backstop mirroring
     // accountIdForWizardSubmission, so no caller (CRM dialog or MCP) can attach
     // a formation offer to an existing account. dev_task 262be11c.
-    const effectiveAccountId = accountIdForOffer(params.contract_type, params.account_id)
+    // A formation-TYPE offer that sells no formation (name change / closure —
+    // the dialog derives "formation" when no bought service has its own type)
+    // is about an EXISTING company: keep its account (workspace-only plan S1).
+    const formationNotBought = isFormationContractWithoutFormation({
+      contractType: params.contract_type || "formation",
+      services: params.services,
+      selectedServices: null,
+      bundledPipelines: params.bundled_pipelines,
+    })
+    const effectiveAccountId = accountIdForOffer(params.contract_type, params.account_id, formationNotBought)
     if (params.account_id && !effectiveAccountId) {
       console.warn(
         `[createOffer] Stripped account_id ${params.account_id} from a formation offer ` +
@@ -615,7 +625,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
           last_name: lastName,
           email: params.client_email || c?.email || null,
           status: "New",
-          source: "Existing client — new company",
+          source: formationNotBought ? "Existing client — additional service" : "Existing client — new company",
         } as never)
         .select("id")
         .single()

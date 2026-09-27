@@ -302,6 +302,44 @@ describe("createOffer — formation account guard (dev_task 262be11c)", () => {
     expect(insert?.contact_id).toBe("contact-1")
   })
 
+  it("S1: keeps account_id on a formation-TYPE offer that only sells a name change (DF Commerce shape)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Existing Co LLC",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Change Name", price: "$350", pipeline_type: "Company Change Name" }],
+      bundled_pipelines: ["Company Change Name"],
+      cost_summary: [{ label: "Total", total: "$350" }],
+      token: "test-change-name-keep",
+      account_id: "existing-account-123",
+      contact_id: "contact-1",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-change-name-keep")
+    expect(insert?.account_id).toBe("existing-account-123")
+  })
+
+  it("S1: a formation offer with a typed formation line + closure still strips the account (real new company)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "New Co Owner 2",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$500", pipeline_type: "Company Formation" }, { name: "Company Closure", price: "$100", pipeline_type: "Company Closure" }],
+      bundled_pipelines: ["Company Formation", "Company Closure"],
+      cost_summary: [{ label: "Total", total: "$600" }],
+      token: "test-formation-closure-strip",
+      account_id: "existing-account-123",
+      contact_id: "contact-1",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-formation-closure-strip")
+    expect(insert?.account_id).toBeNull()
+  })
+
   it("keeps account_id for a non-formation (renewal) offer", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")

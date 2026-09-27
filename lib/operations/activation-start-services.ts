@@ -181,6 +181,34 @@ export function isFormationContractWithoutFormation(p: {
   })
 }
 
+/**
+ * Pure: the description of the invoice staff create with "Confirm Payment".
+ * A formation-type contract that sold no formation (a name change, a closure)
+ * is named after what was bought — "Company Change Name - X", never
+ * "formation - X" (the client sees this line in their payment history).
+ * Every other contract keeps the historical "<contract type> - X" wording.
+ */
+export function confirmedPaymentInvoiceLabel(p: {
+  contractType: string
+  clientName: string
+  services: unknown
+  selectedServices: unknown
+  bundledPipelines: unknown
+}): string {
+  const suffix = `${p.clientName} (admin confirmed)`
+  if (!isFormationContractWithoutFormation({ contractType: p.contractType, services: p.services, selectedServices: p.selectedServices, bundledPipelines: p.bundledPipelines })) {
+    return `${p.contractType} - ${suffix}`
+  }
+  const selected = Array.isArray(p.selectedServices) ? (p.selectedServices as unknown[]).filter((x): x is string => typeof x === "string") : []
+  const names = (Array.isArray(p.services) ? (p.services as Array<Record<string, unknown> | null>) : [])
+    .filter((l): l is Record<string, unknown> => !!l && typeof l === "object" && typeof l.name === "string" && (l.name as string).trim() !== "")
+    .filter((l) => selected.length === 0 || !l.optional || selected.includes(l.name as string))
+    .map((l) => (l.name as string).trim())
+  const label = names.length > 0 ? Array.from(new Set(names)).join(" + ")
+    : (Array.isArray(p.bundledPipelines) ? (p.bundledPipelines as unknown[]).filter((b): b is string => typeof b === "string" && b.trim() !== "").join(" + ") : "")
+  return `${label || "Services"} - ${suffix}`
+}
+
 export type StartServiceScope =
   | { kind: "contact" }
   | { kind: "account"; accountId: string }

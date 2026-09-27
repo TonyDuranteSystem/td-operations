@@ -53,7 +53,7 @@ vi.mock("@/lib/supabase-admin", () => {
 const listEntries = vi.fn()
 vi.mock("@/lib/catalog/framework", async (orig) => ({ ...(await orig<object>()), listEntries: (...a: unknown[]) => listEntries(...a) }))
 
-import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
+import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation, confirmedPaymentInvoiceLabel } from "@/lib/operations/activation-start-services"
 import { getStartAtActivationServiceTypes, _resetServicesCache } from "@/lib/services"
 
 const TYPES = ["Company Closure"]
@@ -452,3 +452,27 @@ describe("createBoughtStartAtActivationServices — scope lookup failure", () =>
   })
 })
 
+
+describe("confirmedPaymentInvoiceLabel — what the client sees in payment history", () => {
+  const cn = [{ name: "Company Change Name", pipeline_type: "Company Change Name" }]
+  it("name change on the formation template → named after the service, never 'formation'", () => {
+    expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "Bravo LLC", services: cn, selectedServices: null, bundledPipelines: ["Company Change Name"] }))
+      .toBe("Company Change Name - Bravo LLC (admin confirmed)")
+  })
+  it("closure only (SupraEmerge shape) → 'Account Closure - X'", () => {
+    expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "X", services: [{ name: "Account Closure", pipeline_type: "Company Closure" }], selectedServices: [], bundledPipelines: ["Company Closure"] }))
+      .toBe("Account Closure - X (admin confirmed)")
+  })
+  it("real formation / other contracts keep the historical wording", () => {
+    expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "A", services: [{ name: "Company Formation", pipeline_type: "Company Formation" }], selectedServices: null, bundledPipelines: ["Company Formation"] }))
+      .toBe("formation - A (admin confirmed)")
+    expect(confirmedPaymentInvoiceLabel({ contractType: "onboarding", clientName: "D", services: [], selectedServices: null, bundledPipelines: [] }))
+      .toBe("onboarding - D (admin confirmed)")
+    expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "E", services: null, selectedServices: null, bundledPipelines: [] }))
+      .toBe("formation - E (admin confirmed)")
+  })
+  it("an unticked optional line is left out of the name", () => {
+    expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "F", services: [...cn, { name: "Company Closure", pipeline_type: "Company Closure", optional: true }], selectedServices: ["Company Change Name"], bundledPipelines: ["Company Change Name"] }))
+      .toBe("Company Change Name - F (admin confirmed)")
+  })
+})
