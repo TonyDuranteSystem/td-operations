@@ -226,6 +226,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           message: text,
           channel: 'whatsapp',
           attachmentPath: file?.path,
+          attachmentMimeType: file?.mimeType,
           clientMsgId: getClientMsgId(),
         }),
       })
@@ -255,19 +256,29 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     e.target.value = ''
     if (!picked) return
 
-    const validationError = validateChatAttachment(picked.name, picked.size, picked.type)
-    if (validationError) {
-      toast.error(validationError)
-      return
+    // The self-hosted line: any attachment (audio is sent as a voice note), a dedicated upload route
+    // (dangerous-type block, size ceiling, a server-built deterministic path keyed to this message's id).
+    // Any other provider keeps the older whatsapp-new/ staging path unchanged.
+    const isWabridge = !!data?.send
+    if (!isWabridge) {
+      const validationError = validateChatAttachment(picked.name, picked.size, picked.type)
+      if (validationError) {
+        toast.error(validationError)
+        return
+      }
     }
 
     setFile({ name: picked.name, size: picked.size, mimeType: picked.type })
     setUploading(true)
     try {
-      const urlRes = await fetch('/api/inbox/whatsapp-new/upload-url', {
+      const urlRes = await fetch(isWabridge ? '/api/inbox/whatsapp/attachment-upload-url' : '/api/inbox/whatsapp-new/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_name: picked.name, file_size: picked.size, mime_type: picked.type }),
+        body: JSON.stringify(
+          isWabridge
+            ? { groupId, clientMsgId: getClientMsgId(), fileName: picked.name, fileSize: picked.size, mimeType: picked.type }
+            : { file_name: picked.name, file_size: picked.size, mime_type: picked.type }
+        ),
       })
       if (!urlRes.ok) {
         const d = await urlRes.json().catch(() => ({}))
@@ -309,7 +320,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   }
 
   const handleOpenConfirm = () => {
-    if (!text.trim() || !canSend) return
+    // A voice note or an attachment can go with NO caption at all — text is only required when there is no
+    // uploaded file (an ordinary text reply still needs real words).
+    if ((!text.trim() && !file?.path) || !canSend) return
     if (uploading) {
       toast.error('Wait for the attachment to finish uploading.')
       return
@@ -331,6 +344,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   // rewrite fails, the dropdown is put back so it can never disagree with what Confirm would actually send.
   const handleConfirmLocaleChange = async (next: 'it' | 'en') => {
     if (next === confirmLocale || rewriting) return
+    if (!text.trim()) { setConfirmLocale(next); return } // nothing to rewrite — e.g. a captionless attachment
     const previousLocale = confirmLocale
     const previousText = text
     const requestGroupId = groupId // the chat this rewrite is FOR — a late response must never land in a different one
@@ -388,7 +402,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
   const notice = data?.send ? sendNotice(data.send) : null
   const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
-  const textOnly = !!data?.send
+  // Attachments/voice notes ARE supported on the self-hosted line now (Antonio 2026-09-27) — kept as a named
+  // constant since the paperclip button still needs to know "is this the wabridge line" for its upload route.
+  const isWabridgeLine = !!data?.send
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -578,9 +594,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               />
               <button
                 onClick={handlePickFile}
-                disabled={!!file || textOnly}
+                disabled={!!file}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
-                aria-label={textOnly ? 'Attachments are not available on this WhatsApp line yet — text only' : 'Attach a file'}
+                aria-label="Attach a file"
               >
                 <Paperclip className="h-4 w-4" />
               </button>
@@ -594,13 +610,18 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               </button>
               <button
                 onClick={handleOpenConfirm}
-                disabled={!text.trim() || uploading || !canSend}
+                disabled={(!text.trim() && !file?.path) || uploading || !canSend}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg bg-green-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-green-700 transition-colors"
                 aria-label="Send"
               >
                 <Send className="h-4 w-4" />
               </button>
             </div>
+            {isWabridgeLine && (
+              <p className="text-[11px] text-zinc-400 px-1">
+                Don&apos;t send ID or tax documents over WhatsApp — use the portal instead.
+              </p>
+            )}
           </div>
         ) : (
           <div className="p-3 space-y-2">
@@ -613,7 +634,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               </span>
             </p>
             <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words">
-              {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text}
+              {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text || <span className="text-zinc-400">(no caption — just the attachment)</span>}
             </div>
             {file && (
               <p className="text-xs text-zinc-500 flex items-center gap-1">

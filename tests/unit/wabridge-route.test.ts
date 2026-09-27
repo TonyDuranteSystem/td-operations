@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   rpcCalls: [] as Array<{ fn: string; args: Record<string, unknown> }>,
   groupCalls: [] as Array<Record<string, unknown>>,
   channelLookups: 0,
+  signUrlOk: true,
+  signUrlCalls: [] as Array<{ path: string; expiresIn: number }>,
 }))
 
 vi.mock("@/lib/supabase-admin", () => ({
@@ -31,6 +33,16 @@ vi.mock("@/lib/supabase-admin", () => ({
       state.rpcCalls.push({ fn, args })
       if (state.rpcThrow[fn]) throw new Error("rpc exploded")
       return state.rpcOverrides[fn] ?? state.rpcResult
+    },
+    storage: {
+      from: () => ({
+        createSignedUrl: async (path: string, expiresIn: number) => {
+          state.signUrlCalls.push({ path, expiresIn })
+          return state.signUrlOk
+            ? { data: { signedUrl: `https://signed.example/${path}` }, error: null }
+            : { data: null, error: { message: "could not sign" } }
+        },
+      }),
     },
   },
 }))
@@ -78,6 +90,8 @@ beforeEach(() => {
   state.rpcCalls = []
   state.groupCalls = []
   state.channelLookups = 0
+  state.signUrlOk = true
+  state.signUrlCalls = []
 })
 
 describe("POST /api/wa-bridge/[channelId] — live messages", () => {
@@ -384,7 +398,7 @@ describe("bridge.send.claim / bridge.send.result (the Mac's reply sender)", () =
     const r = await call(claimEvent())
     expect(r.status).toBe(200)
     expect(r.body).toEqual({ ok: true, claimed: true, id: OB, to_digits: "17274234285", body: "Ciao!", group_id: "g1" })
-    expect(state.rpcCalls.find((c) => c.fn === "wabridge_claim_send")?.args).toEqual({ p_channel_id: CHANNEL })
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_claim_send")?.args).toEqual({ p_channel_id: CHANNEL, p_supports_kinds: ["text"] })
     expect(state.groupCalls).toHaveLength(0)
   })
   it("a refusal (paused, gap, caps…) is a normal 200 with the reason, so the Mac just waits", async () => {
@@ -392,6 +406,41 @@ describe("bridge.send.claim / bridge.send.result (the Mac's reply sender)", () =
     const r = await call(claimEvent())
     expect(r.status).toBe(200)
     expect(r.body).toEqual({ ok: true, claimed: false, reason: "gap", wait_seconds: 42 })
+  })
+  it("passes the Mac's declared kinds through to the database so a text-only sender never gets voice/image handed to it", async () => {
+    state.rpcOverrides.wabridge_claim_send = { data: { claimed: false, reason: "held" }, error: null }
+    await call(claimEvent({ supports: ["text", "voice", "image"] }))
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_claim_send")?.args).toEqual({ p_channel_id: CHANNEL, p_supports_kinds: ["text", "voice", "image"] })
+  })
+  it("a claimed voice/image row gets a short-lived signed download link, never the bare storage path", async () => {
+    state.rpcOverrides.wabridge_claim_send = {
+      data: { claimed: true, id: OB, kind: "voice", media_path: "outbound/ch1/msg1.m4a", body: "[Voice note]", group_id: "g1" },
+      error: null,
+    }
+    const r = await call(claimEvent({ supports: ["text", "voice"] }))
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({
+      ok: true, claimed: true, id: OB, kind: "voice", media_path: "outbound/ch1/msg1.m4a", body: "[Voice note]", group_id: "g1",
+      media_url: "https://signed.example/outbound/ch1/msg1.m4a",
+    })
+    expect(state.signUrlCalls).toEqual([{ path: "outbound/ch1/msg1.m4a", expiresIn: 300 }])
+  })
+  it("a claimed TEXT row is returned as-is, never signed (no media_path to sign)", async () => {
+    state.rpcOverrides.wabridge_claim_send = { data: { claimed: true, id: OB, kind: "text", to_digits: "17274234285", body: "Ciao!", group_id: "g1" }, error: null }
+    const r = await call(claimEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).not.toHaveProperty("media_url")
+    expect(state.signUrlCalls).toHaveLength(0)
+  })
+  it("when the file cannot be signed, the claim is explicitly failed (never left stuck) and reported held, not thrown at the Mac", async () => {
+    state.signUrlOk = false
+    state.rpcOverrides.wabridge_claim_send = { data: { claimed: true, id: OB, kind: "image", media_path: "outbound/ch1/msg2.jpg", body: "[Photo]", group_id: "g1" }, error: null }
+    const r = await call(claimEvent({ supports: ["text", "image"] }))
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, claimed: false, reason: "held" })
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_finish_send")?.args).toEqual({
+      p_channel_id: CHANNEL, p_outbox_id: OB, p_ok: false, p_message_id: null, p_error: "could not prepare the file for download",
+    })
   })
   it("an UNSIGNED or REPLAYED claim never reaches the database (the reply text is only for a signed caller)", async () => {
     expect((await call(claimEvent(), { sig: null })).status).toBe(401)

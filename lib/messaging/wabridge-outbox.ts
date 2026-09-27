@@ -105,9 +105,16 @@ export function outboxDisplayStatus(status: string, claimedAt: string | null | u
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export type SendClaimParse = null | { ok: false; reason: string } | { ok: true }
+const SEND_KINDS = ["text", "voice", "image", "video", "document"] as const
 
-/** {event:"bridge.send.claim", ts}: the Mac asks for its next message. Only a fresh signed timestamp is needed. */
+export type SendClaimParse = null | { ok: false; reason: string } | { ok: true; supports: string[] }
+
+/**
+ * {event:"bridge.send.claim", ts, supports?}: the Mac asks for its next message. `supports` is which kinds this
+ * copy of the sender knows how to send — an UPGRADED sender declares e.g. ["text","voice","image","video","document"];
+ * an OLD, unmodified sender sends no `supports` at all, which this defaults to ["text"] only — it can therefore
+ * NEVER be handed a voice/attachment row and try to send its placeholder caption as literal text.
+ */
 export function parseSendClaim(body: unknown, now: Date): SendClaimParse {
   if (typeof body !== "object" || body === null) return null
   const b = body as Record<string, unknown>
@@ -115,7 +122,12 @@ export function parseSendClaim(body: unknown, now: Date): SendClaimParse {
   if (typeof b.ts !== "number" || !Number.isFinite(b.ts) || Math.abs(now.getTime() - b.ts) > HEARTBEAT_MAX_SKEW_MS) {
     return { ok: false, reason: "stale or missing timestamp" }
   }
-  return { ok: true }
+  let supports: string[] = ["text"]
+  if (Array.isArray(b.supports)) {
+    const clean = b.supports.filter((k): k is string => typeof k === "string" && (SEND_KINDS as readonly string[]).includes(k))
+    if (clean.length > 0) supports = Array.from(new Set(clean))
+  }
+  return { ok: true, supports }
 }
 
 export type SendResultParse =

@@ -104,8 +104,16 @@ describe("outboxDisplayStatus", () => {
 })
 
 describe("parseSendClaim", () => {
-  it("accepts a fresh signed claim", () => {
-    expect(parseSendClaim({ event: "bridge.send.claim", ts: NOW.getTime() }, NOW)).toEqual({ ok: true })
+  it("accepts a fresh signed claim, defaulting supports to text-only when omitted", () => {
+    expect(parseSendClaim({ event: "bridge.send.claim", ts: NOW.getTime() }, NOW)).toEqual({ ok: true, supports: ["text"] })
+  })
+  it("accepts an explicit supports list, ignoring an unknown kind rather than trusting it", () => {
+    expect(parseSendClaim({ event: "bridge.send.claim", ts: NOW.getTime(), supports: ["text", "voice", "image"] }, NOW)).toEqual({
+      ok: true,
+      supports: ["text", "voice", "image"],
+    })
+    expect(parseSendClaim({ event: "bridge.send.claim", ts: NOW.getTime(), supports: ["text", "bogus"] }, NOW)).toEqual({ ok: true, supports: ["text"] })
+    expect(parseSendClaim({ event: "bridge.send.claim", ts: NOW.getTime(), supports: "not-an-array" }, NOW)).toEqual({ ok: true, supports: ["text"] })
   })
   it("is not a claim → null; stale or missing timestamp → refused", () => {
     expect(parseSendClaim(null, NOW)).toBeNull()

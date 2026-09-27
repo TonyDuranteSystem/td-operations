@@ -14337,7 +14337,20 @@ export type Database = {
         Returns: boolean
       }
       wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
-      wabridge_claim_send: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_claim_send: { Args: { p_channel_id: string; p_supports_kinds?: string[] }; Returns: Json }
+      wabridge_enqueue_send: {
+        Args: {
+          p_caption: string | null
+          p_client_msg_id: string
+          p_content_hash: string | null
+          p_created_by: string | null
+          p_group_id: string
+          p_kind: string
+          p_media_mime: string
+          p_media_size: number
+        }
+        Returns: Json
+      }
       wabridge_media_claim: { Args: { p_channel_id: string }; Returns: Json }
       wabridge_media_expired_list: { Args: { p_days?: number; p_limit?: number }; Returns: Json }
       wabridge_media_finish: {
