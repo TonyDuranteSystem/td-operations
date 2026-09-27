@@ -48,7 +48,15 @@ const fx = { account: "", owner: "", company1: "", contactsFolder: "", personA: 
 beforeAll(async () => {
   expect((process.env.NEXT_PUBLIC_SUPABASE_URL || "").includes(SANDBOX_REF)).toBe(true)
   process.env.SANDBOX_MODE = "1"
-  const { data: list } = await db.auth.admin.listUsers({ page: 1, perPage: 200 })
+  // page through ALL auth users — the sandbox has more than one page, and the admin is not always on page 1
+  const allUsers: Array<{ id: string; email: string; app_metadata: Record<string, unknown> }> = []
+  for (let page = 1; page <= 50; page++) {
+    const { data: pg } = await db.auth.admin.listUsers({ page, perPage: 200 })
+    const batch = (pg?.users ?? []) as typeof allUsers
+    allUsers.push(...batch)
+    if (batch.length < 200) break
+  }
+  const list = { users: allUsers }
   const admin = (list.users as FakeUser[]).find((u) => u.app_metadata?.role === "admin")
   if (!admin) throw new Error("no sandbox admin auth user")
   currentUser = { id: admin.id, email: admin.email, app_metadata: { role: "admin" } }
@@ -242,7 +250,7 @@ describe("new storage screens — live sandbox", () => {
     expect(r2.saved).toBe(2)
     const { data: again } = await db.from("store_files").select("id").eq("owner_id", fx.owner).eq("name", "bank_statement.pdf")
     expect(again).toHaveLength(1)
-  })
+  }, 60_000)
 
   it("the ensureCompanyFolder refusal is recognisable as 'store-owned' by the flows", async () => {
     const { ensureCompanyFolder } = await import("@/lib/drive-folder-utils")

@@ -93,7 +93,15 @@ beforeAll(async () => {
   expect((process.env.NEXT_PUBLIC_SUPABASE_URL || "").includes(SANDBOX_REF)).toBe(true)
   process.env.SANDBOX_MODE = "1"
   delete process.env.GOOGLE_DRIVE_LIVE
-  const { data: list } = await db.auth.admin.listUsers({ page: 1, perPage: 200 })
+  // page through ALL auth users — the sandbox has more than one page, and the admin is not always on page 1
+  const allUsers: Array<{ id: string; email: string; app_metadata: Record<string, unknown> }> = []
+  for (let page = 1; page <= 50; page++) {
+    const { data: pg } = await db.auth.admin.listUsers({ page, perPage: 200 })
+    const batch = (pg?.users ?? []) as typeof allUsers
+    allUsers.push(...batch)
+    if (batch.length < 200) break
+  }
+  const list = { users: allUsers }
   const admin = (list.users as Array<{ id: string; email: string; app_metadata: Record<string, unknown> }>).find((u) => u.app_metadata?.role === "admin")
   if (!admin) throw new Error("no sandbox admin auth user")
   staff = { id: admin.id, email: admin.email, app_metadata: { role: "admin" } }

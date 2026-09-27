@@ -277,7 +277,7 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
 
     // ── 2. Bell + push (digest email suppressed — we email directly) ────
     try {
-      await createPortalNotification({
+      const bell = await createPortalNotification({
         account_id: params.account_id ?? undefined,
         contact_id: params.contact_id ?? undefined,
         type: ACTION_REQUIRED_TYPE,
@@ -286,7 +286,7 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
         link: params.link,
         suppressDigestEmail: true,
       })
-      result.notification = 'ok'
+      result.notification = bell?.error ? `failed: ${bell.error}` : 'ok'
     } catch (err) {
       result.notification = `failed: ${err instanceof Error ? err.message : String(err)}`
     }

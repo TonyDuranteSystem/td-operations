@@ -178,3 +178,55 @@ export async function getWelcomeMessage(opts: {
     wizardPath: pickWizardPath(winner.metadata),
   }
 }
+
+/**
+ * Closure line for the payment welcome (dev job e2fee7e7). The client gets ONE
+ * welcome per offer — the highest-priority template wins, and closure's is the
+ * lowest — so on a "Formation + Closure" contract the client never heard that a
+ * closure form is waiting. When a closure form is owed, the caller appends this
+ * one line to the winning welcome. Text is editable in the catalog
+ * (welcome_messages / closure → metadata.addendum.{en,it}); the constant below is
+ * only the fallback when that is missing.
+ */
+export const CLOSURE_WELCOME_ADDENDUM_FALLBACK = {
+  en: "We are also closing your previous company: please fill in the closure form. You will find it on your portal home page, under \"Complete Registration — Company Closure\".",
+  it: "Stiamo anche chiudendo la tua società precedente: compila il modulo di chiusura. Lo trovi nella home del tuo portale, nel riquadro \"Completa Registrazione — Chiusura Società\".",
+} as const
+
+/** Pure: pick the addendum text from the closure row's metadata, else the fallback. */
+export function pickClosureAddendum(
+  metadata: Record<string, unknown> | null | undefined,
+  lang: "en" | "it",
+): string {
+  const a = (metadata as { addendum?: Record<string, unknown> } | null | undefined)?.addendum
+  const v = a && typeof a === "object" ? a[lang] : undefined
+  return typeof v === "string" && v.trim() ? v.trim() : CLOSURE_WELCOME_ADDENDUM_FALLBACK[lang]
+}
+
+/** Pure: should the closure line be appended to this welcome? Only when THIS
+ *  contract includes a Company Closure AND its form is still owed (an old,
+ *  unrelated closure must not make a Tax Return welcome say "we are also
+ *  closing your previous company"), and never when the winning welcome IS the
+ *  closure one (it already says it). */
+export function shouldAppendClosureAddendum(p: {
+  winnerSlug: string | null | undefined
+  contractHasClosure: boolean
+  closureOwed: boolean
+}): boolean {
+  return p.contractHasClosure && p.closureOwed && p.winnerSlug !== "closure"
+}
+
+export async function getClosureWelcomeAddendum(language: string | null | undefined): Promise<string> {
+  const lang = localeFromLanguage(language)
+  try {
+    const { data } = await supabaseAdmin
+      .from("catalog_entries")
+      .select("metadata")
+      .eq("catalog_id", WELCOME_MESSAGES_CATALOG_ID)
+      .eq("slug", "closure")
+      .maybeSingle()
+    return pickClosureAddendum((data?.metadata ?? null) as Record<string, unknown> | null, lang)
+  } catch {
+    return CLOSURE_WELCOME_ADDENDUM_FALLBACK[lang]
+  }
+}

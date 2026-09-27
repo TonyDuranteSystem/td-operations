@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
+import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
+import { getClientContactId } from '@/lib/portal-auth'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 
 /**
@@ -121,6 +123,10 @@ export async function POST(request: NextRequest) {
         file_name: fileName,
         drive_file_id: driveFile.id,
         account_id: accountId,
+        // A personal document (category 2 — passport/ID…) belongs to the member who
+        // uploaded it; without an owner nobody (not even the uploader) can see it.
+        // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
+        ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
         category: categoryNum,
         document_type_name: typeName,
         status: 'classified',

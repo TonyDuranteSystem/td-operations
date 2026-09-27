@@ -1,5 +1,6 @@
 # CRM Storage
 _Last verified against code: 2026-09-26 — Claude (dev job 762b2515; new store slices 1–6: job 685467b5)_
+_Last verified against code: 2026-09-26 — Claude (dev job 762b2515)_
 
 ## What it is
 A general-purpose, staff-only file storage area inside the CRM — folders and files organized however staff set them up, with no connection to the older Google-Drive-backed client documents system. Desktop-first by deliberate design (Antonio and Luca both run the CRM on desktop). Ships with three actions beyond plain browsing: click a file to preview it inline instead of downloading it, and share an existing file straight to email, a client's portal chat, an internal team chat thread, or a fax number. Sending for e-signature is explicitly out of scope — no tool in this codebase lets an existing file be dropped straight into a signature envelope; that would need its own follow-up.
@@ -126,3 +127,7 @@ Applied to sandbox 2026-09-26 (`scripts/migrations/20260926-1900-crm-store-s6-fo
 - Confirm the RLS policies exclude both roles, not just one: `SELECT tablename, policyname, qual FROM pg_policies WHERE tablename LIKE 'crm_storage_%'` — `qual` should reference both `'client'` and `'partner'`.
 - Confirm the active migrations on disk: `scripts/migrations/20260920-2300-crm-storage-v2-desktop.sql`, `20260921-1230-crm-storage-unique-names.sql`, `20260923-1411-crm-storage-council-hardening.sql`.
 - Confirm which tool file registers these routes and whether anything changed since: `grep -c "register.*Tools" app/api/[transport]/route.ts` is not relevant here (this is a plain Next.js dashboard feature, not an MCP tool) — instead just re-read `app/api/crm-storage/**` directly; there's no separate registration step to drift from the code.
+
+## Bucket `wa-voice` (2026-09-26, sandbox)
+Private bucket for WhatsApp voice-note audio (25 MB, audio/mp4|x-m4a|aac). Not part of CRM Storage: no Drive mirror, never public, server-minted paths `voice/<channel>/<message_uuid>.m4a`, staff-only playback via short signed URLs; files deleted after 180 days by `/api/cron/wa-media-retention`. See `docs/systems/messaging.md` "Voice notes".
+

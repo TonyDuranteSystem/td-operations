@@ -17,8 +17,9 @@
  * already: checks for an existing active "Company Closure" service delivery
  * (scoped to account_id OR contact_id, correctly handling the account-less
  * case), creates one via createSD() if none exists (which itself reliably
- * creates the staff workflow task + chat note via dispatchWorkflowForSdCreated
- * — see lib/operations/service-delivery.ts), saves the client's documents to
+ * creates the staff workflow task via dispatchWorkflowForSdCreated — no chat
+ * note any more; the route's own STEP 5b posts the client-action What's New
+ * note, dev job e2fee7e7 — see lib/operations/service-delivery.ts), saves the client's documents to
  * Drive (both inline and via the durable archive-job backstop), and — on a
  * RESUBMISSION specifically — creates a plain staff task so a correction is
  * never silent. Converging both entry points onto one implementation means

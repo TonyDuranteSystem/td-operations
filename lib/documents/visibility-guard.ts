@@ -45,6 +45,23 @@ export function isUnresolvedPersonalDocument(doc: DocumentOwnership): boolean {
   return doc.category === PERSONAL_CATEGORY && !doc.contact_id
 }
 
+/**
+ * Portal viewing rule for personal documents (Master Rules MM6: personal docs are
+ * visible only to the person they belong to). A category-2 document is hidden from a
+ * portal viewer unless it is THEIR OWN: a co-member, a portal teammate (no contact id)
+ * or anyone viewing a personal document with no resolved owner never sees it. Mirrors
+ * the portal documents page's "My documents" rule; every portal route that lists or
+ * serves documents must apply it (dev job 4c20a748, 2026-09-25). Null never matches null.
+ */
+export function isPersonalDocumentHiddenFrom(
+  doc: DocumentOwnership,
+  viewerContactId: string | null | undefined,
+): boolean {
+  if (doc.category !== PERSONAL_CATEGORY) return false
+  if (!viewerContactId || !doc.contact_id) return true
+  return doc.contact_id !== viewerContactId
+}
+
 export const UNRESOLVED_PERSONAL_DOC_MESSAGE =
   "This looks like a personal document (e.g. an ID or passport) that isn't linked to " +
   "one specific member yet, so we can't tell whose it is. Link it to the correct " +

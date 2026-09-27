@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { NextRequest, NextResponse } from 'next/server'
 import { getPendingClosuresOrNull } from '@/lib/portal/pending-closures'
 
@@ -119,14 +120,20 @@ export async function GET(
   // Fetch documents linked to this account. Contact-only SDs (ITIN per
   // Phase 1 rule) have no account scope here — return empty for now;
   // contact-scoped documents are a follow-up.
-  const { data: documents } = accountId
+  const { data: rawDocuments } = accountId
     ? await supabaseAdmin
         .from('documents')
-        .select('id, file_name, document_type_name, category, drive_file_id, created_at')
+        .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at')
         .eq('account_id', accountId)
+        .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
         .order('created_at', { ascending: false })
         .limit(20)
     : { data: [] }
+  // Never list another member's personal document (passport/ID/ITIN…), not even by name.
+  const documents = (rawDocuments ?? [])
+    .filter(d => !isPersonalDocumentHiddenFrom(d, contactId))
+    .slice(0, 20)
+    .map(({ contact_id: _omit, ...d }) => d)
 
   // Build stage timeline
   const stageHistory = (sdForHistory?.stage_history as Array<{ stage: string; entered_at: string; exited_at?: string }> | null) ?? []
@@ -166,7 +173,7 @@ export async function GET(
     ...serviceBase,
     delivery,
     timeline,
-    documents: documents ?? [],
+    documents,
     closure_form_owed: closureFormOwed,
   })
 }

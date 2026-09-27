@@ -4,6 +4,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { recordDocumentView } from '@/lib/portal/document-alerts'
 import { NextRequest, NextResponse } from 'next/server'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 
 /**
  * POST /api/portal/documents/[id]/view
@@ -25,7 +26,7 @@ export async function POST(
 
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, account_id, contact_id')
+    .select('id, account_id, contact_id, category')
     .eq('id', params.id)
     .single()
   if (!doc) return NextResponse.json({ error: 'Document not found' }, { status: 404 })
@@ -34,6 +35,9 @@ export async function POST(
   const hasAccountAccess = doc.account_id ? await canAccessAccount(user, doc.account_id, 'documents') : false
   const hasContactAccess = !doc.account_id && doc.contact_id === contactId
   if (!hasAccountAccess && !hasContactAccess) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+  if (isPersonalDocumentHiddenFrom(doc, contactId)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

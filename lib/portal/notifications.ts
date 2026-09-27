@@ -28,10 +28,13 @@ export async function createPortalNotification(params: {
    * cron never emails it — for callers that send their own immediate email
    * (lib/portal/action-required.ts). Push + bell are unaffected. */
   suppressDigestEmail?: boolean
-}) {
+}): Promise<{ error: string | null }> {
+  // Returns the failure instead of swallowing it, so a caller that reports
+  // per-channel results (notifyClientActionRequired) no longer says "ok" for a
+  // bell that was never created. Existing callers ignore the return value.
   if (!params.account_id && !params.contact_id) {
     console.error('createPortalNotification: account_id or contact_id required')
-    return
+    return { error: 'account_id or contact_id required' }
   }
 
   const { suppressDigestEmail, ...row } = params
@@ -41,7 +44,7 @@ export async function createPortalNotification(params: {
 
   if (error) {
     console.error('Failed to create portal notification:', error.message)
-    return
+    return { error: error.message }
   }
 
   // Send Web Push (fire-and-forget) — prefer contact, fallback to account
@@ -64,6 +67,7 @@ export async function createPortalNotification(params: {
   // Email is now handled by the digest cron (/api/cron/portal-digest)
   // which batches all pending notifications into one email per client every 5 minutes.
   // No immediate email — only push notifications are instant.
+  return { error: null }
 }
 
 /**

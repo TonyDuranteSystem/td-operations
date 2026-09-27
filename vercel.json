@@ -101,6 +101,14 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/wa-bridge-link",
+      "schedule": "*/1 * * * *"
+    },
+    {
+      "path": "/api/cron/wa-media-retention",
+      "schedule": "30 6 * * *"
+    },
+    {
       "path": "/api/cron/invoice-overdue",
       "schedule": "0 9 * * *"
     },

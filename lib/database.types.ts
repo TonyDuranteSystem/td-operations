@@ -13036,6 +13036,120 @@ export type Database = {
         }
         Relationships: []
       }
+      message_media: {
+        Row: {
+          attempts: number
+          audio_deleted_at: string | null
+          channel_id: string
+          claimed_at: string | null
+          created_at: string
+          duration_seconds: number | null
+          error: string | null
+          id: string
+          kind: string
+          message_id: string
+          mime_type: string | null
+          ready_at: string | null
+          size_bytes: number | null
+          status: string
+          storage_path: string | null
+          transcript: string | null
+          transcript_language: string | null
+          transcript_model: string | null
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          audio_deleted_at?: string | null
+          channel_id: string
+          claimed_at?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error?: string | null
+          id?: string
+          kind?: string
+          message_id: string
+          mime_type?: string | null
+          ready_at?: string | null
+          size_bytes?: number | null
+          status?: string
+          storage_path?: string | null
+          transcript?: string | null
+          transcript_language?: string | null
+          transcript_model?: string | null
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          audio_deleted_at?: string | null
+          channel_id?: string
+          claimed_at?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          error?: string | null
+          id?: string
+          kind?: string
+          message_id?: string
+          mime_type?: string | null
+          ready_at?: string | null
+          size_bytes?: number | null
+          status?: string
+          storage_path?: string | null
+          transcript?: string | null
+          transcript_language?: string | null
+          transcript_model?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      wa_outbox: {
+        Row: {
+          body: string
+          channel_id: string
+          claimed_at: string | null
+          client_msg_id: string
+          created_at: string
+          created_by: string | null
+          error: string | null
+          external_message_id: string | null
+          group_id: string
+          id: string
+          sent_at: string | null
+          status: string
+          to_digits: string
+        }
+        Insert: {
+          body: string
+          channel_id: string
+          claimed_at?: string | null
+          client_msg_id: string
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          external_message_id?: string | null
+          group_id: string
+          id?: string
+          sent_at?: string | null
+          status: string
+          to_digits: string
+        }
+        Update: {
+          body?: string
+          channel_id?: string
+          claimed_at?: string | null
+          client_msg_id?: string
+          created_at?: string
+          created_by?: string | null
+          error?: string | null
+          external_message_id?: string | null
+          group_id?: string
+          id?: string
+          sent_at?: string | null
+          status?: string
+          to_digits?: string
+        }
+        Relationships: []
+      }
       wa_bridge_state: {
         Row: {
           alerted_state: string | null
@@ -13046,7 +13160,18 @@ export type Database = {
           last_dropped_at: string | null
           last_heartbeat_at: string | null
           logged_in: boolean | null
+          link_attempts: number
+          link_code: string | null
+          link_code_at: string | null
+          names_synced_at: string | null
           reachable: boolean | null
+          send_allowlist: string[]
+          send_daily_cap: number
+          send_distinct_per_hour: number
+          send_hourly_cap: number
+          send_min_gap_seconds: number
+          send_same_body_per_hour: number
+          send_mode: string
           updated_at: string
         }
         Insert: {
@@ -13058,7 +13183,18 @@ export type Database = {
           last_dropped_at?: string | null
           last_heartbeat_at?: string | null
           logged_in?: boolean | null
+          link_attempts?: number
+          link_code?: string | null
+          link_code_at?: string | null
+          names_synced_at?: string | null
           reachable?: boolean | null
+          send_allowlist?: string[]
+          send_daily_cap?: number
+          send_distinct_per_hour?: number
+          send_hourly_cap?: number
+          send_min_gap_seconds?: number
+          send_same_body_per_hour?: number
+          send_mode?: string
           updated_at?: string
         }
         Update: {
@@ -13070,7 +13206,18 @@ export type Database = {
           last_dropped_at?: string | null
           last_heartbeat_at?: string | null
           logged_in?: boolean | null
+          link_attempts?: number
+          link_code?: string | null
+          link_code_at?: string | null
+          names_synced_at?: string | null
           reachable?: boolean | null
+          send_allowlist?: string[]
+          send_daily_cap?: number
+          send_distinct_per_hour?: number
+          send_hourly_cap?: number
+          send_min_gap_seconds?: number
+          send_same_body_per_hour?: number
+          send_mode?: string
           updated_at?: string
         }
         Relationships: [
@@ -14189,6 +14336,42 @@ export type Database = {
         }
         Returns: boolean
       }
+      wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
+      wabridge_claim_send: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_media_claim: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_media_expired_list: { Args: { p_days?: number; p_limit?: number }; Returns: Json }
+      wabridge_media_finish: {
+        Args: {
+          p_channel_id: string
+          p_duration: number | null
+          p_error: string | null
+          p_language: string | null
+          p_message_id: string
+          p_mime: string | null
+          p_model: string | null
+          p_outcome: string
+          p_path: string | null
+          p_size: number | null
+          p_transcript: string | null
+        }
+        Returns: Json
+      }
+      wabridge_media_mark_deleted: { Args: { p_message_ids: string[] }; Returns: number }
+      wabridge_finish_send: {
+        Args: { p_channel_id: string; p_error: string | null; p_message_id: string | null; p_ok: boolean; p_outbox_id: string }
+        Returns: Json
+      }
+      wabridge_resolve_outbox: { Args: { p_action: string; p_outbox_id: string; p_user: string | null }; Returns: Json }
+      wabridge_set_send_allowlist: { Args: { p_channel_id: string; p_digits: string[] }; Returns: Json }
+      wabridge_set_send_mode: { Args: { p_allow_all?: boolean; p_channel_id: string; p_mode: string }; Returns: Json }
+      wabridge_enqueue_reply: {
+        Args: { p_body: string; p_client_msg_id: string; p_created_by: string | null; p_group_id: string }
+        Returns: Json
+      }
+      wabridge_link_unlinked: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_set_link_code: { Args: { p_channel_id: string; p_code: string }; Returns: boolean }
+      wabridge_name_tokens: { Args: { n: string }; Returns: string[] }
+      wabridge_names_agree: { Args: { a: string; b: string }; Returns: boolean | null }
       wabridge_record_heartbeat: {
         Args: {
           p_channel_id: string

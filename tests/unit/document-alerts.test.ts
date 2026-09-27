@@ -242,6 +242,34 @@ describe('notifyClientsOfNewDocument — chat message', () => {
     expect(messages.insert).not.toHaveBeenCalled()
   })
 
+  it('skips chat for a personal doc ON a company — the company chat would leak its name to co-members (job 4c20a748)', async () => {
+    const messages = chain({})
+    mockTables({
+      documents: chain({
+        single: { ...companyDoc, file_name: 'Passport - Member A.pdf', account_id: 'acct-1', contact_id: 'c-1', category: 2 },
+        updated: { id: 'd' },
+      }),
+      portal_messages: messages,
+      contacts: chain({ single: { language: 'en' } }),
+    })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: true })
+    expect(createPortalNotification).toHaveBeenCalledWith(expect.objectContaining({ contact_id: 'c-1' }))
+    expect(messages.insert).not.toHaveBeenCalled()
+  })
+
+  it('alerts nobody for a personal doc with NO confirmed owner — and does not mark it notified', async () => {
+    const messages = chain({})
+    const docs = chain({ single: { ...companyDoc, file_name: 'Passport.pdf', account_id: 'acct-1', contact_id: null, category: 2 }, updated: { id: 'd' } })
+    mockTables({ documents: docs, portal_messages: messages })
+    const r = await notifyClientsOfNewDocument('d')
+    expect(r).toEqual({ notified: false, reason: 'no_recipient' })
+    expect(createPortalNotification).not.toHaveBeenCalled()
+    expect(messages.insert).not.toHaveBeenCalled()
+    // not claimed: the real owner still gets the alert once staff confirm whose it is
+    expect(docs.update).not.toHaveBeenCalled()
+  })
+
   it('still reports notified:true when the chat insert throws (best-effort chat)', async () => {
     const messages = chain({})
     ;(messages.insert as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('boom') })

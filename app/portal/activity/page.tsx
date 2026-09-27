@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
+import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
@@ -80,12 +81,14 @@ export default async function PortalActivityPage() {
   if (selectedAccountId) {
     const { data: documents } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, created_at')
+      .select('id, file_name, document_type_name, created_at, category, contact_id')
       .eq('account_id', selectedAccountId)
       .eq('portal_visible', true)
+      .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
       .order('created_at', { ascending: false })
       .limit(10)
-    for (const d of documents ?? []) {
+    // Never show another member's personal document (passport/ID/ITIN…), not even by name.
+    for (const d of (documents ?? []).filter(doc => !isPersonalDocumentHiddenFrom(doc, contactId)).slice(0, 10)) {
       activities.push({
         id: `doc-${d.id}`, type: 'document',
         title: `${t('activity.docUploaded', locale)}: ${d.file_name}`,

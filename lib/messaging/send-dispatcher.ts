@@ -102,8 +102,10 @@ async function sendVia2Chat(
   return { ok: true, result }
 }
 
-// Self-hosted linked-device bridge (GOWA on the Mac Mini). Receive-only for now — a send needs the
-// bridge's outbox, which is a later phase. Fail loudly rather than silently pretend to send.
+// Self-hosted linked-device bridge (GOWA on the Mac Mini). This inline path NEVER sends: replies in the CRM inbox are queued by
+// /api/inbox/reply through wabridge_enqueue_reply (reply-only, paused by default) and sent by the Mac's own sender. Everything that
+// still lands here — the "new WhatsApp conversation" dialog, the MCP msg_send tool — would be FIRST CONTACT, which Antonio decided
+// stays on the phone. Fail loudly rather than silently pretend to send.
 async function sendViaWabridge(
   _chatId: string,
   _message: string,
@@ -111,7 +113,7 @@ async function sendViaWabridge(
   _options: SendOptions
 ): Promise<SendResult> {
   throw new Error(
-    "Sending from the CRM is not switched on for the self-hosted WhatsApp link yet — reply from the phone for now."
+    "Starting a new WhatsApp conversation from the CRM is not allowed on this line — first contact is made from the phone. (Replying to a chat that has written to you is done from that chat in the Inbox.)"
   )
 }
 
