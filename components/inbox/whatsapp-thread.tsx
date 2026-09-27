@@ -17,6 +17,7 @@ import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
+import { guessMessageLocale } from '@/lib/messaging/lang-detect'
 import { isMediaPending } from '@/lib/messaging/wabridge-media'
 import { WhatsAppVoiceNote, type VoiceInfo } from './whatsapp-voice-note'
 
@@ -87,10 +88,16 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const emojiPickerRef = useRef<HTMLDivElement>(null)
   const suppressDraftSaveRef = useRef(false)
+  const groupIdRef = useRef(groupId)
+  groupIdRef.current = groupId // read by async callbacks (the language rewrite) to detect a chat switch mid-flight
   const [text, setText] = useState('')
   const [file, setFile] = useState<StagedFile | null>(null)
   const [uploading, setUploading] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  // The confirm screen's language dropdown — like the Portal Chats card, switching it REWRITES the message
+  // (Antonio, 2026-08-01 precedent). Reset whenever confirm opens, never carried over between chats/drafts.
+  const [confirmLocale, setConfirmLocale] = useState<'it' | 'en'>('en')
+  const [rewriting, setRewriting] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const queryClient = useQueryClient()
@@ -141,7 +148,11 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showEmojiPicker])
 
-  const { data, isLoading, error } = useQuery<{ messages: WhatsAppMessage[]; send?: { mode: SendMode; hasInbound: boolean } | null }>({
+  const { data, isLoading, error } = useQuery<{
+    messages: WhatsAppMessage[]
+    send?: { mode: SendMode; hasInbound: boolean } | null
+    chat?: { name: string | null; phone: string | null; language: string | null } | null
+  }>({
     queryKey: ['whatsapp-messages', groupId],
     queryFn: () =>
       fetch(`/api/inbox/whatsapp/messages/${encodeURIComponent(groupId)}`).then((r) =>
@@ -178,6 +189,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     setText(loadWhatsAppDraft('reply', groupId))
     setFile(null)
     setConfirming(false)
+    setRewriting(false) // an in-flight rewrite belongs to the chat being left, not the one being opened
   }, [groupId])
 
   // Save on every change, not just on unmount — a crashed tab must not lose it.
@@ -306,7 +318,40 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
       toast.error('Remove the attachment or re-attach it before sending.')
       return
     }
+    // Default the language dropdown: a guess from the text itself, else the contact's saved language, else English.
+    // The staff member sees and can change this before Confirm — it is a starting point, never silent.
+    const guessed = guessMessageLocale(text)
+    const stored = data?.chat?.language ?? null
+    setConfirmLocale(guessed ?? (stored && /ital/i.test(stored) ? 'it' : stored && /engl/i.test(stored) ? 'en' : 'en'))
     setConfirming(true)
+  }
+
+  // Rewrite the confirm screen's text into the chosen language — same pattern as the Portal Chats Worker card
+  // (Antonio, 2026-08-01): switching the dropdown rewrites in place rather than asking for a manual redo. If the
+  // rewrite fails, the dropdown is put back so it can never disagree with what Confirm would actually send.
+  const handleConfirmLocaleChange = async (next: 'it' | 'en') => {
+    if (next === confirmLocale || rewriting) return
+    const previousLocale = confirmLocale
+    const previousText = text
+    const requestGroupId = groupId // the chat this rewrite is FOR — a late response must never land in a different one
+    setConfirmLocale(next)
+    setRewriting(true)
+    try {
+      const res = await fetch('/api/inbox/whatsapp-new/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: requestGroupId, rewriteText: previousText, language: next }),
+      })
+      const d = await res.json()
+      if (!res.ok || !d.suggestion) throw new Error(d.error || 'Could not rewrite the message.')
+      if (groupIdRef.current !== requestGroupId) return // the staff member already moved to a different chat — drop it silently
+      setText(d.suggestion)
+    } catch (err) {
+      if (groupIdRef.current === requestGroupId) setConfirmLocale(previousLocale) // the box still holds the old-language text — the dropdown must say so too
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not rewrite the message.')
+    } finally {
+      if (groupIdRef.current === requestGroupId) setRewriting(false)
+    }
   }
 
   // A reply the Mac could not confirm ("Not confirmed — check the phone"): a person looks at the phone and decides. Never retried automatically.
@@ -559,25 +604,47 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           </div>
         ) : (
           <div className="p-3 space-y-2">
-            <p className="text-xs text-zinc-500">Sending</p>
+            {/* WHO it is going to — always shown, never assumed (a wrong open chat must be obvious here). */}
+            <p className="text-xs text-zinc-500">
+              Sending to{' '}
+              <span className="font-medium text-zinc-700">
+                {data?.chat?.name ?? 'this chat'}
+                {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
+              </span>
+            </p>
             <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words">
-              {text}
+              {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text}
             </div>
             {file && (
               <p className="text-xs text-zinc-500 flex items-center gap-1">
                 <Paperclip className="h-3 w-3" /> Attaching: {file.name}
               </p>
             )}
+            {/* Language — same pattern as the Portal Chats card: switching it rewrites the text above in place. */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-zinc-500">Language:</span>
+              <select
+                value={confirmLocale}
+                onChange={(e) => handleConfirmLocaleChange(e.target.value as 'it' | 'en')}
+                disabled={rewriting || sendMutation.isPending}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+              >
+                <option value="en">English</option>
+                <option value="it">Italian</option>
+              </select>
+              <span className="text-zinc-400">{rewriting ? 'rewriting…' : 'switching rewrites the message'}</span>
+            </div>
             <div className="flex justify-end gap-2 pt-1">
               <button
                 onClick={() => setConfirming(false)}
-                className="px-3 py-1.5 text-sm border rounded-md hover:bg-zinc-50"
+                disabled={rewriting}
+                className="px-3 py-1.5 text-sm border rounded-md hover:bg-zinc-50 disabled:opacity-50"
               >
                 Edit
               </button>
               <button
                 onClick={handleConfirmSend}
-                disabled={sendMutation.isPending}
+                disabled={sendMutation.isPending || rewriting}
                 className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
               >
                 {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
