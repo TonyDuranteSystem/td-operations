@@ -107,7 +107,7 @@ describe("new storage screens — live sandbox", () => {
   it("upload → created, listed hidden, category Company; same name again → a NEW VERSION of the same file", async () => {
     const { POST } = await import("@/app/api/crm-store/browse/upload/route")
     const s1 = await stage("Bank Letter.pdf", await pdf("v1"))
-    const r1 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s1, fileName: "Bank Letter.pdf", mimeType: "application/pdf", documentType: "articles_of_organization" }))
+    const r1 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s1, fileName: "Bank Letter.pdf", mimeType: "application/pdf", documentType: "articles_of_organization", visible: false }))
     const j1 = await r1.json()
     expect(r1.status).toBe(200)
     expect(j1.write).toBe("created")
@@ -117,7 +117,7 @@ describe("new storage screens — live sandbox", () => {
     const { data: f } = await db.from("store_files").select("published").eq("id", uploadedId).single()
     expect(f.published).toBe(false)
     const s2 = await stage("Bank Letter.pdf", await pdf("v2"))
-    const r2 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s2, fileName: "Bank Letter.pdf", mimeType: "application/pdf", documentType: "articles_of_organization" }))
+    const r2 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s2, fileName: "Bank Letter.pdf", mimeType: "application/pdf", documentType: "articles_of_organization", visible: false }))
     const j2 = await r2.json()
     expect(j2.write).toBe("versioned")
     expect(j2.fileId).toBe(uploadedId)
@@ -254,7 +254,7 @@ describe("new storage screens — live sandbox", () => {
   it("from the company's '2. Contacts' staff upload a person's passport: it lands in THAT person's own storage, listed with both links, and shows in '2. Contacts'", async () => {
     const { POST } = await import("@/app/api/crm-store/browse/upload/route")
     const s1 = await stage("ID card.pdf", await pdf("id"))
-    const r = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.contactsFolder, storagePath: s1, fileName: "ID card.pdf", mimeType: "application/pdf", documentType: "id_document", personContactId: fx.personA }))
+    const r = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.contactsFolder, storagePath: s1, fileName: "ID card.pdf", mimeType: "application/pdf", documentType: "id_document", personContactId: fx.personA, visible: false }))
     const j = await r.json()
     expect(r.status, JSON.stringify(j)).toBe(200)
     const { data: f } = await db.from("store_files").select("owner_id").eq("id", j.fileId).single()
@@ -296,6 +296,61 @@ describe("new storage screens — live sandbox", () => {
     expect(f.state).toBe("live")
     const { data: rows } = await db.from("documents").select("id").eq("drive_file_id", `store:${w.fileId}`)
     expect(rows).toHaveLength(1)
+  })
+
+  it("today's file actions on the new storage: rename (listing follows), move (category follows the folder), delete (store trash + listing removed)", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const s1 = await stage("Old Name.pdf", await pdf("ren"))
+    const up = await (await upload(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s1, fileName: "Old Name.pdf", mimeType: "application/pdf", documentType: "articles_of_organization", visible: false }))).json()
+    const { POST: rename } = await import("@/app/api/crm-store/browse/file/[id]/rename/route")
+    const rn = await rename(post("http://x", { name: "New Name" }), { params: { id: up.fileId } })
+    expect((await rn.json()).name).toBe("New Name.pdf") // the extension is kept
+    let row = (await db.from("documents").select("file_name, category").eq("drive_file_id", `store:${up.fileId}`).single()).data
+    expect(row.file_name).toBe("New Name.pdf")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const banking = await folderOfKind(fx.owner, "banking")
+    const { POST: move } = await import("@/app/api/crm-store/browse/file/[id]/move/route")
+    const mv = await move(post("http://x", { folderId: banking }), { params: { id: up.fileId } })
+    expect(mv.status).toBe(200)
+    row = (await db.from("documents").select("file_name, category").eq("drive_file_id", `store:${up.fileId}`).single()).data
+    expect(row.category).toBe(4)
+    // a company document never into "2. Contacts"
+    const bad = await move(post("http://x", { folderId: fx.contactsFolder }), { params: { id: up.fileId } })
+    expect(bad.status).toBe(400)
+    const { POST: del } = await import("@/app/api/crm-store/browse/file/[id]/delete/route")
+    const d = await del(post("http://x", {}), { params: { id: up.fileId } })
+    expect(d.status).toBe(200)
+    const { data: f } = await db.from("store_files").select("state").eq("id", up.fileId).single()
+    expect(f.state).toBe("trashed")
+    const { data: gone } = await db.from("documents").select("id").eq("drive_file_id", `store:${up.fileId}`)
+    expect(gone).toHaveLength(0)
+  })
+
+  it("upload is shown to the client straight away by default (as today) — never a staff-only type", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const s1 = await stage("Shared.pdf", await pdf("shared"))
+    const j = await (await upload(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s1, fileName: "Shared.pdf", mimeType: "application/pdf", documentType: "operating_agreement" }))).json()
+    expect(j.visible).toBe(true)
+    const { data: row } = await db.from("documents").select("portal_visible").eq("drive_file_id", `store:${j.fileId}`).single()
+    expect(row.portal_visible).toBe(true)
+    const { data: f } = await db.from("store_files").select("published").eq("id", j.fileId).single()
+    expect(f.published).toBe(true)
+    const s2 = await stage("Summary.pdf", await pdf("sum"))
+    const j2 = await (await upload(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s2, fileName: `Summary ${tag}.pdf`, mimeType: "application/pdf", documentType: "formation_summary" }))).json()
+    expect(j2.visible).toBe(false)
+  })
+
+  it("the contact page's Delete on a new-storage document moves it to the store trash (no longer refused)", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const s1 = await stage("ToDelete.pdf", await pdf("del"))
+    const j = await (await upload(post("http://x", { ownerId: fx.owner, folderId: fx.company1, storagePath: s1, fileName: "ToDelete.pdf", mimeType: "application/pdf", documentType: "receipt", visible: false }))).json()
+    const { data: row } = await db.from("documents").select("id").eq("drive_file_id", `store:${j.fileId}`).single()
+    const { POST: delDoc } = await import("@/app/api/crm/admin-actions/delete-document/route")
+    const r = await delDoc(post("http://x", { document_id: row.id }))
+    const body = await r.json()
+    expect(r.status, JSON.stringify(body)).toBe(200)
+    const { data: f } = await db.from("store_files").select("state").eq("id", j.fileId).single()
+    expect(f.state).toBe("trashed")
   })
 
   it("merging two people who both have their own storage is refused in plain words", async () => {

@@ -256,3 +256,18 @@ describe("store upload retry — only on a passing storage hiccup", async () => 
     for (const m of ["The resource already exists", "Invalid key", "new row violates row-level security policy", "Payload too large", null]) expect(isTransientStorageError(m as string)).toBe(false)
   })
 })
+
+describe("rename — the store's name rules, extension kept", async () => {
+  const { cleanNewFileName } = await import("@/lib/crm-store/file-actions")
+  it("keeps the original extension when staff leave it off", () => {
+    expect(cleanNewFileName("New Name", "Old.pdf")).toBe("New Name.pdf")
+    expect(cleanNewFileName("New Name.PDF", "Old.pdf")).toBe("New Name.PDF")
+  })
+  it("replaces what the store refuses and trims", () => {
+    expect(cleanNewFileName("  A/B  Letter ", "x.pdf")).toBe("A-B Letter.pdf")
+  })
+  it("refuses an empty name", () => {
+    expect(() => cleanNewFileName("   ", "x.pdf")).toThrow()
+    expect(() => cleanNewFileName(".pdf", "x.pdf")).toThrow()
+  })
+})

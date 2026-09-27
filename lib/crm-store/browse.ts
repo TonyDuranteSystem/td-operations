@@ -32,6 +32,8 @@ export interface BrowseFile {
   clientVisible: boolean
   /** The file has a CRM documents row (without one the portal cannot show it at all). */
   listed: boolean
+  /** that CRM row (for "View OCR text" / "Run OCR") */
+  docId: string | null
   /** Set when the file belongs to one of the company's people (shown in the company's "2. Contacts"). */
   personName: string | null
   /** The file is in a PERSON's own storage (a personal document may be shown only from there). */
@@ -146,14 +148,16 @@ export async function folderContents(ownerId: string, folderId: string | null): 
   // comes from the row, not from the store's own flag, and a file with no row says so.
   const all = [...(fs ?? []), ...peopleFiles]
   const rowsVisible = new Map<string, boolean>()
+  const docIdOf = new Map<string, string>()
   if (all.length > 0) {
     const { storePointer } = await import("./document-pointer")
-    const { data: rows, error: rErr } = await db().from("documents").select("drive_file_id, portal_visible")
+    const { data: rows, error: rErr } = await db().from("documents").select("id, drive_file_id, portal_visible")
       .in("drive_file_id", all.map((f: { id: string }) => storePointer(f.id)))
     if (rErr) throw new Error(`store browse: ${rErr.message}`)
     for (const r of rows ?? []) {
       const fid = String(r.drive_file_id).slice("store:".length)
       rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || r.portal_visible === true)
+      if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
     }
   }
   const { data: curOwner } = await db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle()
@@ -168,7 +172,7 @@ export async function folderContents(ownerId: string, folderId: string | null): 
     const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null } | null
     files.push({
       id: f.id, name: f.name, documentType: f.document_type, state: f.state, published: !!f.published,
-      clientVisible: so !== true && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id),
+      clientVisible: so !== true && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
       staffOnly: so === true, personal: pers === true, versions: count ?? 0,
       size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at,
       personName: f.owner_id !== ownerId ? personName.get(f.owner_id as string) ?? null : null,
@@ -203,6 +207,18 @@ export async function storeOwnerForAccount(accountId: string): Promise<string | 
   if (!pilotEnvironmentAllowed()) return null
   try {
     const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).maybeSingle()
+    return (data?.id as string | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** A person's own storage in the NEW store (pilot environment only), or null. */
+export async function storeOwnerForContact(contactId: string): Promise<string | null> {
+  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
+  if (!pilotEnvironmentAllowed()) return null
+  try {
+    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").maybeSingle()
     return (data?.id as string | undefined) ?? null
   } catch {
     return null
@@ -296,7 +312,11 @@ export async function staffUploadToStore(p: {
   ownerId: string; folderId: string; storagePath: string; fileName: string; mimeType: string | null; documentType: string; actorId: string | null
   /** uploading from a company's "2. Contacts": whose document it is (saved in that person's own storage) */
   personContactId?: string | null
-}): Promise<{ fileId: string; write: string; name: string }> {
+  /** optional display name (today's "Display name"); the original extension is kept */
+  displayName?: string | null
+  /** show to the client straight away (today's upload does — default true); never for a staff-only type */
+  visible?: boolean | null
+}): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
   const { saveBytesToStore } = await import("./writer")
   const { storeNameKey } = await import("./rules")
   const { upsertStoreDocumentRow } = await import("./formation-pilot")
@@ -306,7 +326,12 @@ export async function staffUploadToStore(p: {
   if (folder.kind === "root") throw new Error("Open one of the folders first — files go inside a folder, not at the top.")
   const { data: types } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
   if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
-  const typeRow = types[0] as { display_name: string; metadata: { personal?: boolean } | null }
+  const typeRow = types[0] as { slug: string; display_name: string; metadata: { personal?: boolean; staff_only?: boolean } | null }
+  let fileName = p.fileName
+  if (p.displayName && p.displayName.trim()) {
+    const { cleanNewFileName } = await import("./file-actions")
+    fileName = cleanNewFileName(p.displayName, p.fileName)
+  }
   const { data: owner0, error: ownErr } = await db().from("store_owners").select("kind, account_id, contact_id, service_delivery_id").eq("id", p.ownerId).single()
   if (ownErr || !owner0) throw new Error("This storage owner no longer exists.")
   let owner = owner0 as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
@@ -341,12 +366,12 @@ export async function staffUploadToStore(p: {
   // Same name in the same folder = a new version of THAT file, whoever saved it first (the Formation
   // pilot, an earlier upload …): reuse its own key. A file saved without a key cannot take a version here.
   const { data: same, error: sameErr } = await db().from("store_files").select("id, caller_key, state")
-    .eq("folder_id", targetFolderId).eq("name_key", storeNameKey(p.fileName)).neq("state", "purged")
+    .eq("folder_id", targetFolderId).eq("name_key", storeNameKey(fileName)).neq("state", "purged")
   if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
   if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
-  const callerKey = sameLive?.caller_key ?? `staff-upload:${targetFolderId}:${storeNameKey(p.fileName)}`
+  const callerKey = sameLive?.caller_key ?? `staff-upload:${targetFolderId}:${storeNameKey(fileName)}`
   // Who the CRM row belongs to: the company, the person, or — for a company still being formed — the
   // client (and account, once linked) of the formation case, exactly as the Formation pilot links its rows.
   // a person's document uploaded from a company keeps BOTH links, as today's passports do
@@ -363,7 +388,7 @@ export async function staffUploadToStore(p: {
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
   const w = await saveBytesToStore({
-    ownerId: targetOwnerId, folderId: targetFolderId, name: p.fileName, mimeType, bytes,
+    ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
     callerKey, contentChanged: true,
     documentType: p.documentType, published: false, actor: p.actorId,
   })
@@ -372,15 +397,51 @@ export async function staffUploadToStore(p: {
   }
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal
     : FOLDER_KIND_CATEGORY[folder.kind as string] ?? FOLDER_KIND_CATEGORY.correspondence
-  await upsertStoreDocumentRow(w.fileId, {
+  const wantVisible = p.visible !== false && typeRow.metadata?.staff_only !== true
+  const row = await upsertStoreDocumentRow(w.fileId, {
     file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
     category: cat.num, category_name: cat.name,
     account_id: rowAccount,
     contact_id: rowContact,
-    portal_visible: false,
+    // today's upload shows the file to the client straight away (with the new-document alert); a staff-only
+    // type never; staff can untick it
+    portal_visible: wantVisible,
   }, w.status)
   await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
-  return { fileId: w.fileId, write: w.status, name: w.name }
+  const { data: rowNow } = await db().from("documents").select("id, portal_visible").eq("id", row.id).maybeSingle()
+  const visibleNow = rowNow?.portal_visible === true
+  if (row.inserted && visibleNow) {
+    const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
+    void notifyClientsOfNewDocument(row.id).catch((e: unknown) => console.error("[crm-store] new-document alert failed:", e))
+  }
+  // today's contact upload reads a passport / ITIN letter and fills the person's record
+  let identity: string | null = null
+  if (owner.kind === "person" && owner.contact_id && (typeRow.slug === "passport" || typeRow.slug === "itin_letter")) {
+    identity = await readIdentityIntoContact(owner.contact_id, typeRow.slug, bytes, mimeType, fileName, rowAccount)
+  }
+  return { fileId: w.fileId, write: w.status, name: w.name, visible: visibleNow, identity }
+}
+
+/** Passport → number / expiry / date of birth; ITIN letter → ITIN + issue date (same helpers as today's upload). */
+async function readIdentityIntoContact(contactId: string, slug: string, bytes: Buffer, mimeType: string, fileName: string, accountId: string | null): Promise<string | null> {
+  try {
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    if (slug === "passport") {
+      const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+      const r = await extractAndStorePassportData({ contact_id: contactId, content: ab, file_name: fileName, mime_type: mimeType, account_id: accountId })
+      return r.detail ?? null
+    }
+    const { ocrRawContent } = await import("@/lib/docai")
+    const { extractItinFromOcr, parseItinIssueDateFromOcr } = await import("@/lib/ocr-helpers")
+    const { writeITINFields } = await import("@/lib/itin/write-itin-fields")
+    const ocr = await ocrRawContent(ab, mimeType, fileName)
+    const itin = extractItinFromOcr(ocr.fullText)
+    if (!itin) return "ITIN letter saved — no ITIN number found in the text (check the image quality)"
+    await writeITINFields(contactId, { itin_number: itin, itin_issue_date: parseItinIssueDateFromOcr(ocr.fullText) })
+    return `ITIN ${itin} saved on the contact`
+  } catch (e) {
+    return `The document was saved, but its details could not be read (${e instanceof Error ? e.message : String(e)})`
+  }
 }
 
 /**

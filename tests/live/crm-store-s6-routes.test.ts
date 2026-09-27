@@ -271,13 +271,19 @@ describe("the workspace routes — real handlers, real database", () => {
     expect(JSON.stringify(body)).toMatch(/blocked outside production/i)
   }, 60_000)
 
-  it("delete from the contact page is refused for a store file", async () => {
+  it("delete from the contact page moves a store file to the store trash and removes its listing", async () => {
     currentUser = staff
-    const [row] = await rows({ service_delivery_id: pilot.sd, flow_stage: "Filed with State" })
+    const { storeOwnerForCase, savePilotFile, upsertStoreDocumentRow } = await import("@/lib/crm-store/formation-pilot")
+    const owner = await storeOwnerForCase(pilot.sd)
+    expect(owner).toBeTruthy()
+    const w = await savePilotFile({ ownerId: owner!.id, folderKind: "company", name: `ZZ throwaway ${tag}.pdf`, bytes: await pdf(["throwaway"]), mimeType: "application/pdf", documentType: "receipt", callerKey: `zz-s6r-throwaway:${tag}` })
+    const r = await upsertStoreDocumentRow(w.fileId, { file_name: w.name, account_id: pilot.account || null, contact_id: pilot.contact, portal_visible: false, category: 5, category_name: "Correspondence" })
     const { POST } = await import("@/app/api/crm/admin-actions/delete-document/route")
-    const res = await POST(post("http://localhost/api/crm/admin-actions/delete-document", { document_id: row.id }))
-    expect(res.status).toBe(409)
-    expect(await rows({ id: row.id })).toHaveLength(1)
+    const res = await POST(post("http://localhost/api/crm/admin-actions/delete-document", { document_id: r.id }))
+    expect(res.status).toBe(200)
+    expect(await rows({ id: r.id })).toHaveLength(0)
+    const { data: f } = await db.from("store_files").select("state").eq("id", w.fileId).single()
+    expect(f.state).toBe("trashed")
   }, 60_000)
 
   it("Go Back (the real route) → the stage's store file goes to the store trash with the staff member; row removed", async () => {

@@ -41,6 +41,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { NewStoreBrowser, useStoreOwnerForContact } from '@/components/storage/new-store-browser'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
@@ -3068,6 +3069,16 @@ function ContactDocumentsTab({
   driveFolderId?: string | null
 }) {
   const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
+  // CRM Store pilot (sandbox only): a person whose own documents live in the new storage gets that storage
+  // here (preview, upload, rename, move, delete, show / hide) instead of the Drive folder tools
+  const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
+  const personStoreId = storeOwner.data?.ownerId ?? null
+  const personStoreSection = personStoreId ? (
+    <div className="space-y-2">
+      <p className="text-xs text-zinc-500">This person&apos;s own documents live in the new CRM storage (pilot).</p>
+      <NewStoreBrowser ownerId={personStoreId} scopedKind="person" />
+    </div>
+  ) : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
@@ -3496,12 +3507,12 @@ function ContactDocumentsTab({
               Open in Drive
             </a>
           )}
-          {uploadButton}
+          {!personStoreId && uploadButton}
         </div>
-        {uploadPanel}
-        {folderCreateSection}
-        {fileBrowserSection}
-        {!driveFolderId && (
+        {!personStoreId && uploadPanel}
+        {personStoreId ? personStoreSection : folderCreateSection}
+        {!personStoreId && fileBrowserSection}
+        {!driveFolderId && !personStoreId && (
           <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
             <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p>No documents linked to this contact</p>
@@ -3527,11 +3538,11 @@ function ContactDocumentsTab({
               Open in Drive
             </a>
           )}
-          {uploadButton}
+          {!personStoreId && uploadButton}
         </div>
       </div>
-      {fileBrowserSection}
-      {uploadPanel}
+      {personStoreId ? personStoreSection : fileBrowserSection}
+      {!personStoreId && uploadPanel}
 
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
