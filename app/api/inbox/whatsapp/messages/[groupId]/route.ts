@@ -28,9 +28,13 @@ export async function GET(
     const { data, error } = await supabaseAdmin
       .from("messages")
       .select(
-        "id, content_text, direction, sender_name, sender_phone, created_at, content_type, media_url"
+        "id, content_text, direction, sender_name, sender_phone, created_at, content_type, media_url, reactions, pinned_at, reply_to_id"
       )
       .eq("group_id", groupId)
+      // A hidden message (staff "Delete" — see the message route's own comment: this only removes OUR
+      // copy from view, the real WhatsApp message on the person's phone is untouched) never reaches the
+      // chat again; the row itself is kept for audit, same shape as the portal chat's soft delete (R100).
+      .is("deleted_at", null)
       .order("created_at", { ascending: true })
 
     if (error) throw error
@@ -42,7 +46,15 @@ export async function GET(
     // Portal Chats Worker card already does — never assume the open chat is the intended recipient (R101 lesson,
     // 2026-09-26: staff opened the wrong chat once during testing). Best-effort: a lookup failure must not hide
     // the chat, it only means the confirm screen falls back to the bare number.
-    let chat: { name: string | null; phone: string | null; language: string | null } | null = null
+    let chat: {
+      name: string | null
+      phone: string | null
+      language: string | null
+      /** Staff-only "three dots" menu (Discuss with Team / Make a note / Create Task,Service,Invoice / To Do)
+       *  needs a client to attach to — null when this chat has never been linked to a CRM record. */
+      accountId: string | null
+      contactId: string | null
+    } | null = null
     try {
       const { data: g } = await supabaseAdmin
         .from("messaging_groups")
@@ -59,6 +71,8 @@ export async function GET(
           name: contact.data?.full_name ?? lead.data?.full_name ?? account.data?.company_name ?? g.group_name ?? null,
           phone: g.external_group_id ? jidToE164(g.external_group_id) : null,
           language: (contact.data as { language?: string } | null)?.language ?? null,
+          accountId: g.account_id ?? null,
+          contactId: g.contact_id ?? null,
         }
       }
     } catch (chatErr) {

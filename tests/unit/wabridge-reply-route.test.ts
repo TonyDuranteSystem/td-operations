@@ -82,8 +82,19 @@ describe("POST /api/inbox/reply on the self-hosted WhatsApp line", () => {
     expect(st.dispatched).toBe(0)
     expect(st.rpcCalls[0]).toEqual({
       fn: "wabridge_enqueue_reply",
-      args: { p_group_id: GROUP, p_body: "Ciao!", p_client_msg_id: "draft-1234-5678", p_created_by: "u1" },
+      args: { p_group_id: GROUP, p_body: "Ciao!", p_client_msg_id: "draft-1234-5678", p_created_by: "u1", p_reply_to_id: null },
     })
+  })
+  it("passes a reply-to-a-message target through to the database when given", async () => {
+    const r = await call(wa({ replyToId: "target-msg-1" }))
+    expect(r.status).toBe(200)
+    expect(st.rpcCalls[0].args).toMatchObject({ p_reply_to_id: "target-msg-1" })
+  })
+  it("a database refusal of the reply-to target (a message from a different chat) surfaces as a clean 400", async () => {
+    st.rpc = { data: { ok: false, code: "bad_reply_to", message: "That message could not be found in this chat." }, error: null }
+    const r = await call(wa({ replyToId: "wrong-chat-msg" }))
+    expect(r.status).toBe(400)
+    expect(r.body.error).toBe("That message could not be found in this chat.")
   })
   it("refuses a portal client / partner (not TD staff) before touching the queue", async () => {
     st.isStaff = false

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   OUTBOX_TEAM_LABEL,
@@ -10,7 +11,10 @@ import {
   sendNotice,
   type SendMode,
 } from '@/lib/messaging/wabridge-outbox'
-import { Send, Loader2, Paperclip, Sparkles, X, Smile } from 'lucide-react'
+import {
+  Send, Loader2, Paperclip, Sparkles, X, Smile, MoreVertical, Reply, Link2, Users, ClipboardList,
+  StickyNote, Pin, Trash2, Check, AlertCircle, Clock, Hourglass, CheckCircle2, Truck, Receipt, Plus,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
@@ -20,10 +24,39 @@ import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 import { guessMessageLocale } from '@/lib/messaging/lang-detect'
 import { isMediaPending } from '@/lib/messaging/wabridge-media'
 import { WhatsAppVoiceNote, type VoiceInfo } from './whatsapp-voice-note'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
+import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
+import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
 
 // Same dynamic-import + ssr:false pattern as every other composer in this
 // codebase that embeds this picker (portal-chat.tsx, floating-chat.tsx, …).
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
+
+/** The 4 tag states, matching the SAME catalog-backed columns Portal Chats' menu uses
+ *  (message_actions.action_type) — a WhatsApp message tag lands on the SAME To-Do board. */
+const ACTION_TAG_CONFIG: Record<string, { label: string; icon: typeof AlertCircle; color: string; bg: string }> = {
+  action_needed: { label: 'Action Needed', icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-100' },
+  in_progress: { label: 'In Progress', icon: Clock, color: 'text-blue-600', bg: 'bg-blue-100' },
+  waiting_on_client: { label: 'Waiting on Client', icon: Hourglass, color: 'text-amber-600', bg: 'bg-amber-100' },
+  done: { label: 'Done', icon: CheckCircle2, color: 'text-green-600', bg: 'bg-green-100' },
+}
+/** WhatsApp messages have no portal_messages row to key a tag/to-do card by — this free-text
+ *  pointer (message_actions.source_ref) identifies one instead. Parse back with waMessageIdFromSourceRef. */
+const waSourceRef = (messageId: string) => `wa_message:${messageId}`
+const waMessageIdFromSourceRef = (sourceRef: string | null) =>
+  sourceRef?.startsWith('wa_message:') ? sourceRef.slice('wa_message:'.length) : null
+
+interface MessageActionRow {
+  source_ref: string | null
+  action_type: string
+}
+
+interface MessageReactionRow {
+  emoji: string
+  reactor_id: string
+  reactor_name: string | null
+}
 
 interface WhatsAppMessage {
   id: string
@@ -40,6 +73,10 @@ interface WhatsAppMessage {
   outbox_id?: string | null
   /** Self-hosted line, staff only: the voice note's audio state + machine transcript. */
   voice?: VoiceInfo
+  /** Self-hosted line: the per-message "three dots" menu (Antonio 2026-09-27, matching Portal Chats). */
+  reactions?: MessageReactionRow[]
+  pinned_at?: string | null
+  reply_to_id?: string | null
 }
 
 interface WhatsappThreadProps {
@@ -100,6 +137,19 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   const [rewriting, setRewriting] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  // Per-message "three dots" menu (Antonio 2026-09-27, "full menu", matching Portal Chats):
+  // reply-to-a-message, pin, react, tag/to-do, discuss with team, share to team chat, a note, and
+  // create task/service/invoice all live here. "Edit" is deliberately not offered — WhatsApp's real
+  // message on the person's own phone never changes, so editing our own copy would just make it lie
+  // about what they actually received. "Delete" (below) only hides OUR OWN copy; it never touches
+  // the real message on their phone.
+  const [replyTo, setReplyTo] = useState<{ id: string; text: string } | null>(null)
+  const [noteSeed, setNoteSeed] = useState<{ accountId: string | null; contactId: string | null; prefill: string; originUrl?: string } | null>(null)
+  const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
+  const [quickCreate, setQuickCreate] = useState<{ type: 'task' | 'sd' | 'invoice'; messageText: string } | null>(null)
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [reactingMessageId, setReactingMessageId] = useState<string | null>(null)
+  const reactionPickerRef = useRef<HTMLDivElement>(null)
   const queryClient = useQueryClient()
 
   // Mark this conversation read the moment it's opened — Antonio, 2026-09-18:
@@ -138,6 +188,17 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   }, [text])
 
   useEffect(() => {
+    if (!reactingMessageId) return
+    const handleClick = (e: MouseEvent) => {
+      if (reactionPickerRef.current && !reactionPickerRef.current.contains(e.target as Node)) {
+        setReactingMessageId(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [reactingMessageId])
+
+  useEffect(() => {
     if (!showEmojiPicker) return
     const handleClick = (e: MouseEvent) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
@@ -151,7 +212,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   const { data, isLoading, error } = useQuery<{
     messages: WhatsAppMessage[]
     send?: { mode: SendMode; hasInbound: boolean } | null
-    chat?: { name: string | null; phone: string | null; language: string | null } | null
+    chat?: { name: string | null; phone: string | null; language: string | null; accountId: string | null; contactId: string | null } | null
   }>({
     queryKey: ['whatsapp-messages', groupId],
     queryFn: () =>
@@ -167,9 +228,47 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
         : 60_000,
   })
 
+  // Tag/To-Do state for every message in this chat, one query per open chat (same pattern Portal
+  // Chats' own menu uses) — only runs once this chat is linked to a CRM account/contact, since an
+  // unlinked WhatsApp chat has nothing to scope the lookup to (Tag Message / To Do are hidden then).
+  const actionsScopeId = data?.chat?.accountId || data?.chat?.contactId || null
+  const actionsScopeParam = data?.chat?.accountId ? `account_id=${data.chat.accountId}` : `contact_id=${data?.chat?.contactId}`
+  const { data: messageActions } = useQuery<MessageActionRow[]>({
+    queryKey: ['wa-message-actions', actionsScopeId],
+    queryFn: () =>
+      fetch(`/api/crm/admin-actions/message-actions?${actionsScopeParam}`).then((r) => r.json()).then((d) => d.actions || []),
+    enabled: !!actionsScopeId,
+    refetchInterval: 15_000,
+  })
+  const actionByMessageId = new Map<string, string>() // message id -> action_type
+  for (const a of messageActions ?? []) {
+    const mid = waMessageIdFromSourceRef(a.source_ref)
+    if (mid) actionByMessageId.set(mid, a.action_type)
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'instant' })
   }, [data?.messages])
+
+  // Deep link: /inbox?thread=whatsapp:<groupId>&message=<id> (the per-message "Copy link" action)
+  // scrolls to and briefly highlights that exact message once it's loaded. Read once per chat open —
+  // a later normal scroll (a new message arriving) must not re-trigger this.
+  const didScrollToMessageRef = useRef(false)
+  useEffect(() => { didScrollToMessageRef.current = false }, [groupId])
+  useEffect(() => {
+    if (didScrollToMessageRef.current || isLoading || typeof window === 'undefined') return
+    const targetId = new URLSearchParams(window.location.search).get('message')
+    if (!targetId) { didScrollToMessageRef.current = true; return }
+    const found = (data?.messages ?? []).some((m) => m.id === targetId)
+    if (!found) return // keep waiting — the messages list may still be loading in
+    didScrollToMessageRef.current = true
+    const el = document.getElementById(`wa-msg-${targetId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedMessageId(targetId)
+      setTimeout(() => setHighlightedMessageId((cur) => (cur === targetId ? null : cur)), 2500)
+    }
+  }, [data?.messages, isLoading])
 
   // Switching conversations must not carry over a half-composed reply or
   // confirm screen from the previous one — but a draft FOR the conversation
@@ -189,6 +288,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     setText(loadWhatsAppDraft('reply', groupId))
     setFile(null)
     setConfirming(false)
+    setReplyTo(null) // a quoted reply belongs to the chat being left, not the one being opened
     setRewriting(false) // an in-flight rewrite belongs to the chat being left, not the one being opened
   }, [groupId])
 
@@ -228,6 +328,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           attachmentPath: file?.path,
           attachmentMimeType: file?.mimeType,
           clientMsgId: getClientMsgId(),
+          replyToId: replyTo?.id,
         }),
       })
       if (!res.ok) {
@@ -242,6 +343,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
       setText('')
       setFile(null)
       setConfirming(false)
+      setReplyTo(null)
       queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
     },
     onError: (err: Error) => {
@@ -398,6 +500,111 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     sendMutation.mutate(undefined, { onSettled: () => { sendingRef.current = false } })
   }
 
+  // ── Per-message "three dots" menu actions (Antonio 2026-09-27) ─────────────────────────────
+  const reactMutation = useMutation({
+    mutationFn: async (vars: { messageId: string; emoji: string }) => {
+      const res = await fetch(`/api/inbox/whatsapp/message/${vars.messageId}/react`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emoji: vars.emoji }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not react to that message.')
+      }
+      return res.json()
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] }),
+    onError: (err: Error) => toast.error(err.message || 'Could not react to that message.'),
+  })
+
+  const pinMutation = useMutation({
+    mutationFn: async (vars: { messageId: string; pinned: boolean }) => {
+      const res = await fetch(`/api/inbox/whatsapp/message/${vars.messageId}/pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: vars.pinned }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not pin that message.')
+      }
+      return res.json()
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] }),
+    onError: (err: Error) => toast.error(err.message || 'Could not pin that message.'),
+  })
+
+  // "Delete" — hides the message from OUR OWN screen only. The real WhatsApp message, on the
+  // person's own phone, is completely untouched — there is no way to recall or unsend it from here.
+  const hideMutation = useMutation({
+    mutationFn: async (messageId: string) => {
+      const res = await fetch(`/api/inbox/whatsapp/message/${messageId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not hide that message.')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      toast.success('Hidden from our view — the real WhatsApp message is untouched.')
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
+    },
+    onError: (err: Error) => toast.error(err.message || 'Could not hide that message.'),
+  })
+
+  const tagMutation = useMutation({
+    mutationFn: async (vars: { messageId: string; actionType: string; label?: string }) => {
+      const res = await fetch('/api/crm/admin-actions/message-actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_ref: waSourceRef(vars.messageId),
+          contact_id: data?.chat?.contactId || null,
+          account_id: data?.chat?.accountId || null,
+          action_type: vars.actionType,
+          label: vars.label,
+        }),
+      })
+      if (!res.ok) throw new Error('Could not tag that message.')
+      return res.json()
+    },
+    onSuccess: () => {
+      toast.success('Message tagged')
+      queryClient.invalidateQueries({ queryKey: ['wa-message-actions', actionsScopeId] })
+    },
+    onError: () => toast.error('Could not tag that message.'),
+  })
+
+  const [todoNote, setTodoNote] = useState<{ messageId: string; note: string } | null>(null)
+  const addTodoMutation = useMutation({
+    mutationFn: (vars: { messageId: string; label: string }) =>
+      tagMutation.mutateAsync({ messageId: vars.messageId, actionType: 'action_needed', label: vars.label }),
+    onSuccess: () => setTodoNote(null),
+  })
+
+  const copyDeepLink = (messageId: string) => {
+    const url = `${window.location.origin}/inbox?thread=whatsapp:${groupId}&message=${messageId}`
+    navigator.clipboard.writeText(url)
+      .then(() => toast.success('Link copied'))
+      .catch(() => toast.error('Could not copy the link.'))
+  }
+
+  const createInternalThread = async (accountId: string, sourceMessageId: string, sourceText: string) => {
+    try {
+      const res = await fetch('/api/internal/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, source_message_id: sourceMessageId || undefined, title: sourceText.slice(0, 100) || undefined }),
+      })
+      if (!res.ok) throw new Error('Failed to create thread')
+      const d = await res.json()
+      toast.success(d.reused ? 'Added to existing thread' : 'Internal thread created')
+    } catch {
+      toast.error('Failed to create internal thread')
+    }
+  }
+
   const messages = data?.messages ?? []
   // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
   const notice = data?.send ? sendNotice(data.send) : null
@@ -433,20 +640,191 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
             const isOutbound = msg.direction === 'outbound'
             const isImage = msg.content_type === 'image'
             const isOtherMedia = !isImage && msg.content_type !== 'text' && !!msg.media_url
+            // Outbox rows are a queued reply not yet sent (synthetic id "outbox:<uuid>") — the
+            // "three dots" menu (react/pin/reply-to/tag/…) only applies to a real, sent message.
+            const isRealMessage = !msg.id.startsWith('outbox:')
+            const quotedMessage = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : null
+            const activeTag = isRealMessage ? actionByMessageId.get(msg.id) : undefined
+            const reactionGroups = (msg.reactions ?? []).reduce<Record<string, number>>((acc, r) => {
+              acc[r.emoji] = (acc[r.emoji] ?? 0) + 1
+              return acc
+            }, {})
+
+            const actionButton = isRealMessage && (
+              <DropdownMenu.Root>
+                <FastTooltip label="Actions">
+                  <DropdownMenu.Trigger asChild>
+                    <button
+                      type="button"
+                      className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0 self-end mb-1"
+                      aria-label="Actions"
+                    >
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenu.Trigger>
+                </FastTooltip>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="z-50 w-48 py-1 bg-white rounded-lg shadow-lg border text-sm animate-in fade-in-0 zoom-in-95 max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
+                    sideOffset={4}
+                    collisionPadding={8}
+                    align={isOutbound ? 'end' : 'start'}
+                  >
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                      onSelect={() => { setReplyTo({ id: msg.id, text: msg.content_text || '[Attachment]' }); textareaRef.current?.focus() }}
+                    >
+                      <Reply className="h-3.5 w-3.5 text-zinc-400" /> Reply
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                      onSelect={() => copyDeepLink(msg.id)}
+                    >
+                      <Link2 className="h-3.5 w-3.5 text-zinc-400" /> Copy link
+                    </DropdownMenu.Item>
+                    {data?.chat?.accountId && (
+                      <DropdownMenu.Item
+                        className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                        onSelect={() => createInternalThread(data.chat!.accountId as string, msg.id, msg.content_text || '')}
+                      >
+                        <Users className="h-3.5 w-3.5 text-zinc-400" /> Discuss with Team
+                      </DropdownMenu.Item>
+                    )}
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                      onSelect={() => setShareItems([{
+                        kind: 'client_message',
+                        title: data?.chat?.name ?? 'WhatsApp contact',
+                        subtitle: msg.content_text || '[Attachment]',
+                        body: msg.content_text || undefined,
+                        url: `/inbox?thread=whatsapp:${groupId}&message=${msg.id}`,
+                        entity_type: 'whatsapp_message',
+                        entity_id: msg.id,
+                      }])}
+                    >
+                      <Send className="h-3.5 w-3.5 text-zinc-400" /> Share to team chat
+                    </DropdownMenu.Item>
+                    {(data?.chat?.accountId || data?.chat?.contactId) && (
+                      <DropdownMenu.Item
+                        className="flex items-center gap-2.5 px-3 py-2 text-violet-700 hover:bg-violet-50 cursor-pointer outline-none"
+                        onSelect={() => setTodoNote({ messageId: msg.id, note: msg.content_text || '' })}
+                      >
+                        <ClipboardList className="h-3.5 w-3.5 text-violet-500" /> To Do
+                      </DropdownMenu.Item>
+                    )}
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-amber-700 hover:bg-amber-50 cursor-pointer outline-none"
+                      onSelect={() => setNoteSeed({
+                        accountId: data?.chat?.accountId ?? null,
+                        contactId: data?.chat?.contactId ?? null,
+                        prefill: msg.content_text || '',
+                        originUrl: `/inbox?thread=whatsapp:${groupId}&message=${msg.id}`,
+                      })}
+                    >
+                      <StickyNote className="h-3.5 w-3.5 text-amber-500" /> Make a note
+                    </DropdownMenu.Item>
+                    {(data?.chat?.accountId || data?.chat?.contactId) && (
+                      <>
+                        <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                        <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                          Tag Message
+                        </DropdownMenu.Label>
+                        {Object.entries(ACTION_TAG_CONFIG).map(([key, cfg]) => {
+                          const TagIcon = cfg.icon
+                          const isActive = activeTag === key
+                          return (
+                            <DropdownMenu.Item
+                              key={key}
+                              className={cn(
+                                'flex items-center gap-2.5 px-3 py-2 cursor-pointer outline-none',
+                                isActive ? `${cfg.bg} ${cfg.color} font-medium` : 'text-zinc-700 hover:bg-zinc-50'
+                              )}
+                              onSelect={() => tagMutation.mutate({ messageId: msg.id, actionType: key })}
+                            >
+                              <TagIcon className={cn('h-3.5 w-3.5', isActive ? cfg.color : 'text-zinc-400')} />
+                              {cfg.label}
+                              {isActive && <Check className="h-3 w-3 ml-auto" />}
+                            </DropdownMenu.Item>
+                          )
+                        })}
+                      </>
+                    )}
+                    {data?.chat?.accountId && (
+                      <>
+                        <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                        <DropdownMenu.Label className="px-3 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                          Create
+                        </DropdownMenu.Label>
+                        <DropdownMenu.Item
+                          className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                          onSelect={() => setQuickCreate({ type: 'task', messageText: msg.content_text || '' })}
+                        >
+                          <ClipboardList className="h-3.5 w-3.5 text-zinc-400" /> Task
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                          onSelect={() => setQuickCreate({ type: 'sd', messageText: msg.content_text || '' })}
+                        >
+                          <Truck className="h-3.5 w-3.5 text-zinc-400" /> Service
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          className="flex items-center gap-2.5 px-3 py-2 text-zinc-500 hover:bg-zinc-50 cursor-pointer outline-none text-xs"
+                          onSelect={() => setQuickCreate({ type: 'invoice', messageText: msg.content_text || '' })}
+                        >
+                          <Receipt className="h-3.5 w-3.5 text-zinc-400" /> Invoice
+                        </DropdownMenu.Item>
+                      </>
+                    )}
+                    <DropdownMenu.Separator className="my-1 h-px bg-zinc-100" />
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-zinc-700 hover:bg-zinc-50 cursor-pointer outline-none"
+                      onSelect={() => pinMutation.mutate({ messageId: msg.id, pinned: !msg.pinned_at })}
+                    >
+                      <Pin className={cn('h-3.5 w-3.5', msg.pinned_at ? 'text-amber-500 fill-amber-400' : 'text-zinc-400')} />
+                      {msg.pinned_at ? 'Unpin message' : 'Pin message'}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2.5 px-3 py-2 text-red-600 hover:bg-red-50 cursor-pointer outline-none"
+                      onSelect={() => {
+                        const preview = msg.content_text ? (msg.content_text.length > 80 ? msg.content_text.slice(0, 80) + '…' : msg.content_text) : '[Attachment]'
+                        if (window.confirm(`Hide this message from our view?\n\n"${preview}"\n\nThis only removes it from the CRM — the real message stays exactly where WhatsApp put it, on their phone.`)) {
+                          hideMutation.mutate(msg.id)
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete message
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            )
 
             return (
               <div
                 key={msg.id}
-                className={cn('flex', isOutbound ? 'justify-end' : 'justify-start')}
+                id={`wa-msg-${msg.id}`}
+                className={cn('flex items-end gap-1', isOutbound ? 'justify-end' : 'justify-start')}
               >
+                {!isOutbound && actionButton}
                 <div
                   className={cn(
-                    'max-w-[70%] px-3 py-2 rounded-2xl shadow-sm',
+                    'max-w-[70%] px-3 py-2 rounded-2xl shadow-sm transition-colors',
                     isOutbound
                       ? 'bg-green-100 text-zinc-800 rounded-br-sm'
-                      : 'bg-white text-zinc-800 rounded-bl-sm'
+                      : 'bg-white text-zinc-800 rounded-bl-sm',
+                    highlightedMessageId === msg.id && 'ring-2 ring-blue-400'
                   )}
                 >
+                  {msg.pinned_at && (
+                    <p className="text-[10px] font-medium text-amber-600 flex items-center gap-1 mb-1">
+                      <Pin className="h-2.5 w-2.5 fill-amber-400" /> Pinned
+                    </p>
+                  )}
+                  {quotedMessage && (
+                    <div className="mb-1 pl-2 border-l-2 border-zinc-300 text-xs text-zinc-500 truncate">
+                      {quotedMessage.content_text || '[Attachment]'}
+                    </div>
+                  )}
                   {isImage && msg.media_url ? (
                     <a href={msg.media_url} target="_blank" rel="noopener noreferrer">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -507,7 +885,47 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                     {' · '}
                     {formatTimestamp(msg.created_at)}
                   </p>
+                  {isRealMessage && (
+                    <div className={cn('flex flex-wrap items-center gap-1 mt-1', isOutbound ? 'justify-end' : 'justify-start')}>
+                      {Object.entries(reactionGroups).map(([emoji, count]) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => reactMutation.mutate({ messageId: msg.id, emoji })}
+                          className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50"
+                        >
+                          <span className="leading-none">{emoji}</span>
+                          <span className="tabular-nums text-zinc-500">{count}</span>
+                        </button>
+                      ))}
+                      <div className="relative" ref={reactingMessageId === msg.id ? reactionPickerRef : undefined}>
+                        <FastTooltip label="Add reaction">
+                          <button
+                            type="button"
+                            onClick={() => setReactingMessageId((cur) => (cur === msg.id ? null : msg.id))}
+                            className="inline-flex items-center justify-center rounded-full p-1 text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+                          >
+                            <Smile className="h-3 w-3" />
+                          </button>
+                        </FastTooltip>
+                        {reactingMessageId === msg.id && (
+                          <div className={cn('absolute z-50 bottom-full mb-1', isOutbound ? 'right-0' : 'left-0')}>
+                            <EmojiPicker
+                              onEmojiClick={(emojiData: { emoji: string }) => {
+                                reactMutation.mutate({ messageId: msg.id, emoji: emojiData.emoji })
+                                setReactingMessageId(null)
+                              }}
+                              lazyLoadEmojis
+                              width={280}
+                              height={340}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
+                {isOutbound && actionButton}
               </div>
             )
           })}
@@ -532,6 +950,15 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
         {!confirming ? (
           <div className="p-2 space-y-2">
             <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+            {replyTo && (
+              <div className="flex items-center gap-2 text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
+                <Reply className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                <span className="truncate flex-1 text-blue-700">{replyTo.text}</span>
+                <button onClick={() => setReplyTo(null)} className="text-blue-400 hover:text-blue-700">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             {file && (
               <div className="flex items-center gap-2 text-xs bg-zinc-50 border rounded px-2 py-1.5">
                 {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
@@ -675,6 +1102,69 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
           </div>
         )}
       </div>
+
+      {/* "Make a note" from a message's menu — the shared editor, same as Portal Chats. */}
+      {noteSeed && (
+        <NoteComposeDialog
+          accountId={noteSeed.accountId}
+          contactId={noteSeed.accountId ? undefined : noteSeed.contactId}
+          prefill={noteSeed.prefill}
+          originUrl={noteSeed.originUrl}
+          onClose={() => setNoteSeed(null)}
+        />
+      )}
+
+      {/* "Share to team chat" from a message's menu — the shared dialog, same as Portal Chats/Inbox. */}
+      {shareItems && (
+        <ShareToTeamDialog items={shareItems} onClose={() => setShareItems(null)} label="1 message" />
+      )}
+
+      {/* "Create Task / Service / Invoice" from a message's menu. */}
+      {quickCreate && data?.chat?.accountId && (
+        <QuickCreateModal
+          type={quickCreate.type}
+          messageText={quickCreate.messageText}
+          accountId={data.chat.accountId}
+          companyName={data.chat.name ?? ''}
+          onClose={() => setQuickCreate(null)}
+        />
+      )}
+
+      {/* "To Do" from a message's menu — same message_actions mechanism Tag Message uses. */}
+      {todoNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setTodoNote(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-4 py-3 border-b">
+              <ClipboardList className="h-4 w-4 text-violet-500" />
+              <h3 className="text-sm font-semibold text-zinc-800">Add a To-Do</h3>
+              <button onClick={() => setTodoNote(null)} className="ml-auto p-1 rounded hover:bg-zinc-100 text-zinc-400">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-2">
+              <label className="block text-xs font-medium text-zinc-500">Note</label>
+              <textarea
+                value={todoNote.note}
+                onChange={(e) => setTodoNote((prev) => (prev ? { ...prev, note: e.target.value } : prev))}
+                rows={4}
+                autoFocus
+                placeholder="What needs doing for this client?"
+                className="w-full text-sm border rounded px-2 py-1.5 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t">
+              <button onClick={() => setTodoNote(null)} className="text-sm text-zinc-600 border rounded px-3 py-1.5">Cancel</button>
+              <button
+                disabled={!todoNote.note.trim() || addTodoMutation.isPending}
+                onClick={() => addTodoMutation.mutate({ messageId: todoNote.messageId, label: todoNote.note })}
+                className="flex items-center gap-1 text-sm font-medium bg-violet-600 text-white rounded px-3 py-1.5 disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" /> {addTodoMutation.isPending ? 'Adding…' : 'Add to board'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

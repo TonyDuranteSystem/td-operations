@@ -293,12 +293,23 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // from window.location once on mount (no useSearchParams → no Suspense need on
   // this client component). The messages endpoint gives us subject + sender to
   // fill the thread header; MessageThread fetches the body itself.
+  //
+  // /inbox?thread=whatsapp:<groupId>&message=<id> opens a specific WhatsApp chat, and
+  // (via the "Copy link" per-message action) scrolls to and briefly highlights the exact
+  // message — WhatsappThread itself reads `message` off the URL for the scroll/highlight,
+  // this effect only needs to select the right conversation. A bare stub is enough here:
+  // WhatsappThread fetches the chat's own name/phone from its messages endpoint.
   useEffect(() => {
     if (deepLinkDone) return
     setDeepLinkDone(true)
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const thread = params.get('thread')
+    if (thread && thread.startsWith('whatsapp:')) {
+      setActiveChannel('whatsapp')
+      setSelected({ id: thread, channel: 'whatsapp', name: '', preview: '', unread: 0, lastMessageAt: '' })
+      return
+    }
     if (!thread || !thread.startsWith('gmail:')) return
     const mailbox = params.get('mailbox') === 'antonio' ? 'antonio' : 'support'
     setActiveMailbox(mailbox)

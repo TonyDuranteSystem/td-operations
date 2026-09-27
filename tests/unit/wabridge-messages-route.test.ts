@@ -17,7 +17,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
       const c: Record<string, unknown> = {}
-      for (const op of ["select", "eq", "order"]) c[op] = () => c
+      for (const op of ["select", "eq", "order", "is"]) c[op] = () => c
       c.neq = (_col: string, val: string) => {
         st.outboxStatusFilter = val
         return c
