@@ -167,6 +167,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
+  const dragRef = useRef<{ id: string; from: string | null } | null>(null)
+  const renameDone = useRef(false)
+  const expandedRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => { expandedRef.current = expanded }, [expanded])
 
   const fetchFolder = useCallback(async (oid: string, folderId: string | null) => {
     const q = `/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`
@@ -227,15 +232,16 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const r = await fetchFolder(ownerId, null)
       setRoot(r)
-      const open = Array.from(expanded)
+      // the folders open NOW (not when the refresh started); merged, so a folder opened meanwhile keeps its files
+      const open = Array.from(expandedRef.current)
       const entries = await Promise.all(open.map(async (id) => {
         try { return [id, await fetchFolder(ownerId, id)] as const } catch { return null }
       }))
-      setLoaded(Object.fromEntries(entries.filter((x): x is readonly [string, Contents] => !!x)))
+      setLoaded((m) => ({ ...m, ...Object.fromEntries(entries.filter((x): x is readonly [string, Contents] => !!x)) }))
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not refresh.')
     }
-  }, [ownerId, expanded, fetchFolder])
+  }, [ownerId, fetchFolder])
 
   const withBusy = async (id: string, fn: () => Promise<void>) => {
     if (busyFiles.has(id)) return
@@ -254,8 +260,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   })
 
   const doRename = (f: File_, value: string) => withBusy(f.id, async () => {
+    if (renameDone.current) return // Enter then blur, or Escape then blur: commit at most once
+    renameDone.current = true
     setRenaming(null)
-    if (!value.trim() || value.trim() === f.name) return
+    const ext = /\.[A-Za-z0-9]{1,8}$/.exec(f.name)?.[0] ?? ''
+    const v = value.trim()
+    if (!v || v === f.name || `${v}${ext}` === f.name) return
     try {
       const r = await postJson<{ name: string }>(`/api/crm-store/browse/file/${f.id}/rename`, { name: value }, 'The file could not be renamed.')
       toast.success(`Renamed to "${r.name}"`)
@@ -344,7 +354,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const onDropInto = (folder: Fold) => {
     setDropOn(null)
-    const d = dragFile
+    const d = dragRef.current
+    dragRef.current = null
     setDragFile(null)
     if (!d || d.from === folder.id) return
     const f = [...(root?.files ?? []), ...Object.values(loaded).flatMap((c) => c.files)].find((x) => x.id === d.id)
@@ -361,13 +372,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return (
       <li key={f.id}
         draggable={ownFile && !renaming}
-        onDragStart={() => setDragFile({ id: f.id, from: inFolder?.id ?? null })}
+        onDragStart={() => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d) }}
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
         className="group relative flex flex-wrap items-center gap-2 py-1.5 text-sm hover:bg-zinc-50/70" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
         <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
         {renaming?.id === f.id ? (
           <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: f.id, value: e.target.value })}
-            onKeyDown={(e) => { if (e.key === 'Enter') doRename(f, renaming.value); if (e.key === 'Escape') setRenaming(null) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') doRename(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
             onBlur={() => doRename(f, renaming.value)}
             className="min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
         ) : (
@@ -403,7 +414,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {menuFor === f.id && (
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
               <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50"
-                onClick={() => { setMenuFor(null); setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }}>
+                onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }}>
                 <Pencil className="h-3.5 w-3.5" />Rename
               </button>
               {ownFile && moveTargets.length > 0 && (
@@ -421,7 +432,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50" onClick={() => { setMenuFor(null); setPreview(f) }}>
                 <Search className="h-3.5 w-3.5" />Preview
               </button>
-              {confirmDelete === f.id ? (
+              {!ownFile ? (
+                <p className="px-3 py-1.5 text-xs text-zinc-500">Delete this from the person&apos;s own page — it is their document, shown in each of their companies.</p>
+              ) : confirmDelete === f.id ? (
                 <div className="px-3 py-1.5 text-xs">
                   <p className="mb-1 text-zinc-700">Move to trash? (recoverable for 90 days)</p>
                   <div className="flex gap-2">
@@ -451,9 +464,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return (
       <li key={f.id}>
         <div
-          onDragOver={(e) => { if (canDrop) { e.preventDefault(); setDropOn(f.id) } }}
+          onDragOver={(e) => { if (canDrop) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
           onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
-          onDrop={(e) => { e.preventDefault(); if (canDrop) onDropInto(f) }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f) }}
           className={`group flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50 ${dropOn === f.id ? 'rounded bg-blue-50 ring-1 ring-blue-300' : ''}`} style={{ paddingLeft: `${depth * 20}px` }}>
           <button type="button" onClick={() => toggleFolder(f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
             {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />}
@@ -470,8 +483,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         </div>
         {isOpen && c && (
           <ul
-            onDragOver={(e) => { if (canDrop) { e.preventDefault(); setDropOn(f.id) } }}
-            onDrop={(e) => { e.preventDefault(); if (canDrop) onDropInto(f) }}>
+            onDragOver={(e) => { if (canDrop) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f) }}>
             {subs.map((sf) => folderNode(sf, depth + 1))}
             {c.files.map((file) => fileRow(file, f, depth + 1))}
             {c.folders.length === 0 && c.files.length === 0 && (

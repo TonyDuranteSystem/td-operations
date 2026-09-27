@@ -326,6 +326,37 @@ describe("new storage screens — live sandbox", () => {
     expect(gone).toHaveLength(0)
   })
 
+  it("a renamed file is never overwritten by a new upload with its OLD name; a deleted file's name can be used again", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const { POST: rename } = await import("@/app/api/crm-store/browse/file/[id]/rename/route")
+    const { POST: del } = await import("@/app/api/crm-store/browse/file/[id]/delete/route")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const banking = await folderOfKind(fx.owner, "banking")
+    const a = await (await upload(post("http://x", { ownerId: fx.owner, folderId: banking, storagePath: await stage("scan.pdf", await pdf("jan")), fileName: "scan.pdf", mimeType: "application/pdf", documentType: "bank_statement", visible: false }))).json()
+    await rename(post("http://x", { name: "Jan statement" }), { params: { id: a.fileId } })
+    const b = await (await upload(post("http://x", { ownerId: fx.owner, folderId: banking, storagePath: await stage("scan.pdf", await pdf("feb")), fileName: "scan.pdf", mimeType: "application/pdf", documentType: "bank_statement", visible: false }))).json()
+    expect(b.write).toBe("created")
+    expect(b.fileId).not.toBe(a.fileId)
+    const { data: jan } = await db.from("store_files").select("name, current_version_id").eq("id", a.fileId).single()
+    expect(jan.name).toBe("Jan statement.pdf")
+    await del(post("http://x", {}), { params: { id: b.fileId } })
+    const c = await (await upload(post("http://x", { ownerId: fx.owner, folderId: banking, storagePath: await stage("scan.pdf", await pdf("feb2")), fileName: "scan.pdf", mimeType: "application/pdf", documentType: "bank_statement", visible: false }))).json()
+    expect(c.write).toBe("created")
+  }, 60_000)
+
+  it("a prepared tax return / 5472 is a DRAFT: hidden from the client even with 'Show to client' ticked, and cannot be shown", async () => {
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const tax = await folderOfKind(fx.owner, "tax")
+    const j = await (await upload(post("http://x", { ownerId: fx.owner, folderId: tax, storagePath: await stage("5472.pdf", await pdf("draft")), fileName: `5472 ${tag}.pdf`, mimeType: "application/pdf", documentType: "form_5472" }))).json()
+    expect(j.visible).toBe(false)
+    const { data: f } = await db.from("store_files").select("published, filing_status").eq("id", j.fileId).single()
+    expect(f).toMatchObject({ published: false, filing_status: "draft" })
+    const { POST: vis } = await import("@/app/api/crm-store/browse/file/[id]/visibility/route")
+    const r = await vis(post("http://x", { visible: true }), { params: { id: j.fileId } })
+    expect(r.status).toBe(400)
+  })
+
   it("upload is shown to the client straight away by default (as today) — never a staff-only type", async () => {
     const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
     const s1 = await stage("Shared.pdf", await pdf("shared"))

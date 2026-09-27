@@ -58,7 +58,11 @@ export async function renameStoreFile(fileId: string, newName: string, actorId: 
   }
   const { storePointer } = await import("./document-pointer")
   const { error: rErr } = await db().from("documents").update({ file_name: name, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointer(fileId))
-  if (rErr) console.error(`[crm-store] rename: CRM row not renamed for ${fileId}: ${rErr.message}`)
+  if (rErr) {
+    // never leave the store and the CRM list with two names: put the store's name back
+    await db().from("store_files").update({ name: f.name }).eq("id", fileId)
+    throw new Error(`The CRM list could not be updated, so the file was not renamed (${rErr.message}) — please try again.`)
+  }
   await logEvent("renamed", { ...f, name }, actorId, { from: f.name, to: name })
   return { name }
 }
@@ -84,7 +88,10 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     const { storePointer } = await import("./document-pointer")
     const { error: rErr } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })
       .eq("drive_file_id", storePointer(fileId))
-    if (rErr) console.error(`[crm-store] move: CRM row category not updated for ${fileId}: ${rErr.message}`)
+    if (rErr) {
+      await db().from("store_files").update({ folder_id: f.folder_id }).eq("id", fileId)
+      throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
+    }
   }
   await logEvent("moved", { ...f, folder_id: toFolderId }, actorId, { from_folder: f.folder_id, to_folder: toFolderId })
   return { folderName: to.name }
@@ -93,10 +100,18 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
 export async function deleteStoreFile(fileId: string, actorId: string | null): Promise<{ crmRowsRemoved: number }> {
   if (!actorId) throw new Error("Only a signed-in staff member can delete a file.")
   await liveFile(fileId)
-  const { error } = await db().rpc("store_trash_file", { p_file_id: fileId, p_actor: actorId, p_reason: "Deleted by staff from the CRM" })
-  if (error) throw new Error(error.message.replace(/^store: /, ""))
+  // the CRM listing goes FIRST (kept in memory): if the store trash then refuses (a legal hold …), the
+  // listing is put back — the portal never lists a file that is in the trash, and nothing is half-deleted
   const { storePointer } = await import("./document-pointer")
-  const { data: removed, error: dErr } = await db().from("documents").delete().eq("drive_file_id", storePointer(fileId)).select("id")
-  if (dErr) console.error(`[crm-store] delete: CRM row not removed for ${fileId}: ${dErr.message}`)
+  const { data: removed, error: dErr } = await db().from("documents").delete().eq("drive_file_id", storePointer(fileId)).select("*")
+  if (dErr) throw new Error(`The CRM list could not be updated, so the file was not deleted (${dErr.message}) — please try again.`)
+  const { error } = await db().rpc("store_trash_file", { p_file_id: fileId, p_actor: actorId, p_reason: "Deleted by staff from the CRM" })
+  if (error) {
+    if ((removed ?? []).length > 0) {
+      const { error: back } = await db().from("documents").insert(removed)
+      if (back) console.error(`[crm-store] delete: CRM rows could not be put back for ${fileId}: ${back.message}`)
+    }
+    throw new Error(error.message.replace(/^store: /, ""))
+  }
   return { crmRowsRemoved: (removed ?? []).length }
 }

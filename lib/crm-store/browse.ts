@@ -326,7 +326,7 @@ export async function staffUploadToStore(p: {
   if (folder.kind === "root") throw new Error("Open one of the folders first — files go inside a folder, not at the top.")
   const { data: types } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
   if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
-  const typeRow = types[0] as { slug: string; display_name: string; metadata: { personal?: boolean; staff_only?: boolean } | null }
+  const typeRow = types[0] as { slug: string; display_name: string; metadata: { personal?: boolean; staff_only?: boolean; draft_never_visible?: boolean } | null }
   let fileName = p.fileName
   if (p.displayName && p.displayName.trim()) {
     const { cleanNewFileName } = await import("./file-actions")
@@ -371,7 +371,10 @@ export async function staffUploadToStore(p: {
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
   if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
-  const callerKey = sameLive?.caller_key ?? `staff-upload:${targetFolderId}:${storeNameKey(fileName)}`
+  // A NEW file gets its own unique key: a key built from folder + name would later match a file that was
+  // renamed or moved away (overwriting it as a "version") or a trashed one (refusing the name for ever).
+  const { randomUUID } = await import("crypto")
+  const callerKey = sameLive?.caller_key ?? `staff-upload:${randomUUID()}`
   // Who the CRM row belongs to: the company, the person, or — for a company still being formed — the
   // client (and account, once linked) of the formation case, exactly as the Formation pilot links its rows.
   // a person's document uploaded from a company keeps BOTH links, as today's passports do
@@ -390,14 +393,17 @@ export async function staffUploadToStore(p: {
   const w = await saveBytesToStore({
     ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
     callerKey, contentChanged: true,
+    // a prepared tax return / 5472 / 1120 … is saved as a DRAFT (never shown until filed); every type starts
+    // unpublished and follows the CRM row below
     documentType: p.documentType, published: false, actor: p.actorId,
+    ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: "draft" as const } : {}),
   })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
     throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)." : `The save ended as "${w.status}".`)
   }
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal
     : FOLDER_KIND_CATEGORY[folder.kind as string] ?? FOLDER_KIND_CATEGORY.correspondence
-  const wantVisible = p.visible !== false && typeRow.metadata?.staff_only !== true
+  const wantVisible = p.visible !== false && typeRow.metadata?.staff_only !== true && typeRow.metadata?.draft_never_visible !== true
   const row = await upsertStoreDocumentRow(w.fileId, {
     file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
     category: cat.num, category_name: cat.name,
@@ -417,7 +423,11 @@ export async function staffUploadToStore(p: {
   // today's contact upload reads a passport / ITIN letter and fills the person's record
   let identity: string | null = null
   if (owner.kind === "person" && owner.contact_id && (typeRow.slug === "passport" || typeRow.slug === "itin_letter")) {
-    identity = await readIdentityIntoContact(owner.contact_id, typeRow.slug, bytes, mimeType, fileName, rowAccount)
+    // bounded: a slow read must not turn a saved upload into a timed-out "failed" upload
+    identity = await Promise.race([
+      readIdentityIntoContact(owner.contact_id, typeRow.slug, bytes, mimeType, fileName, rowAccount),
+      new Promise<string>((r) => setTimeout(() => r("The document was saved; its details are still being read — if the contact's fields stay empty, use Run OCR on the file."), 25_000)),
+    ])
   }
   return { fileId: w.fileId, write: w.status, name: w.name, visible: visibleNow, identity }
 }
