@@ -3,7 +3,8 @@
 /**
  * Browser of the NEW CRM store (job 685467b5) — Storage page → "New storage", and the Files tab of a
  * company whose files live in the new store (scoped to that one owner via `ownerId`).
- * Owners (companies / people / companies being formed) → folders → files. A file opens INSIDE the CRM
+ * Owners (companies / people / companies being formed) → a folder TREE (every folder stays on screen; each opens and
+ * closes in place, like the Drive view) → files. A file opens INSIDE the CRM
  * (preview panel, no new tab); staff can show / hide it for the client (never for a staff-only file) and
  * upload into a folder (same name in the same folder = a new version). No rename / move / delete here.
  */
@@ -11,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, User, Hammer, Folder, FileText, ChevronRight, Eye, EyeOff, Lock, Trash2, Layers, X, Upload, Loader2 } from 'lucide-react'
+import { Building2, User, Hammer, Folder, FolderOpen, FileText, ChevronRight, ChevronDown, Eye, EyeOff, Lock, Trash2, Layers, X, Upload, Loader2 } from 'lucide-react'
 
 interface Owner { id: string; kind: 'company' | 'person' | 'formation' | 'unfiled'; label: string; status: string | null; fileCount: number }
 interface Fold { id: string; name: string; kind: string; trashed: boolean }
@@ -115,49 +116,86 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
   const [owners, setOwners] = useState<Owner[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
-  const [contents, setContents] = useState<Contents | null>(null)
+  const [root, setRoot] = useState<Contents | null>(null)
+  /** loaded contents of each opened folder (by folder id) */
+  const [loaded, setLoaded] = useState<Record<string, Contents>>({})
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
-  const [showUpload, setShowUpload] = useState(false)
+  const [uploadFolder, setUploadFolder] = useState<string | null>(null)
   const [uploadType, setUploadType] = useState('')
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
-  const open = useCallback(async (oid: string, folderId: string | null) => {
+  const fetchFolder = useCallback(async (oid: string, folderId: string | null) => {
+    const q = `/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`
+    return getJson<Contents>(q)
+  }, [])
+
+  const openOwner = useCallback(async (oid: string) => {
     setOwnerId(oid)
     setError(null)
-    setShowUpload(false)
+    setRoot(null)
+    setLoaded({})
+    setExpanded(new Set())
+    setUploadFolder(null)
     try {
-      const q = `/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`
-      setContents(await getJson<Contents>(q))
+      setRoot(await fetchFolder(oid, null))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the folder.')
     }
-  }, [])
+  }, [fetchFolder])
 
   useEffect(() => {
     if (scopedOwnerId) {
-      open(scopedOwnerId, null)
+      openOwner(scopedOwnerId)
       return
     }
     getJson<{ owners: Owner[] }>('/api/crm-store/browse/owners')
       .then((d) => setOwners(d.owners))
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not load the new storage.'))
-  }, [scopedOwnerId, open])
+  }, [scopedOwnerId, openOwner])
 
-  const refresh = useCallback(() => {
-    if (ownerId && contents?.folder) open(ownerId, contents.path.length > 1 ? contents.folder.id : null)
-  }, [ownerId, contents, open])
+  const loadFolder = useCallback(async (folderId: string) => {
+    if (!ownerId) return
+    setLoadingFolders((l) => new Set(l).add(folderId))
+    try {
+      const c = await fetchFolder(ownerId, folderId)
+      setLoaded((m) => ({ ...m, [folderId]: c }))
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not open the folder.')
+    } finally {
+      setLoadingFolders((l) => { const n = new Set(l); n.delete(folderId); return n })
+    }
+  }, [ownerId, fetchFolder])
 
-  const toggleVisible = async (f: File_) => {
+  const toggleFolder = (folderId: string) => {
+    const isOpen = expanded.has(folderId)
+    setExpanded((x) => { const n = new Set(x); if (isOpen) n.delete(folderId); else n.add(folderId); return n })
+    if (!isOpen && !loaded[folderId]) loadFolder(folderId)
+    if (isOpen && uploadFolder === folderId) setUploadFolder(null)
+  }
+
+  /** reload one folder (or the root) after a change inside it */
+  const refreshFolder = useCallback(async (folderId: string | null) => {
+    if (!ownerId) return
+    if (!folderId || folderId === root?.folder?.id) {
+      try { setRoot(await fetchFolder(ownerId, null)) } catch { /* keep what is shown */ }
+      return
+    }
+    await loadFolder(folderId)
+  }, [ownerId, root, fetchFolder, loadFolder])
+
+  const toggleVisible = async (f: File_, inFolder: string | null) => {
     if (busyFiles.has(f.id)) return
     setBusyFiles((b) => new Set(b).add(f.id))
     try {
       await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: !f.clientVisible }, 'Could not change who can see this file — please try again.')
       toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client`)
-      refresh()
+      await refreshFolder(inFolder)
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not change who can see this file.')
     } finally {
@@ -165,8 +203,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     }
   }
 
-  const startUpload = async () => {
-    setShowUpload(true)
+  const startUpload = async (folderId: string) => {
+    setUploadFolder(folderId)
     if (types) return
     try {
       setTypes((await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')).types)
@@ -175,8 +213,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     }
   }
 
-  const doUpload = async (file: File) => {
-    if (!ownerId || !contents?.folder) return
+  const doUpload = async (file: File, folderId: string) => {
+    if (!ownerId) return
     if (!uploadType) { toast.error('Choose the document type first.'); return }
     setUploading(true)
     try {
@@ -189,11 +227,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
       const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
       if (!put.ok) throw new Error(`The file could not be sent (status ${put.status}) — please try again.`)
       const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', {
-        ownerId, folderId: contents.folder.id, storagePath, fileName: file.name, mimeType: file.type, documentType: uploadType,
+        ownerId, folderId, storagePath, fileName: file.name, mimeType: file.type, documentType: uploadType,
       }, 'The upload could not be saved — please try again.')
       toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version` : r.write === 'unchanged' ? `"${r.name}" is identical to the current version — nothing changed` : `"${r.name}" uploaded (hidden from the client until you show it)`)
-      setShowUpload(false)
-      refresh()
+      setUploadFolder(null)
+      await refreshFolder(folderId)
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'The upload failed — please try again.')
     } finally {
@@ -202,88 +240,118 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     }
   }
 
+  const canUploadInto = (f: Fold) => !f.trashed && f.kind !== 'root' && f.kind !== 'contacts'
+
+  const fileRow = (f: File_, inFolder: string | null, depth: number) => (
+    <li key={f.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
+      <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+      <button type="button" onClick={() => setPreview(f)}
+        className={`min-w-0 flex-1 truncate text-left hover:underline ${f.state === 'trashed' ? 'text-zinc-400 line-through' : ''}`}>
+        {f.personName && <span className="text-zinc-500">{f.personName} · </span>}{f.name}
+      </button>
+      {f.state === 'trashed' && <Badge tone="red"><Trash2 className="h-3 w-3" />in trash</Badge>}
+      {f.staffOnly ? (
+        <Badge tone="gray"><Lock className="h-3 w-3" />staff only</Badge>
+      ) : f.clientVisible ? (
+        <Badge tone="green"><Eye className="h-3 w-3" />client can see</Badge>
+      ) : (
+        <Badge tone="gray"><EyeOff className="h-3 w-3" />hidden from client</Badge>
+      )}
+      {!f.documentType ? <Badge tone="amber">no document type yet</Badge> : f.personal && <Badge tone="blue">personal</Badge>}
+      {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
+      {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
+      <span className="text-xs text-zinc-400">{f.size != null ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
+      {!f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible)
+        && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage))) && (
+        <button type="button" onClick={() => toggleVisible(f, inFolder)} disabled={busyFiles.has(f.id)}
+          className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">
+          {busyFiles.has(f.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+          {f.clientVisible ? 'Hide from client' : 'Show to client'}
+        </button>
+      )}
+      <button type="button" onClick={() => setPreview(f)} className="text-blue-700 hover:underline">View</button>
+    </li>
+  )
+
+  const folderNode = (f: Fold, depth: number): React.ReactNode => {
+    const isOpen = expanded.has(f.id)
+    const c = loaded[f.id]
+    const busy = loadingFolders.has(f.id)
+    return (
+      <li key={f.id}>
+        <div className="group flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50" style={{ paddingLeft: `${depth * 20}px` }}>
+          <button type="button" onClick={() => toggleFolder(f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
+            {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />}
+            {isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
+            <span className="truncate">{f.name}</span>
+            {c && <span className="text-xs text-zinc-400">{c.files.length + c.folders.length}</span>}
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
+          </button>
+          {f.trashed && <Badge tone="red"><Trash2 className="h-3 w-3" />in trash</Badge>}
+          {isOpen && canUploadInto(f) && uploadFolder !== f.id && (
+            <button type="button" onClick={() => startUpload(f.id)} className="mr-1 inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-white">
+              <Upload className="h-3.5 w-3.5" />Upload here
+            </button>
+          )}
+        </div>
+        {isOpen && (
+          <div>
+            {uploadFolder === f.id && (
+              <div className="my-1 flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm" style={{ marginLeft: `${depth * 20 + 22}px` }}>
+                <select value={uploadType} onChange={(e) => setUploadType(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm" disabled={uploading || !types}>
+                  <option value="">{types ? 'Document type…' : 'Loading types…'}</option>
+                  {(types ?? []).map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.staffOnly ? ' (staff only)' : ''}</option>)}
+                </select>
+                <input ref={fileInput} type="file" className="text-sm" disabled={uploading || !uploadType}
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file, f.id) }} />
+                {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
+                <button type="button" onClick={() => setUploadFolder(null)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>
+              </div>
+            )}
+            {c && (
+              <ul>
+                {c.folders.map((sf) => folderNode(sf, depth + 1))}
+                {c.files.map((file) => fileRow(file, f.id, depth + 1))}
+                {c.folders.length === 0 && c.files.length === 0 && (
+                  <li className="py-1.5 text-xs text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 20 + 22}px` }}>Empty</li>
+                )}
+              </ul>
+            )}
+          </div>
+        )}
+      </li>
+    )
+  }
+
   const shown = (owners ?? []).filter((o) => !filter || o.label.toLowerCase().includes(filter.toLowerCase()))
-  const canUpload = !!contents?.folder && !contents.folder.trashed && contents.folder.kind !== 'root' && contents.folder.kind !== 'contacts'
+  const allOpen = !!root && root.folders.length > 0 && root.folders.every((f) => expanded.has(f.id))
 
   const right = (
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      {!contents && !error && <p className="text-sm text-zinc-500">{scopedOwnerId ? 'Loading…' : 'Pick a company or person on the left to see its folders and files.'}</p>}
-      {contents && !contents.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
-      {contents?.folder && ownerId && (
+      {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a company or person on the left to see its folders and files.'}</p>}
+      {root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
+      {root?.folder && (
         <>
-          <div className="mb-3 flex flex-wrap items-center gap-1 text-sm">
-            {contents.path.map((p, i) => (
-              <span key={p.id} className="flex items-center gap-1">
-                {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-zinc-300" />}
-                <button type="button" onClick={() => open(ownerId, i === 0 ? null : p.id)} className="text-blue-700 hover:underline">
-                  {p.name}
-                </button>
-              </span>
-            ))}
+          <div className="mb-2 flex items-center gap-2 text-sm">
+            <span className="font-medium text-zinc-800">{root.folder.name}</span>
             <span className="flex-1" />
-            {canUpload && !showUpload && (
-              <button type="button" onClick={startUpload} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
-                <Upload className="h-3.5 w-3.5" />Upload to this folder
+            {root.folders.length > 0 && (
+              <button type="button" className="text-xs text-blue-700 hover:underline"
+                onClick={() => {
+                  if (allOpen) { setExpanded(new Set()); setUploadFolder(null); return }
+                  setExpanded(new Set(root.folders.map((f) => f.id)))
+                  for (const f of root.folders) if (!loaded[f.id]) loadFolder(f.id)
+                }}>
+                {allOpen ? 'Close all' : 'Open all'}
               </button>
             )}
           </div>
-
-          {showUpload && canUpload && (
-            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm">
-              <select value={uploadType} onChange={(e) => setUploadType(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm" disabled={uploading || !types}>
-                <option value="">{types ? 'Document type…' : 'Loading types…'}</option>
-                {(types ?? []).map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.staffOnly ? ' (staff only)' : ''}</option>)}
-              </select>
-              <input ref={fileInput} type="file" className="text-sm" disabled={uploading || !uploadType}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) doUpload(f) }} />
-              {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
-              <button type="button" onClick={() => setShowUpload(false)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>
-            </div>
-          )}
-
-          <ul className="divide-y divide-zinc-100">
-            {contents.folders.map((f) => (
-              <li key={f.id}>
-                <button type="button" onClick={() => open(ownerId, f.id)} className="flex w-full items-center gap-2 py-2 text-left text-sm hover:bg-zinc-50">
-                  <Folder className="h-4 w-4 text-amber-500" />
-                  <span className="flex-1">{f.name}</span>
-                  {f.trashed && <Badge tone="red"><Trash2 className="h-3 w-3" />in trash</Badge>}
-                </button>
-              </li>
-            ))}
-            {contents.files.map((f) => (
-              <li key={f.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
-                <FileText className="h-4 w-4 text-zinc-400" />
-                <button type="button" onClick={() => setPreview(f)}
-                  className={`min-w-0 flex-1 truncate text-left hover:underline ${f.state === 'trashed' ? 'text-zinc-400 line-through' : ''}`}>
-                  {f.personName && <span className="text-zinc-500">{f.personName} · </span>}{f.name}
-                </button>
-                {f.state === 'trashed' && <Badge tone="red"><Trash2 className="h-3 w-3" />in trash</Badge>}
-                {f.staffOnly ? (
-                  <Badge tone="gray"><Lock className="h-3 w-3" />staff only</Badge>
-                ) : f.clientVisible ? (
-                  <Badge tone="green"><Eye className="h-3 w-3" />client can see</Badge>
-                ) : (
-                  <Badge tone="gray"><EyeOff className="h-3 w-3" />hidden from client</Badge>
-                )}
-                {!f.documentType ? <Badge tone="amber">no document type yet</Badge> : f.personal && <Badge tone="blue">personal</Badge>}
-                {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
-                {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
-                <span className="text-xs text-zinc-400">{f.size != null ? `${Math.max(1, Math.round(f.size / 1024))} KB` : ''}</span>
-                {!f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible)
-                  && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage))) && (
-                  <button type="button" onClick={() => toggleVisible(f)} disabled={busyFiles.has(f.id)}
-                    className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">
-                    {busyFiles.has(f.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {f.clientVisible ? 'Hide from client' : 'Show to client'}
-                  </button>
-                )}
-                <button type="button" onClick={() => setPreview(f)} className="text-blue-700 hover:underline">View</button>
-              </li>
-            ))}
-            {contents.folders.length === 0 && contents.files.length === 0 && (
-              <li className="py-2 text-sm text-zinc-500">This folder is empty.</li>
+          <ul className="divide-y divide-zinc-50">
+            {root.folders.map((f) => folderNode(f, 0))}
+            {root.files.map((file) => fileRow(file, null, 0))}
+            {root.folders.length === 0 && root.files.length === 0 && (
+              <li className="py-2 text-sm text-zinc-500">This storage is empty.</li>
             )}
           </ul>
         </>
@@ -312,7 +380,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
               <li key={o.id}>
                 <button
                   type="button"
-                  onClick={() => open(o.id, null)}
+                  onClick={() => openOwner(o.id)}
                   className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}
                 >
                   <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
