@@ -407,27 +407,35 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             {f.personName && <span className="text-zinc-500">{f.personName} · </span>}{f.name}
           </button>
         )}
+        {/* ONE control, as on today's Documents screen: it shows whether the client can see the file and
+            switching it is a click on the same control */}
         {f.staffOnly ? (
           <Badge tone="gray"><Lock className="h-3 w-3" />staff only</Badge>
-        ) : f.clientVisible ? (
-          <Badge tone="green"><Eye className="h-3 w-3" />client can see</Badge>
+        ) : canShare ? (
+          <FastTooltip label={f.clientVisible ? 'Click to hide it from the client' : 'Click to show it to the client'}>
+            <button type="button" onClick={() => toggleVisible(f)} disabled={busy}
+              aria-label={f.clientVisible ? 'Client can see — click to hide' : 'Hidden from client — click to show'}
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] disabled:opacity-50 ${f.clientVisible
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'}`}>
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              {f.clientVisible ? 'Client can see' : 'Hidden from client'}
+            </button>
+          </FastTooltip>
         ) : (
-          <Badge tone="gray"><EyeOff className="h-3 w-3" />hidden from client</Badge>
+          <FastTooltip label={!f.listed ? 'Not in the CRM list — the client cannot see it' : !f.documentType ? 'Choose its document type before it can be shown' : "A person's document can only be shown from their own storage"}>
+            <span><Badge tone="gray"><EyeOff className="h-3 w-3" />Hidden from client</Badge></span>
+          </FastTooltip>
         )}
-        {!f.documentType ? <Badge tone="amber">no document type yet</Badge> : f.personal && <Badge tone="blue">personal</Badge>}
+        {/* no "personal" label: everything in "2. Contacts" / a person's storage is personal by definition, and a
+            personal document can no longer be saved anywhere else */}
+        {!f.documentType && <Badge tone="amber">no document type yet</Badge>}
         {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
         {f.versions > 1 && <Badge tone="blue"><Layers className="h-3 w-3" />{f.versions} versions</Badge>}
         <span className="text-xs text-zinc-400">{[fmtSize(f.size), fmtDate(f.updatedAt)].filter(Boolean).join(' · ')}</span>
         <FastTooltip label="Preview"><button type="button" aria-label="Preview" onClick={() => setPreview(f)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><Search className="h-3.5 w-3.5" /></button></FastTooltip>
         {f.docId && (
           <FastTooltip label="View OCR text"><button type="button" aria-label="View OCR text" onClick={() => setOcrDocId(f.docId)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><ScanText className="h-3.5 w-3.5" /></button></FastTooltip>
-        )}
-        {canShare && (
-          <button type="button" onClick={() => toggleVisible(f)} disabled={busy}
-            className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : f.clientVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-            {f.clientVisible ? 'Hide from client' : 'Show to client'}
-          </button>
         )}
         <div className="relative">
           <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === f.id ? null : f.id); setMoveFor(null); setConfirmDelete(null) }}
