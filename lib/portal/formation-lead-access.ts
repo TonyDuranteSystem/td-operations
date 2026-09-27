@@ -85,3 +85,21 @@ export function onboardingOfferOwned(
 ): boolean {
   return leadOwnedForContractType(offer, 'onboarding', contactId, ownerEmails)
 }
+
+/**
+ * Ownership proof for a FORMATION offer found by its own id, not a lead —
+ * workspace-only plan S1 (dev job 9d34e750, 2026-09-27): an existing client
+ * buying a NEW company from their contact page has no lead any more (the
+ * automatic anchor lead was removed), so the formation wizard is anchored on
+ * the offer exactly like onboardingOfferOwned is for a returning client's
+ * second+ onboarding. Same proof (contact_id OR client_email), contract_type
+ * 'formation'. Re-proven server-side so a tampered offer id can't submit data
+ * tied to someone else's new company.
+ */
+export function formationOfferOwned(
+  offer: LeadOwnershipOffer | null,
+  contactId: string | null,
+  ownerEmails: ReadonlySet<string>,
+): boolean {
+  return leadOwnedForContractType(offer, 'formation', contactId, ownerEmails)
+}

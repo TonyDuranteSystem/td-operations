@@ -186,6 +186,7 @@ export default async function PortalDashboardPage() {
             leaseData={ctx.lease}
             trackerSteps={trackerSteps}
             formationLeadId={selectedFormation.leadId}
+            formationOfferId={selectedFormation.offerId}
             sdStage={tracker?.currentStage ?? null}
             filedAt={tracker?.filedAt ?? null}
           />
@@ -349,6 +350,9 @@ export default async function PortalDashboardPage() {
     const inProgressFormations = contactId ? await getInProgressFormations(contactId) : []
     const soleInProgressLeadId =
       inProgressFormations.length === 1 ? inProgressFormations[0].leadId : null
+    // The offer anchor, used when there is no lead (workspace-only plan S1, dev job 9d34e750).
+    const soleInProgressOfferId =
+      inProgressFormations.length === 1 ? inProgressFormations[0].offerId : null
     const hasActiveFormation =
       authTier !== 'formation' && inProgressFormations.length > 0
     if ((authTier === 'formation' || hasActiveFormation) && contactId) {
@@ -413,6 +417,7 @@ export default async function PortalDashboardPage() {
               leaseData={leaseRes.data}
               trackerSteps={trackerSteps}
               formationLeadId={soleInProgressLeadId}
+              formationOfferId={soleInProgressOfferId}
               sdStage={tracker?.currentStage ?? null}
               filedAt={tracker?.filedAt ?? null}
             />
@@ -445,6 +450,7 @@ export default async function PortalDashboardPage() {
             leaseData={ctx.lease}
             trackerSteps={trackerSteps}
             formationLeadId={soleInProgressLeadId}
+            formationOfferId={soleInProgressOfferId}
             sdStage={tracker?.currentStage ?? null}
             filedAt={tracker?.filedAt ?? null}
           />

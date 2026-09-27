@@ -16,6 +16,7 @@ vi.mock('@/lib/formation/state-lookup', () => ({
 import {
   selectFormationSource,
   preflightFormationMaterialization,
+  matchFormationSdByOfferToken,
   type FormationSourceRows,
 } from '@/lib/operations/formation-materialize'
 import { resolveEntityTypeForFormation } from '@/lib/portal/entity-type-from-contract'
@@ -332,5 +333,31 @@ describe('advance contract — entity_type param + structured materialization re
       materialization: { attempted: true, outcome: 'error', error: 'Drive timeout — the company record was NOT created.' },
     }
     expect(r.materialization?.error).toContain('NOT created')
+  })
+})
+
+// Workspace-only plan S1 (dev job 9d34e750): the wizard run's own formation
+// offer picks which of a contact's in-flight formation SDs gets linked.
+describe('matchFormationSdByOfferToken', () => {
+  const sds = [
+    { id: 'SD-A', source_offer_token: 'tok-a' },
+    { id: 'SD-B', source_offer_token: 'tok-b' },
+    { id: 'SD-X', source_offer_token: null },
+  ]
+
+  it('picks the one SD stamped with the offer token', () => {
+    expect(matchFormationSdByOfferToken(sds, 'tok-b')?.id).toBe('SD-B')
+  })
+
+  it('returns null when no SD carries the token', () => {
+    expect(matchFormationSdByOfferToken(sds, 'tok-zzz')).toBeNull()
+  })
+
+  it('returns null with no token (the lead fallback then decides)', () => {
+    expect(matchFormationSdByOfferToken(sds, null)).toBeNull()
+  })
+
+  it('never guesses when two SDs share the token', () => {
+    expect(matchFormationSdByOfferToken([...sds, { id: 'SD-B2', source_offer_token: 'tok-b' }], 'tok-b')).toBeNull()
   })
 })

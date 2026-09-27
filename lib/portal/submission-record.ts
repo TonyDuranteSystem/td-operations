@@ -45,10 +45,11 @@ export const TABLES_WITH_SOURCE = new Set(["onboarding_submissions"])
 
 /** Tables that HAVE an `offer_id` column (dev job bc2a8f7f, 2026-09-21) —
  * the real "which company" anchor for onboarding, since a returning
- * client's second+ company has no lead at all. Only onboarding_submissions
- * has it today; add a table here alongside its own migration if that ever
- * changes. */
-export const TABLES_WITH_OFFER_ID = new Set(["onboarding_submissions"])
+ * client's second+ company has no lead at all. formation_submissions joined
+ * with workspace-only plan S1 (dev job 9d34e750, migration
+ * 20260927-2000-formation-offer-id-anchor.sql): an existing client's new
+ * company has no lead either. Add a table here alongside its own migration. */
+export const TABLES_WITH_OFFER_ID = new Set(["onboarding_submissions", "formation_submissions"])
 
 export interface SubmissionRecordInput {
   token: string | null

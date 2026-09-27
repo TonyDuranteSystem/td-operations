@@ -358,8 +358,11 @@ describe("createOffer — formation account guard (dev_task 262be11c)", () => {
   })
 })
 
-describe("createOffer — auto-anchor lead for new-company formation (dev_task 262be11c)", () => {
-  it("auto-creates a lead and attaches it when a formation offer has a contact but no lead", async () => {
+// Workspace-only plan S1 (dev job 9d34e750, Antonio 2026-09-27): the automatic
+// anchor lead (dev_task 262be11c) is gone — the offer lives where it was
+// created and the formation is anchored on the offer itself.
+describe("createOffer — no automatic anchor lead (workspace-only plan S1)", () => {
+  it("does NOT auto-create a lead when a formation offer has a contact but no lead; the offer keeps contact_id, lead_id null", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")
     await createOffer({
@@ -373,14 +376,50 @@ describe("createOffer — auto-anchor lead for new-company formation (dev_task 2
       token: "test-autolead",
       contact_id: "existing-contact-1",
     })
-    // A lead row was inserted, tagged as an existing-client new company
-    expect(leadInserts).toHaveLength(1)
-    expect(leadInserts[0].source).toBe("Existing client — new company")
-    // The offer carries the new lead AND the existing contact, no account
+    expect(leadInserts).toHaveLength(0)
+    // The offer carries the existing contact, no lead, no account
     const insert = offerInserts.find((o) => !o.__update && o.token === "test-autolead")
-    expect(insert?.lead_id).toBe("auto-lead-1")
+    expect(insert?.lead_id ?? null).toBeNull()
     expect(insert?.contact_id).toBe("existing-contact-1")
     expect(insert?.account_id).toBeNull()
+  })
+
+  it("a contact may hold a SECOND in-flight new-company formation offer (not duplicate-blocked)", async () => {
+    accountExists = true
+    // An active formation offer already exists on this contact — it must not block a second new company.
+    duplicateOffer = { token: "first-new-company-2026", status: "sent", contract_type: "formation" }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Michele Cotti",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "€2300" }],
+      cost_summary: [{ label: "Total", total: "€2300" }],
+      token: "test-second-new-company",
+      contact_id: "existing-contact-1",
+    })
+    expect(result.outcome).not.toBe("duplicate_blocked")
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-second-new-company")
+    expect(insert?.contact_id).toBe("existing-contact-1")
+  })
+
+  it("the contact-level duplicate block still applies to other contact-only offers (e.g. ITIN)", async () => {
+    accountExists = true
+    duplicateOffer = { token: "existing-itin-2026", status: "sent", contract_type: "itin" }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Solo Person",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "itin",
+      services: [{ name: "ITIN Application", price: "$300" }],
+      cost_summary: [{ label: "Total", total: "$300" }],
+      token: "test-itin-dup",
+      contact_id: "existing-contact-2",
+    })
+    expect(result.outcome).toBe("duplicate_blocked")
   })
 
   it("S1: does NOT auto-create a lead for a name change / closure offer (formation-type, no formation sold)", async () => {

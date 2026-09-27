@@ -199,6 +199,35 @@ describe('runActivation', () => {
     ]))
   })
 
+  // Workspace-only plan S1 (dev job 9d34e750): an offer created on an existing
+  // client's contact page carries contact_id and NO lead — the contact comes
+  // from the offer FIRST, never from an email match to some other lead.
+  it('S1: no lead on the activation → contact resolved from the offer contact_id before any email lookup', async () => {
+    const contactsChain = makeChain({ ...contactFixture, id: 'offer-contact' })
+    contactsChain.maybeSingle = vi.fn(() => Promise.resolve({ data: { id: 'offer-contact' }, error: null }))
+    const leadsFrom = vi.fn(() => makeChain([leadFixture]))
+    vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+      if (table === 'pending_activations') return makeChain({ ...activationFixture, lead_id: null }) as ReturnType<typeof supabaseAdmin.from>
+      if (table === 'offers') return makeChain({ ...offerFixture, contact_id: 'offer-contact', lead_id: null }) as ReturnType<typeof supabaseAdmin.from>
+      if (table === 'leads') return leadsFrom() as ReturnType<typeof supabaseAdmin.from>
+      if (table === 'contacts') return contactsChain as ReturnType<typeof supabaseAdmin.from>
+      return makeChain(null) as ReturnType<typeof supabaseAdmin.from>
+    })
+    vi.mocked(autoCreatePortalUser).mockResolvedValue(
+      { success: false, alreadyExists: true, email: 'test@x.com' } as Awaited<ReturnType<typeof autoCreatePortalUser>>
+    )
+
+    const result = await runActivation('pa-id')
+
+    expect(result.ok).toBe(true)
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'lead_to_contact', status: 'existing', detail: 'Contact from offer: offer-contact' }),
+    ]))
+    expect(contactsChain.eq).toHaveBeenCalledWith('id', 'offer-contact')
+    // the email→lead path never ran, so no lead was adopted
+    expect(result.steps.some((s) => /Lead found by email/.test(s.detail ?? ''))).toBe(false)
+  })
+
   // Dev job 77b66080: a paid formation contract that bundles a Company Closure
   // must create the closure SD at payment (Milan's closure was silently dropped).
   describe('start-at-payment bundled services (Company Closure)', () => {

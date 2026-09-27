@@ -101,12 +101,18 @@ export default async function WizardPage({
   // (the lead comes from getInProgressFormations, which only returns formations
   // for THIS contact), so this never widens access.
   let effectiveLeadParam = leadParam
-  if (!effectiveLeadParam && !forcedType && contactId) {
+  // Declared here (not with the onboarding fallback below) because the
+  // formation cookie can now resolve an OFFER too — workspace-only plan S1
+  // (dev job 9d34e750): an existing client's new company has no lead, so its
+  // formation is anchored on the offer, exactly like onboarding.
+  let effectiveOfferParam = offerParam
+  if (!effectiveLeadParam && !effectiveOfferParam && !forcedType && contactId) {
     const cookieFormation = (await cookieStore).get('portal_formation')?.value
     if (cookieFormation) {
       const inProgress = await getInProgressFormations(contactId)
       const selected = inProgress.find(f => f.id === cookieFormation)
       if (selected?.leadId) effectiveLeadParam = selected.leadId
+      if (selected?.offerId) effectiveOfferParam = selected.offerId
     }
   }
 
@@ -118,7 +124,6 @@ export default async function WizardPage({
   // ?type=&offer= URL the way the sidebar/switcher now do) still resolves
   // correctly as long as the client has an in-progress onboarding selected
   // in the switcher.
-  let effectiveOfferParam = offerParam
   if (!effectiveOfferParam && !forcedType && contactId) {
     const cookieOnboarding = (await cookieStore).get('portal_onboarding')?.value
     if (cookieOnboarding) {
@@ -174,8 +179,14 @@ export default async function WizardPage({
   // before ITS fix).
   let onboardingOfferId: string | null = null
   let onboardingEntityType: string | null = null
+  // Formation's offer anchor (workspace-only plan S1, dev job 9d34e750): the
+  // same ?offer= param, when the offer is a FORMATION offer the logged-in
+  // person owns. Treated as the formation scope exactly like a verified
+  // ?lead= (no account context, wizardType formation). A first-time client's
+  // real lead, when present, still decides the draft scope (lead wins).
+  let formationOfferId: string | null = null
   if (effectiveOfferParam) {
-    const { onboardingOfferOwned } = await import('@/lib/portal/formation-lead-access')
+    const { onboardingOfferOwned, formationOfferOwned } = await import('@/lib/portal/formation-lead-access')
     const ownerEmails = new Set<string>()
     if (user.email) ownerEmails.add(user.email.toLowerCase())
     if (contact.email) ownerEmails.add(String(contact.email).toLowerCase())
@@ -187,6 +198,12 @@ export default async function WizardPage({
     if (onboardingOfferOwned(theOffer, contactId, ownerEmails)) {
       onboardingOfferId = effectiveOfferParam
       onboardingEntityType = (theOffer!.entity_type as string | null) ?? null
+    } else if (
+      (!forcedType || forcedType === 'formation') &&
+      formationOfferOwned(theOffer, contactId, ownerEmails)
+    ) {
+      formationOfferId = effectiveOfferParam
+      formationEntityType ??= (theOffer!.entity_type as string | null) ?? null
     }
   }
 
@@ -204,7 +221,7 @@ export default async function WizardPage({
   // (defensive) no-contact case the prior cookie fallback is kept.
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
   let accountId = contactId ? '' : (cookieAccountId || '')
-  if (contactId && !formationLeadId && !onboardingOfferId) {
+  if (contactId && !formationLeadId && !onboardingOfferId && !formationOfferId) {
     // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
     // found during the MMLLC E2E walk): this page used to pick the first row
     // of a raw, UNORDERED link query — so a two-company client with no cookie
@@ -228,7 +245,7 @@ export default async function WizardPage({
   }
 
   // Formation lead scope forces a blank formation wizard with no account context.
-  if (formationLeadId) {
+  if (formationLeadId || formationOfferId) {
     accountId = ''
   }
   // Same for a verified onboarding-for-a-new-company offer — never let the
@@ -248,7 +265,7 @@ export default async function WizardPage({
   }
 
   // Determine wizard type from offer or service deliveries
-  let wizardType: WizardType = forcedType || (formationLeadId ? 'formation' : 'onboarding')
+  let wizardType: WizardType = forcedType || (formationLeadId || formationOfferId ? 'formation' : 'onboarding')
   let entityType = account.entity_type || formationEntityType || onboardingEntityType || 'SMLLC'
   let isItinRenewal = false
 
@@ -272,7 +289,7 @@ export default async function WizardPage({
   // by editing the URL (every link this codebase actually generates already
   // pairs offer= with type=onboarding), closed here at the resolver level
   // rather than relying on every future caller to remember both params.
-  if (!forcedType && !formationLeadId && !onboardingOfferId && (accountId || contactId)) {
+  if (!forcedType && !formationLeadId && !onboardingOfferId && !formationOfferId && (accountId || contactId)) {
     // Look up service deliveries by account_id OR contact_id (formation clients have no account yet)
     const sdQuery = accountId
       ? supabaseAdmin.from('service_deliveries').select('service_type, stage').eq('account_id', accountId).in('status', ['active']).limit(10)
@@ -635,10 +652,12 @@ export default async function WizardPage({
       // still pins by leadId; onboarding pins by offerId (dev job bc2a8f7f,
       // corrected 2026-09-21 — no lead exists for a returning client's
       // second+ onboarding).
+      // A lead-less formation pins by its offer (workspace-only plan S1,
+      // dev job 9d34e750); a formation with a real lead is unchanged.
       const resolution = await resolveEntityTypeForFormation({
         contactId,
         leadId: formationLeadId,
-        offerId: onboardingOfferId,
+        offerId: onboardingOfferId ?? (formationLeadId ? null : formationOfferId),
       })
       code = resolution.wizardCode
       if (resolution.source === 'corporation_manual') {
@@ -709,7 +728,7 @@ export default async function WizardPage({
   // for the precedence + the lead_id-null disambiguation). Building the query
   // dynamically over a union of columns trips TS's type-instantiation depth
   // (TS2589) on the typed builder, so the builder is cast to any.
-  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId, serviceDeliveryId: closureServiceDeliveryId, onboardingOfferId })
+  const progressScope = resolveWizardProgressScope({ wizardType, formationLeadId, accountId, contactId, serviceDeliveryId: closureServiceDeliveryId, onboardingOfferId, formationOfferId })
 
   const progressQuery = progressScope
     ? (() => {
@@ -773,12 +792,18 @@ export default async function WizardPage({
   // isLocked block right below already keys per-company), never a bare
   // contact_id lookup — a repeat client's other company's submission must
   // never be picked up here.
-  if (wizardType === 'formation' && contactId && !progressId && formationLeadId) {
-    const { data: fallbackSub } = await supabaseAdmin
+  if (wizardType === 'formation' && contactId && !progressId && (formationLeadId || formationOfferId)) {
+    // Lead first (unchanged); a lead-less formation is keyed on its offer
+    // (workspace-only plan S1, dev job 9d34e750). formation_submissions.offer_id
+    // is not in the generated types yet, hence the cast.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- formation_submissions.offer_id not in generated types
+    const fallbackBase = (supabaseAdmin as any)
       .from('formation_submissions')
       .select('submitted_data, status')
       .eq('contact_id', contactId)
-      .eq('lead_id', formationLeadId)
+    const { data: fallbackSub } = await (formationLeadId
+      ? fallbackBase.eq('lead_id', formationLeadId)
+      : fallbackBase.eq('offer_id', formationOfferId))
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -829,6 +854,14 @@ export default async function WizardPage({
         .eq('lead_id', formationLeadId)
         .order('created_at', { ascending: false })
         .limit(1)
+        .maybeSingle()
+      formationOfferToken = (offerRow?.token as string | null) ?? null
+    } else if (formationOfferId) {
+      // Lead-less formation: the offer itself (workspace-only plan S1, dev job 9d34e750).
+      const { data: offerRow } = await supabaseAdmin
+        .from('offers')
+        .select('token')
+        .eq('id', formationOfferId)
         .maybeSingle()
       formationOfferToken = (offerRow?.token as string | null) ?? null
     }
@@ -902,7 +935,7 @@ export default async function WizardPage({
       if (user.email) offerEmails.add(user.email)
       if (contact.email) offerEmails.add(String(contact.email))
       let offerRow: { services: unknown; bundled_pipelines: string[] | null } | null = null
-      if (formationLeadId || onboardingOfferId) {
+      if (formationLeadId || onboardingOfferId || formationOfferId) {
         // Same scoping as the account/progress resolution above (dev job
         // bc2a8f7f, round-3 QA finding, corrected 2026-09-21 to key
         // onboarding on the offer instead of a lead): without this, a
@@ -914,7 +947,7 @@ export default async function WizardPage({
         // there's no lead-to-offer gathering step to get wrong.
         const offerQuery = formationLeadId
           ? supabaseAdmin.from('offers').select('services, bundled_pipelines').eq('lead_id', formationLeadId)
-          : supabaseAdmin.from('offers').select('services, bundled_pipelines').eq('id', onboardingOfferId as string)
+          : supabaseAdmin.from('offers').select('services, bundled_pipelines').eq('id', (onboardingOfferId ?? formationOfferId) as string)
         const { data } = await offerQuery.order('created_at', { ascending: false }).limit(1).maybeSingle()
         offerRow = data as typeof offerRow
       }
@@ -1364,7 +1397,10 @@ export default async function WizardPage({
           accountId={accountId}
           contactId={contactId || ''}
           leadId={formationLeadId || ''}
-          offerId={onboardingOfferId || ''}
+          // A lead-less formation sends its offer id on save/submit
+          // (workspace-only plan S1, dev job 9d34e750); with a real lead the
+          // formation stays lead-scoped exactly as before.
+          offerId={onboardingOfferId || (formationLeadId ? '' : formationOfferId) || ''}
           locale={locale}
           initialSubmitStatus={wizardSubmitStatus}
           isLocked={isLocked}

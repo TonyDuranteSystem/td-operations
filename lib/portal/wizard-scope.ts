@@ -26,6 +26,7 @@ export interface WizardProgressScope {
  *     second closure's draft would silently load and overwrite the first's
  *     saved answers. See lib/portal/closure-subject.ts.
  *  1. ?lead= new-company formation (PR #75) — keyed on lead_id.
+ *  1b. ?offer= formation / onboarding with no lead — keyed on offer_id.
  *  2. Contact-owned wizard (formation) with no lead scope — keyed on
  *     contact_id even when an account exists, so a materialized formation is
  *     found and not re-offered as a duplicate. Restricted to lead_id IS NULL so
@@ -56,14 +57,24 @@ export function resolveWizardProgressScope(params: {
    *  form. Same precedence tier as formationLeadId — both mean "this
    *  session is verified to be about ONE specific new company." */
   onboardingOfferId?: string | null
+  /** Formation's offer anchor — workspace-only plan S1 (dev job 9d34e750,
+   *  2026-09-27). An existing client buying a NEW company from their contact
+   *  page has no lead any more, so the formation is anchored on its offer
+   *  exactly like onboardingOfferId. Used only when there is no
+   *  formationLeadId (a first-time client's real lead keeps its lead_id
+   *  scope unchanged). */
+  formationOfferId?: string | null
 }): WizardProgressScope | null {
-  const { wizardType, formationLeadId, accountId, contactId, serviceDeliveryId, onboardingOfferId } = params
+  const { wizardType, formationLeadId, accountId, contactId, serviceDeliveryId, onboardingOfferId, formationOfferId } = params
 
   if (wizardType === 'closure' && serviceDeliveryId) {
     return { col: 'service_delivery_id', val: serviceDeliveryId, restrictToNoLead: false }
   }
   if (formationLeadId) {
     return { col: 'lead_id', val: formationLeadId, restrictToNoLead: false }
+  }
+  if (formationOfferId) {
+    return { col: 'offer_id', val: formationOfferId, restrictToNoLead: false }
   }
   if (onboardingOfferId) {
     return { col: 'offer_id', val: onboardingOfferId, restrictToNoLead: false }

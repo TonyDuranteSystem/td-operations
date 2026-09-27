@@ -216,7 +216,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("id, contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout, lead_id")
+    .select("id, contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout, lead_id, contact_id")
     .eq("token", activation.offer_token)
     .single()
 
@@ -278,6 +278,21 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   let contactId: string | null = null
   let leadId = activation.lead_id
 
+  // An offer created on an existing client's contact page carries contact_id
+  // and NO lead (workspace-only plan S1, dev job 9d34e750 — the automatic
+  // anchor lead was removed). Resolve the contact from the offer FIRST, before
+  // any email lookup, so the purchase lands on the right person even when the
+  // email matches a different/old lead or contact.
+  let offerContactId: string | null = null
+  if (!leadId && offer?.contact_id) {
+    const { data: offerContact } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("id", offer.contact_id)
+      .maybeSingle()
+    offerContactId = offerContact?.id ?? null
+  }
+
   if (leadId) {
     const { data: lead } = await supabase
       .from("leads")
@@ -335,6 +350,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         }
       }
     }
+  } else if (offerContactId) {
+    contactId = offerContactId
+    steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact from offer: ${contactId}` })
   } else if (activation.client_email) {
     // Try to find lead by email
     const { data: leads } = await supabase
@@ -1080,10 +1098,18 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           // original, DIFFERENT fallbacks — "/portal/wizard" for the text,
           // "/portal" for the link — so they never disagree once an offer
           // id is added, but neither regresses for a non-onboarding offer).
+          // Formation carries its offer too (workspace-only plan S1, dev job
+          // 9d34e750): an existing client's new company has no lead any
+          // more, so the offer is the anchor. type=formation is added only
+          // when the template path doesn't already name a type.
           const appendOffer = (url: string): string => {
-            if (contractType !== "onboarding" || !offer?.id) return url
+            if ((contractType !== "onboarding" && contractType !== "formation") || !offer?.id) return url
+            // A first-time client's formation keeps its proven LEAD path — the
+            // offer anchor is only for an existing client's new company (no lead).
+            if (contractType === "formation" && leadId) return url
             const sep = url.includes("?") ? "&" : "?"
-            return `${url}${sep}offer=${encodeURIComponent(offer.id)}`
+            const typePart = contractType === "formation" && !/[?&]type=/.test(url) ? "type=formation&" : ""
+            return `${url}${sep}${typePart}offer=${encodeURIComponent(offer.id)}`
           }
 
           const vars = {

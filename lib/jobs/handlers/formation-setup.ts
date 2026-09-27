@@ -40,6 +40,10 @@ interface FormationPayload {
   submission_id: string | null
   contact_id: string | null
   lead_id: string | null
+  /** The formation offer — the anchor when there is no lead (workspace-only
+   * plan S1, dev job 9d34e750: an existing client's new company). Optional:
+   * older payloads and first-time clients' lead-anchored submits omit it. */
+  offer_id?: string | null
   submitted_data: Record<string, unknown>
   source?: "portal_wizard" | string
 }
@@ -57,16 +61,24 @@ interface FormationPayload {
  *
  * Returns null when it cannot be resolved. NEVER a fabricated value.
  */
-async function resolveOfferToken(leadId: string | null): Promise<string | null> {
-  if (!leadId) return null
+export async function resolveOfferToken(leadId: string | null, offerId?: string | null): Promise<string | null> {
+  if (!leadId && !offerId) return null
   try {
-    const { data, error } = await supabaseAdmin
-      .from("offers")
-      .select("token")
-      .eq("lead_id", leadId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // Lead first, exactly as before; a lead-less formation resolves its token
+    // straight from the offer id (workspace-only plan S1, dev job 9d34e750).
+    const { data, error } = leadId
+      ? await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .eq("lead_id", leadId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .eq("id", offerId as string)
+          .maybeSingle()
     if (error || !data?.token) return null
     return String(data.token)
   } catch {
@@ -138,7 +150,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // re-submit of one that is already finished. Keyed on the OFFER, never the
   // contact — ~11% of contacts own more than one company and a contact-keyed
   // refusal would strand a repeat client's new formation forever.
-  const offerToken = await resolveOfferToken(p.lead_id)
+  const offerToken = await resolveOfferToken(p.lead_id, p.offer_id ?? null)
   let decision: FormationRunDecision = {
     action: "create",
     reason: "first_run",

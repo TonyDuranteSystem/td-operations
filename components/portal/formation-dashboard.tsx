@@ -45,6 +45,11 @@ interface FormationDashboardProps {
    * page falls through to that account's context and opens the wrong wizard
    * (tax/onboarding) instead of this new company's formation. */
   formationLeadId?: string | null
+  /** Formation offer the in-progress formation is anchored on — used when
+   * there is no lead (workspace-only plan S1, dev job 9d34e750): an existing
+   * client's new company has no lead, so the CTA links to
+   * /portal/wizard?type=formation&offer=<offerId>. */
+  formationOfferId?: string | null
   /** Current formation SD stage name (from getFormationTracker). Authoritative
    * signal that the wizard is already submitted: once the SD is past "Payment
    * Confirmed", the "Complete Formation Details" CTA must hide even when the
@@ -69,6 +74,7 @@ export function FormationDashboard({
   closureData,
   trackerSteps,
   formationLeadId,
+  formationOfferId,
   sdStage,
   filedAt,
 }: FormationDashboardProps) {
@@ -124,9 +130,13 @@ export function FormationDashboard({
   // formation scope via ?lead=. Carry it so returning clients (who already own
   // an account) aren't routed to that account's wizard. Falls back to the bare
   // path for the fresh-client case where no account exists to fall through to.
+  // A real lead keeps its proven path; a lead-less new company (existing
+  // client) is anchored on its offer (workspace-only plan S1, dev job 9d34e750).
   const wizardHref = formationLeadId
     ? `/portal/wizard?lead=${formationLeadId}`
-    : '/portal/wizard'
+    : formationOfferId
+      ? `/portal/wizard?type=formation&offer=${encodeURIComponent(formationOfferId)}`
+      : '/portal/wizard'
 
   // Derive milestone completion. The SD stage is authoritative: once the
   // formation SD is past "Payment Confirmed" the wizard HAS been submitted, even

@@ -33,7 +33,7 @@ import { validateWizardData } from '@/lib/jobs/validation'
 import { collectUploadPaths, isWizardUploadPath } from '@/lib/portal/wizard-uploads'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
-import { formationLeadOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, formationOfferOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import {
   resolveTaxWizardEligibility,
   CLOSED_REASON_COPY,
@@ -159,6 +159,36 @@ export async function POST(req: NextRequest) {
     // directly, would reopen the hijack this block exists to close.
     account_id = null
   }
+
+  // ─── 0b3. FORMATION OFFER (default-deny + hijack backstop) ───
+  // Workspace-only plan S1 (dev job 9d34e750, 2026-09-27): an existing
+  // client's NEW company has no lead any more — the formation is anchored on
+  // its offer, exactly like onboarding's block above. Re-prove the offer
+  // belongs to the logged-in person so a tampered offer_id can't submit a
+  // formation tied to someone else's new company. account_id is already
+  // forced null for formation downstream (accountIdForWizardSubmission).
+  if (offer_id && wizard_type === 'formation') {
+    const ctcId = identity.kind === 'contact' ? identity.contactId : null
+    const ownerEmails = new Set<string>()
+    if (user.email) ownerEmails.add(user.email.toLowerCase())
+    if (ctcId) {
+      const { data: c } = await supabaseAdmin.from('contacts').select('email').eq('id', ctcId).maybeSingle()
+      if (c?.email) ownerEmails.add(String(c.email).toLowerCase())
+    }
+    const { data: theOffer } = await supabaseAdmin
+      .from('offers')
+      .select('client_email, contract_type, contact_id')
+      .eq('id', offer_id)
+      .maybeSingle()
+    if (!formationOfferOwned(theOffer, ctcId, ownerEmails)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  }
+
+  // Offer anchor carried downstream (token scope, job payload, dedupe key,
+  // wizard_progress) — onboarding since bc2a8f7f, formation since S1.
+  const anchorOfferId: string | null =
+    wizard_type === 'onboarding' || wizard_type === 'formation' ? offer_id || null : null
 
   // ─── 0b2. CLOSURE SUBJECT RE-VERIFICATION (dev job fbbf4abe) ───
   // Re-check server-side at the moment of ACTUAL submit — not just once when
@@ -471,7 +501,9 @@ export async function POST(req: NextRequest) {
           // while reworking this mechanism to key on offers instead of
           // leads (dev job bc2a8f7f, 2026-09-21) — the exact bug class this
           // token scheme's own header already documents for two companies.
-          explicitScopeId: closureServiceDeliveryId || (wizard_type === 'onboarding' ? offer_id || null : null),
+          // Formation too (workspace-only plan S1, dev job 9d34e750): two
+          // lead-less formations of one contact get different tokens.
+          explicitScopeId: closureServiceDeliveryId || anchorOfferId,
         })
 
         // Closure re-send → keep updating the SAME saved submission for this
@@ -1061,7 +1093,7 @@ export async function POST(req: NextRequest) {
         account_id: account_id || null,
         contact_id: contact_id || null,
         lead_id: lead_id || null, // Formation-for-new-company carries its lead for materialization
-        offer_id: wizard_type === 'onboarding' ? offer_id || null : null, // Onboarding-for-a-returning-client has no lead — the offer is its own anchor
+        offer_id: anchorOfferId, // Onboarding / lead-less formation (workspace-only plan S1) — the offer is its own anchor
         company_name: companyName,
         state_of_formation: stateOfFormation,
         // NULL, never 'SMLLC', when genuinely unknown. The materializer resolves
@@ -1099,7 +1131,7 @@ export async function POST(req: NextRequest) {
         accountId: account_id,
         contactId: contact_id,
         leadId: lead_id,
-        offerId: wizard_type === 'onboarding' ? offer_id || null : null,
+        offerId: anchorOfferId,
         data,
       })
       payload.dedupe_key = dedupeKey
@@ -1143,7 +1175,7 @@ export async function POST(req: NextRequest) {
         accountId: account_id || null,
         contactId: contact_id || null,
         leadId: lead_id || null,
-        offerId: wizard_type === 'onboarding' ? offer_id || null : null,
+        offerId: anchorOfferId,
         serviceDeliveryId: closureServiceDeliveryId,
       })
       if (wpResult.error) {

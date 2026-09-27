@@ -121,7 +121,15 @@ export interface FormationSourceRows {
     entity_type: string | null
     created_at: string | null
   } | null
-  wp: { id: string; data: unknown; lead_id: string | null; created_at: string | null } | null
+  wp: {
+    id: string
+    data: unknown
+    lead_id: string | null
+    /** The formation offer this wizard run is for — the anchor when there is
+     * no lead (workspace-only plan S1, dev job 9d34e750). */
+    offer_id?: string | null
+    created_at: string | null
+  } | null
 }
 
 export interface FormationSourceData {
@@ -189,6 +197,21 @@ export function selectFormationSource(rows: FormationSourceRows): FormationSourc
 }
 
 /**
+ * PURE: among several unlinked Company Formation SDs, the ONE whose
+ * source_offer_token is this wizard run's formation offer token — or null when
+ * zero or several match (never guess). Workspace-only plan S1 (dev job
+ * 9d34e750): the offer is the preferred key; the lead key stays as fallback.
+ */
+export function matchFormationSdByOfferToken<T extends { source_offer_token: string | null }>(
+  candidates: readonly T[],
+  offerToken: string | null,
+): T | null {
+  if (!offerToken) return null
+  const matches = candidates.filter(c => c.source_offer_token === offerToken)
+  return matches.length === 1 ? matches[0] : null
+}
+
+/**
  * Fetch + select the formation data source for a contact.
  *
  * The submission read accepts status 'completed' OR 'reviewed', newest first:
@@ -211,7 +234,7 @@ export async function fetchFormationSourceData(contactId: string): Promise<Forma
 
   const { data: wp } = await supabaseAdmin
     .from("wizard_progress")
-    .select("id, data, lead_id, created_at")
+    .select("id, data, lead_id, offer_id, created_at")
     .eq("contact_id", contactId)
     .eq("wizard_type", "formation")
     .eq("status", "submitted")
@@ -1111,9 +1134,27 @@ export async function materializeFormationCompany(
       .is("account_id", null)
 
     let resolvedSd: { id: string; source_offer_token: string | null } | null = null
+    // The formation offer's token (wizard_progress.offer_id → offers.token) —
+    // the preferred key when present (workspace-only plan S1, dev job
+    // 9d34e750): an existing client's new company has no lead at all.
+    let wpOfferToken: string | null = null
+    if (wp?.offer_id) {
+      const { data: wpOffer } = await supabaseAdmin
+        .from("offers")
+        .select("token")
+        .eq("id", wp.offer_id)
+        .maybeSingle()
+      wpOfferToken = (wpOffer as { token: string | null } | null)?.token ?? null
+    }
     if (sdCandidates && sdCandidates.length === 1) {
       resolvedSd = sdCandidates[0] as { id: string; source_offer_token: string | null }
-    } else if (sdCandidates && sdCandidates.length > 1 && wp?.lead_id) {
+    } else if (sdCandidates && sdCandidates.length > 1 && wpOfferToken) {
+      resolvedSd = matchFormationSdByOfferToken(
+        sdCandidates as { id: string; source_offer_token: string | null }[],
+        wpOfferToken,
+      )
+    }
+    if (!resolvedSd && sdCandidates && sdCandidates.length > 1 && wp?.lead_id) {
       const tokens = sdCandidates
         .map(s => (s as { source_offer_token: string | null }).source_offer_token)
         .filter((t): t is string => !!t)
@@ -1181,7 +1222,35 @@ export async function materializeFormationCompany(
           .select("token")
         linkedOffers = upd?.length ?? 0
         resolvedOfferToken = offerTokens[0] ?? upd?.[0]?.token ?? null
-      } else if (wp?.lead_id) {
+      }
+      // No SD token: the wizard run's own offer is the preferred key
+      // (workspace-only plan S1, dev job 9d34e750), same status/account
+      // guards as the lead path below.
+      let linkedVia: "token" | "offer" | "lead" | null = offerTokens.length > 0 ? "token" : null
+      if (offerTokens.length === 0 && wp?.offer_id) {
+        const { data: candidate } = await supabaseAdmin
+          .from("offers")
+          .select("token")
+          .eq("id", wp.offer_id)
+          .eq("contract_type", "formation")
+          .in("status", ["signed", "completed"])
+          .is("account_id", null)
+          .maybeSingle()
+        if (candidate?.token) {
+          // eslint-disable-next-line no-restricted-syntax -- central materialization path; clears the portal banner
+          const { data: upd } = await supabaseAdmin
+            .from("offers")
+            .update({ account_id: accountId, updated_at: new Date().toISOString() })
+            .eq("token", candidate.token)
+            .is("account_id", null)
+            .select("token")
+          linkedOffers = upd?.length ?? 0
+          resolvedOfferToken = upd?.[0]?.token ?? null
+          linkedVia = "offer"
+        }
+      }
+      if (offerTokens.length === 0 && !linkedVia && wp?.lead_id) {
+        linkedVia = "lead"
         // Reached whenever step 10 didn't yield a usable offer token — no SD
         // matched at all, OR (the legacy case) the single resolved SD carries
         // no source_offer_token. wp.lead_id is THIS specific wizard
@@ -1218,7 +1287,7 @@ export async function materializeFormationCompany(
       steps.push({
         step: "offer_account_link",
         status: "ok",
-        detail: `${linkedOffers} formation offer(s) linked to account ${offerTokens.length ? "(by token)" : wp?.lead_id ? "(by lead)" : "(no link available)"}`,
+        detail: `${linkedOffers} formation offer(s) linked to account ${linkedVia ? `(by ${linkedVia})` : "(no link available)"}`,
       })
     } catch (offerErr) {
       steps.push({

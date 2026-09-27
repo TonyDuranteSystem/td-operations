@@ -88,6 +88,20 @@ describe('resolveWizardProgressScope', () => {
     ).toEqual({ col: 'lead_id', val: L, restrictToNoLead: false })
   })
 
+  // Workspace-only plan S1 (dev job 9d34e750) — an existing client's NEW
+  // company formation has no lead; it is anchored on its offer.
+  it('Scenario: lead-less new-company formation via ?offer= → keyed on offer_id, not the contact default', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'formation', formationLeadId: null, accountId: null, contactId: C, formationOfferId: OFFER }),
+    ).toEqual({ col: 'offer_id', val: OFFER, restrictToNoLead: false })
+  })
+
+  it('a first-time client formation with a real lead keeps the lead_id scope even when the offer is known', () => {
+    expect(
+      resolveWizardProgressScope({ wizardType: 'formation', formationLeadId: L, accountId: null, contactId: C, formationOfferId: OFFER }),
+    ).toEqual({ col: 'lead_id', val: L, restrictToNoLead: false })
+  })
+
   it('no onboardingOfferId (existing-company onboarding, the common case) falls through to account_id unchanged', () => {
     expect(
       resolveWizardProgressScope({ wizardType: 'onboarding', formationLeadId: null, accountId: A, contactId: C, onboardingOfferId: null }),

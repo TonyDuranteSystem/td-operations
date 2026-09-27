@@ -603,58 +603,31 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       }
     }
 
-    // 3b. Auto-anchor a NEW-company formation offer with a lead.
-    // Formations are lead-anchored — the portal "Complete Formation" CTA routes
-    // via the offer's lead (getInProgressFormations). An offer created for an
-    // EXISTING contact (the "New company" path in the create-offer dialog) has a
-    // contact but no lead, so the new company couldn't route correctly. Creating
-    // the lead here is SAFE for an existing active client: a lead row writes NO
-    // portal_tier (verified — no downgrade), and the offer keeps contact_id so
-    // the new company ties to the SAME person (not a duplicate contact). It also
-    // lets one client hold multiple in-flight new-company offers (each new
-    // company = its own lead), instead of the contact-level dedup blocking a
-    // second formation. dev_task 262be11c.
-    let effectiveLeadId = params.lead_id ?? null
-    // No automatic lead for an offer that sells no formation (Antonio 2026-09-27:
-    // the offer lives where it was created — a contact/company offer is not a
-    // lead). The remaining case (a NEW company for an existing contact) still
-    // needs the lead until the formation flow is anchored on the offer.
-    if (!effectiveLeadId && !formationNotBought && (params.contract_type || "formation") === "formation" && params.contact_id) {
-      const { data: c } = await supabaseAdmin
-        .from("contacts")
-        .select("first_name, last_name, email")
-        .eq("id", params.contact_id)
-        .maybeSingle()
-      const nameParts = (params.client_name || "").trim().split(/\s+/)
-      const firstName = c?.first_name ?? (nameParts[0] || null)
-      const lastName = c?.last_name ?? (nameParts.slice(1).join(" ") || null)
-      const { data: newLead, error: leadErr } = await supabaseAdmin
-        .from("leads")
-        .insert({
-          // full_name is NOT NULL on leads; client_name is always present (validated above).
-          full_name: [firstName, lastName].filter(Boolean).join(" ") || params.client_name,
-          first_name: firstName,
-          last_name: lastName,
-          email: params.client_email || c?.email || null,
-          status: "New",
-          source: "Existing client — new company",
-        } as never)
-        .select("id")
-        .single()
-      if (!leadErr && newLead) {
-        effectiveLeadId = (newLead as { id: string }).id
-        console.warn(`[createOffer] Auto-created anchor lead ${effectiveLeadId} for a new-company formation offer (existing contact ${params.contact_id}).`)
-      } else if (leadErr) {
-        console.error(`[createOffer] Failed to auto-create anchor lead: ${leadErr.message}`)
-      }
-    }
+    // 3b. No automatic "anchor lead" (workspace-only plan S1, dev job 9d34e750,
+    // Antonio 2026-09-27): the offer lives where it was created. An existing
+    // client buying a NEW company from their contact page keeps contact_id and
+    // no lead; the formation is anchored on the OFFER itself (offers.id / token
+    // → the contact-scoped Company Formation SD's source_offer_token), exactly
+    // like a returning client's onboarding (dev job bc2a8f7f). The block that
+    // used to insert a lead here (dev_task 262be11c) was removed.
+    const effectiveLeadId = params.lead_id ?? null
+    // A NEW-company formation offer on an existing contact (no lead, no
+    // account). Each one is its own new company, so the contact-level duplicate
+    // block below must not stop a second one — the removed anchor lead used to
+    // give each its own lead, which is what let them coexist.
+    const isContactScopedNewCompanyFormation =
+      !effectiveLeadId &&
+      !effectiveAccountId &&
+      !!params.contact_id &&
+      !formationNotBought &&
+      (params.contract_type || "formation") === "formation"
 
     // 4. Duplicate check — block active non-renewal offers (not expired/completed/renewal)
     // renewal offers are pre-migration artifacts; annual renewals now live in annual_agreements
     // Precedence: lead_id > account_id > contact_id. Contact-only path also
     // filters by contract_type so a contact can have separate active offers
     // for different individual services (ITIN vs Banking Physical).
-    if (effectiveLeadId || effectiveAccountId || params.contact_id) {
+    if ((effectiveLeadId || effectiveAccountId || params.contact_id) && !isContactScopedNewCompanyFormation) {
       const dupQuery = supabaseAdmin
         .from("offers")
         .select("token, status, contract_type")
