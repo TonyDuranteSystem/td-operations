@@ -80,7 +80,7 @@ export function stateFolderName(raw: string | null | undefined): string | null {
 
 export interface RefRow { external_id: string; backed_up_sha256: string | null; drive_path: Record<string, unknown>; status: string }
 export interface OwnerSnap {
-  id: string; kind: "company" | "person" | "formation" | "unfiled"
+  id: string; kind: "company" | "person" | "formation" | "unfiled" | "business" | "private"
   state: string | null
   /** the account's existing Drive folder (#62) — adopted when no other owner already uses it */
   accountFolderId: string | null
@@ -253,6 +253,12 @@ export async function backupOwner(
   const timeUp = () => opts.deadlineAt !== undefined && Date.now() > opts.deadlineAt - STOP_BEFORE_DEADLINE_MS
   try {
     const snap = await io.load(ownerId)
+    // The firm's "Business" area and a staff member's private "My files" are NOT backed up into the client
+    // Drive or the restricted area until Antonio decides where (master plan #94) — never fall into "Unfiled".
+    if (snap.kind === "business" || snap.kind === "private") {
+      await io.finish(ownerId, token, "ok", upTo, undefined, full)
+      return { ...rep, status: "disabled", error: `the ${snap.kind === "private" ? "private My files" : "Business"} area is not backed up (not decided yet)` }
+    }
 
     // a fixed place: created once under a database claim; an existing folder of that name is adopted
     const places = new Map<string, string>()

@@ -64,6 +64,8 @@ export function ownerStatus(lifecycleOverride: string | null | undefined): strin
 export async function listOwners(): Promise<BrowseOwner[]> {
   const { data: owners, error } = await db().from("store_owners")
     .select("id, kind, account_id, contact_id, lifecycle_override, accounts(company_name), contacts(full_name)")
+    // a private "My files" area is never listed here (only the navigation lists it, for its own login)
+    .neq("kind", "private")
     .order("created_at", { ascending: false }).limit(500)
   if (error) throw new Error(`store browse: ${error.message}`)
   const ids = (owners ?? []).map((o: { id: string }) => o.id)
@@ -370,6 +372,14 @@ export async function staffUploadToStore(p: {
   const { data: owner0, error: ownErr } = await db().from("store_owners").select("kind, account_id, contact_id, service_delivery_id").eq("id", p.ownerId).single()
   if (ownErr || !owner0) throw new Error("This storage owner no longer exists.")
   let owner = owner0 as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
+  // The firm's own "Business" folders and a staff member's private "My files": no client, so no CRM
+  // documents row and never shown to anyone outside the firm. Same versioning rule as everywhere else.
+  if (owner.kind === "business" || owner.kind === "private") {
+    if (typeRow.metadata?.personal === true && owner.kind === "business") {
+      throw new Error("This is a personal document — it belongs in the person's own storage, not in the Business folders.")
+    }
+    return saveInternalAreaFile(p, fileName, typeRow.slug)
+  }
   // Uploading from a company's "2. Contacts" (how staff work today): the document belongs to ONE of the
   // company's people and is saved in that person's own storage (#28), so it shows in "2. Contacts" of every
   // company they are in. Only personal documents go there — company papers go in the company's folders.
@@ -436,8 +446,8 @@ export async function staffUploadToStore(p: {
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
     throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)." : `The save ended as "${w.status}".`)
   }
-  const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal
-    : FOLDER_KIND_CATEGORY[folder.kind as string] ?? FOLDER_KIND_CATEGORY.correspondence
+  const { categoryForFolder } = await import("./structure")
+  const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal : await categoryForFolder(targetFolderId)
   const wantVisible = p.visible !== false && typeRow.metadata?.staff_only !== true && typeRow.metadata?.draft_never_visible !== true
   const row = await upsertStoreDocumentRow(w.fileId, {
     file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
@@ -465,6 +475,32 @@ export async function staffUploadToStore(p: {
     ])
   }
   return { fileId: w.fileId, write: w.status, name: w.name, visible: visibleNow, identity }
+}
+
+/** A file in the Business area or a private "My files" area: saved in the store only (no CRM row, never shown). */
+async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null }, fileName: string, documentType: string): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
+  const { saveBytesToStore } = await import("./writer")
+  const { storeNameKey } = await import("./rules")
+  const { data: same, error: sameErr } = await db().from("store_files").select("id, caller_key, state")
+    .eq("folder_id", p.folderId).eq("name_key", storeNameKey(fileName)).neq("state", "purged")
+  if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
+  const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
+  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
+  if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
+  const { randomUUID } = await import("crypto")
+  const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(p.storagePath)
+  if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
+  const bytes = Buffer.from(await blob.arrayBuffer())
+  const w = await saveBytesToStore({
+    ownerId: p.ownerId, folderId: p.folderId, name: fileName, mimeType: p.mimeType || blob.type || "application/octet-stream", bytes,
+    callerKey: sameLive?.caller_key ?? `staff-upload:${randomUUID()}`, contentChanged: true,
+    documentType, published: false, actor: p.actorId,
+  })
+  if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
+    throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name." : `The save ended as "${w.status}".`)
+  }
+  await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+  return { fileId: w.fileId, write: w.status, name: w.name, visible: false, identity: null }
 }
 
 /** Passport → number / expiry / date of birth; ITIN letter → ITIN + issue date (same helpers as today's upload). */
@@ -501,6 +537,8 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   if (fErr) throw new Error(`Could not read the file — please try again (${fErr.message}).`)
   if (!f) throw new Error("File not found.")
   if (f.state !== "live") throw new Error("Restore the file from the trash first.")
+  const areaKind = (f.store_owners as { kind?: string } | null)?.kind
+  if (visible && (areaKind === "business" || areaKind === "private")) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
   const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
   if (visible) {

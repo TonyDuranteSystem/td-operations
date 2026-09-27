@@ -5,7 +5,7 @@
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
-import { denyUnlessStoreStaff } from "../_auth"
+import { denyUnlessStoreStaff, denyUnlessAreaAccess } from "../_auth"
 
 export async function GET(req: NextRequest) {
   const denied = await denyUnlessStoreStaff()
@@ -13,6 +13,8 @@ export async function GET(req: NextRequest) {
   const owner = req.nextUrl.searchParams.get("owner")
   const folder = req.nextUrl.searchParams.get("folder")
   if (!owner) return NextResponse.json({ error: "owner is required" }, { status: 400 })
+  const noAccess = await denyUnlessAreaAccess({ ownerId: owner, folderId: folder })
+  if (noAccess) return noAccess
   try {
     const { folderContents } = await import("@/lib/crm-store/browse")
     return NextResponse.json(await folderContents(owner, folder), { headers: { "Cache-Control": "no-store" } })

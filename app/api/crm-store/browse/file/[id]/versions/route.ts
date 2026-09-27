@@ -5,11 +5,13 @@
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
-import { denyUnlessStoreStaff } from "../../../_auth"
+import { denyUnlessStoreStaff, denyUnlessAreaAccess } from "../../../_auth"
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
+  const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
+  if (noAccess) return noAccess
   const open = req.nextUrl.searchParams.get("open")
   try {
     if (open) {

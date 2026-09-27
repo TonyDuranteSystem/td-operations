@@ -5,11 +5,13 @@
 export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
-import { denyUnlessStoreStaff } from "../../_auth"
+import { denyUnlessStoreStaff, denyUnlessAreaAccess } from "../../_auth"
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
+  const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
+  if (noAccess) return noAccess
   try {
     const { readFileForStaff } = await import("@/lib/crm-store/browse")
     const f = await readFileForStaff(params.id)

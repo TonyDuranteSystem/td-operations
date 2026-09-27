@@ -8,7 +8,7 @@ export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { denyUnlessStoreStaff, denyUnlessStorePilotEnv } from "../_auth"
+import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../_auth"
 
 export async function POST(req: NextRequest) {
   const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
@@ -19,6 +19,8 @@ export async function POST(req: NextRequest) {
   if (!ownerId || !folderId || !storagePath || !fileName || !documentType) {
     return NextResponse.json({ error: "Choose a folder, a file and its document type." }, { status: 400 })
   }
+  const noAccess = await denyUnlessAreaAccess({ ownerId, folderId })
+  if (noAccess) return noAccess
   const { data: { user } } = await createClient().auth.getUser()
   try {
     const { staffUploadToStore } = await import("@/lib/crm-store/browse")
