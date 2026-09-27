@@ -126,11 +126,32 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     const c = parseSendClaim(body, now)
     if (!c) return NextResponse.json({ error: "bad claim" }, { status: 400 })
     if (c.ok === false) return NextResponse.json({ error: c.reason }, { status: 400 })
-    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_send", { p_channel_id: channel.id })
+    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_send", {
+      p_channel_id: channel.id,
+      p_supports_kinds: c.supports,
+    })
     if (claimError || typeof claimed !== "object" || claimed === null) {
       return NextResponse.json({ error: "could not claim" }, { status: 500 })
     }
-    return NextResponse.json({ ok: true, ...(claimed as Record<string, unknown>) })
+    const item = claimed as Record<string, unknown>
+    // A non-text claim needs the Mac to DOWNLOAD the file — mint a short-lived signed link to it (the bucket is
+    // private). If minting fails, fail this claim explicitly right here rather than hand back a row with nothing
+    // to download: the row stays 'unknown' otherwise and would sit stuck until a human resolves it.
+    if (item.claimed === true && item.kind && item.kind !== "text" && typeof item.media_path === "string") {
+      const { data: signed, error: signError } = await supabaseAdmin.storage.from(VOICE_BUCKET).createSignedUrl(item.media_path, 300)
+      if (signError || !signed?.signedUrl) {
+        await supabaseAdmin.rpc("wabridge_finish_send", {
+          p_channel_id: channel.id,
+          p_outbox_id: item.id as string,
+          p_ok: false,
+          p_message_id: null,
+          p_error: "could not prepare the file for download",
+        })
+        return NextResponse.json({ ok: true, claimed: false, reason: "held" })
+      }
+      return NextResponse.json({ ok: true, ...item, media_url: signed.signedUrl })
+    }
+    return NextResponse.json({ ok: true, ...item })
   }
 
   if (kind === "bridge.send.result") {
