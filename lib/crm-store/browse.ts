@@ -83,7 +83,9 @@ export async function listOwners(): Promise<BrowseOwner[]> {
 }
 
 /** A folder's children (or the owner's root when folderId is null) + its files, trashed ones included. */
-export async function folderContents(ownerId: string, folderId: string | null): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[] }> {
+export interface BrowsePerson { contactId: string; name: string }
+
+export async function folderContents(ownerId: string, folderId: string | null): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[] }> {
   let current: BrowseFolder | null = null
   if (folderId) {
     const { data } = await db().from("store_folders").select("id, name, kind, owner_id, trashed_at").eq("id", folderId).maybeSingle()
@@ -105,20 +107,25 @@ export async function folderContents(ownerId: string, folderId: string | null): 
     walk = data.parent_id
   }
 
-  const { data: subs } = await db().from("store_folders").select("id, name, kind, trashed_at").eq("parent_id", current.id).order("name")
+  const { data: subs } = await db().from("store_folders").select("id, name, kind, trashed_at").eq("parent_id", current.id).is("trashed_at", null).order("name")
   const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, store_file_versions!store_files_current_version_fk(size_bytes, mime_type)"
+  // live files only: the trash is its own view (Stage 1) — a trashed file must not sit among the live ones
   const { data: fs, error } = await db().from("store_files").select(fileSelect)
-    .eq("folder_id", current.id).neq("state", "purged").order("name")
+    .eq("folder_id", current.id).eq("state", "live").order("name")
   if (error) throw new Error(`store browse: ${error.message}`)
   // "2. Contacts" of a company: the company's people's OWN documents (each person's own storage), shown
   // here read-only so a member's passport is visible on the company page — never copied into the company.
   const peopleFiles: typeof fs = []
   const personName = new Map<string, string>()
+  const people: BrowsePerson[] = []
   if (current.kind === "contacts") {
     const { data: own } = await db().from("store_owners").select("account_id").eq("id", ownerId).maybeSingle()
     if (own?.account_id) {
-      const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id").eq("account_id", own.account_id)
+      const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
       if (lErr) throw new Error(`store browse: ${lErr.message}`)
+      for (const l of (links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[]) {
+        people.push({ contactId: l.contact_id, name: l.contacts?.full_name || "Contact" })
+      }
       const cids = (links ?? []).map((l: { contact_id: string }) => l.contact_id)
       if (cids.length > 0) {
         const { data: po } = await db().from("store_owners").select("id, contacts(full_name)").eq("kind", "person").in("contact_id", cids)
@@ -173,6 +180,7 @@ export async function folderContents(ownerId: string, folderId: string | null): 
     path,
     folders: (subs ?? []).map((s: { id: string; name: string; kind: string; trashed_at: string | null }) => ({ id: s.id, name: s.name, kind: s.kind, trashed: !!s.trashed_at })),
     files,
+    ...(current.kind === "contacts" ? { people } : {}),
   }
 }
 
@@ -286,6 +294,8 @@ export const STAFF_STORE_UPLOAD_PREFIX = "crm-uploads/store-staging/"
 
 export async function staffUploadToStore(p: {
   ownerId: string; folderId: string; storagePath: string; fileName: string; mimeType: string | null; documentType: string; actorId: string | null
+  /** uploading from a company's "2. Contacts": whose document it is (saved in that person's own storage) */
+  personContactId?: string | null
 }): Promise<{ fileId: string; write: string; name: string }> {
   const { saveBytesToStore } = await import("./writer")
   const { storeNameKey } = await import("./rules")
@@ -294,29 +304,53 @@ export async function staffUploadToStore(p: {
   if (!folder || folder.owner_id !== p.ownerId || folder.trashed_at) throw new Error("Upload into a live folder of this company or person only.")
   if (!p.storagePath.startsWith(STAFF_STORE_UPLOAD_PREFIX) || p.storagePath.includes("..")) throw new Error("Upload the file through the storage screen.")
   if (folder.kind === "root") throw new Error("Open one of the folders first — files go inside a folder, not at the top.")
-  if (folder.kind === "contacts") throw new Error("\"2. Contacts\" shows the people's own documents — upload a personal document into the person's own storage.")
   const { data: types } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
   if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
   const typeRow = types[0] as { display_name: string; metadata: { personal?: boolean } | null }
-  const { data: owner, error: ownErr } = await db().from("store_owners").select("kind, account_id, contact_id, service_delivery_id").eq("id", p.ownerId).single()
-  if (ownErr || !owner) throw new Error("This storage owner no longer exists.")
+  const { data: owner0, error: ownErr } = await db().from("store_owners").select("kind, account_id, contact_id, service_delivery_id").eq("id", p.ownerId).single()
+  if (ownErr || !owner0) throw new Error("This storage owner no longer exists.")
+  let owner = owner0 as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
+  // Uploading from a company's "2. Contacts" (how staff work today): the document belongs to ONE of the
+  // company's people and is saved in that person's own storage (#28), so it shows in "2. Contacts" of every
+  // company they are in. Only personal documents go there — company papers go in the company's folders.
+  let targetOwnerId = p.ownerId
+  let targetFolderId = p.folderId
+  let companyAccount: string | null = null
+  if (folder.kind === "contacts") {
+    if (typeRow.metadata?.personal !== true) {
+      throw new Error("\"2. Contacts\" holds the people's own documents (passport, ID, proof of address …). Company papers go in the company's folders.")
+    }
+    if (owner.kind !== "company" || !owner.account_id) throw new Error("Open the company to upload a person's document.")
+    if (!p.personContactId) throw new Error("Choose whose document this is.")
+    const { data: link, error: lkErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)")
+      .eq("account_id", owner.account_id).eq("contact_id", p.personContactId).maybeSingle()
+    if (lkErr) throw new Error(`Could not check the person — please try again (${lkErr.message}).`)
+    if (!link) throw new Error("That person is not linked to this company.")
+    const { ensurePersonOwner, folderOfKind } = await import("./formation-pilot")
+    const personName = (link as { contacts: { full_name: string | null } | null }).contacts?.full_name || "Person"
+    targetOwnerId = await ensurePersonOwner(p.personContactId, personName)
+    targetFolderId = await folderOfKind(targetOwnerId, "personal")
+    companyAccount = owner.account_id
+    owner = { kind: "person", account_id: null, contact_id: p.personContactId, service_delivery_id: null }
+  }
   // A personal document (passport, ID …) belongs to ONE person — never into a company's folders, where
   // every co-owner would see it once shared.
   if (typeRow.metadata?.personal === true && owner.kind !== "person") {
-    throw new Error("This is a personal document — upload it into the person's own storage (open the person in the list), not into the company's folders.")
+    throw new Error("This is a personal document — upload it in the company's \"2. Contacts\" and choose whose it is (it is kept in that person's own storage), not in the company's other folders.")
   }
   // Same name in the same folder = a new version of THAT file, whoever saved it first (the Formation
   // pilot, an earlier upload …): reuse its own key. A file saved without a key cannot take a version here.
   const { data: same, error: sameErr } = await db().from("store_files").select("id, caller_key, state")
-    .eq("folder_id", p.folderId).eq("name_key", storeNameKey(p.fileName)).neq("state", "purged")
+    .eq("folder_id", targetFolderId).eq("name_key", storeNameKey(p.fileName)).neq("state", "purged")
   if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
   if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
-  const callerKey = sameLive?.caller_key ?? `staff-upload:${p.folderId}:${storeNameKey(p.fileName)}`
+  const callerKey = sameLive?.caller_key ?? `staff-upload:${targetFolderId}:${storeNameKey(p.fileName)}`
   // Who the CRM row belongs to: the company, the person, or — for a company still being formed — the
   // client (and account, once linked) of the formation case, exactly as the Formation pilot links its rows.
-  let rowAccount: string | null = owner.kind === "company" ? owner.account_id : null
+  // a person's document uploaded from a company keeps BOTH links, as today's passports do
+  let rowAccount: string | null = owner.kind === "company" ? owner.account_id : companyAccount
   let rowContact: string | null = owner.kind === "person" ? owner.contact_id : null
   if (owner.kind === "formation" && owner.service_delivery_id) {
     const { data: sd } = await db().from("service_deliveries").select("account_id, contact_id").eq("id", owner.service_delivery_id).maybeSingle()
@@ -329,7 +363,7 @@ export async function staffUploadToStore(p: {
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
   const w = await saveBytesToStore({
-    ownerId: p.ownerId, folderId: p.folderId, name: p.fileName, mimeType, bytes,
+    ownerId: targetOwnerId, folderId: targetFolderId, name: p.fileName, mimeType, bytes,
     callerKey, contentChanged: true,
     documentType: p.documentType, published: false, actor: p.actorId,
   })

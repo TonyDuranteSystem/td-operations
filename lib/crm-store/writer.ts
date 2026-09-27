@@ -144,6 +144,30 @@ export async function storedSize(bucket: string, path: string): Promise<number> 
   return size
 }
 
+/**
+ * A personal document (passport, ID, proof of address, ITIN papers … — catalog flag `personal`) is saved ONLY
+ * into a PERSON's own storage (decision #28: one personal folder per person, shown in each of their
+ * companies' "2. Contacts"). Never into a company's folders, whichever screen or flow asks. Checked before
+ * any bytes move. Fails closed: if the type or the owner cannot be read, the save is refused.
+ */
+export class PersonalDocumentMisfileError extends Error {
+  constructor() {
+    super("This is a personal document — it can only be saved in the person's own storage (it then shows in their company's \"2. Contacts\"), never in a company folder.")
+    this.name = "PersonalDocumentMisfileError"
+  }
+}
+
+export async function assertPersonalGoesToPerson(ownerId: string, documentType: string | null | undefined): Promise<void> {
+  if (!documentType) return
+  const [{ data: t, error: tErr }, { data: o, error: oErr }] = await Promise.all([
+    db().from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", documentType).maybeSingle(),
+    db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle(),
+  ])
+  if (tErr || oErr || !o) throw new Error("store: could not check where this document may be saved — please try again.")
+  const personal = (t?.metadata as { personal?: boolean } | null)?.personal === true
+  if (personal && o.kind !== "person") throw new PersonalDocumentMisfileError()
+}
+
 /** A storage error worth ONE retry (gateway / unavailable / timeout), never a refusal or a bad request. */
 export function isTransientStorageError(message: string | null | undefined): boolean {
   return /bad gateway|gateway time-?out|service unavailable|\b50[234]\b|timed? ?out|ECONNRESET|fetch failed/i.test(message ?? "")
@@ -151,6 +175,7 @@ export function isTransientStorageError(message: string | null | undefined): boo
 
 /** Save server-side bytes. */
 export async function saveBytesToStore(input: SaveMeta & { bytes: Buffer }): Promise<WriteResult> {
+  await assertPersonalGoesToPerson(input.ownerId, input.documentType)
   const sha = sha256Hex(input.bytes)
   const path = storeObjectPath(input.ownerId)
   const put = () => db().storage.from(STORE_BUCKET).upload(path, input.bytes, {
@@ -254,6 +279,8 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
   const { data: claimed, error } = await db().rpc("store_claim_intent", { p_intent_id: p.intentId, p_actor: p.actor })
   if (error || !claimed) throw new Error(error?.message ?? "store: this upload slot is not valid")
   const i = claimed as { owner_id: string; folder_id: string; file_name: string; mime_type: string | null; caller_key: string | null; staging_path: string; dest_path: string }
+
+  await assertPersonalGoesToPerson(i.owner_id, p.documentType)
 
   // A retry after a move already happened: the object is at dest_path, not in staging any more.
   const { data: inStaging } = await db().storage.from(STORE_STAGING_BUCKET).exists(i.staging_path)

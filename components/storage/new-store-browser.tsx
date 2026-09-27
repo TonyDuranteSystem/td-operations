@@ -21,7 +21,7 @@ interface File_ {
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
   listed: boolean; personName: string | null; inPersonStorage: boolean
 }
-interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[] }
+interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[]; people?: { contactId: string; name: string }[] }
 interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
 
 /**
@@ -127,6 +127,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
   const [types, setTypes] = useState<DocType[] | null>(null)
   const [uploadFolder, setUploadFolder] = useState<string | null>(null)
   const [uploadType, setUploadType] = useState('')
+  const [uploadPerson, setUploadPerson] = useState('')
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
@@ -205,6 +206,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
 
   const startUpload = async (folderId: string) => {
     setUploadFolder(folderId)
+    setUploadType('')
+    setUploadPerson('')
     if (types) return
     try {
       setTypes((await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')).types)
@@ -213,9 +216,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     }
   }
 
-  const doUpload = async (file: File, folderId: string) => {
+  const doUpload = async (file: File, folderId: string, forPerson: boolean) => {
     if (!ownerId) return
     if (!uploadType) { toast.error('Choose the document type first.'); return }
+    if (forPerson && !uploadPerson) { toast.error('Choose whose document this is first.'); return }
     setUploading(true)
     try {
       // Storage refuses spaces and odd characters in keys — sanitize the KEY, keep the readable file name.
@@ -228,6 +232,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
       if (!put.ok) throw new Error(`The file could not be sent (status ${put.status}) — please try again.`)
       const r = await postJson<{ write: string; name: string }>('/api/crm-store/browse/upload', {
         ownerId, folderId, storagePath, fileName: file.name, mimeType: file.type, documentType: uploadType,
+        ...(forPerson ? { personContactId: uploadPerson } : {}),
       }, 'The upload could not be saved — please try again.')
       toast.success(r.write === 'versioned' ? `"${r.name}" saved as a new version` : r.write === 'unchanged' ? `"${r.name}" is identical to the current version — nothing changed` : `"${r.name}" uploaded (hidden from the client until you show it)`)
       setUploadFolder(null)
@@ -240,7 +245,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
     }
   }
 
-  const canUploadInto = (f: Fold) => !f.trashed && f.kind !== 'root' && f.kind !== 'contacts'
+  const canUploadInto = (f: Fold) => !f.trashed && f.kind !== 'root'
 
   const fileRow = (f: File_, inFolder: string | null, depth: number) => (
     <li key={f.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
@@ -298,12 +303,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
           <div>
             {uploadFolder === f.id && (
               <div className="my-1 flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 text-sm" style={{ marginLeft: `${depth * 20 + 22}px` }}>
+                {f.kind === 'contacts' && (
+                  <select value={uploadPerson} onChange={(e) => setUploadPerson(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm" disabled={uploading}>
+                    <option value="">Whose document?</option>
+                    {(c?.people ?? []).map((pp) => <option key={pp.contactId} value={pp.contactId}>{pp.name}</option>)}
+                  </select>
+                )}
                 <select value={uploadType} onChange={(e) => setUploadType(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm" disabled={uploading || !types}>
                   <option value="">{types ? 'Document type…' : 'Loading types…'}</option>
-                  {(types ?? []).map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.staffOnly ? ' (staff only)' : ''}</option>)}
+                  {(types ?? [])
+                    // a company's "2. Contacts" takes only personal documents; its other folders only company
+                    // documents; a person's own storage takes both
+                    .filter((t) => (ownerKind === 'person' ? true : (f.kind === 'contacts') === t.personal))
+                    .map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.staffOnly ? ' (staff only)' : ''}</option>)}
                 </select>
-                <input ref={fileInput} type="file" className="text-sm" disabled={uploading || !uploadType}
-                  onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file, f.id) }} />
+                <input ref={fileInput} type="file" className="text-sm" disabled={uploading || !uploadType || (f.kind === 'contacts' && !uploadPerson)}
+                  onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file, f.id, f.kind === 'contacts') }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
                 <button type="button" onClick={() => setUploadFolder(null)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>
               </div>
@@ -324,6 +339,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId }: { ownerId?: string }
   }
 
   const shown = (owners ?? []).filter((o) => !filter || o.label.toLowerCase().includes(filter.toLowerCase()))
+  // the company page shows a company; on the Storage page the picked owner says what it is
+  const ownerKind: Owner['kind'] = scopedOwnerId ? 'company' : ((owners ?? []).find((o) => o.id === ownerId)?.kind ?? 'company')
   const allOpen = !!root && root.folders.length > 0 && root.folders.every((f) => expanded.has(f.id))
 
   const right = (

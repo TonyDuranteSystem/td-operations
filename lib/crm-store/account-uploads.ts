@@ -1,8 +1,9 @@
 /**
  * When a flow that is NOT piloted yet (tax-return intake, onboarding setup …) reaches a company whose files
  * live in the new CRM store, `ensureCompanyFolder` refuses to make a Drive folder (job 685467b5). The
- * client's uploads must not then be filed nowhere: this saves each one into the store instead — the
- * company's "1. Company" folder, or the person's own storage for a passport — with no document type yet
+ * client's uploads must not then be filed nowhere: this saves each one into the store instead — where today's
+ * wizard copy puts them (tax-return uploads in "3. Tax", the rest in "1. Company"), or the person's own
+ * storage for a passport — with no document type yet
  * (staff classify it), hidden from the client, and raises one alarm so staff see it. Idempotent: the same
  * upload path saves once (re-runs make no copies).
  */
@@ -59,7 +60,8 @@ export async function saveUploadsToStoreForAccount(p: {
         out.passport = { content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, mimeType: blob.type || "application/pdf", fileName: name }
       }
       const w = await savePilotFile({
-        ownerId: target, folderKind: isPassport ? "personal" : "company", name, bytes, mimeType: blob.type || null,
+        // where today's wizard copies put them: tax-return uploads in "3. Tax", the rest in "1. Company"
+        ownerId: target, folderKind: isPassport ? "personal" : p.flow === "tax-intake" ? "tax" : "company", name, bytes, mimeType: blob.type || null,
         documentType: isPassport ? "passport" : null, callerKey: `${p.flow}-upload:${p.accountId}:${path}`, published: false,
       })
       out.saved++

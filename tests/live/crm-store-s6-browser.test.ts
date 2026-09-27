@@ -231,9 +231,10 @@ describe("new storage screens — live sandbox", () => {
     const { saveUploadsToStoreForAccount } = await import("@/lib/crm-store/account-uploads")
     const r1 = await saveUploadsToStoreForAccount({ accountId: fx.account, flow: "tax-intake", paths, passportContact: { contactId: fx.personB, name: `ZZ B S6B ${tag}` } })
     expect(r1).toMatchObject({ saved: 2, failed: [] })
-    const { data: inCompany } = await db.from("store_files").select("id, document_type, published").eq("owner_id", fx.owner).eq("name", "bank_statement.pdf")
+    const { data: inCompany } = await db.from("store_files").select("id, document_type, published, store_folders!inner(kind)").eq("owner_id", fx.owner).eq("name", "bank_statement.pdf")
     expect(inCompany).toHaveLength(1)
     expect(inCompany[0]).toMatchObject({ document_type: null, published: false })
+    expect(inCompany[0].store_folders.kind).toBe("tax") // tax-return uploads land in "3. Tax", as today
     const { data: inPerson } = await db.from("store_files").select("id, document_type").eq("owner_id", fx.ownerB).eq("name", "passport_owner.pdf")
     expect(inPerson).toHaveLength(1)
     expect(inPerson[0].document_type).toBe("passport")
@@ -250,16 +251,35 @@ describe("new storage screens — live sandbox", () => {
     expect(isStoreOwnedRefusal(err)).toBe(true)
   })
 
-  it("sharing from the old list (updateDocument) asks the store first: a passport filed with a company is refused and nothing is written", async () => {
-    const { savePilotFile, upsertStoreDocumentRow } = await import("@/lib/crm-store/formation-pilot")
-    const w = await savePilotFile({ ownerId: fx.owner, folderKind: "company", name: `misfiled passport ${tag}.pdf`, bytes: await pdf("pp"), mimeType: "application/pdf", documentType: "passport", callerKey: `zz-s6b-misfiled:${tag}` })
-    const row = await upsertStoreDocumentRow(w.fileId, { file_name: w.name, account_id: fx.account, contact_id: fx.personA, portal_visible: false, category: 2, category_name: "Contacts" })
-    const { updateDocument } = await import("@/lib/operations/document")
-    const u = await updateDocument({ id: row.id, patch: { portal_visible: true } } as never)
-    expect(u.success).toBe(false)
-    expect(u.error).toMatch(/personal document/)
-    const { data: r } = await db.from("documents").select("portal_visible").eq("id", row.id).single()
-    expect(r.portal_visible).toBe(false)
+  it("from the company's '2. Contacts' staff upload a person's passport: it lands in THAT person's own storage, listed with both links, and shows in '2. Contacts'", async () => {
+    const { POST } = await import("@/app/api/crm-store/browse/upload/route")
+    const s1 = await stage("ID card.pdf", await pdf("id"))
+    const r = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.contactsFolder, storagePath: s1, fileName: "ID card.pdf", mimeType: "application/pdf", documentType: "id_document", personContactId: fx.personA }))
+    const j = await r.json()
+    expect(r.status, JSON.stringify(j)).toBe(200)
+    const { data: f } = await db.from("store_files").select("owner_id").eq("id", j.fileId).single()
+    expect(f.owner_id).toBe(fx.ownerA)
+    const { data: row } = await db.from("documents").select("account_id, contact_id, category, portal_visible").eq("drive_file_id", `store:${j.fileId}`).single()
+    expect(row).toMatchObject({ account_id: fx.account, contact_id: fx.personA, category: 2, portal_visible: false })
+    const { folderContents } = await import("@/lib/crm-store/browse")
+    const c = await folderContents(fx.owner, fx.contactsFolder)
+    expect(c.files.map((x) => x.id)).toContain(j.fileId)
+    expect(c.people?.map((x) => x.contactId)).toEqual(expect.arrayContaining([fx.personA, fx.personB]))
+    // a company paper in "2. Contacts", and a person's document without saying whose, are refused
+    const s2 = await stage("x.pdf", await pdf("x"))
+    const r2 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.contactsFolder, storagePath: s2, fileName: "x.pdf", mimeType: "application/pdf", documentType: "articles_of_organization", personContactId: fx.personA }))
+    expect(r2.status).toBe(400)
+    const s3 = await stage("y.pdf", await pdf("y"))
+    const r3 = await POST(post("http://x", { ownerId: fx.owner, folderId: fx.contactsFolder, storagePath: s3, fileName: "y.pdf", mimeType: "application/pdf", documentType: "passport" }))
+    expect((await r3.json()).error).toMatch(/whose/)
+  })
+
+  it("a passport can NEVER be saved into a company folder — refused at the save step itself, nothing stored", async () => {
+    const { savePilotFile } = await import("@/lib/crm-store/formation-pilot")
+    await expect(savePilotFile({ ownerId: fx.owner, folderKind: "company", name: `misfiled passport ${tag}.pdf`, bytes: await pdf("pp"), mimeType: "application/pdf", documentType: "passport", callerKey: `zz-s6b-misfiled:${tag}` }))
+      .rejects.toThrow(/personal document/)
+    const { data } = await db.from("store_files").select("id").eq("owner_id", fx.owner).eq("name", `misfiled passport ${tag}.pdf`)
+    expect(data).toHaveLength(0)
   })
 
   it("Go Back on a company that already exists KEEPS its stored file (and row) and says so; a formation-stage file is still trashed", async () => {
