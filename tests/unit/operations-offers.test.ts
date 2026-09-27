@@ -28,6 +28,7 @@ let insertSucceeds = true
 
 const offerInserts: Array<Record<string, unknown>> = []
 const leadInserts: Array<Record<string, unknown>> = []
+let ownedBillTo = false
 const leadUpdates: Array<Record<string, unknown>> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
 const whopCalls: Array<Record<string, unknown>> = []
@@ -68,6 +69,15 @@ vi.mock("@/lib/supabase-admin", () => ({
             return Promise.resolve({ data: leadFixture, error: null })
           }),
           then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
+        })
+        return chain
+      }
+      if (table === "account_contacts" || table === "billing_entities") {
+        const chain: Record<string, unknown> = {}
+        Object.assign(chain, {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          limit: vi.fn(() => Promise.resolve({ data: ownedBillTo ? [{ id: "x" }] : [], error: null })),
         })
         return chain
       }
@@ -459,6 +469,26 @@ describe("createOffer — no automatic anchor lead (workspace-only plan S1)", ()
     })
     const insert = offerInserts.find((o) => !o.__update && o.token === "test-billto-ok")
     expect(insert?.bill_to).toMatchObject({ type: "entity", entity: { name: "Rossi Srl" } })
+  })
+
+  it("S1: 'Invoice to' must belong to this client (company / saved payer)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    const base = {
+      client_name: "X", language: "en", payment_type: "bank_transfer" as const, contract_type: "renewal" as const,
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      contact_id: "contact-1",
+    }
+    const OTHER = "1e23b37f-6a09-4ebf-bcf6-328176121c50"
+    ownedBillTo = false
+    const foreignCo = await createOffer({ ...base, token: "t-own-1", bill_to: { type: "company", account_id: OTHER } })
+    expect(foreignCo.outcome).toBe("validation_error")
+    const foreignEntity = await createOffer({ ...base, token: "t-own-2", bill_to: { type: "entity", billing_entity_id: OTHER } })
+    expect(foreignEntity.outcome).toBe("validation_error")
+    ownedBillTo = true
+    const linked = await createOffer({ ...base, token: "t-own-3", bill_to: { type: "company", account_id: OTHER } })
+    expect(linked.outcome).not.toBe("validation_error")
+    ownedBillTo = false
   })
 
   it("does NOT auto-create a lead for a non-formation contact-only offer (e.g. ITIN)", async () => {

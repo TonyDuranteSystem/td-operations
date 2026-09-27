@@ -94,6 +94,9 @@ export function buildRevisedOfferInsert(
     // document the client compares side by side with the previous version.
     credit_kind: (original.credit_kind as string | null | undefined) ?? null,
     referrer_contact_id: (original.referrer_contact_id as string | null | undefined) ?? null,
+    // "Invoice to" (S1 2026-09-27) is a fact of the deal — who pays. Dropping it
+    // silently re-addressed v2's invoice to the person (bug-hunter).
+    bill_to: (original.bill_to as unknown) ?? null,
     // WS-C: the payment plan is a FACT OF THE DEAL — what the client agreed to pay and when.
     // Copied VERBATIM, triggers included. Two reasons it cannot be left to regeneration:
     // dropping it would silently turn a EUR1,250 + EUR1,250 agreement back into one EUR2,500

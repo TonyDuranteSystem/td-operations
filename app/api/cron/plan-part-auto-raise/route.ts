@@ -41,6 +41,7 @@ import {
 } from "@/lib/offers/payment-plan-state"
 import { trancheInvoiceDescription } from "@/lib/offers/payment-plan"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
+import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { sendTDInvoice } from "@/lib/invoice-auto-send"
 import type { Json } from "@/lib/database.types"
 
@@ -51,6 +52,8 @@ interface CandidateOffer {
   contact_id: string | null
   currency: string | null
   services: unknown
+  bill_to: unknown
+  lead_id: string | null
 }
 
 export async function GET(req: NextRequest) {
@@ -70,7 +73,7 @@ export async function GET(req: NextRequest) {
     // eslint-disable-next-line no-restricted-syntax -- payment_plan postdates the generated types for this table.
     const offerQuery = supabaseAdmin
       .from("offers")
-      .select("token, client_name, account_id, contact_id, currency, services, payment_plan" as never)
+      .select("token, client_name, account_id, contact_id, currency, services, bill_to, lead_id, payment_plan" as never)
       .in("status", ["signed", "completed"])
       .not("payment_plan" as never, "is", null) as unknown as {
         then: PromiseLike<{ data: (CandidateOffer & { payment_plan: unknown })[] | null; error: { message: string } | null }>["then"]
@@ -92,8 +95,26 @@ export async function GET(req: NextRequest) {
         const due = duePartsToAutoRaise(status, today)
         if (due.length === 0) continue
 
-        if (!offer.account_id) {
-          for (const d of due) results.push({ token: offer.token, seq: d.part.seq, outcome: "error: offer has no account_id — cannot invoice" })
+        // "Invoice to" (S1 2026-09-27): every part goes to the same payer as the
+        // offer — its chosen payer, else the company it was made under, else the person.
+        // A lead's offer only learns its person when the client signs (the lead
+        // is linked to the contact then, the offer row is not).
+        let personId = offer.contact_id
+        if (!personId && offer.lead_id) {
+          const { data: lead } = await supabaseAdmin
+            .from("leads")
+            .select("converted_to_contact_id")
+            .eq("id", offer.lead_id)
+            .maybeSingle()
+          personId = lead?.converted_to_contact_id ?? null
+        }
+        const target = await invoiceTargetForOffer({
+          billTo: offer.bill_to ?? null,
+          offerAccountId: offer.account_id,
+          contactId: personId,
+        })
+        if (!target.account_id && !target.contact_id) {
+          for (const d of due) results.push({ token: offer.token, seq: d.part.seq, outcome: "error: offer has no company or person — cannot invoice" })
           continue
         }
 
@@ -108,8 +129,9 @@ export async function GET(req: NextRequest) {
             const cardFeeRate = await resolveTrancheCardFeeRate(offer.token)
 
             const invoice = await createTDInvoice({
-              account_id: offer.account_id,
-              contact_id: offer.contact_id ?? undefined,
+              account_id: target.account_id ?? undefined,
+              contact_id: target.contact_id ?? undefined,
+              billing_entity_id: target.billing_entity_id,
               line_items: [{ description, unit_price: part.amount, quantity: 1 }],
               currency: part.currency === "EUR" ? "EUR" : "USD",
               due_date: part.trigger.date,

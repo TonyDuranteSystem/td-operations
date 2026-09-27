@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-let existing: Array<{ id: string; entity_name: string }> = []
+let existing: Array<{ id: string; entity_name: string; billing_address?: string | null; country?: string | null; vat_number?: string | null; fiscal_code?: string | null }> = []
 const inserts: Array<Record<string, unknown>> = []
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
@@ -24,6 +24,16 @@ describe("ensureBillingEntity", () => {
   it("reuses the contact's entity with the same name (case/space-insensitive)", async () => {
     existing = [{ id: "be-1", entity_name: "Rossi Srl" }]
     expect(await ensureBillingEntity("c1", { name: " rossi srl " })).toBe("be-1")
+    expect(inserts).toHaveLength(0)
+  })
+  it("same name but NEW address/VAT → a new entity (the invoice prints what staff typed; old invoices keep theirs)", async () => {
+    existing = [{ id: "be-1", entity_name: "Rossi Srl", billing_address: "Via Vecchia 1", vat_number: "IT111" }]
+    expect(await ensureBillingEntity("c1", { name: "Rossi Srl", address: "Via Nuova 2", vat_number: "IT222" })).toBe("be-new")
+    expect(inserts[0]).toMatchObject({ billing_address: "Via Nuova 2", vat_number: "IT222" })
+  })
+  it("same details retyped (spacing/case) → reuses the entity", async () => {
+    existing = [{ id: "be-1", entity_name: "Rossi Srl", billing_address: "Via Roma 1, Milano", country: "Italy", vat_number: "IT111" }]
+    expect(await ensureBillingEntity("c1", { name: "ROSSI SRL", address: "via roma 1,  Milano", country: " italy", vat_number: "it111" })).toBe("be-1")
     expect(inserts).toHaveLength(0)
   })
   it("creates it otherwise, with the typed details", async () => {

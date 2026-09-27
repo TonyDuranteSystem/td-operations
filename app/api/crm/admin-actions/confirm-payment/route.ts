@@ -133,11 +133,12 @@ export async function POST(request: Request) {
       selected_services: unknown
       bill_to: unknown
       account_id: string | null
+      contact_id: string | null
       lead_id: string | null
       formation_state: string | null
     }
     const offerSelect =
-      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, bill_to, account_id, lead_id, formation_state"
+      "token, status, contract_type, bundled_pipelines, cost_summary, client_email, client_name, services, selected_services, bill_to, account_id, contact_id, lead_id, formation_state"
     let offer: ResolvedOffer | null = null
 
     if (offer_token) {
@@ -431,7 +432,9 @@ export async function POST(request: Request) {
     // 5. Resolve account + contact for the payment record.
     // Priority: offer.account_id (most specific) > body.account_id > resolved
     // via email lookup. Contact: lookup by clientEmail.
-    let resolvedContactId: string | null = contact_id || null
+    // The person the offer was made for wins (S1 2026-09-27) — activation uses
+    // the same one, so services and invoice land on the same person.
+    let resolvedContactId: string | null = offer?.contact_id || contact_id || null
     if (clientEmail) {
       const { data: contact } = await supabaseAdmin
         .from("contacts")
@@ -449,13 +452,21 @@ export async function POST(request: Request) {
     let resolvedAccountId: string | null = null
     let resolvedBillingEntityId: string | null = null
     if (offer) {
-      const target = await invoiceTargetForOffer({
-        billTo: offer.bill_to ?? null,
-        offerAccountId: offer.account_id,
-        contactId: resolvedContactId,
-      })
-      resolvedAccountId = target.account_id
-      resolvedBillingEntityId = target.billing_entity_id
+      // The activation is already locked (payment_confirmed) at this point — a
+      // throw here would strand it behind a 409 on retry. On a billing-entity
+      // DB error fall back to the offer's own company / the person and say so.
+      try {
+        const target = await invoiceTargetForOffer({
+          billTo: offer.bill_to ?? null,
+          offerAccountId: offer.account_id,
+          contactId: resolvedContactId,
+        })
+        resolvedAccountId = target.account_id
+        resolvedBillingEntityId = target.billing_entity_id
+      } catch (err) {
+        console.error("[confirm-payment] Invoice-to resolution failed — billing the offer's company/person instead:", err instanceof Error ? err.message : String(err))
+        resolvedAccountId = offer.account_id ?? null
+      }
     } else {
       resolvedAccountId = account_id || null
     }

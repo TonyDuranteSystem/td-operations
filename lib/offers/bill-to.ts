@@ -91,3 +91,19 @@ export function resolveInvoiceTarget(p: {
   if ("billing_entity_id" in billTo) return { ...base, account_id: null, billing_entity_id: billTo.billing_entity_id }
   return { ...base, account_id: null, new_entity: billTo.entity }
 }
+
+const norm = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLowerCase()
+
+/** Same payer with the same details? Pure — used to reuse vs create a billing entity. */
+export function sameBillingEntity(
+  row: { entity_name: string | null; billing_address?: string | null; country?: string | null; vat_number?: string | null; fiscal_code?: string | null },
+  e: BillToEntityDetails,
+): boolean {
+  return (
+    norm(row.entity_name) === norm(e.name) &&
+    norm(row.billing_address) === norm(e.address) &&
+    norm(row.country) === norm(e.country) &&
+    norm(row.vat_number) === norm(e.vat_number) &&
+    norm(row.fiscal_code) === norm(e.fiscal_code)
+  )
+}

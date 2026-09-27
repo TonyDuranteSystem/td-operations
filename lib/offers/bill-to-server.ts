@@ -5,7 +5,7 @@
  * first time, then reused). See lib/offers/bill-to.ts for the rule.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { resolveInvoiceTarget, type BillToEntityDetails } from "@/lib/offers/bill-to"
+import { resolveInvoiceTarget, type BillToEntityDetails, sameBillingEntity } from "@/lib/offers/bill-to"
 
 export interface ResolvedInvoiceTarget {
   account_id: string | null
@@ -25,14 +25,20 @@ export async function offerBillTo(offerToken: string | null | undefined): Promis
   return (data as { bill_to?: unknown } | null)?.bill_to ?? null
 }
 
-/** Find the contact's billing entity with this name (case-insensitive), else create it. */
+/**
+ * Find the contact's billing entity with these EXACT details (name, address,
+ * country, VAT, fiscal code — trimmed, case-insensitive), else create it.
+ * Name alone is not enough: a payer who moved or changed VAT must print the
+ * NEW details, and editing the old row would rewrite past invoices' Bill To
+ * (the PDF reads the entity live) — so a changed payer gets a new row.
+ */
 export async function ensureBillingEntity(contactId: string, e: BillToEntityDetails): Promise<string> {
   const { data: existing, error: findErr } = await supabaseAdmin
     .from("billing_entities")
-    .select("id, entity_name")
+    .select("id, entity_name, billing_address, country, vat_number, fiscal_code")
     .eq("contact_id", contactId)
   if (findErr) throw new Error(`billing entity lookup failed: ${findErr.message}`)
-  const match = (existing ?? []).find((r) => (r.entity_name ?? "").trim().toLowerCase() === e.name.trim().toLowerCase())
+  const match = (existing ?? []).find((r) => sameBillingEntity(r, e))
   if (match) return match.id
   const { data: created, error: insErr } = await supabaseAdmin
     .from("billing_entities")

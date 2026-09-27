@@ -492,6 +492,37 @@ async function tryCreateWhopPlan(params: {
 
 // ─── Main ──────────────────────────────────────────────────────
 
+/** null when the "Invoice to" choice belongs to this client, else a staff-readable reason. */
+async function checkBillToOwnership(
+  billTo: ReturnType<typeof parseBillTo>["billTo"] | null,
+  offerAccountId: string | null,
+  contactId: string | null,
+): Promise<string | null> {
+  if (!billTo) return null
+  if (billTo.type === "company") {
+    if (billTo.account_id === offerAccountId) return null
+    if (!contactId) return "Invoice to: that company is not this client's — pick the person or type the payer's details."
+    const { data } = await supabaseAdmin
+      .from("account_contacts")
+      .select("account_id")
+      .eq("contact_id", contactId)
+      .eq("account_id", billTo.account_id)
+      .limit(1)
+    return (data ?? []).length > 0 ? null : "Invoice to: that company is not linked to this client."
+  }
+  if (billTo.type === "entity" && "billing_entity_id" in billTo) {
+    if (!contactId) return "Invoice to: that saved payer is not this client's — type the payer's details instead."
+    const { data } = await supabaseAdmin
+      .from("billing_entities")
+      .select("id")
+      .eq("id", billTo.billing_entity_id)
+      .eq("contact_id", contactId)
+      .limit(1)
+    return (data ?? []).length > 0 ? null : "Invoice to: that saved payer belongs to another client."
+  }
+  return null
+}
+
 export async function createOffer(params: CreateOfferParams): Promise<CreateOfferResult> {
   try {
     // 1. Validate JSONB fields
@@ -502,6 +533,13 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const billToParsed = parseBillTo(params.bill_to)
     if (billToParsed.error) {
       return { success: false, outcome: "validation_error", error: billToParsed.error }
+    }
+    // "Invoice to" must belong to THIS client: the company the offer is made
+    // under or one the person is linked to; a saved payer of this person.
+    // Never another client's company or payer (bug-hunter, S1 2026-09-27).
+    const billToOwnershipError = await checkBillToOwnership(billToParsed.billTo ?? null, params.account_id ?? null, params.contact_id ?? null)
+    if (billToOwnershipError) {
+      return { success: false, outcome: "validation_error", error: billToOwnershipError }
     }
 
     // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same

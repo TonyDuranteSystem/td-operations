@@ -295,6 +295,9 @@ export async function POST(req: NextRequest) {
           account_id: invoiceTarget.account_id ?? undefined,
           contact_id: contactId ?? undefined,
           billing_entity_id: invoiceTarget.billing_entity_id,
+          // The offer showed the PERSON's paid-call credit — net that same pool
+          // even when the invoice is addressed to a company.
+          credit_scope: "contact",
           line_items: [{
             description: signingBill.description,
             unit_price: signingBill.amount,

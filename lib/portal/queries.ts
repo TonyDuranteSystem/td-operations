@@ -451,8 +451,14 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
     if (sourceOfferToken && tokenToLead.has(sourceOfferToken)) {
       return tokenToLead.get(sourceOfferToken) ?? null
     }
+    // S1 (2026-09-27): the SD's offer is known and has NO lead — an existing
+    // client's new company, anchored on the offer. Never borrow the lead of
+    // their FIRST company here: that sent the new company's wizard to the old
+    // company's lead (bug-hunter blocker).
+    if (sourceOfferToken && tokenToOfferId.has(sourceOfferToken)) return null
     const token = extractOfferTokenFromNotes(notes)
     if (token && tokenToLead.has(token)) return tokenToLead.get(token) ?? null
+    if (token && tokenToOfferId.has(token)) return null
     // Fallback only when there is exactly one in-progress formation, so we
     // never misattribute a lead to the wrong company.
     return sds.length === 1 ? soleFormationLeadId : null
