@@ -392,6 +392,26 @@ describe("new storage screens — live sandbox", () => {
     expect(f.state).toBe("trashed")
   })
 
+  it("staff add a custom document type while uploading (today's Custom…) — company type from a company folder, personal from 2. Contacts; adding it again reuses it", async () => {
+    const { POST } = await import("@/app/api/crm-store/browse/types/route")
+    const name = `ZZ Custom Letter ${tag}`
+    const r1 = await (await POST(post("http://x", { name, folderKind: "correspondence" }))).json()
+    expect(r1).toMatchObject({ created: true, personal: false })
+    const r2 = await (await POST(post("http://x", { name, folderKind: "correspondence" }))).json()
+    expect(r2).toMatchObject({ created: false, slug: r1.slug })
+    const { data: e } = await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", r1.slug).single()
+    expect(e.metadata).toMatchObject({ personal: false, legacy_category: 5, staff_only: false, custom: true })
+    const { data: log } = await db.from("catalog_decision_log").select("action").eq("catalog_id", "storage_document_types").eq("action", "added").order("created_at", { ascending: false }).limit(1)
+    expect(log?.[0]?.action).toBe("added")
+    const p1 = await (await POST(post("http://x", { name: `ZZ Custom ID ${tag}`, folderKind: "contacts" }))).json()
+    expect(p1.personal).toBe(true)
+    const { POST: upload } = await import("@/app/api/crm-store/browse/upload/route")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const corr = await folderOfKind(fx.owner, "correspondence")
+    const u = await (await upload(post("http://x", { ownerId: fx.owner, folderId: corr, storagePath: await stage("c.pdf", await pdf("c")), fileName: "c.pdf", mimeType: "application/pdf", documentType: r1.slug, visible: false }))).json()
+    expect(u.write).toBe("created")
+  }, 60_000)
+
   it("merging two people who both have their own storage is refused in plain words", async () => {
     const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
     expect(await storeMergeBlocker(fx.personA, fx.personB)).toMatch(/Both contacts/)

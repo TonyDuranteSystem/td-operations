@@ -158,6 +158,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [upType, setUpType] = useState('')
   const [upName, setUpName] = useState('')
   const [upVisible, setUpVisible] = useState(true)
+  const [customName, setCustomName] = useState('')
+  const [addingType, setAddingType] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
   // row menu / inline rename / delete confirm / drag and drop
@@ -316,6 +318,25 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const ownerKind: Owner['kind'] = scopedOwnerId ? scopedKind : ((owners ?? []).find((o) => o.id === ownerId)?.kind ?? 'company')
   const upTypes = (types ?? []).filter((t) => (ownerKind === 'person' ? true : upIsContacts === t.personal))
   const upPeople = upFolderObj ? loaded[upFolderObj.id]?.people ?? [] : []
+
+  /** today's "Custom…" type: added once, then listed for everyone (catalog, with who added it) */
+  const addCustomType = async () => {
+    if (!upFolderObj) return
+    setAddingType(true)
+    try {
+      const folderKind = ownerKind === 'person' ? (upFolderObj.kind === 'person_tax' ? 'person_tax' : 'personal') : upFolderObj.kind
+      const r = await postJson<{ slug: string; name: string; created: boolean }>('/api/crm-store/browse/types', { name: customName, folderKind }, 'The type could not be added.')
+      const fresh = await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')
+      setTypes(fresh.types)
+      setUpType(r.slug)
+      setCustomName('')
+      toast.success(r.created ? `New document type "${r.name}" added` : `"${r.name}" already exists — selected`)
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'The type could not be added.')
+    } finally {
+      setAddingType(false)
+    }
+  }
 
   const doUpload = async (file: File) => {
     if (!ownerId || !upFolder) { toast.error('Choose the folder first.'); return }
@@ -546,7 +567,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 <select value={upType} onChange={(e) => setUpType(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading || !types || !upFolder}>
                   <option value="">{types ? 'Document type…' : 'Loading types…'}</option>
                   {upTypes.map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.staffOnly ? ' (staff only)' : ''}</option>)}
+                  <option value="__custom__">Custom…</option>
                 </select>
+                {upType === '__custom__' && (
+                  <>
+                    <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="New type name" className="w-44 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={addingType} />
+                    <button type="button" disabled={addingType || customName.trim().length < 2} onClick={addCustomType}
+                      className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50">
+                      {addingType ? 'Adding…' : 'Add'}
+                    </button>
+                  </>
+                )}
                 <input value={upName} onChange={(e) => setUpName(e.target.value)} placeholder="Display name (optional)" className="w-52 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading} />
                 <label className="inline-flex items-center gap-1.5 text-xs text-zinc-700">
                   <input type="checkbox" checked={upVisible} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading} />
@@ -555,7 +586,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="text-sm"
-                  disabled={uploading || !upFolder || !upType || (upIsContacts && ownerKind !== 'person' && !upPerson)}
+                  disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && ownerKind !== 'person' && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
                 <button type="button" onClick={() => setUploadOpen(false)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>

@@ -271,3 +271,17 @@ describe("rename — the store's name rules, extension kept", async () => {
     expect(() => cleanNewFileName(".pdf", "x.pdf")).toThrow()
   })
 })
+
+describe("custom document types — names", async () => {
+  const { customTypeSlug, cleanTypeName } = await import("@/lib/crm-store/custom-types")
+  it("builds a plain slug", () => {
+    expect(customTypeSlug("Lease Amendment")).toBe("lease_amendment")
+    expect(customTypeSlug("  Certificato d'Identità  ")).toBe("certificato_d_identita")
+    expect(customTypeSlug("W-8BEN (2026)")).toBe("w_8ben_2026")
+  })
+  it("refuses empty / too long names", () => {
+    expect(() => cleanTypeName(" a ")).toThrow()
+    expect(() => cleanTypeName("x".repeat(81))).toThrow()
+    expect(cleanTypeName("  Lease   Amendment ")).toBe("Lease Amendment")
+  })
+})
