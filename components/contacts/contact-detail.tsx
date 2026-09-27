@@ -41,7 +41,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { NewStoreBrowser, useStoreOwnerForContact } from '@/components/storage/new-store-browser'
+import { NewStoreBrowser, useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
@@ -3096,6 +3096,9 @@ function ContactDocumentsTab({
   const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
   const [togglingVis, setTogglingVis] = useState<string | null>(null)
   const [activeDocScope, setActiveDocScope] = useState<string>('personal')
+  const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
+  const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
+  const companyScopeInStore = !!personStoreId && activeCompanyId !== '' && !!activeCompanyStore.data?.ownerId
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
@@ -3285,12 +3288,15 @@ function ContactDocumentsTab({
   // contact belongs to. A doc carrying an account_id belongs to that company's
   // scope; a doc with no account_id is personal. Lets staff see each company's
   // files on its own tab instead of one merged pile (Adam Mihaly owns THW + LUMA).
+  // New storage (decision #28): the person's OWN documents live once in their personal storage — they count
+  // under "Personal" even though their listing also names the company it was filed from.
+  const isOwnStoreDoc = (d: ContactDocumentRecord) => (d.drive_file_id ?? '').startsWith('store:') && d.category === 2
   const docScopes = [
-    { key: 'personal', label: 'Personal', count: documents.filter(d => !d.account_id).length },
+    { key: 'personal', label: 'Personal', count: documents.filter(d => !d.account_id || isOwnStoreDoc(d)).length },
     ...accounts.map(a => ({
       key: a.id,
       label: a.company_name,
-      count: documents.filter(d => d.account_id === a.id).length,
+      count: documents.filter(d => d.account_id === a.id && !isOwnStoreDoc(d)).length,
     })),
   ]
   const scopedDocuments = activeDocScope === 'personal'
@@ -3548,7 +3554,7 @@ function ContactDocumentsTab({
           {!personStoreId && uploadButton}
         </div>
       </div>
-      {personStoreId ? personStoreSection : fileBrowserSection}
+      {!personStoreId && fileBrowserSection}
       {!personStoreId && uploadPanel}
 
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
@@ -3575,14 +3581,21 @@ function ContactDocumentsTab({
         ))}
       </div>
 
-      {scopedDocuments.length === 0 && (
+      {/* New storage: "Personal" = the person's own storage; a company tab = that company's storage (when the
+          company is in the new storage too) — the same screen as the company page, with all its tools */}
+      {personStoreId && activeDocScope === 'personal' && personStoreSection}
+      {companyScopeInStore && activeCompanyStore.data?.ownerId && (
+        <NewStoreBrowser ownerId={activeCompanyStore.data.ownerId} />
+      )}
+
+      {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && scopedDocuments.length === 0 && (
         <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
           <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p>No documents in this section</p>
         </div>
       )}
 
-      {sortedCategories.map(category => (
+      {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && sortedCategories.map(category => (
         <div key={category} className="space-y-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             {category} ({grouped[category].length})
