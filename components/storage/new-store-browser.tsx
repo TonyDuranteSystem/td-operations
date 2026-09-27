@@ -398,10 +398,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </button>
         )}
         <div className="relative">
-          <FastTooltip label="More"><button type="button" aria-label="More" onClick={() => { setMenuFor(menuFor === f.id ? null : f.id); setMoveFor(null); setConfirmDelete(null) }}
+          <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === f.id ? null : f.id); setMoveFor(null); setConfirmDelete(null) }}
             className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
           {menuFor === f.id && (
-            <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg">
+            <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
               <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50"
                 onClick={() => { setMenuFor(null); setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }}>
                 <Pencil className="h-3.5 w-3.5" />Rename
