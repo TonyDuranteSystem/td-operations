@@ -1,30 +1,41 @@
 'use client'
 
 /**
- * Browser of the NEW CRM store (job 685467b5) — Storage page → "New storage", and the Files tab of a
- * company whose files live in the new store (scoped to that one owner via `ownerId`).
- * Owners (companies / people / companies being formed) → a folder TREE (every folder stays on screen; each opens and
- * closes in place, like the Drive view) → files. A file opens INSIDE the CRM
- * (preview panel, no new tab); staff can show / hide it for the client (never for a staff-only file) and
- * upload into a folder (same name in the same folder = a new version). No rename / move / delete here.
+ * Browser of the NEW CRM store (job 685467b5) — Storage page → "New storage", and the Files / Documents tabs
+ * of a company or person whose files live in the new store (scoped to that one owner via `ownerId`).
+ *
+ * Left side (Storage page, master plan Part 14): Clients grouped automatically from the CRM (by state, People,
+ * Companies being formed, Closed / Cancelled, Missing state, Unfiled) + Business (the firm's own folders) +
+ * My files (the owner-only login). Right side: the path, then the folder TREE (each folder opens and closes in
+ * place). Folders: + Folder, New tax year, rename / move / delete for the folders staff made (the fixed ones are
+ * locked). Files open INSIDE the CRM; show / hide for the client; rename / move (tree picker or drag) / delete.
+ * A company's "2. Contacts" shows one branch per person — that person's OWN storage (#28), through the company.
+ * When the system can't work something out it ASKS (Part 16): one question, the evidence, real choices.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, User, Hammer, Folder, FolderOpen, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff, Lock, Trash2, Layers, X, Upload, Loader2, RefreshCw, Search, ScanText, MoreHorizontal, Pencil, FolderInput } from 'lucide-react'
+import {
+  Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
+  Lock, Trash2, Layers, X, Upload, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search,
+} from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
+import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 
-interface Owner { id: string; kind: 'company' | 'person' | 'formation' | 'unfiled'; label: string; status: string | null; fileCount: number }
-interface Fold { id: string; name: string; kind: string; trashed: boolean }
+interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 interface File_ {
   id: string; name: string; documentType: string | null; state: string; published: boolean; clientVisible: boolean
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
   listed: boolean; personName: string | null; inPersonStorage: boolean; docId: string | null
+  sha256?: string | null; needsReview?: string | null
 }
-interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[]; people?: { contactId: string; name: string }[] }
-interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
+interface OwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
+interface Person { contactId: string; name: string; ownerId: string | null; companies: string[] }
+interface Contents { folder: Fold | null; path: Fold[]; folders: Fold[]; files: File_[]; people?: Person[]; owner: OwnerInfo }
+interface DocType { slug: string; name: string; staffOnly: boolean; personal: boolean; defaultFolderKind: string | null; draftNeverVisible: boolean }
 
 /**
  * The company's owner in the NEW store (Formation pilot), or null. Shared by the company Files tab and the
@@ -77,7 +88,9 @@ async function postJson<T>(url: string, body: unknown, fallback: string): Promis
   return data as T
 }
 
-const ownerIcon = (k: Owner['kind']) => (k === 'company' ? Building2 : k === 'person' ? User : k === 'formation' ? Hammer : Folder)
+const errMsg = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
+
+const ownerIcon = (k: string) => (k === 'company' ? Building2 : k === 'person' ? User : k === 'formation' ? Hammer : k === 'business' ? Briefcase : k === 'private' ? Lock : Folder)
 
 function Badge({ tone, children }: { tone: 'green' | 'gray' | 'amber' | 'red' | 'blue'; children: React.ReactNode }) {
   const t = {
@@ -136,26 +149,38 @@ const fileIcon = (mime: string | null) => {
 }
 const fmtSize = (n: number | null) => (n == null ? '' : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`)
 const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) } catch { return '' } }
+const isYear = (n: string) => /^\d{4}$/.test(n)
+/** year folders newest first, as today; everything else by name */
+const sortFolders = (a: Fold, b: Fold) => (isYear(a.name) && isYear(b.name) ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name))
 
-export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company' }: { ownerId?: string; scopedKind?: Owner['kind'] } = {}) {
-  const [owners, setOwners] = useState<Owner[] | null>(null)
+type PersonKey = `person:${string}`
+const personKey = (contactId: string): PersonKey => `person:${contactId}`
+
+interface Asking { slug: string; fallbackTitle: string; body: React.ReactNode; choices: Array<Omit<Choice, 'onChoose'>>; resolve: (key: string) => void }
+interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPick' | 'onClose'>; resolve: (r: { folderId: string; ownerId: string; path: string } | null) => void }
+interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[] }
+
+export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company' }: { ownerId?: string; scopedKind?: string } = {}) {
+  const [groups, setGroups] = useState<NavGroup[] | null>(null)
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
   const [root, setRoot] = useState<Contents | null>(null)
-  /** loaded contents of each opened folder (by folder id) */
+  /** loaded contents of each opened folder (by folder id), and of each person branch (by person:<contact id>) */
   const [loaded, setLoaded] = useState<Record<string, Contents>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
-  // "2 versions": every saved copy, openable (an old copy nobody can open would be pointless)
   const [versionsFor, setVersionsFor] = useState<string | null>(null)
   const [versions, setVersions] = useState<{ id: string; versionNo: number; createdAt: string; size: number | null; mimeType: string | null; current: boolean; by: string | null }[] | null>(null)
   const [previewVersion, setPreviewVersion] = useState<{ file: File_; src: string; title: string } | null>(null)
   const [busyFiles, setBusyFiles] = useState<Set<string>>(new Set())
   const [types, setTypes] = useState<DocType[] | null>(null)
-  // upload panel (today's "Upload Document"): folder, whose (2. Contacts), type, display name, show to client
+  const [questions, setQuestions] = useState<Record<string, StoreQuestion> | null>(null)
+  // upload panel: folder, whose (2. Contacts), type, name shown, show to client
   const [uploadOpen, setUploadOpen] = useState(false)
   const [upFolder, setUpFolder] = useState('')
   const [upPerson, setUpPerson] = useState('')
@@ -166,22 +191,48 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [addingType, setAddingType] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
-  // row menu / inline rename / delete confirm / drag and drop
+  // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
-  const [moveFor, setMoveFor] = useState<string | null>(null)
-  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean } | null>(null)
+  const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
+  const [asking, setAsking] = useState<Asking | null>(null)
+  const [picking, setPicking] = useState<Picking | null>(null)
   const dragRef = useRef<{ id: string; from: string | null } | null>(null)
   const renameDone = useRef(false)
   const expandedRef = useRef<Set<string>>(new Set())
+  /** which storage each folder on screen belongs to (a person branch's folders belong to the PERSON) */
+  const folderOwner = useRef<Map<string, string>>(new Map())
+  /** folders reached through a company's "2. Contacts" (opened with via=company) */
+  const viaCompany = useRef<Set<string>>(new Set())
 
   useEffect(() => { expandedRef.current = expanded }, [expanded])
 
-  const fetchFolder = useCallback(async (oid: string, folderId: string | null) => {
-    const q = `/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}`
-    return getJson<Contents>(q)
+  useEffect(() => {
+    getJson<{ questions: Record<string, StoreQuestion> }>('/api/crm-store/browse/questions')
+      .then((d) => setQuestions(d.questions)).catch(() => setQuestions({}))
+  }, [])
+
+  /** ask ONE question (Part 16); resolves with the chosen key — or "__default__" when the question is switched off */
+  const ask = useCallback((slug: string, fallbackTitle: string, body: React.ReactNode, choices: Asking['choices']) => new Promise<string>((resolve) => {
+    const q = questions?.[slug]
+    if (q && !q.enabled) { resolve('__default__'); return }
+    setAsking({ slug, fallbackTitle, body, choices, resolve })
+  }), [questions])
+  const pick = useCallback((props: Picking['props']) => new Promise<{ folderId: string; ownerId: string; path: string } | null>((resolve) => {
+    setPicking({ props, resolve })
+  }), [])
+
+  const fetchInto = useCallback(async (oid: string, folderId: string | null, via?: boolean) => {
+    const q = `/api/crm-store/browse/folder?owner=${encodeURIComponent(oid)}${folderId ? `&folder=${encodeURIComponent(folderId)}` : ''}${via ? '&via=company' : ''}`
+    const c = await getJson<Contents>(q)
+    for (const f of [c.folder, ...c.folders]) {
+      if (!f) continue
+      folderOwner.current.set(f.id, oid)
+      if (via) viaCompany.current.add(f.id)
+    }
+    return c
   }, [])
 
   const openOwner = useCallback(async (oid: string) => {
@@ -190,64 +241,79 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setRoot(null)
     setLoaded({})
     setExpanded(new Set())
+    setSelected(null)
     setUploadOpen(false)
     try {
-      const r = await fetchFolder(oid, null)
+      const r = await fetchInto(oid, null)
       setRoot(r)
       // today's folder view opens the top-level folders straight away
       setExpanded(new Set(r.folders.map((f) => f.id)))
-      const entries = await Promise.all(r.folders.map(async (f) => [f.id, await fetchFolder(oid, f.id)] as const))
+      const entries = await Promise.all(r.folders.map(async (f) => [f.id, await fetchInto(oid, f.id)] as const))
       setLoaded(Object.fromEntries(entries))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the folder.')
+      setError(errMsg(e, 'Could not load the folder.'))
     }
-  }, [fetchFolder])
+  }, [fetchInto])
+
+  const loadNav = useCallback(async () => {
+    try { setGroups((await getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation')).groups) } catch (e) { setError(errMsg(e, 'Could not load the new storage.')) }
+  }, [])
 
   useEffect(() => {
-    if (scopedOwnerId) {
-      openOwner(scopedOwnerId)
-      return
-    }
-    getJson<{ owners: Owner[] }>('/api/crm-store/browse/owners')
-      .then((d) => setOwners(d.owners))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Could not load the new storage.'))
-  }, [scopedOwnerId, openOwner])
+    if (scopedOwnerId) { openOwner(scopedOwnerId); return }
+    loadNav()
+  }, [scopedOwnerId, openOwner, loadNav])
 
-  const loadFolder = useCallback(async (folderId: string) => {
+  /** load a folder (or a person branch) into `loaded` */
+  const loadKey = useCallback(async (key: string) => {
     if (!ownerId) return
-    setLoadingFolders((l) => new Set(l).add(folderId))
+    setLoadingFolders((l) => new Set(l).add(key))
     try {
-      const c = await fetchFolder(ownerId, folderId)
-      setLoaded((m) => ({ ...m, [folderId]: c }))
+      let c: Contents
+      if (key.startsWith('person:')) {
+        const person = Object.values(loaded).flatMap((x) => x.people ?? []).find((p) => personKey(p.contactId) === key)
+        if (!person?.ownerId) return
+        c = await fetchInto(person.ownerId, null, true)
+      } else {
+        c = await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))
+      }
+      setLoaded((m) => ({ ...m, [key]: c }))
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not open the folder.')
+      toast.error(errMsg(e, 'Could not open the folder.'))
     } finally {
-      setLoadingFolders((l) => { const n = new Set(l); n.delete(folderId); return n })
+      setLoadingFolders((l) => { const n = new Set(l); n.delete(key); return n })
     }
-  }, [ownerId, fetchFolder])
+  }, [ownerId, fetchInto, loaded])
 
-  const toggleFolder = (folderId: string) => {
-    const isOpen = expanded.has(folderId)
-    setExpanded((x) => { const n = new Set(x); if (isOpen) n.delete(folderId); else n.add(folderId); return n })
-    if (!isOpen && !loaded[folderId]) loadFolder(folderId)
+  const toggleKey = (key: string) => {
+    const isOpen = expanded.has(key)
+    setExpanded((x) => { const n = new Set(x); if (isOpen) n.delete(key); else n.add(key); return n })
+    if (!isOpen) { setSelected(key); if (!loaded[key]) loadKey(key) }
   }
 
   /** reload everything that is on screen (Refresh, and after any change) */
   const refreshAll = useCallback(async () => {
     if (!ownerId) return
     try {
-      const r = await fetchFolder(ownerId, null)
+      const r = await fetchInto(ownerId, null)
       setRoot(r)
-      // the folders open NOW (not when the refresh started); merged, so a folder opened meanwhile keeps its files
       const open = Array.from(expandedRef.current)
-      const entries = await Promise.all(open.map(async (id) => {
-        try { return [id, await fetchFolder(ownerId, id)] as const } catch { return null }
+      const people = Object.values(loaded).flatMap((x) => x.people ?? [])
+      const entries = await Promise.all(open.map(async (key) => {
+        try {
+          if (key.startsWith('person:')) {
+            const p = people.find((pp) => personKey(pp.contactId) === key)
+            return p?.ownerId ? [key, await fetchInto(p.ownerId, null, true)] as const : null
+          }
+          return [key, await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))] as const
+        } catch { return null }
       }))
       setLoaded((m) => ({ ...m, ...Object.fromEntries(entries.filter((x): x is readonly [string, Contents] => !!x)) }))
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not refresh.')
+      toast.error(errMsg(e, 'Could not refresh.'))
     }
-  }, [ownerId, fetchFolder])
+    if (!scopedOwnerId) loadNav()
+  }, [ownerId, fetchInto, loaded, scopedOwnerId, loadNav])
 
   const openVersions = async (fileId: string) => {
     if (versionsFor === fileId) { setVersionsFor(null); return }
@@ -258,7 +324,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setVersions((await getJson<{ versions: NonNullable<typeof versions> }>(`/api/crm-store/browse/file/${fileId}/versions`)).versions)
     } catch (e) {
       setVersionsFor(null)
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not load the versions.')
+      toast.error(errMsg(e, 'Could not load the versions.'))
     }
   }
 
@@ -268,17 +334,36 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try { await fn() } finally { setBusyFiles((b) => { const n = new Set(b); n.delete(id); return n }) }
   }
 
+  const ownerLabelOf = (oid: string | undefined | null) => {
+    if (!oid) return ''
+    if (oid === ownerId) return root?.owner.label ?? ''
+    const c = Object.values(loaded).find((x) => x.folder && folderOwner.current.get(x.folder.id) === oid)
+    return c?.owner.label ?? ''
+  }
+
   const toggleVisible = (f: File_) => withBusy(f.id, async () => {
     try {
+      if (!f.clientVisible && f.personal) {
+        // Part 16: showing a document with personal data — who would see it
+        const who = f.personName ?? (root?.owner.kind === 'person' ? root.owner.label : 'the person it belongs to')
+        const a = await ask('show_personal_data', 'This document holds personal data',
+          <>
+            <MiniPreview src={`/api/crm-store/browse/file/${f.id}`} mimeType={f.mimeType} label={f.name} sub={f.documentType ?? undefined} />
+            <p>Who would see it: <strong>{who}</strong> only, in their own portal. A personal document is never shown to anyone else in a company.</p>
+            {f.docId && <button type="button" className="text-blue-700 hover:underline" onClick={() => setOcrDocId(f.docId)}>Read scanned text</button>}
+          </>,
+          [{ key: 'owner_only', label: `${questions?.show_personal_data?.choices.owner_only ?? 'Show it to'} ${who} only`, tone: 'primary' }, { key: 'keep_hidden' }])
+        if (a !== 'owner_only' && a !== '__default__') return
+      }
       await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: !f.clientVisible }, 'Could not change who can see this file — please try again.')
       toast.success(f.clientVisible ? `"${f.name}" is now hidden from the client` : `"${f.name}" is now visible to the client`)
       await refreshAll()
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not change who can see this file.')
+      toast.error(errMsg(e, 'Could not change who can see this file.'))
     }
   })
 
-  const doRename = (f: File_, value: string) => withBusy(f.id, async () => {
+  const doRenameFile = (f: File_, value: string) => withBusy(f.id, async () => {
     if (renameDone.current) return // Enter then blur, or Escape then blur: commit at most once
     renameDone.current = true
     setRenaming(null)
@@ -290,50 +375,236 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.success(`Renamed to "${r.name}"`)
       await refreshAll()
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'The file could not be renamed.')
+      toast.error(errMsg(e, 'The file could not be renamed.'))
     }
   })
 
-  const doMove = (fileId: string, name: string, folderId: string) => withBusy(fileId, async () => {
-    setMenuFor(null); setMoveFor(null)
+  /** move a file (after the "client can see it" question when it applies) */
+  const moveFileTo = (f: File_, folderId: string, where: string) => withBusy(f.id, async () => {
+    setMenuFor(null)
+    let hide = false
+    if (f.clientVisible) {
+      const a = await ask('move_visible_file', 'The client can see this file',
+        <p><strong>{f.name}</strong> is visible to <strong>{f.personName ?? root?.owner.label ?? 'the client'}</strong>. It is moving to <strong>{where}</strong>. Who can see a file goes with the file, not the folder.</p>,
+        [{ key: 'keep', tone: 'primary' }, { key: 'hide' }, { key: 'cancel' }])
+      if (a === 'cancel') return
+      hide = a === 'hide'
+    }
     try {
-      const r = await postJson<{ folderName: string }>(`/api/crm-store/browse/file/${fileId}/move`, { folderId }, 'The file could not be moved.')
-      toast.success(`Moved "${name}" to ${r.folderName}`)
+      const r = await postJson<{ folderName: string }>(`/api/crm-store/browse/file/${f.id}/move`, { folderId }, 'The file could not be moved.')
+      if (hide) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'The file was moved, but could not be hidden — hide it from its row.')
+      toast.success(`Moved "${f.name}" to ${r.folderName}${hide ? ' (now hidden from the client)' : ''}`)
       await refreshAll()
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'The file could not be moved.')
+      toast.error(errMsg(e, 'The file could not be moved.'))
     }
   })
 
-  const doDelete = (f: File_) => withBusy(f.id, async () => {
-    setConfirmDelete(null); setMenuFor(null)
+  const pickAndMoveFile = async (f: File_, inFolder: Fold | null) => {
+    setMenuFor(null)
+    const oid = (inFolder && folderOwner.current.get(inFolder.id)) ?? ownerId
+    if (!oid) return
+    const r = await pick({ title: `Move "${f.name}" to…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'file', currentFolderId: inFolder?.id ?? null })
+    setPicking(null)
+    if (r) await moveFileTo(f, r.folderId, r.path)
+  }
+
+  const doDeleteFile = (f: File_) => withBusy(f.id, async () => {
+    setMenuFor(null)
+    const a = await ask('delete_file', 'Move this file to the trash?',
+      <p><strong>{f.name}</strong>{f.clientVisible ? ' — the client can see it today; it disappears from their portal.' : ''} Recoverable for 90 days.</p>,
+      [{ key: 'trash', label: 'Move to trash', tone: 'danger' }, { key: 'cancel', label: 'Cancel' }])
+    if (a !== 'trash' && a !== '__default__') return
     try {
       await postJson(`/api/crm-store/browse/file/${f.id}/delete`, {}, 'The file could not be deleted.')
       toast.success(`"${f.name}" moved to the trash`)
       await refreshAll()
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'The file could not be deleted.')
+      toast.error(errMsg(e, 'The file could not be deleted.'))
     }
   })
+
+  const markReviewed = (f: File_) => withBusy(f.id, async () => {
+    setMenuFor(null)
+    try {
+      await postJson(`/api/crm-store/browse/file/${f.id}/reviewed`, {}, 'Could not clear "Needs review".')
+      toast.success(`"${f.name}" marked as reviewed`)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not clear "Needs review".'))
+    }
+  })
+
+  // ───────────────────────────────────────── folders
+
+  /** the questions before a folder move / delete when the client can see files inside (Part 16) */
+  const settleVisibleInside = async (f: Fold, action: 'move' | 'delete'): Promise<{ go: boolean; files: number; shown: number }> => {
+    const s = await getJson<{ files: number; shown: number; list: { id: string; name: string; shown: boolean }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
+    if (s.shown === 0) return { go: true, files: s.files, shown: 0 }
+    const visible = s.list.filter((x) => x.shown)
+    const a = await ask('folder_with_visible_files', 'The client can see files in this folder',
+      <>
+        <p>{action === 'delete' ? 'Deleting' : 'Moving'} <strong>{f.name}</strong> touches {s.files} {s.files === 1 ? 'file' : 'files'}; <strong>{s.shown}</strong> {s.shown === 1 ? 'is' : 'are'} shown to the client:</p>
+        <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs">{visible.slice(0, 40).map((x) => <li key={x.id}>{x.name}</li>)}{visible.length > 40 && <li>… and {visible.length - 40} more</li>}</ul>
+      </>,
+      [{ key: 'all' }, { key: 'hide_first', tone: 'primary' }, { key: 'pick' }, { key: 'cancel' }])
+    if (a === 'cancel') return { go: false, files: s.files, shown: s.shown }
+    if (a === 'hide_first') await postJson(`/api/crm-store/browse/folder/${f.id}/hide-all`, {}, 'The files could not be hidden, so nothing was done.')
+    if (a === 'pick') {
+      const chosen = new Set(visible.map((x) => x.id))
+      const b = await ask('folder_with_visible_files_pick', 'Which ones should the client stop seeing?',
+        <PickList items={visible} chosen={chosen} />,
+        [{ key: 'go', label: 'Hide the ticked ones, then continue', tone: 'primary' }, { key: 'cancel', label: 'Cancel' }])
+      if (b !== 'go' && b !== '__default__') return { go: false, files: s.files, shown: s.shown }
+      await postJson(`/api/crm-store/browse/folder/${f.id}/hide-chosen`, { fileIds: Array.from(chosen) }, 'The files could not be hidden, so nothing was done.')
+    }
+    return { go: true, files: s.files, shown: a === 'all' || a === '__default__' ? s.shown : 0 }
+  }
+
+  const pickAndMoveFolder = async (f: Fold, parentId: string | null) => {
+    setMenuFor(null)
+    const oid = folderOwner.current.get(f.id) ?? ownerId
+    if (!oid) return
+    const r = await pick({ title: `Move the folder "${f.name}" into…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'folder', excludeFolderId: f.id, currentFolderId: parentId })
+    setPicking(null)
+    if (!r) return
+    try {
+      const v = await settleVisibleInside(f, 'move')
+      if (!v.go) return
+      const m = await postJson<{ parentName: string }>(`/api/crm-store/browse/folder/${f.id}/move`, { toFolderId: r.folderId }, 'The folder could not be moved.')
+      toast.success(`Moved "${f.name}" into ${m.parentName}`)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'The folder could not be moved.'))
+    }
+  }
+
+  const deleteFolder = async (f: Fold) => {
+    setMenuFor(null)
+    try {
+      const v = await settleVisibleInside(f, 'delete')
+      if (!v.go) return
+      const a = await ask('delete_folder', 'Move this folder to the trash?',
+        <p>Move <strong>{f.name}</strong> and its {v.files} {v.files === 1 ? 'file' : 'files'} to the trash?{v.shown > 0 ? ` ${v.shown} ${v.shown === 1 ? 'is' : 'are'} shown to the client and will disappear from their portal.` : ''} Recoverable for 90 days.</p>,
+        [{ key: 'trash', label: 'Move to trash', tone: 'danger' }, { key: 'cancel', label: 'Cancel' }])
+      if (a !== 'trash' && a !== '__default__') return
+      const r = await postJson<{ files: number }>(`/api/crm-store/browse/folder/${f.id}/delete`, {}, 'The folder could not be deleted.')
+      toast.success(`"${f.name}" and ${r.files} ${r.files === 1 ? 'file' : 'files'} moved to the trash`)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'The folder could not be deleted.'))
+    }
+  }
+
+  const doRenameFolder = async (f: Fold, value: string) => {
+    if (renameDone.current) return
+    renameDone.current = true
+    setRenaming(null)
+    if (!value.trim() || value.trim() === f.name) return
+    try {
+      const r = await postJson<{ name: string }>(`/api/crm-store/browse/folder/${f.id}/rename`, { name: value }, 'The folder could not be renamed.')
+      toast.success(`Folder renamed to "${r.name}"`)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'The folder could not be renamed.'))
+    }
+  }
+
+  /** open the inline "new folder" box under a folder (the siblings are what is on screen now) */
+  const startNewFolder = (parentId: string, year?: boolean) => {
+    setMenuFor(null)
+    const siblings = (loaded[parentId]?.folders ?? (root?.folder?.id === parentId ? root.folders : [])).map((x) => x.name)
+    setNewFolder({ parentId, siblings, year, value: year ? suggestYear(siblings) : '' })
+    setExpanded((x) => new Set(x).add(parentId))
+    if (!loaded[parentId] && root?.folder?.id !== parentId) loadKey(parentId)
+  }
+
+  /** the person whose storage a folder on screen (reached through "2. Contacts") belongs to */
+  const personOfFolder = (folderId: string): Person | null => {
+    const oid = folderOwner.current.get(folderId)
+    if (!oid || oid === ownerId) return null
+    return Object.values(loaded).flatMap((x) => x.people ?? []).find((p) => p.ownerId === oid) ?? null
+  }
+
+  const saveNewFolder = async () => {
+    if (!newFolder) return
+    const nf = newFolder
+    const problem = folderNameProblem(nf.value, nf.siblings)
+    if (problem) { toast.error(problem); return }
+    let parentId = nf.parentId
+    // Part 16: a folder made in a PERSON's storage from a company page shows in every company of theirs
+    const person = viaCompany.current.has(nf.parentId) ? personOfFolder(nf.parentId) : null
+    if (person && !nf.year) {
+      const others = person.companies.filter((c) => c !== root?.owner.label)
+      const a = await ask('person_folder_from_company', "This folder goes into the person's own storage",
+        <p><strong>{person.name}</strong> is in {person.companies.length > 0 ? person.companies.join(' and ') : 'this company'}; a folder in their storage {others.length > 0 ? `shows in ${person.companies.length === 2 ? 'both' : 'each of them'}` : 'shows on this company and on their own page'}.</p>,
+        [{ key: 'person', label: `Create it in ${person.name}'s storage`, tone: 'primary' }, { key: 'company' }, { key: 'cancel' }])
+      if (a === 'cancel') return
+      if (a === 'company') {
+        if (!ownerId) return
+        const r = await pick({ title: `Where in ${root?.owner.label ?? 'this company'}?`, ownerId, ownerLabel: root?.owner.label, mode: 'folder' })
+        setPicking(null)
+        if (!r) return
+        parentId = r.folderId
+      }
+    }
+    setNewFolder(null)
+    try {
+      const r = nf.year
+        ? await postJson<{ name: string }>(`/api/crm-store/browse/folder/${parentId}/tax-year`, { year: nf.value.trim() }, 'The tax-year folder could not be created.')
+        : await postJson<{ name: string }>('/api/crm-store/browse/folder/create', { parentId, name: nf.value }, 'The folder could not be created.')
+      toast.success(`Folder "${r.name}" created`)
+      setExpanded((x) => new Set(x).add(parentId))
+      if (!loaded[parentId]) await loadKey(parentId)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'The folder could not be created.'))
+    }
+  }
+
+  // ───────────────────────────────────────── upload
+
+  const loadTypes = async () => {
+    if (types) return types
+    try {
+      const t = (await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')).types
+      setTypes(t)
+      return t
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not load the document types.'))
+      return null
+    }
+  }
 
   const openUpload = async (folderId?: string) => {
     setUploadOpen(true)
     setUpFolder(folderId ?? '')
     setUpPerson(''); setUpType(''); setUpName(''); setUpVisible(true)
-    if (types) return
-    try {
-      setTypes((await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')).types)
-    } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not load the document types.')
-    }
+    await loadTypes()
   }
 
-  const topFolders = root?.folders ?? []
-  const upFolderObj = topFolders.find((f) => f.id === upFolder) ?? null
+  /** every folder on screen that can take a file, in tree order, with its depth (the upload's Folder list) */
+  const folderOptions = (): Array<{ f: Fold; depth: number; owner: string }> => {
+    const out: Array<{ f: Fold; depth: number; owner: string }> = []
+    const walk = (list: Fold[], depth: number) => {
+      for (const f of list) {
+        if (f.trashed) continue
+        out.push({ f, depth, owner: folderOwner.current.get(f.id) ?? ownerId ?? '' })
+        if (f.kind === 'contacts') continue
+        const c = loaded[f.id]
+        if (c) walk([...c.folders].sort(sortFolders), depth + 1)
+      }
+    }
+    if (root?.folder && root.folder.kind !== 'root') out.push({ f: root.folder, depth: 0, owner: ownerId ?? '' })
+    walk(root?.folders ?? [], root?.folder && root.folder.kind !== 'root' ? 1 : 0)
+    return out
+  }
+  const upOptions = folderOptions()
+  const upFolderObj = upOptions.find((o) => o.f.id === upFolder)?.f ?? null
   const upIsContacts = upFolderObj?.kind === 'contacts'
-  // the company page shows a company; on the Storage page the picked owner says what it is
-  const ownerKind: Owner['kind'] = scopedOwnerId ? scopedKind : ((owners ?? []).find((o) => o.id === ownerId)?.kind ?? 'company')
-  const upTypes = (types ?? []).filter((t) => (ownerKind === 'person' ? true : upIsContacts === t.personal))
+  const ownerKind = root?.owner.kind ?? scopedKind
+  const upTargetIsPerson = ownerKind === 'person' || (!!upFolderObj && viaCompany.current.has(upFolderObj.id))
+  const upTypes = (types ?? []).filter((t) => (upTargetIsPerson ? true : upIsContacts ? t.personal : ownerKind === 'private' ? true : !t.personal))
   const upPeople = upFolderObj ? loaded[upFolderObj.id]?.people ?? [] : []
 
   /** today's "Custom…" type: added once, then listed for everyone (catalog, with who added it) */
@@ -341,7 +612,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (!upFolderObj) return
     setAddingType(true)
     try {
-      const folderKind = ownerKind === 'person' ? (upFolderObj.kind === 'person_tax' ? 'person_tax' : 'personal') : upFolderObj.kind
+      const folderKind = upTargetIsPerson ? (upFolderObj.kind === 'person_tax' ? 'person_tax' : 'personal') : upFolderObj.kind
       const r = await postJson<{ slug: string; name: string; created: boolean }>('/api/crm-store/browse/types', { name: customName, folderKind }, 'The type could not be added.')
       const fresh = await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')
       setTypes(fresh.types)
@@ -349,86 +620,214 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setCustomName('')
       toast.success(r.created ? `New document type "${r.name}" added` : `"${r.name}" already exists — selected`)
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'The type could not be added.')
+      toast.error(errMsg(e, 'The type could not be added.'))
     } finally {
       setAddingType(false)
     }
   }
 
+  /**
+   * The upload, with the questions the system can't answer itself (Part 16), in this order: a closed
+   * company · which tax year · a prepared return filed or draft · the same name already here · the exact same
+   * file stored elsewhere. Every question has a way out; nothing is saved until the answers are in.
+   */
   const doUpload = async (file: File) => {
-    if (!ownerId || !upFolder) { toast.error('Choose the folder first.'); return }
+    if (!ownerId || !upFolderObj) { toast.error('Choose the folder first.'); return }
     if (!upType) { toast.error('Choose the document type first.'); return }
     if (upIsContacts && !upPerson) { toast.error('Choose whose document this is first.'); return }
+    const type = (types ?? []).find((t) => t.slug === upType)
+    let target = { ownerId: folderOwner.current.get(upFolderObj.id) ?? ownerId, folder: upFolderObj, via: viaCompany.current.has(upFolderObj.id) }
+    let periodYear: number | null = null
+    let filingAnswer: 'filed' | 'draft' | null = null
+    let needsReview: string | null = null
+    let displayName = upName
+    const localUrl = URL.createObjectURL(file)
     setUploading(true)
     try {
-      // Storage refuses spaces and odd characters in keys — sanitize the KEY, keep the readable file name.
+      // 1. a closed or cancelled company
+      if (root?.owner.closed && target.ownerId === ownerId) {
+        const a = await ask('closed_company_upload', 'This company is closed or cancelled',
+          <>
+            <p><strong>{root.owner.label}</strong> is <strong>{root.owner.accountStatus ?? 'archived'}</strong>. Is this document really for it?</p>
+            <MiniPreview src={localUrl} mimeType={file.type} label={file.name} sub="the file you are uploading" />
+          </>,
+          [{ key: 'store_here', tone: 'primary' }, { key: 'other_place' }, { key: 'business' }, { key: 'later' }])
+        if (a === 'other_place' || a === 'business') {
+          const businessId = (groups ?? []).find((g) => g.key === 'business')?.owners[0]?.id
+          const r = await pick({ title: a === 'business' ? 'Where in the Business folders?' : 'Where does it belong?', mode: 'file', chooseOwner: a !== 'business', ownerId: a === 'business' ? businessId : undefined, ownerLabel: a === 'business' ? 'Business' : undefined })
+          setPicking(null)
+          if (!r) return
+          const info = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(r.ownerId)}&folder=${encodeURIComponent(r.folderId)}`)
+          if (!info.folder) return
+          target = { ownerId: r.ownerId, folder: info.folder, via: false }
+        } else if (a === 'later') {
+          needsReview = `Uploaded into ${root.owner.label} (${root.owner.accountStatus ?? 'closed'}) — check it belongs here`
+        }
+      }
+      // 2. a tax form put in "Tax" itself, not in a year folder
+      if (type && /_year$/.test(type.defaultFolderKind ?? '') && (target.folder.kind === 'tax' || target.folder.kind === 'person_tax')) {
+        const years = (loaded[target.folder.id]?.folders ?? []).filter((f) => isYear(f.name)).sort((x, y) => y.name.localeCompare(x.name))
+        const suggestion = suggestYear(years.map((y) => y.name))
+        const choiceLabel = questions?.tax_year_missing?.choices.year ?? 'Put it in'
+        const a = await ask('tax_year_missing', 'Which tax year is this for?',
+          <p>A <strong>{type.name}</strong> belongs in a year folder inside <strong>{target.folder.name}</strong>. {years.length ? `Year folders here: ${years.map((y) => y.name).join(', ')}.` : 'There is no year folder yet.'}</p>,
+          [
+            ...years.slice(0, 4).map((y, i) => ({ key: `y:${y.id}`, label: `${choiceLabel} ${y.name}`, tone: i === 0 ? 'primary' as const : 'plain' as const })),
+            { key: 'new_year', label: `${questions?.tax_year_missing?.choices.new_year ?? 'New year folder'} ${suggestion}`, tone: years.length ? 'plain' : 'primary' },
+            { key: 'other_place' }, { key: 'cancel' },
+          ])
+        if (a === 'cancel') return
+        if (a.startsWith('y:')) {
+          const y = years.find((x) => `y:${x.id}` === a)!
+          target = { ...target, folder: y }
+          periodYear = Number(y.name)
+        } else if (a === 'new_year') {
+          const r = await postJson<{ id: string; name: string }>(`/api/crm-store/browse/folder/${target.folder.id}/tax-year`, { year: suggestion }, 'The year folder could not be created.')
+          folderOwner.current.set(r.id, target.ownerId)
+          if (target.via) viaCompany.current.add(r.id)
+          target = { ...target, folder: { id: r.id, name: r.name, kind: target.folder.kind === 'tax' ? 'tax_year' : 'person_tax_year', trashed: false } }
+          periodYear = Number(r.name)
+        } else if (a === 'other_place') {
+          const r = await pick({ title: 'Which folder?', ownerId: target.ownerId, ownerLabel: ownerLabelOf(target.ownerId), mode: 'file', currentFolderId: target.folder.id })
+          setPicking(null)
+          if (!r) return
+          const info = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(r.ownerId)}&folder=${encodeURIComponent(r.folderId)}`)
+          if (!info.folder) return
+          target = { ...target, folder: info.folder }
+        }
+      } else if (target.folder.kind === 'tax_year' || target.folder.kind === 'person_tax_year' || isYear(target.folder.name)) {
+        periodYear = isYear(target.folder.name) ? Number(target.folder.name) : null
+      }
+      // 3. a prepared tax return — filed or draft
+      if (type?.draftNeverVisible && !needsReview) {
+        const a = await ask('prepared_tax_return', 'Is this the filed return or a draft?',
+          <>
+            <MiniPreview src={localUrl} mimeType={file.type} label={file.name} sub="the first pages — check the signature / filing marks" />
+            <p>A draft is never shown to the client until it is marked filed.</p>
+          </>,
+          [{ key: 'filed' }, { key: 'draft', tone: 'primary' }, { key: 'later' }])
+        if (a === 'filed') filingAnswer = 'filed'
+        else if (a === 'later') needsReview = 'Prepared return — filed or draft not decided yet'
+        else filingAnswer = 'draft'
+      }
+      // 4. the same name already in that folder, different content
+      const name = finalUploadName(file.name, displayName)
+      const here = target.folder.kind === 'contacts' ? null
+        : await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}${target.via ? '&via=company' : ''}`)
+      const sha = await sha256OfFile(file)
+      const same = here?.files.find((x) => x.name.toLowerCase() === name.toLowerCase())
+      if (same && !(sha && same.sha256 === sha)) {
+        const suggestion = keepBothName(name, (here?.files ?? []).map((x) => x.name))
+        const a = await ask('same_name_different_content', 'A file with this name is already here',
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <MiniPreview src={`/api/crm-store/browse/file/${same.id}`} mimeType={same.mimeType} label={`Now: ${same.name}`} sub={`${fmtDate(same.updatedAt)} · ${fmtSize(same.size)}`} />
+            <MiniPreview src={localUrl} mimeType={file.type} label={`New: ${name}`} sub={`${fmtSize(file.size)} · from your computer`} />
+          </div>,
+          [{ key: 'replace' }, { key: 'keep_both', label: `${questions?.same_name_different_content?.choices.keep_both ?? 'Keep both — save the new one as'} "${suggestion}"`, tone: 'primary' }, { key: 'cancel' }])
+        if (a === 'cancel') return
+        if (a === 'keep_both') displayName = suggestion
+      } else if (!same && sha) {
+        // 5. the exact same file already stored under another name / somewhere else
+        const hits = (await getJson<{ files: { fileId: string; name: string; ownerId: string; where: string; mimeType: string | null }[] }>(`/api/crm-store/browse/identical?sha=${sha}`)).files
+        if (hits.length > 0) {
+          const h = hits[0]
+          const a = await ask('identical_elsewhere', 'This exact file is already stored',
+            <>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <MiniPreview src={`/api/crm-store/browse/file/${h.fileId}`} mimeType={h.mimeType} label={`Already stored: ${h.name}`} sub={h.where} />
+                <MiniPreview src={localUrl} mimeType={file.type} label={`New: ${name}`} sub={`into ${target.folder.name}`} />
+              </div>
+              {hits.length > 1 && <p className="text-xs text-zinc-500">Also stored at: {hits.slice(1, 5).map((x) => x.where).join(' · ')}{hits.length > 5 ? ' …' : ''}</p>}
+            </>,
+            [{ key: 'dont_add', tone: 'primary' }, { key: 'rename_existing', disabled: h.name.toLowerCase() === name.toLowerCase() }, { key: 'second_copy' }, { key: 'cancel' }])
+          if (a === 'dont_add' || a === 'cancel') { if (a === 'dont_add') toast.message(`Kept the existing copy: ${h.where}`); return }
+          if (a === 'rename_existing') {
+            const r = await postJson<{ name: string }>(`/api/crm-store/browse/file/${h.fileId}/rename`, { name }, 'The existing file could not be renamed.')
+            toast.success(`The existing file is now called "${r.name}" — nothing new was added`)
+            setUploadOpen(false)
+            await refreshAll()
+            return
+          }
+        }
+      }
+      // the save
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
-      const storagePath = `${STAGING_PREFIX}${ownerId}/${Date.now()}_${safe}`
+      const storagePath = `${STAGING_PREFIX}${target.ownerId}/${Date.now()}_${safe}`
       const sig = await postJson<{ signedUrl?: string }>('/api/storage/upload',
         { bucket: 'onboarding-uploads', path: storagePath, contentType: file.type }, 'Could not prepare the upload — please try again.')
       if (!sig.signedUrl) throw new Error('Could not prepare the upload — please try again.')
       const put = await fetch(sig.signedUrl, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
       if (!put.ok) throw new Error(`The file could not be sent (status ${put.status}) — please try again.`)
       const r = await postJson<{ write: string; name: string; visible: boolean; identity?: string | null }>('/api/crm-store/browse/upload', {
-        ownerId, folderId: upFolder, storagePath, fileName: file.name, mimeType: file.type, documentType: upType,
-        displayName: upName || undefined, visible: upVisible,
-        ...(upIsContacts ? { personContactId: upPerson } : {}),
+        ownerId: target.ownerId, folderId: target.folder.id, storagePath, fileName: file.name, mimeType: file.type, documentType: upType,
+        displayName: displayName || undefined, visible: upVisible && !needsReview, periodYear, filingAnswer, needsReview,
+        ...(target.folder.kind === 'contacts' ? { personContactId: upPerson } : {}),
+        ...(target.via && ownerId ? { viaCompanyOwnerId: ownerId } : {}),
       }, 'The upload could not be saved — please try again.')
       toast.success(
-        r.write === 'versioned' ? `"${r.name}" saved as a new version`
-          : r.write === 'unchanged' ? `"${r.name}" is identical to the current version — nothing changed`
-            : `"${r.name}" uploaded${r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
+        r.write === 'versioned' ? `"${r.name}" saved as a new version (the old copy is under Versions)`
+          : r.write === 'unchanged' ? `"${r.name}" is identical to the current copy — nothing changed`
+            : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )
       if (r.identity) toast.message(r.identity)
       setUploadOpen(false)
       await refreshAll()
     } catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'The upload failed — please try again.')
+      toast.error(errMsg(e, 'The upload failed — please try again.'))
     } finally {
+      URL.revokeObjectURL(localUrl)
+      setAsking(null)
       setUploading(false)
       if (fileInput.current) fileInput.current.value = ''
     }
   }
 
-  const onDropInto = (folder: Fold) => {
+  const onDropInto = (folder: Fold, where: string) => {
     setDropOn(null)
     const d = dragRef.current
     dragRef.current = null
     setDragFile(null)
     if (!d || d.from === folder.id) return
     const f = [...(root?.files ?? []), ...Object.values(loaded).flatMap((c) => c.files)].find((x) => x.id === d.id)
-    if (f) doMove(f.id, f.name, folder.id)
+    if (!f) return
+    const fromOwner = d.from ? folderOwner.current.get(d.from) ?? ownerId : ownerId
+    if ((folderOwner.current.get(folder.id) ?? ownerId) !== fromOwner) { toast.error("A file can only be moved within the same company's or person's storage."); return }
+    moveFileTo(f, folder.id, where)
   }
+
+  // ───────────────────────────────────────── rows
 
   const fileRow = (f: File_, inFolder: Fold | null, depth: number) => {
     const Icon = fileIcon(f.mimeType)
     const busy = busyFiles.has(f.id)
-    const ownFile = !f.personName // a person's file shown in the company's "2. Contacts" is moved from their own storage
     const canShare = !f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible)
       && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage)))
-    const moveTargets = topFolders.filter((t) => t.id !== inFolder?.id && t.kind !== 'contacts' && !t.trashed)
+    const internal = ownerKind === 'business' || ownerKind === 'private'
+    const cantShowWhy = f.staffOnly ? 'Staff only — it holds other people\'s personal data and is never shown to a client'
+      : internal ? 'Internal folders — never shown to a client'
+        : !f.listed ? 'Not linked to the CRM list — the client cannot see it'
+          : !f.documentType ? 'It needs a document type before it can be shown'
+            : "A person's document can only be shown from their own storage"
     return (
       <li key={f.id}
-        draggable={ownFile && !renaming}
+        draggable={!renaming}
         onDragStart={() => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d) }}
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
         className="group relative flex flex-wrap items-center gap-2 py-1.5 text-sm hover:bg-zinc-50/70" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
         <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
-        {renaming?.id === f.id ? (
+        {renaming?.id === f.id && !renaming.folder ? (
           <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: f.id, value: e.target.value })}
-            onKeyDown={(e) => { if (e.key === 'Enter') doRename(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
-            onBlur={() => doRename(f, renaming.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') doRenameFile(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
+            onBlur={() => doRenameFile(f, renaming.value)}
             className="min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
         ) : (
-          <button type="button" onClick={() => setPreview(f)} className="min-w-0 flex-1 truncate text-left hover:underline">
-            {f.personName && <span className="text-zinc-500">{f.personName} · </span>}{f.name}
-          </button>
+          <button type="button" onClick={() => setPreview(f)} className="min-w-0 flex-1 truncate text-left hover:underline">{f.name}</button>
         )}
-        {/* ONE control, as on today's Documents screen: it shows whether the client can see the file and
-            switching it is a click on the same control */}
-        {f.staffOnly ? (
-          <Badge tone="gray"><Lock className="h-3 w-3" />staff only</Badge>
-        ) : canShare ? (
+        {f.needsReview && (
+          <FastTooltip label={f.needsReview}><span><Badge tone="red"><AlertTriangle className="h-3 w-3" />Needs review</Badge></span></FastTooltip>
+        )}
+        {/* ONE control: it shows whether the client can see the file, and a click on it switches it */}
+        {canShare && !internal ? (
           <FastTooltip label={f.clientVisible ? 'Click to hide it from the client' : 'Click to show it to the client'}>
             <button type="button" onClick={() => toggleVisible(f)} disabled={busy}
               aria-label={f.clientVisible ? 'Client can see — click to hide' : 'Hidden from client — click to show'}
@@ -440,20 +839,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </button>
           </FastTooltip>
         ) : (
-          <FastTooltip label={!f.listed ? 'Not in the CRM list — the client cannot see it' : !f.documentType ? 'Choose its document type before it can be shown' : "A person's document can only be shown from their own storage"}>
-            <span><Badge tone="gray"><EyeOff className="h-3 w-3" />Hidden from client</Badge></span>
+          <FastTooltip label={cantShowWhy}>
+            <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500"><Lock className="h-3 w-3" />Can&apos;t be shown</span>
           </FastTooltip>
         )}
-        {/* no "personal" label: everything in "2. Contacts" / a person's storage is personal by definition, and a
-            personal document can no longer be saved anywhere else */}
-        {!f.documentType && <Badge tone="amber">no document type yet</Badge>}
-        {!f.listed && <Badge tone="amber">not in the CRM list</Badge>}
+        {!f.documentType && <Badge tone="amber">Needs a type</Badge>}
+        {!f.listed && !internal && <Badge tone="amber">Not linked — client can&apos;t see it</Badge>}
         {f.versions > 1 && (
           <div className="relative">
             <FastTooltip label="See and open every saved copy">
               <button type="button" onClick={(e) => { e.stopPropagation(); openVersions(f.id) }}
                 className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100">
-                <Layers className="h-3 w-3" />{f.versions} versions
+                <Layers className="h-3 w-3" />Versions ({f.versions})
               </button>
             </FastTooltip>
             {versionsFor === f.id && (
@@ -477,49 +874,19 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </div>
         )}
         <span className="text-xs text-zinc-400">{[fmtSize(f.size), fmtDate(f.updatedAt)].filter(Boolean).join(' · ')}</span>
-        <FastTooltip label="Preview"><button type="button" aria-label="Preview" onClick={() => setPreview(f)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><Search className="h-3.5 w-3.5" /></button></FastTooltip>
         {f.docId && (
-          <FastTooltip label="View OCR text"><button type="button" aria-label="View OCR text" onClick={() => setOcrDocId(f.docId)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><ScanText className="h-3.5 w-3.5" /></button></FastTooltip>
+          <FastTooltip label="Read scanned text"><button type="button" aria-label="Read scanned text" onClick={() => setOcrDocId(f.docId)} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><ScanText className="h-3.5 w-3.5" /></button></FastTooltip>
         )}
         <div className="relative">
-          <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === f.id ? null : f.id); setMoveFor(null); setConfirmDelete(null) }}
+          <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === f.id ? null : f.id) }}
             className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
           {menuFor === f.id && (
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
-              <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50"
-                onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }}>
-                <Pencil className="h-3.5 w-3.5" />Rename
-              </button>
-              {ownFile && moveTargets.length > 0 && (
-                <>
-                  <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50" onClick={() => setMoveFor(moveFor === f.id ? null : f.id)}>
-                    <FolderInput className="h-3.5 w-3.5" />Move to…<ChevronRight className="ml-auto h-3.5 w-3.5" />
-                  </button>
-                  {moveFor === f.id && moveTargets.map((t) => (
-                    <button key={t.id} type="button" className="flex w-full items-center gap-2 py-1.5 pl-8 pr-3 text-left text-zinc-700 hover:bg-zinc-50" onClick={() => doMove(f.id, f.name, t.id)}>
-                      <Folder className="h-3.5 w-3.5 text-amber-500" />{t.name}
-                    </button>
-                  ))}
-                </>
-              )}
-              <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-50" onClick={() => { setMenuFor(null); setPreview(f) }}>
-                <Search className="h-3.5 w-3.5" />Preview
-              </button>
-              {!ownFile ? (
-                <p className="px-3 py-1.5 text-xs text-zinc-500">Delete this from the person&apos;s own page — it is their document, shown in each of their companies.</p>
-              ) : confirmDelete === f.id ? (
-                <div className="px-3 py-1.5 text-xs">
-                  <p className="mb-1 text-zinc-700">Move to trash? (recoverable for 90 days)</p>
-                  <div className="flex gap-2">
-                    <button type="button" className="rounded bg-red-600 px-2 py-0.5 text-white" onClick={() => doDelete(f)}>Confirm</button>
-                    <button type="button" className="rounded border px-2 py-0.5" onClick={() => setConfirmDelete(null)}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <button type="button" className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(f.id)}>
-                  <Trash2 className="h-3.5 w-3.5" />Delete
-                </button>
-              )}
+              <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
+              <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
+              <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
+              {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
+              <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
             </div>
           )}
         </div>
@@ -527,40 +894,109 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     )
   }
 
-  const folderNode = (f: Fold, depth: number): React.ReactNode => {
+  const newFolderBox = (parentId: string, depth: number) => {
+    if (newFolder?.parentId !== parentId) return null
+    const problem = newFolder.value ? folderNameProblem(newFolder.value, newFolder.siblings) : null
+    const badYear = newFolder.year && !/^(19|20)\d{2}$/.test(newFolder.value.trim())
+    return (
+      <li className="py-1.5" style={{ paddingLeft: `${depth * 20 + 22}px` }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex flex-wrap items-center gap-2">
+          <FolderPlus className="h-4 w-4 text-amber-500" />
+          <input autoFocus value={newFolder.value} onChange={(e) => setNewFolder({ ...newFolder, value: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !problem && !badYear) saveNewFolder(); if (e.key === 'Escape') setNewFolder(null) }}
+            placeholder={newFolder.year ? 'Year, e.g. 2025' : 'Folder name'} className="w-56 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
+          <button type="button" disabled={!!problem || !newFolder.value.trim() || !!badYear} onClick={saveNewFolder}
+            className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white disabled:opacity-50">{newFolder.year ? 'Create year folder' : 'Create folder'}</button>
+          <button type="button" onClick={() => setNewFolder(null)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
+        </div>
+        <p className={`mt-1 text-[11px] ${problem || badYear ? 'text-red-600' : 'text-zinc-400'}`}>
+          {badYear ? 'Four digits, e.g. 2025.' : problem ?? '1–255 characters · no / or \\ · no two folders with the same name here'}
+        </p>
+      </li>
+    )
+  }
+
+  const folderNode = (f: Fold, depth: number, parentId: string | null, trail: string[]): React.ReactNode => {
     const isOpen = expanded.has(f.id)
     const c = loaded[f.id]
     const busy = loadingFolders.has(f.id)
-    const canDrop = !!dragFile && f.kind !== 'contacts' && dragFile.from !== f.id
-    // tax year folders newest first, as today
-    const subs = c ? [...c.folders].sort((a, b) => (/^\d{4}$/.test(a.name) && /^\d{4}$/.test(b.name) ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name))) : []
+    const canDrop = !!dragFile && f.kind !== 'contacts' && f.kind !== 'root' && dragFile.from !== f.id
+    const subs = c ? [...c.folders].sort(sortFolders) : []
+    const shown = c ? c.files.filter((x) => x.clientVisible).length : 0
+    const isTax = f.kind === 'tax' || f.kind === 'person_tax'
+    const where = [...trail, f.name].join(' › ')
     return (
       <li key={f.id}>
         <div
           onDragOver={(e) => { if (canDrop) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
           onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
-          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f) }}
-          className={`group flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50 ${dropOn === f.id ? 'rounded bg-blue-50 ring-1 ring-blue-300' : ''}`} style={{ paddingLeft: `${depth * 20}px` }}>
-          <button type="button" onClick={() => toggleFolder(f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
-            {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />}
-            {isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
-            <span className="truncate font-medium text-zinc-800">{f.name}</span>
-            {c && <span className="text-xs text-zinc-400">{c.files.length} {c.files.length === 1 ? 'file' : 'files'}</span>}
-            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
-          </button>
-          {depth === 0 && !f.trashed && f.kind !== 'root' && (
-            <button type="button" onClick={() => openUpload(f.id)} className="mr-1 hidden items-center gap-1 rounded-md border border-zinc-200 px-2 py-0.5 text-xs hover:bg-white group-hover:inline-flex">
-              <Upload className="h-3.5 w-3.5" />Upload here
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f, where) }}
+          className={`group relative flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50 ${dropOn === f.id ? 'rounded bg-blue-50 ring-1 ring-blue-300' : ''} ${selected === f.id ? 'bg-zinc-50' : ''}`} style={{ paddingLeft: `${depth * 20}px` }}>
+          {renaming?.id === f.id && renaming.folder ? (
+            <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: f.id, value: e.target.value, folder: true })}
+              onKeyDown={(e) => { if (e.key === 'Enter') doRenameFolder(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
+              onBlur={() => doRenameFolder(f, renaming.value)}
+              className="ml-6 min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
+          ) : (
+            <button type="button" onClick={() => toggleKey(f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left" aria-expanded={isOpen}>
+              {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />}
+              {isOpen ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
+              <span className="truncate font-medium text-zinc-800">{f.name}</span>
+              {c && f.kind !== 'contacts' && (
+                <span className="text-xs text-zinc-400">{c.files.length} {c.files.length === 1 ? 'file' : 'files'}{shown > 0 ? ` · ${shown} shown to client` : ''}</span>
+              )}
+              {c && f.kind === 'contacts' && <span className="text-xs text-zinc-400">{(c.people ?? []).length} {(c.people ?? []).length === 1 ? 'person' : 'people'}</span>}
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
             </button>
           )}
+          {!f.trashed && (
+            <div className="mr-1 hidden items-center gap-1 group-hover:flex">
+              {f.kind !== 'root' && (
+                <button type="button" onClick={() => openUpload(f.id)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
+                  <Upload className="h-3.5 w-3.5" />Upload here
+                </button>
+              )}
+              {f.kind !== 'contacts' && (
+                <button type="button" onClick={() => startNewFolder(f.id)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
+                  <FolderPlus className="h-3.5 w-3.5" />Folder
+                </button>
+              )}
+              {isTax && (
+                <button type="button" onClick={() => startNewFolder(f.id, true)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
+                  <CalendarPlus className="h-3.5 w-3.5" />New tax year
+                </button>
+              )}
+            </div>
+          )}
+          {!f.locked && !f.trashed && (
+            <div className="relative">
+              <FastTooltip label="Folder actions"><button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === `folder:${f.id}` ? null : `folder:${f.id}`) }}
+                className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
+              {menuFor === `folder:${f.id}` && (
+                <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
+                  <MenuItem icon={FolderPlus} label="New folder inside" onClick={() => startNewFolder(f.id)} />
+                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true }) }} />
+                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
+                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+                </div>
+              )}
+            </div>
+          )}
+          {f.locked && <FastTooltip label="A fixed folder — it can't be renamed, moved or deleted"><Lock className="mr-1 h-3.5 w-3.5 text-zinc-300" /></FastTooltip>}
         </div>
         {isOpen && c && (
           <ul
             onDragOver={(e) => { if (canDrop) { e.preventDefault(); e.stopPropagation(); setDropOn(f.id) } }}
-            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f) }}>
-            {subs.map((sf) => folderNode(sf, depth + 1))}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f, where) }}>
+            {newFolderBox(f.id, depth + 1)}
+            {f.kind === 'contacts'
+              ? (c.people ?? []).map((p) => personNode(p, depth + 1, [...trail, f.name]))
+              : subs.map((sf) => folderNode(sf, depth + 1, f.id, [...trail, f.name]))}
             {c.files.map((file) => fileRow(file, f, depth + 1))}
-            {c.folders.length === 0 && c.files.length === 0 && (
+            {f.kind === 'contacts' && (c.people ?? []).length === 0 && (
+              <li className="py-1.5 text-xs italic text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 20 + 22}px` }}>No people are linked to this company.</li>
+            )}
+            {f.kind !== 'contacts' && c.folders.length === 0 && c.files.length === 0 && newFolder?.parentId !== f.id && (
               <li className="py-1.5 text-xs italic text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 20 + 22}px` }}>Empty folder</li>
             )}
           </ul>
@@ -569,34 +1005,93 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     )
   }
 
-  const shown = (owners ?? []).filter((o) => !filter || o.label.toLowerCase().includes(filter.toLowerCase()))
+  /** one person inside a company's "2. Contacts": their own storage, opened through the company */
+  const personNode = (p: Person, depth: number, trail: string[]): React.ReactNode => {
+    const key = personKey(p.contactId)
+    const isOpen = expanded.has(key)
+    const c = loaded[key]
+    const others = p.companies.filter((x) => x !== root?.owner.label)
+    return (
+      <li key={key}>
+        <div className="group flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50" style={{ paddingLeft: `${depth * 20}px` }}>
+          <button type="button" onClick={() => p.ownerId && toggleKey(key)} disabled={!p.ownerId} className="flex min-w-0 flex-1 items-center gap-1.5 text-left disabled:cursor-default" aria-expanded={isOpen}>
+            {p.ownerId ? (isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />) : <span className="w-4" />}
+            <User className="h-4 w-4 shrink-0 text-zinc-400" />
+            <span className="truncate font-medium text-zinc-800">{p.name}</span>
+            {others.length > 0 && <span className="truncate text-xs text-zinc-400">also in {others.join(', ')}</span>}
+            {!p.ownerId && <span className="text-xs italic text-zinc-400">no documents yet</span>}
+            {loadingFolders.has(key) && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
+          </button>
+          {c?.folder && (
+            <button type="button" onClick={() => startNewFolder(c.folder!.id)} className="mr-1 hidden items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50 group-hover:inline-flex">
+              <FolderPlus className="h-3.5 w-3.5" />Folder
+            </button>
+          )}
+        </div>
+        {isOpen && c && (
+          <ul>
+            {c.folder && newFolderBox(c.folder.id, depth + 1)}
+            {[...c.folders].sort(sortFolders).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
+            {c.files.map((file) => fileRow(file, c.folder, depth + 1))}
+          </ul>
+        )}
+      </li>
+    )
+  }
+
+  // ───────────────────────────────────────── page
+
+  const topFolders = root?.folders ?? []
   const allOpen = topFolders.length > 0 && topFolders.every((f) => expanded.has(f.id))
   const totalFiles = (root?.files.length ?? 0) + topFolders.reduce((n, f) => n + (loaded[f.id]?.files.length ?? 0), 0)
+  const groupOf = (groups ?? []).find((g) => g.owners.some((o) => o.id === ownerId))
+  const selPath = selected && loaded[selected] ? loaded[selected].path.filter((x) => x.kind !== 'root' && x.kind !== 'business_root' && x.kind !== 'private_root') : []
+  const selPerson = selected?.startsWith('person:') ? Object.values(loaded).flatMap((x) => x.people ?? []).find((p) => personKey(p.contactId) === selected) : null
+  const crumbs = [
+    ...(scopedOwnerId ? [] : ['Storage', ...(groupOf && groupOf.section === 'clients' ? [groupOf.label] : [])]),
+    root?.owner.label ?? '',
+    ...(selPerson ? ['2. Contacts', selPerson.name] : selPath.map((x) => x.name)),
+  ].filter(Boolean)
 
   const right = (
     <div className="rounded-xl border border-zinc-200 bg-white p-4" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a company or person on the left to see its folders and files.'}</p>}
+      {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
       {root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
       {root?.folder && (
         <>
+          <nav aria-label="Path" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-zinc-500">
+            {crumbs.map((c, i) => (
+              <span key={`${c}-${i}`} className="inline-flex items-center gap-1">
+                {i > 0 && <ChevronRight className="h-3 w-3" />}
+                <span className={i === crumbs.length - 1 ? 'font-medium text-zinc-800' : ''}>{c}</span>
+              </span>
+            ))}
+            {root.owner.closed && <Badge tone="gray">{root.owner.accountStatus ?? 'archived'}</Badge>}
+          </nav>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
             <span className="font-medium text-zinc-800">{root.folder.name}</span>
             <span className="text-xs text-zinc-400">{totalFiles} {totalFiles === 1 ? 'file' : 'files'}</span>
             <span className="flex-1" />
-            <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload() }}
+            <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(root.folder!.id) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
-              <Upload className="h-3.5 w-3.5" />Upload Document
+              <FolderPlus className="h-3.5 w-3.5" />New folder
             </button>
-            <button type="button" onClick={() => refreshAll()} aria-label="Refresh" className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
-              <RefreshCw className="h-3.5 w-3.5" />Refresh
+            <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload(root.folder!.kind !== 'root' ? root.folder!.id : undefined) }}
+              className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
+              <Upload className="h-3.5 w-3.5" />Upload
             </button>
+            <FastTooltip label="Refresh">
+              <button type="button" onClick={() => refreshAll()} aria-label="Refresh" className="rounded-md border border-zinc-200 p-1 hover:bg-zinc-50">
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </FastTooltip>
             {topFolders.length > 0 && (
               <button type="button" className="text-xs text-blue-700 hover:underline"
                 onClick={() => {
                   if (allOpen) { setExpanded(new Set()); return }
                   setExpanded(new Set(topFolders.map((f) => f.id)))
-                  for (const f of topFolders) if (!loaded[f.id]) loadFolder(f.id)
+                  for (const f of topFolders) if (!loaded[f.id]) loadKey(f.id)
                 }}>
                 {allOpen ? 'Close all' : 'Open all'}
               </button>
@@ -606,11 +1101,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {uploadOpen && (
             <div className="mb-3 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
               <div className="flex flex-wrap items-center gap-2">
-                <select value={upFolder} onChange={(e) => { setUpFolder(e.target.value); setUpType(''); setUpPerson('') }} className="rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading}>
+                <select value={upFolder} onChange={(e) => { setUpFolder(e.target.value); setUpType(''); setUpPerson('') }} className="max-w-xs rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading}>
                   <option value="">Folder…</option>
-                  {topFolders.filter((t) => !t.trashed && t.kind !== 'root').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {upOptions.map(({ f, depth }) => <option key={f.id} value={f.id}>{`${'  '.repeat(depth)}${f.name}`}</option>)}
                 </select>
-                {upIsContacts && ownerKind !== 'person' && (
+                {upIsContacts && (
                   <select value={upPerson} onChange={(e) => setUpPerson(e.target.value)} className="rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading}>
                     <option value="">Whose document?</option>
                     {upPeople.map((pp) => <option key={pp.contactId} value={pp.contactId}>{pp.name}</option>)}
@@ -630,28 +1125,31 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                     </button>
                   </>
                 )}
-                <input value={upName} onChange={(e) => setUpName(e.target.value)} placeholder="Display name (optional)" className="w-52 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading} />
-                <label className="inline-flex items-center gap-1.5 text-xs text-zinc-700">
-                  <input type="checkbox" checked={upVisible} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading} />
-                  Show to client
-                </label>
+                <input value={upName} onChange={(e) => setUpName(e.target.value)} placeholder="Name shown (optional)" className="w-52 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading} />
+                {ownerKind !== 'business' && ownerKind !== 'private' && (
+                  <label className="inline-flex items-center gap-1.5 text-xs text-zinc-700">
+                    <input type="checkbox" checked={upVisible} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading} />
+                    Show to client
+                  </label>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="text-sm"
-                  disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && ownerKind !== 'person' && !upPerson)}
+                  disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
                 <button type="button" onClick={() => setUploadOpen(false)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>
-                <span className="text-xs text-zinc-400">Same name in the same folder = a new version of that file.</span>
+                <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under Versions.</span>
               </div>
             </div>
           )}
 
           <ul className="divide-y divide-zinc-50">
-            {topFolders.map((f) => folderNode(f, 0))}
-            {root.files.map((file) => fileRow(file, null, 0))}
-            {topFolders.length === 0 && root.files.length === 0 && (
-              <li className="py-2 text-sm text-zinc-500">This storage is empty.</li>
+            {newFolderBox(root.folder.id, 0)}
+            {topFolders.map((f) => folderNode(f, 0, root.folder!.id, []))}
+            {root.files.map((file) => fileRow(file, root.folder, 0))}
+            {topFolders.length === 0 && root.files.length === 0 && newFolder?.parentId !== root.folder.id && (
+              <li className="py-2 text-sm text-zinc-500">This storage is empty — use New folder or Upload.</li>
             )}
           </ul>
           <p className="mt-2 text-xs text-zinc-400">Drag a file onto a folder to move it.</p>
@@ -660,10 +1158,25 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
+      {asking && (
+        <QuestionDialog q={questions?.[asking.slug]} fallbackTitle={asking.fallbackTitle}
+          onClose={() => { const r = asking.resolve; setAsking(null); r('cancel') }}
+          choices={asking.choices.map((c) => ({ ...c, onChoose: () => { const r = asking.resolve; setAsking(null); r(c.key) } }))}>
+          {asking.body}
+        </QuestionDialog>
+      )}
+      {picking && (
+        <FolderPicker {...picking.props}
+          onClose={() => { const r = picking.resolve; setPicking(null); r(null) }}
+          onPick={(folderId, oid, path) => { const r = picking.resolve; setPicking(null); r({ folderId, ownerId: oid, path }) }} />
+      )}
     </div>
   )
 
   if (scopedOwnerId) return right
+
+  const q = filter.trim().toLowerCase()
+  const sections: Array<{ key: NavGroup['section']; label: string }> = [{ key: 'clients', label: 'Clients' }, { key: 'business', label: 'Business' }, { key: 'private', label: 'My files' }]
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">
@@ -671,32 +1184,101 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Search companies and people…"
+          placeholder="Search clients, people, Business…"
           className="mb-2 w-full rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         />
-        {owners === null && !error && <p className="p-2 text-sm text-zinc-500">Loading…</p>}
-        {owners !== null && shown.length === 0 && <p className="p-2 text-sm text-zinc-500">Nothing in the new storage yet.</p>}
-        <ul className="max-h-[70vh] space-y-0.5 overflow-y-auto">
-          {shown.map((o) => {
-            const Icon = ownerIcon(o.kind)
+        {groups === null && !error && <p className="p-2 text-sm text-zinc-500">Loading…</p>}
+        <div className="max-h-[75vh] space-y-3 overflow-y-auto">
+          {sections.map((sec) => {
+            const gs = (groups ?? []).filter((g) => g.section === sec.key)
+            if (gs.length === 0) return null
+            // Business and My files are one area each: a single row, opened directly
+            if (sec.key !== 'clients') {
+              const o = gs[0].owners[0]
+              if (!o || (q && !sec.label.toLowerCase().includes(q))) return null
+              const Icon = ownerIcon(o.kind)
+              return (
+                <div key={sec.key}>
+                  <button type="button" onClick={() => openOwner(o.id)}
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}>
+                    <Icon className="h-4 w-4 text-zinc-500" /><span className="flex-1">{sec.label}</span>
+                    {sec.key === 'private' && <span className="text-[11px] font-normal text-zinc-400">only you</span>}
+                    <span className="text-xs font-normal text-zinc-400">{o.fileCount}</span>
+                  </button>
+                </div>
+              )
+            }
             return (
-              <li key={o.id}>
-                <button
-                  type="button"
-                  onClick={() => openOwner(o.id)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}
-                >
-                  <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                  {o.status && <Badge tone={o.status === 'archived' ? 'gray' : 'amber'}>{o.status}</Badge>}
-                  <span className="text-xs text-zinc-400">{o.fileCount}</span>
-                </button>
-              </li>
+              <div key={sec.key}>
+                <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">{sec.label}</p>
+                <ul className="space-y-0.5">
+                  {gs.map((g) => {
+                    const owners = g.owners.filter((o) => !q || o.label.toLowerCase().includes(q))
+                    if (q && owners.length === 0) return null
+                    const isOpen = !!q || openGroups.has(g.key)
+                    return (
+                      <li key={g.key}>
+                        <button type="button" onClick={() => setOpenGroups((s) => { const n = new Set(s); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n })}
+                          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-zinc-50" aria-expanded={isOpen}>
+                          {isOpen ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
+                          <Folder className="h-4 w-4 text-amber-500" />
+                          <span className="flex-1 truncate">{g.label}</span>
+                          <span className="text-xs text-zinc-400">{owners.length}</span>
+                        </button>
+                        {isOpen && (
+                          <ul className="ml-5 space-y-0.5">
+                            {owners.map((o) => {
+                              const Icon = ownerIcon(o.kind)
+                              return (
+                                <li key={o.id}>
+                                  <button type="button" onClick={() => openOwner(o.id)}
+                                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}>
+                                    <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
+                                    <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                                    {o.status && <Badge tone={o.status === 'archived' ? 'gray' : 'amber'}>{o.status}</Badge>}
+                                    <span className="text-xs text-zinc-400">{o.fileCount}</span>
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
             )
           })}
-        </ul>
+        </div>
       </div>
       {right}
     </div>
+  )
+}
+
+function MenuItem({ icon: Icon, label, onClick, danger }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left ${danger ? 'text-red-600 hover:bg-red-50' : 'hover:bg-zinc-50'}`}>
+      <Icon className="h-3.5 w-3.5" />{label}
+    </button>
+  )
+}
+
+/** "Pick which ones to hide": ticked = the client stops seeing it (the Set is read when the question is answered). */
+function PickList({ items, chosen }: { items: { id: string; name: string }[]; chosen: Set<string> }) {
+  const [, force] = useState(0)
+  return (
+    <ul className="max-h-60 space-y-1 overflow-y-auto">
+      {items.map((x) => (
+        <li key={x.id}>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={chosen.has(x.id)} onChange={(e) => { if (e.target.checked) chosen.add(x.id); else chosen.delete(x.id); force((n) => n + 1) }} />
+            {x.name}
+          </label>
+        </li>
+      ))}
+    </ul>
   )
 }

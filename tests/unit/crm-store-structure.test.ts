@@ -79,3 +79,40 @@ describe("suggestTaxYear", () => {
   it("last year when missing", () => { expect(suggestTaxYear([], now)).toBe("2025") })
   it("the most recent missing year", () => { expect(suggestTaxYear(["2025", "Other"], now)).toBe("2024") })
 })
+
+import { folderNameProblem, finalUploadName, keepBothName, cleanNewFileName } from "@/lib/crm-store/names"
+import { shownThroughCompany } from "@/lib/crm-store/browse"
+
+describe("folderNameProblem (the message the screen shows before saving)", () => {
+  it("fine name → null; same name as a folder next to it (any case) → message", () => {
+    expect(folderNameProblem("Bank of America", ["2025"])).toBeNull()
+    expect(folderNameProblem(" bank of america ", ["Bank of America"])).toMatch(/already exists/)
+    expect(folderNameProblem("a/b", [])).toMatch(/can't contain/)
+    expect(folderNameProblem("", [])).toMatch(/Enter a folder name/)
+  })
+})
+
+describe("upload names", () => {
+  it("the name shown keeps the original extension; empty → the file's own name", () => {
+    expect(finalUploadName("scan 01.PDF", "")).toBe("scan 01.PDF")
+    expect(finalUploadName("scan.pdf", "Articles")).toBe("Articles.pdf")
+    expect(finalUploadName("scan.pdf", "Articles.PDF")).toBe("Articles.PDF")
+    expect(finalUploadName("scan.pdf", "a/b")).toBe("a-b.pdf")
+    expect(finalUploadName("scan.pdf", "a/b")).toBe(cleanNewFileName("a/b", "scan.pdf"))
+  })
+  it("keep both → the first free (n)", () => {
+    expect(keepBothName("Invoice.pdf", ["Invoice.pdf"])).toBe("Invoice (2).pdf")
+    expect(keepBothName("Invoice.pdf", ["Invoice.pdf", "invoice (2).pdf"])).toBe("Invoice (3).pdf")
+    expect(keepBothName("README", ["README"])).toBe("README (2)")
+  })
+})
+
+describe("shownThroughCompany (catalog: a person's ITIN / Tax never on a company page)", () => {
+  const kinds = new Map<string, { shown_through_company?: boolean }>([["personal", { shown_through_company: true }], ["itin", { shown_through_company: false }], ["person_tax", { shown_through_company: false }], ["custom", {}]])
+  it("follows the catalog; a kind with no setting is shown", () => {
+    expect(shownThroughCompany("personal", kinds)).toBe(true)
+    expect(shownThroughCompany("itin", kinds)).toBe(false)
+    expect(shownThroughCompany("person_tax", kinds)).toBe(false)
+    expect(shownThroughCompany("custom", kinds)).toBe(true)
+  })
+})

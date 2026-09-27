@@ -111,4 +111,38 @@ LANGUAGE sql STABLE AS $$
 $$;
 REVOKE ALL ON FUNCTION public.store_navigation(uuid) FROM PUBLIC, anon, authenticated;
 
+-- "Decide later" (Part 16 rule 4): a file saved hidden and marked red "Needs review" until staff settle it.
+ALTER TABLE public.store_files ADD COLUMN IF NOT EXISTS needs_review_at timestamptz;
+ALTER TABLE public.store_files ADD COLUMN IF NOT EXISTS needs_review_reason text;
+CREATE INDEX IF NOT EXISTS store_files_needs_review_idx ON public.store_files (owner_id) WHERE needs_review_at IS NOT NULL AND state = 'live';
+
+-- The questions the system asks (Part 16): which exist, whether they are asked, their title and the words on
+-- each choice are catalog DATA (a question switched off = the system does its default without asking).
+-- metadata: { enabled, choices: { <choice key>: <label> } } — the choice keys are what the screens implement.
+INSERT INTO public.catalog_definitions (id, display_name, description, admin_can_add_rows)
+SELECT 'storage_questions', 'Storage — questions the system asks', 'Part 16 human step. metadata: enabled(bool), choices{key: label}. A question switched off = the default action without asking.', true
+WHERE NOT EXISTS (SELECT 1 FROM public.catalog_definitions d WHERE d.id = 'storage_questions');
+
+INSERT INTO public.catalog_entries (catalog_id, slug, display_name, status, metadata)
+VALUES
+  ('storage_questions', 'same_name_different_content', 'A file with this name is already here', 'active',
+   '{"enabled":true,"choices":{"replace":"Replace it (the old copy is kept under Versions)","keep_both":"Keep both — save the new one as","cancel":"Cancel"}}'),
+  ('storage_questions', 'identical_elsewhere', 'This exact file is already stored', 'active',
+   '{"enabled":true,"choices":{"dont_add":"Don''t add it (keep the existing one)","rename_existing":"Rename the existing one to the new name","second_copy":"Add a second copy here","cancel":"Cancel"}}'),
+  ('storage_questions', 'closed_company_upload', 'This company is closed or cancelled', 'active',
+   '{"enabled":true,"choices":{"store_here":"Store it here (e.g. closure papers)","other_place":"Choose another client or folder…","business":"Business folders…","later":"Decide later"}}'),
+  ('storage_questions', 'person_folder_from_company', 'This folder goes into the person''s own storage', 'active',
+   '{"enabled":true,"choices":{"person":"Create it in the person''s storage (shows in each of their companies)","company":"Create it in this company''s own folders instead","cancel":"Cancel"}}'),
+  ('storage_questions', 'tax_year_missing', 'Which tax year is this for?', 'active',
+   '{"enabled":true,"choices":{"year":"Put it in","new_year":"New year folder","other_place":"Choose another folder…","cancel":"Cancel"}}'),
+  ('storage_questions', 'prepared_tax_return', 'Is this the filed return or a draft?', 'active',
+   '{"enabled":true,"choices":{"filed":"It''s the filed return (can be shown to the client)","draft":"It''s a draft for review (never shown until marked filed)","later":"Decide later"}}'),
+  ('storage_questions', 'move_visible_file', 'The client can see this file', 'active',
+   '{"enabled":true,"choices":{"keep":"Move it and keep it visible","hide":"Move it and hide it","cancel":"Cancel the move"}}'),
+  ('storage_questions', 'folder_with_visible_files', 'The client can see files in this folder', 'active',
+   '{"enabled":true,"choices":{"all":"Continue with everything","hide_first":"Hide the visible ones first, then continue","pick":"Pick which ones to hide","cancel":"Cancel"}}'),
+  ('storage_questions', 'show_personal_data', 'This document holds personal data', 'active',
+   '{"enabled":true,"choices":{"owner_only":"Show it to","keep_hidden":"Keep it hidden"}}')
+ON CONFLICT (catalog_id, slug) DO NOTHING;
+
 COMMIT;

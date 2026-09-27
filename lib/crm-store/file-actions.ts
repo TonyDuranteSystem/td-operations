@@ -24,21 +24,8 @@ async function liveFile(fileId: string) {
   return f as { id: string; name: string; owner_id: string; folder_id: string; document_type: string | null; state: string; store_owners: { kind: string } }
 }
 
-function extensionOf(name: string): string {
-  const m = /\.[A-Za-z0-9]{1,8}$/.exec(name)
-  return m ? m[0] : ""
-}
-
-/** The name the store accepts: no "/", "\\" or control characters; the original extension is kept. */
-export function cleanNewFileName(input: string, currentName: string): string {
-  // eslint-disable-next-line no-control-regex -- control characters are what the store refuses
-  let n = input.replace(/[\\/\u0000-\u001f\u007f]/g, "-").replace(/\s+/g, " ").trim()
-  const ext = extensionOf(currentName)
-  if (ext && !n.toLowerCase().endsWith(ext.toLowerCase())) n = `${n}${ext}`
-  if (!n || n === ext) throw new Error("Enter a file name.")
-  if (n.length > 255) throw new Error("That name is too long.")
-  return n
-}
+export { cleanNewFileName } from "./names"
+import { cleanNewFileName } from "./names"
 
 async function logEvent(event: string, f: { id: string; owner_id: string; folder_id: string; name: string }, actor: string | null, details: Record<string, unknown>) {
   const { error } = await db().from("store_events").insert({

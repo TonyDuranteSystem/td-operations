@@ -35,8 +35,9 @@ export function stateGroup(value: string | null | undefined): string | null {
   return hit ?? v
 }
 
-/** Account statuses that put a company under "Closed / Cancelled" (the CRM's own values). */
-export const CLOSED_STATUSES = ["Closed", "Cancelled", "Offboarding"]
+/** Account statuses that put a company under "Closed / Cancelled" (the CRM's own values — one list, in browse). */
+export { CLOSED_ACCOUNT_STATUSES as CLOSED_STATUSES } from "./browse"
+import { CLOSED_ACCOUNT_STATUSES } from "./browse"
 
 export interface NavOwner { id: string; kind: string; label: string; status: string | null; fileCount: number }
 export interface NavGroup { key: string; label: string; section: "clients" | "business" | "private"; owners: NavOwner[] }
@@ -53,7 +54,7 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
     else if (r.kind === "person") people.push(o)
     else if (r.kind === "formation") (r.status === "archived" ? closed : forming).push(o)
     else if (r.kind === "unfiled") unfiled.push(o)
-    else if (r.accountStatus && CLOSED_STATUSES.includes(r.accountStatus)) closed.push(o)
+    else if (r.accountStatus && CLOSED_ACCOUNT_STATUSES.includes(r.accountStatus)) closed.push(o)
     else {
       const st = stateGroup(r.state)
       if (!st) noState.push(o)
@@ -78,7 +79,9 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
 export async function navigation(user: { id: string; email?: string | null } | null, isOwnerOnlyUser: boolean): Promise<NavGroup[]> {
   await ensureArea("business", null)
   if (isOwnerOnlyUser && user) await ensureArea("private", user.id)
-  const { data, error } = await db().rpc("store_navigation", { p_user: user?.id ?? null })
+  // a private area is listed only for the owner-only login, and only its own (the database function already
+  // returns no one else's)
+  const { data, error } = await db().rpc("store_navigation", { p_user: isOwnerOnlyUser ? user?.id ?? null : null })
   if (error) throw new Error(`store navigation: ${error.message}`)
   const { ownerLabel, ownerStatus } = await import("./browse")
   return groupOwners(((data ?? []) as Array<{ id: string; kind: string; lifecycle_override: string | null; company_name: string | null; state_of_formation: string | null; account_status: string | null; person_name: string | null; root_name: string | null; file_count: number | string }>).map((o) => ({
@@ -138,15 +141,8 @@ export function isLockedFolder(f: { template_slug: string | null; parent_id: str
   return f.template_slug !== null || f.parent_id === null
 }
 
-/** Pure: the store's folder-name rules, checked BEFORE saving so staff get a plain message. */
-export function cleanFolderName(input: string): string {
-  // eslint-disable-next-line no-control-regex -- control characters are what the store refuses
-  if (/[\\/\u0000-\u001f\u007f]/.test(input)) throw new Error("A folder name can't contain / or \\.")
-  const n = input.replace(/\s+/g, " ").trim()
-  if (!n) throw new Error("Enter a folder name.")
-  if (n.length > 255) throw new Error("That name is too long (255 characters at most).")
-  return n
-}
+export { cleanFolderName } from "./names"
+import { cleanFolderName } from "./names"
 
 /** The nearest fixed folder kind above a folder (a year folder inside "3. Tax" counts as Tax). */
 export async function effectiveKind(folderId: string): Promise<string> {
@@ -175,13 +171,13 @@ async function logFolder(event: string, f: { id: string; owner_id: string; name:
   if (error) console.error(`[crm-store] ${event} not logged for folder ${f.id}: ${error.message}`)
 }
 
-export async function createFolder(parentId: string, name: string, actorId: string | null): Promise<{ id: string; name: string }> {
+export async function createFolder(parentId: string, name: string, actorId: string | null, kind = "custom"): Promise<{ id: string; name: string }> {
   const p = await folder(parentId)
   if (p.trashed_at) throw new Error("That folder is in the trash.")
   if (p.kind === "contacts") throw new Error("\"2. Contacts\" shows each person's own storage — open the person to add a folder there.")
   const clean = cleanFolderName(name)
   if (await nameTaken(p.owner_id, parentId, clean)) throw new Error(`"${clean}" already exists here.`)
-  const { data, error } = await db().from("store_folders").insert({ owner_id: p.owner_id, parent_id: parentId, kind: "custom", name: clean, created_by: actorId }).select("id, name").single()
+  const { data, error } = await db().from("store_folders").insert({ owner_id: p.owner_id, parent_id: parentId, kind, name: clean, created_by: actorId }).select("id, name").single()
   if (error) throw new Error(/name_key|duplicate/i.test(error.message) ? `"${clean}" already exists here.` : `The folder could not be created (${error.message}).`)
   await logFolder("folder_created", { id: data.id, owner_id: p.owner_id, name: clean }, actorId, { parent: parentId })
   return { id: data.id as string, name: data.name as string }
@@ -192,15 +188,11 @@ export async function createTaxYear(taxFolderId: string, year: string, actorId: 
   const kind = await effectiveKind(taxFolderId)
   if (kind !== "tax" && kind !== "person_tax") throw new Error("A tax-year folder goes inside a Tax folder.")
   if (!/^(19|20)\d{2}$/.test(year.trim())) throw new Error("Enter a four-digit year, e.g. 2025.")
-  return createFolder(taxFolderId, year.trim(), actorId)
+  // a year folder is its own kind (so a file saved in it is known to be for that year) but not locked
+  return createFolder(taxFolderId, year.trim(), actorId, kind === "tax" ? "tax_year" : "person_tax_year")
 }
 
-/** Pure: the year to suggest for "New tax year" — the most recent year without a folder, starting last year. */
-export function suggestTaxYear(existing: string[], now = new Date()): string {
-  const have = new Set(existing.filter((n) => /^\d{4}$/.test(n)))
-  for (let y = now.getFullYear() - 1; y >= now.getFullYear() - 10; y--) if (!have.has(String(y))) return String(y)
-  return String(now.getFullYear())
-}
+export { suggestTaxYear } from "./names"
 
 export async function renameFolder(folderId: string, name: string, actorId: string | null): Promise<{ name: string }> {
   const f = await folder(folderId)
@@ -259,18 +251,37 @@ async function refreshCategories(ownerId: string, folderId: string) {
   if (error) console.error(`[crm-store] folder move: categories not refreshed: ${error.message}`)
 }
 
-/** What a folder delete / move would touch: files (all levels) and how many the client can see today. */
-export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; shownNames: string[]; locked: boolean }> {
+/** What a folder delete / move would touch: every file (all levels, first 500 listed) and which the client sees. */
+export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean }>; locked: boolean }> {
   const f = await folder(folderId)
   const files = await filesUnder(folderId)
-  let shownNames: string[] = []
+  const shownIds = new Set<string>()
   if (files.length) {
     const { storePointer } = await import("./document-pointer")
-    const { data } = await db().from("documents").select("drive_file_id, file_name, portal_visible")
-      .in("drive_file_id", files.map((x) => storePointer(x.id))).eq("portal_visible", true)
-    shownNames = Array.from(new Set(((data ?? []) as { file_name: string }[]).map((r) => r.file_name)))
+    for (let i = 0; i < files.length; i += 200) {
+      const chunk = files.slice(i, i + 200)
+      const { data, error } = await db().from("documents").select("drive_file_id")
+        .in("drive_file_id", chunk.map((x) => storePointer(x.id))).eq("portal_visible", true)
+      if (error) throw new Error(`Could not check what the client sees (${error.message}).`)
+      for (const r of data ?? []) shownIds.add(String(r.drive_file_id).slice("store:".length))
+    }
   }
-  return { name: f.name, files: files.length, shown: shownNames.length, shownNames, locked: isLockedFolder(f) }
+  const list = files.map((x) => ({ id: x.id, name: x.name, shown: shownIds.has(x.id) }))
+    .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
+  return { name: f.name, files: files.length, shown: shownIds.size, list, locked: isLockedFolder(f) }
+}
+
+/** Hide from the client only the chosen files under a folder ("Pick which ones to hide"). */
+export async function hideChosenUnder(folderId: string, fileIds: string[], actorId: string | null): Promise<number> {
+  const inside = new Set((await filesUnder(folderId)).map((x) => x.id))
+  const { setClientVisibility } = await import("./browse")
+  let n = 0
+  for (const id of fileIds) {
+    if (!inside.has(id)) continue
+    await setClientVisibility(id, false, actorId)
+    n++
+  }
+  return n
 }
 
 /** Hide from the client every file under a folder (the "hide the visible ones first" answer). */
@@ -278,9 +289,14 @@ export async function hideAllUnder(folderId: string, actorId: string | null): Pr
   const { setClientVisibility } = await import("./browse")
   const files = await filesUnder(folderId)
   let n = 0
+  const failed: string[] = []
   for (const f of files) {
-    try { await setClientVisibility(f.id, false, actorId); n++ } catch { /* a file with no listing / already hidden */ }
+    try { await setClientVisibility(f.id, false, actorId); n++ } catch (e) {
+      // a file with no CRM listing cannot be seen by the client anyway; anything else is a real failure
+      if (!/not listed in the CRM documents list/i.test(e instanceof Error ? e.message : "")) failed.push(f.name)
+    }
   }
+  if (failed.length) throw new Error(`These files could not be hidden, so nothing else was done: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? " …" : ""}`)
   return n
 }
 
@@ -305,4 +321,76 @@ export async function deleteFolder(folderId: string, actorId: string | null): Pr
     throw new Error(error.message.replace(/^store: /, ""))
   }
   return { files: files.length }
+}
+
+// ───────────────────────────────────────────────────────────── the questions (Part 16)
+
+export interface StoreQuestion { enabled: boolean; title: string; choices: Record<string, string> }
+
+/** The questions the system asks, from the catalog (a question switched off = the default, no question). */
+export async function listQuestions(): Promise<Record<string, StoreQuestion>> {
+  const { data, error } = await db().from("catalog_entries").select("slug, display_name, status, metadata").eq("catalog_id", "storage_questions")
+  if (error) throw new Error(`store questions: ${error.message}`)
+  const out: Record<string, StoreQuestion> = {}
+  for (const r of (data ?? []) as { slug: string; display_name: string; status: string; metadata: { enabled?: boolean; choices?: Record<string, string> } | null }[]) {
+    out[r.slug] = { enabled: r.status === "active" && r.metadata?.enabled !== false, title: r.display_name, choices: r.metadata?.choices ?? {} }
+  }
+  return out
+}
+
+export interface IdenticalFile { fileId: string; name: string; ownerId: string; where: string; mimeType: string | null }
+
+/** Live files whose CURRENT copy has exactly these bytes (sha256), anywhere this login may open. */
+export async function findIdenticalFiles(sha256: string, userId: string | null): Promise<IdenticalFile[]> {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Bad fingerprint.")
+  const { data, error } = await db().from("store_file_versions").select("id, mime_type, store_files!store_file_versions_file_id_fkey(id, name, owner_id, folder_id, state, current_version_id, store_owners(kind, private_user_id))")
+    .eq("sha256", sha256).limit(50)
+  if (error) throw new Error(`Could not look for the same file (${error.message}).`)
+  const hits: IdenticalFile[] = []
+  const labels = new Map<string, string>()
+  for (const v of (data ?? []) as Array<{ id: string; mime_type: string | null; store_files: { id: string; name: string; owner_id: string; folder_id: string; state: string; current_version_id: string | null; store_owners: { kind: string; private_user_id: string | null } | null } | null }>) {
+    const f = v.store_files
+    if (!f || f.state !== "live" || f.current_version_id !== v.id) continue
+    if (f.store_owners?.kind === "private" && f.store_owners.private_user_id !== userId) continue
+    if (!labels.has(f.owner_id)) {
+      const { data: nav } = await db().rpc("store_navigation", { p_user: userId })
+      for (const o of (nav ?? []) as Array<{ id: string; kind: string; company_name: string | null; person_name: string | null; root_name: string | null }>) {
+        const { ownerLabel } = await import("./browse")
+        labels.set(o.id, ownerLabel({ kind: o.kind, company: o.company_name, person: o.person_name, root: o.root_name }))
+      }
+    }
+    hits.push({ fileId: f.id, name: f.name, ownerId: f.owner_id, where: [labels.get(f.owner_id) ?? "Storage", ...(await folderPathNames(f.folder_id))].join(" › "), mimeType: v.mime_type })
+  }
+  return hits
+}
+
+/** Folder names from below the top folder down to this one ("3. Tax", "2025"). */
+async function folderPathNames(folderId: string): Promise<string[]> {
+  const names: string[] = []
+  let cur: string | null = folderId
+  for (let i = 0; i < 50 && cur; i++) {
+    const f = await folder(cur)
+    if (f.parent_id) names.unshift(f.name)
+    cur = f.parent_id
+  }
+  return names
+}
+
+/** "Decide later": mark a file red "Needs review" (it stays hidden from the client). */
+export async function markNeedsReview(fileId: string, reason: string, actorId: string | null): Promise<void> {
+  const { data, error } = await db().from("store_files").update({ needs_review_at: new Date().toISOString(), needs_review_reason: reason.slice(0, 200) })
+    .eq("id", fileId).eq("state", "live").select("id, owner_id, folder_id, name")
+  if (error) throw new Error(`The file was saved, but could not be marked "Needs review" (${error.message}).`)
+  const f = (data ?? [])[0]
+  if (f) await db().from("store_events").insert({ event: "needs_review", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { reason } })
+}
+
+/** Staff settled a "Needs review" file. */
+export async function clearNeedsReview(fileId: string, actorId: string | null): Promise<void> {
+  const { data, error } = await db().from("store_files").update({ needs_review_at: null, needs_review_reason: null })
+    .eq("id", fileId).eq("state", "live").select("id, owner_id, folder_id, name")
+  if (error) throw new Error(`Could not clear "Needs review" (${error.message}).`)
+  const f = (data ?? [])[0]
+  if (!f) throw new Error("File not found.")
+  await db().from("store_events").insert({ event: "reviewed", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: {} })
 }

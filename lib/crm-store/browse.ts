@@ -14,13 +14,17 @@ const db = () => supabaseAdmin as any
 
 export interface BrowseOwner {
   id: string
-  kind: "company" | "person" | "formation" | "unfiled"
+  kind: "company" | "person" | "formation" | "unfiled" | "business" | "private"
   label: string
   status: string | null // "being formed" / "archived" / null
   fileCount: number
 }
 
-export interface BrowseFolder { id: string; name: string; kind: string; trashed: boolean }
+export interface BrowseFolder {
+  id: string; name: string; kind: string; trashed: boolean
+  /** a fixed folder (made by a template, or a top folder): no rename / move / delete */
+  locked?: boolean
+}
 
 export interface BrowseFile {
   id: string
@@ -44,10 +48,16 @@ export interface BrowseFile {
   size: number | null
   mimeType: string | null
   updatedAt: string
+  /** the current version's content fingerprint (to tell "same name, different content" apart) */
+  sha256?: string | null
+  /** "Decide later": saved hidden and waiting for staff (the reason shown on the red chip) */
+  needsReview?: string | null
 }
 
 /** Pure: the label shown for an owner (unit-tested). */
 export function ownerLabel(o: { kind: string; company?: string | null; person?: string | null; root?: string | null }): string {
+  if (o.kind === "business") return "Business"
+  if (o.kind === "private") return "My files"
   if (o.kind === "company") return o.company || o.root || "Company"
   if (o.kind === "person") return o.person || o.root || "Person"
   if (o.kind === "formation") return o.root || "Company being formed"
@@ -86,69 +96,97 @@ export async function listOwners(): Promise<BrowseOwner[]> {
   }))
 }
 
-/** A folder's children (or the owner's root when folderId is null) + its files, trashed ones included. */
-export interface BrowsePerson { contactId: string; name: string }
+/** A folder's children (or the owner's root when folderId is null) + its live files. */
+export interface BrowsePerson { contactId: string; name: string; ownerId: string | null; companies: string[] }
+export interface BrowseOwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 
-export async function folderContents(ownerId: string, folderId: string | null): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[] }> {
-  let current: BrowseFolder | null = null
+/** Pure: a person's folders that may be shown on a COMPANY's page (catalog: shown_through_company). */
+export function shownThroughCompany(kind: string, kinds: Map<string, { shown_through_company?: boolean }>): boolean {
+  return kinds.get(kind)?.shown_through_company !== false
+}
+
+async function folderKindSettings(): Promise<Map<string, { shown_through_company?: boolean }>> {
+  const { data, error } = await db().from("catalog_entries").select("slug, metadata").eq("catalog_id", "storage_folder_kinds")
+  if (error) throw new Error(`store browse: ${error.message}`)
+  return new Map(((data ?? []) as { slug: string; metadata: { shown_through_company?: boolean } | null }[]).map((k) => [k.slug, k.metadata ?? {}]))
+}
+
+/** Account statuses that count as closed (the CRM's own values; the left side groups them the same way). */
+export const CLOSED_ACCOUNT_STATUSES = ["Closed", "Cancelled", "Offboarding"]
+
+type FolderRowLite = { id: string; name: string; kind: string; trashed_at: string | null; template_slug: string | null; parent_id: string | null }
+const toFolder = (d: FolderRowLite): BrowseFolder => ({ id: d.id, name: d.name, kind: d.kind, trashed: !!d.trashed_at, locked: d.template_slug !== null || d.parent_id === null })
+
+export async function folderContents(ownerId: string, folderId: string | null, opts: { throughCompany?: boolean } = {}): Promise<{ folder: BrowseFolder | null; path: BrowseFolder[]; folders: BrowseFolder[]; files: BrowseFile[]; people?: BrowsePerson[]; owner: BrowseOwnerInfo }> {
+  const { data: own, error: oErr } = await db().from("store_owners").select("kind, account_id, lifecycle_override, accounts(company_name, status), contacts(full_name)").eq("id", ownerId).maybeSingle()
+  if (oErr) throw new Error(`store browse: ${oErr.message}`)
+  if (!own) throw new Error("store browse: owner not found")
+  const cols = "id, name, kind, owner_id, trashed_at, template_slug, parent_id"
+  let cur: FolderRowLite | null = null
   if (folderId) {
-    const { data } = await db().from("store_folders").select("id, name, kind, owner_id, trashed_at").eq("id", folderId).maybeSingle()
+    const { data } = await db().from("store_folders").select(cols).eq("id", folderId).maybeSingle()
     if (!data || data.owner_id !== ownerId) throw new Error("store browse: folder not found for this owner")
-    current = { id: data.id, name: data.name, kind: data.kind, trashed: !!data.trashed_at }
+    cur = data
   } else {
-    const { data } = await db().from("store_folders").select("id, name, kind, trashed_at").eq("owner_id", ownerId).is("parent_id", null).maybeSingle()
-    if (data) current = { id: data.id, name: data.name, kind: data.kind, trashed: !!data.trashed_at }
+    const { data } = await db().from("store_folders").select(cols).eq("owner_id", ownerId).is("parent_id", null).maybeSingle()
+    cur = data ?? null
   }
-  if (!current) return { folder: null, path: [], folders: [], files: [] }
+  const rootName = cur && !cur.parent_id ? cur.name : null
+  const owner: BrowseOwnerInfo = {
+    kind: own.kind,
+    label: ownerLabel({ kind: own.kind, company: own.accounts?.company_name, person: own.contacts?.full_name, root: rootName }),
+    accountStatus: (own.accounts?.status as string | null) ?? null,
+    closed: (own.kind === "company" && CLOSED_ACCOUNT_STATUSES.includes(String(own.accounts?.status ?? ""))) || (own.kind === "formation" && own.lifecycle_override === "archived"),
+  }
+  if (!cur) return { folder: null, path: [], folders: [], files: [], owner }
+  const kinds = opts.throughCompany ? await folderKindSettings() : null
+  const current = toFolder(cur)
 
   // breadcrumb (bounded walk up)
   const path: BrowseFolder[] = []
   let walk: string | null = current.id
-  for (let i = 0; i < 20 && walk; i++) {
-    const { data } = await db().from("store_folders").select("id, name, kind, parent_id, trashed_at").eq("id", walk).maybeSingle()
+  for (let i = 0; i < 50 && walk; i++) {
+    const { data } = await db().from("store_folders").select(cols).eq("id", walk).maybeSingle()
     if (!data) break
-    path.unshift({ id: data.id, name: data.name, kind: data.kind, trashed: !!data.trashed_at })
+    path.unshift(toFolder(data))
+    // a person's ITIN / Tax (and anything under them) is never shown on a company's page
+    if (kinds && !shownThroughCompany(data.kind, kinds)) throw new Error("store browse: this folder is only shown on the person's own page")
     walk = data.parent_id
   }
 
-  const { data: subs } = await db().from("store_folders").select("id, name, kind, trashed_at").eq("parent_id", current.id).is("trashed_at", null).order("name")
-  const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, store_file_versions!store_files_current_version_fk(size_bytes, mime_type)"
-  // live files only: the trash is its own view (Stage 1) — a trashed file must not sit among the live ones
+  const { data: subs } = await db().from("store_folders").select(cols).eq("parent_id", current.id).is("trashed_at", null).order("name")
+  const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, needs_review_at, needs_review_reason, store_file_versions!store_files_current_version_fk(size_bytes, mime_type, sha256)"
+  // live files only: the trash is its own view — a trashed file must not sit among the live ones
   const { data: fs, error } = await db().from("store_files").select(fileSelect)
     .eq("folder_id", current.id).eq("state", "live").order("name")
   if (error) throw new Error(`store browse: ${error.message}`)
-  // "2. Contacts" of a company: the company's people's OWN documents (each person's own storage), shown
-  // here read-only so a member's passport is visible on the company page — never copied into the company.
-  const peopleFiles: typeof fs = []
-  const personName = new Map<string, string>()
+  // "2. Contacts" of a company: one branch per person — each person's OWN storage (#28), opened through the
+  // company (only the folders the catalog lets a company show). Never copied into the company.
   const people: BrowsePerson[] = []
-  if (current.kind === "contacts") {
-    const { data: own } = await db().from("store_owners").select("account_id").eq("id", ownerId).maybeSingle()
-    if (own?.account_id) {
-      const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
-      if (lErr) throw new Error(`store browse: ${lErr.message}`)
-      for (const l of (links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[]) {
-        people.push({ contactId: l.contact_id, name: l.contacts?.full_name || "Contact" })
-      }
-      const cids = (links ?? []).map((l: { contact_id: string }) => l.contact_id)
-      if (cids.length > 0) {
-        const { data: po } = await db().from("store_owners").select("id, contacts(full_name)").eq("kind", "person").in("contact_id", cids)
-        const pids = (po ?? []).map((o: { id: string; contacts: { full_name: string } | null }) => {
-          personName.set(o.id, o.contacts?.full_name ?? "Person")
-          return o.id
-        })
-        if (pids.length > 0) {
-          const { data: pf, error: pErr } = await db().from("store_files").select(fileSelect)
-            .in("owner_id", pids).eq("state", "live").order("name")
-          if (pErr) throw new Error(`store browse: ${pErr.message}`)
-          peopleFiles.push(...(pf ?? []))
-        }
+  if (current.kind === "contacts" && own.account_id) {
+    const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
+    if (lErr) throw new Error(`store browse: ${lErr.message}`)
+    const cids = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)
+    const ownerOf = new Map<string, string>()
+    const companiesOf = new Map<string, string[]>()
+    if (cids.length > 0) {
+      const { data: po, error: poErr } = await db().from("store_owners").select("id, contact_id").eq("kind", "person").in("contact_id", cids)
+      if (poErr) throw new Error(`store browse: ${poErr.message}`)
+      for (const o of (po ?? []) as { id: string; contact_id: string }[]) ownerOf.set(o.contact_id, o.id)
+      const { data: ac, error: acErr } = await db().from("account_contacts").select("contact_id, accounts(company_name)").in("contact_id", cids)
+      if (acErr) throw new Error(`store browse: ${acErr.message}`)
+      for (const r of (ac ?? []) as { contact_id: string; accounts: { company_name: string | null } | null }[]) {
+        if (r.accounts?.company_name) companiesOf.set(r.contact_id, [...(companiesOf.get(r.contact_id) ?? []), r.accounts.company_name])
       }
     }
+    for (const l of (links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[]) {
+      people.push({ contactId: l.contact_id, name: l.contacts?.full_name || "Contact", ownerId: ownerOf.get(l.contact_id) ?? null, companies: (companiesOf.get(l.contact_id) ?? []).sort() })
+    }
+    people.sort((x, y) => x.name.localeCompare(y.name))
   }
   // What the client sees TODAY is decided by the CRM documents row (the portal reads it) — so the badge
   // comes from the row, not from the store's own flag, and a file with no row says so.
-  const all = [...(fs ?? []), ...peopleFiles]
+  const all = fs ?? []
   const rowsVisible = new Map<string, boolean>()
   const docIdOf = new Map<string, string>()
   if (all.length > 0) {
@@ -162,8 +200,7 @@ export async function folderContents(ownerId: string, folderId: string | null): 
       if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
     }
   }
-  const { data: curOwner } = await db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle()
-  const currentIsPerson = curOwner?.kind === "person"
+  const isPerson = own.kind === "person"
   const files: BrowseFile[] = []
   for (const f of all) {
     const [{ data: pers }, { data: so }, { count }] = await Promise.all([
@@ -171,26 +208,27 @@ export async function folderContents(ownerId: string, folderId: string | null): 
       db().rpc("store_type_staff_only", { p_document_type: f.document_type }),
       db().from("store_file_versions").select("id", { count: "exact", head: true }).eq("file_id", f.id),
     ])
-    const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null } | null
+    const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null; sha256: string | null } | null
     files.push({
       id: f.id, name: f.name, documentType: f.document_type, state: f.state, published: !!f.published,
       clientVisible: so !== true && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
       staffOnly: so === true, personal: pers === true, versions: count ?? 0,
-      size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at,
-      personName: f.owner_id !== ownerId ? personName.get(f.owner_id as string) ?? null : null,
-      inPersonStorage: f.owner_id !== ownerId ? personName.has(f.owner_id as string) : currentIsPerson,
+      size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at, sha256: v?.sha256 ?? null,
+      needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
+      personName: opts.throughCompany ? owner.label : null,
+      inPersonStorage: isPerson,
     })
   }
   return {
     folder: current,
     path,
-    folders: (subs ?? []).map((s: { id: string; name: string; kind: string; trashed_at: string | null }) => ({ id: s.id, name: s.name, kind: s.kind, trashed: !!s.trashed_at })),
+    folders: ((subs ?? []) as FolderRowLite[]).filter((sf) => !kinds || shownThroughCompany(sf.kind, kinds)).map(toFolder),
     files,
+    owner,
     ...(current.kind === "contacts" ? { people } : {}),
   }
 }
 
-/** Current version bytes of a file for staff viewing — trashed files too (staff can look inside the trash). */
 export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer; mimeType: string | null; name: string }> {
   const { data: f, error } = await db().from("store_files")
     .select("name, state, store_file_versions!store_files_current_version_fk(storage_bucket, storage_path, mime_type)")
@@ -314,14 +352,15 @@ export async function assertNotStoreOwnedAccount(accountId: string): Promise<voi
   }
 }
 
-export interface BrowseDocType { slug: string; name: string; staffOnly: boolean; personal: boolean }
+export interface BrowseDocType { slug: string; name: string; staffOnly: boolean; personal: boolean; defaultFolderKind: string | null; draftNeverVisible: boolean }
 
 export async function listDocumentTypes(): Promise<BrowseDocType[]> {
   const { data, error } = await db().from("catalog_entries").select("slug, display_name, metadata")
     .eq("catalog_id", "storage_document_types").eq("status", "active").order("display_name")
   if (error) throw new Error(`store browse: ${error.message}`)
-  return (data ?? []).map((t: { slug: string; display_name: string; metadata: { staff_only?: boolean; personal?: boolean } | null }) => ({
+  return (data ?? []).map((t: { slug: string; display_name: string; metadata: { staff_only?: boolean; personal?: boolean; default_folder_kind?: string; draft_never_visible?: boolean } | null }) => ({
     slug: t.slug, name: t.display_name, staffOnly: t.metadata?.staff_only === true, personal: t.metadata?.personal === true,
+    defaultFolderKind: t.metadata?.default_folder_kind ?? null, draftNeverVisible: t.metadata?.draft_never_visible === true,
   }))
 }
 
@@ -353,6 +392,15 @@ export async function staffUploadToStore(p: {
   displayName?: string | null
   /** show to the client straight away (today's upload does — default true); never for a staff-only type */
   visible?: boolean | null
+  /** the tax year the staff member chose (saved on the file) */
+  periodYear?: number | null
+  /** a prepared tax return: the staff member's answer — "filed" (may be shown) or "draft" (never shown) */
+  filingAnswer?: "filed" | "draft" | null
+  /** "Decide later": save it hidden and mark it red "Needs review" with this reason */
+  needsReview?: string | null
+  /** uploading straight into a person's folder shown in a company's "2. Contacts": that company's owner
+   *  (the CRM row keeps BOTH links, as an upload through "2. Contacts" does) */
+  viaCompanyOwnerId?: string | null
 }): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
   const { saveBytesToStore } = await import("./writer")
   const { storeNameKey } = await import("./rules")
@@ -403,6 +451,17 @@ export async function staffUploadToStore(p: {
     companyAccount = owner.account_id
     owner = { kind: "person", account_id: null, contact_id: p.personContactId, service_delivery_id: null }
   }
+  if (p.viaCompanyOwnerId && folder.kind !== "contacts") {
+    if (owner.kind !== "person" || !owner.contact_id) throw new Error("Upload into the person's folder from the company's \"2. Contacts\".")
+    const { data: co, error: coErr } = await db().from("store_owners").select("kind, account_id").eq("id", p.viaCompanyOwnerId).maybeSingle()
+    if (coErr) throw new Error(`Could not check the company — please try again (${coErr.message}).`)
+    if (co?.kind === "company" && co.account_id) {
+      const { data: link, error: lkErr } = await db().from("account_contacts").select("contact_id").eq("account_id", co.account_id).eq("contact_id", owner.contact_id).maybeSingle()
+      if (lkErr) throw new Error(`Could not check the person — please try again (${lkErr.message}).`)
+      if (!link) throw new Error("That person is not linked to this company.")
+      companyAccount = co.account_id
+    }
+  }
   // A personal document (passport, ID …) belongs to ONE person — never into a company's folders, where
   // every co-owner would see it once shared.
   if (typeRow.metadata?.personal === true && owner.kind !== "person") {
@@ -441,14 +500,18 @@ export async function staffUploadToStore(p: {
     // a prepared tax return / 5472 / 1120 … is saved as a DRAFT (never shown until filed); every type starts
     // unpublished and follows the CRM row below
     documentType: p.documentType, published: false, actor: p.actorId,
-    ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: "draft" as const } : {}),
+    ...(p.periodYear ? { periodYear: p.periodYear } : {}),
+    // a type that is never shown as a draft is a DRAFT unless staff said it is the filed return
+    ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: (p.filingAnswer === "filed" && !p.needsReview ? "filed" : "draft") as "filed" | "draft" } : {}),
   })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {
     throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)." : `The save ended as "${w.status}".`)
   }
   const { categoryForFolder } = await import("./structure")
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal : await categoryForFolder(targetFolderId)
-  const wantVisible = p.visible !== false && typeRow.metadata?.staff_only !== true && typeRow.metadata?.draft_never_visible !== true
+  const filedReturn = typeRow.metadata?.draft_never_visible === true && p.filingAnswer === "filed" && !p.needsReview
+  const wantVisible = !p.needsReview && p.visible !== false && typeRow.metadata?.staff_only !== true
+    && (typeRow.metadata?.draft_never_visible !== true || filedReturn)
   const row = await upsertStoreDocumentRow(w.fileId, {
     file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
     category: cat.num, category_name: cat.name,
@@ -459,6 +522,10 @@ export async function staffUploadToStore(p: {
     portal_visible: wantVisible,
   }, w.status)
   await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+  if (p.needsReview) {
+    const { markNeedsReview } = await import("./structure")
+    await markNeedsReview(w.fileId, p.needsReview, p.actorId)
+  }
   const { data: rowNow } = await db().from("documents").select("id, portal_visible").eq("id", row.id).maybeSingle()
   const visibleNow = rowNow?.portal_visible === true
   if (row.inserted && visibleNow) {
@@ -478,7 +545,7 @@ export async function staffUploadToStore(p: {
 }
 
 /** A file in the Business area or a private "My files" area: saved in the store only (no CRM row, never shown). */
-async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null }, fileName: string, documentType: string): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
+async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null; needsReview?: string | null }, fileName: string, documentType: string): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
   const { saveBytesToStore } = await import("./writer")
   const { storeNameKey } = await import("./rules")
   const { data: same, error: sameErr } = await db().from("store_files").select("id, caller_key, state")
@@ -500,6 +567,10 @@ async function saveInternalAreaFile(p: { ownerId: string; folderId: string; stor
     throw new Error(w.status === "trashed" ? "A file with this name is in the trash — use another name." : `The save ended as "${w.status}".`)
   }
   await supabaseAdmin.storage.from("onboarding-uploads").remove([p.storagePath]).catch(() => {})
+  if (p.needsReview) {
+    const { markNeedsReview } = await import("./structure")
+    await markNeedsReview(w.fileId, p.needsReview, p.actorId)
+  }
   return { fileId: w.fileId, write: w.status, name: w.name, visible: false, identity: null }
 }
 

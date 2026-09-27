@@ -43,6 +43,13 @@ async function stage(name: string, bytes: Buffer, type = "application/pdf") {
   return path
 }
 
+/** a person's "Personal documents" as a company's "2. Contacts" shows it */
+async function personalViaCompany(personOwner: string) {
+  const { folderContents } = await import("@/lib/crm-store/browse")
+  const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+  return folderContents(personOwner, await folderOfKind(personOwner, "personal"), { throughCompany: true })
+}
+
 const fx = { account: "", owner: "", company1: "", contactsFolder: "", personA: "", personB: "", ownerA: "", ownerB: "", passportA: "" }
 
 beforeAll(async () => {
@@ -101,14 +108,28 @@ describe("new storage screens — live sandbox", () => {
     expect(j.shownFileIds).toContain(fx.passportA)
   })
 
-  it("'2. Contacts' of the company shows member A's passport, named, with the badge the client really has", async () => {
+  it("'2. Contacts' of the company: one branch per person (their own storage); A's branch shows the passport, named, with the badge the client really has", async () => {
     const { folderContents } = await import("@/lib/crm-store/browse")
     const c = await folderContents(fx.owner, fx.contactsFolder)
-    const p = c.files.find((f) => f.id === fx.passportA)
+    expect(c.files).toEqual([]) // never copied into the company
+    const a = c.people?.find((x) => x.contactId === fx.personA)
+    expect(a?.ownerId).toBe(fx.ownerA)
+    expect(a?.companies).toContain(`ZZ S6B Browser LLC ${tag}`)
+    const p = (await personalViaCompany(fx.ownerA)).files.find((f) => f.id === fx.passportA)
     expect(p).toBeTruthy()
     expect(p!.personName).toBe(`ZZ A S6B ${tag}`)
     expect(p!.clientVisible).toBe(true)
     expect(p!.listed).toBe(true)
+  })
+
+  it("through a company, a person's ITIN and Tax folders are NOT shown (catalog), and opening one directly is refused", async () => {
+    const { folderContents } = await import("@/lib/crm-store/browse")
+    const rootVia = await folderContents(fx.ownerA, null, { throughCompany: true })
+    expect(rootVia.folders.map((f) => f.kind).sort()).toEqual(["personal"])
+    const own = await folderContents(fx.ownerA, null)
+    expect(own.folders.map((f) => f.kind).sort()).toEqual(["itin", "person_tax", "personal"])
+    const itin = own.folders.find((f) => f.kind === "itin")!
+    await expect(folderContents(fx.ownerA, itin.id, { throughCompany: true })).rejects.toThrow(/person's own page/)
   })
 
   let uploadedId = ""
@@ -271,7 +292,7 @@ describe("new storage screens — live sandbox", () => {
     expect(row).toMatchObject({ account_id: fx.account, contact_id: fx.personA, category: 2, portal_visible: false })
     const { folderContents } = await import("@/lib/crm-store/browse")
     const c = await folderContents(fx.owner, fx.contactsFolder)
-    expect(c.files.map((x) => x.id)).toContain(j.fileId)
+    expect((await personalViaCompany(fx.ownerA)).files.map((x) => x.id)).toContain(j.fileId)
     expect(c.people?.map((x) => x.contactId)).toEqual(expect.arrayContaining([fx.personA, fx.personB]))
     // a company paper in "2. Contacts", and a person's document without saying whose, are refused
     const s2 = await stage("x.pdf", await pdf("x"))

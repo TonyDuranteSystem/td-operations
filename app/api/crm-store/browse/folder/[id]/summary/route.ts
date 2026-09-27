@@ -6,13 +6,11 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../../_auth"
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
   if (denied) return denied
   const noAccess = await denyUnlessAreaAccess({ folderId: params.id })
   if (noAccess) return noAccess
-  const body = (req.method === "POST" ? await req.json().catch(() => ({})) : {}) as Record<string, unknown>
-  void body
   try {
     const s = await import("@/lib/crm-store/structure")
     return NextResponse.json(await s.folderSummary(params.id), { headers: { "Cache-Control": "no-store" } })
