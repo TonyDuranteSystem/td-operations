@@ -3538,7 +3538,8 @@ function ContactDocumentsTab({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{scopedDocuments.length} documents</p>
+        {/* a tab shown from the new storage carries its own file count */}
+        <p className="text-sm text-muted-foreground">{personStoreId && (activeDocScope === 'personal' || companyScopeInStore) ? '' : `${scopedDocuments.length} documents`}</p>
         <div className="flex items-center gap-2">
           {driveFolderUrl && (
             <a
@@ -3571,12 +3572,12 @@ function ContactDocumentsTab({
             )}
           >
             {scope.label || 'Company'}
-            <span className={cn(
+            {!personStoreId && <span className={cn(
               'text-[10px] px-1.5 py-0.5 rounded-full',
               activeDocScope === scope.key ? 'bg-white/20 text-white' : 'bg-white text-zinc-500'
             )}>
               {scope.count}
-            </span>
+            </span>}
           </button>
         ))}
       </div>
