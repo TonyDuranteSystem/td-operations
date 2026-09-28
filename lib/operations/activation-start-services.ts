@@ -377,6 +377,28 @@ export async function createStartAtActivationSDs(p: {
   return steps
 }
 
+/** Banking is self-service until the bank workspace (plan S8): never created at payment. */
+const NEVER_STARTED_AT_PAYMENT = new Set(["banking fintech", "banking physical"])
+
+/**
+ * Pure: the start-at-payment types for a formation-type contract that sold no
+ * formation — the catalog's start-at-payment types PLUS every pipeline the
+ * offer itself sells (typed lines and its service list), minus banking.
+ * Unit-tested in tests/unit/activation-start-services.test.ts.
+ */
+export function allBoughtStartTypes(startTypes: string[], services: unknown, bundledPipelines: unknown): string[] {
+  const out = new Map<string, string>()
+  const add = (v: unknown) => {
+    const t = typeof v === "string" ? v.trim() : ""
+    if (!t || NEVER_STARTED_AT_PAYMENT.has(t.toLowerCase())) return
+    if (!out.has(t.toLowerCase())) out.set(t.toLowerCase(), t)
+  }
+  startTypes.forEach(add)
+  if (Array.isArray(services)) for (const l of services as Array<Record<string, unknown> | null>) if (l && typeof l === "object") add(l.pipeline_type)
+  if (Array.isArray(bundledPipelines)) (bundledPipelines as unknown[]).forEach(add)
+  return Array.from(out.values())
+}
+
 /**
  * Catalog lookup + selection + creation in one call, for any contract whose
  * payment branch does not create every bundled service itself (formation and
@@ -394,6 +416,10 @@ export async function createBoughtStartAtActivationServices(p: {
   mustCreateSomething?: boolean
   /** The contract sells a new company or onboards one (see decideStartServiceScope). */
   newCompanyContract?: boolean
+  /** A formation-type contract that sold NO formation: every bought service
+   *  with a pipeline starts now (EIN, DBA, CMRA… sold alone created nothing
+   *  before — S1 QA 2026-09-27), except banking (self-service until plan S8). */
+  createAllBought?: boolean
 }): Promise<ActivationStep[]> {
   const steps = await createBoughtStartAtActivationServicesInner(p)
   // Silent = nothing created AND nothing already reported (a skip/error step
@@ -412,11 +438,13 @@ async function createBoughtStartAtActivationServicesInner(p: {
   clientName: string | null
   contactId: string | null
   newCompanyContract?: boolean
+  createAllBought?: boolean
 }): Promise<ActivationStep[]> {
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
   let startTypes: string[] = []
   try {
     startTypes = await getStartAtActivationServiceTypes()
+    if (p.createAllBought) startTypes = allBoughtStartTypes(startTypes, p.offer?.services, p.offer?.bundled_pipelines)
   } catch (tagErr) {
     const detail = `catalog lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}`
     report(`start-at-payment services NOT checked for ${who}: ${detail}`, { offerToken: p.offerToken })

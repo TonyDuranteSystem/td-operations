@@ -53,7 +53,7 @@ vi.mock("@/lib/supabase-admin", () => {
 const listEntries = vi.fn()
 vi.mock("@/lib/catalog/framework", async (orig) => ({ ...(await orig<object>()), listEntries: (...a: unknown[]) => listEntries(...a) }))
 
-import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation, confirmedPaymentInvoiceLabel } from "@/lib/operations/activation-start-services"
+import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation, confirmedPaymentInvoiceLabel, allBoughtStartTypes } from "@/lib/operations/activation-start-services"
 import { getStartAtActivationServiceTypes, _resetServicesCache } from "@/lib/services"
 
 const TYPES = ["Company Closure"]
@@ -511,5 +511,20 @@ describe("confirmedPaymentInvoiceLabel — what the client sees in payment histo
   it("an unticked optional line is left out of the name", () => {
     expect(confirmedPaymentInvoiceLabel({ contractType: "formation", clientName: "F", services: [...cn, { name: "Company Closure", pipeline_type: "Company Closure", optional: true }], selectedServices: ["Company Change Name"], bundledPipelines: ["Company Change Name"] }))
       .toBe("Company Change Name - F (admin confirmed)")
+  })
+})
+
+describe("allBoughtStartTypes (formation-type contract that sold no formation)", () => {
+  it("adds every pipeline the offer sells to the catalog's start-at-payment types (EIN / DBA / CMRA sold alone)", () => {
+    const out = allBoughtStartTypes(["Company Closure"], [{ name: "EIN Application", pipeline_type: "EIN" }], ["EIN", "DBA"])
+    expect(out).toEqual(expect.arrayContaining(["Company Closure", "EIN", "DBA"]))
+    expect(out).toHaveLength(3)
+  })
+  it("never starts banking at payment (self-service until the bank workspace)", () => {
+    const out = allBoughtStartTypes([], [{ name: "Banking", pipeline_type: "Banking Fintech" }], ["Banking Fintech", "Banking Physical"])
+    expect(out).toEqual([])
+  })
+  it("no duplicates across lines and the service list (case-insensitive)", () => {
+    expect(allBoughtStartTypes(["EIN"], [{ pipeline_type: "ein" }], ["EIN"])).toEqual(["EIN"])
   })
 })

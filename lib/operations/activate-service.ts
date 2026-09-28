@@ -742,6 +742,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       contactId,
       mustCreateSomething: formationNotBought,
       newCompanyContract: !formationNotBought,
+      createAllBought: formationNotBought,
     }))
   } else if (contractType === "onboarding") {
     steps.push({
