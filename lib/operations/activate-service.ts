@@ -824,7 +824,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           continue
         }
         if (isPerPerson && boughtUnits > 1) {
-          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; the other ${boughtUnits - 1} are for other people — add each one on that person`
+          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; ${boughtUnits - 1 === 1 ? "the other one is for another person — add it on that person" : `the other ${boughtUnits - 1} are for other people — add each one on that person`}`
           steps.push({ step: "service_deliveries", status: "skipped", detail })
           tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, units: boughtUnits })
         }
