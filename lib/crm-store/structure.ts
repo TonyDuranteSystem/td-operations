@@ -177,6 +177,18 @@ export async function effectiveKind(folderId: string): Promise<string> {
   return "custom"
 }
 
+/** The tax year of a folder: the nearest year folder at or above it inside a Tax folder (Tax › 2024 › Bank → 2024). */
+export async function nearestYear(folderId: string): Promise<number | null> {
+  let cur: string | null = folderId
+  for (let i = 0; i < 50 && cur; i++) {
+    const f = await folder(cur)
+    if (f.kind === "tax_year" || f.kind === "person_tax_year") return /^\d{4}$/.test(f.name.trim()) ? Number(f.name.trim()) : null
+    if (f.template_slug !== null) return null // reached a fixed folder with no year on the way
+    cur = f.parent_id
+  }
+  return null
+}
+
 /** The CRM documents-list category for a file saved in this folder (a year folder in "3. Tax" → Tax). ONE rule,
  *  used by upload, file move and folder move. */
 export async function categoryForFolder(folderId: string): Promise<{ num: number; name: string }> {

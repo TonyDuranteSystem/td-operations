@@ -557,13 +557,15 @@ export async function staffUploadToStore(p: {
   if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
+  // the year the staff member chose, else the nearest year folder above (Tax › 2024 › Bank → 2024)
+  const yearToSave = p.periodYear ?? await (await import("./structure")).nearestYear(targetFolderId)
   const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
     callerKey, contentChanged: true,
     // a prepared tax return / 5472 / 1120 … is saved as a DRAFT (never shown until filed); every type starts
     // unpublished and follows the CRM row below
     documentType: p.documentType, published: false, actor: p.actorId,
-    ...(p.periodYear ? { periodYear: p.periodYear } : {}),
+    ...(yearToSave ? { periodYear: yearToSave } : {}),
     // a type that is never shown as a draft is a DRAFT unless staff said it is the filed return
     ...(typeRow.metadata?.draft_never_visible === true ? { filingStatus: (p.filingAnswer === "filed" && !p.needsReview ? "filed" : "draft") as "filed" | "draft" } : {}),
   }))

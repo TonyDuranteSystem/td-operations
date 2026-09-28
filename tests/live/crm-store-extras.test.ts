@@ -155,4 +155,15 @@ describe("filters, details, zip, dragged folders — live sandbox", () => {
     const { logZipDownload } = await import("@/lib/crm-store/extras")
     await expect(logZipDownload("00000000-0000-4000-8000-000000000000", 1, 1, fx.admin!.id)).rejects.toThrow(/not found/i)
   })
+
+  it("a file saved in a staff folder under a year folder gets that year (Tax › 2024 › Bank → 2024)", async () => {
+    const { POST } = await import("@/app/api/crm-store/browse/folder/[id]/ensure-path/route")
+    const r = await (await POST(post({ path: ["2024", "Bank"] }), { params: { id: fx.tax } })).json()
+    const up = await upload({ ownerId: fx.owner, folderId: r.id, fileName: "Statement.pdf", documentType: "irs_notice", visible: false })
+    const { data } = await db.from("store_files").select("period_year").eq("id", up.fileId).single()
+    expect(data.period_year).toBe(2024)
+    const plain = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: "NoYear.pdf", documentType: "business_license", visible: false })
+    const { data: d2 } = await db.from("store_files").select("period_year").eq("id", plain.fileId).single()
+    expect(d2.period_year).toBeNull()
+  })
 })

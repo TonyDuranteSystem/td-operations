@@ -724,6 +724,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setUploading(true)
     let saved = 0, skipped = 0, failed = 0
     const madePaths = new Map<string, Fold | null>() // null = that path could not be made (said once)
+    const taxMemo = new Map<string, { folder: Fold; year: number | null }>()
     const oidOfDrop = folderOwner.current.get(drop.folder.id) ?? ownerId ?? ''
     const viaDrop = viaCompany.current.has(drop.folder.id)
     for (let i = 0; i < drop.items.length; i++) {
@@ -758,7 +759,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         }
       }
       // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
-      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: drop.person, displayName: it.name, visible: false, batch: true })
+      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: drop.person, displayName: it.name, visible: false, batch: true, taxMemo })
       if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
     }
@@ -776,7 +777,21 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const c = await getJson<{ files: number; bytes: number }>(`/api/crm-store/browse/folder/${f.id}/zip?check=1`)
       toast.message(`Preparing ${f.name}.zip — ${c.files} ${c.files === 1 ? 'file' : 'files'}, ${fmtSize(c.bytes)}`)
-      window.location.href = `/api/crm-store/browse/folder/${f.id}/zip`
+      // a hidden frame: the zip downloads, and if the server refuses at the last moment its message is read from
+      // the frame and shown — the CRM page is never replaced by an error text
+      const frame = document.createElement('iframe')
+      frame.style.display = 'none'
+      frame.src = `/api/crm-store/browse/folder/${f.id}/zip`
+      frame.onload = () => {
+        try {
+          const txt = frame.contentDocument?.body?.innerText ?? ''
+          const m = /"error"\s*:\s*"([^"]+)"/.exec(txt)
+          if (m) toast.error(m[1])
+        } catch { /* a download never loads a page into the frame */ }
+        setTimeout(() => frame.remove(), 1000)
+      }
+      document.body.appendChild(frame)
+      setTimeout(() => { if (document.body.contains(frame)) frame.remove() }, 10 * 60_000)
     } catch (e) {
       toast.error(errMsg(e, 'The zip could not be made.'))
     }
@@ -1124,7 +1139,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
    * ONE upload through every question — used by the Upload panel and by files dragged in from the computer
    * (`batch`: several in a row — no panel close / refresh per file). Returns what happened to this file.
    */
-  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean }): Promise<UploadOutcome> => {
+  const doUploadWith = async (file: File, o: { folder: Fold | null; typeSlug: string; personId: string; displayName: string; visible: boolean; batch?: boolean; taxMemo?: Map<string, { folder: Fold; year: number | null }> }): Promise<UploadOutcome> => {
     const upFolderObj = o.folder, upType = o.typeSlug, upPerson = o.personId, upName = o.displayName, upVisible = o.visible
     const upIsContacts = upFolderObj?.kind === 'contacts'
     if (!ownerId || !upFolderObj) { toast.error('Choose the folder first.'); return 'failed' }
@@ -1163,7 +1178,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         }
       }
       // 2. a tax form put in "Tax" itself, not in a year folder
-      if (type && /_year$/.test(type.defaultFolderKind ?? '') && (target.folder.kind === 'tax' || target.folder.kind === 'person_tax')) {
+      const memoKey = `tax:${target.folder.id}`
+      const memo = o.taxMemo?.get(memoKey)
+      if (memo && type && /_year$/.test(type.defaultFolderKind ?? '') && (target.folder.kind === 'tax' || target.folder.kind === 'person_tax')) {
+        // a drag-in of several: the year answered for the first file of this folder is used for the rest
+        target = { ...target, folder: memo.folder }
+        periodYear = memo.year
+      } else if (type && /_year$/.test(type.defaultFolderKind ?? '') && (target.folder.kind === 'tax' || target.folder.kind === 'person_tax')) {
+        const askedFor = target.folder.id
         // read the year folders fresh (the target may not be open on screen)
         const taxNow = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}${target.via ? '&via=company' : ''}`)
         const years = taxNow.folders.filter((f) => isYear(f.name) && !f.trashed).sort((x, y) => y.name.localeCompare(x.name))
@@ -1195,6 +1217,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           if (!info.folder) return 'cancelled'
           target = { ...target, folder: info.folder }
         }
+        o.taxMemo?.set(`tax:${askedFor}`, { folder: target.folder, year: periodYear })
       } else if (target.folder.kind === 'tax_year' || target.folder.kind === 'person_tax_year' || isYear(target.folder.name)) {
         periodYear = isYear(target.folder.name) ? Number(target.folder.name) : null
       }
