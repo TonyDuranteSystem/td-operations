@@ -73,15 +73,21 @@ export async function setFileShares(fileId: string, userIds: string[], actorId: 
   const bad = wanted.filter((u) => !allowed.has(u))
   if (bad.length) throw new Error("One of the people ticked is not a staff login any more — refresh and try again.")
   const { add, remove } = shareDiff(await fileShares(fileId), wanted)
+  // log only what really changed (two owners saving at once: the rows actually written / removed)
+  let added: string[] = [], removed: string[] = []
   if (add.length) {
-    const { error } = await db().from("store_file_shares").insert(add.map((u) => ({ file_id: fileId, user_id: u, shared_by: actorId })))
-    if (error && !/duplicate key/i.test(error.message)) throw new Error(`The file could not be shared (${error.message}).`)
+    const { data, error } = await db().from("store_file_shares")
+      .upsert(add.map((u) => ({ file_id: fileId, user_id: u, shared_by: actorId })), { onConflict: "file_id,user_id", ignoreDuplicates: true })
+      .select("user_id")
+    if (error) throw new Error(`The file could not be shared (${error.message}).`)
+    added = ((data ?? []) as { user_id: string }[]).map((r) => r.user_id)
   }
   if (remove.length) {
-    const { error } = await db().from("store_file_shares").delete().eq("file_id", fileId).in("user_id", remove)
+    const { data, error } = await db().from("store_file_shares").delete().eq("file_id", fileId).in("user_id", remove).select("user_id")
     if (error) throw new Error(`The file could not be unshared (${error.message}).`)
+    removed = ((data ?? []) as { user_id: string }[]).map((r) => r.user_id)
   }
-  const events = [...add.map((u) => ({ event: "shared", user: u })), ...remove.map((u) => ({ event: "unshared", user: u }))]
+  const events = [...added.map((u) => ({ event: "shared", user: u })), ...removed.map((u) => ({ event: "unshared", user: u }))]
   if (events.length) {
     const { error } = await db().from("store_events").insert(events.map((e) => ({ event: e.event, actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { staff_user: e.user } })))
     if (error) console.error(`[crm-store] share change not logged for ${f.id}: ${error.message}`)
@@ -98,17 +104,36 @@ export async function canReadSharedFile(fileId: string, userId: string): Promise
   return isInStaffShare(f.folder_id)
 }
 
-/** After a move: files no longer inside "Shared with staff" lose every tick (so nothing stays shared by accident). */
-export async function dropSharesOutsideStaffShare(fileIds: string[], actorId: string | null): Promise<void> {
+/**
+ * Ticks survive ONLY a move that stays inside "Shared with staff". A file that leaves it, ENTERS it from outside,
+ * or goes to the trash loses every tick — so an old tick can never come back to life (a later move back in, a
+ * restore) and a file always starts unshared in Shared with staff. Throws on a database error (the caller says so).
+ */
+export async function clearShares(fileIds: string[], actorId: string | null, reason: string): Promise<void> {
   if (!fileIds.length) return
-  const shares = await sharesForFiles(fileIds)
-  for (const id of Array.from(shares.keys())) {
-    const f = await fileRow(id)
-    if (f && f.state === "live" && f.store_owners?.kind === "private" && (await isInStaffShare(f.folder_id))) continue
-    const { error } = await db().from("store_file_shares").delete().eq("file_id", id)
-    if (error) { console.error(`[crm-store] shares not removed for ${id}: ${error.message}`); continue }
-    if (f) await db().from("store_events").insert({ event: "unshared", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { reason: "moved out of Shared with staff", staff_users: shares.get(id) } })
+  for (let i = 0; i < fileIds.length; i += 200) {
+    const part = fileIds.slice(i, i + 200)
+    const { data, error } = await db().from("store_file_shares").delete().in("file_id", part).select("file_id, user_id")
+    if (error) throw new Error(`The sharing with staff could not be removed (${error.message}) — open the file's "Shared with" and untick everyone.`)
+    const byFile = new Map<string, string[]>()
+    for (const r of (data ?? []) as { file_id: string; user_id: string }[]) byFile.set(r.file_id, [...(byFile.get(r.file_id) ?? []), r.user_id])
+    for (const [id, users] of Array.from(byFile.entries())) {
+      const f = await fileRow(id)
+      if (f) await db().from("store_events").insert({ event: "unshared", actor: actorId, owner_id: f.owner_id, file_id: f.id, folder_id: f.folder_id, name_snapshot: f.name, details: { reason, staff_users: users } })
+    }
   }
+}
+
+/** After a move from `wasInside`: keep the ticks only if the file was AND still is inside Shared with staff. */
+export async function afterMove(fileIds: string[], wasInside: boolean, actorId: string | null): Promise<void> {
+  if (!fileIds.length) return
+  const out: string[] = []
+  for (const id of fileIds) {
+    const f = await fileRow(id)
+    const inside = !!f && f.state === "live" && f.store_owners?.kind === "private" && (await isInStaffShare(f.folder_id))
+    if (!(wasInside && inside)) out.push(id)
+  }
+  await clearShares(out, actorId, wasInside ? "moved out of Shared with staff" : "moved into Shared with staff — starts unshared")
 }
 
 export interface SharedFile { id: string; name: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; sharedAt: string }
@@ -127,7 +152,9 @@ export async function sharedWithMe(userId: string): Promise<SharedFile[]> {
       .in("id", rows.slice(i, i + 200).map((r) => r.file_id)).eq("state", "live")
     if (fErr) throw new Error(`Could not read the files shared with you (${fErr.message}).`)
     for (const f of (files ?? []) as Array<{ id: string; name: string; folder_id: string; updated_at: string; store_owners: { kind: string } | null; store_file_versions: { size_bytes: number | null; mime_type: string | null } | null }>) {
-      if (f.store_owners?.kind !== "private" || !(await isInStaffShare(f.folder_id))) continue
+      let inside = false
+      try { inside = f.store_owners?.kind === "private" && (await isInStaffShare(f.folder_id)) } catch { inside = false }
+      if (!inside) continue
       out.push({ id: f.id, name: f.name, where: (await pathUnderShare(f.folder_id)).join(" › "), mimeType: f.store_file_versions?.mime_type ?? null, size: f.store_file_versions?.size_bytes ?? null, updatedAt: f.updated_at, sharedAt: at.get(f.id) ?? f.updated_at })
     }
   }

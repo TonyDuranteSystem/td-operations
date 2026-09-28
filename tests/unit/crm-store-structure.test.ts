@@ -150,3 +150,22 @@ describe("shareDiff", () => {
     expect(shareDiff([], [])).toEqual({ add: [], remove: [] })
   })
 })
+
+import { isOwnerOnly, isProtectedAdminEmail, isSecureAdmin, PRIMARY_OWNER_EMAIL } from "@/lib/auth"
+describe("owners vs the protected admin (adding an owner never changes 2FA protection)", () => {
+  const u = (email: string, role?: string) => ({ email, app_metadata: role ? { role } : {}, user_metadata: {} }) as never
+  it("Jodi is an owner but NOT the protected admin", () => {
+    expect(isOwnerOnly(u("jodi@tonydurante.us"))).toBe(true)
+    expect(isOwnerOnly(u("Jodi@TonyDurante.us"))).toBe(true)
+    expect(isProtectedAdminEmail("jodi@tonydurante.us")).toBe(false)
+    expect(isSecureAdmin(u("jodi@tonydurante.us"))).toBe(false)
+    expect(isSecureAdmin(u("jodi@tonydurante.us", "admin"))).toBe(true)
+  })
+  it("Antonio is both, and the primary owner; staff are neither", () => {
+    expect(isOwnerOnly(u("antonio.durante@tonydurante.us"))).toBe(true)
+    expect(isProtectedAdminEmail("antonio.durante@tonydurante.us")).toBe(true)
+    expect(PRIMARY_OWNER_EMAIL).toBe("antonio.durante@tonydurante.us")
+    expect(isOwnerOnly(u("luca@tonydurante.us", "team"))).toBe(false)
+    expect(isOwnerOnly(u("support@tonydurante.us", "team"))).toBe(false)
+  })
+})

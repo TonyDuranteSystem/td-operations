@@ -11,9 +11,9 @@ ON CONFLICT (catalog_id, slug) DO NOTHING;
 -- My files now comes with that one fixed folder (added to existing areas the next time they are opened —
 -- store_apply_template only adds what is missing)
 UPDATE public.catalog_entries
-   SET metadata = jsonb_set(metadata, '{folders}', '[{"kind":"staff_share","name":"Shared with staff"}]'::jsonb)
+   SET metadata = jsonb_set(metadata, '{folders}', coalesce(metadata->'folders', '[]'::jsonb) || '[{"kind":"staff_share","name":"Shared with staff"}]'::jsonb)
  WHERE catalog_id = 'storage_folder_templates' AND slug = 'private_standard'
-   AND NOT (metadata->'folders' @> '[{"kind":"staff_share"}]'::jsonb);
+   AND NOT (coalesce(metadata->'folders', '[]'::jsonb) @> '[{"kind":"staff_share"}]'::jsonb);
 
 -- who may open each shared file (one row per file per staff login); service role only, like every store_* table
 CREATE TABLE IF NOT EXISTS public.store_file_shares (

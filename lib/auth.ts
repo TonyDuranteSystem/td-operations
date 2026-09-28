@@ -1,12 +1,16 @@
 import type { User } from "@supabase/supabase-js"
 import { isStaffAuthRole } from "@/lib/team/workspace"
 
+// The protected admin (MFA self-only, admin by email). Deliberately ONE login.
+const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
+
 // The OWNERS (Antonio 2026-09-28: Jodi "will see everything I see" — My Finances, My files, owner settings).
+// Kept SEPARATE from ADMIN_EMAILS so adding an owner never changes MFA protection or admin-by-email.
 // The FIRST entry is the primary owner: the owners' shared "My files" is kept under that login.
-const ADMIN_EMAILS = ["antonio.durante@tonydurante.us", "jodi@tonydurante.us"]
+const OWNER_EMAILS = ["antonio.durante@tonydurante.us", "jodi@tonydurante.us"]
 
 /** The primary owner's email — the owners' shared "My files" storage area belongs to this login. */
-export const PRIMARY_OWNER_EMAIL = ADMIN_EMAILS[0]
+export const PRIMARY_OWNER_EMAIL = OWNER_EMAILS[0]
 
 export type CrmRole = 'admin' | 'team'
 
@@ -55,7 +59,7 @@ export function isProtectedAdminEmail(email: string | null | undefined): boolean
  */
 export function isOwnerOnly(user: User | null): boolean {
   if (!user) return false
-  return ADMIN_EMAILS.includes(user.email ?? "")
+  return OWNER_EMAILS.includes((user.email ?? "").toLowerCase())
 }
 
 export function isTeam(user: User | null): boolean {

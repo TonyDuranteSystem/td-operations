@@ -161,10 +161,24 @@ describe("owners' My files + Shared with staff — live sandbox", () => {
     await expect(setFileShares(fx.fileB, [who.jodi.id], who.antonio.id)).rejects.toThrow(/not a staff login/)
   })
 
+  it("a file moved INTO Shared with staff starts unshared (an old tick never comes back); a trashed file loses its ticks", async () => {
+    // fileA is outside now; give it a stale tick directly, then move it back in
+    await db.from("store_file_shares").insert({ file_id: fx.fileA, user_id: who.luca.id, shared_by: who.antonio.id })
+    const { moveStoreFile } = await import("@/lib/crm-store/file-actions")
+    await moveStoreFile(fx.fileA, fx.share, who.antonio.id)
+    const { data: none } = await db.from("store_file_shares").select("user_id").eq("file_id", fx.fileA)
+    expect(none).toEqual([])
+    const { setFileShares } = await import("@/lib/crm-store/staff-share")
+    await setFileShares(fx.fileB, [who.luca.id], who.antonio.id)
+    const { deleteStoreFile } = await import("@/lib/crm-store/file-actions")
+    await deleteStoreFile(fx.fileB, who.antonio.id)
+    const { data: gone } = await db.from("store_file_shares").select("user_id").eq("file_id", fx.fileB)
+    expect(gone).toEqual([])
+  })
+
   it("clean-up: the test files go to the trash", async () => {
     const { deleteStoreFile } = await import("@/lib/crm-store/file-actions")
     await deleteStoreFile(fx.fileA, who.antonio.id)
-    await deleteStoreFile(fx.fileB, who.antonio.id)
     const { data } = await db.from("store_files").select("state").in("id", [fx.fileA, fx.fileB])
     expect((data ?? []).every((f: { state: string }) => f.state === "trashed")).toBe(true)
   })

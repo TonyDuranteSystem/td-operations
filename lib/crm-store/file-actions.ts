@@ -61,6 +61,7 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
   if (!to || to.trashed_at) throw new Error("That folder is not available.")
   if (to.owner_id !== f.owner_id) throw new Error("A file can only be moved within the same company's or person's storage.")
   if (to.id === f.folder_id) return { folderName: to.name }
+  const wasInsideShare = f.store_owners.kind === "private" && await (await import("./staff-share")).isInStaffShare(f.folder_id)
   if (to.kind === "root") throw new Error("Files go inside a folder, not at the top.")
   if (to.kind === "contacts") throw new Error("\"2. Contacts\" shows the people's own documents — a company document cannot go there.")
   const { error } = await db().from("store_files").update({ folder_id: toFolderId }).eq("id", fileId).eq("state", "live")
@@ -81,9 +82,11 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     }
   }
   await logEvent("moved", { ...f, folder_id: toFolderId }, actorId, { from_folder: f.folder_id, to_folder: toFolderId })
-  // moved out of "Shared with staff": nobody else may open it any more
-  const { dropSharesOutsideStaffShare } = await import("./staff-share")
-  await dropSharesOutsideStaffShare([fileId], actorId)
+  // "Shared with staff": the ticks stay only if the file stayed inside it
+  if (f.store_owners.kind === "private") {
+    const { afterMove } = await import("./staff-share")
+    await afterMove([fileId], wasInsideShare, actorId)
+  }
   return { folderName: to.name }
 }
 
@@ -103,5 +106,8 @@ export async function deleteStoreFile(fileId: string, actorId: string | null): P
     }
     throw new Error(error.message.replace(/^store: /, ""))
   }
+  // a trashed file is never shared with staff again (not even after a restore)
+  const { clearShares } = await import("./staff-share")
+  await clearShares([fileId], actorId, "trashed").catch((e: unknown) => console.error("[crm-store] shares not cleared on delete:", e))
   return { crmRowsRemoved: (removed ?? []).length }
 }

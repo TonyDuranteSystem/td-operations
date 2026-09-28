@@ -254,6 +254,9 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
     if ((await effectiveKind(to.id)) !== want) throw new Error(`"${f.name}" is a tax-year folder — it can only go inside a Tax folder.`)
   }
   if (await nameTaken(f.owner_id, to.id, f.name, f.id)) throw new Error(`"${to.name}" already has a folder called "${f.name}".`)
+  // "Shared with staff": the files keep their ticks only if the folder stays inside it (private areas only)
+  const { data: ownerKindRow } = await db().from("store_owners").select("kind").eq("id", f.owner_id).maybeSingle()
+  const wasInsideShare = ownerKindRow?.kind === "private" ? await (await import("./staff-share")).isInStaffShare(folderId) : null
   // every check is done — only now hide what staff chose to hide, so a refused move hides nothing
   await applyHide(folderId, hide, actorId)
   const { error } = await db().from("store_folders").update({ parent_id: to.id }).eq("id", folderId).is("trashed_at", null)
@@ -261,8 +264,8 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
   // the files inside keep their CRM category in step with the new place, and stop being shared with staff if
   // the folder left "Shared with staff"
   await refreshCategories(f.owner_id, folderId)
-  const { dropSharesOutsideStaffShare } = await import("./staff-share")
-  await dropSharesOutsideStaffShare((await filesUnder(folderId)).map((x) => x.id), actorId)
+  const share = await import("./staff-share")
+  if (wasInsideShare !== null) await share.afterMove((await filesUnder(folderId)).map((x) => x.id), wasInsideShare, actorId)
   await logFolder("folder_moved", f, actorId, { from_parent: f.parent_id, to_parent: to.id })
   return { parentName: to.name }
 }
@@ -361,6 +364,12 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
     }
     if (lost.length) console.error(`[crm-store] folder delete refused AND ${lost.length} CRM listing chunk(s) could not be put back: ${lost[0]}`)
     throw new Error(`${error.message.replace(/^store: /, "")}${lost.length ? " — and some CRM listings could not be put back; tell the tech team." : ""}`)
+  }
+  // a trashed file is never shared with staff again (not even after a restore)
+  {
+    const { clearShares } = await import("./staff-share")
+    const { data: inBatch } = batch ? await db().from("store_files").select("id").eq("trash_batch_id", batch) : { data: [] }
+    await clearShares(Array.from(new Set([...files.map((x) => x.id), ...((inBatch ?? []) as { id: string }[]).map((x) => x.id)])), actorId, "trashed").catch((e: unknown) => console.error("[crm-store] shares not cleared on folder delete:", e))
   }
   // a file saved into the folder while this ran is in the same trash batch — its listing goes too
   if (batch) {
