@@ -80,6 +80,7 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | E2 | O | Open a person's branch | Only "Personal documents" (+ staff folders); NEVER their ITIN / Tax |
 | E3 | O | + Folder in a person's branch | Question: the folder shows in all their companies → person's storage / this company's folders / Cancel |
 | E4 | O | Open the person under People | All 3 folders (Personal, ITIN, Tax) |
+| E5 | O | A person's FIRST document (no personal storage yet — "no documents yet"), via upload AND via drag onto 2. Contacts | Saved; their storage is created; never "failed" |
 
 ## F. Trash
 | # | Who | Do | Expect |
@@ -144,6 +145,7 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | J6 | C | Tax documents page | Hidden / draft / needs-review returns never listed, not even by name |
 | J7 | C | Portal search | Never returns the name of a hidden file |
 | J8 | C | Open a hidden file's download address directly | Refused |
+| J10 | O→C | Run block J with "View as client" on a company whose client has a portal login (sandbox: Uxio Test LLC) | On the sandbox the portal and CRM share one address: exiting signs the staff login out — sign in again |
 | J9 | C | A file in a workspace stage the client sees (e.g. Formation) | Shown with the locked "client can see" badge in storage; it stays on the portal (it can't be hidden from the storage) |
 
 ## K. Company and contact pages (the same browser, scoped)
