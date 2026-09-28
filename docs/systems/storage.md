@@ -1,5 +1,5 @@
 # CRM Storage
-_Last verified against code: 2026-09-27 — Claude (dev job 762b2515; new store slices 1–6 + the structure step: job 685467b5)_
+_Last verified against code: 2026-09-28 — Claude (dev job 762b2515; new store slices 1–6 + the structure step + the E2E fixes: job 685467b5)_
 _Last verified against code: 2026-09-26 — Claude (dev job 762b2515)_
 
 ## What it is
@@ -163,6 +163,16 @@ Antonio "go on both" 2026-09-28. Library `lib/crm-store/extras.ts`; routes `brow
 - **After the review (2026-09-28):** a group "Show" sends `group: true` and the server refuses a personal document (shown one by one with its question); group hide / move are sent for every ticked file (the server knows the file's state NOW); the Zip button asks first (`?check=1`) so an empty / too-large / private folder answers with a message, and a download that can't be recorded (even a failed read) is refused; the record is written when the download starts; dropped folders: hidden files AND folders (".DS_Store", ".git" …) are skipped while reading, the 500 limit counts real files, a failed read says so, a path that can't be made is reported once; inside a Tax folder a four-digit level becomes a real tax-year folder and a staff folder below Tax still gets the tax-year question; the very top of a storage is refused; filters answer only for the newest request and say they cover the storage's own folders.
 - **Recheck (2026-09-28):** the zip downloads through a hidden frame (a last-moment refusal is shown as a message, the CRM page stays); a drag-in answers the tax-year question once per target folder for the whole drop; a file saved in a staff folder under a year folder gets that year (`nearestYear`: Tax › 2024 › Bank → 2024).
 - **Live proof:** `tests/live/crm-store-extras.test.ts` (8).
+
+## The new store — E2E QA fixes (2026-09-28, SANDBOX ONLY)
+Found during the end-to-end browser run (scenario list: `docs/qa/crm-storage-e2e-scenarios.md` — run it before every ship).
+- **"Client can see" = what the portal really shows.** `lib/crm-store/client-visibility.ts` is the one rule: a listing row is client-visible when `portal_visible` is true OR its `flow_stage` is on the workspace allowlist (`isClientSafeFlowDoc`). The badge, the "Shown to client" filter, the details panel and folder summaries all use it. Hiding a file also clears an allowlisted stage (`takeOffClientStage`), so Hide really takes it off the portal.
+- **Needs review can never be shown** — enforced in the database too: `store_set_published` refuses while `needs_review_at` is set (migration `20260928-1300-crm-store-needs-review-guard.sql`).
+- **Mark filed** (`POST /api/crm-store/browse/file/[id]/filed`): a draft return → filed, asked first (forward only, cannot be undone); refused while Needs review. A draft shows a "Draft" badge and its Show control is off with the reason.
+- **Replace with "Show to client" unticked hides first** — the answer wins over the old copy's visibility.
+- **Categories follow the folder unless the document TYPE is personal** (catalog `storage_document_types.metadata.personal`) — not "any file in a person's storage" (`personalTypes()` in `structure.ts`, used by `moveStoreFile` and `refreshCategories`).
+- **Company Trash also lists the members' own-storage batches** deleted from "2. Contacts" ("In <name>'s own storage"); restore goes to that person's storage. A restored listing gets a fresh `drive_link` (`/api/documents/<newId>/preview`). A restored tax-year folder that lands outside a Tax folder becomes a staff folder.
+- **After an upload the screen refreshes the target folder first**, then the rest; the personal-document check retries its read once before refusing.
 
 ## How to verify current state
 - Confirm the four tables and the `crm-files` bucket exist in whichever environment you're checking: `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'crm_storage_%'` and `SELECT id, public FROM storage.buckets WHERE id = 'crm-files'`.

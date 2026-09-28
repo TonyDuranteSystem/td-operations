@@ -189,6 +189,13 @@ export async function nearestYear(folderId: string): Promise<number | null> {
   return null
 }
 
+/** Pure-ish: the document types that are PERSONAL (passport, ID …) — by the catalog, not by where a file sits. */
+export async function personalTypes(): Promise<Set<string>> {
+  const { data, error } = await db().from("catalog_entries").select("slug, metadata").eq("catalog_id", "storage_document_types")
+  if (error) throw new Error(`Could not read the document types (${error.message}).`)
+  return new Set(((data ?? []) as { slug: string; metadata: { personal?: boolean } | null }[]).filter((t) => t.metadata?.personal === true).map((t) => t.slug))
+}
+
 /** The CRM documents-list category for a file saved in this folder (a year folder in "3. Tax" → Tax). ONE rule,
  *  used by upload, file move and folder move. */
 export async function categoryForFolder(folderId: string): Promise<{ num: number; name: string }> {
@@ -286,7 +293,11 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
 export async function filesUnder(folderId: string): Promise<Array<{ id: string; name: string; folder_id: string; visible: boolean }>> {
   const { data, error } = await db().rpc("store_subtree_files", { p_folder: folderId })
   if (error) throw new Error(`Could not read the folder's files (${error.message}).`)
-  return (data ?? []) as Array<{ id: string; name: string; folder_id: string; visible: boolean }>
+  const files = (data ?? []) as Array<{ id: string; name: string; folder_id: string; visible: boolean }>
+  // "visible" = what the client really sees (the visible flag OR a client-facing workspace stage)
+  const { clientVisibleFileIds } = await import("./client-visibility")
+  const sees = await clientVisibleFileIds(files.map((f) => f.id))
+  return files.map((f) => ({ ...f, visible: sees.has(f.id) }))
 }
 
 const CHUNK = 200
@@ -295,9 +306,17 @@ const chunks = <T,>(list: T[]): T[][] => { const out: T[][] = []; for (let i = 0
 /** After a folder move: each file's CRM category from ITS OWN folder (same rule as upload and file move). */
 async function refreshCategories(ownerId: string, folderId: string) {
   const { data: o } = await db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle()
-  if (o?.kind === "person" || o?.kind === "business" || o?.kind === "private") return
+  if (o?.kind === "business" || o?.kind === "private") return // no CRM listing there
   const { storePointer } = await import("./document-pointer")
-  const files = await filesUnder(folderId)
+  const all = await filesUnder(folderId)
+  // a personal TYPE (passport, ID …) keeps "Contacts"; every other file follows its folder
+  const ptypes = await personalTypes()
+  const personal = new Set<string>()
+  for (let i = 0; i < all.length; i += 200) {
+    const { data } = await db().from("store_files").select("id, document_type").in("id", all.slice(i, i + 200).map((x) => x.id))
+    for (const x of (data ?? []) as { id: string; document_type: string | null }[]) if (x.document_type && ptypes.has(x.document_type)) personal.add(x.id)
+  }
+  const files = all.filter((x) => !personal.has(x.id))
   const byFolder = new Map<string, string[]>()
   for (const x of files) byFolder.set(x.folder_id, [...(byFolder.get(x.folder_id) ?? []), x.id])
   const failed: string[] = []

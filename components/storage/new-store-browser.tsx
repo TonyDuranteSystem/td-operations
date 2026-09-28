@@ -33,6 +33,8 @@ interface File_ {
   sha256?: string | null; needsReview?: string | null
   /** in My files › Shared with staff: who it is shared with (null = not a shareable place) */
   sharedWith?: string[] | null
+  /** none / draft / filed / amended */
+  filingStatus?: string | null
 }
 interface OwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 interface Person { contactId: string; name: string; ownerId: string | null; companies: string[] }
@@ -157,6 +159,7 @@ const sortFolders = (a: Fold, b: Fold) => (isYear(a.name) && isYear(b.name) ? b.
 
 type UploadOutcome = 'saved' | 'cancelled' | 'failed'
 interface TrashBatch {
+  whose: string | null; ownerId: string
   batchId: string; trashedAt: string; purgeAfter: string | null; trashedBy: string | null
   topName: string | null; folders: number; files: number; held: number
   items: { kind: 'file' | 'folder'; id: string; name: string; mimeType: string | null }[]
@@ -443,13 +446,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     // started for a storage that is no longer the one on screen (switched while an upload ran): leave the screen alone
     if (ownerIdRef.current !== ownerId) { if (!scopedOwnerId) loadNav(); return }
     try {
-      const r = await fetchInto(ownerId, null)
-      if (ownerIdRef.current !== ownerId) return
-      setRoot(r)
-      // the folder shown on the right is ALWAYS refreshed, whatever is open or closed
-      const open = Array.from(new Set([...Array.from(expandedRef.current), ...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
       const people = Object.values(loaded).flatMap((x) => x.people ?? [])
-      const entries = await Promise.all(open.map(async (key) => {
+      const fetchKey = async (key: string) => {
         try {
           if (key.startsWith('person:')) {
             const p = people.find((pp) => personKey(pp.contactId) === key)
@@ -461,11 +459,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           if (key === focusRef.current) { focusRef.current = null; setFocus(null) }
           return null
         }
-      }))
-      const got = entries.filter((x): x is readonly [string, Contents] => !!x)
-      // a folder that went to the trash (deleted, or inside a deleted folder) is no longer shown on the right
-      if (focusRef.current && got.some(([k, c]) => k === focusRef.current && c.folder?.trashed)) { focusRef.current = null; setFocus(null) }
-      setLoaded((m) => ({ ...m, ...Object.fromEntries(got) }))
+      }
+      const apply = (entries: Array<readonly [string, Contents] | null>) => {
+        const got = entries.filter((x): x is readonly [string, Contents] => !!x)
+        // a folder that went to the trash (deleted, or inside a deleted folder) is no longer shown on the right
+        if (focusRef.current && got.some(([k, c]) => k === focusRef.current && c.folder?.trashed)) { focusRef.current = null; setFocus(null) }
+        setLoaded((m) => ({ ...m, ...Object.fromEntries(got) }))
+      }
+      // FIRST the folder on the right and the folder just changed (what staff are looking at), THEN the rest of
+      // what is open — so the screen shows the change in about a second, not after every open folder reloads
+      const first = Array.from(new Set([...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
+      const [r, firstEntries] = await Promise.all([fetchInto(ownerId, null), Promise.all(first.map(fetchKey))])
+      if (ownerIdRef.current !== ownerId) return
+      setRoot(r)
+      apply(firstEntries)
+      const rest = Array.from(expandedRef.current).filter((k) => !first.includes(k))
+      apply(await Promise.all(rest.map(fetchKey)))
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
@@ -581,6 +590,21 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     }
   })
 
+  const markFiled = (f: File_) => withBusy(f.id, async () => {
+    setMenuFor(null)
+    const a = await ask('mark_filed', 'Mark this return as filed?',
+      <p><strong>{f.name}</strong> becomes the FILED return: it can then be shown to the client, and it is frozen — no new version can replace it (a correction is saved as an amended return). This can&apos;t be undone.</p>,
+      [{ key: 'filed', label: 'Mark filed', tone: 'primary' }, { key: 'cancel', label: 'Cancel' }])
+    if (a !== 'filed' && a !== '__default__') return
+    try {
+      await postJson(`/api/crm-store/browse/file/${f.id}/filed`, {}, 'It could not be marked filed.')
+      toast.success(`"${f.name}" is now the filed return — show it to the client from its row when ready`)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'It could not be marked filed.'))
+    }
+  })
+
   const markReviewed = (f: File_) => withBusy(f.id, async () => {
     setMenuFor(null)
     try {
@@ -656,7 +680,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (res.status === 409 && d.needsTarget) {
         // the folder it came from is gone (deleted too): ask where to put it
         const onlyFiles = b.items.every((i) => i.kind === 'file')
-        const r = await pick({ title: `The folder "${b.topName ?? ''}" came from is gone — restore it into…`, ownerId, ownerLabel: root?.owner.label, mode: onlyFiles ? 'file' : 'folder' })
+        const r = await pick({ title: `The folder "${b.topName ?? ''}" came from is gone — restore it into…`, ownerId: b.ownerId, ownerLabel: b.whose ?? root?.owner.label, mode: onlyFiles ? 'file' : 'folder' })
         setPicking(null)
         if (r) await restoreBatch(b, r.folderId)
         return
@@ -1317,7 +1341,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         const saved = after?.files.find((x) => x.name === r.name)
         if (saved && saved.sharedWith != null) void openSharing(saved)
       }
-      if (!o.batch) { setUploadOpen(false); await refreshAll() }
+      if (!o.batch) { setUploadOpen(false); await refreshAll([target.folder.id]) }
       return 'saved'
     } catch (e) {
       toast.error(errMsg(e, 'The upload failed — please try again.'))
@@ -1350,10 +1374,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileRow = (f: File_, inFolder: Fold | null, depth: number) => {
     const Icon = fileIcon(f.mimeType)
     const busy = busyFiles.has(f.id)
-    const canShare = !f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible)
+    const canShare = !f.staffOnly && f.state === 'live' && (f.listed || f.clientVisible) && f.filingStatus !== 'draft'
       && (f.clientVisible || (!!f.documentType && !(f.personal && !f.inPersonStorage)))
     const internal = ownerKind === 'business' || ownerKind === 'private'
-    const cantShowWhy = f.staffOnly ? 'Staff only — it holds other people\'s personal data and is never shown to a client'
+    const cantShowWhy = f.filingStatus === 'draft' ? 'A draft return — never shown to the client until it is marked filed (menu → Mark filed)'
+      : f.staffOnly ? 'Staff only — it holds other people\'s personal data and is never shown to a client'
       : internal ? 'Internal folders — never shown to a client'
         : !f.listed ? 'Not linked to the CRM list — the client cannot see it'
           : !f.documentType ? 'It needs a document type before it can be shown'
@@ -1403,6 +1428,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </button>
           </FastTooltip>
         )}
+        {f.filingStatus === 'draft' && <Badge tone="gray">Draft</Badge>}
         {!f.documentType && <Badge tone="amber">Needs a type</Badge>}
         {!f.listed && !internal && <Badge tone="amber">Not linked — client can&apos;t see it</Badge>}
         {f.versions > 1 && (
@@ -1447,6 +1473,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
               <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
               {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
+              {f.filingStatus === 'draft' && !f.needsReview && <MenuItem icon={Check} label="Mark filed" onClick={() => markFiled(f)} />}
               <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
             </div>
           )}
@@ -1900,6 +1927,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                         )
                       })}
                       {b.items.length > 5 && <p className="text-xs text-zinc-500">… and {b.items.length - 5} more</p>}
+                      {b.whose && <p className="mt-1 text-xs font-medium text-violet-700">In {b.whose}</p>}
                       <p className="mt-1 text-xs text-zinc-500">
                         {b.folders > 0 && `${b.folders} ${b.folders === 1 ? 'folder' : 'folders'} · `}{b.files} {b.files === 1 ? 'file' : 'files'} · deleted {fmtDate(b.trashedAt)}{b.trashedBy ? ` by ${b.trashedBy}` : ''}
                         {b.purgeAfter ? ` · deleted for good on ${fmtDate(b.purgeAfter)}` : ''}
@@ -2136,7 +2164,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const businessOwner = (groups ?? []).find((g) => g.section === 'business')?.owners[0]
   const privateOwner = (groups ?? []).find((g) => g.section === 'private')?.owners[0]
   const clientsOpen = !!q || openTree.has('sec:clients')
-  const clientCount = clientGroups.reduce((n, g) => n + g.owners.length, 0)
+  const clientCount = clientGroups.reduce((n, g) => n + g.owners.filter((o) => !q || o.label.toLowerCase().includes(q)).length, 0)
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-[340px_1fr]">

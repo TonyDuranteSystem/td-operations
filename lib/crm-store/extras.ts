@@ -43,13 +43,9 @@ export async function filterFiles(ownerId: string, kind: FilterKind): Promise<Fi
   }
   let keep = rows
   if (kind === "shown") {
-    const { storePointer } = await import("./document-pointer")
-    const shown = new Set<string>()
-    for (let i = 0; i < rows.length; i += 200) {
-      const { data, error } = await db().from("documents").select("drive_file_id").in("drive_file_id", rows.slice(i, i + 200).map((r) => storePointer(r.id))).eq("portal_visible", true)
-      if (error) throw new Error(`Could not check what the client sees (${error.message}).`)
-      for (const d of data ?? []) shown.add(String(d.drive_file_id).slice("store:".length))
-    }
+    // what the client really sees (the visible flag OR a client-facing workspace stage)
+    const { clientVisibleFileIds } = await import("./client-visibility")
+    const shown = await clientVisibleFileIds(rows.map((r) => r.id))
     keep = rows.filter((r) => shown.has(r.id))
   }
   return keep.map((r) => ({
@@ -102,7 +98,7 @@ export async function fileDetails(fileId: string): Promise<FileDetails> {
     type: f.document_type, typeName: (t as { display_name?: string } | null)?.display_name ?? null, year: f.period_year, filingStatus: f.filing_status,
     createdAt: f.created_at, createdBy, updatedAt: f.updated_at,
     versions: versions.map((v) => ({ versionNo: v.versionNo, createdAt: v.createdAt, size: v.size, by: v.by, current: v.current })),
-    clientCanSee: ((rows ?? []) as { portal_visible: boolean | null }[]).some((r) => r.portal_visible === true), listed: (rows ?? []).length > 0,
+    clientCanSee: (await (await import("./client-visibility")).clientVisibleFileIds([fileId])).has(fileId), listed: (rows ?? []).length > 0,
     sharedWithStaff: sharedWith, needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
     links: ((links ?? []) as { link_kind: string; tax_year: number | null }[]).map((l) => ({ kind: l.link_kind, taxYear: l.tax_year })),
   }

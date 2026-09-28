@@ -70,9 +70,13 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     throw new Error(`The file could not be moved (${error.message}).`)
   }
   // the CRM row's category follows the folder, as today's Drive move does
+  // (a person's own document keeps "Contacts"; any other file — also in a person's storage — follows its folder)
   const { categoryForFolder } = await import("./structure")
+  const { personalTypes } = await import("./structure")
+  const { data: ft } = await db().from("store_files").select("document_type").eq("id", fileId).maybeSingle()
+  const isPers = !!ft?.document_type && (await personalTypes()).has(ft.document_type as string)
   const cat = await categoryForFolder(toFolderId)
-  if (f.store_owners.kind !== "person") {
+  if (!isPers) {
     const { storePointer } = await import("./document-pointer")
     const { error: rErr } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })
       .eq("drive_file_id", storePointer(fileId))

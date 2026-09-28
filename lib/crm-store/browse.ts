@@ -54,6 +54,8 @@ export interface BrowseFile {
   needsReview?: string | null
   /** a file in My files › Shared with staff: the staff logins it is shared with (null = not a shareable place) */
   sharedWith?: string[] | null
+  /** none / draft / filed / amended — a draft of a return type is never shown until marked filed */
+  filingStatus?: string | null
 }
 
 /** Pure: the label shown for an owner (unit-tested). */
@@ -158,7 +160,7 @@ export async function folderContents(ownerId: string, folderId: string | null, o
   }
 
   const { data: subs } = await db().from("store_folders").select(cols).eq("parent_id", current.id).is("trashed_at", null).order("name")
-  const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, needs_review_at, needs_review_reason, store_file_versions!store_files_current_version_fk(size_bytes, mime_type, sha256)"
+  const fileSelect = "id, name, owner_id, document_type, state, published, updated_at, filing_status, needs_review_at, needs_review_reason, store_file_versions!store_files_current_version_fk(size_bytes, mime_type, sha256)"
   // live files only: the trash is its own view — a trashed file must not sit among the live ones (paged: a
   // folder can hold more than one page of files)
   const fs: Array<Record<string, unknown> & { id: string; name: string; owner_id: string; document_type: string | null; state: string; published: boolean; updated_at: string; needs_review_at: string | null; needs_review_reason: string | null; store_file_versions: unknown }> = []
@@ -204,15 +206,24 @@ export async function folderContents(ownerId: string, folderId: string | null, o
     for (let i = 0; i < all.length; i += 200) {
       const part = all.slice(i, i + 200)
       const [{ data: rows, error: rErr }, { data: fx, error: fErr }] = await Promise.all([
-        db().from("documents").select("id, drive_file_id, portal_visible").in("drive_file_id", part.map((f) => storePointer(f.id))),
+        db().from("documents").select("id, drive_file_id, portal_visible, service_delivery_id, flow_stage").in("drive_file_id", part.map((f) => storePointer(f.id))),
         // personal? staff-only type? how many versions? — one call for the whole chunk
         db().rpc("store_files_facts", { p_ids: part.map((f) => f.id) }),
       ])
       if (rErr) throw new Error(`store browse: ${rErr.message}`)
       if (fErr) throw new Error(`store browse: ${fErr.message}`)
-      for (const r of rows ?? []) {
+      // what the client REALLY sees: the visible flag, or a client-facing workspace stage (the portal's own rule)
+      const { rowClientVisible } = await import("./client-visibility")
+      const sdIds = Array.from(new Set(((rows ?? []) as { service_delivery_id: string | null }[]).map((r) => r.service_delivery_id).filter((x): x is string => !!x)))
+      const st = new Map<string, string>()
+      if (sdIds.length) {
+        const { data: sds } = await db().from("service_deliveries").select("id, service_type").in("id", sdIds)
+        for (const x of (sds ?? []) as { id: string; service_type: string | null }[]) if (x.service_type) st.set(x.id, x.service_type)
+      }
+      for (const r of (rows ?? []) as { id: string; drive_file_id: string; portal_visible: boolean | null; service_delivery_id: string | null; flow_stage: string | null }[]) {
         const fid = String(r.drive_file_id).slice("store:".length)
-        rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || r.portal_visible === true)
+        const sees = rowClientVisible(r, r.service_delivery_id ? st.get(r.service_delivery_id) ?? null : null)
+        rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || sees)
         if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
       }
       for (const x of (fx ?? []) as { id: string; is_personal: boolean; staff_only: boolean; version_count: number }[]) facts.set(x.id, x)
@@ -239,6 +250,7 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       personName: opts.throughCompany ? owner.label : null,
       inPersonStorage: isPerson,
       sharedWith: shares ? shares.get(f.id) ?? [] : null,
+      filingStatus: (f.filing_status as string | null) ?? null,
     })
   }
   return {
@@ -557,6 +569,15 @@ export async function staffUploadToStore(p: {
   if (dlErr || !blob) throw new Error(`The uploaded file could not be read (${dlErr?.message ?? "no data"}) — please try again.`)
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
+  const filedReturn = typeRow.metadata?.draft_never_visible === true && p.filingAnswer === "filed" && !p.needsReview
+  const wantVisible = !p.needsReview && p.visible !== false && typeRow.metadata?.staff_only !== true
+    && (typeRow.metadata?.draft_never_visible !== true || filedReturn)
+  // replacing a file the client sees with an answer of "hidden": hide it BEFORE the new copy is saved, so the
+  // client never sees the new copy, not even for a moment (and not at all if a later step fails)
+  if (sameLive && !wantVisible) {
+    const sameId = (same ?? []).find((f: { state: string }) => f.state === "live")?.id as string | undefined
+    if (sameId) await setClientVisibility(sameId, false, p.actorId)
+  }
   // the year the staff member chose, else the nearest year folder above (Tax › 2024 › Bank → 2024)
   const yearToSave = p.periodYear ?? await (await import("./structure")).nearestYear(targetFolderId)
   const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
@@ -575,9 +596,6 @@ export async function staffUploadToStore(p: {
   }
   const { categoryForFolder } = await import("./structure")
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal : await categoryForFolder(targetFolderId)
-  const filedReturn = typeRow.metadata?.draft_never_visible === true && p.filingAnswer === "filed" && !p.needsReview
-  const wantVisible = !p.needsReview && p.visible !== false && typeRow.metadata?.staff_only !== true
-    && (typeRow.metadata?.draft_never_visible !== true || filedReturn)
   const row = await upsertStoreDocumentRow(w.fileId, {
     file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
     category: cat.num, category_name: cat.name,
@@ -743,6 +761,11 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
     }
     await db().rpc("store_set_published", { p_file_id: fileId, p_published: before, p_actor: actorId })
     throw e
+  }
+  // hiding: a workspace document at a client-facing stage is shown by its stage — take it off that stage too
+  if (!visible) {
+    const { takeOffClientStage } = await import("./client-visibility")
+    await takeOffClientStage(fileId, actorId)
   }
   return { visible, crmRowsUpdated }
 }

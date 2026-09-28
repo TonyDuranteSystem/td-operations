@@ -57,6 +57,10 @@ export async function rememberRemovedRows(rows: DocRow[], actorId: string | null
 
 export interface TrashItem { kind: "file" | "folder"; id: string; name: string; mimeType: string | null }
 export interface TrashBatchView {
+  /** set when the deletion is in one of the company's people's own storage */
+  whose: string | null
+  /** the storage the deletion belongs to (a company's trash also lists its people's) */
+  ownerId: string
   batchId: string; trashedAt: string; purgeAfter: string | null; trashedBy: string | null
   topName: string | null; folders: number; files: number; held: number; items: TrashItem[]
 }
@@ -65,7 +69,20 @@ export interface TrashBatchView {
 export async function trashForOwner(ownerId: string): Promise<TrashBatchView[]> {
   const { data: batches, error } = await db().rpc("store_trash_list", { p_owner_id: ownerId })
   if (error) throw new Error(`Could not read the trash (${error.message}).`)
-  const list = (batches ?? []) as Array<{ batch_id: string; trashed_at: string; purge_after: string | null; trashed_by: string | null; top_name: string | null; folders: number; files: number; held_files: number }>
+  const list = ((batches ?? []) as Array<{ batch_id: string; owner_id: string; trashed_at: string; purge_after: string | null; trashed_by: string | null; top_name: string | null; folders: number; files: number; held_files: number }>).map((b) => ({ ...b, whose: null as string | null }))
+  // a company's trash also lists what was deleted from its people's own storage (a passport deleted from its
+  // "2. Contacts" lives in that person's storage) — labelled with whose storage it is
+  const { data: own } = await db().from("store_owners").select("kind, account_id").eq("id", ownerId).maybeSingle()
+  if (own?.kind === "company" && own.account_id) {
+    const { data: links } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
+    const cids = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)
+    const nameOf = new Map(((links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[]).map((l) => [l.contact_id, l.contacts?.full_name || "a person"]))
+    const { data: pos } = cids.length ? await db().from("store_owners").select("id, contact_id").eq("kind", "person").in("contact_id", cids) : { data: [] }
+    for (const po of (pos ?? []) as { id: string; contact_id: string }[]) {
+      const { data: pb } = await db().rpc("store_trash_list", { p_owner_id: po.id })
+      for (const b of (pb ?? []) as typeof list) list.push({ ...b, whose: `${nameOf.get(po.contact_id)}'s own storage` })
+    }
+  }
   if (!list.length) return []
   const ids = list.map((b) => b.batch_id)
   const [{ data: fs, error: fErr }, { data: ds, error: dErr }] = await Promise.all([
@@ -85,7 +102,7 @@ export async function trashForOwner(ownerId: string): Promise<TrashBatchView[]> 
   const names = await staffNames(list.map((b) => b.trashed_by).filter((x): x is string => !!x))
   return list
     .map((b) => ({
-      batchId: b.batch_id, trashedAt: b.trashed_at, purgeAfter: b.purge_after, trashedBy: b.trashed_by ? names.get(b.trashed_by) ?? "a staff member" : null,
+      batchId: b.batch_id, whose: b.whose, ownerId: b.owner_id, trashedAt: b.trashed_at, purgeAfter: b.purge_after, trashedBy: b.trashed_by ? names.get(b.trashed_by) ?? "a staff member" : null,
       topName: b.top_name, folders: Number(b.folders) || 0, files: Number(b.files) || 0, held: Number(b.held_files) || 0,
       items: (items.get(b.batch_id) ?? []).sort((x, y) => x.name.localeCompare(y.name)),
     }))
@@ -116,6 +133,15 @@ export async function restoreFromTrash(batchId: string, actorId: string | null, 
   }
   const report = (data ?? { restored: [], skipped: [] }) as { restored: Array<{ kind: string; id: string; name: string; renamed: boolean }>; skipped: Array<{ kind: string; name: string; why: string }> }
   const files = report.restored.filter((r) => r.kind === "file").map((r) => r.id)
+  // a tax-year folder restored somewhere that is not a Tax folder loses its year meaning (it becomes a staff folder)
+  const { effectiveKind } = await import("./structure")
+  for (const fo of report.restored.filter((r) => r.kind === "folder")) {
+    const { data: row } = await db().from("store_folders").select("kind, parent_id").eq("id", fo.id).maybeSingle()
+    if ((row?.kind === "tax_year" || row?.kind === "person_tax_year") && row.parent_id) {
+      const want = row.kind === "tax_year" ? "tax" : "person_tax"
+      if ((await effectiveKind(row.parent_id)) !== want) await db().from("store_folders").update({ kind: "custom" }).eq("id", fo.id)
+    }
+  }
   // per file: hidden in the store and its CRM listing back — a few at a time, each on its own, so one failure
   // never stops the rest (a file left without a listing simply stays invisible to the client, the safe side)
   let listingsBack = 0
@@ -164,8 +190,16 @@ async function putListingBack(fileId: string, actorId: string | null): Promise<n
     const cat = owner.kind === "person" || tt?.metadata?.personal === true ? null : await categoryForFolder(f.folder_id)
     void FOLDER_KIND_CATEGORY
     const rows = remembered.map((r) => ({ ...r, file_name: f.name, portal_visible: false, updated_at: new Date().toISOString(), ...(cat ? { category: cat.num, category_name: cat.name } : {}) }))
-    const { error } = await db().from("documents").insert(rows)
-    if (!error) return rows.length
+    const { data: ins, error } = await db().from("documents").insert(rows).select("id, drive_link")
+    if (!error) {
+      // the remembered link pointed at the OLD listing id — point each restored listing at its own new id
+      for (const r of (ins ?? []) as { id: string; drive_link: string | null }[]) {
+        if (!r.drive_link || /\/api\/documents\/[^/]+\/preview/.test(r.drive_link)) {
+          await db().from("documents").update({ drive_link: `/api/documents/${r.id}/preview` }).eq("id", r.id)
+        }
+      }
+      return rows.length
+    }
     console.error(`[crm-store] restore: remembered listing of ${fileId} not re-inserted (${error.message}) — a fresh one is made`)
   }
   // no remembered listing (deleted before this was built): a fresh hidden row linked to the storage's client

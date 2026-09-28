@@ -159,10 +159,13 @@ export class PersonalDocumentMisfileError extends Error {
 
 export async function assertPersonalGoesToPerson(ownerId: string, documentType: string | null | undefined): Promise<void> {
   if (!documentType) return
-  const [{ data: t, error: tErr }, { data: o, error: oErr }] = await Promise.all([
+  const read = () => Promise.all([
     db().from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", documentType).maybeSingle(),
     db().from("store_owners").select("kind").eq("id", ownerId).maybeSingle(),
   ])
+  let [{ data: t, error: tErr }, { data: o, error: oErr }] = await read()
+  // a one-off read failure (seen in the E2E run) gets ONE retry before the save is refused (it still fails closed)
+  if (tErr || oErr || !o) [{ data: t, error: tErr }, { data: o, error: oErr }] = await read()
   if (tErr || oErr || !o) throw new Error("store: could not check where this document may be saved — please try again.")
   const personal = (t?.metadata as { personal?: boolean } | null)?.personal === true
   if (personal && o.kind !== "person") throw new PersonalDocumentMisfileError()
