@@ -1322,7 +1322,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         const peopleHere = loaded[target.folder.id]?.people
           ?? (await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}`)).people ?? []
         const person = peopleHere.find((pp) => pp.contactId === upPerson)
-        if (!person?.ownerId) throw new Error("That person's storage could not be found — refresh and choose whose document it is again.")
+        if (!person) throw new Error("That person is not listed in this company any more — refresh and choose whose document it is again.")
+        // a person with no storage yet has no files to clash with: the server makes their storage on this first upload
         const top = person?.ownerId ? await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(person.ownerId)}&via=company`) : null
         const personal = top?.folders.find((x) => x.kind === 'personal')
         landsIn = person?.ownerId && personal ? { ownerId: person.ownerId, folderId: personal.id, via: true } : { ownerId: '', folderId: '', via: false }
