@@ -12,5 +12,7 @@ export async function GET(req: NextRequest) {
   const { storeOwnerForAccount, storeFilesShownForAccount } = await import("@/lib/crm-store/browse")
   const ownerId = await storeOwnerForAccount(account)
   const shownFileIds = ownerId ? await storeFilesShownForAccount(account, ownerId) : null
-  return NextResponse.json({ ownerId, shownFileIds: shownFileIds ?? [] }, { headers: { "Cache-Control": "no-store" } })
+  // moved from Drive: the company page then works in the new storage only (Drive stays as the backup)
+  const moved = ownerId ? await (await import("@/lib/crm-store/drive-import")).movedAt(account) : null
+  return NextResponse.json({ ownerId, shownFileIds: shownFileIds ?? [], moved }, { headers: { "Cache-Control": "no-store" } })
 }

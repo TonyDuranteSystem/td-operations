@@ -880,6 +880,21 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
     )
   }
 
+  // moved from Drive to the new storage: staff work there only — the Drive folder stays as the backup
+  if (storeOwner.data?.ownerId && storeOwner.data.moved) {
+    const m = storeOwner.data.moved
+    return (
+      <div className="space-y-2">
+        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          {m.status === 'moving' ? 'Being moved to the new storage — files are still arriving.' : `Moved to the new storage on ${new Date(m.finishedAt ?? m.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`}{' '}
+          The Drive folder stays as a backup — work here.{' '}
+          {driveFolderId && <a href={`https://drive.google.com/drive/folders/${driveFolderId}`} target="_blank" rel="noreferrer" className="underline">Open the old Drive folder (backup)</a>}
+        </p>
+        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+      </div>
+    )
+  }
+
   // a company with BOTH (several open formations at company creation: Drive ran as today, then the store
   // files were handed over) — its new-storage files are shown in every state of the Drive view (loading,
   // Drive error, loaded), because the flat list above hides them

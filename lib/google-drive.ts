@@ -1440,3 +1440,53 @@ export async function uploadStreamToDrive(p: {
   }
   return result
 }
+
+// ─── Read-only, any Shared Drive (CRM store: "Move this company to the new storage") ───
+// These three READ across drives (supportsAllDrives), so a sandbox move can read the separate TEST
+// Shared Drive. They never write. The caller (lib/crm-store/drive-import.ts) decides which drive may be
+// read: outside production only the TEST drive.
+
+export interface DriveListedItem { id: string; name: string; mimeType: string; size?: string; md5Checksum?: string; driveId?: string }
+
+/** One item's id, name, type and the Shared Drive it lives in. */
+export async function getDriveItemAnyDrive(fileId: string): Promise<DriveListedItem> {
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`)
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("fields", "id,name,mimeType,size,md5Checksum,driveId")
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return (await res.json()) as DriveListedItem
+}
+
+/** One page (up to 100) of a folder's children, with size + md5 for parity. */
+export async function listFolderPageAnyDrive(folderId: string, pageToken?: string | null): Promise<{ files: DriveListedItem[]; nextPageToken: string | null }> {
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files`)
+  url.searchParams.set("q", `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`)
+  url.searchParams.set("corpora", "allDrives")
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("includeItemsFromAllDrives", "true")
+  url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,size,md5Checksum,driveId)")
+  url.searchParams.set("pageSize", "100")
+  url.searchParams.set("orderBy", "folder,name")
+  if (pageToken) url.searchParams.set("pageToken", pageToken)
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  const j = (await res.json()) as { files?: DriveListedItem[]; nextPageToken?: string }
+  return { files: j.files ?? [], nextPageToken: j.nextPageToken ?? null }
+}
+
+/** A binary file's real bytes (never mocked — the caller has checked which drive it is in). */
+export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
+  const token = await getAccessToken()
+  const res = await fetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Drive download ${res.status}: ${res.statusText}`)
+  return Buffer.from(await res.arrayBuffer())
+}

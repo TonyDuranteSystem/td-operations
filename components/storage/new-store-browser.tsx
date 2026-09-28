@@ -48,7 +48,7 @@ interface DocType { slug: string; name: string; staffOnly: boolean; personal: bo
  * flat documents list so both agree (same cache key). The route answers null outside the pilot environment.
  */
 export function useStoreOwnerForAccount(accountId: string, enabled: boolean) {
-  return useQuery<{ ownerId: string | null; shownFileIds?: string[] }>({
+  return useQuery<{ ownerId: string | null; shownFileIds?: string[]; moved?: { status: string; finishedAt: string | null; startedAt: string } | null }>({
     queryKey: ['crm-store-owner-for-account', accountId],
     queryFn: async () => {
       const r = await fetch(`/api/crm-store/browse/owner-for-account?account=${encodeURIComponent(accountId)}`)
