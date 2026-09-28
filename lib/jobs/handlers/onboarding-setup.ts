@@ -35,6 +35,7 @@ import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identi
 import { createSD } from "@/lib/operations/service-delivery"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import type { Json } from "@/lib/database.types"
+import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
 
 interface OnboardingPayload {
   token: string
@@ -1147,7 +1148,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
             s.pipeline_type === "Tax Return" &&
             s.price &&
-            /inclus[ao]|included|€?\s*0|\$?\s*0/i.test(s.price)
+            isIncludedPrice(s.price)
           )
           if (taxService) {
             taxReturnIncludedInOffer = true

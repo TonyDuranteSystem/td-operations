@@ -25,9 +25,13 @@ describe('deriveContractType', () => {
     expect(deriveContractType(['onboarding', 'formation'])).toBe('formation')
   })
 
-  it('falls back to the first real type when neither formation nor onboarding is present', () => {
-    expect(deriveContractType(['itin', 'tax_return'])).toBe('itin')
+  it('Tax Return wins over ITIN whatever the click order (S1 2026-09-27)', () => {
+    expect(deriveContractType(['itin', 'tax_return'])).toBe('tax_return')
     expect(deriveContractType(['tax_return', 'itin'])).toBe('tax_return')
+  })
+
+  it('falls back to the first real type otherwise', () => {
+    expect(deriveContractType(['itin', 'renewal'])).toBe('itin')
   })
 
   it('skips null/undefined entries (services with no catalog contract_type)', () => {

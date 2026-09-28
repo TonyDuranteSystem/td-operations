@@ -18,13 +18,12 @@
  *    SD. pipeline_type is matched case-insensitively. Any disagreement between
  *    bundled_pipelines and the recomputed selection is REPORTED, never silently
  *    skipped.
- *  - Scope comes from the catalog (workspace-only plan S1, dev job 9d34e750):
- *    a type tagged `contact_eligible` (Company Closure) is contact-scoped
- *    (account_id NULL) — the company being CLOSED is the client's old LLC,
- *    never the one being formed. A type WITHOUT that tag (Company Change Name)
- *    belongs to an existing company and is created on the contract's company
- *    (offers.account_id); with no company on the contract it is NOT guessed —
- *    it is reported for staff to add by hand.
+ *  - Scope follows where the offer was made (workspace-only plan S1, Antonio
+ *    2026-09-27): made on a company page → that company; made on a lead or
+ *    contact page → the person, never a guessed company. One exception: a
+ *    person-level type (tag `contact_eligible`, e.g. Company Closure) bundled
+ *    in a contract that forms or onboards a company stays on the person — the
+ *    company being CLOSED is the client's OLD LLC, never the one on the contract.
  *  - Runs for formation AND onboarding contracts (onboarding used to create
  *    nothing at payment, so a bundled closure was never created).
  *  - Never a duplicate: skip when (a) an SD of this type already carries this
@@ -217,10 +216,18 @@ export function decideStartServiceScope(p: {
   serviceType: string
   contactScopedTypes: string[] | null
   accountId: string | null
+  /** The contract sells a NEW company (a real formation) or onboards one. A
+   *  person-level service bundled there (Company Closure) is about the client's
+   *  OLD company, never the one on the contract (plan §1.4). */
+  newCompanyContract?: boolean
 }): StartServiceScope {
   // null = catalog scope unknown → legacy behaviour (contact-scoped), which is
   // what every start-at-payment service did before S1.
-  if (p.contactScopedTypes === null || p.contactScopedTypes.includes(p.serviceType)) return { kind: "contact" }
+  if (p.contactScopedTypes === null) return { kind: "contact" }
+  const personLevel = p.contactScopedTypes.includes(p.serviceType)
+  if (personLevel && p.newCompanyContract) return { kind: "contact" }
+  // Sold from a company page (Antonio 2026-09-27): a closure of THAT company, a
+  // name change, a shipping… belongs to that company.
   if (p.accountId) return { kind: "account", accountId: p.accountId }
   // The offer lives where it was created (Antonio 2026-09-27): an offer made on
   // a lead or a contact page belongs to that person, so a company service sold
@@ -242,6 +249,8 @@ export async function createStartAtActivationSDs(p: {
   accountId?: string | null
   /** Types tagged contact_eligible. Omitted/null → every type contact-scoped (pre-S1 behaviour). */
   contactScopedTypes?: string[] | null
+  /** See decideStartServiceScope. */
+  newCompanyContract?: boolean
 }): Promise<ActivationStep[]> {
   const steps: ActivationStep[] = []
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
@@ -257,6 +266,7 @@ export async function createStartAtActivationSDs(p: {
         serviceType,
         contactScopedTypes: p.contactScopedTypes ?? null,
         accountId: p.accountId ?? null,
+        newCompanyContract: p.newCompanyContract ?? false,
       })
       if (scope.kind === "skip") {
         const detail = `${serviceType} not created for ${who}: ${scope.reason} — add it by hand`
@@ -375,6 +385,8 @@ export async function createBoughtStartAtActivationServices(p: {
    *  loudly instead of activating an empty contract (e.g. the catalog tag is
    *  missing in this environment). */
   mustCreateSomething?: boolean
+  /** The contract sells a new company or onboards one (see decideStartServiceScope). */
+  newCompanyContract?: boolean
 }): Promise<ActivationStep[]> {
   const steps = await createBoughtStartAtActivationServicesInner(p)
   // Silent = nothing created AND nothing already reported (a skip/error step
@@ -392,6 +404,7 @@ async function createBoughtStartAtActivationServicesInner(p: {
   offerToken: string
   clientName: string | null
   contactId: string | null
+  newCompanyContract?: boolean
 }): Promise<ActivationStep[]> {
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
   let startTypes: string[] = []
@@ -427,5 +440,6 @@ async function createBoughtStartAtActivationServicesInner(p: {
     selection,
     accountId: p.offer?.account_id ?? null,
     contactScopedTypes,
+    newCompanyContract: p.newCompanyContract ?? false,
   })
 }

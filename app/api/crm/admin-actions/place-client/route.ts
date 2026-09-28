@@ -24,6 +24,7 @@ import { canPerform } from "@/lib/permissions"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
 
 // ─── Types ───
 
@@ -565,7 +566,7 @@ async function createTaxReturnRecord(
             const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
               s.pipeline_type === "Tax Return" &&
               s.price &&
-              /inclus[ao]|included|€?\s*0|\$?\s*0/i.test(s.price)
+              isIncludedPrice(s.price)
             )
             if (taxService) isBundled = true
           }

@@ -91,6 +91,20 @@ export function parsePriceQuirk(raw: unknown): number {
 
 const RECURRING_RE = /\/(year|anno|month|mese)/i
 const INCLUDED_RE = /includ|inclus/i
+
+/**
+ * Is this service line INCLUDED in the price (nothing to pay for it)? True when
+ * the price says so ("Included", "Inclusa", "incluso") or is actually zero
+ * ("$0", "€ 0,00"). Never true for a real amount that merely contains a 0
+ * ("$1,000", "€350") — the old check /inclus[ao]|included|€?\s*0/ matched any
+ * price with a zero in it (workspace-only plan S1, 2026-09-27).
+ */
+export function isIncludedPrice(raw: unknown): boolean {
+  const text = String(raw ?? "").trim()
+  if (!text) return false
+  if (INCLUDED_RE.test(text)) return true
+  return /[0-9]/.test(text) && parsePriceQuirk(text) === 0
+}
 const PRECONDITION_RE = /pre.?condition/i
 
 interface SummaryGroup {

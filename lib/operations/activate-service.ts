@@ -14,7 +14,8 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
-import { getServiceBySlugStatic } from "@/lib/services"
+import { getServiceBySlugStatic, getPerPersonServiceTypes } from "@/lib/services"
+import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { invoiceTargetForOffer, offerBillTo } from "@/lib/offers/bill-to-server"
 import { autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
@@ -30,6 +31,7 @@ import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
+import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -66,6 +68,11 @@ const BUSINESS_SERVICE_TYPES = new Set([
 const INDIVIDUAL_SERVICE_TYPES = new Set([
   'ITIN', 'ITIN Renewal',
 ])
+// Tracked add-ons (S1, 2026-09-27) say nothing about business vs personal —
+// they must never tip a personal Tax Return into the business path.
+const CONTEXT_NEUTRAL_SERVICE_TYPES = new Set([
+  'Shipping', 'Public Notary', 'Consulting Call', 'Certificate of Incumbency',
+])
 
 /**
  * Resolve service_context for each pipeline in the offer.
@@ -81,6 +88,7 @@ function hasBusinessContextPipeline(
   for (const pipeline of pipelines) {
     if (BUSINESS_SERVICE_TYPES.has(pipeline)) return true
     if (INDIVIDUAL_SERVICE_TYPES.has(pipeline)) continue
+    if (CONTEXT_NEUTRAL_SERVICE_TYPES.has(pipeline)) continue
 
     // Ambiguous type (Tax Return) — use shared helper to find service entry
     if (pipeline === 'Tax Return') {
@@ -475,8 +483,13 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       }
     }
 
+    // A Tax Return contract is business or personal by ITS OWN line only —
+    // another bundled business service (e.g. EIN) must not turn a personal
+    // 1040-NR into a company return.
+    const taxLine = contractType === "tax_return" ? findTaxReturnService(offerServices) : null
+    const taxLineIsBusiness = taxLine?.status === "found" && taxLine.service_context === "business"
     if (businessContextResult === true) {
-      if (contractType === "tax_return") {
+      if (contractType === "tax_return" && (taxLine?.status !== "found" || taxLineIsBusiness)) {
         // Standalone BUSINESS Tax Return: defer account creation to company_info intake.
         // No placeholder account — SD created with contact_id only, account_id=null.
         isStandaloneBusinessTR = true
@@ -713,6 +726,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
       contactId,
       mustCreateSomething: formationNotBought,
+      newCompanyContract: !formationNotBought,
     }))
   } else if (contractType === "onboarding") {
     steps.push({
@@ -728,6 +742,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       offerToken: activation.offer_token,
       clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
       contactId,
+      newCompanyContract: true,
     }))
   } else if (pipelines.length > 0) {
     // Get first pipeline stage for each type (including auto_tasks for task creation)
@@ -755,9 +770,27 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // Use autoAccountId (may have been created in Step 1.5)
     const accountId = autoAccountId
 
+    // Per-person services (ITIN): a person holds only one, and the offer does
+    // not say WHO the extra units are for (ITIN ×2 = the buyer + someone else).
+    // Create the buyer's one and tell staff about the rest — never N copies on
+    // the buyer, never a silent unique-index failure (S1 QA, 2026-09-27).
+    let perPersonTypes: string[] = []
+    try { perPersonTypes = await getPerPersonServiceTypes() } catch { perPersonTypes = [] }
+    const who = `${activation.client_name || "unknown client"} (offer ${activation.offer_token})`
+    const tellStaff = (message: string, context: Record<string, unknown>) => {
+      reportSystemError({ source: "server", route: "lib/operations/activate-service", message, context }).catch(() => {})
+    }
+
     for (const pipeline of pipelines) {
       try {
-        const quantity = pipelineQuantity.get(pipeline) ?? 1
+        const isPerPerson = perPersonTypes.includes(pipeline)
+        const boughtUnits = pipelineQuantity.get(pipeline) ?? 1
+        const quantity = isPerPerson ? 1 : boughtUnits
+        if (isPerPerson && boughtUnits > 1) {
+          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; the other ${boughtUnits - 1} are for other people — add each one on that person`
+          steps.push({ step: "service_deliveries", status: "skipped", detail })
+          tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, units: boughtUnits })
+        }
 
         // Guard 1: count SDs already created for this exact offer + pipeline
         // (tied by offer_token in notes — the canonical link).
@@ -784,13 +817,40 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             .eq("account_id", accountId)
             .eq("status", "active")
           if ((activeSds?.length ?? 0) >= quantity) {
-            sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
-            continue
+            if (pipeline === "Tax Return") {
+              // A Tax Return bought for a company that already has one open is
+              // another YEAR (a retry of this same offer is caught by Guard 1).
+              // Create it and tell staff to check the year — never a silent skip
+              // (S1 QA, 2026-09-27).
+              const detail = `Tax Return created for ${who} although this company already has an open one (${activeSds![0]?.id}) — check it is for a different tax year`
+              steps.push({ step: "service_deliveries", status: "warning", detail })
+              tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: activeSds![0]?.id })
+            } else {
+              sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
+              continue
+            }
           }
         }
 
         // How many more SDs to create (quantity minus what already exists for this offer)
         const toCreate = quantity - existingOfferCount
+
+        if (isPerPerson && contactId && toCreate > 0) {
+          const { data: ownOpen } = await supabase
+            .from("service_deliveries")
+            .select("id")
+            .eq("service_type", pipeline)
+            .eq("contact_id", contactId)
+            .in("status", ["active", "on_hold"])
+            .limit(1)
+          if (ownOpen && ownOpen.length > 0) {
+            const detail = `${pipeline} NOT created for ${who}: the buyer already has an open one (${ownOpen[0].id}). If this one is for another person, add it on that person`
+            sdResults.push({ pipeline, status: "existing", id: ownOpen[0].id })
+            steps.push({ step: "service_deliveries", status: "skipped", detail })
+            tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: ownOpen[0].id })
+            continue
+          }
+        }
 
         // Tax season pause computed once before the quantity loop (same result for all N SDs)
         const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
@@ -888,7 +948,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         }
       } catch (e) {
-        sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
+        const msg = e instanceof Error ? e.message : String(e)
+        sdResults.push({ pipeline, status: "error", id: msg })
+        const detail = `${pipeline} could NOT be created for ${who}: ${msg} — add it by hand`
+        steps.push({ step: "service_deliveries", status: "error", detail })
+        tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline })
       }
     }
 
@@ -912,7 +976,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     const includedTaxReturn = services.find((s: { pipeline_type?: string; price?: string }) =>
       s.pipeline_type === "Tax Return" &&
       s.price &&
-      /inclus[ao]|included|€?\s*0/i.test(s.price)
+      isIncludedPrice(s.price)
     )
     if (includedTaxReturn) {
       const today = new Date().toISOString().split("T")[0]
@@ -1070,9 +1134,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // across all pipelines. Falls back to contractType when pipelines is
         // empty (e.g. onboarding/formation where the SD is created later by
         // the wizard, not at payment).
+        // Banking bought inside a formation/onboarding-type contract creates no
+        // service (formation ends at the EIN; banking is self-service until the
+        // bank workspace, plan S8) — so it must not pick a banking welcome that
+        // promises an application in progress (S1 QA, 2026-09-27).
+        const welcomePipelines = contractType === "formation" || contractType === "onboarding"
+          ? pipelines.filter((p) => p !== "Banking Fintech" && p !== "Banking Physical")
+          : pipelines
         const template = await getWelcomeMessage({
           contractType: experienceType,
-          pipelines,
+          pipelines: welcomePipelines,
           language,
         })
 

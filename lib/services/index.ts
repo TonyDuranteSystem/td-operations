@@ -195,6 +195,12 @@ const SERVICE_TYPE_TO_SLUG: Record<string, string> = {
   DBA: "dba",
   "Company Change Name": "company_change_name",
   "EIN Change Name": "ein_change_name",
+  // Tracked add-ons (workspace-only plan S1, 2026-09-27 — migration
+  // 20260927-2200-track-addon-services.sql).
+  Shipping: "shipping",
+  "Public Notary": "public_notary",
+  "Consulting Call": "consulting",
+  "Certificate of Incumbency": "certificate_of_incumbency",
 }
 
 /**

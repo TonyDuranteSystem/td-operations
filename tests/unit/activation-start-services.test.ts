@@ -294,8 +294,14 @@ describe("contractBoughtService — no fake formation", () => {
 })
 
 describe("decideStartServiceScope", () => {
-  it("contact_eligible type (Closure) → on the person", () => {
-    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: ["Company Closure", "ITIN"], accountId: "acc1" })).toEqual({ kind: "contact" })
+  it("Closure bundled with a NEW company (formation/onboarding) → on the person: it closes the OLD company", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: ["Company Closure", "ITIN"], accountId: "acc1", newCompanyContract: true })).toEqual({ kind: "contact" })
+  })
+  it("Closure sold from a company page on its own → on THAT company (Antonio 2026-09-27)", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: ["Company Closure", "ITIN"], accountId: "acc1" })).toEqual({ kind: "account", accountId: "acc1" })
+  })
+  it("Closure sold from a lead/contact page → on the person", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: ["Company Closure"], accountId: null })).toEqual({ kind: "contact" })
   })
   it("company type (Change Name) with the contract's company → on that company", () => {
     expect(decideStartServiceScope({ serviceType: "Company Change Name", contactScopedTypes: ["Company Closure"], accountId: "acc1" })).toEqual({ kind: "account", accountId: "acc1" })
@@ -352,7 +358,7 @@ describe("createBoughtStartAtActivationServices — catalog-driven, formation AN
       { slug: "itin", status: "active", tags: ["contact_eligible", "start_at_wizard"] },
     ])
   })
-  it("closure → on the person; change name → on the contract's company; ITIN untouched (starts at the form)", async () => {
+  it("in a contract that forms/onboards a company: closure → on the person (old company); change name → on the contract's company; ITIN untouched (starts at the form)", async () => {
     await createBoughtStartAtActivationServices({
       offer: {
         services: [closureLine, { name: "Company Change Name", pipeline_type: "Company Change Name" }, { name: "ITIN", pipeline_type: "ITIN" }],
@@ -360,7 +366,7 @@ describe("createBoughtStartAtActivationServices — catalog-driven, formation AN
         bundled_pipelines: ["Company Closure", "Company Change Name", "ITIN"],
         account_id: "acc1",
       },
-      offerToken: "t", clientName: "X", contactId: "c1",
+      offerToken: "t", clientName: "X", contactId: "c1", newCompanyContract: true,
     })
     const calls = createSD.mock.calls.map((c) => c[0] as { service_type: string; account_id: string | null })
     expect(calls).toEqual(expect.arrayContaining([
@@ -368,6 +374,14 @@ describe("createBoughtStartAtActivationServices — catalog-driven, formation AN
       expect.objectContaining({ service_type: "Company Change Name", account_id: "acc1" }),
     ]))
     expect(calls.some((c) => c.service_type === "ITIN")).toBe(false)
+  })
+  it("sold from a company page on its own: closure → on THAT company", async () => {
+    await createBoughtStartAtActivationServices({
+      offer: { services: [closureLine], selected_services: null, bundled_pipelines: ["Company Closure"], account_id: "acc1" },
+      offerToken: "t", clientName: "X", contactId: "c1",
+    })
+    const calls = createSD.mock.calls.map((c) => c[0] as { service_type: string; account_id: string | null })
+    expect(calls).toEqual([expect.objectContaining({ service_type: "Company Closure", account_id: "acc1" })])
   })
   it("nothing tagged → nothing created, no noise", async () => {
     listEntries.mockResolvedValue([{ slug: "closure", status: "active", tags: ["sd"] }])

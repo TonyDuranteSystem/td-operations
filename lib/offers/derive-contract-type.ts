@@ -17,5 +17,9 @@ export function deriveContractType(selectedContractTypes: Array<string | null | 
   const types = selectedContractTypes.filter((t): t is string => !!t)
   if (types.includes('formation')) return 'formation'
   if (types.includes('onboarding')) return 'onboarding'
+  // A Tax Return must decide the contract whenever it is sold with ITIN: in an
+  // 'itin' contract a BUSINESS tax return skipped the company-info intake — the
+  // outcome depended on which box staff ticked first (S1 QA, 2026-09-27).
+  if (types.includes('tax_return')) return 'tax_return'
   return types[0] ?? 'formation'
 }
