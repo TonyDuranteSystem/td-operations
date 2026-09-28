@@ -153,6 +153,15 @@ Antonio "go" 2026-09-28. Library `lib/crm-store/trash.ts`; routes `browse/trash?
 - A file from the computer dropped anywhere else on the page is ignored (never opens in the tab); a drop while an upload runs is refused; dropping onto a closed "2. Contacts" loads its people first; several files dropped into Shared with staff are shared with nobody (one reminder at the end).
 - **Live proof:** `tests/live/crm-store-trash.test.ts` (6).
 
+## The new store — working with many files (2026-09-28, SANDBOX ONLY)
+Antonio "go on both" 2026-09-28. Library `lib/crm-store/extras.ts`; routes `browse/filter`, `browse/file/[id]/details`, `browse/folder/[id]/zip`, `browse/folder/[id]/ensure-path`.
+- **Select several files** (tick box on each row) → Move to… / Show to client / Hide from client / Delete, one storage at a time. The screen runs the SAME one-file routes per file (every rule still applies) after one summary question with the counts; a group "Show" skips personal documents (one by one from their own button, with the personal-data question), staff-only, "Needs review", untyped and unlisted files. Moving visible files asks keep / hide once.
+- **Sort** by name or newest first (remembered in the browser). **Filters** per storage (Shown to client / Needs review / Needs a type): one list across all its folders with where each file lives (`filterFiles`).
+- **Details panel** (read-only): where, type, year, filed/draft, client can see, shared with staff, needs review, uploaded by/when, versions, record links (`fileDetails`). Changing a type is NOT here (it changes who sees a file — its own question later).
+- **Folder zip** (every folder but "2. Contacts"): the store's zip listing + stream (2,000 files / 2 GB limits); staff only, a private area only for owners; **every download is logged** (`zip_downloaded` event) and a download that can't be logged is refused.
+- **Drag a whole folder in**: the dropped folder's files are read with their sub-folder paths (hidden system files skipped, 500 files at most, not into "2. Contacts"); the panel shows which folders will be made; on Upload each path is made or reused ONCE (`ensureFolderPath` → `store_ensure_folder_path`, names checked) and every file goes through the same upload questions, hidden from the client.
+- **Live proof:** `tests/live/crm-store-extras.test.ts` (4).
+
 ## How to verify current state
 - Confirm the four tables and the `crm-files` bucket exist in whichever environment you're checking: `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'crm_storage_%'` and `SELECT id, public FROM storage.buckets WHERE id = 'crm-files'`.
 - Confirm the RLS policies exclude both roles, not just one: `SELECT tablename, policyname, qual FROM pg_policies WHERE tablename LIKE 'crm_storage_%'` — `qual` should reference both `'client'` and `'partner'`.

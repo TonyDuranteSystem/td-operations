@@ -177,3 +177,16 @@ describe("rememberable (what a delete keeps for a restore)", () => {
     expect(r).toEqual({ drive_file_id: "store:x", account_id: "a", contact_id: "c", category: 3 })
   })
 })
+
+import { pathOf, draggedFolderPath } from "@/lib/crm-store/extras"
+describe("paths for filters and dragged folders", () => {
+  it("pathOf leaves out the storage's top folder", () => {
+    const m = new Map([["r", { name: "Acme", parent_id: null }], ["t", { name: "3. Tax", parent_id: "r" }], ["y", { name: "2025", parent_id: "t" }]])
+    expect(pathOf("y", m)).toBe("3. Tax › 2025")
+    expect(pathOf("r", m)).toBe("")
+  })
+  it("draggedFolderPath drops the file name and empty parts", () => {
+    expect(draggedFolderPath("Taxes/2024/w2.pdf")).toEqual(["Taxes", "2024"])
+    expect(draggedFolderPath("w2.pdf")).toEqual([])
+  })
+})

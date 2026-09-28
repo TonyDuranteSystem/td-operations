@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
-  Lock, Trash2, Layers, X, Upload, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search,
+  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -161,7 +161,37 @@ interface TrashBatch {
   topName: string | null; folders: number; files: number; held: number
   items: { kind: 'file' | 'folder'; id: string; name: string; mimeType: string | null }[]
 }
-interface DropItem { file: File; type: string; name: string; status: 'waiting' | 'uploading' | UploadOutcome }
+interface DropItem { file: File; type: string; name: string; status: 'waiting' | 'uploading' | UploadOutcome; /** sub-folders of a dropped folder ("Taxes/2024") */ path: string[] }
+interface FilteredFile { id: string; name: string; folderId: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; needsReview: string | null; documentType: string | null }
+interface FileDetails {
+  id: string; name: string; where: string; state: string; type: string | null; typeName: string | null; year: number | null; filingStatus: string | null
+  createdAt: string; createdBy: string | null; updatedAt: string
+  versions: { versionNo: number; createdAt: string; size: number | null; by: string | null; current: boolean }[]
+  clientCanSee: boolean; listed: boolean; sharedWithStaff: string[] | null; needsReview: string | null; links: { kind: string; taxYear: number | null }[]
+}
+type SortMode = 'name' | 'date'
+const DROP_MAX_FILES = 500
+type FsEntry = { isFile: boolean; isDirectory: boolean; name: string; file?: (ok: (f: File) => void, bad: (e: unknown) => void) => void; createReader?: () => { readEntries: (ok: (list: FsEntry[]) => void, bad: (e: unknown) => void) => void } }
+/** every file inside what was dropped (files and folders, all levels), with its sub-folder path */
+async function readDropped(items: DataTransferItemList | null, files: FileList | null): Promise<{ file: File; path: string[] }[]> {
+  const entries = Array.from(items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.() ?? null)
+  if (!entries.some((x) => x?.isDirectory)) return Array.from(files ?? []).map((file) => ({ file, path: [] }))
+  const out: { file: File; path: string[] }[] = []
+  const walk = async (e: FsEntry, path: string[]): Promise<void> => {
+    if (out.length > DROP_MAX_FILES) return
+    if (e.isFile && e.file) { const f = await new Promise<File>((ok, bad) => e.file!(ok, bad)); out.push({ file: f, path }); return }
+    if (e.isDirectory && e.createReader) {
+      const reader = e.createReader()
+      for (;;) { // readEntries answers in batches until it returns nothing
+        const batch = await new Promise<FsEntry[]>((ok, bad) => reader.readEntries(ok, bad))
+        if (!batch.length) break
+        for (const c of batch) await walk(c, [...path, e.name])
+      }
+    }
+  }
+  for (const e of entries) if (e) await walk(e, [])
+  return out.filter((x) => !x.file.name.startsWith('.')) // hidden system files (.DS_Store …) are never uploaded
+}
 interface DropBatch { folder: Fold; items: DropItem[]; person: string }
 /** a drag that carries files from the computer (not a file being moved inside the CRM) */
 const isComputerDrag = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
@@ -234,6 +264,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [trash, setTrash] = useState<TrashBatch[] | null>(null)
   const [restoring, setRestoring] = useState<string | null>(null)
   const [drop, setDrop] = useState<DropBatch | null>(null)
+  // many files at once: selection, sort, filters, details
+  const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
+  const [filterKind, setFilterKind] = useState<'shown' | 'review' | 'untyped' | null>(null)
+  const [filtered, setFiltered] = useState<FilteredFile[] | null>(null)
+  const [detailsFor, setDetailsFor] = useState<string | null>(null)
+  const [details, setDetails] = useState<FileDetails | null>(null)
   const [dropRunning, setDropRunning] = useState(false)
   const [sharedFiles, setSharedFiles] = useState<{ id: string; name: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; sharedAt: string }[] | null>(null)
   const dragRef = useRef<{ id: string; from: string | null } | null>(null)
@@ -283,6 +321,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const openOwner = useCallback(async (oid: string, fromPick = false) => {
     setSharedView(false)
+    setSelectedFiles(new Map())
+    setFilterKind(null)
     if (!fromPick) pickSeq.current++ // opening a storage by hand cancels a folder pick still loading
     ownerIdRef.current = oid
     focusRef.current = null
@@ -660,13 +700,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         setLoaded((m) => ({ ...m, [folder.id]: c }))
       } catch (err) { toast.error(errMsg(err, 'Could not read the people of this company.')); return }
     }
-    const entries = Array.from(e.dataTransfer.items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.())
-    const files = Array.from(e.dataTransfer.files ?? []).filter((_, i) => !entries[i]?.isDirectory)
-    if (entries.some((x) => x?.isDirectory)) toast.message('Folders can’t be dropped yet — drop the files inside them.')
-    if (!files.length) return
+    const found = await readDropped(e.dataTransfer.items, e.dataTransfer.files)
+    if (!found.length) { toast.message('Nothing to upload in what was dropped.'); return }
+    if (found.length > DROP_MAX_FILES) { toast.error(`At most ${DROP_MAX_FILES} files at a time — drop a smaller folder.`); return }
+    if (folder.kind === 'contacts' && found.some((x) => x.path.length)) { toast.error('A whole folder can’t go into "2. Contacts" — open the person and drop it into one of their folders.'); return }
     const typed = typesForFolder(folder, types ?? (await loadTypes()))
     const def = defaultTypeFor(folder, typed)
-    setDrop({ folder, person: '', items: files.map((file) => ({ file, type: def, name: '', status: 'waiting' })) })
+    setDrop({ folder, person: '', items: found.map(({ file, path }) => ({ file, path, type: def, name: '', status: 'waiting' })) })
   }
 
   const runDrop = async () => {
@@ -676,12 +716,36 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setDropRunning(true)
     setUploading(true)
     let saved = 0, skipped = 0, failed = 0
+    const madePaths = new Map<string, Fold>()
+    const oidOfDrop = folderOwner.current.get(drop.folder.id) ?? ownerId ?? ''
+    const viaDrop = viaCompany.current.has(drop.folder.id)
     for (let i = 0; i < drop.items.length; i++) {
       const it = drop.items[i]
       if (it.status !== 'waiting') continue
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'uploading' } : x)) }))
+      // a dropped folder: its sub-folders are made (or reused) under the target, once per path
+      let into: Fold = drop.folder
+      if (it.path.length) {
+        const key = it.path.join('/')
+        const known = madePaths.get(key)
+        if (known) into = known
+        else {
+          try {
+            const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${drop.folder.id}/ensure-path`, { path: it.path }, 'The folders could not be created.')
+            into = { id: r.id, name: it.path[it.path.length - 1], kind: r.kind, trashed: false, locked: false }
+            folderOwner.current.set(r.id, oidOfDrop)
+            if (viaDrop) viaCompany.current.add(r.id)
+            madePaths.set(key, into)
+          } catch (err) {
+            toast.error(errMsg(err, 'The folders could not be created.'))
+            failed++
+            setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
+            continue
+          }
+        }
+      }
       // dragged files always arrive HIDDEN from the client (decision #85); every question still applies
-      const out = await doUploadWith(it.file, { folder: drop.folder, typeSlug: it.type, personId: drop.person, displayName: it.name, visible: false, batch: true })
+      const out = await doUploadWith(it.file, { folder: into, typeSlug: it.type, personId: drop.person, displayName: it.name, visible: false, batch: true })
       if (out === 'saved') saved++; else if (out === 'cancelled') skipped++; else failed++
       setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: out } : x)) }))
     }
@@ -691,6 +755,115 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (saved && root?.owner.kind === 'private') toast.message('Files in Shared with staff are shared with nobody yet — use "Not shared" on each one to choose who can see it.')
     await refreshAll()
     if (!failed) setDrop(null)
+  }
+
+  // ───────────────────────────────────────── many files: sort, filters, details, group actions
+
+  const setSort = (m: SortMode) => { setSortMode(m); try { localStorage.setItem('store-sort', m) } catch { /* a per-browser nicety */ } }
+  const sortFiles = (list: File_[]) => [...list].sort((a, b) => (sortMode === 'date' ? b.updatedAt.localeCompare(a.updatedAt) : a.name.localeCompare(b.name)))
+
+  const openFilter = async (k: 'shown' | 'review' | 'untyped' | null) => {
+    setFilterKind(k)
+    setFiltered(null)
+    if (!k || !ownerId) return
+    try {
+      setFiltered((await getJson<{ files: FilteredFile[] }>(`/api/crm-store/browse/filter?owner=${encodeURIComponent(ownerId)}&kind=${k}`)).files)
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not filter the files.'))
+      setFiltered([])
+    }
+  }
+
+  const openDetails = async (fileId: string) => {
+    setMenuFor(null)
+    setDetailsFor(fileId)
+    setDetails(null)
+    try {
+      setDetails(await getJson<FileDetails>(`/api/crm-store/browse/file/${fileId}/details`))
+    } catch (e) {
+      toast.error(errMsg(e, "Could not read the file's details."))
+      setDetailsFor(null)
+    }
+  }
+
+  const toggleSelect = (f: File_, folderId: string | null) => setSelectedFiles((m) => {
+    const n = new Map(m)
+    if (n.has(f.id)) n.delete(f.id); else n.set(f.id, { ...f, folderId })
+    return n
+  })
+
+  /** a file the client could be shown in a group "Show" (the same checks as its own button; personal ones one by one) */
+  const bulkShowable = (f: File_) => !f.staffOnly && !f.personal && !f.needsReview && f.listed && !!f.documentType && f.sharedWith == null
+
+  const runBulk = async (action: 'show' | 'hide' | 'delete' | 'move') => {
+    const list = Array.from(selectedFiles.values())
+    if (!list.length) return
+    const oids = new Set(list.map((f) => (f.folderId && folderOwner.current.get(f.folderId)) || ownerId))
+    if (oids.size > 1) { toast.error('Select files of ONE client (or area) at a time.'); return }
+    const oid = Array.from(oids)[0] ?? ownerId
+    let targets = list
+    let hideAfterMove = false
+    let moveTo: { folderId: string; path: string } | null = null
+    if (action === 'show') {
+      const ok = list.filter((f) => !f.clientVisible && bulkShowable(f))
+      const already = list.filter((f) => f.clientVisible).length
+      const skip = list.length - ok.length - already
+      const a = await ask('bulk_show', `Show ${ok.length} ${ok.length === 1 ? 'file' : 'files'} to the client?`,
+        <p>{ok.length} will be shown{already ? `; ${already} already shown` : ''}{skip ? `; ${skip} can't be shown in a group and are skipped (personal documents one by one from their own button; staff-only, "Needs review", untyped or unlinked files not at all)` : ''}.</p>,
+        [{ key: 'go', label: `Show ${ok.length}`, tone: 'primary', disabled: ok.length === 0 }, { key: 'cancel', label: 'Cancel' }])
+      if (a !== 'go' && a !== '__default__') return
+      targets = ok
+    } else if (action === 'hide') {
+      const ok = list.filter((f) => f.clientVisible)
+      const a = await ask('bulk_hide', `Hide ${ok.length} ${ok.length === 1 ? 'file' : 'files'} from the client?`,
+        <p>{ok.length} will be hidden{list.length - ok.length ? `; ${list.length - ok.length} already hidden` : ''}.</p>,
+        [{ key: 'go', label: `Hide ${ok.length}`, tone: 'primary', disabled: ok.length === 0 }, { key: 'cancel', label: 'Cancel' }])
+      if (a !== 'go' && a !== '__default__') return
+      targets = ok
+    } else if (action === 'delete') {
+      const shown = list.filter((f) => f.clientVisible).length
+      const a = await ask('bulk_delete', `Move ${list.length} ${list.length === 1 ? 'file' : 'files'} to the trash?`,
+        <p>{shown ? `${shown} ${shown === 1 ? 'is' : 'are'} shown to the client and will disappear from their portal. ` : ''}Recoverable for 90 days from the Trash.</p>,
+        [{ key: 'go', label: 'Move to trash', tone: 'danger' }, { key: 'cancel', label: 'Cancel' }])
+      if (a !== 'go' && a !== '__default__') return
+    } else {
+      const r = await pick({ title: `Move ${list.length} ${list.length === 1 ? 'file' : 'files'} to…`, ownerId: oid ?? undefined, ownerLabel: ownerLabelOf(oid), mode: 'file' })
+      setPicking(null)
+      if (!r) return
+      moveTo = { folderId: r.folderId, path: r.path }
+      const shown = list.filter((f) => f.clientVisible).length
+      if (shown) {
+        const a = await ask('move_visible_file', 'The client can see this file',
+          <p>{shown} of the {list.length} files {shown === 1 ? 'is' : 'are'} visible to the client. They are moving to <strong>{r.path}</strong>. Who can see a file goes with the file, not the folder.</p>,
+          [{ key: 'keep', tone: 'primary' }, { key: 'hide' }, { key: 'cancel' }])
+        if (a === 'cancel') return
+        hideAfterMove = a === 'hide'
+      }
+    }
+    setBulkBusy(true)
+    let ok = 0
+    const failed: string[] = []
+    for (const f of targets) {
+      try {
+        if (action === 'show') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true }, 'Could not show it.')
+        if (action === 'hide') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Could not hide it.')
+        if (action === 'delete') await postJson(`/api/crm-store/browse/file/${f.id}/delete`, {}, 'Could not delete it.')
+        if (action === 'move' && moveTo) {
+          if (f.folderId !== moveTo.folderId) await postJson(`/api/crm-store/browse/file/${f.id}/move`, { folderId: moveTo.folderId }, 'Could not move it.')
+          if (hideAfterMove && f.clientVisible) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Moved, but could not hide it.')
+        }
+        ok++
+      } catch (e) {
+        failed.push(`${f.name} (${errMsg(e, 'failed')})`)
+      }
+    }
+    setBulkBusy(false)
+    const verb = { show: 'shown to the client', hide: 'hidden from the client', delete: 'moved to the trash', move: `moved to ${moveTo?.path ?? ''}` }[action]
+    toast.success(`${ok} ${ok === 1 ? 'file' : 'files'} ${verb}`)
+    if (failed.length) toast.error(`Not done: ${failed.slice(0, 5).join('; ')}${failed.length > 5 ? ' …' : ''}`)
+    setSelectedFiles(new Map())
+    await refreshAll()
+    if (filterKind) void openFilter(filterKind)
   }
 
   // ───────────────────────────────────────── folders
@@ -1138,6 +1311,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         onDragStart={() => { const d = { id: f.id, from: inFolder?.id ?? null }; dragRef.current = d; setDragFile(d) }}
         onDragEnd={() => { setDragFile(null); setDropOn(null) }}
         className="group relative flex flex-wrap items-center gap-2 py-1.5 text-sm hover:bg-zinc-50/70" style={{ paddingLeft: `${depth * 20 + 22}px` }}>
+        <input type="checkbox" aria-label={`Select ${f.name}`} checked={selectedFiles.has(f.id)} onChange={() => toggleSelect(f, inFolder?.id ?? null)}
+          className={`h-3.5 w-3.5 shrink-0 ${selectedFiles.size ? '' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'}`} />
         <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
         {renaming?.id === f.id && !renaming.folder ? (
           <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: f.id, value: e.target.value })}
@@ -1215,6 +1390,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {menuFor === f.id && (
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
               <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
+              <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
               <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
               {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
@@ -1293,6 +1469,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   <FolderPlus className="h-3.5 w-3.5" />Folder
                 </button>
               )}
+              {f.kind !== 'contacts' && (
+                <FastTooltip label="Download this folder as a zip (the download is recorded)">
+                  <a href={`/api/crm-store/browse/folder/${f.id}/zip`} download onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
+                    <Download className="h-3.5 w-3.5" />Zip
+                  </a>
+                </FastTooltip>
+              )}
               {isTax && (
                 <button type="button" onClick={() => startNewFolder(f.id, true)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
                   <CalendarPlus className="h-3.5 w-3.5" />New tax year
@@ -1324,7 +1508,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             {f.kind === 'contacts'
               ? (c.people ?? []).map((p) => personNode(p, depth + 1, [...trail, f.name]))
               : subs.map((sf) => folderNode(sf, depth + 1, f.id, [...trail, f.name]))}
-            {c.files.map((file) => fileRow(file, f, depth + 1))}
+            {sortFiles(c.files).map((file) => fileRow(file, f, depth + 1))}
             {f.kind === 'contacts' && (c.people ?? []).length === 0 && (
               <li className="py-1.5 text-xs italic text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 20 + 22}px` }}>No people are linked to this company.</li>
             )}
@@ -1364,7 +1548,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           <ul>
             {c.folder && newFolderBox(c.folder.id, depth + 1)}
             {[...c.folders].sort(sortFolders).map((sf) => folderNode(sf, depth + 1, c.folder?.id ?? null, [...trail, p.name]))}
-            {c.files.map((file) => fileRow(file, c.folder, depth + 1))}
+            {sortFiles(c.files).map((file) => fileRow(file, c.folder, depth + 1))}
           </ul>
         )}
       </li>
@@ -1458,6 +1642,16 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <Trash2 className="h-3.5 w-3.5" />Trash
             </button>
+            <select aria-label="Sort" value={sortMode} onChange={(e) => setSort(e.target.value as SortMode)} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs">
+              <option value="name">Sort: name</option>
+              <option value="date">Sort: newest first</option>
+            </select>
+            <select aria-label="Filter" value={filterKind ?? ''} onChange={(e) => { void openFilter((e.target.value || null) as typeof filterKind) }} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs">
+              <option value="">Filter: none</option>
+              {root.owner.kind !== 'business' && root.owner.kind !== 'private' && <option value="shown">Shown to client</option>}
+              <option value="review">Needs review</option>
+              <option value="untyped">Needs a type</option>
+            </select>
             {topFolders.length > 0 && (
               <button type="button" className="text-xs text-blue-700 hover:underline"
                 onClick={() => {
@@ -1469,6 +1663,48 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </button>
             )}
           </div>
+
+          {selectedFiles.size > 0 && (
+            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm" onClick={(e) => e.stopPropagation()}>
+              <span className="font-medium text-blue-900">{selectedFiles.size} selected</span>
+              <span className="flex-1" />
+              <button type="button" disabled={bulkBusy} onClick={() => runBulk('move')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><FolderInput className="mr-1 inline h-3.5 w-3.5" />Move to…</button>
+              {ownerKind !== 'business' && ownerKind !== 'private' && <>
+                <button type="button" disabled={bulkBusy} onClick={() => runBulk('show')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><Eye className="mr-1 inline h-3.5 w-3.5" />Show to client</button>
+                <button type="button" disabled={bulkBusy} onClick={() => runBulk('hide')} className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><EyeOff className="mr-1 inline h-3.5 w-3.5" />Hide from client</button>
+              </>}
+              <button type="button" disabled={bulkBusy} onClick={() => runBulk('delete')} className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 className="mr-1 inline h-3.5 w-3.5" />Delete</button>
+              <button type="button" disabled={bulkBusy} onClick={() => setSelectedFiles(new Map())} className="text-xs text-zinc-600 hover:underline">Clear</button>
+              {bulkBusy && <Loader2 className="h-4 w-4 animate-spin text-blue-700" />}
+            </div>
+          )}
+
+          {filterKind && (
+            <div className="mb-3 rounded-lg border border-zinc-200 p-2">
+              <div className="mb-1 flex items-center gap-2 text-sm">
+                <span className="font-medium">{filterKind === 'shown' ? 'Shown to client' : filterKind === 'review' ? 'Needs review' : 'Needs a type'}</span>
+                <span className="text-xs text-zinc-400">across all of {root.owner.label}</span>
+                <span className="flex-1" />
+                <button type="button" onClick={() => { void openFilter(null) }} className="text-xs text-blue-700 hover:underline">Close filter</button>
+              </div>
+              {filtered === null && <p className="text-sm text-zinc-500">Loading…</p>}
+              {filtered && filtered.length === 0 && <p className="text-sm text-zinc-500">No files.</p>}
+              <ul className="divide-y divide-zinc-50">
+                {(filtered ?? []).map((ff) => {
+                  const Icon = fileIcon(ff.mimeType)
+                  return (
+                    <li key={ff.id} className="flex flex-wrap items-center gap-2 py-1 text-sm">
+                      <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
+                      <button type="button" className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => setPreview({ id: ff.id, name: ff.name, documentType: ff.documentType, state: 'live', published: false, clientVisible: false, staffOnly: false, personal: false, versions: 1, size: ff.size, mimeType: ff.mimeType, updatedAt: ff.updatedAt, listed: true, personName: null, inPersonStorage: false, docId: null })}>{ff.name}</button>
+                      {ff.needsReview && <Badge tone="red"><AlertTriangle className="h-3 w-3" />Needs review</Badge>}
+                      <button type="button" className="text-xs text-zinc-500 hover:underline" onClick={() => { void selectFolder(folderOwner.current.get(ff.folderId) ?? ownerId ?? '', ff.folderId); void openFilter(null) }}>{ff.where || 'top'}</button>
+                      <button type="button" className="text-xs text-blue-700 hover:underline" onClick={() => { void openDetails(ff.id) }}>Details</button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
 
           {uploadOpen && (
             <div className="mb-3 space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()}>
@@ -1524,7 +1760,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             {viewFolder?.kind === 'contacts'
               ? (view?.people ?? []).map((p) => personNode(p, 0, [viewFolder.name]))
               : topFolders.map((f) => folderNode(f, 0, viewFolder?.id ?? null, []))}
-            {(view?.files ?? []).map((file) => fileRow(file, viewFolder, 0))}
+            {sortFiles(view?.files ?? []).map((file) => fileRow(file, viewFolder, 0))}
             {viewFolder?.kind !== 'contacts' && topFolders.length === 0 && (view?.files.length ?? 0) === 0 && newFolder?.parentId !== viewFolder?.id && (
               <li className="py-2 text-sm text-zinc-500">{focus ? 'This folder is empty — use New folder or Upload.' : 'This storage is empty — use New folder or Upload.'}</li>
             )}
@@ -1541,6 +1777,47 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           choices={asking.choices.map((c) => ({ ...c, onChoose: () => { const r = asking.resolve; setAsking(null); r(c.key) } }))}>
           {asking.body}
         </QuestionDialog>
+      )}
+      {detailsFor && (
+        <div className="fixed inset-y-0 right-0 z-[58] flex w-full max-w-md flex-col border-l border-zinc-200 bg-white p-4 shadow-xl" role="dialog" aria-label="File details" onClick={(e) => e.stopPropagation()}>
+          <div className="mb-3 flex items-center gap-2">
+            <Layers className="h-4 w-4 text-zinc-500" />
+            <h3 className="min-w-0 flex-1 truncate text-base font-semibold">{details?.name ?? 'Details'}</h3>
+            <button type="button" onClick={() => { setDetailsFor(null); setDetails(null) }} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+          </div>
+          {!details ? <p className="text-sm text-zinc-500">Loading…</p> : (
+            <dl className="min-h-0 flex-1 space-y-2 overflow-y-auto text-sm">
+              {([
+                ['Where', details.where || 'top of the storage'],
+                ['Type', details.typeName ?? 'Needs a type'],
+                ['Year', details.year ? String(details.year) : '—'],
+                ['Filed or draft', details.filingStatus && details.filingStatus !== 'none' ? details.filingStatus : '—'],
+                ['Client can see it', ownerKind === 'business' || ownerKind === 'private' ? 'Never (internal)' : details.clientCanSee ? 'Yes' : details.listed ? 'No' : 'No — not linked to the CRM list'],
+                ...(details.sharedWithStaff ? [['Shared with staff', details.sharedWithStaff.length ? details.sharedWithStaff.join(', ') : 'Nobody']] : []),
+                ...(details.needsReview ? [['Needs review', details.needsReview]] : []),
+                ['Uploaded', `${fmtDate(details.createdAt)}${details.createdBy ? ` by ${details.createdBy}` : ''}`],
+                ['Last changed', fmtDate(details.updatedAt)],
+                ...(details.links.length ? [['Linked to', details.links.map((l) => `${l.kind.replace(/_/g, ' ')}${l.taxYear ? ` ${l.taxYear}` : ''}`).join(', ')]] : []),
+              ] as [string, string][]).map(([k, v]) => (
+                <div key={k} className="grid grid-cols-[9rem_1fr] gap-2"><dt className="text-zinc-500">{k}</dt><dd className="text-zinc-800">{v}</dd></div>
+              ))}
+              <div>
+                <dt className="mb-1 text-zinc-500">Versions ({details.versions.length})</dt>
+                <dd>
+                  <ul className="space-y-1">
+                    {details.versions.map((v) => (
+                      <li key={v.versionNo} className="flex items-center gap-2 text-xs">
+                        <span className="font-medium">v{v.versionNo}</span>
+                        <span className="text-zinc-500">{fmtDate(v.createdAt)} · {fmtSize(v.size)}{v.by ? ` · ${v.by}` : ''}</span>
+                        {v.current && <Badge tone="green">current</Badge>}
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            </dl>
+          )}
+        </div>
       )}
       {trashOpen && (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" onClick={() => setTrashOpen(false)} role="dialog" aria-modal="true">
@@ -1596,6 +1873,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <button type="button" disabled={dropRunning} onClick={() => setDrop(null)} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100 disabled:opacity-40"><X className="h-4 w-4" /></button>
             </div>
             <p className="mb-2 text-xs text-zinc-500">Files dragged in arrive <strong>hidden from the client</strong>; show them afterwards from their row. If something needs a decision (same name, tax year, filed or draft…) you are asked one file at a time.</p>
+            {drop.items.some((x) => x.path.length) && (
+              <p className="mb-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                These folders will be created inside “{drop.folder.name}” (or reused if they already exist): {Array.from(new Set(drop.items.filter((x) => x.path.length).map((x) => x.path.join(' › ')))).join(' · ')}
+              </p>
+            )}
             <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
               {drop.folder.kind === 'contacts' && (
                 <select value={drop.person} disabled={dropRunning} onChange={(e) => setDrop({ ...drop, person: e.target.value })} className="rounded-md border border-zinc-200 bg-white px-2 py-1">
@@ -1613,7 +1895,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               {drop.items.map((it, i) => (
                 <li key={`${it.file.name}-${i}`} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
                   <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
-                  <span className="min-w-0 flex-1 truncate" title={it.file.name}>{it.file.name}</span>
+                  <span className="min-w-0 flex-1 truncate" title={[...it.path, it.file.name].join(' › ')}>
+                    {it.path.length > 0 && <span className="text-zinc-400">{it.path.join(' › ')} › </span>}{it.file.name}
+                  </span>
                   <span className="text-xs text-zinc-400">{fmtSize(it.file.size)}</span>
                   <select value={it.type} disabled={dropRunning || it.status !== 'waiting'} onChange={(e) => setDrop({ ...drop, items: drop.items.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)) })}
                     className="max-w-[12rem] rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs">
