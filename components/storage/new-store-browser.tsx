@@ -158,11 +158,11 @@ const personKey = (contactId: string): PersonKey => `person:${contactId}`
 
 interface Asking { slug: string; fallbackTitle: string; body: React.ReactNode; choices: Array<Omit<Choice, 'onChoose'>>; resolve: (key: string) => void }
 interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPick' | 'onClose'>; resolve: (r: { folderId: string; ownerId: string; path: string } | null) => void }
-interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[] }
+interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[]; left?: boolean }
+interface TreeNode { root?: Fold | null; folders: Fold[] }
 
 export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company' }: { ownerId?: string; scopedKind?: string } = {}) {
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
   const [root, setRoot] = useState<Contents | null>(null)
@@ -171,6 +171,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
+  /** the folder the right side shows (null = the storage's top) */
+  const [focus, setFocus] = useState<string | null>(null)
+  // the LEFT tree (Storage page): Clients › groups › storages › folders, Business › folders, My files › folders
+  const [openTree, setOpenTree] = useState<Set<string>>(new Set())
+  const [tree, setTree] = useState<Record<string, TreeNode>>({})
+  const [treeLoading, setTreeLoading] = useState<Set<string>>(new Set())
+  const openTreeRef = useRef<Set<string>>(new Set())
+  const focusRef = useRef<string | null>(null)
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
@@ -193,7 +201,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileInput = useRef<HTMLInputElement | null>(null)
   // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
-  const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean } | null>(null)
+  const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean; left?: boolean } | null>(null)
   const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
   const [dropOn, setDropOn] = useState<string | null>(null)
@@ -208,6 +216,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const viaCompany = useRef<Set<string>>(new Set())
 
   useEffect(() => { expandedRef.current = expanded }, [expanded])
+  useEffect(() => { openTreeRef.current = openTree }, [openTree])
+  useEffect(() => { focusRef.current = focus }, [focus])
 
   useEffect(() => {
     getJson<{ questions: Record<string, StoreQuestion> }>('/api/crm-store/browse/questions')
@@ -242,6 +252,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setLoaded({})
     setExpanded(new Set())
     setSelected(null)
+    setFocus(null)
     setUploadOpen(false)
     try {
       const r = await fetchInto(oid, null)
@@ -263,6 +274,49 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (scopedOwnerId) { openOwner(scopedOwnerId); return }
     loadNav()
   }, [scopedOwnerId, openOwner, loadNav])
+
+  // ───────────────────────────────────────── the left tree
+
+  /** load one tree node: a storage (`own:<id>` → its top folder + folders) or a folder (→ its sub-folders) */
+  const loadTree = useCallback(async (key: string) => {
+    const oid = key.startsWith('own:') ? key.slice(4) : folderOwner.current.get(key)
+    if (!oid) return
+    setTreeLoading((l) => new Set(l).add(key))
+    try {
+      const c = await fetchInto(oid, key.startsWith('own:') ? null : key)
+      setTree((t) => ({ ...t, [key]: { root: key.startsWith('own:') ? c.folder : undefined, folders: [...c.folders].sort(sortFolders) } }))
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not open the folder.'))
+    } finally {
+      setTreeLoading((l) => { const n = new Set(l); n.delete(key); return n })
+    }
+  }, [fetchInto])
+
+  const toggleTree = (key: string, load = true) => {
+    const isOpen = openTree.has(key)
+    setOpenTree((x) => { const n = new Set(x); if (isOpen) n.delete(key); else n.add(key); return n })
+    if (!isOpen && load && !tree[key]) loadTree(key)
+  }
+
+  /** reload every tree node that is open (after any folder change) */
+  const refreshTree = useCallback(async () => {
+    const keys = Array.from(openTreeRef.current).filter((k) => k.startsWith('own:') || folderOwner.current.has(k))
+    await Promise.all(keys.map((k) => loadTree(k)))
+  }, [loadTree])
+
+  /** show ONE folder on the right (from the left tree or the path) */
+  const selectFolder = async (oid: string, folderId: string) => {
+    if (oid !== ownerId) await openOwner(oid)
+    try {
+      const c = await fetchInto(oid, folderId)
+      setLoaded((m) => ({ ...m, [folderId]: c }))
+      setFocus(folderId)
+      setSelected(folderId)
+      setExpanded((x) => new Set(x).add(folderId))
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not open the folder.'))
+    }
+  }
 
   /** load a folder (or a person branch) into `loaded` */
   const loadKey = useCallback(async (key: string) => {
@@ -293,7 +347,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   /** reload everything that is on screen (Refresh, and after any change) */
   const refreshAll = useCallback(async () => {
-    if (!ownerId) return
+    void refreshTree()
+    if (!ownerId) { if (!scopedOwnerId) loadNav(); return }
     try {
       const r = await fetchInto(ownerId, null)
       setRoot(r)
@@ -306,14 +361,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             return p?.ownerId ? [key, await fetchInto(p.ownerId, null, true)] as const : null
           }
           return [key, await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))] as const
-        } catch { return null }
+        } catch {
+          // the folder shown on the right is gone (deleted / moved away): back to the storage's top
+          if (key === focusRef.current) setFocus(null)
+          return null
+        }
       }))
       setLoaded((m) => ({ ...m, ...Object.fromEntries(entries.filter((x): x is readonly [string, Contents] => !!x)) }))
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
     if (!scopedOwnerId) loadNav()
-  }, [ownerId, fetchInto, loaded, scopedOwnerId, loadNav])
+  }, [ownerId, fetchInto, loaded, scopedOwnerId, loadNav, refreshTree])
 
   const openVersions = async (fileId: string) => {
     if (versionsFor === fileId) { setVersionsFor(null); return }
@@ -514,9 +573,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     }
   }
 
-  /** open the inline "new folder" box under a folder (the siblings are what is on screen now) */
-  const startNewFolder = (parentId: string, year?: boolean) => {
+  /** open the inline "new folder" box under a folder — on the right tree, or in the LEFT tree (`left`) */
+  const startNewFolder = (parentId: string, year?: boolean, left?: boolean) => {
     setMenuFor(null)
+    if (left) {
+      const node = tree[parentId] ?? Object.values(tree).find((t) => t.root?.id === parentId)
+      const siblings = (node?.folders ?? []).map((x) => x.name)
+      setNewFolder({ parentId, siblings, year, left: true, value: year ? suggestYear(siblings) : '' })
+      return
+    }
     const siblings = (loaded[parentId]?.folders ?? (root?.folder?.id === parentId ? root.folders : [])).map((x) => x.name)
     setNewFolder({ parentId, siblings, year, value: year ? suggestYear(siblings) : '' })
     setExpanded((x) => new Set(x).add(parentId))
@@ -558,8 +623,16 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         ? await postJson<{ name: string }>(`/api/crm-store/browse/folder/${parentId}/tax-year`, { year: nf.value.trim() }, 'The tax-year folder could not be created.')
         : await postJson<{ name: string }>('/api/crm-store/browse/folder/create', { parentId, name: nf.value }, 'The folder could not be created.')
       toast.success(`Folder "${r.name}" created`)
-      setExpanded((x) => new Set(x).add(parentId))
-      if (!loaded[parentId]) await loadKey(parentId)
+      if (nf.left) {
+        // open the parent in the left tree so the new folder is visible there
+        const ownKey = Object.entries(tree).find(([, t]) => t.root?.id === parentId)?.[0]
+        const key = ownKey ?? parentId
+        setOpenTree((x) => new Set(x).add(key))
+        openTreeRef.current = new Set(openTreeRef.current).add(key)
+      } else {
+        setExpanded((x) => new Set(x).add(parentId))
+        if (!loaded[parentId]) await loadKey(parentId)
+      }
       await refreshAll()
     } catch (e) {
       toast.error(errMsg(e, 'The folder could not be created.'))
@@ -930,8 +1003,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     )
   }
 
-  const newFolderBox = (parentId: string, depth: number) => {
-    if (newFolder?.parentId !== parentId) return null
+  const newFolderBox = (parentId: string, depth: number, left = false) => {
+    if (newFolder?.parentId !== parentId || !!newFolder.left !== left) return null
     const problem = newFolder.value ? folderNameProblem(newFolder.value, newFolder.siblings) : null
     const badYear = newFolder.year && !/^(19|20)\d{2}$/.test(newFolder.value.trim())
     return (
@@ -968,7 +1041,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           onDragLeave={() => setDropOn((d) => (d === f.id ? null : d))}
           onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (canDrop) onDropInto(f, where) }}
           className={`group relative flex items-center gap-1 py-1.5 text-sm hover:bg-zinc-50 ${dropOn === f.id ? 'rounded bg-blue-50 ring-1 ring-blue-300' : ''} ${selected === f.id ? 'bg-zinc-50' : ''}`} style={{ paddingLeft: `${depth * 20}px` }}>
-          {renaming?.id === f.id && renaming.folder ? (
+          {renaming?.id === f.id && renaming.folder && !renaming.left ? (
             <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ id: f.id, value: e.target.value, folder: true })}
               onKeyDown={(e) => { if (e.key === 'Enter') doRenameFolder(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
               onBlur={() => doRenameFolder(f, renaming.value)}
@@ -1077,17 +1150,22 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   // ───────────────────────────────────────── page
 
-  const topFolders = root?.folders ?? []
+  // the right side shows the storage's top, or the ONE folder picked on the left / in the path
+  const view: Contents | null = focus && loaded[focus] ? loaded[focus] : root
+  const viewFolder = view?.folder ?? null
+  const topFolders = view && viewFolder?.kind !== 'contacts' ? [...view.folders].sort(sortFolders) : []
   const allOpen = topFolders.length > 0 && topFolders.every((f) => expanded.has(f.id))
-  const totalFiles = (root?.files.length ?? 0) + topFolders.reduce((n, f) => n + (loaded[f.id]?.files.length ?? 0), 0)
+  const totalFiles = (view?.files.length ?? 0) + topFolders.reduce((n, f) => n + (loaded[f.id]?.files.length ?? 0), 0)
   const groupOf = (groups ?? []).find((g) => g.owners.some((o) => o.id === ownerId))
-  const selPath = selected && loaded[selected] ? loaded[selected].path.filter((x) => x.kind !== 'root' && x.kind !== 'business_root' && x.kind !== 'private_root') : []
+  const pathKey = focus ?? selected
+  const selPath = pathKey && loaded[pathKey] ? loaded[pathKey].path.filter((x) => x.kind !== 'root' && x.kind !== 'business_root' && x.kind !== 'private_root') : []
   const selPerson = selected?.startsWith('person:') ? Object.values(loaded).flatMap((x) => x.people ?? []).find((p) => personKey(p.contactId) === selected) : null
-  const crumbs = [
-    ...(scopedOwnerId ? [] : ['Storage', ...(groupOf && groupOf.section === 'clients' ? [groupOf.label] : [])]),
-    root?.owner.label ?? '',
-    ...(selPerson ? ['2. Contacts', selPerson.name] : selPath.map((x) => x.name)),
-  ].filter(Boolean)
+  // each step of the path: its label and, when it is a place you can go to, what a click opens
+  const crumbs: Array<{ label: string; go?: () => void }> = [
+    ...(scopedOwnerId ? [] : [{ label: 'Storage' }, ...(groupOf && groupOf.section === 'clients' ? [{ label: groupOf.label }] : [])]),
+    ...(root?.owner.label ? [{ label: root.owner.label, go: () => { setFocus(null); setSelected(null) } }] : []),
+    ...(selPerson ? [{ label: '2. Contacts' }, { label: selPerson.name }] : selPath.map((x) => ({ label: x.name, go: ownerId ? () => { void selectFolder(folderOwner.current.get(x.id) ?? ownerId, x.id) } : undefined }))),
+  ]
 
   const right = (
     <div className="rounded-xl border border-zinc-200 bg-white p-4" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
@@ -1098,22 +1176,24 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <>
           <nav aria-label="Path" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-zinc-500">
             {crumbs.map((c, i) => (
-              <span key={`${c}-${i}`} className="inline-flex items-center gap-1">
+              <span key={`${c.label}-${i}`} className="inline-flex items-center gap-1">
                 {i > 0 && <ChevronRight className="h-3 w-3" />}
-                <span className={i === crumbs.length - 1 ? 'font-medium text-zinc-800' : ''}>{c}</span>
+                {c.go && i < crumbs.length - 1
+                  ? <button type="button" onClick={c.go} className="hover:text-zinc-800 hover:underline">{c.label}</button>
+                  : <span className={i === crumbs.length - 1 ? 'font-medium text-zinc-800' : ''}>{c.label}</span>}
               </span>
             ))}
             {root.owner.closed && <Badge tone="gray">{root.owner.accountStatus ?? 'archived'}</Badge>}
           </nav>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium text-zinc-800">{root.folder.name}</span>
-            <span className="text-xs text-zinc-400">{totalFiles} {totalFiles === 1 ? 'file' : 'files'}</span>
+            <span className="font-medium text-zinc-800">{viewFolder?.name ?? root.folder.name}</span>
+            {viewFolder?.kind !== 'contacts' && <span className="text-xs text-zinc-400">{totalFiles} {totalFiles === 1 ? 'file' : 'files'}</span>}
             <span className="flex-1" />
-            <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(root.folder!.id) }}
+            {viewFolder && viewFolder.kind !== 'contacts' && <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <FolderPlus className="h-3.5 w-3.5" />New folder
-            </button>
-            <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload(root.folder!.kind !== 'root' ? root.folder!.id : undefined) }}
+            </button>}
+            <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload(viewFolder && viewFolder.kind !== 'root' ? viewFolder.id : undefined) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <Upload className="h-3.5 w-3.5" />Upload
             </button>
@@ -1181,11 +1261,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           )}
 
           <ul className="divide-y divide-zinc-50">
-            {newFolderBox(root.folder.id, 0)}
-            {topFolders.map((f) => folderNode(f, 0, root.folder!.id, []))}
-            {root.files.map((file) => fileRow(file, root.folder, 0))}
-            {topFolders.length === 0 && root.files.length === 0 && newFolder?.parentId !== root.folder.id && (
-              <li className="py-2 text-sm text-zinc-500">This storage is empty — use New folder or Upload.</li>
+            {viewFolder && newFolderBox(viewFolder.id, 0)}
+            {viewFolder?.kind === 'contacts'
+              ? (view?.people ?? []).map((p) => personNode(p, 0, [viewFolder.name]))
+              : topFolders.map((f) => folderNode(f, 0, viewFolder?.id ?? null, []))}
+            {(view?.files ?? []).map((file) => fileRow(file, viewFolder, 0))}
+            {viewFolder?.kind !== 'contacts' && topFolders.length === 0 && (view?.files.length ?? 0) === 0 && newFolder?.parentId !== viewFolder?.id && (
+              <li className="py-2 text-sm text-zinc-500">{focus ? 'This folder is empty — use New folder or Upload.' : 'This storage is empty — use New folder or Upload.'}</li>
             )}
           </ul>
           <p className="mt-2 text-xs text-zinc-400">Drag a file onto a folder to move it.</p>
@@ -1212,11 +1294,135 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   if (scopedOwnerId) return right
 
   const q = filter.trim().toLowerCase()
-  const sections: Array<{ key: NavGroup['section']; label: string }> = [{ key: 'clients', label: 'Clients' }, { key: 'business', label: 'Business' }, { key: 'private', label: 'My files' }]
+
+  /** "+" on a storage in the left tree: a new folder at its top (loads the storage first if needed) */
+  const newFolderAtOwner = async (oid: string) => {
+    setMenuFor(null)
+    const key = `own:${oid}`
+    try {
+      const c = await fetchInto(oid, null)
+      if (!c.folder) return
+      const folders = [...c.folders].sort(sortFolders)
+      setTree((t) => ({ ...t, [key]: { root: c.folder, folders } }))
+      setOpenTree((x) => new Set(x).add(key))
+      setNewFolder({ parentId: c.folder.id, siblings: folders.map((x) => x.name), left: true, value: '' })
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not open the storage.'))
+    }
+  }
+
+  const treeArrow = (key: string, open: boolean, load = true) => (
+    <button type="button" aria-label={open ? 'Close' : 'Open'} aria-expanded={open} onClick={(e) => { e.stopPropagation(); toggleTree(key, load) }}
+      className="rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+      {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+    </button>
+  )
+
+  /** one folder in the LEFT tree: arrow opens / closes it here; the name shows it on the right */
+  const treeFolderRow = (oid: string, f: Fold, depth: number, parentId: string | null): React.ReactNode => {
+    if (f.trashed) return null
+    const open = openTree.has(f.id)
+    const kids = tree[f.id]?.folders
+    const menuKey = `lfolder:${f.id}`
+    return (
+      <li key={f.id}>
+        <div className={`group relative flex items-center gap-1 rounded-md py-1 pr-1 text-sm hover:bg-zinc-50 ${focus === f.id ? 'bg-blue-50' : ''}`} style={{ paddingLeft: `${depth * 14}px` }}>
+          {f.kind === 'contacts' ? <span className="w-5" /> : treeArrow(f.id, open)}
+          {renaming?.id === f.id && renaming.left ? (
+            <input autoFocus value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Enter') doRenameFolder(f, renaming.value); if (e.key === 'Escape') { renameDone.current = true; setRenaming(null) } }}
+              onBlur={() => doRenameFolder(f, renaming.value)}
+              className="min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
+          ) : (
+            <button type="button" onClick={() => selectFolder(oid, f.id)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+              {open ? <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" /> : <Folder className="h-4 w-4 shrink-0 text-amber-500" />}
+              <span className="truncate">{f.name}</span>
+            </button>
+          )}
+          {treeLoading.has(f.id) && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
+          {f.kind !== 'contacts' && (
+            <FastTooltip label="New folder inside">
+              <button type="button" aria-label="New folder inside" onClick={(e) => {
+                e.stopPropagation()
+                if (!open) { setOpenTree((x) => new Set(x).add(f.id)); if (!tree[f.id]) loadTree(f.id) }
+                startNewFolder(f.id, false, true)
+              }} className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><FolderPlus className="h-3.5 w-3.5" /></button>
+            </FastTooltip>
+          )}
+          {!f.locked ? (
+            <div className="relative">
+              <button type="button" aria-label="Folder actions" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === menuKey ? null : menuKey) }}
+                className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><MoreHorizontal className="h-3.5 w-3.5" /></button>
+              {menuFor === menuKey && (
+                <div className="absolute right-0 z-30 mt-1 w-48 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
+                  <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name, folder: true, left: true }) }} />
+                  <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFolder(f, parentId)} />
+                  <MenuItem icon={Trash2} label="Delete" danger onClick={() => deleteFolder(f)} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <FastTooltip label="A fixed folder — it can't be renamed, moved or deleted"><Lock className="hidden h-3 w-3 text-zinc-300 group-hover:inline" /></FastTooltip>
+          )}
+        </div>
+        {open && (
+          <ul>
+            {newFolderBox(f.id, depth + 1, true)}
+            {(kids ?? []).map((k) => treeFolderRow(oid, k, depth + 1, f.id))}
+            {kids && kids.length === 0 && newFolder?.parentId !== f.id && f.kind !== 'contacts' && (
+              <li className="py-0.5 text-xs italic text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 14 + 22}px` }}>no sub-folders</li>
+            )}
+          </ul>
+        )}
+      </li>
+    )
+  }
+
+  /** one storage in the LEFT tree (a company, a person, Business, My files) */
+  const treeOwnerRow = (o: NavGroup['owners'][number], depth: number, label?: string, note?: string): React.ReactNode => {
+    const key = `own:${o.id}`
+    const open = openTree.has(key)
+    const node = tree[key]
+    const Icon = ownerIcon(o.kind)
+    return (
+      <li key={o.id}>
+        <div className={`group flex items-center gap-1 rounded-md py-1 pr-1 text-sm hover:bg-zinc-50 ${ownerId === o.id && !focus ? 'bg-blue-50' : ''}`} style={{ paddingLeft: `${depth * 14}px` }}>
+          {treeArrow(key, open)}
+          <button type="button" onClick={() => openOwner(o.id)} className={`flex min-w-0 flex-1 items-center gap-2 text-left ${label ? 'font-medium' : ''}`}>
+            <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
+            <span className="min-w-0 flex-1 truncate">{label ?? o.label}</span>
+          </button>
+          {o.status && <Badge tone={o.status === 'archived' ? 'gray' : 'amber'}>{o.status}</Badge>}
+          {note && <span className="text-[11px] text-zinc-400">{note}</span>}
+          {treeLoading.has(key) && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
+          <FastTooltip label="New folder">
+            <button type="button" aria-label="New folder" onClick={(e) => { e.stopPropagation(); void newFolderAtOwner(o.id) }}
+              className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><FolderPlus className="h-3.5 w-3.5" /></button>
+          </FastTooltip>
+          <span className="w-6 text-right text-xs text-zinc-400">{o.fileCount}</span>
+        </div>
+        {open && node && (
+          <ul>
+            {node.root && newFolderBox(node.root.id, depth + 1, true)}
+            {node.folders.map((f) => treeFolderRow(o.id, f, depth + 1, node.root?.id ?? null))}
+            {node.folders.length === 0 && newFolder?.parentId !== node.root?.id && (
+              <li className="py-0.5 text-xs italic text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 14 + 22}px` }}>no folders yet — hover and click the folder + to add one</li>
+            )}
+          </ul>
+        )}
+      </li>
+    )
+  }
+
+  const clientGroups = (groups ?? []).filter((g) => g.section === 'clients')
+  const businessOwner = (groups ?? []).find((g) => g.section === 'business')?.owners[0]
+  const privateOwner = (groups ?? []).find((g) => g.section === 'private')?.owners[0]
+  const clientsOpen = !!q || openTree.has('sec:clients')
+  const clientCount = clientGroups.reduce((n, g) => n + g.owners.length, 0)
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">
-      <div className="rounded-xl border border-zinc-200 bg-white p-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-[340px_1fr]">
+      <div className="rounded-xl border border-zinc-200 bg-white p-3" onClick={() => { if (menuFor?.startsWith('lfolder:')) setMenuFor(null) }}>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -1224,69 +1430,43 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           className="mb-2 w-full rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         />
         {groups === null && !error && <p className="p-2 text-sm text-zinc-500">Loading…</p>}
-        <div className="max-h-[75vh] space-y-3 overflow-y-auto">
-          {sections.map((sec) => {
-            const gs = (groups ?? []).filter((g) => g.section === sec.key)
-            if (gs.length === 0) return null
-            // Business and My files are one area each: a single row, opened directly
-            if (sec.key !== 'clients') {
-              const o = gs[0].owners[0]
-              if (!o || (q && !sec.label.toLowerCase().includes(q))) return null
-              const Icon = ownerIcon(o.kind)
-              return (
-                <div key={sec.key}>
-                  <button type="button" onClick={() => openOwner(o.id)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}>
-                    <Icon className="h-4 w-4 text-zinc-500" /><span className="flex-1">{sec.label}</span>
-                    {sec.key === 'private' && <span className="text-[11px] font-normal text-zinc-400">only you</span>}
-                    <span className="text-xs font-normal text-zinc-400">{o.fileCount}</span>
-                  </button>
-                </div>
-              )
-            }
-            return (
-              <div key={sec.key}>
-                <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">{sec.label}</p>
-                <ul className="space-y-0.5">
-                  {gs.map((g) => {
+        <ul className="max-h-[75vh] space-y-0.5 overflow-y-auto">
+          {clientGroups.length > 0 && (
+            <li>
+              <div className="flex items-center gap-1 rounded-md py-1 pr-1 text-sm font-medium hover:bg-zinc-50">
+                {treeArrow('sec:clients', clientsOpen, false)}
+                <button type="button" onClick={() => toggleTree('sec:clients', false)} className="flex flex-1 items-center gap-2 text-left">
+                  <Building2 className="h-4 w-4 text-zinc-500" /><span className="flex-1">Clients</span>
+                </button>
+                <span className="w-6 text-right text-xs font-normal text-zinc-400">{clientCount}</span>
+              </div>
+              {clientsOpen && (
+                <ul>
+                  {clientGroups.map((g) => {
                     const owners = g.owners.filter((o) => !q || o.label.toLowerCase().includes(q))
                     if (q && owners.length === 0) return null
-                    const isOpen = !!q || openGroups.has(g.key)
+                    const gKey = `grp:${g.key}`
+                    const gOpen = !!q || openTree.has(gKey)
                     return (
                       <li key={g.key}>
-                        <button type="button" onClick={() => setOpenGroups((s) => { const n = new Set(s); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n })}
-                          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-zinc-50" aria-expanded={isOpen}>
-                          {isOpen ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
-                          <Folder className="h-4 w-4 text-amber-500" />
-                          <span className="flex-1 truncate">{g.label}</span>
-                          <span className="text-xs text-zinc-400">{owners.length}</span>
-                        </button>
-                        {isOpen && (
-                          <ul className="ml-5 space-y-0.5">
-                            {owners.map((o) => {
-                              const Icon = ownerIcon(o.kind)
-                              return (
-                                <li key={o.id}>
-                                  <button type="button" onClick={() => openOwner(o.id)}
-                                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm hover:bg-zinc-50 ${ownerId === o.id ? 'bg-zinc-100' : ''}`}>
-                                    <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
-                                    <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                                    {o.status && <Badge tone={o.status === 'archived' ? 'gray' : 'amber'}>{o.status}</Badge>}
-                                    <span className="text-xs text-zinc-400">{o.fileCount}</span>
-                                  </button>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        )}
+                        <div className="flex items-center gap-1 rounded-md py-1 pr-1 text-sm hover:bg-zinc-50" style={{ paddingLeft: '14px' }}>
+                          {treeArrow(gKey, gOpen, false)}
+                          <button type="button" onClick={() => toggleTree(gKey, false)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                            <Folder className="h-4 w-4 shrink-0 text-amber-500" /><span className="truncate">{g.label}</span>
+                          </button>
+                          <span className="w-6 text-right text-xs text-zinc-400">{owners.length}</span>
+                        </div>
+                        {gOpen && <ul>{owners.map((o) => treeOwnerRow(o, 2))}</ul>}
                       </li>
                     )
                   })}
                 </ul>
-              </div>
-            )
-          })}
-        </div>
+              )}
+            </li>
+          )}
+          {businessOwner && (!q || 'business'.includes(q)) && <li className="pt-2"><ul>{treeOwnerRow(businessOwner, 0, 'Business')}</ul></li>}
+          {privateOwner && (!q || 'my files'.includes(q)) && <li><ul>{treeOwnerRow(privateOwner, 0, 'My files', 'only you')}</ul></li>}
+        </ul>
       </div>
       {right}
     </div>

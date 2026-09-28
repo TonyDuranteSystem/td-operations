@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll, vi } from "vitest"
 import { NextRequest } from "next/server"
-import { createHash, randomUUID } from "crypto"
+import { createHash } from "crypto"
 import { PDFDocument, StandardFonts } from "pdf-lib"
 
 type FakeUser = { id: string; email: string; app_metadata: Record<string, unknown> }
@@ -20,6 +20,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 const db = supabaseAdmin as any
 const tag = Date.now()
 const SANDBOX_REF = "xjcxlmlpeywtwkhstjlw"
+/** a made-up login id, the SAME every run — so the tests reuse one test "My files" area instead of adding one per run */
+const TEST_OTHER_LOGIN = "00000000-0000-4000-8000-0000000051e5"
 
 async function pdf(text: string): Promise<Buffer> {
   const d = await PDFDocument.create({ updateMetadata: false })
@@ -99,7 +101,7 @@ describe("storage structure — live sandbox", () => {
     const mine = (await navigation({ id: fx.adminId }, true)).find((x) => x.key === "private")
     expect(mine?.owners).toHaveLength(1)
     // "another login": a made-up user id, so no real sandbox login gets a My files area from this test
-    const other = await ensureArea("private", randomUUID())
+    const other = await ensureArea("private", TEST_OTHER_LOGIN)
     expect(other).not.toBe(mine!.owners[0].id)
     expect((await navigation({ id: fx.adminId }, true)).flatMap((x) => x.owners).some((o) => o.id === other)).toBe(false)
     await expect(assertOwnerAccess(other, fx.adminId)).rejects.toThrow(/Not found/)
@@ -318,7 +320,7 @@ describe("storage structure — live sandbox", () => {
 
   it("a private area's folder can't be reached by naming another owner in the same request", async () => {
     const { ensureArea } = await import("@/lib/crm-store/structure")
-    const other = await ensureArea("private", randomUUID())
+    const other = await ensureArea("private", TEST_OTHER_LOGIN)
     const { data: root } = await db.from("store_folders").select("id").eq("owner_id", other).is("parent_id", null).single()
     const { GET } = await import("@/app/api/crm-store/browse/folder/route")
     expect((await GET(get(`http://x/api/crm-store/browse/folder?owner=${fx.owner}&folder=${root.id}`))).status).toBe(404)
