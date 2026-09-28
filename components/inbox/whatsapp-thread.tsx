@@ -89,6 +89,10 @@ interface WhatsappThreadProps {
    * (a send is in flight).
    */
   registerInsertDraft?: (fn: ((draft: string) => boolean) | null) => void
+  /** Antonio, 2026-09-28: "I want to see the phone number next to the name" — this component already
+   *  fetches the chat's own name/phone (for the send-confirm screen); this just reports it up to the
+   *  header, which lives in the parent (inbox-shell.tsx), rather than that header re-fetching it itself. */
+  onChatInfo?: (info: { name: string | null; phone: string | null } | null) => void
 }
 
 interface StagedFile {
@@ -112,7 +116,7 @@ function formatTimestamp(dateStr: string) {
   })
 }
 
-export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadProps) {
+export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: WhatsappThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const sendingRef = useRef(false)
   // One id per composed draft: a retry, double click or second tab of the SAME draft can never send twice (the server dedupes on it).
@@ -229,6 +233,17 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
         ? 5_000
         : 60_000,
   })
+
+  // Report the chat's own name/phone up to the header (inbox-shell.tsx), which has no fetch of its own
+  // for this — reset to null immediately on a chat switch so the header never flashes the PREVIOUS
+  // chat's number while this one is still loading, and clear it on unmount.
+  const onChatInfoRef = useRef(onChatInfo)
+  useEffect(() => { onChatInfoRef.current = onChatInfo }, [onChatInfo])
+  useEffect(() => { onChatInfoRef.current?.(null) }, [groupId])
+  useEffect(() => {
+    if (data?.chat) onChatInfoRef.current?.({ name: data.chat.name, phone: data.chat.phone })
+  }, [data?.chat])
+  useEffect(() => () => onChatInfoRef.current?.(null), [])
 
   // Tag/To-Do state for every message in this chat, one query per open chat (same pattern Portal
   // Chats' own menu uses) — only runs once this chat is linked to a CRM account/contact, since an
