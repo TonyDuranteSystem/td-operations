@@ -1,6 +1,6 @@
 # CRM Storage — end-to-end QA scenarios (run before every ship)
 
-_Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios that we will use later before shipping and save it"). Covers everything built in the new CRM storage up to build `cce38deca` plus the E2E fixes of 2026-09-28 (sandbox). Run it top to bottom in a real browser on the environment being shipped, logged in as the right person for each block. Record PASS / FAIL / NOT RUN + a note for each line. A FAIL blocks the ship._
+_Created 2026-09-28 (extended the same day after the browser run) at Antonio's request ("create a list of the entire scenarios that we will use later before shipping and save it"). Covers everything built in the new CRM storage up to build `cce38deca` plus the E2E fixes of 2026-09-28 (sandbox). Run it top to bottom in a real browser on the environment being shipped, logged in as the right person for each block. Record PASS / FAIL / NOT RUN + a note for each line. A FAIL blocks the ship._
 
 **Test data rule:** use only test companies and people named "ZZ …" (never a sandbox copy of a real client), the sandbox logins antonio.durante@ (owner), jodi@ (owner), luca@ and support@ (staff), and the QA client portal login. Never press "Send fax to IRS". Clean up test files after (Delete → they go to the trash).
 
@@ -51,6 +51,8 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | C12 | O | Upload a company paper into a person's folder from the company page | Refused ("only the person's own documents") |
 | C13 | O | Upload into the Business area | No CRM listing, can never be shown; a personal type refused there |
 | C14 | O | Custom… document type | Added once to the list, then reused |
+| C15 | O | Pick a staff-only type (Formation Summary) | "Show to client" greys out with the reason; the file is saved hidden, "Can't be shown" |
+| C16 | O | First upload after the page sat idle | Finishes (a first request can take up to ~20 s on a cold server — note the time); the spinner never hangs for ever |
 
 ## D. Files
 | # | Who | Do | Expect |
@@ -68,6 +70,8 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | D11 | O | Read scanned text | Opens the OCR text |
 | D12 | O | A draft return → ⋯ → Mark filed | Asks first (can't be undone); becomes a filed return that can be shown; refused while Needs review |
 | D13 | O | A draft return → Show to client | Can't be shown ("a draft is never shown") |
+| D14 | O | A workspace document the client always sees (e.g. Formation Articles) | Locked "Client can see" badge (hover: which workspace); no Hide; Move only offers "stays visible"; a same-name replace with Show unticked is refused ("Keep both") |
+| D15 | O | A passport whose details can't be read | Plain message ("enter them on the contact by hand"), never technical text |
 
 ## E. "2. Contacts" and people
 | # | Who | Do | Expect |
@@ -88,6 +92,8 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | F6 | S | Trash of My files | Refused |
 | F7 | O | Company Trash after deleting a member's passport from 2. Contacts | Listed "In <person>'s own storage"; restore puts it back in the person's storage |
 | F8 | O | Open a restored file from the company's Documents list | Opens (the link was renewed on restore) |
+| F9 | O | Restore a folder, look at its count before opening it | Never an old count (e.g. "1 shown to client" for a file that came back hidden) |
+| F10 | O | Escape in the Trash window / details panel | Closes it (not while a question or preview is open on top) |
 
 ## G. Drag from the computer
 | # | Who | Do | Expect |
@@ -111,6 +117,8 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | H6 | O | Sort: newest first | Order changes; remembered after reload |
 | H7 | O | Filter: Shown to client / Needs review / Needs a type | One list across the client's own folders, folder name clickable |
 | H8 | O | Hover a folder → Zip | Downloads; an empty folder gives a message; the download is recorded |
+| H9 | O | Folder with a workspace document → Delete/Move → the question | The workspace file is listed as "always shown by its workspace", never offered for hiding; the rest can be hidden |
+| H10 | O | Zip of 300+ files | Complete (open the zip: every file, none empty), well under a minute |
 
 ## I. My files, owners and "Shared with staff"
 | # | Who | Do | Expect |
@@ -136,7 +144,7 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | J6 | C | Tax documents page | Hidden / draft / needs-review returns never listed, not even by name |
 | J7 | C | Portal search | Never returns the name of a hidden file |
 | J8 | C | Open a hidden file's download address directly | Refused |
-| J9 | C | A file in a workspace stage the client sees (e.g. Formation) | Shown with the "client can see" badge in storage; Hide takes it off the portal too |
+| J9 | C | A file in a workspace stage the client sees (e.g. Formation) | Shown with the locked "client can see" badge in storage; it stays on the portal (it can't be hidden from the storage) |
 
 ## K. Company and contact pages (the same browser, scoped)
 | # | Who | Do | Expect |
@@ -155,3 +163,5 @@ _Created 2026-09-28 at Antonio's request ("create a list of the entire scenarios
 | L5 | Slow network / an error from the server | A clear message, never a blank or stuck screen |
 | L6 | Browser back / reload mid-action | No half-done state |
 | L7 | Console | No red errors during the whole run |
+| L8 | After every action | The changed folder updates within a couple of seconds; "Moving…/Renaming…" shows while it runs; a storage never looks empty while loading ("Loading…") |
+| L9 | Reload the Storage page | Opens on the tab used last on this computer |
