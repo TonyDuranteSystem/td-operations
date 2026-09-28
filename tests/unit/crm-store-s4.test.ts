@@ -152,6 +152,38 @@ describe("zip", () => {
     expect(reads).toBeLessThan(10)
     await r.cancel()
   })
+  it("opens the next few files AHEAD (at most 8 at once) but keeps them in order, and an unreadable one still becomes a note", async () => {
+    const many: ZipEntry[] = Array.from({ length: 30 }, (_, i) => ({ file_id: String(i), zip_path: `f${String(i).padStart(2, "0")}.txt`, bucket: "b", object_path: `p${i}`, size_bytes: String(i).length }))
+    let inFlight = 0, maxInFlight = 0
+    const open = async (_b: string, path: string) => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((r) => setTimeout(r, 5 + (Number(path.slice(1)) * 7) % 11)) // uneven: later files can finish first
+      inFlight--
+      if (path === "p13") throw new Error("missing")
+      return streamOf(path.slice(1), 1)
+    }
+    const files = unzipSync(await collect(streamZip(many, open)))
+    expect(maxInFlight).toBeGreaterThan(1)
+    expect(maxInFlight).toBeLessThanOrEqual(8)
+    expect(Object.keys(files)).toContain("f13.txt - could not be included.txt")
+    for (let i = 0; i < 30; i++) if (i !== 13) expect(strFromU8(files[`f${String(i).padStart(2, "0")}.txt`])).toBe(String(i))
+    // order inside the zip = the listing order
+    const order = Object.keys(files).filter((k) => !k.includes("could not"))
+    expect(order).toEqual([...order].sort())
+  })
+  it("a download that stops lets go of the files opened ahead", async () => {
+    const cancelled: string[] = []
+    const open = async (_b: string, path: string) => new ReadableStream<Uint8Array>({
+      pull(c) { c.enqueue(new Uint8Array(1)) },
+      cancel() { cancelled.push(path) },
+    })
+    const s = streamZip(Array.from({ length: 5 }, (_, i) => ({ ...entries[1], file_id: String(i), zip_path: `x${i}.bin`, object_path: `q${i}`, size_bytes: 1000 })), open)
+    const r = s.getReader()
+    await r.read()
+    await r.cancel()
+    await new Promise((res) => setTimeout(res, 10))
+    expect(cancelled.length).toBeGreaterThanOrEqual(4) // the one being read + the ones opened ahead
+  })
   it("refuses a zip that is too big to finish, before streaming anything", () => {
     expect(() => assertZipFits([{ ...entries[0], size_bytes: ZIP_MAX_BYTES + 1 }])).toThrow(StoreZipTooLargeError)
     expect(() => streamZip([{ ...entries[0], size_bytes: ZIP_MAX_BYTES + 1 }])).toThrow(/too large/)
