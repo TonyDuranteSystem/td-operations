@@ -21,7 +21,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const { data: { user } } = await createClient().auth.getUser()
     const { setClientVisibility } = await import("@/lib/crm-store/browse")
-    return NextResponse.json(await setClientVisibility(params.id, (body as { visible: boolean }).visible, user?.id ?? null))
+    // { group: true } = part of a group action: personal documents are refused (they are shown one by one)
+    return NextResponse.json(await setClientVisibility(params.id, (body as { visible: boolean }).visible, user?.id ?? null, { refusePersonal: (body as { group?: unknown }).group === true }))
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Could not change who can see this file." }, { status: 400 })
   }

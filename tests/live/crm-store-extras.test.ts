@@ -112,4 +112,47 @@ describe("filters, details, zip, dragged folders — live sandbox", () => {
     const contacts = await folderOfKind(fx.owner, "contacts")
     expect((await (await POST(post({ path: ["X"] }), { params: { id: contacts } })).json()).error).toMatch(/Contacts/)
   })
+
+  it("a dropped folder '2024/W2s' onto Tax: '2024' becomes a real tax-year folder; the files below still count as Tax; the very top is refused", async () => {
+    const { POST } = await import("@/app/api/crm-store/browse/folder/[id]/ensure-path/route")
+    const r = await (await POST(post({ path: ["2024", "W2s"] }), { params: { id: fx.tax } })).json()
+    expect(r.kind).toBe("tax_year") // effective kind of W2s = the year folder above it
+    const { data: year } = await db.from("store_folders").select("kind, template_slug").eq("parent_id", fx.tax).eq("name", "2024").is("trashed_at", null).single()
+    expect(year).toEqual({ kind: "tax_year", template_slug: null })
+    const again = await (await POST(post({ path: ["2024", "W2s"] }), { params: { id: fx.tax } })).json()
+    expect(again.id).toBe(r.id)
+    const plain = await (await POST(post({ path: ["Receipts"] }), { params: { id: fx.tax } })).json()
+    expect(plain.kind).toBe("tax") // a staff folder under Tax → the upload still asks which year
+    const { data: root } = await db.from("store_folders").select("id").eq("owner_id", fx.owner).is("parent_id", null).single()
+    expect((await (await POST(post({ path: ["X"] }), { params: { id: root.id } })).json()).error).toMatch(/fixed folders/)
+    expect((await (await POST(post({ path: Array.from({ length: 21 }, (_, n) => `L${n}`) }), { params: { id: fx.tax } })).json()).error).toMatch(/20 levels/)
+  })
+
+  it("the zip is checked first (an empty folder answers with a message), and a group Show refuses a personal document", async () => {
+    const { GET } = await import("@/app/api/crm-store/browse/folder/[id]/zip/route")
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const banking = await folderOfKind(fx.owner, "banking")
+    const empty = await GET(get("http://x/zip?check=1"), { params: { id: banking } })
+    expect(empty.status).toBe(400)
+    expect((await empty.json()).error).toMatch(/no files/)
+    const ok = await GET(get("http://x/zip?check=1"), { params: { id: fx.company1 } })
+    expect((await ok.json()).ok).toBe(true)
+    // a person's passport, shown as a group → refused; from its own button → fine
+    const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
+    const { data: c } = await db.from("contacts").insert({ first_name: "Zz", last_name: `EXTRA ${tag}`, full_name: `ZZ Person EXTRA ${tag}`, email: `zz-extra-${tag}@example.test` }).select("id").single()
+    await db.from("account_contacts").insert({ account_id: fx.account, contact_id: c.id })
+    const po = await ensurePersonOwner(c.id, `ZZ Person EXTRA ${tag}`)
+    const personal = await folderOfKind(po, "personal")
+    const pp = await upload({ ownerId: po, folderId: personal, fileName: "Passport.pdf", documentType: "passport", visible: false })
+    const vis = await import("@/app/api/crm-store/browse/file/[id]/visibility/route")
+    const g = await vis.POST(post({ visible: true, group: true }), { params: { id: pp.fileId } })
+    expect((await g.json()).error).toMatch(/one by one/)
+    const one = await vis.POST(post({ visible: true }), { params: { id: pp.fileId } })
+    expect(one.status, JSON.stringify(await one.clone().json())).toBe(200)
+  })
+
+  it("a download that can't be recorded is refused", async () => {
+    const { logZipDownload } = await import("@/lib/crm-store/extras")
+    await expect(logZipDownload("00000000-0000-4000-8000-000000000000", 1, 1, fx.admin!.id)).rejects.toThrow(/not found/i)
+  })
 })

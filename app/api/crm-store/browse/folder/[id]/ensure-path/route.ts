@@ -14,7 +14,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const noAccess = await denyUnlessAreaAccess({ folderId: params.id })
   if (noAccess) return noAccess
   const body = await req.json().catch(() => ({})) as { path?: unknown }
-  if (!Array.isArray(body.path) || !body.path.every((p) => typeof p === "string") || body.path.length > 20) return NextResponse.json({ error: "A folder path is needed." }, { status: 400 })
+  if (!Array.isArray(body.path) || !body.path.every((p) => typeof p === "string")) return NextResponse.json({ error: "A folder path is needed." }, { status: 400 })
+  if (body.path.length > 20) return NextResponse.json({ error: "That folder goes more than 20 levels deep — drop a smaller part of it." }, { status: 400 })
   const { data: { user } } = await createClient().auth.getUser()
   try {
     const { ensureFolderPath } = await import("@/lib/crm-store/extras")

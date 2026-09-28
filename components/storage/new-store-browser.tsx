@@ -175,10 +175,11 @@ type FsEntry = { isFile: boolean; isDirectory: boolean; name: string; file?: (ok
 /** every file inside what was dropped (files and folders, all levels), with its sub-folder path */
 async function readDropped(items: DataTransferItemList | null, files: FileList | null): Promise<{ file: File; path: string[] }[]> {
   const entries = Array.from(items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.() ?? null)
-  if (!entries.some((x) => x?.isDirectory)) return Array.from(files ?? []).map((file) => ({ file, path: [] }))
+  if (!entries.some((x) => x?.isDirectory)) return Array.from(files ?? []).filter((f) => !f.name.startsWith('.')).map((file) => ({ file, path: [] }))
   const out: { file: File; path: string[] }[] = []
   const walk = async (e: FsEntry, path: string[]): Promise<void> => {
-    if (out.length > DROP_MAX_FILES) return
+    if (out.length > DROP_MAX_FILES) return // one past the limit is enough to say "too many"
+    if (e.name.startsWith('.')) return // hidden system files and folders (.DS_Store, ._x, .git …) are never uploaded
     if (e.isFile && e.file) { const f = await new Promise<File>((ok, bad) => e.file!(ok, bad)); out.push({ file: f, path }); return }
     if (e.isDirectory && e.createReader) {
       const reader = e.createReader()
@@ -190,7 +191,7 @@ async function readDropped(items: DataTransferItemList | null, files: FileList |
     }
   }
   for (const e of entries) if (e) await walk(e, [])
-  return out.filter((x) => !x.file.name.startsWith('.')) // hidden system files (.DS_Store …) are never uploaded
+  return out
 }
 interface DropBatch { folder: Fold; items: DropItem[]; person: string }
 /** a drag that carries files from the computer (not a file being moved inside the CRM) */
@@ -693,6 +694,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     e.preventDefault(); e.stopPropagation(); setDropOn(null)
     if (uploading || dropRunning || !!drop) { toast.error('Wait for the upload in progress to finish, then drop again.'); return }
     if (folder.trashed || folder.kind === 'root') { toast.error('Drop the files on one of the folders.'); return }
+    let found: { file: File; path: string[] }[]
+    try {
+      found = await readDropped(e.dataTransfer.items, e.dataTransfer.files)
+    } catch (err) {
+      toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.'))
+      return
+    }
     // "2. Contacts" needs its people for "Whose documents?" even when the folder is closed in the tree
     if (folder.kind === 'contacts' && !loaded[folder.id]) {
       try {
@@ -700,7 +708,6 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         setLoaded((m) => ({ ...m, [folder.id]: c }))
       } catch (err) { toast.error(errMsg(err, 'Could not read the people of this company.')); return }
     }
-    const found = await readDropped(e.dataTransfer.items, e.dataTransfer.files)
     if (!found.length) { toast.message('Nothing to upload in what was dropped.'); return }
     if (found.length > DROP_MAX_FILES) { toast.error(`At most ${DROP_MAX_FILES} files at a time — drop a smaller folder.`); return }
     if (folder.kind === 'contacts' && found.some((x) => x.path.length)) { toast.error('A whole folder can’t go into "2. Contacts" — open the person and drop it into one of their folders.'); return }
@@ -716,7 +723,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setDropRunning(true)
     setUploading(true)
     let saved = 0, skipped = 0, failed = 0
-    const madePaths = new Map<string, Fold>()
+    const madePaths = new Map<string, Fold | null>() // null = that path could not be made (said once)
     const oidOfDrop = folderOwner.current.get(drop.folder.id) ?? ownerId ?? ''
     const viaDrop = viaCompany.current.has(drop.folder.id)
     for (let i = 0; i < drop.items.length; i++) {
@@ -728,6 +735,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (it.path.length) {
         const key = it.path.join('/')
         const known = madePaths.get(key)
+        if (known === null) {
+          failed++
+          setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
+          continue
+        }
         if (known) into = known
         else {
           try {
@@ -737,7 +749,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             if (viaDrop) viaCompany.current.add(r.id)
             madePaths.set(key, into)
           } catch (err) {
-            toast.error(errMsg(err, 'The folders could not be created.'))
+            toast.error(`${it.path.join(' › ')}: ${errMsg(err, 'the folders could not be created.')}`)
+            madePaths.set(key, null)
             failed++
             setDrop((d) => d && ({ ...d, items: d.items.map((x, j) => (j === i ? { ...x, status: 'failed' } : x)) }))
             continue
@@ -759,16 +772,30 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   // ───────────────────────────────────────── many files: sort, filters, details, group actions
 
+  const downloadZip = async (f: Fold) => {
+    try {
+      const c = await getJson<{ files: number; bytes: number }>(`/api/crm-store/browse/folder/${f.id}/zip?check=1`)
+      toast.message(`Preparing ${f.name}.zip — ${c.files} ${c.files === 1 ? 'file' : 'files'}, ${fmtSize(c.bytes)}`)
+      window.location.href = `/api/crm-store/browse/folder/${f.id}/zip`
+    } catch (e) {
+      toast.error(errMsg(e, 'The zip could not be made.'))
+    }
+  }
+
   const setSort = (m: SortMode) => { setSortMode(m); try { localStorage.setItem('store-sort', m) } catch { /* a per-browser nicety */ } }
   const sortFiles = (list: File_[]) => [...list].sort((a, b) => (sortMode === 'date' ? b.updatedAt.localeCompare(a.updatedAt) : a.name.localeCompare(b.name)))
 
+  const filterSeq = useRef(0)
   const openFilter = async (k: 'shown' | 'review' | 'untyped' | null) => {
+    const my = ++filterSeq.current
     setFilterKind(k)
     setFiltered(null)
     if (!k || !ownerId) return
     try {
-      setFiltered((await getJson<{ files: FilteredFile[] }>(`/api/crm-store/browse/filter?owner=${encodeURIComponent(ownerId)}&kind=${k}`)).files)
+      const r = (await getJson<{ files: FilteredFile[] }>(`/api/crm-store/browse/filter?owner=${encodeURIComponent(ownerId)}&kind=${k}`)).files
+      if (my === filterSeq.current) setFiltered(r)
     } catch (e) {
+      if (my !== filterSeq.current) return
       toast.error(errMsg(e, 'Could not filter the files.'))
       setFiltered([])
     }
@@ -805,6 +832,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     let hideAfterMove = false
     let moveTo: { folderId: string; path: string } | null = null
     if (action === 'show') {
+      // the counts are from what is on screen; each file is checked again on the server when it is done
       const ok = list.filter((f) => !f.clientVisible && bulkShowable(f))
       const already = list.filter((f) => f.clientVisible).length
       const skip = list.length - ok.length - already
@@ -814,12 +842,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (a !== 'go' && a !== '__default__') return
       targets = ok
     } else if (action === 'hide') {
-      const ok = list.filter((f) => f.clientVisible)
-      const a = await ask('bulk_hide', `Hide ${ok.length} ${ok.length === 1 ? 'file' : 'files'} from the client?`,
-        <p>{ok.length} will be hidden{list.length - ok.length ? `; ${list.length - ok.length} already hidden` : ''}.</p>,
-        [{ key: 'go', label: `Hide ${ok.length}`, tone: 'primary', disabled: ok.length === 0 }, { key: 'cancel', label: 'Cancel' }])
+      const shownNow = list.filter((f) => f.clientVisible).length
+      const a = await ask('bulk_hide', `Hide ${list.length} ${list.length === 1 ? 'file' : 'files'} from the client?`,
+        <p>All {list.length} will be hidden from the client ({shownNow} {shownNow === 1 ? 'is' : 'are'} shown now; the others stay hidden).</p>,
+        [{ key: 'go', label: `Hide ${list.length}`, tone: 'primary' }, { key: 'cancel', label: 'Cancel' }])
       if (a !== 'go' && a !== '__default__') return
-      targets = ok
+      targets = list // every ticked file is hidden — also one shown after it was ticked
     } else if (action === 'delete') {
       const shown = list.filter((f) => f.clientVisible).length
       const a = await ask('bulk_delete', `Move ${list.length} ${list.length === 1 ? 'file' : 'files'} to the trash?`,
@@ -845,12 +873,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const failed: string[] = []
     for (const f of targets) {
       try {
-        if (action === 'show') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true }, 'Could not show it.')
+        // group: true → the server refuses a personal document (shown one by one, with its question)
+        if (action === 'show') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: true, group: true }, 'Could not show it.')
         if (action === 'hide') await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Could not hide it.')
         if (action === 'delete') await postJson(`/api/crm-store/browse/file/${f.id}/delete`, {}, 'Could not delete it.')
         if (action === 'move' && moveTo) {
-          if (f.folderId !== moveTo.folderId) await postJson(`/api/crm-store/browse/file/${f.id}/move`, { folderId: moveTo.folderId }, 'Could not move it.')
-          if (hideAfterMove && f.clientVisible) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Moved, but could not hide it.')
+          // always sent: the server knows where the file is NOW (it may have moved since it was ticked)
+          await postJson(`/api/crm-store/browse/file/${f.id}/move`, { folderId: moveTo.folderId }, 'Could not move it.')
+          if (hideAfterMove) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Moved, but could not hide it.')
         }
         ok++
       } catch (e) {
@@ -1471,10 +1501,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               )}
               {f.kind !== 'contacts' && (
                 <FastTooltip label="Download this folder as a zip (the download is recorded)">
-                  <a href={`/api/crm-store/browse/folder/${f.id}/zip`} download onClick={(e) => e.stopPropagation()}
+                  <button type="button" onClick={(e) => { e.stopPropagation(); void downloadZip(f) }}
                     className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs hover:bg-zinc-50">
                     <Download className="h-3.5 w-3.5" />Zip
-                  </a>
+                  </button>
                 </FastTooltip>
               )}
               {isTax && (
@@ -1683,7 +1713,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <div className="mb-3 rounded-lg border border-zinc-200 p-2">
               <div className="mb-1 flex items-center gap-2 text-sm">
                 <span className="font-medium">{filterKind === 'shown' ? 'Shown to client' : filterKind === 'review' ? 'Needs review' : 'Needs a type'}</span>
-                <span className="text-xs text-zinc-400">across all of {root.owner.label}</span>
+                <span className="text-xs text-zinc-400">in all of {root.owner.label}&apos;s own folders{root.owner.kind === 'company' ? ' (its people’s own documents are in each person’s storage)' : ''}</span>
                 <span className="flex-1" />
                 <button type="button" onClick={() => { void openFilter(null) }} className="text-xs text-blue-700 hover:underline">Close filter</button>
               </div>

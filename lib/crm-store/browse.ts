@@ -690,7 +690,7 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
  * a never-visible draft), then the CRM documents row(s) the portal reads today — through the shared share
  * step, so the client's "new document" alert and the audit log work exactly as for any other share.
  */
-export async function setClientVisibility(fileId: string, visible: boolean, actorId: string | null = null): Promise<{ visible: boolean; crmRowsUpdated: number }> {
+export async function setClientVisibility(fileId: string, visible: boolean, actorId: string | null = null, opts: { refusePersonal?: boolean } = {}): Promise<{ visible: boolean; crmRowsUpdated: number }> {
   const { storePointer } = await import("./document-pointer")
   const { isUnresolvedPersonalDocument, UNRESOLVED_PERSONAL_DOC_MESSAGE } = await import("@/lib/documents/visibility-guard")
   const { data: f, error: fErr } = await db().from("store_files").select("document_type, state, published, needs_review_at, store_owners!inner(kind)").eq("id", fileId).maybeSingle()
@@ -699,6 +699,11 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
   if (f.state !== "live") throw new Error("Restore the file from the trash first.")
   const areaKind = (f.store_owners as { kind?: string } | null)?.kind
   if (visible && f.needs_review_at) throw new Error("This file is marked \"Needs review\" — settle it (and use \"Mark reviewed\") before showing it to the client.")
+  // a group "Show": a personal document is never shown in a group — only from its own button (with its question)
+  if (visible && opts.refusePersonal) {
+    const { data: pers, error: pErr } = await db().rpc("store_file_is_personal", { p_file_id: fileId })
+    if (pErr || pers !== false) throw new Error(pErr ? "Could not check whether this is a personal document — please try again." : "A personal document is shown one by one, from its own button.")
+  }
   if (visible && (areaKind === "business" || areaKind === "private")) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
   const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)

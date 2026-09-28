@@ -115,25 +115,49 @@ export function draggedFolderPath(relativePath: string): string[] {
   return parts
 }
 
-/** Make (or reuse) a staff folder path under a folder — for a folder dragged in from the computer. */
+/**
+ * Make (or reuse) the folder path of a folder dragged in from the computer, under a folder. Inside a Tax folder a
+ * four-digit level ("2024") becomes a real tax-year folder (reused if it exists); every other level is a staff
+ * folder. Returns the last folder and its EFFECTIVE kind (so the upload still asks the tax-year question when the
+ * files land under Tax without a year).
+ */
 export async function ensureFolderPath(parentId: string, path: string[], actorId: string | null): Promise<{ id: string; kind: string }> {
   const { cleanFolderName } = await import("./names")
+  const { effectiveKind, createTaxYear } = await import("./structure")
   const clean = path.map((p) => cleanFolderName(p))
   const { data: parent, error: pErr } = await db().from("store_folders").select("id, owner_id, kind, trashed_at").eq("id", parentId).maybeSingle()
   if (pErr) throw new Error(`Could not read the folder (${pErr.message}).`)
   if (!parent || parent.trashed_at) throw new Error("That folder is not available.")
   if (parent.kind === "contacts") throw new Error("\"2. Contacts\" shows each person's own storage — drop the folder into one of the person's folders.")
-  if (!clean.length) return { id: parentId, kind: parent.kind }
-  const { data, error } = await db().rpc("store_ensure_folder_path", { p_owner: parent.owner_id, p_parent: parentId, p_path: clean, p_actor: actorId })
-  if (error) throw new Error(`The folders could not be created (${error.message.replace(/^store: /, "")}).`)
-  return { id: data as string, kind: "custom" }
+  if (parent.kind === "root") throw new Error("Drop the folder into one of the fixed folders, not at the very top.")
+  let cur: string = parentId
+  for (const seg of clean) {
+    const k = await effectiveKind(cur)
+    if ((k === "tax" || k === "person_tax") && /^(19|20)\d{2}$/.test(seg)) {
+      const { data: kids, error: kErr } = await db().from("store_folders").select("id, name").eq("parent_id", cur).is("trashed_at", null)
+      if (kErr) throw new Error(`Could not read the folder (${kErr.message}).`)
+      const same = ((kids ?? []) as { id: string; name: string }[]).find((x) => x.name.trim() === seg)
+      cur = same ? same.id : (await createTaxYear(cur, seg, actorId)).id
+      continue
+    }
+    const { data, error } = await db().rpc("store_ensure_folder_path", { p_owner: parent.owner_id, p_parent: cur, p_path: [seg], p_actor: actorId })
+    if (error) throw new Error(`The folders could not be created (${error.message.replace(/^store: /, "")}).`)
+    cur = data as string
+  }
+  const { data: last } = await db().from("store_folders").select("kind").eq("id", cur).maybeSingle()
+  // the kind the screen needs: a year folder is a year folder; a staff folder counts as the fixed folder above it
+  const own = (last?.kind as string | undefined) ?? "custom"
+  return { id: cur, kind: own === "custom" ? await effectiveKind(cur) : own }
 }
 
 /** Log a folder zip download (it can carry personal documents off the CRM). */
-export async function logZipDownload(folderId: string, files: number, bytes: number, actorId: string | null): Promise<string | null> {
-  const { data: f } = await db().from("store_folders").select("id, owner_id, name").eq("id", folderId).maybeSingle()
-  if (!f) return null
-  const { error } = await db().from("store_events").insert({ event: "zip_downloaded", actor: actorId, owner_id: f.owner_id, folder_id: f.id, name_snapshot: f.name, details: { files, bytes } })
+/** Record a folder zip download BEFORE it streams (the record says the download was started, with its size). */
+export async function logZipDownload(folderId: string, files: number, bytes: number, actorId: string | null): Promise<string> {
+  const { data: f, error: fErr } = await db().from("store_folders").select("id, owner_id, name").eq("id", folderId).maybeSingle()
+  // no record, no download — also when the folder can't even be read
+  if (fErr) throw new Error(`The download could not be recorded (${fErr.message}) — please try again.`)
+  if (!f) throw new Error("Folder not found.")
+  const { error } = await db().from("store_events").insert({ event: "zip_downloaded", actor: actorId, owner_id: f.owner_id, folder_id: f.id, name_snapshot: f.name, details: { files, bytes, note: "recorded when the download started" } })
   // no log, no download: a download that can carry personal documents must always be on record
   if (error) throw new Error(`The download could not be recorded (${error.message}) — please try again.`)
   return f.name as string
