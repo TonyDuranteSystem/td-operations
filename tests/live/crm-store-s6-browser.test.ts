@@ -431,6 +431,8 @@ describe("new storage screens — live sandbox", () => {
     const corr = await folderOfKind(fx.owner, "correspondence")
     const u = await (await upload(post("http://x", { ownerId: fx.owner, folderId: corr, storagePath: await stage("c.pdf", await pdf("c")), fileName: "c.pdf", mimeType: "application/pdf", documentType: r1.slug, visible: false }))).json()
     expect(u.write).toBe("created")
+    // clean-up: the test's own types leave the sandbox's type list (retired, never deleted — a file still uses one)
+    await db.from("catalog_entries").update({ status: "deprecated" }).eq("catalog_id", "storage_document_types").in("slug", [r1.slug, p1.slug])
   }, 60_000)
 
   it("every saved copy can be listed and opened — version 1 still returns the OLD content; an identical re-upload adds no version", async () => {

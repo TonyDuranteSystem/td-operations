@@ -277,6 +277,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [filterKind, setFilterKind] = useState<'shown' | 'review' | 'untyped' | null>(null)
   const [filtered, setFiltered] = useState<FilteredFile[] | null>(null)
   const [detailsFor, setDetailsFor] = useState<string | null>(null)
+  // Escape closes the Trash window / the details panel (not while a question, picker or preview is open on top)
+  useEffect(() => {
+    if (!trashOpen && !detailsFor) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || asking || picking || preview) return
+      if (detailsFor) setDetailsFor(null)
+      else setTrashOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [trashOpen, detailsFor, asking, picking, preview])
   const [details, setDetails] = useState<FileDetails | null>(null)
   const [dropRunning, setDropRunning] = useState(false)
   const [sharedFiles, setSharedFiles] = useState<{ id: string; name: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; sharedAt: string }[] | null>(null)
@@ -1870,12 +1881,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   </>
                 )}
                 <input value={upName} onChange={(e) => setUpName(e.target.value)} placeholder="Name shown (optional)" className="w-52 rounded-md border border-zinc-200 bg-white px-2 py-1" disabled={uploading} />
-                {ownerKind !== 'business' && ownerKind !== 'private' && (
-                  <label className="inline-flex items-center gap-1.5 text-xs text-zinc-700">
-                    <input type="checkbox" checked={upVisible} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading} />
-                    Show to client
-                  </label>
-                )}
+                {ownerKind !== 'business' && ownerKind !== 'private' && (() => {
+                  // a staff-only type is never shown: the box says so instead of looking ticked
+                  const neverShown = (types ?? []).find((t) => t.slug === upType)?.staffOnly === true
+                  return (
+                    <FastTooltip label={neverShown ? 'Staff only — this type is never shown to a client' : 'Show the file to the client straight away'}>
+                      <label className={`inline-flex items-center gap-1.5 text-xs ${neverShown ? 'text-zinc-400' : 'text-zinc-700'}`}>
+                        <input type="checkbox" checked={upVisible && !neverShown} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading || neverShown} />
+                        Show to client
+                      </label>
+                    </FastTooltip>
+                  )
+                })()}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="text-sm"
