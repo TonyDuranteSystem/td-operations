@@ -179,6 +179,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [treeLoading, setTreeLoading] = useState<Set<string>>(new Set())
   const openTreeRef = useRef<Set<string>>(new Set())
   const focusRef = useRef<string | null>(null)
+  /** the storage open on the right RIGHT NOW (a slower, older load must not overwrite a newer pick) */
+  const ownerIdRef = useRef<string | null>(scopedOwnerId ?? null)
+  /** each folder pick gets a number; only the latest one may land */
+  const pickSeq = useRef(0)
   const [filter, setFilter] = useState('')
   const [preview, setPreview] = useState<File_ | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
@@ -246,6 +250,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }, [])
 
   const openOwner = useCallback(async (oid: string) => {
+    ownerIdRef.current = oid
+    focusRef.current = null
     setOwnerId(oid)
     setError(null)
     setRoot(null)
@@ -256,11 +262,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setUploadOpen(false)
     try {
       const r = await fetchInto(oid, null)
+      if (ownerIdRef.current !== oid) return // another storage was opened meanwhile
       setRoot(r)
-      // today's folder view opens the top-level folders straight away
-      setExpanded(new Set(r.folders.map((f) => f.id)))
+      // today's folder view opens the top-level folders straight away (and keeps a folder picked meanwhile)
+      setExpanded((x) => new Set([...r.folders.map((f) => f.id), ...(focusRef.current ? [focusRef.current] : []), ...Array.from(x)]))
       const entries = await Promise.all(r.folders.map(async (f) => [f.id, await fetchInto(oid, f.id)] as const))
-      setLoaded(Object.fromEntries(entries))
+      if (ownerIdRef.current !== oid) return
+      setLoaded((m) => ({ ...m, ...Object.fromEntries(entries) }))
     } catch (e) {
       setError(errMsg(e, 'Could not load the folder.'))
     }
@@ -278,15 +286,18 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // ───────────────────────────────────────── the left tree
 
   /** load one tree node: a storage (`own:<id>` → its top folder + folders) or a folder (→ its sub-folders) */
-  const loadTree = useCallback(async (key: string) => {
+  const loadTree = useCallback(async (key: string): Promise<Fold[] | null> => {
     const oid = key.startsWith('own:') ? key.slice(4) : folderOwner.current.get(key)
-    if (!oid) return
+    if (!oid) return null
     setTreeLoading((l) => new Set(l).add(key))
     try {
       const c = await fetchInto(oid, key.startsWith('own:') ? null : key)
-      setTree((t) => ({ ...t, [key]: { root: key.startsWith('own:') ? c.folder : undefined, folders: [...c.folders].sort(sortFolders) } }))
+      const folders = [...c.folders].sort(sortFolders)
+      setTree((t) => ({ ...t, [key]: { root: key.startsWith('own:') ? c.folder : undefined, folders } }))
+      return folders
     } catch (e) {
       toast.error(errMsg(e, 'Could not open the folder.'))
+      return null
     } finally {
       setTreeLoading((l) => { const n = new Set(l); n.delete(key); return n })
     }
@@ -306,9 +317,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   /** show ONE folder on the right (from the left tree or the path) */
   const selectFolder = async (oid: string, folderId: string) => {
-    if (oid !== ownerId) await openOwner(oid)
+    const my = ++pickSeq.current
+    if (oid !== ownerIdRef.current) await openOwner(oid)
+    if (my !== pickSeq.current || ownerIdRef.current !== oid) return
+    focusRef.current = folderId
     try {
       const c = await fetchInto(oid, folderId)
+      // a later pick (another folder, another storage) wins
+      if (my !== pickSeq.current || ownerIdRef.current !== oid) return
       setLoaded((m) => ({ ...m, [folderId]: c }))
       setFocus(folderId)
       setSelected(folderId)
@@ -346,13 +362,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** reload everything that is on screen (Refresh, and after any change) */
-  const refreshAll = useCallback(async () => {
+  const refreshAll = useCallback(async (extraKeys: string[] = []) => {
     void refreshTree()
     if (!ownerId) { if (!scopedOwnerId) loadNav(); return }
     try {
       const r = await fetchInto(ownerId, null)
       setRoot(r)
-      const open = Array.from(expandedRef.current)
+      // the folder shown on the right is ALWAYS refreshed, whatever is open or closed
+      const open = Array.from(new Set([...Array.from(expandedRef.current), ...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
       const people = Object.values(loaded).flatMap((x) => x.people ?? [])
       const entries = await Promise.all(open.map(async (key) => {
         try {
@@ -363,11 +380,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           return [key, await fetchInto(folderOwner.current.get(key) ?? ownerId, key, viaCompany.current.has(key))] as const
         } catch {
           // the folder shown on the right is gone (deleted / moved away): back to the storage's top
-          if (key === focusRef.current) setFocus(null)
+          if (key === focusRef.current) { focusRef.current = null; setFocus(null) }
           return null
         }
       }))
-      setLoaded((m) => ({ ...m, ...Object.fromEntries(entries.filter((x): x is readonly [string, Contents] => !!x)) }))
+      const got = entries.filter((x): x is readonly [string, Contents] => !!x)
+      // a folder that went to the trash (deleted, or inside a deleted folder) is no longer shown on the right
+      if (focusRef.current && got.some(([k, c]) => k === focusRef.current && c.folder?.trashed)) { focusRef.current = null; setFocus(null) }
+      setLoaded((m) => ({ ...m, ...Object.fromEntries(got) }))
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
@@ -574,11 +594,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   /** open the inline "new folder" box under a folder — on the right tree, or in the LEFT tree (`left`) */
-  const startNewFolder = (parentId: string, year?: boolean, left?: boolean) => {
+  const startNewFolder = (parentId: string, year?: boolean, left?: boolean, knownSiblings?: Fold[]) => {
     setMenuFor(null)
     if (left) {
       const node = tree[parentId] ?? Object.values(tree).find((t) => t.root?.id === parentId)
-      const siblings = (node?.folders ?? []).map((x) => x.name)
+      const siblings = (knownSiblings ?? node?.folders ?? []).map((x) => x.name)
       setNewFolder({ parentId, siblings, year, left: true, value: year ? suggestYear(siblings) : '' })
       return
     }
@@ -602,7 +622,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (problem) { toast.error(problem); return }
     let parentId = nf.parentId
     // Part 16: a folder made in a PERSON's storage from a company page shows in every company of theirs
-    const person = viaCompany.current.has(nf.parentId) ? personOfFolder(nf.parentId) : null
+    // (not from the left tree: there the folder is in the person's OWN storage, opened as such)
+    const person = !nf.left && viaCompany.current.has(nf.parentId) ? personOfFolder(nf.parentId) : null
     if (person && !nf.year) {
       const others = person.companies.filter((c) => c !== root?.owner.label)
       const a = await ask('person_folder_from_company', "This folder goes into the person's own storage",
@@ -633,7 +654,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         setExpanded((x) => new Set(x).add(parentId))
         if (!loaded[parentId]) await loadKey(parentId)
       }
-      await refreshAll()
+      await refreshAll([parentId])
     } catch (e) {
       toast.error(errMsg(e, 'The folder could not be created.'))
     }
@@ -1151,7 +1172,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // ───────────────────────────────────────── page
 
   // the right side shows the storage's top, or the ONE folder picked on the left / in the path
-  const view: Contents | null = focus && loaded[focus] ? loaded[focus] : root
+  const view: Contents | null = focus && loaded[focus] && !loaded[focus].folder?.trashed ? loaded[focus] : root
   const viewFolder = view?.folder ?? null
   const topFolders = view && viewFolder?.kind !== 'contacts' ? [...view.folders].sort(sortFolders) : []
   const allOpen = topFolders.length > 0 && topFolders.every((f) => expanded.has(f.id))
@@ -1164,7 +1185,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const crumbs: Array<{ label: string; go?: () => void }> = [
     ...(scopedOwnerId ? [] : [{ label: 'Storage' }, ...(groupOf && groupOf.section === 'clients' ? [{ label: groupOf.label }] : [])]),
     ...(root?.owner.label ? [{ label: root.owner.label, go: () => { setFocus(null); setSelected(null) } }] : []),
-    ...(selPerson ? [{ label: '2. Contacts' }, { label: selPerson.name }] : selPath.map((x) => ({ label: x.name, go: ownerId ? () => { void selectFolder(folderOwner.current.get(x.id) ?? ownerId, x.id) } : undefined }))),
+    ...(selPerson ? [{ label: '2. Contacts' }, { label: selPerson.name }]
+      : pathKey && personOfFolder(pathKey)
+        // a person's folder reached through "2. Contacts": say whose it is; never jump into their own storage from here
+        ? [{ label: '2. Contacts' }, { label: personOfFolder(pathKey)!.name }, ...selPath.map((x) => ({ label: x.name }))]
+        : selPath.map((x) => ({ label: x.name, go: ownerId && (folderOwner.current.get(x.id) ?? ownerId) === ownerId ? () => { void selectFolder(ownerId, x.id) } : undefined }))),
   ]
 
   const right = (
@@ -1342,10 +1367,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {treeLoading.has(f.id) && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
           {f.kind !== 'contacts' && (
             <FastTooltip label="New folder inside">
-              <button type="button" aria-label="New folder inside" onClick={(e) => {
+              <button type="button" aria-label="New folder inside" onClick={async (e) => {
                 e.stopPropagation()
-                if (!open) { setOpenTree((x) => new Set(x).add(f.id)); if (!tree[f.id]) loadTree(f.id) }
-                startNewFolder(f.id, false, true)
+                if (!open) setOpenTree((x) => new Set(x).add(f.id))
+                // the name check needs the folders already inside — read them first
+                const kidsNow = tree[f.id]?.folders ?? await loadTree(f.id)
+                if (kidsNow) startNewFolder(f.id, false, true, kidsNow)
               }} className="hidden rounded p-0.5 text-zinc-500 hover:bg-zinc-100 group-hover:inline-flex"><FolderPlus className="h-3.5 w-3.5" /></button>
             </FastTooltip>
           )}
@@ -1422,7 +1449,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-[340px_1fr]">
-      <div className="rounded-xl border border-zinc-200 bg-white p-3" onClick={() => { if (menuFor?.startsWith('lfolder:')) setMenuFor(null) }}>
+      <div className="rounded-xl border border-zinc-200 bg-white p-3" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
