@@ -483,8 +483,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => keep.has(k))))
       setRoot(r)
       apply(firstEntries)
-      // each open folder is shown as soon as ITS reload arrives (never held back by the slowest one)
-      await Promise.all(rest.map((k) => fetchKey(k).then((e) => {
+      // the rest of what is open reloads in the BACKGROUND (the action that asked is done once the folders it
+      // changed are on screen); each folder is shown as soon as ITS reload arrives, never held back by the slowest
+      void Promise.all(rest.map((k) => fetchKey(k).then((e) => {
         if (ownerIdRef.current === ownerId && seq === refreshSeq.current) apply([e])
       })))
     } catch (e) {
@@ -572,7 +573,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const r = await postJson<{ folderName: string }>(`/api/crm-store/browse/file/${f.id}/move`, { folderId }, 'The file could not be moved.')
       if (hide) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'The file was moved, but could not be hidden — hide it from its row.')
       toast.success(`Moved "${f.name}" to ${r.folderName}${hide ? ' (now hidden from the client)' : ''}`)
-      await refreshAll()
+      await refreshAll([folderId])
     } catch (e) {
       toast.error(errMsg(e, 'The file could not be moved.'))
     }
@@ -898,7 +899,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const hideable = list.filter((f) => !f.shownByWorkspace)
       const shownNow = hideable.filter((f) => f.clientVisible).length
       const a = await ask('bulk_hide', `Hide ${hideable.length} ${hideable.length === 1 ? 'file' : 'files'} from the client?`,
-        <p>{hideable.length} will be hidden from the client ({shownNow} {shownNow === 1 ? 'is' : 'are'} shown now; the others stay hidden).{byWs.length ? ` ${byWs.length} ${byWs.length === 1 ? 'is' : 'are'} always shown by ${byWs.length === 1 ? 'its' : 'their'} workspace and can't be hidden from here — skipped.` : ''}</p>,
+        <p>{hideable.length} will be hidden from the client ({shownNow === hideable.length ? `all ${shownNow === 1 ? 'is' : 'are'} shown now` : `${shownNow} ${shownNow === 1 ? 'is' : 'are'} shown now; the others are already hidden`}).{byWs.length ? ` ${byWs.length} ${byWs.length === 1 ? 'is' : 'are'} always shown by ${byWs.length === 1 ? 'its' : 'their'} workspace and can't be hidden from here — skipped.` : ''}</p>,
         [{ key: 'go', label: `Hide ${hideable.length}`, tone: 'primary', disabled: hideable.length === 0 }, { key: 'cancel', label: 'Cancel' }])
       if (a !== 'go' && a !== '__default__') return
       targets = hideable // every other ticked file is hidden — also one shown after it was ticked
@@ -1561,6 +1562,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 <span className="text-xs text-zinc-400">{c.files.length} {c.files.length === 1 ? 'file' : 'files'}{shown > 0 ? ` · ${shown} shown to client` : ''}</span>
               )}
               {c && f.kind === 'contacts' && <span className="text-xs text-zinc-400">{(c.people ?? []).length} {(c.people ?? []).length === 1 ? 'person' : 'people'}</span>}
+              {/* open but not read yet: say so, never look like an empty folder */}
+              {isOpen && !c && !busy && <span className="inline-flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />Loading…</span>}
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
             </button>
           )}
@@ -1730,7 +1733,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </nav>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
             <span className="font-medium text-zinc-800">{viewFolder?.name ?? root.folder.name}</span>
-            {viewFolder?.kind !== 'contacts' && <span className="text-xs text-zinc-400">{totalFiles} {totalFiles === 1 ? 'file' : 'files'}</span>}
+            {viewFolder?.kind !== 'contacts' && <span className="text-xs text-zinc-400">{topFolders.some((f) => expanded.has(f.id) && !loaded[f.id]) ? 'Loading…' : `${totalFiles} ${totalFiles === 1 ? 'file' : 'files'}`}</span>}
             <span className="flex-1" />
             {viewFolder && viewFolder.kind !== 'contacts' && <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">

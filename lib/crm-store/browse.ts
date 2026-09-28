@@ -704,6 +704,17 @@ async function saveInternalAreaFile(p: { ownerId: string; folderId: string; stor
   return { fileId: w.fileId, write: w.status, name: w.name, visible: false, identity: null }
 }
 
+const PASSPORT_FIELD_WORDS: Record<string, string> = { passport_number: "passport number", passport_expiry_date: "expiry date", date_of_birth: "date of birth" }
+
+/** Pure: the passport reader's result in plain words for staff (never the reader's technical text). */
+export function passportReadNote(r: { status: string; extracted_fields?: string[] | null; manual_task_created?: boolean }): string {
+  const got = (r.extracted_fields ?? []).map((f) => PASSPORT_FIELD_WORDS[f] ?? f.replace(/_/g, " "))
+  if (r.status === "ok" && got.length) return `Passport read — ${got.join(", ")} saved on the contact.`
+  if (r.status === "error") return "The passport was saved, but its details could not be saved on the contact — enter them by hand."
+  if (r.manual_task_created) return "The passport was saved; this file type can't be read automatically — enter the details on the contact by hand."
+  return "The passport was saved, but its details could not be read automatically (check the scan quality) — enter them on the contact by hand."
+}
+
 /** Passport → number / expiry / date of birth; ITIN letter → ITIN + issue date (same helpers as today's upload). */
 async function readIdentityIntoContact(contactId: string, slug: string, bytes: Buffer, mimeType: string, fileName: string, accountId: string | null): Promise<string | null> {
   try {
@@ -711,7 +722,7 @@ async function readIdentityIntoContact(contactId: string, slug: string, bytes: B
     if (slug === "passport") {
       const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
       const r = await extractAndStorePassportData({ contact_id: contactId, content: ab, file_name: fileName, mime_type: mimeType, account_id: accountId })
-      return r.detail ?? null
+      return passportReadNote(r)
     }
     const { ocrRawContent } = await import("@/lib/docai")
     const { extractItinFromOcr, parseItinIssueDateFromOcr } = await import("@/lib/ocr-helpers")
