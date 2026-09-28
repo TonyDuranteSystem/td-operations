@@ -14,6 +14,7 @@ import {
 import {
   Send, Loader2, Paperclip, Sparkles, X, Smile, MoreVertical, Reply, Link2, Users, ClipboardList,
   StickyNote, Pin, Trash2, Check, AlertCircle, Clock, Hourglass, CheckCircle2, Truck, Receipt, Plus,
+  Mic, Square,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -23,6 +24,7 @@ import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 import { guessMessageLocale } from '@/lib/messaging/lang-detect'
 import { isMediaPending } from '@/lib/messaging/wabridge-media'
+import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { WhatsAppVoiceNote, type VoiceInfo } from './whatsapp-voice-note'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
@@ -290,6 +292,8 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     setConfirming(false)
     setReplyTo(null) // a quoted reply belongs to the chat being left, not the one being opened
     setRewriting(false) // an in-flight rewrite belongs to the chat being left, not the one being opened
+    audioNoteRecorder.cancelRecording() // an in-progress recording belongs to the chat being left; discard, don't attach it to the new one
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stopRecording is stable (useCallback with no changing deps); including the whole object would re-run this on every recorder state change
   }, [groupId])
 
   // Save on every change, not just on unmount — a crashed tab must not lose it.
@@ -353,11 +357,9 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
 
   const handlePickFile = () => fileInputRef.current?.click()
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.files?.[0]
-    e.target.value = ''
-    if (!picked) return
-
+  // Shared by the paperclip picker AND the mic recorder — a recorded voice note is just a File like any
+  // other, and goes through the exact same upload path so it is sent exactly the way a picked file is.
+  const uploadAndStageFile = async (picked: File) => {
     // The self-hosted line: any attachment (audio is sent as a voice note), a dedicated upload route
     // (dangerous-type block, size ceiling, a server-built deterministic path keyed to this message's id).
     // Any other provider keeps the older whatsapp-new/ staging path unchanged.
@@ -403,6 +405,18 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
     }
   }
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0]
+    e.target.value = ''
+    if (!picked) return
+    await uploadAndStageFile(picked)
+  }
+
+  const audioNoteRecorder = useAudioNoteRecorder({
+    onRecorded: (recordedFile) => { void uploadAndStageFile(recordedFile) },
+    onError: (msg) => toast.error(msg),
+  })
+
   const handleSuggest = async () => {
     setSuggesting(true)
     try {
@@ -424,7 +438,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
   const handleOpenConfirm = () => {
     // A voice note or an attachment can go with NO caption at all — text is only required when there is no
     // uploaded file (an ordinary text reply still needs real words).
-    if ((!text.trim() && !file?.path) || !canSend) return
+    if ((!text.trim() && !file?.path) || !canSend || audioNoteRecorder.isRecording) return
     if (uploading) {
       toast.error('Wait for the attachment to finish uploading.')
       return
@@ -1009,8 +1023,8 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                 ref={textareaRef}
                 className="compose-reply-textarea flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-blue-400 min-h-[40px] max-h-60 disabled:bg-zinc-50 disabled:text-zinc-400"
                 rows={1}
-                disabled={suggesting}
-                placeholder={suggesting ? 'Writing a suggestion…' : 'Type a WhatsApp message…'}
+                disabled={suggesting || audioNoteRecorder.isRecording}
+                placeholder={audioNoteRecorder.isRecording ? 'Recording… tap the mic to stop' : suggesting ? 'Writing a suggestion…' : 'Type a WhatsApp message…'}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
@@ -1019,9 +1033,27 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
                   handleOpenConfirm()
                 }}
               />
+              {isWabridgeLine && audioNoteRecorder.isSupported && (
+                <FastTooltip label={audioNoteRecorder.isRecording ? 'Stop recording' : 'Record a voice note'}>
+                  <button
+                    type="button"
+                    onClick={() => (audioNoteRecorder.isRecording ? audioNoteRecorder.stopRecording() : audioNoteRecorder.startRecording())}
+                    disabled={!!file && !audioNoteRecorder.isRecording}
+                    className={cn(
+                      'inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border transition-colors disabled:opacity-40',
+                      audioNoteRecorder.isRecording
+                        ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 animate-pulse'
+                        : 'border-zinc-200 text-zinc-500 hover:bg-zinc-50'
+                    )}
+                    aria-label={audioNoteRecorder.isRecording ? 'Stop recording' : 'Record a voice note'}
+                  >
+                    {audioNoteRecorder.isRecording ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-4 w-4" />}
+                  </button>
+                </FastTooltip>
+              )}
               <button
                 onClick={handlePickFile}
-                disabled={!!file}
+                disabled={!!file || audioNoteRecorder.isRecording}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 disabled:opacity-40"
                 aria-label="Attach a file"
               >
@@ -1029,7 +1061,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               </button>
               <button
                 onClick={handleSuggest}
-                disabled={suggesting}
+                disabled={suggesting || audioNoteRecorder.isRecording}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
                 aria-label="AI Suggest"
               >
@@ -1037,7 +1069,7 @@ export function WhatsappThread({ groupId, registerInsertDraft }: WhatsappThreadP
               </button>
               <button
                 onClick={handleOpenConfirm}
-                disabled={(!text.trim() && !file?.path) || uploading || !canSend}
+                disabled={(!text.trim() && !file?.path) || uploading || !canSend || audioNoteRecorder.isRecording}
                 className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg bg-green-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-green-700 transition-colors"
                 aria-label="Send"
               >
