@@ -1197,7 +1197,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   ]
 
   const right = (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
+    <div className={`rounded-xl border border-zinc-200 bg-white p-4 ${scopedOwnerId ? '' : 'min-h-[70vh] self-start'}`} onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
       {root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
@@ -1453,7 +1453,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-[340px_1fr]">
-      <div className="rounded-xl border border-zinc-200 bg-white p-3" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
+      <div className="min-h-[70vh] self-start rounded-xl border border-zinc-200 bg-white p-3" onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -1461,7 +1461,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           className="mb-2 w-full rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
         />
         {groups === null && !error && <p className="p-2 text-sm text-zinc-500">Loading…</p>}
-        <ul className="max-h-[75vh] space-y-0.5 overflow-y-auto">
+        <ul className="space-y-0.5">
           {clientGroups.length > 0 && (
             <li>
               <div className="flex items-center gap-1 rounded-md py-1 pr-1 text-sm font-medium hover:bg-zinc-50">
