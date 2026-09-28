@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Bot, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -89,6 +90,7 @@ interface WorkerChatPanelProps {
 }
 
 export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPanelProps) {
+  const queryClient = useQueryClient()
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
@@ -192,6 +194,16 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Could not complete — please try again.')
+      if (action === 'confirm' && !isPortal) {
+        // An email send writes straight to Gmail; the open thread and the
+        // Sent folder read from OUR OWN mirror, which the server just
+        // updated (in the same request, before this response) for the
+        // common no-attachment case. Refetch now instead of waiting on the
+        // 15s/75s polls or the next Gmail push (which never fires for our
+        // own outgoing mail).
+        queryClient.invalidateQueries({ queryKey: ['inbox-messages', conversation.id, mailbox] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+      }
       setMessages(prev => [
         ...prev,
         {

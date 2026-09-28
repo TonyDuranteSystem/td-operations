@@ -528,6 +528,83 @@ ${plainTextToParagraphs(claimed.body)}${signature ? `\n${signature.html}` : ""}
       console.error("[worker-email-send] post-send bookkeeping failed (email WAS sent):", bookkeepingErr)
     }
 
+    // ── INSTANT LOCAL-STORE CAPTURE (best-effort) ──────────────────────────
+    // The Sent folder / open thread render from OUR OWN mirror of Gmail
+    // (email_index + email_message_content), not live Gmail — see
+    // lib/email-store/read.ts. That mirror only updates for OUR OWN outgoing
+    // mail via the two 10-min crons: the Gmail push watch is INBOX-label-only
+    // (lib/gmail-push.ts) so a send never triggers it. Result: a worker-sent
+    // email could take minutes to appear on screen (Antonio, 2026-09-28, a
+    // reply to Irshad Ahangar took ~5 min).
+    //
+    // Deliberately NOT a re-fetch from Gmail (a first draft of this fix did
+    // that via captureMessageContent and was rejected — its per-attachment
+    // Gmail refetch + retry/backoff loop risked pushing this request past the
+    // platform's function timeout, which would show staff a false "failed"
+    // toast on an email that had already sent). Instead:
+    //   - The index row always comes from ONE cheap, retry-free Gmail
+    //     metadata call (indexThread) — the same cost the crons already pay.
+    //   - The BODY is written straight from the html/plain text already built
+    //     above for the send — zero extra Gmail calls, zero timeout risk.
+    //   - Only when there are NO attachments: files a Gmail attachment fetch
+    //     would be needed to reproduce (we don't have Gmail's own attachment
+    //     ids for our own upload bytes). With attachments, capture is left to
+    //     the existing 10-min cron exactly as before — a disclosed, narrower
+    //     gap, not a regression.
+    // Any failure here is logged only — it must never affect a send that
+    // already left, and the cron heals any miss within 10 minutes.
+    try {
+      const threadIdForCapture = (sent as { threadId?: string })?.threadId || claimed.gmail_thread_id
+      if (gmailMessageId && threadIdForCapture) {
+        const mailboxKey: "support" | "antonio" =
+          sender.email === SIGNATURE_MAILBOX_ADDRESSES.antonio ? "antonio" : "support"
+        const { indexThread, loadCrmDirectory } = await import("@/lib/email-index/sync")
+        const dir = await loadCrmDirectory()
+        await indexThread(mailboxKey, threadIdForCapture, dir)
+
+        if (files.length === 0) {
+          const { EMAIL_CONTENT_BUCKET } = await import("@/lib/email-store/capture")
+          const { bodyStoragePath, safeContentType } = await import("@/lib/email-store/paths")
+          const bodyPath = bodyStoragePath(mailboxKey, gmailMessageId)
+          const { error: uploadErr } = await supabaseAdmin.storage
+            .from(EMAIL_CONTENT_BUCKET)
+            .upload(bodyPath, Buffer.from(html, "utf-8"), {
+              contentType: safeContentType("text/html; charset=utf-8"),
+              upsert: true,
+            })
+          if (uploadErr) throw new Error(`body upload failed: ${uploadErr.message}`)
+          const sentPlainText = signature ? `${claimed.body}\n\n${signature.text}` : claimed.body
+          const { error: contentErr } = await db.from("email_message_content").upsert(
+            {
+              mailbox: mailboxKey,
+              message_id: gmailMessageId,
+              thread_id: threadIdForCapture,
+              body_path: bodyPath,
+              // The FULL plain text as actually sent (including the
+              // signature block) — not just claimed.body — so a search for
+              // a signature-only term (phone number, sign-off) still
+              // matches. A first draft of this used claimed.body alone and
+              // would have permanently under-indexed every instant-captured
+              // send (capture_status='complete' short-circuits any later
+              // re-capture by the cron).
+              body_text: sentPlainText,
+              has_attachments: false,
+              attachment_count: 0,
+              capture_status: "complete",
+              captured_at: new Date().toISOString(),
+              capture_error: null,
+              is_html: true,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "mailbox,message_id" },
+          )
+          if (contentErr) throw new Error(`content upsert failed: ${contentErr.message}`)
+        }
+      }
+    } catch (captureErr) {
+      console.warn("[worker-email-send] instant local-store capture failed (10-min cron will heal):", captureErr)
+    }
+
     return { ok: true, gmailMessageId, to: claimed.to_address }
   } catch (err) {
     // Reached ONLY on a failure BEFORE the send fired (resolve/download/build/
