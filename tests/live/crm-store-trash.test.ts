@@ -186,18 +186,50 @@ describe("trash + restore — live sandbox", () => {
     await deleteStoreFile(up.fileId, who.antonio.id)
   })
 
-  it("a workspace document at a client-facing stage: the badge says the client sees it, and Hide takes it off that stage", async () => {
+  it("a workspace document at a client-facing stage: the badge says the client sees it (through the workspace); Hide, a hidden replace and a folder 'hide first' are refused and the stage is never erased", async () => {
     const { data: sd, error: sdErr } = await db.from("service_deliveries").insert({ service_name: "ZZ TRASH Formation", service_type: "Company Formation", account_id: fx.account }).select("id").single()
     if (sdErr) throw new Error(sdErr.message)
     const up = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Articles stage ${tag}.pdf`, documentType: "articles_of_organization", visible: false })
     await db.from("documents").update({ service_delivery_id: sd.id, flow_stage: "Filed with State", portal_visible: false }).eq("drive_file_id", `store:${up.fileId}`)
     const { folderContents } = await import("@/lib/crm-store/browse")
     expect((await folderContents(fx.owner, fx.company1)).files.find((f) => f.id === up.fileId)?.clientVisible).toBe(true)
+    expect((await folderContents(fx.owner, fx.company1)).files.find((f) => f.id === up.fileId)?.shownByWorkspace).toBe("Company Formation")
     const { POST } = await import("@/app/api/crm-store/browse/file/[id]/visibility/route")
-    expect((await POST(post({ visible: false }), { params: { id: up.fileId } })).status).toBe(200)
+    const r = await POST(post({ visible: false }), { params: { id: up.fileId } })
+    expect(r.status).toBe(400)
+    expect((await r.json()).error).toMatch(/through the Company Formation workspace/)
+    // a replace with "Show to client" unticked: refused, nothing changes
+    await expect(upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Articles stage ${tag}.pdf`, documentType: "articles_of_organization", visible: false })).rejects.toThrow(/Keep both/)
+    // a folder move with "hide the visible ones first": refused before anything changes
+    const { createFolder, moveFolder } = await import("@/lib/crm-store/structure")
+    const sub = await createFolder(fx.company1, `WS sub ${tag}`, who.antonio.id)
+    const { moveStoreFile } = await import("@/lib/crm-store/file-actions")
+    await moveStoreFile(up.fileId, sub.id, who.antonio.id)
+    const dest = await createFolder(fx.company1, `WS dest ${tag}`, who.antonio.id)
+    await expect(moveFolder(sub.id, dest.id, who.antonio.id, "all")).rejects.toThrow(/always shown to the client by its workspace/)
     const { data: row } = await db.from("documents").select("flow_stage, portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
-    expect(row).toEqual({ flow_stage: null, portal_visible: false })
-    expect((await folderContents(fx.owner, fx.company1)).files.find((f) => f.id === up.fileId)?.clientVisible).toBe(false)
+    expect(row).toEqual({ flow_stage: "Filed with State", portal_visible: false })
+    const { data: still } = await db.from("store_files").select("folder_id, state").eq("id", up.fileId).single()
+    expect(still).toEqual({ folder_id: sub.id, state: "live" })
+    // a folder DELETE with "hide first" goes through: the listing goes, so the portal stops showing it
+    const { deleteFolder } = await import("@/lib/crm-store/structure")
+    await deleteFolder(sub.id, who.antonio.id, "all")
+    const { data: gone } = await db.from("documents").select("id").eq("drive_file_id", `store:${up.fileId}`)
+    expect(gone).toEqual([])
+  })
+
+  it("replacing a FILED return with 'Show to client' unticked is refused and the filed copy stays as the client saw it", async () => {
+    const { folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const { createTaxYear } = await import("@/lib/crm-store/structure")
+    const tax = await folderOfKind(fx.owner, "tax")
+    const yr = await createTaxYear(tax, "2019", who.antonio.id)
+    const name = `Filed 1120 ${tag}.pdf`
+    const up = await upload({ ownerId: fx.owner, folderId: yr.id, fileName: name, documentType: "form_1120", filingAnswer: "filed", visible: true })
+    const { data: before } = await db.from("documents").select("portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
+    expect(before.portal_visible).toBe(true)
+    await expect(upload({ ownerId: fx.owner, folderId: yr.id, fileName: name, documentType: "form_1120", filingAnswer: "filed", visible: false })).rejects.toThrow(/FILED document/)
+    const { data: after } = await db.from("documents").select("portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
+    expect(after.portal_visible).toBe(true)
   })
 
   it("a draft return can be marked filed (then it can be shown); a Needs-review file is refused by the database itself", async () => {

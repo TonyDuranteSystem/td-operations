@@ -28,6 +28,8 @@ import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keep
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
 interface File_ {
   id: string; name: string; documentType: string | null; state: string; published: boolean; clientVisible: boolean
+  /** the workspace that always shows this file to the client — it can't be hidden from here */
+  shownByWorkspace?: string | null
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
   listed: boolean; personName: string | null; inPersonStorage: boolean; docId: string | null
   sha256?: string | null; needsReview?: string | null
@@ -439,8 +441,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (!isOpen) { setSelected(key); if (!loaded[key]) loadKey(key) }
   }
 
+  const refreshSeq = useRef(0)
   /** reload everything that is on screen (Refresh, and after any change) */
   const refreshAll = useCallback(async (extraKeys: string[] = []) => {
+    // only the NEWEST refresh may write the screen: an older one finishing late would put back stale folders
+    const seq = ++refreshSeq.current
     void refreshTree()
     if (!ownerId) { if (!scopedOwnerId) loadNav(); return }
     // started for a storage that is no longer the one on screen (switched while an upload ran): leave the screen alone
@@ -470,11 +475,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       // what is open — so the screen shows the change in about a second, not after every open folder reloads
       const first = Array.from(new Set([...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
       const [r, firstEntries] = await Promise.all([fetchInto(ownerId, null), Promise.all(first.map(fetchKey))])
-      if (ownerIdRef.current !== ownerId) return
+      if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
       setRoot(r)
       apply(firstEntries)
       const rest = Array.from(expandedRef.current).filter((k) => !first.includes(k))
-      apply(await Promise.all(rest.map(fetchKey)))
+      const restEntries = await Promise.all(rest.map(fetchKey))
+      if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
+      apply(restEntries)
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
@@ -881,12 +888,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       if (a !== 'go' && a !== '__default__') return
       targets = ok
     } else if (action === 'hide') {
-      const shownNow = list.filter((f) => f.clientVisible).length
-      const a = await ask('bulk_hide', `Hide ${list.length} ${list.length === 1 ? 'file' : 'files'} from the client?`,
-        <p>All {list.length} will be hidden from the client ({shownNow} {shownNow === 1 ? 'is' : 'are'} shown now; the others stay hidden).</p>,
-        [{ key: 'go', label: `Hide ${list.length}`, tone: 'primary' }, { key: 'cancel', label: 'Cancel' }])
+      // a file its workspace always shows can't be hidden from here — skipped, and said so
+      const byWs = list.filter((f) => f.shownByWorkspace)
+      const hideable = list.filter((f) => !f.shownByWorkspace)
+      const shownNow = hideable.filter((f) => f.clientVisible).length
+      const a = await ask('bulk_hide', `Hide ${hideable.length} ${hideable.length === 1 ? 'file' : 'files'} from the client?`,
+        <p>{hideable.length} will be hidden from the client ({shownNow} {shownNow === 1 ? 'is' : 'are'} shown now; the others stay hidden).{byWs.length ? ` ${byWs.length} ${byWs.length === 1 ? 'is' : 'are'} always shown by ${byWs.length === 1 ? 'its' : 'their'} workspace and can't be hidden from here — skipped.` : ''}</p>,
+        [{ key: 'go', label: `Hide ${hideable.length}`, tone: 'primary', disabled: hideable.length === 0 }, { key: 'cancel', label: 'Cancel' }])
       if (a !== 'go' && a !== '__default__') return
-      targets = list // every ticked file is hidden — also one shown after it was ticked
+      targets = hideable // every other ticked file is hidden — also one shown after it was ticked
     } else if (action === 'delete') {
       const shown = list.filter((f) => f.clientVisible).length
       const a = await ask('bulk_delete', `Move ${list.length} ${list.length === 1 ? 'file' : 'files'} to the trash?`,
@@ -1404,7 +1414,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           <FastTooltip label={f.needsReview}><span><Badge tone="red"><AlertTriangle className="h-3 w-3" />Needs review</Badge></span></FastTooltip>
         )}
         {/* ONE control: it shows whether the client can see the file, and a click on it switches it */}
-        {canShare && !internal ? (
+        {f.shownByWorkspace && f.clientVisible ? (
+          <FastTooltip label={`Always shown to the client by the ${f.shownByWorkspace} workspace — it can't be hidden from here`}>
+            <span className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
+              <Lock className="h-3 w-3" />Client can see
+            </span>
+          </FastTooltip>
+        ) : canShare && !internal ? (
           <FastTooltip label={f.clientVisible ? 'Click to hide it from the client' : 'Click to show it to the client'}>
             <button type="button" onClick={() => toggleVisible(f)} disabled={busy}
               aria-label={f.clientVisible ? 'Client can see — click to hide' : 'Hidden from client — click to show'}

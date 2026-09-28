@@ -34,6 +34,8 @@ export interface BrowseFile {
   published: boolean
   /** What the client sees TODAY: a CRM documents row for this file is visible (never for staff-only). */
   clientVisible: boolean
+  /** the workspace that always shows this file to the client (it can't be hidden from the storage), else null */
+  shownByWorkspace: string | null
   /** The file has a CRM documents row (without one the portal cannot show it at all). */
   listed: boolean
   /** that CRM row (for "View OCR text" / "Run OCR") */
@@ -200,6 +202,7 @@ export async function folderContents(ownerId: string, folderId: string | null, o
   const all = fs
   const rowsVisible = new Map<string, boolean>()
   const docIdOf = new Map<string, string>()
+  const byWorkspace = new Map<string, string>()
   const facts = new Map<string, { is_personal: boolean; staff_only: boolean; version_count: number }>()
   if (all.length > 0) {
     const { storePointer } = await import("./document-pointer")
@@ -217,13 +220,17 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       const sdIds = Array.from(new Set(((rows ?? []) as { service_delivery_id: string | null }[]).map((r) => r.service_delivery_id).filter((x): x is string => !!x)))
       const st = new Map<string, string>()
       if (sdIds.length) {
-        const { data: sds } = await db().from("service_deliveries").select("id, service_type").in("id", sdIds)
+        const { data: sds, error: sErr } = await db().from("service_deliveries").select("id, service_type").in("id", sdIds)
+        // never guess: without the workspace's type the badge could say "hidden" for a file the client sees
+        if (sErr) throw new Error(`store browse: ${sErr.message}`)
         for (const x of (sds ?? []) as { id: string; service_type: string | null }[]) if (x.service_type) st.set(x.id, x.service_type)
       }
       for (const r of (rows ?? []) as { id: string; drive_file_id: string; portal_visible: boolean | null; service_delivery_id: string | null; flow_stage: string | null }[]) {
         const fid = String(r.drive_file_id).slice("store:".length)
-        const sees = rowClientVisible(r, r.service_delivery_id ? st.get(r.service_delivery_id) ?? null : null)
+        const svc = r.service_delivery_id ? st.get(r.service_delivery_id) ?? null : null
+        const sees = rowClientVisible(r, svc)
         rowsVisible.set(fid, (rowsVisible.get(fid) ?? false) || sees)
+        if (svc && r.flow_stage && rowClientVisible({ portal_visible: false, flow_stage: r.flow_stage }, svc)) byWorkspace.set(fid, svc)
         if (!docIdOf.has(fid)) docIdOf.set(fid, r.id as string)
       }
       for (const x of (fx ?? []) as { id: string; is_personal: boolean; staff_only: boolean; version_count: number }[]) facts.set(x.id, x)
@@ -243,7 +250,9 @@ export async function folderContents(ownerId: string, folderId: string | null, o
     const v = f.store_file_versions as { size_bytes: number | null; mime_type: string | null; sha256: string | null } | null
     files.push({
       id: f.id, name: f.name, documentType: f.document_type, state: f.state, published: !!f.published,
-      clientVisible: !so && rowsVisible.get(f.id) === true, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
+      // exactly what the portal shows (the same rule as the filter and the details panel) — never "hidden" for a
+      // file the client sees, whatever its type says
+      clientVisible: rowsVisible.get(f.id) === true, shownByWorkspace: byWorkspace.get(f.id) ?? null, listed: rowsVisible.has(f.id), docId: docIdOf.get(f.id) ?? null,
       staffOnly: so, personal: k?.is_personal === true, versions: k?.version_count ?? 0,
       size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null, updatedAt: f.updated_at, sha256: v?.sha256 ?? null,
       needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
@@ -576,7 +585,19 @@ export async function staffUploadToStore(p: {
   // client never sees the new copy, not even for a moment (and not at all if a later step fails)
   if (sameLive && !wantVisible) {
     const sameId = (same ?? []).find((f: { state: string }) => f.state === "live")?.id as string | undefined
-    if (sameId) await setClientVisibility(sameId, false, p.actorId)
+    if (sameId) {
+      await removeStagedOnFailure(p.storagePath, async () => {
+        const { data: old, error: oErr } = await db().from("store_files").select("name, filing_status").eq("id", sameId).maybeSingle()
+        if (oErr || !old) throw new Error(`Could not read the file being replaced — please try again${oErr ? ` (${oErr.message})` : ""}.`)
+        // a filed return can't take a new copy: refuse BEFORE touching the old one (it stays as the client saw it)
+        if (old.filing_status === "filed") throw new Error(saveRefusalMessage("frozen"))
+        // a workspace document the client always sees: a new copy would be shown too — say so, change nothing
+        const { workspaceShownFiles, workspaceShownMessage } = await import("./client-visibility")
+        const ws = (await workspaceShownFiles([sameId])).get(sameId)
+        if (ws) throw new Error(`${workspaceShownMessage(old.name as string, ws)} A new copy would be shown too — use "Keep both" to save it as a separate hidden file.`)
+        await setClientVisibility(sameId, false, p.actorId)
+      })
+    }
   }
   // the year the staff member chose, else the nearest year folder above (Tax › 2024 › Bank → 2024)
   const yearToSave = p.periodYear ?? await (await import("./structure")).nearestYear(targetFolderId)
@@ -724,6 +745,15 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
     const { data: pers, error: pErr } = await db().rpc("store_file_is_personal", { p_file_id: fileId })
     if (pErr || pers !== false) throw new Error(pErr ? "Could not check whether this is a personal document — please try again." : "A personal document is shown one by one, from its own button.")
   }
+  // hiding a file its workspace always shows would change nothing for the client — refuse BEFORE any change
+  if (!visible) {
+    const { workspaceShownFiles, workspaceShownMessage } = await import("./client-visibility")
+    const ws = (await workspaceShownFiles([fileId])).get(fileId)
+    if (ws) {
+      const { data: n } = await db().from("store_files").select("name").eq("id", fileId).maybeSingle()
+      throw new Error(workspaceShownMessage((n?.name as string | undefined) ?? "this file", ws))
+    }
+  }
   if (visible && (areaKind === "business" || areaKind === "private")) throw new Error("Files in the Business folders and in My files are internal — they can never be shown to a client.")
   const { data: rows, error: rErr } = await db().from("documents").select("id, category, contact_id, portal_visible").eq("drive_file_id", storePointer(fileId))
   if (rErr) throw new Error(`Could not read the CRM listing — please try again (${rErr.message}).`)
@@ -761,11 +791,6 @@ export async function setClientVisibility(fileId: string, visible: boolean, acto
     }
     await db().rpc("store_set_published", { p_file_id: fileId, p_published: before, p_actor: actorId })
     throw e
-  }
-  // hiding: a workspace document at a client-facing stage is shown by its stage — take it off that stage too
-  if (!visible) {
-    const { takeOffClientStage } = await import("./client-visibility")
-    await takeOffClientStage(fileId, actorId)
   }
   return { visible, crmRowsUpdated }
 }

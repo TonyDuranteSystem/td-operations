@@ -64,6 +64,11 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
   const wasInsideShare = f.store_owners.kind === "private" && await (await import("./staff-share")).isInStaffShare(f.folder_id)
   if (to.kind === "root") throw new Error("Files go inside a folder, not at the top.")
   if (to.kind === "contacts") throw new Error("\"2. Contacts\" shows the people's own documents — a company document cannot go there.")
+  // BEFORE the move: is it a personal TYPE (passport, ID …)? — its CRM category stays "Contacts"; every other
+  // file follows its folder. Read first so a failed read stops the move instead of leaving the category stale.
+  const { categoryForFolder, personalTypes } = await import("./structure")
+  const isPers = !!f.document_type && (await personalTypes()).has(f.document_type)
+  const cat = await categoryForFolder(toFolderId)
   const { error } = await db().from("store_files").update({ folder_id: toFolderId }).eq("id", fileId).eq("state", "live")
   if (error) {
     if (/store_files_folder_name_uq|duplicate key/i.test(error.message)) throw new Error(`"${to.name}" already has a file with this name.`)
@@ -71,11 +76,6 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
   }
   // the CRM row's category follows the folder, as today's Drive move does
   // (a person's own document keeps "Contacts"; any other file — also in a person's storage — follows its folder)
-  const { categoryForFolder } = await import("./structure")
-  const { personalTypes } = await import("./structure")
-  const { data: ft } = await db().from("store_files").select("document_type").eq("id", fileId).maybeSingle()
-  const isPers = !!ft?.document_type && (await personalTypes()).has(ft.document_type as string)
-  const cat = await categoryForFolder(toFolderId)
   if (!isPers) {
     const { storePointer } = await import("./document-pointer")
     const { error: rErr } = await db().from("documents").update({ category: cat.num, category_name: cat.name, updated_at: new Date().toISOString() })

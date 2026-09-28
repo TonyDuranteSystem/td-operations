@@ -3,7 +3,8 @@
  * when it is marked visible, OR when it is a workspace document at a client-facing stage (the flow-stage allowlist
  * in lib/flows/flow-doc-visibility.ts shows it whatever the visible flag says). Every store screen that says
  * "client can see" — the row badge, the filter, the folder move/delete question — uses THIS, so it never says
- * "hidden" for a file the client sees; and hiding a file also takes it off its client-facing stage.
+ * "hidden" for a file the client sees. A file shown by its workspace stage can't be hidden from the storage
+ * (the stage is never erased — other flows find documents by it).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isClientSafeFlowDoc } from "@/lib/flows/flow-doc-visibility"
@@ -49,14 +50,23 @@ export async function clientVisibleFileIds(fileIds: string[]): Promise<Set<strin
   return out
 }
 
-/** Hiding a file: take its listing off a client-facing workspace stage too (else the portal keeps showing it). */
-export async function takeOffClientStage(fileId: string, actorId: string | null): Promise<number> {
-  const { rows, serviceType } = await listingsOf([fileId])
-  const onStage = rows.filter((r) => r.flow_stage && rowClientVisible({ portal_visible: false, flow_stage: r.flow_stage }, r.service_delivery_id ? serviceType.get(r.service_delivery_id) ?? null : null))
-  if (!onStage.length) return 0
-  const { error } = await db().from("documents").update({ flow_stage: null, updated_at: new Date().toISOString() }).in("id", onStage.map((r) => r.id))
-  if (error) throw new Error(`The file could not be taken off its workspace stage, so the client may still see it (${error.message}) — please try again.`)
-  const { data: f } = await db().from("store_files").select("owner_id, folder_id, name").eq("id", fileId).maybeSingle()
-  if (f) await db().from("store_events").insert({ event: "unpublished", actor: actorId, owner_id: f.owner_id, file_id: fileId, folder_id: f.folder_id, name_snapshot: f.name, details: { off_workspace_stage: onStage.map((r) => r.flow_stage) } })
-  return onStage.length
+/**
+ * Files the client sees THROUGH a workspace stage (e.g. the Articles on "Filed with State"): the workspace shows
+ * them whatever the visible flag says, so the storage cannot hide them — and must never erase the stage to try
+ * (the SS-4 lookup and the stage-revert clean-up find documents by it). Returns file id → the workspace's name.
+ */
+export async function workspaceShownFiles(fileIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (!fileIds.length) return out
+  const { rows, serviceType } = await listingsOf(fileIds)
+  for (const r of rows) {
+    const st = r.service_delivery_id ? serviceType.get(r.service_delivery_id) ?? null : null
+    if (st && r.flow_stage && rowClientVisible({ portal_visible: false, flow_stage: r.flow_stage }, st)) out.set(r.drive_file_id.slice("store:".length), st)
+  }
+  return out
+}
+
+/** Pure: the message when a workspace-shown file can't be hidden. */
+export function workspaceShownMessage(name: string, workspace: string): string {
+  return `The client sees "${name}" through the ${workspace} workspace (it is one of the documents that workspace always shows), so it can't be hidden from the storage.`
 }

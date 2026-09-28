@@ -74,12 +74,16 @@ export async function trashForOwner(ownerId: string): Promise<TrashBatchView[]> 
   // "2. Contacts" lives in that person's storage) — labelled with whose storage it is
   const { data: own } = await db().from("store_owners").select("kind, account_id").eq("id", ownerId).maybeSingle()
   if (own?.kind === "company" && own.account_id) {
-    const { data: links } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
+    const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)").eq("account_id", own.account_id)
+    if (lErr) throw new Error(`Could not read the trash (${lErr.message}).`)
     const cids = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)
     const nameOf = new Map(((links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[]).map((l) => [l.contact_id, l.contacts?.full_name || "a person"]))
-    const { data: pos } = cids.length ? await db().from("store_owners").select("id, contact_id").eq("kind", "person").in("contact_id", cids) : { data: [] }
+    const { data: pos, error: pErr } = cids.length ? await db().from("store_owners").select("id, contact_id").eq("kind", "person").in("contact_id", cids) : { data: [], error: null }
+    if (pErr) throw new Error(`Could not read the trash (${pErr.message}).`)
     for (const po of (pos ?? []) as { id: string; contact_id: string }[]) {
-      const { data: pb } = await db().rpc("store_trash_list", { p_owner_id: po.id })
+      // never a silently shorter list: a person's deletions that can't be read stop the listing with a message
+      const { data: pb, error: bErr } = await db().rpc("store_trash_list", { p_owner_id: po.id })
+      if (bErr) throw new Error(`Could not read the trash (${bErr.message}).`)
       for (const b of (pb ?? []) as typeof list) list.push({ ...b, whose: `${nameOf.get(po.contact_id)}'s own storage` })
     }
   }
