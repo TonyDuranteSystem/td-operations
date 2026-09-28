@@ -5,6 +5,7 @@ import { supabasePublic } from '@/lib/supabase/public-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
+import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
@@ -250,6 +251,14 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     if (!isNaN(numAmt) && !isTotal) annualFeeNum += numAmt
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
+
+  // Dated schedule with the after-September rule (billing already follows it).
+  // Null for unusual recurring rows — the verbatim list below is kept then.
+  const annualSchedule = buildAnnualMaintenanceWording({
+    recurringCosts: rc,
+    currency: (offer as { installment_currency?: string | null }).installment_currency || null,
+    signDate: new Date(),
+  })
 
   // Services from offer — filter by client selections, exclude recurring, only main contract_type
   const servicesList = services
@@ -751,7 +760,9 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <table className="contract-key-terms">
             <tbody>
               <tr><th>{feeLabel}</th><td>{fee} (one-time, due upon signing)</td></tr>
-              {installmentLines.length >= 2 && (
+              {annualSchedule ? (
+                <tr><th>Annual Maintenance</th><td>{annualSchedule.lines.map((l, i) => <span key={i}>{i > 0 && <br />}{l}</span>)}</td></tr>
+              ) : installmentLines.length >= 2 && (
                 <tr><th>Annual Maintenance (from following year)</th><td>{installmentLines.map((inst, i) => <span key={i}>{i > 0 && <br />}&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
               )}
             </tbody>
