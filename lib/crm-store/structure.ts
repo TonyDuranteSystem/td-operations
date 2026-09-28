@@ -376,10 +376,14 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
     const { data: late } = await db().from("store_files").select("id").eq("trash_batch_id", batch)
     const extra = ((late ?? []) as { id: string }[]).map((x) => storePointer(x.id)).filter((ptr) => !removed.some((r) => r.drive_file_id === ptr))
     for (const part of chunks(extra)) {
-      const { error: lErr } = await db().from("documents").delete().in("drive_file_id", part)
+      const { data: lateRows, error: lErr } = await db().from("documents").delete().in("drive_file_id", part).select("*")
       if (lErr) console.error(`[crm-store] folder delete: a late file's listing was not removed: ${lErr.message}`)
+      removed.push(...(lateRows ?? []))
     }
   }
+  // remember the removed listings so a restore from the trash brings them back (hidden)
+  const { rememberRemovedRows } = await import("./trash")
+  await rememberRemovedRows(removed as Array<Record<string, unknown> & { drive_file_id?: string }>, actorId)
   return { files: files.length }
 }
 

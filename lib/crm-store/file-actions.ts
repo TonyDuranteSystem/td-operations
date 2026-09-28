@@ -106,6 +106,9 @@ export async function deleteStoreFile(fileId: string, actorId: string | null): P
     }
     throw new Error(error.message.replace(/^store: /, ""))
   }
+  // remember the removed listing so a restore from the trash brings it back (hidden)
+  const { rememberRemovedRows } = await import("./trash")
+  await rememberRemovedRows(removed ?? [], actorId)
   // a trashed file is never shared with staff again (not even after a restore)
   const { clearShares } = await import("./staff-share")
   await clearShares([fileId], actorId, "trashed").catch((e: unknown) => console.error("[crm-store] shares not cleared on delete:", e))

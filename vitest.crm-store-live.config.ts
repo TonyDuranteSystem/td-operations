@@ -5,7 +5,7 @@ import path from "path"
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/live/crm-store-s6-routes.test.ts", "tests/live/crm-store-s6-browser.test.ts", "tests/live/crm-store-structure.test.ts", "tests/live/crm-store-staff-share.test.ts"],
+    include: ["tests/live/crm-store-s6-routes.test.ts", "tests/live/crm-store-s6-browser.test.ts", "tests/live/crm-store-structure.test.ts", "tests/live/crm-store-staff-share.test.ts", "tests/live/crm-store-trash.test.ts"],
     globals: true,
     setupFiles: ["./tests/live/_env.ts"],
     fileParallelism: false,
