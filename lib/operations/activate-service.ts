@@ -31,7 +31,7 @@ import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
-import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
+import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -994,17 +994,13 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 2a: Mark included Tax Return as paid (AUTO) ─────
-  // If Tax Return SD was created and the offer has Tax Return with price "Inclusa"/"Included",
-  // update the tax_returns record to paid=true so Stage 1 task knows to skip invoicing.
+  // If a Tax Return SD was created from this paid offer, the tax return was paid
+  // with it (own price in the total, or $0 = included) — mark the tax_returns
+  // record paid so Stage 1 knows not to invoice it again.
   const taxReturnSd = sdResults.find(r => r.pipeline === "Tax Return" && r.status === "created")
   if (taxReturnSd?.id && offer?.services && autoAccountId) {
-    const services = Array.isArray(offer.services) ? offer.services : []
-    const includedTaxReturn = services.find((s: { pipeline_type?: string; price?: string }) =>
-      s.pipeline_type === "Tax Return" &&
-      s.price &&
-      isIncludedPrice(s.price)
-    )
-    if (includedTaxReturn) {
+    // Sold on this paid offer = paid, whatever its price (Antonio 2026-09-27).
+    if (offerSellsTaxReturn(offer.services, (offer as { selected_services?: unknown }).selected_services)) {
       const today = new Date().toISOString().split("T")[0]
       // Check if tax_returns record exists for this account + current year
       const currentYear = new Date().getFullYear()

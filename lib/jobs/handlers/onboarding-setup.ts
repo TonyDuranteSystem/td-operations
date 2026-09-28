@@ -35,7 +35,7 @@ import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identi
 import { createSD } from "@/lib/operations/service-delivery"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import type { Json } from "@/lib/database.types"
-import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
+import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 interface OnboardingPayload {
   token: string
@@ -1145,12 +1145,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         const pipelines = Array.isArray(offer.bundled_pipelines) ? offer.bundled_pipelines : []
         const services = Array.isArray(offer.services) ? offer.services : []
         if (pipelines.some((p: string) => /tax.return/i.test(p))) {
-          const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
-            s.pipeline_type === "Tax Return" &&
-            s.price &&
-            isIncludedPrice(s.price)
-          )
-          if (taxService) {
+          // On the paid onboarding offer = paid, whatever its price (Antonio 2026-09-27).
+          if (offerSellsTaxReturn(services)) {
             taxReturnIncludedInOffer = true
           }
         }

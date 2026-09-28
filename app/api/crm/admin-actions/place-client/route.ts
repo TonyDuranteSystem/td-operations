@@ -24,7 +24,7 @@ import { canPerform } from "@/lib/permissions"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
-import { isIncludedPrice } from "@/lib/offers/compute-offer-totals"
+import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 // ─── Types ───
 
@@ -563,12 +563,7 @@ async function createTaxReturnRecord(
           const pipelines = Array.isArray(offer.bundled_pipelines) ? offer.bundled_pipelines : []
           const services = Array.isArray(offer.services) ? offer.services : []
           if (pipelines.some((p: string) => /tax.return/i.test(p))) {
-            const taxService = services.find((s: { pipeline_type?: string; price?: string }) =>
-              s.pipeline_type === "Tax Return" &&
-              s.price &&
-              isIncludedPrice(s.price)
-            )
-            if (taxService) isBundled = true
+            if (offerSellsTaxReturn(services)) isBundled = true
           }
         }
       }

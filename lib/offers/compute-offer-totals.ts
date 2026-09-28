@@ -93,21 +93,21 @@ const RECURRING_RE = /\/(year|anno|month|mese)/i
 const INCLUDED_RE = /includ|inclus/i
 
 /**
- * Is this service line INCLUDED in the price (nothing to pay for it)? True when
- * the price says so ("Included", "Inclusa", "incluso") or is actually zero
- * ("$0", "€ 0,00"). Never true for a real amount that merely contains a 0
- * ("$1,000", "€350") — the old check /inclus[ao]|included|€?\s*0/ matched any
- * price with a zero in it (workspace-only plan S1, 2026-09-27).
+ * Does this paid offer sell a Tax Return? Antonio 2026-09-27: onboarding and
+ * tax return always sit on the SAME invoice — with its own price the tax
+ * return is part of the total, at $0 it is included in the onboarding price.
+ * Either way, once the offer is paid the tax return is paid: the PRICE never
+ * decides it. (The old check looked at the price and marked "$750" unpaid.)
+ * A deselected optional line was not bought.
  */
-export function isIncludedPrice(raw: unknown): boolean {
-  const text = String(raw ?? "").trim()
-  if (!text) return false
-  // "Not included" / "Non inclusa" / "non compreso" say the opposite.
-  if (/\b(not|non)\s+(inclu|compres)/i.test(text)) return false
-  // A real amount "VAT inclusive" is a price, not "included in the package".
-  if (/inclusive/i.test(text) && /[1-9]/.test(text)) return false
-  if (INCLUDED_RE.test(text) || /\b(compres[oa]|gratuit[oa]|gratis|omaggio|free)\b/i.test(text)) return true
-  return /[0-9]/.test(text) && parsePriceQuirk(text) === 0
+export function offerSellsTaxReturn(services: unknown, selectedServices?: unknown): boolean {
+  if (!Array.isArray(services)) return false
+  const selected = Array.isArray(selectedServices) ? (selectedServices as unknown[]).map(String) : []
+  return (services as Array<Record<string, unknown> | null>).some((l) =>
+    !!l && typeof l === "object" &&
+    String(l.pipeline_type ?? "").toLowerCase() === "tax return" &&
+    (!l.optional || selected.includes(String(l.name ?? ""))),
+  )
 }
 const PRECONDITION_RE = /pre.?condition/i
 
