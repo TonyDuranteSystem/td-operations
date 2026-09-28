@@ -476,12 +476,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const first = Array.from(new Set([...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
       const [r, firstEntries] = await Promise.all([fetchInto(ownerId, null), Promise.all(first.map(fetchKey))])
       if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
+      const rest = Array.from(expandedRef.current).filter((k) => !first.includes(k))
+      // a CLOSED folder's saved contents are not reloaded, so they may be out of date (e.g. a restored folder
+      // still counting a file as shown): drop them — they are read again, fresh, when the folder is opened
+      const keep = new Set([...first, ...rest])
+      setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => keep.has(k))))
       setRoot(r)
       apply(firstEntries)
-      const rest = Array.from(expandedRef.current).filter((k) => !first.includes(k))
-      const restEntries = await Promise.all(rest.map(fetchKey))
-      if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
-      apply(restEntries)
+      // each open folder is shown as soon as ITS reload arrives (never held back by the slowest one)
+      await Promise.all(rest.map((k) => fetchKey(k).then((e) => {
+        if (ownerIdRef.current === ownerId && seq === refreshSeq.current) apply([e])
+      })))
     } catch (e) {
       toast.error(errMsg(e, 'Could not refresh.'))
     }
@@ -982,19 +987,23 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const r = await pick({ title: `Move the folder "${f.name}" into…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'folder', excludeFolderId: f.id, currentFolderId: parentId })
     setPicking(null)
     if (!r) return
+    let tid: string | number | undefined
     try {
       const v = await settleVisibleInside(f, 'move')
       if (!v.go) return
+      // a folder move can take several seconds (every file's CRM category follows) — say so while it runs
+      tid = toast.loading(`Moving "${f.name}"…`)
       const m = await postJson<{ parentName: string }>(`/api/crm-store/browse/folder/${f.id}/move`, { toFolderId: r.folderId, hide: v.hide }, 'The folder could not be moved.')
-      toast.success(`Moved "${f.name}" into ${m.parentName}${v.hide !== 'none' ? ' (the files you chose are now hidden from the client)' : ''}`)
-      await refreshAll()
+      await refreshAll([r.folderId])
+      toast.success(`Moved "${f.name}" into ${m.parentName}${v.hide !== 'none' ? ' (the files you chose are now hidden from the client)' : ''}`, { id: tid })
     } catch (e) {
-      toast.error(errMsg(e, 'The folder could not be moved.'))
+      toast.error(errMsg(e, 'The folder could not be moved.'), tid ? { id: tid } : undefined)
     }
   }
 
   const deleteFolder = async (f: Fold) => {
     setMenuFor(null)
+    let tid: string | number | undefined
     try {
       const v = await settleVisibleInside(f, 'delete')
       if (!v.go) return
@@ -1002,11 +1011,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         <p>Move <strong>{f.name}</strong> and its {v.files} {v.files === 1 ? 'file' : 'files'} to the trash?{v.stillShown > 0 ? ` ${v.stillShown} ${v.stillShown === 1 ? 'is' : 'are'} shown to the client and will disappear from their portal.` : ''} Recoverable for 90 days.</p>,
         [{ key: 'trash', label: 'Move to trash', tone: 'danger' }, { key: 'cancel', label: 'Cancel' }])
       if (a !== 'trash' && a !== '__default__') return
+      tid = toast.loading(`Moving "${f.name}" to the trash…`)
       const r = await postJson<{ files: number }>(`/api/crm-store/browse/folder/${f.id}/delete`, { hide: v.hide }, 'The folder could not be deleted.')
-      toast.success(`"${f.name}" and ${r.files} ${r.files === 1 ? 'file' : 'files'} moved to the trash`)
       await refreshAll()
+      toast.success(`"${f.name}" and ${r.files} ${r.files === 1 ? 'file' : 'files'} moved to the trash`, { id: tid })
     } catch (e) {
-      toast.error(errMsg(e, 'The folder could not be deleted.'))
+      toast.error(errMsg(e, 'The folder could not be deleted.'), tid ? { id: tid } : undefined)
     }
   }
 
@@ -1015,12 +1025,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     renameDone.current = true
     setRenaming(null)
     if (!value.trim() || value.trim() === f.name) return
+    const tid = toast.loading('Renaming…')
     try {
       const r = await postJson<{ name: string }>(`/api/crm-store/browse/folder/${f.id}/rename`, { name: value }, 'The folder could not be renamed.')
-      toast.success(`Folder renamed to "${r.name}"`)
       await refreshAll()
+      toast.success(`Folder renamed to "${r.name}"`, { id: tid })
     } catch (e) {
-      toast.error(errMsg(e, 'The folder could not be renamed.'))
+      toast.error(errMsg(e, 'The folder could not be renamed.'), { id: tid })
     }
   }
 
@@ -1923,7 +1934,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <h3 className="flex-1 text-base font-semibold">Trash — {root?.owner.label}</h3>
               <button type="button" onClick={() => setTrashOpen(false)} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
             </div>
-            <p className="mb-3 text-xs text-zinc-500">Deleted files and folders stay here for 90 days, then they are deleted for good. Anything restored comes back hidden from the client{root?.owner.kind === 'private' ? ' and shared with nobody' : ''}.{root?.owner.kind === 'company' ? " A person's own document (passport, ID…) deleted from 2. Contacts is in THAT person's trash — open the person under Clients › People." : ''}</p>
+            <p className="mb-3 text-xs text-zinc-500">Deleted files and folders stay here for 90 days, then they are deleted for good. Anything restored comes back hidden from the client{root?.owner.kind === 'private' ? ' and shared with nobody' : ''}.{root?.owner.kind === 'company' ? " A person's own document (passport, ID…) deleted from 2. Contacts is listed here too, marked with whose storage it is, and goes back to that person's storage." : ''}</p>
             <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto">
               {trash === null && <li className="text-sm text-zinc-500">Loading…</li>}
               {trash && trash.length === 0 && <li className="text-sm text-zinc-500">The trash is empty.</li>}
