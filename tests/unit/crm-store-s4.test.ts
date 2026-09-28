@@ -12,7 +12,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createUploadIntent } from "@/lib/crm-store/writer"
 import {
   trashFile, trashFolder, restoreBatch, trashList, removeFromView, startFolderUpload, splitUploadPath,
-  purgeExpiredStore, folderZipListing, streamZip, safeZipPaths, assertZipFits, StoreZipTooLargeError, FOLDER_UPLOAD_MAX_FILES,
+  purgeExpiredStore, folderZipListing, streamZip, keepAliveBody, safeZipPaths, assertZipFits, StoreZipTooLargeError, FOLDER_UPLOAD_MAX_FILES,
   ZIP_MAX_BYTES, type PurgeIO, type ZipEntry,
 } from "@/lib/crm-store/folders"
 import { StoreAccessDeniedError } from "@/lib/crm-store/visibility"
@@ -183,6 +183,16 @@ describe("zip", () => {
     await r.cancel()
     await new Promise((res) => setTimeout(res, 10))
     expect(cancelled.length).toBeGreaterThanOrEqual(4) // the one being read + the ones opened ahead
+  })
+  it("keepAliveBody passes every byte through, ends when the body ends, and forwards a cancel", async () => {
+    const res = new Response("hello world")
+    expect(new TextDecoder().decode(await collect(keepAliveBody(res)))).toBe("hello world")
+    let cancelled = false
+    const res2 = new Response(new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(1)) }, cancel() { cancelled = true } }))
+    const r = keepAliveBody(res2).getReader()
+    await r.read(); await r.cancel()
+    expect(cancelled).toBe(true)
+    expect(() => keepAliveBody(new Response(null))).toThrow(/no content/)
   })
   it("refuses a zip that is too big to finish, before streaming anything", () => {
     expect(() => assertZipFits([{ ...entries[0], size_bytes: ZIP_MAX_BYTES + 1 }])).toThrow(StoreZipTooLargeError)

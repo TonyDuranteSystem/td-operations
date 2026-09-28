@@ -202,7 +202,8 @@ export const backupIO: BackupIO = {
     if (error || !data?.signedUrl) throw new Error(`store backup: cannot read ${path} (${error?.message ?? "no url"})`)
     const res = await fetch(data.signedUrl)
     if (!res.ok || !res.body) throw new Error(`store backup: cannot read ${path} (HTTP ${res.status})`)
-    return res.body
+    const { keepAliveBody } = await import("./folders")
+    return keepAliveBody(res)
   },
   find: (k, v, driveIds) => drive.findByAppProperty(k, v, driveIds),
   get: (id) => drive.getTaggedItem(id),

@@ -310,7 +310,24 @@ export const openStoredObject: ObjectOpener = async (bucket, path) => {
   if (error || !data?.signedUrl) throw new Error(`store: cannot read ${path} (${error?.message ?? "no url"})`)
   const res = await fetch(data.signedUrl)
   if (!res.ok || !res.body) throw new Error(`store: cannot read ${path} (HTTP ${res.status})`)
-  return res.body
+  return keepAliveBody(res)
+}
+
+/**
+ * A fetch Response's body that keeps the Response itself alive while the body is used: Node's fetch cancels the
+ * body of a Response that is garbage-collected, which (with files opened ahead for a zip) came back as a
+ * silently EMPTY file. Every store reader that hands a body on uses this.
+ */
+export function keepAliveBody(res: Response): ReadableStream<Uint8Array> {
+  if (!res.body) throw new Error("store: the file came back with no content")
+  const reader = res.body.getReader()
+  return new ReadableStream<Uint8Array>({
+    async pull(c) {
+      const { done, value } = await reader.read()
+      if (done) { c.close(); void res.status } else c.enqueue(value)
+    },
+    cancel(reason) { return reader.cancel(reason) },
+  })
 }
 
 /**
