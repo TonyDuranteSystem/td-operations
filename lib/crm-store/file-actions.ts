@@ -81,6 +81,9 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
     }
   }
   await logEvent("moved", { ...f, folder_id: toFolderId }, actorId, { from_folder: f.folder_id, to_folder: toFolderId })
+  // moved out of "Shared with staff": nobody else may open it any more
+  const { dropSharesOutsideStaffShare } = await import("./staff-share")
+  await dropSharesOutsideStaffShare([fileId], actorId)
   return { folderName: to.name }
 }
 

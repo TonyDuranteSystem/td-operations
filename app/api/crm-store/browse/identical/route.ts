@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await createClient().auth.getUser()
   try {
     const { findIdenticalFiles } = await import("@/lib/crm-store/structure")
-    return NextResponse.json({ files: await findIdenticalFiles(sha, user?.id ?? null) }, { headers: { "Cache-Control": "no-store" } })
+    const { isOwnerOnly } = await import("@/lib/auth")
+    return NextResponse.json({ files: await findIdenticalFiles(sha, { id: user?.id ?? null, ownerOnly: isOwnerOnly(user) }) }, { headers: { "Cache-Control": "no-store" } })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Could not look for the same file." }, { status: 400 })
   }

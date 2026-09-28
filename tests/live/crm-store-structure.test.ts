@@ -104,7 +104,7 @@ describe("storage structure — live sandbox", () => {
     const other = await ensureArea("private", TEST_OTHER_LOGIN)
     expect(other).not.toBe(mine!.owners[0].id)
     expect((await navigation({ id: fx.adminId }, true)).flatMap((x) => x.owners).some((o) => o.id === other)).toBe(false)
-    await expect(assertOwnerAccess(other, fx.adminId)).rejects.toThrow(/Not found/)
+    await expect(assertOwnerAccess(other, { id: fx.adminId, ownerOnly: false })).rejects.toThrow(/Not found/)
     const { GET } = await import("@/app/api/crm-store/browse/folder/route")
     const r = await GET(get(`http://x/api/crm-store/browse/folder?owner=${other}`))
     expect(r.status).toBe(404)

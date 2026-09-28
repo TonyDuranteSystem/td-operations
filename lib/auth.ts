@@ -1,7 +1,12 @@
 import type { User } from "@supabase/supabase-js"
 import { isStaffAuthRole } from "@/lib/team/workspace"
 
-const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
+// The OWNERS (Antonio 2026-09-28: Jodi "will see everything I see" — My Finances, My files, owner settings).
+// The FIRST entry is the primary owner: the owners' shared "My files" is kept under that login.
+const ADMIN_EMAILS = ["antonio.durante@tonydurante.us", "jodi@tonydurante.us"]
+
+/** The primary owner's email — the owners' shared "My files" storage area belongs to this login. */
+export const PRIMARY_OWNER_EMAIL = ADMIN_EMAILS[0]
 
 export type CrmRole = 'admin' | 'team'
 
@@ -41,7 +46,8 @@ export function isProtectedAdminEmail(email: string | null | undefined): boolean
 }
 
 /**
- * My Finances (the owner's own private books) — Antonio's own account ONLY.
+ * My Finances (the owners' own private books) — the owners' own accounts ONLY (Antonio, and Jodi since
+ * 2026-09-28).
  * Deliberately stricter than isSecureAdmin(): a real account can legitimately
  * carry app_metadata.role === "admin" for OTHER admin-area testing/work
  * (e.g. the qa-staff@ account) without that meaning it should ever see

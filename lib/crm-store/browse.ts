@@ -52,6 +52,8 @@ export interface BrowseFile {
   sha256?: string | null
   /** "Decide later": saved hidden and waiting for staff (the reason shown on the red chip) */
   needsReview?: string | null
+  /** a file in My files › Shared with staff: the staff logins it is shared with (null = not a shareable place) */
+  sharedWith?: string[] | null
 }
 
 /** Pure: the label shown for an owner (unit-tested). */
@@ -217,6 +219,11 @@ export async function folderContents(ownerId: string, folderId: string | null, o
     }
   }
   const isPerson = own.kind === "person"
+  let shares: Map<string, string[]> | null = null
+  if (own.kind === "private" && all.length > 0) {
+    const { isInStaffShare, sharesForFiles } = await import("./staff-share")
+    if (await isInStaffShare(current.id)) shares = await sharesForFiles(all.map((f) => f.id))
+  }
   const files: BrowseFile[] = []
   for (const f of all) {
     const k = facts.get(f.id)
@@ -231,6 +238,7 @@ export async function folderContents(ownerId: string, folderId: string | null, o
       needsReview: f.needs_review_at ? (f.needs_review_reason || "Needs review") : null,
       personName: opts.throughCompany ? owner.label : null,
       inPersonStorage: isPerson,
+      sharedWith: shares ? shares.get(f.id) ?? [] : null,
     })
   }
   return {

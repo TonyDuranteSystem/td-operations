@@ -78,10 +78,11 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
  *  login — their private "My files". Both areas are created on first use. */
 export async function navigation(user: { id: string; email?: string | null } | null, isOwnerOnlyUser: boolean): Promise<NavGroup[]> {
   await ensureArea("business", null)
-  if (isOwnerOnlyUser && user) await ensureArea("private", user.id)
-  // a private area is listed only for the owner-only login, and only its own (the database function already
-  // returns no one else's)
-  const { data, error } = await db().rpc("store_navigation", { p_user: isOwnerOnlyUser ? user?.id ?? null : null })
+  // the owners share ONE "My files" — the primary owner's (never a separate one per owner)
+  const ownersArea = isOwnerOnlyUser && user ? await ownersAreaUserId() : null
+  if (ownersArea) await ensureArea("private", ownersArea)
+  // a private area is listed only for the owners, and only the owners' one (the database function returns no other)
+  const { data, error } = await db().rpc("store_navigation", { p_user: ownersArea })
   if (error) throw new Error(`store navigation: ${error.message}`)
   const { ownerLabel, ownerStatus } = await import("./browse")
   return groupOwners(((data ?? []) as Array<{ id: string; kind: string; lifecycle_override: string | null; company_name: string | null; state_of_formation: string | null; account_status: string | null; person_name: string | null; root_name: string | null; file_count: number | string }>).map((o) => ({
@@ -106,12 +107,33 @@ export async function ensureArea(kind: "business" | "private", userId: string | 
 
 // ───────────────────────────────────────────────────────────── who may open what
 
-/** A private "My files" area opens ONLY for the login it belongs to — every route checks this. */
-export async function assertOwnerAccess(ownerId: string, userId: string | null): Promise<void> {
+/**
+ * The owners' shared "My files" (Antonio 2026-09-28): the area of the primary owner's login, opened by EVERY
+ * owner-only login (the owner list is code, lib/auth.ts). Any other private area only for its own login.
+ */
+let primaryOwnerIdCache: { id: string | null; at: number } | null = null
+export async function ownersAreaUserId(): Promise<string | null> {
+  if (primaryOwnerIdCache && Date.now() - primaryOwnerIdCache.at < 10 * 60_000) return primaryOwnerIdCache.id
+  const { PRIMARY_OWNER_EMAIL } = await import("@/lib/auth")
+  const { findAuthUserByEmail } = await import("@/lib/auth-admin-helpers")
+  const u = await findAuthUserByEmail(PRIMARY_OWNER_EMAIL)
+  primaryOwnerIdCache = { id: u?.id ?? null, at: Date.now() }
+  return primaryOwnerIdCache.id
+}
+
+/** Pure: may this login open this private area? (its own; or the owners' area for an owner-only login) */
+export function mayOpenPrivateArea(areaUserId: string | null, login: { id: string | null; ownerOnly: boolean }, ownersAreaUser: string | null): boolean {
+  if (!areaUserId || !login.id) return false
+  if (areaUserId === login.id) return true
+  return login.ownerOnly && !!ownersAreaUser && areaUserId === ownersAreaUser
+}
+
+/** A private "My files" area opens only for its login (or, for the owners' area, for every owner) — every route checks this. */
+export async function assertOwnerAccess(ownerId: string, login: { id: string | null; ownerOnly: boolean }): Promise<void> {
   const { data: o, error } = await db().from("store_owners").select("kind, private_user_id").eq("id", ownerId).maybeSingle()
   if (error) throw new Error("Could not check access — please try again.")
   if (!o) throw new Error("Not found.")
-  if (o.kind === "private" && o.private_user_id !== userId) throw new Error("Not found.")
+  if (o.kind === "private" && !mayOpenPrivateArea(o.private_user_id, login, login.ownerOnly ? await ownersAreaUserId() : null)) throw new Error("Not found.")
 }
 export async function ownerOfFolder(folderId: string): Promise<string> {
   const { data, error } = await db().from("store_folders").select("owner_id").eq("id", folderId).maybeSingle()
@@ -236,8 +258,11 @@ export async function moveFolder(folderId: string, toParentId: string, actorId: 
   await applyHide(folderId, hide, actorId)
   const { error } = await db().from("store_folders").update({ parent_id: to.id }).eq("id", folderId).is("trashed_at", null)
   if (error) throw new Error(/loop/i.test(error.message) ? "A folder can't go inside one of its own sub-folders." : `The folder could not be moved (${error.message}).`)
-  // the files inside keep their CRM category in step with the new place
+  // the files inside keep their CRM category in step with the new place, and stop being shared with staff if
+  // the folder left "Shared with staff"
   await refreshCategories(f.owner_id, folderId)
+  const { dropSharesOutsideStaffShare } = await import("./staff-share")
+  await dropSharesOutsideStaffShare((await filesUnder(folderId)).map((x) => x.id), actorId)
   await logFolder("folder_moved", f, actorId, { from_parent: f.parent_id, to_parent: to.id })
   return { parentName: to.name }
 }
@@ -367,7 +392,9 @@ export async function listQuestions(): Promise<Record<string, StoreQuestion>> {
 export interface IdenticalFile { fileId: string; name: string; ownerId: string; where: string; mimeType: string | null }
 
 /** Live files whose CURRENT copy has exactly these bytes (sha256), anywhere this login may open. */
-export async function findIdenticalFiles(sha256: string, userId: string | null): Promise<IdenticalFile[]> {
+export async function findIdenticalFiles(sha256: string, login: { id: string | null; ownerOnly: boolean }): Promise<IdenticalFile[]> {
+  const userId = login.id
+  const ownersArea = login.ownerOnly ? await ownersAreaUserId() : null
   if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Bad fingerprint.")
   // only CURRENT copies of LIVE files (the join is on the file's current version), so old versions never crowd them out
   const { data, error } = await db().from("store_files")
@@ -376,9 +403,9 @@ export async function findIdenticalFiles(sha256: string, userId: string | null):
   if (error) throw new Error(`Could not look for the same file (${error.message}).`)
   const rows = ((data ?? []) as Array<{ id: string; name: string; owner_id: string; folder_id: string; store_owners: { kind: string; private_user_id: string | null } | null; store_file_versions: { mime_type: string | null } | null }>)
     // an unreadable owner counts as private (fails closed); a private area only for its own login
-    .filter((f) => !!f.store_owners && (f.store_owners.kind !== "private" || f.store_owners.private_user_id === userId))
+    .filter((f) => !!f.store_owners && (f.store_owners.kind !== "private" || mayOpenPrivateArea(f.store_owners.private_user_id, login, ownersArea)))
   if (rows.length === 0) return []
-  const { data: nav, error: nErr } = await db().rpc("store_navigation", { p_user: userId })
+  const { data: nav, error: nErr } = await db().rpc("store_navigation", { p_user: ownersArea ?? userId })
   if (nErr) throw new Error(`Could not look for the same file (${nErr.message}).`)
   const { ownerLabel } = await import("./browse")
   const labels = new Map<string, string>()

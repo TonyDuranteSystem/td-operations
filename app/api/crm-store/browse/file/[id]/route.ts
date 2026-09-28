@@ -10,7 +10,8 @@ import { denyUnlessStoreStaff, denyUnlessAreaAccess } from "../../_auth"
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await denyUnlessStoreStaff()
   if (denied) return denied
-  const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
+  // read-only: a staff member may also open a file the owners shared with them
+  const noAccess = await denyUnlessAreaAccess({ fileId: params.id }, { allowSharedRead: true })
   if (noAccess) return noAccess
   try {
     const { readFileForStaff } = await import("@/lib/crm-store/browse")

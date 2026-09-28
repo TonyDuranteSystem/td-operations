@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
 
-import { stateGroup, groupOwners, isLockedFolder, cleanFolderName, suggestTaxYear, CLOSED_STATUSES } from "@/lib/crm-store/structure"
+import { stateGroup, groupOwners, isLockedFolder, cleanFolderName, suggestTaxYear, CLOSED_STATUSES, mayOpenPrivateArea } from "@/lib/crm-store/structure"
 
 const row = (o: Partial<Parameters<typeof groupOwners>[0][number]>) => ({
   id: o.id ?? "x", kind: o.kind ?? "company", label: o.label ?? "A LLC", status: o.status ?? null, fileCount: o.fileCount ?? 0,
@@ -130,5 +130,23 @@ describe("categoryForKind (one rule for upload, file move, folder move)", () => 
   it("a refused save says why in plain words", () => {
     expect(saveRefusalMessage("frozen")).toMatch(/FILED/)
     expect(saveRefusalMessage("trashed")).toMatch(/trash/)
+  })
+})
+
+import { shareDiff } from "@/lib/crm-store/staff-share"
+describe("My files is the owners' shared area; every other private area only for its own login", () => {
+  it("own area yes; the owners' area for any owner; never for a non-owner", () => {
+    expect(mayOpenPrivateArea("A", { id: "A", ownerOnly: false }, null)).toBe(true)
+    expect(mayOpenPrivateArea("A", { id: "J", ownerOnly: true }, "A")).toBe(true)
+    expect(mayOpenPrivateArea("A", { id: "L", ownerOnly: false }, "A")).toBe(false)
+    expect(mayOpenPrivateArea("X", { id: "J", ownerOnly: true }, "A")).toBe(false)
+    expect(mayOpenPrivateArea(null, { id: "J", ownerOnly: true }, "A")).toBe(false)
+    expect(mayOpenPrivateArea("A", { id: null, ownerOnly: true }, "A")).toBe(false)
+  })
+})
+describe("shareDiff", () => {
+  it("adds the new ticks and removes the unticked ones", () => {
+    expect(shareDiff(["a", "b"], ["b", "c"])).toEqual({ add: ["c"], remove: ["a"] })
+    expect(shareDiff([], [])).toEqual({ add: [], remove: [] })
   })
 })

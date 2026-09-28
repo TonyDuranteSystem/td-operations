@@ -31,6 +31,8 @@ interface File_ {
   staffOnly: boolean; personal: boolean; versions: number; size: number | null; mimeType: string | null; updatedAt: string
   listed: boolean; personName: string | null; inPersonStorage: boolean; docId: string | null
   sha256?: string | null; needsReview?: string | null
+  /** in My files › Shared with staff: who it is shared with (null = not a shareable place) */
+  sharedWith?: string[] | null
 }
 interface OwnerInfo { kind: string; label: string; accountStatus: string | null; closed: boolean }
 interface Person { contactId: string; name: string; ownerId: string | null; companies: string[] }
@@ -211,6 +213,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [dropOn, setDropOn] = useState<string | null>(null)
   const [asking, setAsking] = useState<Asking | null>(null)
   const [picking, setPicking] = useState<Picking | null>(null)
+  // "Shared with staff": the owners tick who may open each file; staff see "Shared with me"
+  const [sharing, setSharing] = useState<File_ | null>(null)
+  const [staffLogins, setStaffLogins] = useState<{ userId: string; email: string; name: string }[] | null>(null)
+  const [shareTicks, setShareTicks] = useState<Set<string>>(new Set())
+  const [savingShare, setSavingShare] = useState(false)
+  const [sharedView, setSharedView] = useState(false)
+  const [sharedFiles, setSharedFiles] = useState<{ id: string; name: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; sharedAt: string }[] | null>(null)
   const dragRef = useRef<{ id: string; from: string | null } | null>(null)
   const renameDone = useRef(false)
   const expandedRef = useRef<Set<string>>(new Set())
@@ -250,6 +259,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }, [])
 
   const openOwner = useCallback(async (oid: string, fromPick = false) => {
+    setSharedView(false)
     if (!fromPick) pickSeq.current++ // opening a storage by hand cancels a folder pick still loading
     ownerIdRef.current = oid
     focusRef.current = null
@@ -517,6 +527,47 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.error(errMsg(e, 'Could not clear "Needs review".'))
     }
   })
+
+  // ───────────────────────────────────────── Shared with staff
+
+  const openSharing = async (f: File_) => {
+    setMenuFor(null)
+    setSharing(f)
+    setShareTicks(new Set(f.sharedWith ?? []))
+    if (staffLogins) return
+    try {
+      setStaffLogins((await getJson<{ logins: { userId: string; email: string; name: string }[] }>('/api/crm-store/browse/staff-logins')).logins)
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not load the staff list.'))
+      setSharing(null)
+    }
+  }
+
+  const saveSharing = async () => {
+    if (!sharing) return
+    setSavingShare(true)
+    try {
+      const r = await postJson<{ sharedWith: string[] }>(`/api/crm-store/browse/file/${sharing.id}/shares`, { userIds: Array.from(shareTicks) }, 'The sharing could not be changed.')
+      toast.success(r.sharedWith.length === 0 ? `"${sharing.name}" is not shared with anyone` : `"${sharing.name}" is shared with ${r.sharedWith.length} ${r.sharedWith.length === 1 ? 'person' : 'people'}`)
+      setSharing(null)
+      await refreshAll()
+    } catch (e) {
+      toast.error(errMsg(e, 'The sharing could not be changed.'))
+    } finally {
+      setSavingShare(false)
+    }
+  }
+
+  const openSharedWithMe = async () => {
+    setSharedView(true)
+    setSharedFiles(null)
+    try {
+      setSharedFiles((await getJson<{ files: NonNullable<typeof sharedFiles> }>('/api/crm-store/browse/shared-with-me')).files)
+    } catch (e) {
+      toast.error(errMsg(e, 'Could not read the files shared with you.'))
+      setSharedFiles([])
+    }
+  }
 
   // ───────────────────────────────────────── folders
 
@@ -904,6 +955,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )
       if (r.identity) toast.message(r.identity)
+      // saved into My files › Shared with staff: ask straight away who may open it (nobody until ticked)
+      if (root?.owner.kind === 'private' && r.write === 'created') {
+        const after = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}`).catch(() => null)
+        const saved = after?.files.find((x) => x.name === r.name)
+        if (saved && saved.sharedWith != null) void openSharing(saved)
+      }
       setUploadOpen(false)
       await refreshAll()
     } catch (e) {
@@ -975,6 +1032,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         ) : (
           <FastTooltip label={cantShowWhy}>
             <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500"><Lock className="h-3 w-3" />Can&apos;t be shown</span>
+          </FastTooltip>
+        )}
+        {f.sharedWith != null && (
+          <FastTooltip label="Choose which staff can open and download it">
+            <button type="button" onClick={() => openSharing(f)}
+              className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${f.sharedWith.length ? 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100' : 'border-zinc-200 bg-zinc-50 text-zinc-600 hover:bg-zinc-100'}`}>
+              <User className="h-3 w-3" />{f.sharedWith.length ? `Shared with ${f.sharedWith.length}` : 'Not shared'}
+            </button>
           </FastTooltip>
         )}
         {!f.documentType && <Badge tone="amber">Needs a type</Badge>}
@@ -1199,9 +1264,34 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const right = (
     <div className={`rounded-xl border border-zinc-200 bg-white p-4 ${scopedOwnerId ? '' : 'min-h-[70vh] self-start'}`} onClick={() => { if (menuFor) setMenuFor(null); if (versionsFor) setVersionsFor(null) }}>
       {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      {!root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
-      {root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
-      {root?.folder && (
+      {sharedView && (
+        <>
+          <div className="mb-3 flex items-center gap-2 text-sm">
+            <span className="font-medium text-zinc-800">Shared with me</span>
+            <span className="text-xs text-zinc-400">files the owners shared with you — open or download</span>
+          </div>
+          {sharedFiles === null && <p className="text-sm text-zinc-500">Loading…</p>}
+          {sharedFiles && sharedFiles.length === 0 && <p className="text-sm text-zinc-500">Nothing has been shared with you yet.</p>}
+          <ul className="divide-y divide-zinc-50">
+            {(sharedFiles ?? []).map((sf) => {
+              const Icon = fileIcon(sf.mimeType)
+              const asFile: File_ = { id: sf.id, name: sf.name, documentType: null, state: 'live', published: false, clientVisible: false, staffOnly: false, personal: false, versions: 1, size: sf.size, mimeType: sf.mimeType, updatedAt: sf.updatedAt, listed: false, personName: null, inPersonStorage: false, docId: null }
+              return (
+                <li key={sf.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
+                  <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
+                  <button type="button" onClick={() => setPreview(asFile)} className="min-w-0 flex-1 truncate text-left hover:underline">{sf.name}</button>
+                  <span className="text-xs text-zinc-400">{sf.where}</span>
+                  <span className="text-xs text-zinc-400">{[fmtSize(sf.size), `shared ${fmtDate(sf.sharedAt)}`].filter(Boolean).join(' · ')}</span>
+                  <a href={`/api/crm-store/browse/file/${sf.id}`} download className="text-xs text-blue-700 hover:underline">Download</a>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
+      {!sharedView && !root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
+      {!sharedView && root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
+      {!sharedView && root?.folder && (
         <>
           <nav aria-label="Path" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-zinc-500">
             {crumbs.map((c, i) => (
@@ -1310,6 +1400,28 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           onClose={() => { const r = asking.resolve; setAsking(null); r('cancel') }}
           choices={asking.choices.map((c) => ({ ...c, onChoose: () => { const r = asking.resolve; setAsking(null); r(c.key) } }))}>
           {asking.body}
+        </QuestionDialog>
+      )}
+      {sharing && (
+        <QuestionDialog q={undefined} fallbackTitle={`Who can see "${sharing.name}"?`} onClose={() => setSharing(null)}
+          choices={[
+            { key: 'save', label: savingShare ? 'Saving…' : 'Save', tone: 'primary', disabled: savingShare || !staffLogins, onChoose: () => { void saveSharing() } },
+            { key: 'cancel', label: 'Cancel', onChoose: () => setSharing(null) },
+          ]}>
+          <p>Ticked people can open and download this file from their <strong>Shared with me</strong>. They can&apos;t change, move or delete it. The owners always see it.</p>
+          {!staffLogins ? <p className="text-zinc-500">Loading…</p> : staffLogins.length === 0 ? <p className="text-zinc-500">No staff logins yet — add them in Team Management.</p> : (
+            <ul className="space-y-1">
+              {staffLogins.map((l) => (
+                <li key={l.userId}>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={shareTicks.has(l.userId)} disabled={savingShare}
+                      onChange={(e) => setShareTicks((t) => { const n = new Set(t); if (e.target.checked) n.add(l.userId); else n.delete(l.userId); return n })} />
+                    <span className="font-medium">{l.name}</span><span className="text-xs text-zinc-500">{l.email}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
         </QuestionDialog>
       )}
       {picking && (
@@ -1496,7 +1608,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </li>
           )}
           {businessOwner && (!q || 'business'.includes(q)) && <li className="pt-2"><ul>{treeOwnerRow(businessOwner, 0, 'Business')}</ul></li>}
-          {privateOwner && (!q || 'my files'.includes(q)) && <li><ul>{treeOwnerRow(privateOwner, 0, 'My files', 'only you')}</ul></li>}
+          {privateOwner && (!q || 'my files'.includes(q)) && <li><ul>{treeOwnerRow(privateOwner, 0, 'My files', 'owners only')}</ul></li>}
+          {groups && !privateOwner && (!q || 'shared with me'.includes(q)) && (
+            <li>
+              <button type="button" onClick={() => { void openSharedWithMe() }}
+                className={`flex w-full items-center gap-2 rounded-md py-1 pl-6 pr-1 text-left text-sm font-medium hover:bg-zinc-50 ${sharedView ? 'bg-blue-50' : ''}`}>
+                <User className="h-4 w-4 text-zinc-400" /><span className="flex-1">Shared with me</span>
+              </button>
+            </li>
+          )}
         </ul>
       </div>
       {right}
