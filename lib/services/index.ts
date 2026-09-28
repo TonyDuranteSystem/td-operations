@@ -304,6 +304,24 @@ export async function getStartAtActivationServiceTypes(): Promise<string[]> {
 }
 
 /**
+ * Pipeline / `service_type` names tagged `repeatable` — services a client can
+ * buy again and again, each purchase a new job (Shipping, Public Notary,
+ * Consulting Call, Certificate of Incumbency — S1, 2026-09-27). An open one of
+ * the same type must NOT block a new purchase from being created.
+ */
+export async function getRepeatableServiceTypes(): Promise<string[]> {
+  const all = await loadEntries()
+  const slugs = new Set(
+    all
+      .filter((e) => e.status === "active" && e.tags.includes("repeatable"))
+      .map((e) => e.slug),
+  )
+  return Object.entries(SERVICE_TYPE_TO_SLUG)
+    .filter(([, slug]) => slugs.has(slug))
+    .map(([serviceType]) => serviceType)
+}
+
+/**
  * Pipeline / `service_type` names tagged `contact_eligible` — services that can
  * live on a PERSON with no company attached (Company Closure of an old LLC we
  * don't track, ITIN, a formation before its company exists). A start-at-payment

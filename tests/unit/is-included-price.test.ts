@@ -11,6 +11,12 @@ describe("isIncludedPrice (S1 2026-09-27)", () => {
   it("REGRESSION: a real price that merely contains a 0 is NOT included (the old check said yes)", () => {
     for (const p of ["$1,000", "€1000", "$1200", "€350", "$900", "€ 250", "EUR 2,500"]) expect(isIncludedPrice(p)).toBe(false)
   })
+  it("Italian / other wording for included or free", () => {
+    for (const p of ["Compreso", "compresa nel pacchetto", "Gratuito", "Gratis", "Omaggio", "Free"]) expect(isIncludedPrice(p)).toBe(true)
+  })
+  it("negations and 'VAT inclusive' amounts are NOT included (bug-hunter)", () => {
+    for (const p of ["Not included", "Non inclusa", "non compreso", "€1,200 VAT inclusive"]) expect(isIncludedPrice(p)).toBe(false)
+  })
   it("empty / missing price is not 'included'", () => {
     for (const p of ["", "   ", null, undefined]) expect(isIncludedPrice(p)).toBe(false)
   })

@@ -207,6 +207,28 @@ describe("createStartAtActivationSDs", () => {
     expect(reported[0]).toContain("magyardi-milan-2026")
   })
 
+  it("a REPEATABLE service (Shipping) is created even when an open one exists — each purchase is a new job", async () => {
+    openRows = [{ id: "sd-old-shipping", status: "active", account_id: null }]
+    const steps = await createStartAtActivationSDs({
+      offerToken: "t-ship-2", clientName: "X", contactId: "c1",
+      selection: { pipelines: ["Shipping"], mismatches: [], multiQuantity: [] },
+      contactScopedTypes: ["Shipping"], repeatableTypes: ["Shipping"],
+    })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(steps[0].status).toBe("created")
+  })
+
+  it("the same offer is still never created twice for a repeatable service (retry)", async () => {
+    byOfferRows = [{ id: "sd-this-offer", status: "active" }]
+    const steps = await createStartAtActivationSDs({
+      offerToken: "t-ship-2", clientName: "X", contactId: "c1",
+      selection: { pipelines: ["Shipping"], mismatches: [], multiQuantity: [] },
+      contactScopedTypes: ["Shipping"], repeatableTypes: ["Shipping"],
+    })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("existing")
+  })
+
   it("with no linked companies, the open-closure check is the person only", async () => {
     await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
     expect(orFilters[0]).toBe("and(contact_id.eq.c1,account_id.is.null)")

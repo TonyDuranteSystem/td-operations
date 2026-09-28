@@ -276,8 +276,10 @@ describe('createBackfilledSD — service_type strict validation', () => {
     }
   })
 
-  it('VALID_SERVICE_TYPES has exactly 20 values', () => {
-    expect(VALID_SERVICE_TYPES).toHaveLength(20)
+  it('VALID_SERVICE_TYPES has exactly 24 values (S1 2026-09-27 added the name changes + tracked add-ons)', () => {
+    expect(VALID_SERVICE_TYPES).toHaveLength(24)
+    expect(VALID_SERVICE_TYPES).toContain('Consulting Call')
+    expect(VALID_SERVICE_TYPES).toContain('Certificate of Incumbency')
     // Spot-check: must include at least these canonical members
     expect(VALID_SERVICE_TYPES).toContain('Tax Return')
     expect(VALID_SERVICE_TYPES).toContain('Tax Return One-Time')

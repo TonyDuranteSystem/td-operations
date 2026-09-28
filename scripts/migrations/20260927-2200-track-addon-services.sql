@@ -7,7 +7,8 @@
 -- move (names are a first proposal — editable in the catalog, no deploy).
 -- Placement follows the offer (company page → that company; lead/contact page →
 -- the person). Shipping / Notary / Consulting can live on a person
--- (contact_eligible); Incumbency is a company document.
+-- (contact_eligible); Incumbency is a company document. All four are
+-- `repeatable`: each purchase is a new job, an open one never blocks a new one.
 -- Idempotent: re-running changes nothing.
 
 -- 1. Pipeline name + tags on the four catalog services.
@@ -19,10 +20,10 @@ SET metadata = jsonb_set(COALESCE(ce.metadata, '{}'::jsonb), '{pipeline}', to_js
     ),
     updated_at = now()
 FROM (VALUES
-  ('shipping',                  'Shipping',                  '["sd","start_at_activation","contact_eligible"]'::jsonb),
-  ('public_notary',             'Public Notary',             '["sd","start_at_activation","contact_eligible"]'::jsonb),
-  ('consulting',                'Consulting Call',           '["sd","start_at_activation","contact_eligible"]'::jsonb),
-  ('certificate_of_incumbency', 'Certificate of Incumbency', '["sd","start_at_activation"]'::jsonb)
+  ('shipping',                  'Shipping',                  '["sd","start_at_activation","contact_eligible","repeatable"]'::jsonb),
+  ('public_notary',             'Public Notary',             '["sd","start_at_activation","contact_eligible","repeatable"]'::jsonb),
+  ('consulting',                'Consulting Call',           '["sd","start_at_activation","contact_eligible","repeatable"]'::jsonb),
+  ('certificate_of_incumbency', 'Certificate of Incumbency', '["sd","start_at_activation","repeatable"]'::jsonb)
 ) AS v(slug, pipeline, add_tags)
 WHERE ce.catalog_id = 'services'
   AND ce.slug = v.slug

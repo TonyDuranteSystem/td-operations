@@ -1,9 +1,10 @@
 /**
  * Canonical `service_type` vocabulary.
  *
- * Mirrors the DB constraint `chk_sd_service_type` on `service_deliveries`.
- * Any insert that uses a value not in this list will be rejected by the DB
- * with a 23514 check_violation.
+ * Originally mirrored the DB constraint `chk_sd_service_type`. Checked
+ * 2026-09-27: that constraint no longer exists in sandbox or production
+ * (only chk_sd_status remains) — this list is now the app-side vocabulary
+ * for the strict pickers; keep it in step with the catalog.
  *
  * This module has NO runtime dependencies so it can be imported from both
  * server-only code (helpers, route handlers) and client components (the
@@ -35,6 +36,11 @@ export const VALID_SERVICE_TYPES = [
   "Shipping",
   "Support",
   "DBA",
+  // Created at payment since S1 (2026-09-27): name changes + tracked add-ons.
+  "Company Change Name",
+  "EIN Change Name",
+  "Consulting Call",
+  "Certificate of Incumbency",
 ] as const
 
 export type ValidServiceType = (typeof VALID_SERVICE_TYPES)[number]

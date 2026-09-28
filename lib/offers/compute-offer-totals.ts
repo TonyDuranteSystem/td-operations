@@ -102,7 +102,11 @@ const INCLUDED_RE = /includ|inclus/i
 export function isIncludedPrice(raw: unknown): boolean {
   const text = String(raw ?? "").trim()
   if (!text) return false
-  if (INCLUDED_RE.test(text)) return true
+  // "Not included" / "Non inclusa" / "non compreso" say the opposite.
+  if (/\b(not|non)\s+(inclu|compres)/i.test(text)) return false
+  // A real amount "VAT inclusive" is a price, not "included in the package".
+  if (/inclusive/i.test(text) && /[1-9]/.test(text)) return false
+  if (INCLUDED_RE.test(text) || /\b(compres[oa]|gratuit[oa]|gratis|omaggio|free)\b/i.test(text)) return true
   return /[0-9]/.test(text) && parsePriceQuirk(text) === 0
 }
 const PRECONDITION_RE = /pre.?condition/i

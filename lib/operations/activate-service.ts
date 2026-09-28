@@ -14,7 +14,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
 import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
-import { getServiceBySlugStatic, getPerPersonServiceTypes } from "@/lib/services"
+import { getServiceBySlugStatic, getPerPersonServiceTypes, getRepeatableServiceTypes } from "@/lib/services"
 import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import { invoiceTargetForOffer, offerBillTo } from "@/lib/offers/bill-to-server"
@@ -430,7 +430,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 1.5: Ensure Minimal Account (AUTO) ──
-  let autoAccountId: string | null = offer?.account_id || null
+  const autoAccountId: string | null = offer?.account_id || null
   let isStandaloneBusinessTR = false
 
   // Formation excluded (Antonio's architectural model, 2026-05-03/04): when an
@@ -488,6 +488,15 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // 1040-NR into a company return.
     const taxLine = contractType === "tax_return" ? findTaxReturnService(offerServices) : null
     const taxLineIsBusiness = taxLine?.status === "found" && taxLine.service_context === "business"
+    // Never guess business vs personal from the ORDER of the offer's lines: a
+    // Tax Return line without its own choice, or two Tax Return lines, block
+    // activation even when another business line came first (bug-hunter, S1).
+    if (taxLine?.status === "multiple_matches") {
+      return { ok: false, error: "Tax Return activation blocked — offer has multiple Tax Return service entries. Update the offer to have exactly one.", steps, status: 400 }
+    }
+    if (taxLine?.status === "found" && taxLine.service_context !== "business" && taxLine.service_context !== "individual") {
+      return { ok: false, error: "Tax Return activation requires explicit service_context (business or individual) on the offer. Update the offer's services[] before retrying activation.", steps, status: 400 }
+    }
     if (businessContextResult === true) {
       if (contractType === "tax_return" && (taxLine?.status !== "found" || taxLineIsBusiness)) {
         // Standalone BUSINESS Tax Return: defer account creation to company_info intake.
@@ -511,10 +520,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           detail: "offer made on a lead/contact page — services stay on the person (no company assumed)",
         })
       }
-    } else if (leadId) {
-      // Individual-context service — try to resolve from lead (legacy fallback)
-      const { data: lead } = await supabase.from("leads").select("converted_to_account_id").eq("id", leadId).maybeSingle()
-      autoAccountId = lead?.converted_to_account_id || null
+    } else {
+      // Personal services (ITIN, a personal Tax Return…) on a lead/contact page
+      // stay on the person. The old fallback put them on the lead's converted
+      // company — a personal 1040-NR would have landed on a company
+      // (Antonio 2026-09-27: the offer lives where it was created).
+      steps.push({
+        step: "ensure_account",
+        status: "skipped",
+        detail: "personal services on a lead/contact page — they stay on the person",
+      })
     }
   }
 
@@ -774,11 +789,17 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // not say WHO the extra units are for (ITIN ×2 = the buyer + someone else).
     // Create the buyer's one and tell staff about the rest — never N copies on
     // the buyer, never a silent unique-index failure (S1 QA, 2026-09-27).
-    let perPersonTypes: string[] = []
-    try { perPersonTypes = await getPerPersonServiceTypes() } catch { perPersonTypes = [] }
     const who = `${activation.client_name || "unknown client"} (offer ${activation.offer_token})`
     const tellStaff = (message: string, context: Record<string, unknown>) => {
       reportSystemError({ source: "server", route: "lib/operations/activate-service", message, context }).catch(() => {})
+    }
+    let perPersonTypes: string[] = []
+    let repeatableTypes: string[] = []
+    try {
+      perPersonTypes = await getPerPersonServiceTypes()
+      repeatableTypes = await getRepeatableServiceTypes()
+    } catch (tagErr) {
+      tellStaff(`service catalog lookup failed while creating services for ${who}: ${tagErr instanceof Error ? tagErr.message : String(tagErr)} — check the created services by hand`, { offerToken: activation.offer_token })
     }
 
     for (const pipeline of pipelines) {
@@ -786,11 +807,6 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         const isPerPerson = perPersonTypes.includes(pipeline)
         const boughtUnits = pipelineQuantity.get(pipeline) ?? 1
         const quantity = isPerPerson ? 1 : boughtUnits
-        if (isPerPerson && boughtUnits > 1) {
-          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; the other ${boughtUnits - 1} are for other people — add each one on that person`
-          steps.push({ step: "service_deliveries", status: "skipped", detail })
-          tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, units: boughtUnits })
-        }
 
         // Guard 1: count SDs already created for this exact offer + pipeline
         // (tied by offer_token in notes — the canonical link).
@@ -806,10 +822,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           sdResults.push({ pipeline, status: "existing", id: existingByOffer![0]?.id })
           continue
         }
+        if (isPerPerson && boughtUnits > 1) {
+          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; the other ${boughtUnits - 1} are for other people — add each one on that person`
+          steps.push({ step: "service_deliveries", status: "skipped", detail })
+          tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, units: boughtUnits })
+        }
 
         // Guard 2: same service_type already active on this account via another path.
         // For quantity > 1, allow up to `quantity` active SDs of this type.
-        if (accountId) {
+        // Repeatable services (shipping, notary…) skip it: each purchase is a new job.
+        if (accountId && !repeatableTypes.includes(pipeline)) {
           const { data: activeSds } = await supabase
             .from("service_deliveries")
             .select("id")
@@ -826,6 +848,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               steps.push({ step: "service_deliveries", status: "warning", detail })
               tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: activeSds![0]?.id })
             } else {
+              const detail = `${pipeline} NOT created for ${who}: this company already has an open one (${activeSds![0]?.id}) — if this purchase is a separate job, add it by hand`
+              steps.push({ step: "service_deliveries", status: "skipped", detail })
+              tellStaff(`[info] ${detail}`, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: activeSds![0]?.id })
               sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
               continue
             }

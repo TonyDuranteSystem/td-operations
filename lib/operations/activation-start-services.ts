@@ -40,7 +40,7 @@
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
 import { reportSystemError } from "@/lib/system-errors"
-import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes } from "@/lib/services"
+import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes } from "@/lib/services"
 
 export interface ActivationStep {
   step: string
@@ -251,6 +251,9 @@ export async function createStartAtActivationSDs(p: {
   contactScopedTypes?: string[] | null
   /** See decideStartServiceScope. */
   newCompanyContract?: boolean
+  /** Types tagged `repeatable`: each purchase is a new job — an open one of the
+   *  same type does not block creation (only this offer's own does). */
+  repeatableTypes?: string[]
 }): Promise<ActivationStep[]> {
   const steps: ActivationStep[] = []
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
@@ -296,7 +299,9 @@ export async function createStartAtActivationSDs(p: {
 
       // (b) an open one already exists (e.g. added by hand) — for a person-level
       // service: on the person or any of their companies; for a company
-      // service: on that company.
+      // service: on that company. Skipped for repeatable services (a second
+      // shipping/notary is a new job, not a duplicate).
+      const repeatable = (p.repeatableTypes ?? []).includes(serviceType)
       let openFilter: string
       if (scope.kind === "account") {
         openFilter = `account_id.eq.${scope.accountId}`
@@ -311,13 +316,15 @@ export async function createStartAtActivationSDs(p: {
         if (accountIds.length) parts.push(`account_id.in.(${accountIds.join(",")})`)
         openFilter = parts.join(",")
       }
-      const { data: open, error: openErr } = await supabase
-        .from("service_deliveries")
-        .select("id, status, account_id")
-        .eq("service_type", serviceType)
-        .in("status", ["active", "on_hold"])
-        .or(openFilter)
-        .limit(1)
+      const { data: open, error: openErr } = repeatable
+        ? { data: [] as Array<{ id: string; status: string; account_id: string | null }>, error: null }
+        : await supabase
+            .from("service_deliveries")
+            .select("id, status, account_id")
+            .eq("service_type", serviceType)
+            .in("status", ["active", "on_hold"])
+            .or(openFilter)
+            .limit(1)
       if (openErr) throw new Error(`open ${serviceType} lookup failed: ${openErr.message}`)
       if (open && open.length > 0) {
         const detail = `${serviceType} NOT created for ${who}: an open one already exists (${open[0].id}${open[0].account_id ? ", on a company" : ""}). If this contract is for a DIFFERENT company, add it by hand.`
@@ -418,8 +425,10 @@ async function createBoughtStartAtActivationServicesInner(p: {
   if (startTypes.length === 0) return []
 
   let contactScopedTypes: string[]
+  let repeatableTypes: string[] = []
   try {
     contactScopedTypes = await getContactEligibleServiceTypes()
+    repeatableTypes = await getRepeatableServiceTypes()
   } catch (tagErr) {
     // Unknown scope → create nothing rather than risk the wrong person/company.
     const detail = `scope lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}`
@@ -441,5 +450,6 @@ async function createBoughtStartAtActivationServicesInner(p: {
     accountId: p.offer?.account_id ?? null,
     contactScopedTypes,
     newCompanyContract: p.newCompanyContract ?? false,
+    repeatableTypes,
   })
 }

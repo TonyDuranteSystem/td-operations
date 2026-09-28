@@ -43,6 +43,13 @@ const PIPELINE_OPTIONS = [
   'Annual Renewal',
   'CMRA Mailing Address',
   'Company Closure',
+  // Created at payment since S1 (2026-09-27)
+  'Company Change Name',
+  'EIN Change Name',
+  'Shipping',
+  'Public Notary',
+  'Consulting Call',
+  'Certificate of Incumbency',
 ]
 
 const CONTRACT_TYPES = [
