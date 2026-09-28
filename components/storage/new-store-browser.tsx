@@ -1336,7 +1336,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         const suggestion = keepBothName(name, (here?.files ?? []).map((x) => x.name))
         const a = await ask('same_name_different_content', 'A file with this name is already here',
           <div className="flex flex-col gap-2 sm:flex-row">
-            <MiniPreview src={`/api/crm-store/browse/file/${same.id}`} mimeType={same.mimeType} label={`Now: ${same.name}`} sub={`${fmtDate(same.updatedAt)} · ${fmtSize(same.size)}`} />
+            <MiniPreview src={`/api/crm-store/browse/file/${same.id}`} mimeType={same.mimeType} label={`Already here: ${same.name}`} sub={`${fmtDate(same.updatedAt)} · ${fmtSize(same.size)}`} />
             <MiniPreview src={localUrl} mimeType={file.type} label={`New: ${name}`} sub={`${fmtSize(file.size)} · from your computer`} />
           </div>,
           [{ key: 'replace' }, { key: 'keep_both', label: `${questions?.same_name_different_content?.choices.keep_both ?? 'Keep both — save the new one as'} "${suggestion}"`, tone: 'primary' }, { key: 'cancel' }])
