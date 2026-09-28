@@ -4,6 +4,7 @@ import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 import { isStaffAuthRole } from '@/lib/team/workspace'
 import { resolveMfaGate } from '@/lib/auth/mfa-gate'
 import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-device'
+import { isSandboxBlockedWebhook } from '@/lib/sandbox-webhook-guard'
 
 // --- Public paths (no auth required) ---
 const PUBLIC_PREFIXES = [
@@ -208,7 +209,8 @@ export async function middleware(request: NextRequest) {
 
   // Sandbox guard: block inbound webhooks to prevent external traffic from
   // mutating sandbox data when SANDBOX_MODE=1
-  if (process.env.SANDBOX_MODE === '1' && request.nextUrl.pathname.startsWith('/api/webhooks')) {
+  // (our own offer-signed step is allowed — see lib/sandbox-webhook-guard.ts)
+  if (process.env.SANDBOX_MODE === '1' && isSandboxBlockedWebhook(request.nextUrl.pathname)) {
     return new NextResponse('Service Unavailable (sandbox mode)', { status: 503 })
   }
 
