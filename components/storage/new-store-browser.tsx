@@ -249,7 +249,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return c
   }, [])
 
-  const openOwner = useCallback(async (oid: string) => {
+  const openOwner = useCallback(async (oid: string, fromPick = false) => {
+    if (!fromPick) pickSeq.current++ // opening a storage by hand cancels a folder pick still loading
     ownerIdRef.current = oid
     focusRef.current = null
     setOwnerId(oid)
@@ -318,13 +319,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   /** show ONE folder on the right (from the left tree or the path) */
   const selectFolder = async (oid: string, folderId: string) => {
     const my = ++pickSeq.current
-    if (oid !== ownerIdRef.current) await openOwner(oid)
+    if (oid !== ownerIdRef.current) await openOwner(oid, true)
     if (my !== pickSeq.current || ownerIdRef.current !== oid) return
-    focusRef.current = folderId
     try {
       const c = await fetchInto(oid, folderId)
       // a later pick (another folder, another storage) wins
       if (my !== pickSeq.current || ownerIdRef.current !== oid) return
+      focusRef.current = folderId
       setLoaded((m) => ({ ...m, [folderId]: c }))
       setFocus(folderId)
       setSelected(folderId)
@@ -365,8 +366,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const refreshAll = useCallback(async (extraKeys: string[] = []) => {
     void refreshTree()
     if (!ownerId) { if (!scopedOwnerId) loadNav(); return }
+    // started for a storage that is no longer the one on screen (switched while an upload ran): leave the screen alone
+    if (ownerIdRef.current !== ownerId) { if (!scopedOwnerId) loadNav(); return }
     try {
       const r = await fetchInto(ownerId, null)
+      if (ownerIdRef.current !== ownerId) return
       setRoot(r)
       // the folder shown on the right is ALWAYS refreshed, whatever is open or closed
       const open = Array.from(new Set([...Array.from(expandedRef.current), ...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
@@ -1337,7 +1341,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   }
 
   const treeArrow = (key: string, open: boolean, load = true) => (
-    <button type="button" aria-label={open ? 'Close' : 'Open'} aria-expanded={open} onClick={(e) => { e.stopPropagation(); toggleTree(key, load) }}
+    <button type="button" aria-label={open ? 'Close' : 'Open'} aria-expanded={open} onClick={(e) => { e.stopPropagation(); setMenuFor(null); toggleTree(key, load) }}
       className="rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
       {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
     </button>
