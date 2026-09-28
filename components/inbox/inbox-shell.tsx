@@ -247,6 +247,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const registerWaInsertDraft = useCallback((fn: ((draft: string) => boolean) | null) => { waInsertDraftRef.current = fn }, [])
   useEffect(() => { setWaWorkerOpen(false) }, [selected?.id])
 
+  // Antonio, 2026-09-28: "I want to see the phone number next to the name" — WhatsappThread already
+  // fetches the chat's own name/phone; it reports it up here rather than this header re-fetching it.
+  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null } | null>(null)
+  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null } | null) => setWaChatInfo(info), [])
+
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
@@ -1671,6 +1676,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                 <div className="min-w-0 flex-1 basis-44">
                   <p className="text-sm font-semibold text-zinc-900 truncate">
                     {selected.name}
+                    {selected.channel === 'whatsapp' && waChatInfo?.phone && (
+                      <span className="ml-1.5 text-xs font-normal text-zinc-400">{waChatInfo.phone}</span>
+                    )}
                   </p>
                   <p className="text-xs text-zinc-500 truncate">
                     {channelLabels[selected.channel]}
@@ -1959,7 +1967,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                       }}
                     />
-                    <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} />
+                    <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} onChatInfo={handleWaChatInfo} />
                   </div>
                   {/* Keyed per chat, like WorkerChatPanel below: no state may survive a chat switch. */}
                   {waWorkerOpen && (
