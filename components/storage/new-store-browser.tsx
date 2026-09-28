@@ -247,6 +247,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   useEffect(() => { expandedRef.current = expanded }, [expanded])
   useEffect(() => { openTreeRef.current = openTree }, [openTree])
   useEffect(() => { focusRef.current = focus }, [focus])
+  // a file from the computer dropped anywhere else on the page must NOT make the browser open it (and lose the page)
+  useEffect(() => {
+    const stop = (e: DragEvent) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault() }
+    window.addEventListener('dragover', stop)
+    window.addEventListener('drop', stop)
+    return () => { window.removeEventListener('dragover', stop); window.removeEventListener('drop', stop) }
+  }, [])
 
   useEffect(() => {
     getJson<{ questions: Record<string, StoreQuestion> }>('/api/crm-store/browse/questions')
@@ -604,7 +611,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setRestoring(b.batchId)
     try {
       const res = await fetch('/api/crm-store/browse/trash/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batchId: b.batchId, targetFolderId }) })
-      const d = await res.json().catch(() => ({})) as { needsTarget?: boolean; error?: string; files?: number; folders?: number; renamed?: string[]; skipped?: { name: string; why: string }[] }
+      const d = await res.json().catch(() => ({})) as { needsTarget?: boolean; error?: string; files?: number; folders?: number; renamed?: string[]; skipped?: { name: string; why: string }[]; notRelisted?: string[] }
       if (res.status === 409 && d.needsTarget) {
         // the folder it came from is gone (deleted too): ask where to put it
         const onlyFiles = b.items.every((i) => i.kind === 'file')
@@ -617,6 +624,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const what = [d.folders ? `${d.folders} ${d.folders === 1 ? 'folder' : 'folders'}` : '', d.files ? `${d.files} ${d.files === 1 ? 'file' : 'files'}` : ''].filter(Boolean).join(' and ')
       toast.success(`Restored ${what || 'it'} — hidden from the client${(d.renamed ?? []).length ? ` (renamed so nothing clashes: ${(d.renamed ?? []).join(', ')})` : ''}`)
       if ((d.skipped ?? []).length) toast.message(`Not restored: ${(d.skipped ?? []).map((x) => `${x.name} (${x.why})`).join('; ')}`)
+      if ((d.notRelisted ?? []).length) toast.message(`Restored, but not put back in the CRM list (the client can't see them): ${(d.notRelisted ?? []).join(', ')} — tell the tech team.`)
       await openTrash()
       await refreshAll()
     } catch (e) {
@@ -643,7 +651,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   const onComputerDrop = async (e: React.DragEvent, folder: Fold) => {
     e.preventDefault(); e.stopPropagation(); setDropOn(null)
+    if (uploading || dropRunning || !!drop) { toast.error('Wait for the upload in progress to finish, then drop again.'); return }
     if (folder.trashed || folder.kind === 'root') { toast.error('Drop the files on one of the folders.'); return }
+    // "2. Contacts" needs its people for "Whose documents?" even when the folder is closed in the tree
+    if (folder.kind === 'contacts' && !loaded[folder.id]) {
+      try {
+        const c = await fetchInto(folderOwner.current.get(folder.id) ?? ownerId ?? '', folder.id)
+        setLoaded((m) => ({ ...m, [folder.id]: c }))
+      } catch (err) { toast.error(errMsg(err, 'Could not read the people of this company.')); return }
+    }
     const entries = Array.from(e.dataTransfer.items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory: boolean } | null }).webkitGetAsEntry?.())
     const files = Array.from(e.dataTransfer.files ?? []).filter((_, i) => !entries[i]?.isDirectory)
     if (entries.some((x) => x?.isDirectory)) toast.message('Folders can’t be dropped yet — drop the files inside them.')
@@ -672,6 +688,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setDropRunning(false)
     setUploading(false)
     toast.success(`${saved} ${saved === 1 ? 'file' : 'files'} uploaded — hidden from the client${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`)
+    if (saved && root?.owner.kind === 'private') toast.message('Files in Shared with staff are shared with nobody yet — use "Not shared" on each one to choose who can see it.')
     await refreshAll()
     if (!failed) setDrop(null)
   }
@@ -927,7 +944,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <MiniPreview src={localUrl} mimeType={file.type} label={file.name} sub="the file you are uploading" />
           </>,
           [{ key: 'store_here', tone: 'primary' }, { key: 'other_place' }, { key: 'business' }, { key: 'later' }])
-        if (a === 'cancel') return // closed the question: nothing is saved
+        if (a === 'cancel') return 'cancelled' // closed the question: nothing is saved
         if (a === 'other_place' || a === 'business') {
           const nav = groups ?? (await getJson<{ groups: NavGroup[] }>('/api/crm-store/browse/navigation')).groups
           const businessId = nav.find((g) => g.key === 'business')?.owners[0]?.id
@@ -986,7 +1003,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <p>A draft is never shown to the client until it is marked filed.</p>
           </>,
           [{ key: 'filed' }, { key: 'draft', tone: 'primary' }, { key: 'later' }])
-        if (a === 'cancel') return // closed the question: nothing is saved
+        if (a === 'cancel') return 'cancelled' // closed the question: nothing is saved
         if (a === 'filed') filingAnswer = 'filed'
         else if (a === 'later') needsReview = 'Prepared return — filed or draft not decided yet'
         else filingAnswer = 'draft'
@@ -1067,8 +1084,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             : `"${r.name}" uploaded${needsReview ? ' — marked "Needs review", hidden from the client' : r.visible ? ' and shared with the client' : ' (hidden from the client)'}`,
       )
       if (r.identity) toast.message(r.identity)
-      // saved into My files › Shared with staff: ask straight away who may open it (nobody until ticked)
-      if (root?.owner.kind === 'private' && r.write === 'created') {
+      // saved into My files › Shared with staff: ask straight away who may open it (nobody until ticked) —
+      // one file at a time only; after a drag-in of several the panel says so once
+      if (!o.batch && root?.owner.kind === 'private' && r.write === 'created') {
         const after = await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}`).catch(() => null)
         const saved = after?.files.find((x) => x.name === r.name)
         if (saved && saved.sharedWith != null) void openSharing(saved)
@@ -1532,7 +1550,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <h3 className="flex-1 text-base font-semibold">Trash — {root?.owner.label}</h3>
               <button type="button" onClick={() => setTrashOpen(false)} aria-label="Close" className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
             </div>
-            <p className="mb-3 text-xs text-zinc-500">Deleted files and folders stay here for 90 days, then they are deleted for good. Anything restored comes back hidden from the client{root?.owner.kind === 'private' ? ' and shared with nobody' : ''}.</p>
+            <p className="mb-3 text-xs text-zinc-500">Deleted files and folders stay here for 90 days, then they are deleted for good. Anything restored comes back hidden from the client{root?.owner.kind === 'private' ? ' and shared with nobody' : ''}.{root?.owner.kind === 'company' ? " A person's own document (passport, ID…) deleted from 2. Contacts is in THAT person's trash — open the person under Clients › People." : ''}</p>
             <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto">
               {trash === null && <li className="text-sm text-zinc-500">Loading…</li>}
               {trash && trash.length === 0 && <li className="text-sm text-zinc-500">The trash is empty.</li>}

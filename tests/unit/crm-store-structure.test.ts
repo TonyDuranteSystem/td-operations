@@ -169,3 +169,11 @@ describe("owners vs the protected admin (adding an owner never changes 2FA prote
     expect(isOwnerOnly(u("support@tonydurante.us", "team"))).toBe(false)
   })
 })
+
+import { rememberable } from "@/lib/crm-store/trash"
+describe("rememberable (what a delete keeps for a restore)", () => {
+  it("keeps links / type / category; never the scanned text, the stage or the visibility", () => {
+    const r = rememberable({ drive_file_id: "store:x", account_id: "a", contact_id: "c", category: 3, ocr_text: "passport 123", ocr_confidence: 0.9, flow_stage: "EIN Received", portal_visible: true, client_notified_at: "t" })
+    expect(r).toEqual({ drive_file_id: "store:x", account_id: "a", contact_id: "c", category: 3 })
+  })
+})

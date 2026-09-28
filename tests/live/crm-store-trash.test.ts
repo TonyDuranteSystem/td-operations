@@ -76,7 +76,7 @@ describe("trash + restore — live sandbox", () => {
   it("a shared file deleted, then restored: back in its folder, its CRM listing back with the SAME links, but HIDDEN from the client", async () => {
     const up = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Articles ${tag}.pdf`, documentType: "articles_of_organization", visible: true })
     expect(up.visible).toBe(true)
-    const { data: before } = await db.from("documents").select("id, account_id, contact_id, category, document_type_name").eq("drive_file_id", `store:${up.fileId}`).single()
+    const { data: before } = await db.from("documents").select("account_id, contact_id, category, document_type_name").eq("drive_file_id", `store:${up.fileId}`).single()
     const { deleteStoreFile } = await import("@/lib/crm-store/file-actions")
     await deleteStoreFile(up.fileId, who.antonio.id)
     const { data: gone } = await db.from("documents").select("id").eq("drive_file_id", `store:${up.fileId}`)
@@ -93,8 +93,24 @@ describe("trash + restore — live sandbox", () => {
     expect(j.files).toBe(1)
     const { data: f } = await db.from("store_files").select("state, folder_id, published").eq("id", up.fileId).single()
     expect(f).toEqual({ state: "live", folder_id: fx.company1, published: false })
-    const { data: after } = await db.from("documents").select("id, account_id, contact_id, category, document_type_name, portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
+    const { data: after } = await db.from("documents").select("account_id, contact_id, category, document_type_name, portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
     expect(after).toEqual({ ...before, portal_visible: false })
+  })
+
+  it("delete never keeps the scanned text in the log; a workspace-stage document comes back WITHOUT its stage (so the portal can't show it)", async () => {
+    const up = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `EIN letter ${tag}.pdf`, documentType: "ein_letter_irs", visible: false })
+    await db.from("documents").update({ ocr_text: "EIN 12-3456789 SECRET", flow_stage: "EIN Received" }).eq("drive_file_id", `store:${up.fileId}`)
+    const { deleteStoreFile } = await import("@/lib/crm-store/file-actions")
+    await deleteStoreFile(up.fileId, who.antonio.id)
+    const { data: ev } = await db.from("store_events").select("details").eq("file_id", up.fileId).eq("event", "crm_rows_removed").single()
+    const kept = JSON.stringify(ev.details)
+    expect(kept).not.toMatch(/SECRET|ocr_text|flow_stage|portal_visible/)
+    expect(ev.details.rows[0].account_id).toBe(fx.account)
+    const { trashForOwner, restoreFromTrash } = await import("@/lib/crm-store/trash")
+    const b = (await trashForOwner(fx.owner)).find((x) => x.items.some((i) => i.id === up.fileId))!
+    await restoreFromTrash(b.batchId, who.antonio.id, null)
+    const { data: row } = await db.from("documents").select("flow_stage, ocr_text, portal_visible, account_id").eq("drive_file_id", `store:${up.fileId}`).single()
+    expect(row).toEqual({ flow_stage: null, ocr_text: null, portal_visible: false, account_id: fx.account })
   })
 
   it("a person's document (both links) comes back with both links, hidden", async () => {

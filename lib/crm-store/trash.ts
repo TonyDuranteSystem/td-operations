@@ -15,7 +15,25 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
 
-type DocRow = Record<string, unknown> & { drive_file_id?: string }
+type DocRow = Record<string, unknown>
+
+/**
+ * The ONLY listing columns kept for a restore. Never the scanned text (ocr_text / page count / confidence — a
+ * passport's number, date of birth …: the event log is permanent and must not outlive the 90-day purge), never
+ * the client-visibility columns (portal_visible, client_notified_at), and never flow_stage: the portal shows a
+ * workspace document by its stage whatever portal_visible says, so keeping it would make a "hidden" restore visible.
+ */
+export const REMEMBERED_COLUMNS = [
+  "drive_file_id", "file_name", "mime_type", "file_size", "drive_link", "document_type_id", "document_type_name",
+  "category", "category_name", "account_id", "account_name", "contact_id", "tax_year", "service_delivery_id", "notify_client", "created_at",
+] as const
+
+/** Pure: keep only the remembered columns of a removed listing row. */
+export function rememberable(row: DocRow): DocRow {
+  const out: DocRow = {}
+  for (const k of REMEMBERED_COLUMNS) if (k in row) out[k] = row[k]
+  return out
+}
 
 /** Remember the CRM listing rows removed when files went to the trash (so a restore can put them back). */
 export async function rememberRemovedRows(rows: DocRow[], actorId: string | null): Promise<void> {
@@ -24,7 +42,7 @@ export async function rememberRemovedRows(rows: DocRow[], actorId: string | null
     const ptr = String(r.drive_file_id ?? "")
     if (!ptr.startsWith("store:")) continue
     const fid = ptr.slice("store:".length)
-    byFile.set(fid, [...(byFile.get(fid) ?? []), r])
+    byFile.set(fid, [...(byFile.get(fid) ?? []), rememberable(r)])
   }
   for (const [fileId, list] of Array.from(byFile.entries())) {
     const { data: f } = await db().from("store_files").select("owner_id, folder_id, name").eq("id", fileId).maybeSingle()
@@ -85,7 +103,7 @@ async function staffNames(ids: string[]): Promise<Map<string, string>> {
   return out
 }
 
-export interface RestoreResult { files: number; folders: number; renamed: string[]; skipped: Array<{ name: string; why: string }>; listingsBack: number }
+export interface RestoreResult { files: number; folders: number; renamed: string[]; skipped: Array<{ name: string; why: string }>; listingsBack: number; notRelisted: string[] }
 
 /** Restore one deletion. Everything comes back HIDDEN from the client and unshared; the CRM listing comes back. */
 export async function restoreFromTrash(batchId: string, actorId: string | null, targetFolderId: string | null): Promise<RestoreResult> {
@@ -98,12 +116,21 @@ export async function restoreFromTrash(batchId: string, actorId: string | null, 
   }
   const report = (data ?? { restored: [], skipped: [] }) as { restored: Array<{ kind: string; id: string; name: string; renamed: boolean }>; skipped: Array<{ kind: string; name: string; why: string }> }
   const files = report.restored.filter((r) => r.kind === "file").map((r) => r.id)
+  // per file: hidden in the store and its CRM listing back — a few at a time, each on its own, so one failure
+  // never stops the rest (a file left without a listing simply stays invisible to the client, the safe side)
   let listingsBack = 0
-  for (const fileId of files) {
-    // hidden in the store too, and never shared with staff
-    const { error: pErr } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: false, p_actor: actorId })
-    if (pErr) console.error(`[crm-store] restore: ${fileId} could not be marked hidden in the store: ${pErr.message}`)
-    listingsBack += await putListingBack(fileId, actorId)
+  const failed: string[] = []
+  for (let i = 0; i < files.length; i += 8) {
+    await Promise.all(files.slice(i, i + 8).map(async (fileId) => {
+      try {
+        const { error: pErr } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: false, p_actor: actorId })
+        if (pErr) throw new Error(pErr.message)
+        listingsBack += await putListingBack(fileId, actorId)
+      } catch (e) {
+        failed.push(report.restored.find((r) => r.id === fileId)?.name ?? fileId)
+        console.error(`[crm-store] restore: ${fileId} restored, but its listing / hidden flag failed: ${e instanceof Error ? e.message : e}`)
+      }
+    }))
   }
   const { clearShares } = await import("./staff-share")
   await clearShares(files, actorId, "restored from the trash — starts unshared").catch((e: unknown) => console.error("[crm-store] shares not cleared on restore:", e))
@@ -113,6 +140,7 @@ export async function restoreFromTrash(batchId: string, actorId: string | null, 
     renamed: report.restored.filter((r) => r.renamed).map((r) => r.name),
     skipped: report.skipped.map((s) => ({ name: s.name, why: s.why })),
     listingsBack,
+    notRelisted: failed,
   }
 }
 
@@ -127,9 +155,15 @@ async function putListingBack(fileId: string, actorId: string | null): Promise<n
   const owner = f.store_owners as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null } | null
   if (!owner || owner.kind === "business" || owner.kind === "private") return 0 // internal areas have no CRM listing
   const { data: ev } = await db().from("store_events").select("details").eq("file_id", fileId).eq("event", "crm_rows_removed").order("occurred_at", { ascending: false }).limit(1)
-  const remembered = ((ev ?? [])[0]?.details?.rows ?? []) as DocRow[]
+  const remembered = (((ev ?? [])[0]?.details?.rows ?? []) as DocRow[]).map(rememberable)
   if (remembered.length) {
-    const rows = remembered.map((r) => ({ ...r, file_name: f.name, portal_visible: false, updated_at: new Date().toISOString() }))
+    const { categoryForFolder } = await import("./structure")
+    const { FOLDER_KIND_CATEGORY } = await import("./browse")
+    const { data: tt } = f.document_type ? await db().from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", f.document_type).maybeSingle() : { data: null }
+    // the category follows where it was restored TO (it may not be its old folder)
+    const cat = owner.kind === "person" || tt?.metadata?.personal === true ? null : await categoryForFolder(f.folder_id)
+    void FOLDER_KIND_CATEGORY
+    const rows = remembered.map((r) => ({ ...r, file_name: f.name, portal_visible: false, updated_at: new Date().toISOString(), ...(cat ? { category: cat.num, category_name: cat.name } : {}) }))
     const { error } = await db().from("documents").insert(rows)
     if (!error) return rows.length
     console.error(`[crm-store] restore: remembered listing of ${fileId} not re-inserted (${error.message}) — a fresh one is made`)

@@ -536,7 +536,7 @@ export async function staffUploadToStore(p: {
     .eq("folder_id", targetFolderId).eq("name_key", storeNameKey(fileName)).neq("state", "purged")
   if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
-  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
+  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — restore it from the Trash (top of this storage) or use another name.")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
   // A NEW file gets its own unique key: a key built from folder + name would later match a file that was
   // renamed or moved away (overwriting it as a "version") or a trashed one (refusing the name for ever).
@@ -627,7 +627,7 @@ async function removeStagedOnFailure<T>(storagePath: string, fn: () => Promise<T
 
 /** Plain words for a save the store refused. */
 export function saveRefusalMessage(status: string): string {
-  if (status === "trashed") return "A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet)."
+  if (status === "trashed") return "A file with this name is in the trash — restore it from the Trash (top of this storage) or use another name."
   if (status === "frozen") return "A file with this name is a FILED document and can't be replaced — upload the amended one under another name."
   return `The file was not saved (the storage answered "${status}") — please try again.`
 }
@@ -640,7 +640,7 @@ async function saveInternalAreaFile(p: { ownerId: string; folderId: string; stor
     .eq("folder_id", p.folderId).eq("name_key", storeNameKey(fileName)).neq("state", "purged")
   if (sameErr) throw new Error(`Could not check this folder — please try again (${sameErr.message}).`)
   const sameLive = (same ?? []).find((f: { state: string }) => f.state === "live") as { caller_key: string | null } | undefined
-  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — use another name (restoring from the trash is not on this screen yet).")
+  if ((same ?? []).length > 0 && !sameLive) throw new Error("A file with this name is in the trash — restore it from the Trash (top of this storage) or use another name.")
   if (sameLive && !sameLive.caller_key) throw new Error("A file with this name is already here and cannot take a new version from this screen — use another name.")
   const { randomUUID } = await import("crypto")
   const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(p.storagePath)
