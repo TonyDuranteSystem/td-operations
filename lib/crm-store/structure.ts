@@ -252,10 +252,10 @@ export async function renameFolder(folderId: string, name: string, actorId: stri
 /** What to hide from the client before a folder move / delete: nothing, every visible file, or the chosen files. */
 export type HideChoice = "none" | "all" | { ids: string[] }
 
-async function applyHide(folderId: string, hide: HideChoice | undefined, actorId: string | null, opts: { forDelete?: boolean } = {}): Promise<void> {
+async function applyHide(folderId: string, hide: HideChoice | undefined, actorId: string | null): Promise<void> {
   if (!hide || hide === "none") return
-  if (hide === "all") await hideAllUnder(folderId, actorId, opts)
-  else await hideChosenUnder(folderId, hide.ids, actorId, opts)
+  if (hide === "all") await hideAllUnder(folderId, actorId)
+  else await hideChosenUnder(folderId, hide.ids, actorId)
 }
 
 export async function moveFolder(folderId: string, toParentId: string, actorId: string | null, hide?: HideChoice): Promise<{ parentName: string }> {
@@ -334,26 +334,24 @@ async function refreshCategories(ownerId: string, folderId: string) {
 }
 
 /** What a folder delete / move would touch: every file (all levels, first 500 listed) and which the client sees. */
-export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean }>; locked: boolean }> {
+export async function folderSummary(folderId: string): Promise<{ name: string; files: number; shown: number; list: Array<{ id: string; name: string; shown: boolean; byWorkspace: string | null }>; locked: boolean }> {
   const f = await folder(folderId)
   const files = await filesUnder(folderId)
-  const list = files.map((x) => ({ id: x.id, name: x.name, shown: x.visible }))
+  // a file its workspace always shows can't be hidden — the screen names it and never offers it for hiding
+  const { workspaceShownFiles } = await import("./client-visibility")
+  const ws = await workspaceShownFiles(files.filter((x) => x.visible).map((x) => x.id))
+  const list = files.map((x) => ({ id: x.id, name: x.name, shown: x.visible, byWorkspace: ws.get(x.id) ?? null }))
     .sort((a, b) => Number(b.shown) - Number(a.shown) || a.name.localeCompare(b.name)).slice(0, 500)
   return { name: f.name, files: files.length, shown: files.filter((x) => x.visible).length, list, locked: isLockedFolder(f) }
 }
 
 /** Hide from the client the given files (all must be under the folder); stops at the first failure and says which. */
-async function hideFiles(ids: string[], actorId: string | null, opts: { forDelete?: boolean } = {}): Promise<number> {
+async function hideFiles(ids: string[], actorId: string | null): Promise<number> {
   const { setClientVisibility } = await import("./browse")
-  // files a workspace always shows can't be hidden: a delete takes them off the portal anyway (their listings go),
-  // so they are skipped there; anything else is refused BEFORE a single file changes, naming them
+  // files a workspace always shows can't be hidden: they are skipped (the screen names them as "stays visible"
+  // before anything is done; a delete takes them off the portal anyway, their listings go)
   const { workspaceShownFiles } = await import("./client-visibility")
   const ws = await workspaceShownFiles(ids)
-  if (ws.size && !opts.forDelete) {
-    const { data: ns } = await db().from("store_files").select("name").in("id", Array.from(ws.keys())).limit(5)
-    const names = ((ns ?? []) as { name: string }[]).map((x) => `"${x.name}"`).join(", ")
-    throw new Error(`${ws.size} file${ws.size === 1 ? " is" : "s are"} always shown to the client by ${ws.size === 1 ? "its" : "their"} workspace (${names}${ws.size > 5 ? " …" : ""}) and can't be hidden from the storage — nothing was changed. Continue without hiding, or pick only the other files.`)
-  }
   let n = 0
   for (const id of ids.filter((x) => !ws.has(x))) {
     try {
@@ -367,14 +365,14 @@ async function hideFiles(ids: string[], actorId: string | null, opts: { forDelet
 }
 
 /** Hide from the client only the chosen files under a folder ("Pick which ones to hide"). */
-export async function hideChosenUnder(folderId: string, fileIds: string[], actorId: string | null, opts: { forDelete?: boolean } = {}): Promise<number> {
+export async function hideChosenUnder(folderId: string, fileIds: string[], actorId: string | null): Promise<number> {
   const inside = new Set((await filesUnder(folderId)).map((x) => x.id))
-  return hideFiles(fileIds.filter((id) => inside.has(id)), actorId, opts)
+  return hideFiles(fileIds.filter((id) => inside.has(id)), actorId)
 }
 
 /** Hide from the client every file under a folder that the client sees today ("hide the visible ones first"). */
-export async function hideAllUnder(folderId: string, actorId: string | null, opts: { forDelete?: boolean } = {}): Promise<number> {
-  return hideFiles((await filesUnder(folderId)).filter((x) => x.visible).map((x) => x.id), actorId, opts)
+export async function hideAllUnder(folderId: string, actorId: string | null): Promise<number> {
+  return hideFiles((await filesUnder(folderId)).filter((x) => x.visible).map((x) => x.id), actorId)
 }
 
 /** Delete a folder: the folder and everything in it go to the store TRASH as one batch (recoverable 90 days);
@@ -384,7 +382,7 @@ export async function deleteFolder(folderId: string, actorId: string | null, hid
   const f = await folder(folderId)
   if (f.trashed_at) throw new Error("That folder is already in the trash.")
   if (isLockedFolder(f)) throw new Error(`"${f.name}" is one of the fixed folders and can't be deleted.`)
-  await applyHide(folderId, hide, actorId, { forDelete: true })
+  await applyHide(folderId, hide, actorId)
   const files = await filesUnder(folderId)
   const { storePointer } = await import("./document-pointer")
   // listings first (kept in memory) so a refusal by the trash (legal hold …) can put them back

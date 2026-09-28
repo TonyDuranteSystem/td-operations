@@ -186,7 +186,7 @@ describe("trash + restore — live sandbox", () => {
     await deleteStoreFile(up.fileId, who.antonio.id)
   })
 
-  it("a workspace document at a client-facing stage: the badge says the client sees it (through the workspace); Hide, a hidden replace and a folder 'hide first' are refused and the stage is never erased", async () => {
+  it("a workspace document at a client-facing stage: the badge says the client sees it (through the workspace); Hide and a hidden replace are refused, a folder 'hide first' skips it (named by the summary), the stage is never erased", async () => {
     const { data: sd, error: sdErr } = await db.from("service_deliveries").insert({ service_name: "ZZ TRASH Formation", service_type: "Company Formation", account_id: fx.account }).select("id").single()
     if (sdErr) throw new Error(sdErr.message)
     const up = await upload({ ownerId: fx.owner, folderId: fx.company1, fileName: `Articles stage ${tag}.pdf`, documentType: "articles_of_organization", visible: false })
@@ -206,11 +206,13 @@ describe("trash + restore — live sandbox", () => {
     const { moveStoreFile } = await import("@/lib/crm-store/file-actions")
     await moveStoreFile(up.fileId, sub.id, who.antonio.id)
     const dest = await createFolder(fx.company1, `WS dest ${tag}`, who.antonio.id)
-    await expect(moveFolder(sub.id, dest.id, who.antonio.id, "all")).rejects.toThrow(/always shown to the client by its workspace/)
+    const { folderSummary } = await import("@/lib/crm-store/structure")
+    expect((await folderSummary(sub.id)).list.find((x) => x.id === up.fileId)?.byWorkspace).toBe("Company Formation")
+    await moveFolder(sub.id, dest.id, who.antonio.id, "all")
     const { data: row } = await db.from("documents").select("flow_stage, portal_visible").eq("drive_file_id", `store:${up.fileId}`).single()
     expect(row).toEqual({ flow_stage: "Filed with State", portal_visible: false })
     const { data: still } = await db.from("store_files").select("folder_id, state").eq("id", up.fileId).single()
-    expect(still).toEqual({ folder_id: sub.id, state: "live" })
+    expect(still).toEqual({ folder_id: sub.id, state: "live" }) // it moved WITH its folder, still live
     // a folder DELETE with "hide first" goes through: the listing goes, so the portal stops showing it
     const { deleteFolder } = await import("@/lib/crm-store/structure")
     await deleteFolder(sub.id, who.antonio.id, "all")

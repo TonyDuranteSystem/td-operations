@@ -184,6 +184,32 @@ describe("zip", () => {
     await new Promise((res) => setTimeout(res, 10))
     expect(cancelled.length).toBeGreaterThanOrEqual(4) // the one being read + the ones opened ahead
   })
+  it("a file that fails on its first read, or comes back empty, becomes a note — the zip still completes", async () => {
+    const list: ZipEntry[] = [
+      { file_id: "a", zip_path: "ok.txt", bucket: "b", object_path: "ok", size_bytes: 2 },
+      { file_id: "b", zip_path: "boom.txt", bucket: "b", object_path: "boom", size_bytes: 5 },
+      { file_id: "c", zip_path: "empty.txt", bucket: "b", object_path: "empty", size_bytes: 7 },
+      { file_id: "d", zip_path: "zero.txt", bucket: "b", object_path: "zero", size_bytes: 0 },
+    ]
+    const open = async (_b: string, p: string) => {
+      if (p === "boom") return new ReadableStream<Uint8Array>({ pull() { throw new Error("reset") } })
+      if (p === "empty" || p === "zero") return new ReadableStream<Uint8Array>({ start(c) { c.close() } })
+      return streamOf("ok", 1)
+    }
+    const files = unzipSync(await collect(streamZip(list, open)))
+    expect(Object.keys(files).sort()).toEqual(["boom.txt - could not be included.txt", "empty.txt - could not be included.txt", "ok.txt", "zero.txt"])
+    expect(files["zero.txt"].length).toBe(0)
+  })
+  it("a failure half-way stops opening files and lets go of the ones opened ahead", async () => {
+    const opened: string[] = [], cancelled: string[] = []
+    const list: ZipEntry[] = Array.from({ length: 20 }, (_, i) => ({ file_id: String(i), zip_path: `g${i}.bin`, bucket: "b", object_path: `r${i}`, size_bytes: i === 0 ? 99 : 1 }))
+    const open = async (_b: string, p: string) => { opened.push(p); return new ReadableStream<Uint8Array>({
+      pull(c) { c.enqueue(new Uint8Array(1)); c.close() }, cancel() { cancelled.push(p) } }) }
+    await expect(collect(streamZip(list, open))).rejects.toThrow(/came back 1 bytes, saved 99/)
+    await new Promise((res) => setTimeout(res, 10))
+    expect(opened.length).toBeLessThanOrEqual(8) // only the first look-ahead batch was ever opened
+    expect(cancelled.length).toBeGreaterThanOrEqual(opened.length - 1)
+  })
   it("keepAliveBody passes every byte through, ends when the body ends, and forwards a cancel", async () => {
     const res = new Response("hello world")
     expect(new TextDecoder().decode(await collect(keepAliveBody(res)))).toBe("hello world")

@@ -354,7 +354,9 @@ export function streamZip(entries: ZipEntry[], open: ObjectOpener = openStoredOb
   // time, in order; an opened file is not read until its turn.
   const AHEAD = 8
   const opening = new Map<number, Promise<ReadableStream<Uint8Array>>>()
+  let stopped = false // cancelled by the downloader, or failed: nothing more is opened
   const openAhead = () => {
+    if (stopped) return
     for (let k = idx; k < Math.min(list.length, idx + AHEAD); k++) {
       if (!opening.has(k)) {
         const pr = open(list[k].bucket, list[k].object_path)
@@ -381,20 +383,36 @@ export function streamZip(entries: ZipEntry[], open: ObjectOpener = openStoredOb
     openAhead()
     const at = idx
     const e = list[idx++]
-    const pending = opening.get(at)!
+    const pending = opening.get(at) ?? open(e.bucket, e.object_path)
     opening.delete(at)
-    try {
-      reader = (await pending).getReader()
-    } catch {
-      const note = new ZipPassThrough(`${e.zip_path} - could not be included.txt`)
-      zip.add(note)
-      note.push(new TextEncoder().encode(`This file could not be read when the zip was made: ${e.zip_path}\n`), true)
-      return
+    const note = () => {
+      const n = new ZipPassThrough(`${e.zip_path} - could not be included.txt`)
+      zip.add(n)
+      n.push(new TextEncoder().encode(`This file could not be read when the zip was made: ${e.zip_path}\n`), true)
     }
+    let r: ReadableStreamDefaultReader<Uint8Array>
+    try { r = (await pending).getReader() } catch { note(); return }
+    if (stopped) { r.cancel().catch(() => {}); return } // cancelled while it was opening
+    // its first piece is read BEFORE it goes into the zip: a file that fails (or comes back empty) right away
+    // becomes a note and the zip completes; a failure half-way still fails loudly (the size check)
+    let first: ReadableStreamReadResult<Uint8Array>
+    try { first = await r.read() } catch { r.cancel().catch(() => {}); note(); return }
+    if (first.done && Number(e.size_bytes) !== 0) { note(); return }
     entry = new ZipPassThrough(e.zip_path)
     zip.add(entry)
     current = e
     seen = 0
+    if (first.done) { entry.push(new Uint8Array(0), true); entry = null; current = null; return }
+    reader = r
+    seen = first.value.byteLength
+    entry.push(first.value)
+  }
+  const letGo = () => {
+    stopped = true
+    reader?.cancel().catch(() => {})
+    // files opened ahead and never read: let them go
+    for (const pr of Array.from(opening.values())) pr.then((st) => st.cancel()).catch(() => {})
+    opening.clear()
   }
 
   return new ReadableStream<Uint8Array>({
@@ -407,14 +425,10 @@ export function streamZip(entries: ZipEntry[], open: ObjectOpener = openStoredOb
         if (out.length > 0) controller.enqueue(out.shift()!)
         if (finished && out.length === 0) controller.close()
       } catch (err) {
+        letGo()
         controller.error(err)
       }
     },
-    async cancel() {
-      try { await reader?.cancel() } catch { /* downloader went away */ }
-      // files opened ahead and never read: let them go
-      for (const pr of Array.from(opening.values())) pr.then((st) => st.cancel()).catch(() => {})
-      opening.clear()
-    },
+    cancel() { letGo() },
   })
 }

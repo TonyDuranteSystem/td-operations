@@ -444,12 +444,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const refreshSeq = useRef(0)
   /** reload everything that is on screen (Refresh, and after any change) */
   const refreshAll = useCallback(async (extraKeys: string[] = []) => {
-    // only the NEWEST refresh may write the screen: an older one finishing late would put back stale folders
-    const seq = ++refreshSeq.current
     void refreshTree()
     if (!ownerId) { if (!scopedOwnerId) loadNav(); return }
-    // started for a storage that is no longer the one on screen (switched while an upload ran): leave the screen alone
+    // started for a storage that is no longer the one on screen (switched while an upload ran): leave the screen
+    // alone — and do NOT count as the newest refresh (it would cancel the one running for the storage on screen)
     if (ownerIdRef.current !== ownerId) { if (!scopedOwnerId) loadNav(); return }
+    // only the NEWEST refresh may write the screen: an older one finishing late would put back stale folders
+    const seq = ++refreshSeq.current
     try {
       const people = Object.values(loaded).flatMap((x) => x.people ?? [])
       const fetchKey = async (key: string) => {
@@ -476,11 +477,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const first = Array.from(new Set([...(focusRef.current ? [focusRef.current] : []), ...extraKeys]))
       const [r, firstEntries] = await Promise.all([fetchInto(ownerId, null), Promise.all(first.map(fetchKey))])
       if (ownerIdRef.current !== ownerId || seq !== refreshSeq.current) return
-      const rest = Array.from(expandedRef.current).filter((k) => !first.includes(k))
+      // what is reloaded: everything open, plus the storage's top folders (their counts show even when closed)
+      const rest = Array.from(new Set([...Array.from(expandedRef.current), ...r.folders.map((x) => x.id)])).filter((k) => !first.includes(k))
       // a CLOSED folder's saved contents are not reloaded, so they may be out of date (e.g. a restored folder
-      // still counting a file as shown): drop them — they are read again, fresh, when the folder is opened
+      // still counting a file as shown): drop them — they are read again, fresh, when the folder is opened.
+      // "2. Contacts" lists (who the people are) are kept: the upload's "Whose document?" reads them.
       const keep = new Set([...first, ...rest])
-      setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => keep.has(k))))
+      setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k, c]) => keep.has(k) || c.folder?.kind === 'contacts')))
       setRoot(r)
       apply(firstEntries)
       // the rest of what is open reloads in the BACKGROUND (the action that asked is done once the folders it
@@ -562,7 +565,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const moveFileTo = (f: File_, folderId: string, where: string) => withBusy(f.id, async () => {
     setMenuFor(null)
     let hide = false
-    if (f.clientVisible) {
+    if (f.shownByWorkspace && f.clientVisible) {
+      const a = await ask('move_workspace_file', 'The client can see this file',
+        <p><strong>{f.name}</strong> is always shown to the client by the <strong>{f.shownByWorkspace}</strong> workspace, so it stays visible after the move to <strong>{where}</strong>.</p>,
+        [{ key: 'keep', label: 'Move it (it stays visible)', tone: 'primary' }, { key: 'cancel', label: 'Cancel the move' }])
+      if (a === 'cancel') return
+    } else if (f.clientVisible) {
       const a = await ask('move_visible_file', 'The client can see this file',
         <p><strong>{f.name}</strong> is visible to <strong>{f.personName ?? root?.owner.label ?? 'the client'}</strong>. It is moving to <strong>{where}</strong>. Who can see a file goes with the file, not the folder.</p>,
         [{ key: 'keep', tone: 'primary' }, { key: 'hide' }, { key: 'cancel' }])
@@ -576,6 +584,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       await refreshAll([folderId])
     } catch (e) {
       toast.error(errMsg(e, 'The file could not be moved.'))
+      await refreshAll([folderId]) // the move itself may have happened: show where the file really is
     }
   })
 
@@ -914,10 +923,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       setPicking(null)
       if (!r) return
       moveTo = { folderId: r.folderId, path: r.path }
-      const shown = list.filter((f) => f.clientVisible).length
+      // files a workspace always shows can't be hidden — they move and stay visible (said in the question)
+      const byWs = list.filter((f) => f.clientVisible && f.shownByWorkspace).length
+      const shown = list.filter((f) => f.clientVisible && !f.shownByWorkspace).length
       if (shown) {
         const a = await ask('move_visible_file', 'The client can see this file',
-          <p>{shown} of the {list.length} files {shown === 1 ? 'is' : 'are'} visible to the client. They are moving to <strong>{r.path}</strong>. Who can see a file goes with the file, not the folder.</p>,
+          <p>{shown} of the {list.length} files {shown === 1 ? 'is' : 'are'} visible to the client. They are moving to <strong>{r.path}</strong>. Who can see a file goes with the file, not the folder.{byWs ? ` ${byWs} more ${byWs === 1 ? 'is' : 'are'} always shown by ${byWs === 1 ? 'its' : 'their'} workspace and stay${byWs === 1 ? 's' : ''} visible.` : ''}</p>,
           [{ key: 'keep', tone: 'primary' }, { key: 'hide' }, { key: 'cancel' }])
         if (a === 'cancel') return
         hideAfterMove = a === 'hide'
@@ -935,7 +946,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         if (action === 'move' && moveTo) {
           // always sent: the server knows where the file is NOW (it may have moved since it was ticked)
           await postJson(`/api/crm-store/browse/file/${f.id}/move`, { folderId: moveTo.folderId }, 'Could not move it.')
-          if (hideAfterMove) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Moved, but could not hide it.')
+          if (hideAfterMove && !f.shownByWorkspace) await postJson(`/api/crm-store/browse/file/${f.id}/visibility`, { visible: false }, 'Moved, but could not hide it.')
         }
         ok++
       } catch (e) {
@@ -959,17 +970,20 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
    * here: it returns WHAT to hide; the server hides only after all its own checks pass, in the same request.
    */
   const settleVisibleInside = async (f: Fold, action: 'move' | 'delete'): Promise<{ go: boolean; files: number; stillShown: number; hide: 'none' | 'all' | { ids: string[] } }> => {
-    const s = await getJson<{ files: number; shown: number; list: { id: string; name: string; shown: boolean }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
+    const s = await getJson<{ files: number; shown: number; list: { id: string; name: string; shown: boolean; byWorkspace?: string | null }[] }>(`/api/crm-store/browse/folder/${f.id}/summary`)
     if (s.shown === 0) return { go: true, files: s.files, stillShown: 0, hide: 'none' }
-    const visible = s.list.filter((x) => x.shown)
+    // files a workspace always shows can't be hidden: listed as such, never offered in "hide"
+    const locked = s.list.filter((x) => x.shown && x.byWorkspace)
+    const visible = s.list.filter((x) => x.shown && !x.byWorkspace)
     const a = await ask('folder_with_visible_files', 'The client can see files in this folder',
       <>
         <p>{action === 'delete' ? 'Deleting' : 'Moving'} <strong>{f.name}</strong> touches {s.files} {s.files === 1 ? 'file' : 'files'}; <strong>{s.shown}</strong> {s.shown === 1 ? 'is' : 'are'} shown to the client:</p>
-        <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs">{visible.slice(0, 40).map((x) => <li key={x.id}>{x.name}</li>)}{visible.length > 40 && <li>… and {visible.length - 40} more</li>}</ul>
+        <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-xs">{visible.slice(0, 40).map((x) => <li key={x.id}>{x.name}</li>)}{visible.length > 40 && <li>… and {visible.length - 40} more</li>}
+          {locked.slice(0, 20).map((x) => <li key={x.id}>{x.name} <span className="text-zinc-500">— always shown by the {x.byWorkspace} workspace (it can&apos;t be hidden here{action === 'delete' ? '; deleting takes it off the portal' : ''})</span></li>)}</ul>
       </>,
-      [{ key: 'all' }, { key: 'hide_first', tone: 'primary' }, { key: 'pick' }, { key: 'cancel' }])
+      visible.length ? [{ key: 'all' }, { key: 'hide_first', tone: 'primary' }, { key: 'pick' }, { key: 'cancel' }] : [{ key: 'all', tone: 'primary' }, { key: 'cancel' }])
     if (a === 'cancel') return { go: false, files: s.files, stillShown: s.shown, hide: 'none' }
-    if (a === 'hide_first') return { go: true, files: s.files, stillShown: 0, hide: 'all' }
+    if (a === 'hide_first') return { go: true, files: s.files, stillShown: locked.length, hide: 'all' }
     if (a === 'pick') {
       const chosen = new Set(visible.map((x) => x.id))
       const b = await ask('folder_with_visible_files_pick', 'Which ones should the client stop seeing?',
@@ -1156,6 +1170,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // a person's folder opened from a company page takes only the person's own documents (the server refuses the rest)
   const upTypes = (types ?? []).filter((t) => (upViaCompany ? t.personal : upTargetIsPerson ? true : upIsContacts ? t.personal : ownerKind === 'private' ? true : !t.personal))
   const upPeople = upFolderObj ? loaded[upFolderObj.id]?.people ?? [] : []
+  // "Whose document?" needs the people of "2. Contacts": read them when the panel points there and they aren't on screen
+  const peopleTried = useRef(new Set<string>())
+  useEffect(() => {
+    if (!upIsContacts || !upFolderObj || loaded[upFolderObj.id] || loadingFolders.has(upFolderObj.id)) return
+    if (peopleTried.current.has(upFolderObj.id)) return // once per folder: a failed read is not retried in a loop
+    peopleTried.current.add(upFolderObj.id)
+    void loadKey(upFolderObj.id)
+  }, [upIsContacts, upFolderObj, loaded, loadingFolders, loadKey])
 
   /** today's "Custom…" type: added once, then listed for everyone (catalog, with who added it) */
   const addCustomType = async () => {
@@ -1285,7 +1307,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       // where the file will really land: through "2. Contacts" it goes into that person's "Personal documents"
       let landsIn = { ownerId: target.ownerId, folderId: target.folder.id, via: target.via }
       if (target.folder.kind === 'contacts') {
-        const person = (loaded[target.folder.id]?.people ?? []).find((pp) => pp.contactId === upPerson)
+        // the people list is read fresh when it isn't on screen — never skip the same-name check for want of it
+        const peopleHere = loaded[target.folder.id]?.people
+          ?? (await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(target.ownerId)}&folder=${encodeURIComponent(target.folder.id)}`)).people ?? []
+        const person = peopleHere.find((pp) => pp.contactId === upPerson)
+        if (!person?.ownerId) throw new Error("That person's storage could not be found — refresh and choose whose document it is again.")
         const top = person?.ownerId ? await getJson<Contents>(`/api/crm-store/browse/folder?owner=${encodeURIComponent(person.ownerId)}&via=company`) : null
         const personal = top?.folders.find((x) => x.kind === 'personal')
         landsIn = person?.ownerId && personal ? { ownerId: person.ownerId, folderId: personal.id, via: true } : { ownerId: '', folderId: '', via: false }
