@@ -9,6 +9,7 @@ import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-w
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -33,7 +34,7 @@ const CL = {
     cardSurcharge: 'A 5% processing fee applies to card payments.',
     orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
-    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', reference: 'Reference',
+    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', bankAddress: 'Bank address', reference: 'Reference',
     accountNumber: 'Account Number', routingNumber: 'Routing Number',
     receiptTitle: 'Upload Wire Transfer Receipt',
     receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
@@ -63,7 +64,7 @@ const CL = {
     cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
     orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
-    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', reference: 'Causale',
+    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', bankAddress: 'Indirizzo banca', reference: 'Causale',
     accountNumber: 'Numero Conto', routingNumber: 'Routing Number',
     receiptTitle: 'Carica Ricevuta Bonifico',
     receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
@@ -485,6 +486,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.iban}</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
           if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bic}</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
           if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bank}</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
+          if (euroBankAddress(b)) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bankAddress}</span><span class="contract-bank-value">${esc(euroBankAddress(b) as string)}</span></div>`
           if (b.reference) sh += `<div class="contract-bank-ref">${cl.reference}: ${esc(b.reference)}</div>`
           sh += '</div>'
           sh += '<div class="contract-receipt-upload">'

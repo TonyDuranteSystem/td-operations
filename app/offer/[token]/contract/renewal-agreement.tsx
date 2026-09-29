@@ -6,6 +6,7 @@ import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } 
 import type { Offer } from '@/lib/types/offer'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -487,6 +488,7 @@ function RenewalPaymentPanel({
             {bankDetails.iban && <div className="contract-bank-row"><span className="contract-bank-label">IBAN</span><span className="contract-bank-value">{bankDetails.iban}</span></div>}
             {bankDetails.bic && <div className="contract-bank-row"><span className="contract-bank-label">BIC/SWIFT</span><span className="contract-bank-value">{bankDetails.bic}</span></div>}
             {bankDetails.bank_name && <div className="contract-bank-row"><span className="contract-bank-label">Bank</span><span className="contract-bank-value">{bankDetails.bank_name}</span></div>}
+            {euroBankAddress(bankDetails) && <div className="contract-bank-row"><span className="contract-bank-label">Bank address</span><span className="contract-bank-value">{euroBankAddress(bankDetails)}</span></div>}
             {bankDetails.reference && <div className="contract-bank-ref">Reference: {bankDetails.reference}</div>}
           </div>
 

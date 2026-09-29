@@ -14,6 +14,7 @@ import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-w
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -45,7 +46,7 @@ const CL = {
     cardSurcharge: 'A 5% processing fee applies to card payments.',
     orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
-    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', reference: 'Reference',
+    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', bankAddress: 'Bank address', reference: 'Reference',
     accountNumber: 'Account Number', routingNumber: 'Routing Number',
     receiptTitle: 'Upload Wire Transfer Receipt',
     receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
@@ -72,7 +73,7 @@ const CL = {
     cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
     orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
-    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', reference: 'Causale',
+    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', bankAddress: 'Indirizzo banca', reference: 'Causale',
     accountNumber: 'Numero Conto', routingNumber: 'Routing Number',
     receiptTitle: 'Carica Ricevuta Bonifico',
     receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
@@ -214,6 +215,7 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
               {offer.bank_details!.iban && <div className="contract-bank-row"><span className="contract-bank-label">{cl.iban}</span><span className="contract-bank-value">{offer.bank_details!.iban}</span></div>}
               {offer.bank_details!.bic && <div className="contract-bank-row"><span className="contract-bank-label">{cl.bic}</span><span className="contract-bank-value">{offer.bank_details!.bic}</span></div>}
               {offer.bank_details!.bank_name && <div className="contract-bank-row"><span className="contract-bank-label">{cl.bank}</span><span className="contract-bank-value">{offer.bank_details!.bank_name}</span></div>}
+              {euroBankAddress(offer.bank_details) && <div className="contract-bank-row"><span className="contract-bank-label">{cl.bankAddress}</span><span className="contract-bank-value">{euroBankAddress(offer.bank_details)}</span></div>}
               {offer.bank_details!.reference && <div className="contract-bank-ref">{cl.reference}: {offer.bank_details!.reference}</div>}
             </div>
             <div className="contract-receipt-upload">
@@ -931,6 +933,7 @@ export default function ContractPage() {
           if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.iban}</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
           if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bic}</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
           if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bank}</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
+          if (euroBankAddress(b)) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bankAddress}</span><span class="contract-bank-value">${esc(euroBankAddress(b) as string)}</span></div>`
           if (b.reference) sh += `<div class="contract-bank-ref">${cl.reference}: ${esc(b.reference)}</div>`
           sh += '</div>'
           // Wire receipt upload
