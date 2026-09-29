@@ -284,8 +284,12 @@ describe("move — identical copies with and without a type, a retried file, a f
     expect(by(g.gNr).status).toBe("merged")
     expect(by(g.gNr).store_file_id).toBe(by(g.fNr).store_file_id)
     expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", g.rowG).single()).data).toEqual({ drive_file_id: g.gNr, portal_visible: true })
-    expect(by(g.gNr).reason).toMatch(/Still on Drive/)
-    expect(v.report?.waitingForType.map((x) => x.name)).toContain("G nr copy.pdf")
+    expect(by(g.gNr).reason).toMatch(/Second record/)
+    expect(v.report?.secondRecords?.map((x) => x.name)).toContain("G nr copy.pdf")
+    expect(v.report?.waitingForType.map((x) => x.name)).not.toContain("G nr copy.pdf")
+    // every batch marked the move alive
+    const { data: runRow } = await db.from("store_import_runs").select("started_at, updated_at").eq("id", g.run).single()
+    expect(Date.parse(runRow.updated_at)).toBeGreaterThan(Date.parse(runRow.started_at))
   }, 300_000)
 
   it("a personal file that runs again (a batch that died after saving) recognises its own copy — never 'merged into itself'", async () => {

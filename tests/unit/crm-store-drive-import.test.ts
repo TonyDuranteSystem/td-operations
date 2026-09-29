@@ -77,6 +77,11 @@ describe("drive import — pure rules", () => {
     }
     expect(WAITING_RE.test("Type set later: Passport.")).toBe(false)
   })
+  it("a merged copy with a second record the client sees is listed apart (checked by hand, no Set type)", () => {
+    const r = buildReport([item({ name: "Copy.pdf", drive_path: ["2. Contacts"], status: "merged", reason: "Kept once. The client sees this record too, but the kept copy already has its own CRM record — two records for one document: check them by hand (Second record)." })], [])
+    expect(r.secondRecords).toEqual([{ name: "Copy.pdf", where: "2. Contacts" }])
+    expect(r.waitingForType).toEqual([])
+  })
   it("lists the files the client sees that have no type (their records still open from Drive)", () => {
     const r = buildReport([
       item({ name: "Old note.pdf", drive_path: ["Old stuff"], reason: "The client could see this but it has no type — its CRM record still opens from Drive until it gets one (Needs a type)." }),

@@ -18,7 +18,7 @@ interface Folder { folder: string; driveFiles: number; moved: number; merged: nu
 interface Report {
   folders: Folder[]; rowsRepointed: number; rowsCreated: number; fromStorage: number
   skipped: { name: string; where: string; reason: string }[]; failed: { name: string; where: string; reason: string }[]
-  needsReview: number; waitingForType?: { name: string; where: string; fileId: string | null }[]; parityOk: boolean; stillReadDrive: string[]
+  needsReview: number; waitingForType?: { name: string; where: string; fileId: string | null }[]; secondRecords?: { name: string; where: string }[]; parityOk: boolean; stillReadDrive: string[]
 }
 interface Run {
   id: string; status: string; startedAt: string; finishedAt: string | null; ownerId?: string | null
@@ -196,6 +196,7 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
           </div>
           {r.report.failed.length > 0 && <div><p className="font-medium text-red-700">Failed</p><ul className="list-disc pl-5">{r.report.failed.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
           {(r.report.waitingForType?.length ?? 0) > 0 && <div><p className="font-medium text-amber-700">Still opening from Drive — check each (the client sees them; give it its type, or settle &quot;Needs review&quot; first)</p><ul className="list-disc pl-5">{r.report.waitingForType!.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}){x.fileId && <> — <button type="button" className="text-blue-700 hover:underline" onClick={() => setTyping({ id: x.fileId!, name: x.name })}>Set type</button></>}</li>)}</ul></div>}
+          {(r.report.secondRecords?.length ?? 0) > 0 && <div><p className="font-medium text-amber-700">Two CRM records for one document — check by hand (the client sees the second one, from Drive)</p><ul className="list-disc pl-5">{r.report.secondRecords!.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where})</li>)}</ul></div>}
           {r.report.skipped.length > 0 && <div><p className="font-medium">Not moved (still in Drive)</p><ul className="list-disc pl-5">{r.report.skipped.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
           <p className="text-zinc-500">Still read only from Drive for now (to switch before real clients): {r.report.stillReadDrive.join(', ')}.</p>
         </div>

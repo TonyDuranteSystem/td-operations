@@ -273,6 +273,18 @@ describe("label questions + the move's Re-check (live sandbox)", () => {
     expect(it.repointed.filter((r: { id: string }) => r.id === x.rowId)).toHaveLength(1)
   }, 120_000)
 
+  it("a hidden record the move listed that staff edited since is never removed to make room: both stay, staff told", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const x = await driveLeft("Left listed.pdf")
+    // the move had listed the stored copy (hidden) — and staff worked on that listing since
+    const listed = await insert("documents", { drive_file_id: `store:${x.fileId}`, file_name: "Left listed.pdf", account_id: g.account, category: 5, portal_visible: false, status: "classified", created_at: new Date(Date.now() - 3_600_000).toISOString() })
+    await db.from("store_import_items").update({ repointed: [{ id: listed, drive_file_id: `store:${x.fileId}`, drive_link: null, created: true }] }).eq("source_id", x.driveId)
+    const r = await setStoreFileType({ fileId: x.fileId, typeSlug: "office_lease", actorId: actor })
+    expect(r.notes.join(" ")).toMatch(/changed since the move/)
+    expect((await db.from("documents").select("id").eq("id", listed).maybeSingle()).data).toEqual({ id: listed })
+    expect(await row(x.rowId)).toMatchObject({ drive_file_id: x.driveId, portal_visible: true })
+  }, 120_000)
+
   it("a file's own record that shows a file the storage keeps hidden is lined up (a staff-only type hides both)", async () => {
     const { setStoreFileType } = await import("@/lib/crm-store/set-type")
     const f = await file(g.company, "company", "Mismatch.pdf", "operating_agreement", "Operating Agreement", false)

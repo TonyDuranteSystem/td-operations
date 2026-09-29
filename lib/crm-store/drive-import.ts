@@ -62,6 +62,8 @@ export interface ImportReport {
   needsReview: number
   /** copied, but the client could see them and they have no type — their CRM records still open from Drive */
   waitingForType: Array<{ name: string; where: string; fileId: string | null }>
+  /** a merged copy whose record the client sees, while the kept copy has its own record — checked by hand */
+  secondRecords?: Array<{ name: string; where: string }>
   parityOk: boolean
   stillReadDrive: string[]
 }
@@ -126,6 +128,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     failed: items.filter((it) => it.status === "failed").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     needsReview: items.filter((it) => /needs review/i.test(it.reason ?? "")).length,
     waitingForType: items.filter((it) => WAITING_RE.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it), fileId: it.store_file_id })),
+    secondRecords: items.filter((it) => /\(Second record\)/.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it) })),
     parityOk: items.every((it) => it.status !== "failed" && it.status !== "pending" && it.status !== "working"),
     stillReadDrive,
   }
@@ -576,7 +579,7 @@ async function mergeInto(it: ImportItem, fileId: string, rows: DocRow[], ctx: Ct
       repointed = await repointRows(live, fileId, null, null, it, ctx, vis)
     } else {
       reason += vis
-        ? " The client could see it but the kept copy already has its own CRM record — this record still opens from Drive; check it (Still on Drive)."
+        ? " The client sees this record too, but the kept copy already has its own CRM record — two records for one document: check them by hand (Second record)."
         : " Its CRM record still points to Drive."
     }
   }

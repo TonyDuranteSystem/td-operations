@@ -277,8 +277,9 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
     if (name !== f.name) { await renameStoreFile(f.id, name, p.actorId); renamedTo = name }
     const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: target.folderId, p_actor: p.actorId, p_reason: `Set type: ${type.display_name}` })
     if (rhErr) {
-      if (renamedTo) await renameStoreFile(f.id, f.name, p.actorId).catch(() => undefined)
-      throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).`)
+      let back = ""
+      if (renamedTo) await renameStoreFile(f.id, f.name, p.actorId).catch((e) => { back = ` It keeps the name "${renamedTo}" — the old name could not be put back (${e instanceof Error ? e.message : e}).` })
+      throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).${back}`)
     }
     if (renamedTo) notes.push(`Renamed "${renamedTo}" — the folder already had a file called "${f.name}".`)
     folderId = target.folderId
@@ -291,7 +292,7 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
     if (bErr) throw new Error(bErr.message.replace(/^store: /, ""))
     if (renamedTo) {
       const { renameStoreFile } = await import("./file-actions")
-      await renameStoreFile(f.id, f.name, p.actorId).catch(() => undefined)
+      await renameStoreFile(f.id, f.name, p.actorId) // an error is reported by the caller
     }
   }
 
@@ -299,6 +300,7 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
   let visible = f.published
   let fr: FollowResult
   let typeSaved = false, filingRan = false
+  const track: { placeholder: Brought["placeholder"] } = { placeholder: null }
   try {
     if (visible && hideIt) {
       await setClientVisibility(f.id, false, p.actorId)
@@ -326,13 +328,15 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
     }
     // the CRM record follows; a record left on Drive comes over (ledger first, with what it said before — Undo restores it)
     const owner = { contactId: target ? target.contactId : ownerKind === "person" ? f.store_owners.contact_id : null, accountId: target && !target.contactId ? target.accountId : null }
-    fr = await followRecords(f, folderId, type, legacyId, personal, owner, bring, own, placeholderHolder, ctx.items, notes)
+    fr = await followRecords(f, folderId, type, legacyId, personal, owner, bring, own, placeholderHolder, ctx.items, notes, track)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     // a filing step already ran (it only moves forward): the file keeps its new type and place — the record follows
     // on the next Save (never a return frozen under the old type, never a personal type back in a company folder)
     if (filingRan) throw new Error(`${msg} The type is saved; its CRM record did not follow — press Save again.`)
     const problems: string[] = []
+    // the hidden record the move had listed (removed to make room) is listed again — the file never ends unlisted
+    if (track.placeholder) await relistPlaceholder(pointer, track.placeholder).catch((rErr) => problems.push(`its listed CRM record could not be put back (${rErr instanceof Error ? rErr.message : rErr})`))
     if (typeSaved) {
       const { error: rErr } = await db().from("store_files").update({ document_type: f.document_type, period_year: f.period_year }).eq("id", f.id)
       if (rErr) problems.push(`the old type could not be put back (${rErr.message})`)
@@ -363,12 +367,27 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
   }
   // the file's record says exactly what the store does (a record showing a file the storage keeps hidden is lined up)
   if (fr.count > 0) {
-    const { data: lined, error: vErr } = await db().from("documents").update({ portal_visible: visible, updated_at: new Date().toISOString() }).eq("drive_file_id", pointer).neq("portal_visible", visible).select("id")
-    if (vErr) {
-      if (fr.brought) await putBackOnDrive(fr.brought)
-      throw new Error(`The CRM record could not be lined up with the file (${vErr.message})${fr.brought ? " — it still opens from Drive" : ""}.`)
+    const { data: recs, error: rErr } = await db().from("documents").select("id, portal_visible").eq("drive_file_id", pointer)
+    if (rErr) throw new Error(`The type is saved; the CRM record could not be checked (${rErr.message}) — press Save again.`)
+    const { updateDocument } = await import("@/lib/operations/document")
+    for (const r of (recs ?? []) as { id: string; portal_visible: boolean | null }[]) {
+      const shows = r.portal_visible === true
+      if (shows === visible) continue
+      if (visible) {
+        // turned visible through the normal share step (the client's alert, the audit) — never a raw write
+        const u = await updateDocument({ id: r.id, patch: { portal_visible: true } } as never)
+        if (!u.success) throw new Error(`The CRM record could not be shown (${u.error ?? "unknown"}) — press Save again.`)
+      } else if (shows && wantVisible) {
+        // the client sees it and should: the file can't be shown yet — the record is NOT hidden behind anyone's back
+        notes.push("The client still sees its CRM record, but the new storage cannot show the file yet (see above) — settle that, then Save again.")
+      } else {
+        const { error: hErr } = await db().from("documents").update({ portal_visible: false, updated_at: new Date().toISOString() }).eq("id", r.id)
+        if (hErr) {
+          if (fr.brought) await putBackOnDrive(fr.brought)
+          throw new Error(`The CRM record could not be hidden (${hErr.message})${fr.brought ? " — it still opens from Drive" : ""}.`)
+        }
+      }
     }
-    if ((lined ?? []).length && !visible && own?.portal_visible === true && !hideIt) notes.push("Hidden from the client — the new storage cannot show it as it is (see the note above); show it once that is settled.")
   }
   // an Undo that started meanwhile wins: the record goes back on Drive
   if (fr.brought && fr.settled.size && ctx.runIds.length) {
@@ -378,9 +397,28 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
       throw new Error("The move was undone meanwhile — the CRM record stays on Drive.")
     }
   }
+  // two tabs choosing different types at once: the record ends on whatever the store says (last word wins, together)
+  const { data: nowType } = await db().from("store_files").select("document_type").eq("id", f.id).maybeSingle()
+  if (nowType && nowType.document_type !== type.slug) {
+    notes.push("Someone else changed the type at the same moment — the file and its record now both show their choice.")
+    await syncRecordType(f.id, nowType.document_type as string | null)
+  }
   await settleMoveLedger(fr.settled, type.display_name, p.skipReportRefresh ? [] : ctx.runIds, notes)
   await logEvent({ ...f, folder_id: folderId }, p.actorId, { from: f.document_type, to: type.slug, moved_to: movedTo })
   return { typeName: type.display_name, movedTo, visible, notes, recordsFollowed: fr.count }
+}
+
+/** The file's CRM record takes the store's current type (name and number). */
+async function syncRecordType(fileId: string, slug: string | null): Promise<void> {
+  let name: string | null = null, legacy: number | null = null
+  if (slug) {
+    const { data: t } = await db().from("catalog_entries").select("display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", slug).maybeSingle()
+    name = (t?.display_name as string | undefined) ?? null
+    const l = (t?.metadata as { legacy_document_type_id?: unknown } | null)?.legacy_document_type_id
+    legacy = typeof l === "number" ? l : null
+  }
+  const { error } = await db().from("documents").update({ document_type_name: name, document_type_id: legacy, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointerOf(fileId))
+  if (error) throw new Error(`The CRM record could not follow the latest type (${error.message}) — press Save again.`)
 }
 
 function storePointerOf(fileId: string): string {
@@ -403,14 +441,22 @@ async function putBackOnDrive(b: Brought): Promise<void> {
   const rest = ((it?.repointed ?? []) as LedgerEntry[]).filter((r) => !(r.id === b.entry.id && !r.created))
   const { error: lErr } = await db().from("store_import_items").update({ repointed: rest, updated_at: new Date().toISOString() }).eq("id", b.itemId)
   if (lErr) throw new Error(`Could not update the move's ledger (${lErr.message}).`)
-  if (b.placeholder) {
-    const { error: iErr } = await db().from("documents").insert(b.placeholder.row)
-    if (iErr) throw new Error(`The listed CRM record could not be put back (${iErr.message}).`)
-    const { data: h } = await db().from("store_import_items").select("repointed").eq("id", b.placeholder.holderId).maybeSingle()
-    const back = [...((h?.repointed ?? []) as LedgerEntry[]), b.placeholder.entry]
-    const { error: hErr } = await db().from("store_import_items").update({ repointed: back, updated_at: new Date().toISOString() }).eq("id", b.placeholder.holderId)
-    if (hErr) throw new Error(`Could not update the move's ledger (${hErr.message}).`)
-  }
+  if (b.placeholder) await relistPlaceholder(b.pointer, b.placeholder)
+}
+
+/** The hidden record a move listed (removed by this call to make room) is listed again — only while nothing else
+ *  holds the file's place (one record per stored file) — and goes back into the move's ledger. */
+async function relistPlaceholder(pointer: string, ph: NonNullable<Brought["placeholder"]>): Promise<void> {
+  const { data: holder, error: hoErr } = await db().from("documents").select("id").eq("drive_file_id", pointer).maybeSingle()
+  if (hoErr) throw new Error(`Could not read the CRM listing (${hoErr.message}).`)
+  if (holder) return
+  const { error: iErr } = await db().from("documents").insert(ph.row)
+  if (iErr) throw new Error(`The listed CRM record could not be put back (${iErr.message}).`)
+  const { data: h, error: rErr } = await db().from("store_import_items").select("repointed").eq("id", ph.holderId).maybeSingle()
+  if (rErr) throw new Error(`Could not read the move's ledger (${rErr.message}).`)
+  const back = [...((h?.repointed ?? []) as LedgerEntry[]), ph.entry]
+  const { error: lErr } = await db().from("store_import_items").update({ repointed: back, updated_at: new Date().toISOString() }).eq("id", ph.holderId)
+  if (lErr) throw new Error(`Could not update the move's ledger (${lErr.message}).`)
 }
 
 /** The move's report stops listing this file as still opening from Drive — only for the items whose record now
@@ -442,6 +488,7 @@ async function followRecords(
   f: FileRow, folderId: string, type: TypeRow, legacyId: number | null, personal: boolean,
   owner: { contactId: string | null; accountId: string | null }, bring: WaitingRow | null, own: Record<string, unknown> | null,
   placeholderHolder: { id: string; repointed: LedgerEntry[] } | null, items: Array<{ id: string; repointed: LedgerEntry[] }>, notes: string[],
+  track: { placeholder: Brought["placeholder"] },
 ): Promise<FollowResult> {
   const out: FollowResult = { count: 0, brought: null, settled: new Set<string>() }
   if (f.store_owners.kind === "business" || f.store_owners.kind === "private") return out
@@ -452,6 +499,15 @@ async function followRecords(
   const cat = personal ? categoryForKind("personal") : await categoryForFolder(folderId)
   let record = own
 
+  if (bring && own && placeholderHolder) {
+    // a listed record staff have worked on since the move is never removed to make room: both stay, staff check
+    const { data: pr, error: prErr } = await db().from("documents").select("created_at, updated_at").eq("id", own.id as string).maybeSingle()
+    if (prErr) throw new Error(`Could not read the listed CRM record (${prErr.message}).`)
+    if (pr && Date.parse(pr.updated_at) - Date.parse(pr.created_at) > 60_000) {
+      notes.push("The CRM record listed for this file was changed since the move — the record still on Drive was left as it is; check both.")
+      bring = null
+    }
+  }
   if (bring) {
     let placeholder: Brought["placeholder"] = null
     if (own && placeholderHolder) {
@@ -465,6 +521,7 @@ async function followRecords(
       const { error: hErr } = await db().from("store_import_items").update({ repointed: rest, updated_at: new Date().toISOString() }).eq("id", placeholderHolder.id)
       if (hErr) throw new Error(`Could not update the move's ledger (${hErr.message}).`)
       placeholder = { holderId: placeholderHolder.id, row: snap as Record<string, unknown>, entry }
+      track.placeholder = placeholder
     }
     const { data: full, error: fErr } = await db().from("documents").select(RECORD_FIELDS).eq("id", bring.row.id).maybeSingle()
     if (fErr || !full) throw new Error(`Could not read the CRM record (${fErr?.message ?? "missing"}).`)
@@ -479,19 +536,17 @@ async function followRecords(
     if (rErr) throw new Error(`The CRM record could not be moved to the new storage (${rErr.message}).`)
     if ((moved ?? []).length) {
       out.brought = { itemId: bring.itemId, pointer, entry, placeholder }
+      track.placeholder = null // from here a put-back re-lists it
       out.settled.add(bring.itemId)
       record = full
       notes.push("Its CRM record now opens from the new storage.")
     } else {
       // changed meanwhile (another tab brought it over first): its work is left alone; only the listed record THIS
       // call removed comes back, when nothing holds the file's place
-      const { data: holder } = await db().from("documents").select(RECORD_FIELDS).eq("drive_file_id", pointer).maybeSingle()
-      if (!holder && placeholder) {
-        const { error: iErr } = await db().from("documents").insert(placeholder.row)
-        if (iErr) throw new Error(`The listed CRM record could not be put back (${iErr.message}).`)
-        const { data: h } = await db().from("store_import_items").select("repointed").eq("id", placeholder.holderId).maybeSingle()
-        await db().from("store_import_items").update({ repointed: [...((h?.repointed ?? []) as LedgerEntry[]), placeholder.entry], updated_at: new Date().toISOString() }).eq("id", placeholder.holderId)
-      }
+      const { data: holder, error: hoErr } = await db().from("documents").select(RECORD_FIELDS).eq("drive_file_id", pointer).maybeSingle()
+      if (hoErr) throw new Error(`Could not read the CRM listing (${hoErr.message}).`)
+      if (!holder && placeholder) await relistPlaceholder(pointer, placeholder)
+      track.placeholder = null
       record = holder ?? (placeholder ? placeholder.row : null)
     }
   }
@@ -517,8 +572,9 @@ async function followRecords(
   if (owner.accountId) { patch.account_id = owner.accountId; patch.contact_id = null }
   const { data: done, error } = await db().from("documents").update(patch).eq("drive_file_id", pointer).select("id")
   if (error) {
-    if (out.brought) await putBackOnDrive(out.brought).catch(() => undefined)
-    throw new Error(`The CRM record could not follow (${error.message}) — press Save again.`)
+    let back = ""
+    if (out.brought) await putBackOnDrive(out.brought).then(() => { track.placeholder = null }).catch((e) => { back = ` Its record could not be put back on Drive either (${e instanceof Error ? e.message : e}) — tell an owner.` })
+    throw new Error(`The CRM record could not follow (${error.message}) — press Save again.${back}`)
   }
   out.count = (done ?? []).length
   return out
