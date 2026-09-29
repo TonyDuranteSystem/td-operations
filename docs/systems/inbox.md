@@ -1,6 +1,21 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-09-29 — Claude (**REFRESHING THE INBOX NO LONGER DROPS YOU BACK TO THE DEFAULT VIEW** —
+_Last verified against code: 2026-09-29 — Claude (**FOLLOW-UP: THE PLAIN WHATSAPP/GMAIL LIST (NOTHING OPEN) NOW ALSO
+SURVIVES A REFRESH** — Antonio, same day, testing the fix below: "it works if I'm in a specific message, it doesn't
+if I'm in whtsapp list messages." Two real bugs in that first pass. (1) The tracked selection only ever carried the
+OPEN conversation's id — with nothing open, there was no channel to persist, so refreshing fell back to the
+hardcoded Gmail default. Fixed with a `channel` URL param that carries the active tab only when nothing is
+selected (an open conversation's own id already carries its channel via the `gmail:`/`whatsapp:` prefix, so
+tracking both would be redundant). (2) Fixing (1) surfaced a subtler bug: gating the tracked values on the
+one-shot mount flag (`deepLinkDone ? {realValues} : {}`) made the very FIRST render adopt an EMPTY signature as
+`useSelectionHistory`'s baseline; the render immediately after that flag flips true then hands it the REAL default
+values for the first time, which differ from that empty baseline and get pushed into the URL — even on a bare
+`/inbox` visit where nothing the user did actually changed (confirmed live: a fresh visit was picking up a
+needless `?channel=gmail&mailbox=support`). Fix: removed the gate, pass the real values unconditionally from
+render 1 — the hook's own "first render adopts silently, no push" rule already handles this correctly without a
+gate. Verified live with REAL hard reloads (`window.location.reload()`, not a soft client transition, to rule out
+a false pass): bare `/inbox` visit picks up no extra params; WhatsApp list with nothing open survives a refresh;
+an open WhatsApp conversation still survives a refresh.) Prior 2026-09-29 — Claude (**REFRESHING THE INBOX NO LONGER DROPS YOU BACK TO THE DEFAULT VIEW** —
 Antonio: "when I refresh the page for example in whatsapp, the page refresh and go back to inbox indtead of staying
 in whatsapp and in the message i was in before refreshing." Checked further and this was a repeated gap across the
 CRM (Storage had it too — fixed alongside this in `docs/systems/storage.md`; Team Chat and Portal Chats had ALREADY
