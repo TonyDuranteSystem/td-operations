@@ -10,6 +10,7 @@ import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
+import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
@@ -440,7 +441,7 @@ export default function ContractPage() {
 
   // Extract offer data for contract
   function getContractData() {
-    if (!offer) return { fee: '', llcType: '', installments: '', annualFee: '', year: new Date().getFullYear() }
+    if (!offer) return { fee: '', llcType: '', installments: '', annualFee: '', annualSchedule: null, year: new Date().getFullYear() }
     const o = offer
     const year = new Date().getFullYear()
     let llcType = '', installments = '', annualFee = ''
@@ -547,6 +548,9 @@ export default function ContractPage() {
         : rawFee
     }
     if (!installments) installments = 'As specified in the offer'
+    // Dated schedule with the after-September rule (billing already follows it).
+    // Null for unusual recurring rows — the verbatim line above is kept then.
+    const annualSchedule = buildAnnualMaintenanceWording({ recurringCosts: o.recurring_costs, currency: instCurrency, signDate: new Date() })
 
     // LLC type — prefer offer.entity_type (canonical source). Previously this
     // ONLY scanned service names and defaulted to Single-Member, so every
@@ -564,7 +568,7 @@ export default function ContractPage() {
     }
     if (!llcType) llcType = 'Single-Member LLC'
 
-    return { fee, planFeeWording, llcType, installments, annualFee, year }
+    return { fee, planFeeWording, llcType, installments, annualFee, annualSchedule, year }
   }
 
   // Sign contract
@@ -1112,7 +1116,7 @@ export default function ContractPage() {
     )
   }
 
-  const { fee, planFeeWording, llcType, installments, annualFee, year } = getContractData()
+  const { fee, planFeeWording, llcType, installments, annualFee, annualSchedule, year } = getContractData()
   // WS-B: the offer's pinned formation state (null on pre-WS-B offers → row hidden)
   const contractFormationState = normalizeFormationState((offer as { formation_state?: string | null } | null)?.formation_state)
   const effDate = today()
@@ -1200,7 +1204,9 @@ export default function ContractPage() {
               <tr><th>State of Formation</th><td>{FORMATION_STATE_NAMES[contractFormationState]}</td></tr>
             )}
             <tr><th>Setup Fee</th><td>{planFeeWording ?? `${fee} -- one-time, due upon signing.`} Covers all selected services for the first contract year.</td></tr>
-            {annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
+            {annualSchedule
+              ? <tr><th>Annual Maintenance</th><td>{annualSchedule.lines.map((l, i) => <span key={i}>{i > 0 && <br />}{l}</span>)}</td></tr>
+              : annualFee && <tr><th>Annual Maintenance (from {year + 1})</th><td>{annualFee} -- {installments}</td></tr>}
             <tr><th>Cancellation Deadline</th><td>Written notice must be received no later than November 1 of the current Contract Year to prevent automatic renewal.</td></tr>
           </tbody>
         </table>
@@ -1317,7 +1323,7 @@ export default function ContractPage() {
           <table className="contract-key-terms">
             <tbody>
               <tr><th>Setup Fee</th><td>{planFeeWording ?? `${fee} (one-time, due upon signing)`}</td></tr>
-              <tr><th>Annual Maintenance (from following year)</th><td>{installments}</td></tr>
+              <tr><th>{annualSchedule ? 'Annual Maintenance' : 'Annual Maintenance (from following year)'}</th><td>{annualSchedule ? annualSchedule.lines.map((l, i) => <span key={i}>{i > 0 && <br />}{l}</span>) : installments}</td></tr>
             </tbody>
           </table>
           <p style={{ marginTop: 10 }}>All payments are subject to the terms set forth in Section 5 of the MSA.</p>
@@ -1591,7 +1597,7 @@ function LegalSections() {
 
       <div className="contract-section"><h3>9. Data Protection &amp; Privacy</h3><p>Personal data shall be processed solely for performing the Services. For EU/EEA residents, processing is based on Article 6(1)(b) GDPR.</p></div>
 
-      <div className="contract-section"><h3>10. Tax Return Preparation</h3><p>If included in the SOW, the Consulting Firm shall arrange for preparation and filing of the LLC&apos;s annual U.S. tax return through a qualified third-party professional. The Client is solely responsible for providing accurate financial records.</p></div>
+      <div className="contract-section"><h3>10. Tax Return Preparation</h3><p>If included in the SOW, the Consulting Firm shall arrange for the preparation and filing of the LLC&apos;s annual U.S. tax return, directly or through a qualified third-party professional. The Client is solely responsible for providing accurate and complete financial records.</p><p><strong>Automatic extension.</strong> To protect the Client from late-filing penalties, the Consulting Firm files an extension with the IRS for every annual return on or before the original due date (March 15 for Multi-Member LLCs, April 15 for Single-Member LLCs). No action is required from the Client.</p><p><strong>When the return is filed.</strong> The return is prepared and filed after the Second Installment (June) has been paid and the Client has provided complete information, and before the extended deadline (September 15 for Multi-Member LLCs, October 15 for Single-Member LLCs). An extension gives more time to file the return, not to pay any tax that may be due.</p></div>
 
       <div className="contract-section"><h3>11. Contract Year &amp; Renewal</h3><p>The Contract Year runs <strong>January 1 through December 31</strong>. This Agreement shall <strong>automatically renew</strong> each year unless notice is provided by <strong>November 1</strong>. Clients onboarding after January 1 pay the full fee (no proration).</p></div>
 
