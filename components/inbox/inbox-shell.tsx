@@ -37,6 +37,7 @@ import {
   overrideKey,
 } from '@/lib/inbox/conversation-reconcile'
 import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
+import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel, InboxMessage } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
@@ -247,6 +248,11 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const registerWaInsertDraft = useCallback((fn: ((draft: string) => boolean) | null) => { waInsertDraftRef.current = fn }, [])
   useEffect(() => { setWaWorkerOpen(false) }, [selected?.id])
 
+  // Antonio, 2026-09-28: "I want to see the phone number next to the name" — WhatsappThread already
+  // fetches the chat's own name/phone; it reports it up here rather than this header re-fetching it.
+  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null } | null>(null)
+  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null } | null) => setWaChatInfo(info), [])
+
   const isWhatsApp = activeChannel === 'whatsapp'
   const isGmail = selected?.channel === 'gmail'
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
@@ -288,18 +294,39 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Deep-link: /inbox?thread=gmail:<id>&mailbox=support|antonio opens a specific
-  // email (used by the "Share to team chat" card link back to the source). Read
-  // from window.location once on mount (no useSearchParams → no Suspense need on
-  // this client component). The messages endpoint gives us subject + sender to
-  // fill the thread header; MessageThread fetches the body itself.
-  useEffect(() => {
-    if (deepLinkDone) return
-    setDeepLinkDone(true)
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
+  // Opening a specific conversation from a URL — either a shared/deep link
+  // (`?thread=gmail:<id>` from "Share to team chat"; `?thread=whatsapp:<id>`
+  // from the per-message "Copy link") OR, as of 2026-09-29, a page REFRESH:
+  // Antonio ("when I refresh the page in whatsapp, it goes back to inbox
+  // instead of staying on the same message"). The read side below already
+  // existed for the two share links; what was missing is the WRITE side —
+  // nothing ever put the open conversation into the URL as you just clicked
+  // around, so a refresh mid-browsing had nothing to restore from. Fixed the
+  // same way Team Chat and Portal Chats already fixed the identical complaint
+  // for themselves (Antonio, 2026-07-26) — `useSelectionHistory` below, not a
+  // new mechanism. For gmail the messages endpoint gives us subject + sender to
+  // fill the thread header (MessageThread fetches the body itself); for
+  // whatsapp a bare stub is enough — WhatsappThread loads its own data from the
+  // id and reports the chat's name/phone back via onChatInfo.
+  const applyThreadParams = useCallback((params: URLSearchParams) => {
     const thread = params.get('thread')
-    if (!thread || !thread.startsWith('gmail:')) return
+    if (!thread) {
+      // Nothing open — Antonio (2026-09-29, follow-up): "it works if I'm in a
+      // specific message, it doesn't if I'm in whatsapp list messages". The
+      // conversation itself already carries its own channel (the gmail:/
+      // whatsapp: prefix on `thread`), but the LIST view has no thread to carry
+      // it, so the tab itself needs its own param here.
+      const channel = params.get('channel')
+      if (channel === 'whatsapp' || channel === 'gmail') setActiveChannel(channel)
+      setSelected(null)
+      return
+    }
+    if (thread.startsWith('whatsapp:')) {
+      setActiveChannel('whatsapp')
+      setSelected({ id: thread, channel: 'whatsapp', name: '', preview: '', unread: 0, lastMessageAt: '' })
+      return
+    }
+    if (!thread.startsWith('gmail:')) return
     const mailbox = params.get('mailbox') === 'antonio' ? 'antonio' : 'support'
     setActiveMailbox(mailbox)
     setActiveChannel('gmail')
@@ -332,7 +359,44 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (deepLinkDone) return
+    setDeepLinkDone(true)
+    if (typeof window === 'undefined') return
+    applyThreadParams(new URLSearchParams(window.location.search))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkDone])
+
+  // Keep the OPEN conversation — or, with nothing open, the active TAB itself
+  // (Antonio, 2026-09-29 follow-up: viewing the plain WhatsApp list and
+  // refreshing still dropped back to Gmail) — in the page's own address as it
+  // changes (a real pushState step, not a route change — switching stays
+  // instant, nothing refetches) so a REFRESH restores it via applyThreadParams
+  // above, and the browser Back arrow walks list/conversation → the previous
+  // one before leaving the page. `channel` is only carried on its own when
+  // NOTHING is selected — an open conversation's id already carries its
+  // channel via the gmail:/whatsapp: prefix, so tracking both would be
+  // redundant.
+  //
+  // NOT gated on `deepLinkDone` — an earlier version was, on the theory that
+  // it would stop this from firing before the initial URL read. That gate was
+  // itself the bug: it makes render 1 adopt `{}` (empty) as the hook's
+  // baseline, then render 2 (the instant `deepLinkDone` flips true) sees the
+  // REAL default values for the first time and — because they differ from
+  // that empty baseline — pushes them into the URL, even on a bare `/inbox`
+  // visit where nothing the user did actually changed. Passing the real
+  // values from render 1 onward lets the hook's own "first render adopts
+  // silently, no push" rule do its job correctly instead.
+  useSelectionHistory(
+    {
+      thread: selected?.id ?? null,
+      channel: !selected ? activeChannel : null,
+      mailbox: activeChannel === 'gmail' ? activeMailbox : null,
+    },
+    (v) => applyThreadParams(new URLSearchParams(Object.entries(v).filter(([, val]) => val != null) as [string, string][])),
+  )
 
   // Build a ShareItem for an email conversation (email → 'link' card: subject as
   // title, sender + snippet as subtitle, deep-link back to /inbox).
@@ -1660,6 +1724,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                 <div className="min-w-0 flex-1 basis-44">
                   <p className="text-sm font-semibold text-zinc-900 truncate">
                     {selected.name}
+                    {selected.channel === 'whatsapp' && waChatInfo?.phone && (
+                      <span className="ml-1.5 text-xs font-normal text-zinc-400">{waChatInfo.phone}</span>
+                    )}
                   </p>
                   <p className="text-xs text-zinc-500 truncate">
                     {channelLabels[selected.channel]}
@@ -1948,7 +2015,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                       }}
                     />
-                    <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} />
+                    <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} onChatInfo={handleWaChatInfo} />
                   </div>
                   {/* Keyed per chat, like WorkerChatPanel below: no state may survive a chat switch. */}
                   {waWorkerOpen && (

@@ -7,6 +7,7 @@ import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import type { Offer } from '@/lib/types/offer'
+import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 
 // ─── Bilingual Labels ───────────────────────────────────────
 
@@ -643,7 +644,12 @@ export default function OfferPage() {
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
-                    {o.recurring_costs.map((c, i) => (
+                    {(buildAnnualCostRows({
+                      recurringCosts: o.recurring_costs,
+                      currency: (o as { installment_currency?: string | null }).installment_currency || o.currency || null,
+                      viewDate: new Date(),
+                      language: lang === 'it' ? 'it' : 'en',
+                    }) ?? o.recurring_costs).map((c, i) => (
                       <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{c.price}</span></div>
                     ))}
                   </div>

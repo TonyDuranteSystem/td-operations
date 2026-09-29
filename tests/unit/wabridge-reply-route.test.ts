@@ -11,6 +11,8 @@ const st = vi.hoisted(() => ({
   rpc: { data: { ok: true, id: "ob1", status: "shadow" } as unknown, error: null as null | { message: string } },
   rpcCalls: [] as Array<{ fn: string; args: Record<string, unknown> }>,
   dispatched: 0,
+  storageFound: true,
+  storageSize: 5000,
 }))
 
 vi.mock("@/lib/auth/require-staff-route", () => ({
@@ -40,6 +42,15 @@ vi.mock("@/lib/supabase-admin", () => ({
       st.rpcCalls.push({ fn, args })
       return st.rpc
     },
+    storage: {
+      from: () => ({
+        // Simulates "the file really is there" by echoing back whatever name the route searched for — the route
+        // itself is what proves the name is the deterministic path's own file name (see the route's own check).
+        list: async (_folder: string, opts: { search: string }) =>
+          st.storageFound ? { data: [{ name: opts.search, metadata: { size: st.storageSize } }], error: null } : { data: [], error: null },
+        download: async () => (st.storageFound ? { data: { arrayBuffer: async () => new TextEncoder().encode("fake file bytes").buffer }, error: null } : { data: null, error: { message: "not found" } }),
+      }),
+    },
   },
 }))
 
@@ -59,6 +70,8 @@ beforeEach(() => {
   st.rpc = { data: { ok: true, id: "ob1", status: "shadow" }, error: null }
   st.rpcCalls = []
   st.dispatched = 0
+  st.storageFound = true
+  st.storageSize = 5000
 })
 
 describe("POST /api/inbox/reply on the self-hosted WhatsApp line", () => {
@@ -69,8 +82,19 @@ describe("POST /api/inbox/reply on the self-hosted WhatsApp line", () => {
     expect(st.dispatched).toBe(0)
     expect(st.rpcCalls[0]).toEqual({
       fn: "wabridge_enqueue_reply",
-      args: { p_group_id: GROUP, p_body: "Ciao!", p_client_msg_id: "draft-1234-5678", p_created_by: "u1" },
+      args: { p_group_id: GROUP, p_body: "Ciao!", p_client_msg_id: "draft-1234-5678", p_created_by: "u1", p_reply_to_id: null },
     })
+  })
+  it("passes a reply-to-a-message target through to the database when given", async () => {
+    const r = await call(wa({ replyToId: "target-msg-1" }))
+    expect(r.status).toBe(200)
+    expect(st.rpcCalls[0].args).toMatchObject({ p_reply_to_id: "target-msg-1" })
+  })
+  it("a database refusal of the reply-to target (a message from a different chat) surfaces as a clean 400", async () => {
+    st.rpc = { data: { ok: false, code: "bad_reply_to", message: "That message could not be found in this chat." }, error: null }
+    const r = await call(wa({ replyToId: "wrong-chat-msg" }))
+    expect(r.status).toBe(400)
+    expect(r.body.error).toBe("That message could not be found in this chat.")
   })
   it("refuses a portal client / partner (not TD staff) before touching the queue", async () => {
     st.isStaff = false
@@ -79,11 +103,46 @@ describe("POST /api/inbox/reply on the self-hosted WhatsApp line", () => {
     expect(st.rpcCalls).toHaveLength(0)
     expect(st.dispatched).toBe(0)
   })
-  it("refuses attachments (text only) without silently dropping them", async () => {
-    const r = await call(wa({ attachmentPath: "whatsapp-new/abc.pdf" }))
+  it("enqueues an attachment through wabridge_enqueue_send, verifying the upload first, never trusting the client's size", async () => {
+    const path = `outbound/${CHANNEL}/draft-1234-5678.m4a`
+    const r = await call(wa({ attachmentPath: path, attachmentMimeType: "audio/mp4", message: "" }))
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ success: true, queued: true })
+    expect(st.rpcCalls[0].fn).toBe("wabridge_enqueue_send")
+    expect(st.rpcCalls[0].args).toMatchObject({
+      p_group_id: GROUP, p_kind: "voice", p_caption: null, p_client_msg_id: "draft-1234-5678",
+      p_media_mime: "audio/mp4", p_media_size: 5000, p_created_by: "u1",
+    })
+    expect(typeof st.rpcCalls[0].args.p_content_hash).toBe("string")
+    expect((st.rpcCalls[0].args.p_content_hash as string).length).toBe(64) // sha-256 hex
+  })
+  it("a caption travels through unchanged for an attachment send", async () => {
+    const path = `outbound/${CHANNEL}/draft-1234-5678.jpg`
+    await call(wa({ attachmentPath: path, attachmentMimeType: "image/jpeg", message: "Ecco il documento" }))
+    expect(st.rpcCalls[0].args.p_caption).toBe("Ecco il documento")
+  })
+  it("refuses an attachment whose mime type maps to no supported kind", async () => {
+    const path = `outbound/${CHANNEL}/draft-1234-5678.bin`
+    const r = await call(wa({ attachmentPath: path, attachmentMimeType: "application/zip", message: "" }))
     expect(r.status).toBe(400)
-    expect(r.body.error).toMatch(/text only/i)
     expect(st.rpcCalls).toHaveLength(0)
+  })
+  it("refuses when the attachment path does not match this message's own deterministic path (never trust the client's path)", async () => {
+    const r = await call(wa({ attachmentPath: "outbound/some-other-channel/abc.bin", attachmentMimeType: "audio/mp4", message: "" }))
+    expect(r.status).toBe(400)
+    expect(st.rpcCalls).toHaveLength(0)
+  })
+  it("refuses when the uploaded file cannot be found in storage — never enqueue an attachment that isn't really there", async () => {
+    st.storageFound = false
+    const path = `outbound/${CHANNEL}/draft-1234-5678.m4a`
+    const r = await call(wa({ attachmentPath: path, attachmentMimeType: "audio/mp4", message: "" }))
+    expect(r.status).toBe(400)
+    expect(st.rpcCalls).toHaveLength(0)
+  })
+  it("a captionless attachment is allowed through the earlier conversationId/message guard", async () => {
+    const path = `outbound/${CHANNEL}/draft-1234-5678.mp4`
+    const r = await call(wa({ attachmentPath: path, attachmentMimeType: "video/mp4", message: "" }))
+    expect(r.status).toBe(200)
   })
   it("passes a missing client id on as empty so the database refuses it (a retry must never send twice)", async () => {
     st.rpc = { data: { ok: false, code: "bad_request", message: "Missing message id — please reload the page and try again." }, error: null }

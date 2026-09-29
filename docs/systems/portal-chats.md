@@ -1,6 +1,12 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-23 — Claude (**The same three unread
+_Last verified against code: 2026-09-27 — Claude (**The "Create Task / Service / Invoice"
+dialog (`QuickCreateModal`) moved out of this page into its own shared file**
+(`components/dashboard/quick-create-modal.tsx`), so the new WhatsApp per-message
+menu (`docs/systems/messaging.md`'s newest entry) can raise the exact same
+dialog instead of a second, drifting copy. Pure extraction — this page now
+imports it; no behavior change here.)_
+_Prior: 2026-09-23 — Claude (**The same three unread
 indicators now exclude chat-event notices (wizard submitted, signed, paid,
 etc.) entirely** — Antonio found a client action badging both the Topic pill
 and What's New at once confusing; What's New is now the only surface where a

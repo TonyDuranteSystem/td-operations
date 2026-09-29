@@ -77,7 +77,7 @@ function isWizardStep(value: unknown): value is WizardStep {
 }
 
 /**
- * Static UI copy hardcoded directly in the two wizard rendering components —
+ * Static UI copy hardcoded directly in the wizard rendering components —
  * toasts, validation messages, button labels, headers — as opposed to
  * FieldConfig-derived content (collected above by walking wizard-configs.ts).
  * These are literal strings with no source-of-truth data structure to walk,
@@ -86,8 +86,9 @@ function isWizardStep(value: unknown): value is WizardStep {
  * 2026-08-24). Keyed by the phrase's own English text, same convention as
  * everything else in this file.
  *
- * Keep this list in sync with app/portal/wizard/wizard-client.tsx and
- * components/portal/wizard/wizard-field.tsx: a new pickText()/pick() call
+ * Keep this list in sync with app/portal/wizard/wizard-client.tsx,
+ * components/portal/wizard/wizard-field.tsx and
+ * components/forms/money-input.tsx: a new pickText()/pick() call
  * site in either file needs its English string added here too, or that
  * phrase never gets translated for a language outside en/it.
  */
@@ -178,6 +179,21 @@ const WIZARD_UI_TEXT_EN: string[] = [
   'Remove file',
   'This amount cannot be negative.',
   'Must be at least {min}.',
+  // components/forms/money-input.tsx + wizard-client.tsx money note/banner
+  // (dev job 89195c68). Strings with an amount built in ("Saved as $…",
+  // "more than 2 decimals (10.596)") can't be pre-translated and fall back to
+  // English for languages outside en/it — accepted by the council.
+  'Which amount did you mean?',
+  'Neither — let me retype',
+  "We couldn't read this amount. Type only the digits, e.g. 80000.",
+  'Enter the amount in US dollars.',
+  'Enter the amount in euros.',
+  'This amount is too large. Please check it.',
+  'Use at most 2 decimals, e.g. 80000 or 80.50.',
+  'Which amount did you mean? Choose one of the options under the box.',
+  'Amounts are shown in US format: 80,000.00 = eighty thousand dollars.',
+  'Tip: you can type just the digits, e.g. 80000 for eighty thousand dollars.',
+  'One amount on this page needs a quick check before you can submit. Nothing you entered has been lost.',
 ]
 
 /**

@@ -8098,12 +8098,17 @@ export type Database = {
           content_text: string | null
           content_type: string
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           direction: string
           external_message_id: string | null
           group_id: string
           id: string
           media_url: string | null
           metadata: Json | null
+          pinned_at: string | null
+          reactions: Json
+          reply_to_id: string | null
           responded_at: string | null
           responded_by: string | null
           sender_name: string | null
@@ -8118,12 +8123,17 @@ export type Database = {
           content_text?: string | null
           content_type?: string
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           direction: string
           external_message_id?: string | null
           group_id: string
           id?: string
           media_url?: string | null
           metadata?: Json | null
+          pinned_at?: string | null
+          reactions?: Json
+          reply_to_id?: string | null
           responded_at?: string | null
           responded_by?: string | null
           sender_name?: string | null
@@ -8138,12 +8148,17 @@ export type Database = {
           content_text?: string | null
           content_type?: string
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           direction?: string
           external_message_id?: string | null
           group_id?: string
           id?: string
           media_url?: string | null
           metadata?: Json | null
+          pinned_at?: string | null
+          reactions?: Json
+          reply_to_id?: string | null
           responded_at?: string | null
           responded_by?: string | null
           sender_name?: string | null
@@ -14337,7 +14352,20 @@ export type Database = {
         Returns: boolean
       }
       wabridge_link_chat: { Args: { p_group_id: string }; Returns: string }
-      wabridge_claim_send: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_claim_send: { Args: { p_channel_id: string; p_supports_kinds?: string[] }; Returns: Json }
+      wabridge_enqueue_send: {
+        Args: {
+          p_caption: string | null
+          p_client_msg_id: string
+          p_content_hash: string | null
+          p_created_by: string | null
+          p_group_id: string
+          p_kind: string
+          p_media_mime: string
+          p_media_size: number
+        }
+        Returns: Json
+      }
       wabridge_media_claim: { Args: { p_channel_id: string }; Returns: Json }
       wabridge_media_expired_list: { Args: { p_days?: number; p_limit?: number }; Returns: Json }
       wabridge_media_finish: {
@@ -14365,7 +14393,11 @@ export type Database = {
       wabridge_set_send_allowlist: { Args: { p_channel_id: string; p_digits: string[] }; Returns: Json }
       wabridge_set_send_mode: { Args: { p_allow_all?: boolean; p_channel_id: string; p_mode: string }; Returns: Json }
       wabridge_enqueue_reply: {
-        Args: { p_body: string; p_client_msg_id: string; p_created_by: string | null; p_group_id: string }
+        Args: { p_body: string; p_client_msg_id: string; p_created_by: string | null; p_group_id: string; p_reply_to_id?: string | null }
+        Returns: Json
+      }
+      wabridge_toggle_reaction: {
+        Args: { p_message_id: string; p_emoji: string; p_reactor_id: string; p_reactor_name: string | null }
         Returns: Json
       }
       wabridge_link_unlinked: { Args: { p_channel_id: string }; Returns: Json }

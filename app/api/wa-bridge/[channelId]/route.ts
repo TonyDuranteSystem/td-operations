@@ -12,7 +12,16 @@ import {
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
 import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
-import { parseMediaClaim, parseMediaResult, voicePath, VOICE_BUCKET } from "@/lib/messaging/wabridge-media"
+import {
+  inboundMediaPath,
+  MAX_AUDIO_BYTES,
+  MAX_MEDIA_BYTES,
+  parseMediaClaim,
+  parseMediaResult,
+  parseMediaUploadUrlRequest,
+  voicePath,
+  VOICE_BUCKET,
+} from "@/lib/messaging/wabridge-media"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -126,11 +135,32 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     const c = parseSendClaim(body, now)
     if (!c) return NextResponse.json({ error: "bad claim" }, { status: 400 })
     if (c.ok === false) return NextResponse.json({ error: c.reason }, { status: 400 })
-    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_send", { p_channel_id: channel.id })
+    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_send", {
+      p_channel_id: channel.id,
+      p_supports_kinds: c.supports,
+    })
     if (claimError || typeof claimed !== "object" || claimed === null) {
       return NextResponse.json({ error: "could not claim" }, { status: 500 })
     }
-    return NextResponse.json({ ok: true, ...(claimed as Record<string, unknown>) })
+    const item = claimed as Record<string, unknown>
+    // A non-text claim needs the Mac to DOWNLOAD the file — mint a short-lived signed link to it (the bucket is
+    // private). If minting fails, fail this claim explicitly right here rather than hand back a row with nothing
+    // to download: the row stays 'unknown' otherwise and would sit stuck until a human resolves it.
+    if (item.claimed === true && item.kind && item.kind !== "text" && typeof item.media_path === "string") {
+      const { data: signed, error: signError } = await supabaseAdmin.storage.from(VOICE_BUCKET).createSignedUrl(item.media_path, 300)
+      if (signError || !signed?.signedUrl) {
+        await supabaseAdmin.rpc("wabridge_finish_send", {
+          p_channel_id: channel.id,
+          p_outbox_id: item.id as string,
+          p_ok: false,
+          p_message_id: null,
+          p_error: "could not prepare the file for download",
+        })
+        return NextResponse.json({ ok: true, claimed: false, reason: "held" })
+      }
+      return NextResponse.json({ ok: true, ...item, media_url: signed.signedUrl })
+    }
+    return NextResponse.json({ ok: true, ...item })
   }
 
   if (kind === "bridge.send.result") {
@@ -150,8 +180,10 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     return NextResponse.json(finished)
   }
 
-  // ─── Voice notes: the Mac claims ONE note to fetch, uploads the prepared audio to a signed URL we mint, then reports ───
-  // The storage path is built HERE (never chosen by the Mac); the transcript is stored in its own column and never logged.
+  // ─── Media (voice notes + inbound photos/videos/documents): the Mac claims ONE item, downloads/prepares it, ───
+  // ─── uploads to a signed URL we mint, then reports. The storage path is built HERE (never chosen by the Mac). ───
+  // Voice's path is fixed and known at claim time (upload URL minted immediately, unchanged since Phase 1). A
+  // non-voice item's path depends on the mime the Mac discovers only after downloading — see bridge.media.upload_url.
   if (kind === "bridge.media.claim") {
     const c = parseMediaClaim(body, now)
     if (!c) return NextResponse.json({ error: "bad claim" }, { status: 400 })
@@ -163,29 +195,63 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     const item = claimed as Record<string, unknown>
     if (item.claimed !== true) return NextResponse.json({ ok: true, ...item })
     const path = typeof item.path === "string" ? item.path : ""
+    if (!path) {
+      // non-voice: no path yet — the Mac must call bridge.media.upload_url once it knows the real mime.
+      return NextResponse.json({ ok: true, ...item })
+    }
     const { data: signed, error: signError } = await supabaseAdmin.storage.from(VOICE_BUCKET).createSignedUploadUrl(path, { upsert: true })
     if (signError || !signed?.signedUrl) return NextResponse.json({ error: "could not prepare the upload" }, { status: 500 })
     return NextResponse.json({ ok: true, ...item, upload_url: signed.signedUrl })
   }
 
+  // ─── Non-voice only: the Mac has downloaded the file and learned its real mime; mint the (now-computable) upload URL. ───
+  if (kind === "bridge.media.upload_url") {
+    const u = parseMediaUploadUrlRequest(body, now)
+    if (!u) return NextResponse.json({ error: "bad request" }, { status: 400 })
+    if (u.ok === false) return NextResponse.json({ error: u.reason }, { status: 400 })
+    const { data: media, error: mediaError } = await supabaseAdmin
+      .from("message_media")
+      .select("kind, status")
+      .eq("message_id", u.messageId)
+      .eq("channel_id", channel.id)
+      .maybeSingle()
+    if (mediaError) return NextResponse.json({ error: "could not look up this item" }, { status: 500 })
+    if (!media || media.status !== "processing" || media.kind === "voice") {
+      return NextResponse.json({ error: "not a claimed non-voice item" }, { status: 409 })
+    }
+    const path = inboundMediaPath(channel.id, u.messageId, u.mime)
+    const { data: signed, error: signError } = await supabaseAdmin.storage.from(VOICE_BUCKET).createSignedUploadUrl(path, { upsert: true })
+    if (signError || !signed?.signedUrl) return NextResponse.json({ error: "could not prepare the upload" }, { status: 500 })
+    return NextResponse.json({ ok: true, path, upload_url: signed.signedUrl })
+  }
+
   if (kind === "bridge.media.result") {
-    const r = parseMediaResult(body, now)
+    // The size ceiling depends on the kind — look it up before parsing (voice keeps its existing 25 MB cap).
+    const bodyMessageId = typeof (body as Record<string, unknown> | null)?.message_id === "string" ? (body as Record<string, unknown>).message_id as string : null
+    let resultKind: string | null = null
+    if (bodyMessageId && UUID_RE.test(bodyMessageId)) {
+      const { data: mediaRow } = await supabaseAdmin.from("message_media").select("kind").eq("message_id", bodyMessageId).eq("channel_id", channel.id).maybeSingle()
+      resultKind = mediaRow?.kind ?? null
+    }
+    const isVoice = resultKind !== "image" && resultKind !== "video" && resultKind !== "document"
+    const r = parseMediaResult(body, now, isVoice ? MAX_AUDIO_BYTES : MAX_MEDIA_BYTES)
     if (!r) return NextResponse.json({ error: "bad result" }, { status: 400 })
     if (r.ok === false) return NextResponse.json({ error: r.reason }, { status: 400 })
-    const path = voicePath(channel.id, r.messageId)
+    const path = isVoice ? voicePath(channel.id, r.messageId) : inboundMediaPath(channel.id, r.messageId, r.mime)
+    const fileName = path.slice(path.lastIndexOf("/") + 1)
     if (r.outcome === "ready") {
       // Never mark ready on the Mac's word alone: the object must really be there.
       const folder = path.slice(0, path.lastIndexOf("/"))
-      const { data: found, error: listError } = await supabaseAdmin.storage.from(VOICE_BUCKET).list(folder, { search: `${r.messageId}.m4a`, limit: 5 })
+      const { data: found, error: listError } = await supabaseAdmin.storage.from(VOICE_BUCKET).list(folder, { search: fileName, limit: 5 })
       if (listError) return NextResponse.json({ error: "could not verify the upload" }, { status: 500 })
-      if (!found?.some((f) => f.name === `${r.messageId}.m4a`)) return NextResponse.json({ error: "audio file not found in storage" }, { status: 409 })
+      if (!found?.some((f) => f.name === fileName)) return NextResponse.json({ error: "file not found in storage" }, { status: 409 })
     }
     const { data: finished, error: finishError } = await supabaseAdmin.rpc("wabridge_media_finish", {
       p_channel_id: channel.id,
       p_message_id: r.messageId,
       p_outcome: r.outcome,
       p_path: r.outcome === "ready" ? path : null,
-      p_mime: r.outcome === "ready" ? "audio/mp4" : null,
+      p_mime: r.outcome === "ready" ? (isVoice ? "audio/mp4" : r.mime) : null,
       p_size: r.sizeBytes,
       p_duration: r.durationSeconds,
       p_transcript: r.transcript,

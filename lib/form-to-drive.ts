@@ -12,6 +12,8 @@
 
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { TAX_FIELDS, TAX_MMLLC_FIELDS, TAX_CORP_FIELDS } from "@/components/portal/wizard/wizard-configs"
+import { formatMoneyWithSymbol } from "@/lib/money-input"
 
 // ─── Form Type Config ───
 
@@ -1069,6 +1071,47 @@ export function normalizeFormationPayloadForPdf(
   return out
 }
 
+/**
+ * Money amounts in the accountant PDF (dev job 89195c68): print a real number
+ * as "$80,000.00" so an implausible figure stands out, instead of a bare
+ * "80000" / "80". ONLY real numbers are formatted — a string is printed
+ * exactly as stored, because on old submissions the raw text ("1.500") is
+ * the only surviving evidence of what the client typed. Money keys come from
+ * the wizard config (format: 'money'), top-level and inside folded repeater
+ * items (rpt_amount). Run AFTER normalizeTaxPayloadForPdf (the fold + alias
+ * dedupe compare raw values). Pure — returns a new object.
+ */
+const TAX_MONEY_KEYS: Set<string> = (() => {
+  const keys = new Set<string>()
+  for (const cfg of [TAX_FIELDS, TAX_MMLLC_FIELDS, TAX_CORP_FIELDS]) {
+    for (const stepFields of Object.values(cfg)) {
+      for (const f of stepFields) {
+        if (f.format === "money") keys.add(f.name)
+        for (const rf of f.repeaterFields ?? []) if (rf.format === "money") keys.add(rf.name)
+      }
+    }
+  }
+  return keys
+})()
+
+export function formatTaxMoneyForPdf(data: Record<string, unknown>): Record<string, unknown> {
+  const fmt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? formatMoneyWithSymbol(v) : v)
+  const out: Record<string, unknown> = { ...data }
+  for (const [k, v] of Object.entries(out)) {
+    if (TAX_MONEY_KEYS.has(k)) {
+      out[k] = fmt(v)
+    } else if (Array.isArray(v) && v.length > 0 && typeof v[0] === "object" && v[0] !== null) {
+      out[k] = v.map(item => {
+        if (!item || typeof item !== "object") return item
+        const copy: Record<string, unknown> = { ...(item as Record<string, unknown>) }
+        for (const ik of Object.keys(copy)) if (TAX_MONEY_KEYS.has(ik)) copy[ik] = fmt(copy[ik])
+        return copy
+      })
+    }
+  }
+  return out
+}
+
 // ─── Full Save-to-Drive Pipeline ───
 
 export async function saveFormToDrive(
@@ -1095,7 +1138,7 @@ export async function saveFormToDrive(
   // duplicates — normalize them for the accountant PDF (fold member/RPT
   // repeaters into renderable arrays, drop exact-duplicate alias keys).
   if (formType === "tax_return") {
-    submittedData = normalizeTaxPayloadForPdf(submittedData)
+    submittedData = formatTaxMoneyForPdf(normalizeTaxPayloadForPdf(submittedData))
   }
   const config = FORM_CONFIGS[formType]
   if (!config) {

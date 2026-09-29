@@ -10,6 +10,8 @@ import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/
 import type { Offer } from '@/lib/types/offer'
 import { PackagePicker } from './package-picker'
 import { PaymentChoicePicker } from './payment-choice-picker'
+import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 // ─── Bilingual Labels ───────────────────────────────────────
 
@@ -54,6 +56,7 @@ const LABELS = {
     accountNumber: 'Account Number',
     routingNumber: 'Routing Number',
     bankAddress: 'Address',
+    bankAddressEuro: 'Bank address',
     reference: 'Reference',
     expired: 'Offer Expired',
     expiredMessage: 'This offer is no longer available. Contact Tony Durante for a new proposal.',
@@ -121,6 +124,7 @@ const LABELS = {
     accountNumber: 'Numero Conto',
     routingNumber: 'Routing Number',
     bankAddress: 'Indirizzo',
+    bankAddressEuro: 'Indirizzo banca',
     reference: 'Causale',
     expired: 'Offerta Scaduta',
     expiredMessage: 'Questa offerta non è più disponibile. Contatta Tony Durante per una nuova proposta.',
@@ -739,13 +743,26 @@ export default function OfferPageWithCode() {
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
-                    {o.recurring_costs.map((c: { label: string; price: string; currency?: string }, i: number) => {
-                      const sym = c.currency === 'EUR' ? '€' : c.currency === 'USD' ? '$' : null
-                      const displayPrice = sym ? `${sym}${c.price.replace(/[^0-9.,]/g, '')}` : c.price
-                      return (
-                        <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{displayPrice}</span></div>
-                      )
-                    })}
+                    {(() => {
+                      // Dated rows with the after-September rule — the same schedule the
+                      // contract states. Null for unusual rows → the offer's own rows.
+                      const dated = buildAnnualCostRows({
+                        recurringCosts: o.recurring_costs,
+                        currency: (o as { installment_currency?: string | null }).installment_currency || o.currency || null,
+                        viewDate: new Date(),
+                        language: lang === 'it' ? 'it' : 'en',
+                      })
+                      if (dated) return dated.map((r, i) => (
+                        <div key={i} className="offer-riepilogo-row offer-annual"><span>{r.label}</span><span className="offer-riepilogo-price">{r.price}</span></div>
+                      ))
+                      return o.recurring_costs.map((c: { label: string; price: string; currency?: string }, i: number) => {
+                        const sym = c.currency === 'EUR' ? '€' : c.currency === 'USD' ? '$' : null
+                        const displayPrice = sym ? `${sym}${c.price.replace(/[^0-9.,]/g, '')}` : c.price
+                        return (
+                          <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{displayPrice}</span></div>
+                        )
+                      })
+                    })()}
                   </div>
                 )}
               </div>
@@ -915,7 +932,7 @@ export default function OfferPageWithCode() {
                       <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>
                     )}
                     {(o.bank_details.bank_address || (o.bank_details as any).address) && (
-                      <div className="offer-bank-row"><span className="offer-bank-label">{L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address || (o.bank_details as any).address}</span></div>
+                      <div className="offer-bank-row"><span className="offer-bank-label">{euroBankAddress(o.bank_details) ? L.bankAddressEuro : L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address || (o.bank_details as any).address}</span></div>
                     )}
                     {o.bank_details.reference && (
                       <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>

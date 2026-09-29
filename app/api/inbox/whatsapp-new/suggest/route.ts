@@ -28,6 +28,12 @@ export const maxDuration = 300
  * { groupId } for a reply inside an existing one (leadId/contactId/phone are
  * then resolved from the conversation itself, falling back to phone-only
  * context when it has no CRM link).
+ *
+ * REWRITE MODE: pass { groupId, rewriteText, language: 'it' | 'en' } to rewrite an EXISTING draft (e.g. one the
+ * staff member is about to send) into the given language, same meaning/length — the Portal Chats Worker card
+ * pattern (Antonio, 2026-08-01: switching the language dropdown should rewrite in place, not ask for a redo).
+ * Deliberately reuses this route rather than adding a new one: the context it builds (lead/contact/conversation)
+ * is exactly what a rewrite should stay grounded in too.
  */
 export async function POST(request: NextRequest) {
   const rl = checkRateLimit(getRateLimitKey(request) + ':whatsapp-suggest', 6, 60_000)
@@ -45,7 +51,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 503 })
   }
 
-  const { leadId: leadIdBody, contactId: contactIdBody, phone: phoneBody, groupId } = await request.json() as {
+  const { leadId: leadIdBody, contactId: contactIdBody, phone: phoneBody, groupId, rewriteText, language } = await request.json() as {
     leadId?: string
     contactId?: string
     phone?: string
@@ -53,6 +59,17 @@ export async function POST(request: NextRequest) {
      *  leadId/contactId for a conversation with no CRM link (common: most
      *  WhatsApp groups are phone-only, see docs/systems/messaging.md). */
     groupId?: string
+    /** REWRITE MODE: the text already on the compose screen. */
+    rewriteText?: string
+    /** REWRITE MODE: the language to rewrite `rewriteText` into. */
+    language?: "it" | "en"
+  }
+  const isRewrite = typeof rewriteText === "string" && rewriteText.trim().length > 0
+  if (isRewrite && language !== "it" && language !== "en") {
+    return NextResponse.json({ error: "language must be 'it' or 'en' for a rewrite" }, { status: 400 })
+  }
+  if (isRewrite && (rewriteText as string).length > 4096) {
+    return NextResponse.json({ error: "Text too long to rewrite" }, { status: 400 })
   }
   if (!leadIdBody && !contactIdBody && !groupId) {
     return NextResponse.json({ error: 'leadId, contactId, or groupId required' }, { status: 400 })
@@ -137,10 +154,14 @@ export async function POST(request: NextRequest) {
     // 3. Draft via the shared AI-worker primitive, NOT the portal-chat prompt
     // or template library (see file header) — a lead-appropriate system
     // prompt only.
-    const systemPromptOverride =
-      "You are drafting a WhatsApp reply for Antonio, owner of a US company-formation/tax firm, to a PRE-SALE lead or prospect (not yet a paying client) — or an existing client he's sending an occasional WhatsApp message to. This is a casual, first-contact-appropriate channel, not a formal client support channel. Be warm, direct, brief (WhatsApp message length, not an email). Never invent services, prices, or timelines TD doesn't actually offer — if the lead asks something you don't have grounded information for, draft a reply that offers to follow up rather than guessing. Draft in the same language the lead/contact has been writing in. Output ONLY the message text itself, exactly as it should be sent — no preamble like 'here is a draft', no framing, no quotation marks around it, no explanation."
+    const languageName = language === "it" ? "Italian" : "English"
+    const systemPromptOverride = isRewrite
+      ? `You are rewriting Antonio's WhatsApp message (to a lead, prospect, or client of his US company-formation/tax firm) into ${languageName}. Keep the exact same meaning, tone and length — this is a translation/rewrite, not a new draft. Output ONLY the rewritten message text — no preamble, no framing, no quotation marks, no explanation.`
+      : "You are drafting a WhatsApp reply for Antonio, owner of a US company-formation/tax firm, to a PRE-SALE lead or prospect (not yet a paying client) — or an existing client he's sending an occasional WhatsApp message to. This is a casual, first-contact-appropriate channel, not a formal client support channel. Be warm, direct, brief (WhatsApp message length, not an email). Never invent services, prices, or timelines TD doesn't actually offer — if the lead asks something you don't have grounded information for, draft a reply that offers to follow up rather than guessing. Draft in the same language the lead/contact has been writing in. Output ONLY the message text itself, exactly as it should be sent — no preamble like 'here is a draft', no framing, no quotation marks around it, no explanation."
 
-    const userMessage = `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
+    const userMessage = isRewrite
+      ? `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})\n\nCONVERSATION SO FAR (for tone only — do not answer it):\n${conversationText}\n\nREWRITE THIS MESSAGE INTO ${languageName.toUpperCase()}:\n${rewriteText}`
+      : `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
 
     const { reply, reachedMaxLoops } = await callWorkerWithAttachments(userMessage, {
       systemPromptOverride,
