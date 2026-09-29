@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildAnnualMaintenanceWording } from "@/lib/offers/annual-maintenance-wording"
+import { buildAnnualMaintenanceWording, buildAnnualCostRows } from "@/lib/offers/annual-maintenance-wording"
 
 // The real rows of a live formation offer (Stefano Stella, 2026-09-28).
 const USD_ROWS = [
@@ -81,5 +81,50 @@ describe("buildAnnualMaintenanceWording — falls back (null) for anything unusu
     ["zero amounts", [{ label: "January", price: "$0" }, { label: "June", price: "$0" }]],
   ])("%s → null", (_name, rows) => {
     expect(buildAnnualMaintenanceWording({ recurringCosts: rows, currency: "USD", signDate: at(2026, 9, 28) })).toBeNull()
+  })
+})
+
+
+describe("buildAnnualCostRows — offer page 'Annual Costs' box", () => {
+  it("Italian, after September: first payment June next year, then January+June", () => {
+    const rows = buildAnnualCostRows({ recurringCosts: USD_ROWS, currency: "USD", viewDate: at(2026, 9, 29), language: "it" })
+    expect(rows).toEqual([
+      { label: "Prima rata — giugno 2027", price: "$1,000" },
+      { label: "Dal 2028 — gennaio", price: "$1,000" },
+      { label: "Dal 2028 — giugno", price: "$1,000" },
+      { label: "Totale annuo (dal 2028)", price: "$2,000" },
+    ])
+  })
+
+  it("English, before September: January and June from next year", () => {
+    const rows = buildAnnualCostRows({ recurringCosts: USD_ROWS, currency: "USD", viewDate: at(2026, 5, 10), language: "en" })
+    expect(rows).toEqual([
+      { label: "From 2027 — January", price: "$1,000" },
+      { label: "From 2027 — June", price: "$1,000" },
+      { label: "Annual total (from 2027)", price: "$2,000" },
+    ])
+  })
+
+  it("agrees with the contract sentence for the same day", () => {
+    const day = at(2026, 11, 3)
+    const rows = buildAnnualCostRows({ recurringCosts: USD_ROWS, currency: "USD", viewDate: day, language: "en" })!
+    const contract = buildAnnualMaintenanceWording({ recurringCosts: USD_ROWS, currency: "USD", signDate: day })!
+    expect(rows[0].label).toBe("First payment — June 2027")
+    expect(contract.lines[0]).toBe("June 2027: $1,000")
+    expect(rows[1].label).toContain("2028")
+    expect(contract.lines[1]).toContain("From 2028")
+  })
+
+  it("no total row when January and June are in different currencies", () => {
+    const rows = buildAnnualCostRows({
+      recurringCosts: [{ label: "January", price: "€500", currency: "EUR" }, { label: "June", price: "$500", currency: "USD" }],
+      viewDate: at(2026, 3, 1),
+      language: "en",
+    })
+    expect(rows?.map((r) => r.label)).toEqual(["From 2027 — January", "From 2027 — June"])
+  })
+
+  it("unusual rows → null (the offer's own rows are shown)", () => {
+    expect(buildAnnualCostRows({ recurringCosts: [{ label: "Fee", price: "$1000" }], viewDate: at(2026, 9, 29), language: "it" })).toBeNull()
   })
 })

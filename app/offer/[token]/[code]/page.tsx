@@ -10,6 +10,7 @@ import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/
 import type { Offer } from '@/lib/types/offer'
 import { PackagePicker } from './package-picker'
 import { PaymentChoicePicker } from './payment-choice-picker'
+import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 
 // ─── Bilingual Labels ───────────────────────────────────────
 
@@ -739,13 +740,26 @@ export default function OfferPageWithCode() {
                 {o.recurring_costs && o.recurring_costs.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--offer-blue)', marginBottom: 8 }}>{L.recurringCosts}</h4>
-                    {o.recurring_costs.map((c: { label: string; price: string; currency?: string }, i: number) => {
-                      const sym = c.currency === 'EUR' ? '€' : c.currency === 'USD' ? '$' : null
-                      const displayPrice = sym ? `${sym}${c.price.replace(/[^0-9.,]/g, '')}` : c.price
-                      return (
-                        <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{displayPrice}</span></div>
-                      )
-                    })}
+                    {(() => {
+                      // Dated rows with the after-September rule — the same schedule the
+                      // contract states. Null for unusual rows → the offer's own rows.
+                      const dated = buildAnnualCostRows({
+                        recurringCosts: o.recurring_costs,
+                        currency: (o as { installment_currency?: string | null }).installment_currency || o.currency || null,
+                        viewDate: new Date(),
+                        language: lang === 'it' ? 'it' : 'en',
+                      })
+                      if (dated) return dated.map((r, i) => (
+                        <div key={i} className="offer-riepilogo-row offer-annual"><span>{r.label}</span><span className="offer-riepilogo-price">{r.price}</span></div>
+                      ))
+                      return o.recurring_costs.map((c: { label: string; price: string; currency?: string }, i: number) => {
+                        const sym = c.currency === 'EUR' ? '€' : c.currency === 'USD' ? '$' : null
+                        const displayPrice = sym ? `${sym}${c.price.replace(/[^0-9.,]/g, '')}` : c.price
+                        return (
+                          <div key={i} className="offer-riepilogo-row offer-annual"><span>{c.label}</span><span className="offer-riepilogo-price">{displayPrice}</span></div>
+                        )
+                      })
+                    })()}
                   </div>
                 )}
               </div>
