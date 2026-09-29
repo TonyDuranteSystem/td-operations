@@ -37,6 +37,7 @@ import {
   overrideKey,
 } from '@/lib/inbox/conversation-reconcile'
 import { ORIGIN_UNKNOWN, viewKey, isInstantSearchQuery, type RowAction, type ViewScope } from '@/lib/inbox/view-query'
+import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel, InboxMessage } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
@@ -293,29 +294,29 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Deep-link: /inbox?thread=gmail:<id>&mailbox=support|antonio opens a specific
-  // email (used by the "Share to team chat" card link back to the source). Read
-  // from window.location once on mount (no useSearchParams → no Suspense need on
-  // this client component). The messages endpoint gives us subject + sender to
-  // fill the thread header; MessageThread fetches the body itself.
-  //
-  // /inbox?thread=whatsapp:<groupId>&message=<id> opens a specific WhatsApp chat, and
-  // (via the "Copy link" per-message action) scrolls to and briefly highlights the exact
-  // message — WhatsappThread itself reads `message` off the URL for the scroll/highlight,
-  // this effect only needs to select the right conversation. A bare stub is enough here:
-  // WhatsappThread fetches the chat's own name/phone from its messages endpoint.
-  useEffect(() => {
-    if (deepLinkDone) return
-    setDeepLinkDone(true)
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
+  // Opening a specific conversation from a URL — either a shared/deep link
+  // (`?thread=gmail:<id>` from "Share to team chat"; `?thread=whatsapp:<id>`
+  // from the per-message "Copy link") OR, as of 2026-09-29, a page REFRESH:
+  // Antonio ("when I refresh the page in whatsapp, it goes back to inbox
+  // instead of staying on the same message"). The read side below already
+  // existed for the two share links; what was missing is the WRITE side —
+  // nothing ever put the open conversation into the URL as you just clicked
+  // around, so a refresh mid-browsing had nothing to restore from. Fixed the
+  // same way Team Chat and Portal Chats already fixed the identical complaint
+  // for themselves (Antonio, 2026-07-26) — `useSelectionHistory` below, not a
+  // new mechanism. For gmail the messages endpoint gives us subject + sender to
+  // fill the thread header (MessageThread fetches the body itself); for
+  // whatsapp a bare stub is enough — WhatsappThread loads its own data from the
+  // id and reports the chat's name/phone back via onChatInfo.
+  const applyThreadParams = useCallback((params: URLSearchParams) => {
     const thread = params.get('thread')
-    if (thread && thread.startsWith('whatsapp:')) {
+    if (!thread) { setSelected(null); return }
+    if (thread.startsWith('whatsapp:')) {
       setActiveChannel('whatsapp')
       setSelected({ id: thread, channel: 'whatsapp', name: '', preview: '', unread: 0, lastMessageAt: '' })
       return
     }
-    if (!thread || !thread.startsWith('gmail:')) return
+    if (!thread.startsWith('gmail:')) return
     const mailbox = params.get('mailbox') === 'antonio' ? 'antonio' : 'support'
     setActiveMailbox(mailbox)
     setActiveChannel('gmail')
@@ -348,7 +349,37 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (deepLinkDone) return
+    setDeepLinkDone(true)
+    if (typeof window === 'undefined') return
+    applyThreadParams(new URLSearchParams(window.location.search))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkDone])
+
+  // Keep the OPEN conversation in the page's own address as it changes (a real
+  // pushState step, not a route change — switching stays instant, nothing
+  // refetches) so a REFRESH restores it via applyThreadParams above, and the
+  // browser Back arrow walks conversation → conversation before leaving the
+  // page. `mailbox` collapses to null whenever nothing is selected — this
+  // deliberately does NOT track which TAB is showing on its own (Antonio only
+  // asked to stay on the same message, not to remember the tab), which also
+  // keeps a plain /inbox visit with nothing open from picking up a needless
+  // `?mailbox=support` on the very first load (that would differ from the
+  // arrival URL and push a spurious history step). Only wired once the initial
+  // deep-link/refresh read has happened — otherwise this would immediately
+  // overwrite whatever the URL arrived with, on the very first render.
+  useSelectionHistory(
+    deepLinkDone
+      ? {
+          thread: selected?.id ?? null,
+          mailbox: selected && activeChannel === 'gmail' ? activeMailbox : null,
+        }
+      : {},
+    (v) => applyThreadParams(new URLSearchParams(Object.entries(v).filter(([, val]) => val != null) as [string, string][])),
+  )
 
   // Build a ShareItem for an email conversation (email → 'link' card: subject as
   // title, sender + snippet as subtitle, deep-link back to /inbox).

@@ -1,5 +1,15 @@
 # CRM Storage
-_Last verified against code: 2026-09-26 — Claude (dev job 762b2515)_
+_Last verified against code: 2026-09-29 — Claude (**REFRESHING NO LONGER DROPS YOU BACK TO THE ROOT FOLDER** —
+Antonio: "when I refresh the page ... it goes back to inbox instead of staying where I was", same complaint here.
+The open folder is now written into the page's own address as you browse (`?folder=<id>`), reusing the existing
+`useSelectionHistory` hook (`lib/hooks/use-selection-history.ts`) already proven in Team Chat and Portal Chats —
+not a new mechanism. `storage-browser-client.tsx`'s `selectedFolderId` now initializes from that URL param at
+construction time (`initialFolderIdFromUrl`), so the existing content-loading effect just naturally fetches the
+right folder on a fresh load; no separate restore step was needed. Root folder is `null`, which the hook already
+strips from the URL. File-preview-modal state (`previewFile`) was deliberately left untouched — out of scope,
+Antonio's complaint was about losing your PLACE (the folder), not an open preview. Verified live in the browser:
+opened a folder, refreshed, still in that folder with its contents showing.)_
+_Prior: 2026-09-26 — Claude (dev job 762b2515)_
 
 ## What it is
 A general-purpose, staff-only file storage area inside the CRM — folders and files organized however staff set them up, with no connection to the older Google-Drive-backed client documents system. Desktop-first by deliberate design (Antonio and Luca both run the CRM on desktop). Ships with three actions beyond plain browsing: click a file to preview it inline instead of downloading it, and share an existing file straight to email, a client's portal chat, an internal team chat thread, or a fax number. Sending for e-signature is explicitly out of scope — no tool in this codebase lets an existing file be dropped straight into a signature envelope; that would need its own follow-up.
