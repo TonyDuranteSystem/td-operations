@@ -348,7 +348,8 @@ describe("createStartAtActivationSDs — company-scoped service", () => {
     const steps = await createStartAtActivationSDs({ offerToken: "df-commerce-llc-2026", clientName: "DF Commerce LLC", contactId: "c1", selection: sel, accountId: "acc-df", contactScopedTypes: ["Company Closure"] })
     expect(createSD).toHaveBeenCalledWith(expect.objectContaining({ service_type: "Company Change Name", account_id: "acc-df", contact_id: "c1", source_offer_token: "df-commerce-llc-2026" }))
     expect(steps[0]).toMatchObject({ status: "created" })
-    expect(orFilters).toEqual(["account_id.eq.acc-df"])
+    // also an open one on the PERSON with no company (hand-added while waiting)
+    expect(orFilters).toEqual(["account_id.eq.acc-df,and(contact_id.eq.c1,account_id.is.null)"])
   })
   it("company service with NO contact still created on the company", async () => {
     await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: null, selection: sel, accountId: "acc-df", contactScopedTypes: ["Company Closure"] })
@@ -558,13 +559,21 @@ describe("companyServicesToStartOnFormation — company add-ons wait for the new
     expect(r.pipelines).toEqual([])
   })
 
-  it("services that already started at payment and banking are left out", () => {
+  it("person-level (Closure of the OLD company) and banking are left out", () => {
     const r = run([
       { name: "Closure", pipeline_type: "Company Closure" },
-      { name: "Change Name", pipeline_type: "Company Change Name" },
       { name: "Banking", pipeline_type: "Banking Fintech" },
     ])
     expect(r.pipelines).toEqual([])
+  })
+
+  it("company-level start-at-payment services (Incumbency, Change Name) waited at payment, so they start with the company", () => {
+    const r = run([
+      { name: "Company Formation", pipeline_type: "Company Formation" },
+      { name: "Certificate of Incumbency", pipeline_type: "Certificate of Incumbency" },
+      { name: "Change Name", pipeline_type: "Company Change Name" },
+    ])
+    expect(r.pipelines).toEqual(["Certificate of Incumbency", "Company Change Name"])
   })
 
   it("an unticked optional line is not bought; a ticked one is", () => {
@@ -580,5 +589,24 @@ describe("companyServicesToStartOnFormation — company add-ons wait for the new
   it("lines without a service type and junk are ignored", () => {
     expect(run([{ name: "Notary" }, null, "x", { pipeline_type: "  " }]).pipelines).toEqual([])
     expect(run(null).pipelines).toEqual([])
+  })
+})
+
+
+describe("decideStartServiceScope — company services wait for a NEW company", () => {
+  const PERSON = ["ITIN", "Company Closure"]
+  it("a company service on a real formation waits (not the person, not another company)", () => {
+    expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: PERSON, accountId: null, newCompanyContract: true, waitForNewCompany: true })).toEqual({ kind: "wait" })
+    expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: PERSON, accountId: "company-A", newCompanyContract: true, waitForNewCompany: true })).toEqual({ kind: "wait" })
+  })
+  it("a person-level service on a real formation still starts on the person (closure of the OLD company)", () => {
+    expect(decideStartServiceScope({ serviceType: "Company Closure", contactScopedTypes: PERSON, accountId: null, newCompanyContract: true, waitForNewCompany: true })).toEqual({ kind: "contact" })
+  })
+  it("without a new company nothing changes (company page → that company; lead → the person)", () => {
+    expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: PERSON, accountId: "company-A" })).toEqual({ kind: "account", accountId: "company-A" })
+    expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: PERSON, accountId: null })).toEqual({ kind: "contact" })
+  })
+  it("unknown catalog scope keeps the legacy behaviour", () => {
+    expect(decideStartServiceScope({ serviceType: "Certificate of Incumbency", contactScopedTypes: null, accountId: null, waitForNewCompany: true })).toEqual({ kind: "contact" })
   })
 })

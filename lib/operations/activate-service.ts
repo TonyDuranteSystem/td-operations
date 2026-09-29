@@ -743,6 +743,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       mustCreateSomething: formationNotBought,
       newCompanyContract: !formationNotBought,
       createAllBought: formationNotBought,
+      // A real formation: company-level add-ons (DBA, Incumbency…) wait for the
+      // new company and are created on it by formation-materialize (step 10f).
+      waitForNewCompany: !formationNotBought,
     }))
   } else if (contractType === "onboarding") {
     steps.push({

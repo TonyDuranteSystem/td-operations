@@ -1487,8 +1487,28 @@ export async function materializeFormationCompany(
     // the company (a DBA — Antonio 2026-09-28) start now, on this company.
     // Keyed on the formation SD's own offer token, else the offer just linked.
     // Idempotent + never throws (see createCompanyServicesOnFormation).
-    const formationOfferToken = resolvedSd?.source_offer_token ?? resolvedOfferToken
-    if (formationOfferToken) {
+    let formationOfferToken = resolvedSd?.source_offer_token ?? resolvedOfferToken
+    // The offer may already carry a company (made on an existing client's
+    // company page), so 10d linked nothing: find it by the wizard's own offer,
+    // then by its lead (signed/completed formation, newest) — bug-hunter 2026-09-29.
+    if (!formationOfferToken) {
+      try {
+        if (wp?.offer_id) {
+          const { data: o } = await supabaseAdmin.from("offers").select("token")
+            .eq("id", wp.offer_id).eq("contract_type", "formation").in("status", ["signed", "completed"]).maybeSingle()
+          formationOfferToken = o?.token ?? null
+        }
+        if (!formationOfferToken && wp?.lead_id) {
+          const { data: o } = await supabaseAdmin.from("offers").select("token")
+            .eq("lead_id", wp.lead_id).eq("contract_type", "formation").in("status", ["signed", "completed"])
+            .order("created_at", { ascending: false }).limit(1).maybeSingle()
+          formationOfferToken = o?.token ?? null
+        }
+      } catch { /* reported below as "no offer found" */ }
+    }
+    if (!formationOfferToken) {
+      steps.push({ step: "company_services_on_formation", status: "skipped", detail: "no formation offer found — check by hand whether the client bought company services (e.g. a DBA) with this formation" })
+    } else {
       const { createCompanyServicesOnFormation } = await import("@/lib/operations/activation-start-services")
       const companySteps = await createCompanyServicesOnFormation({
         offerToken: formationOfferToken,

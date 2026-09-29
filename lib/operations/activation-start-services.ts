@@ -210,6 +210,9 @@ export type StartServiceScope =
   | { kind: "contact" }
   | { kind: "account"; accountId: string }
   | { kind: "skip"; reason: string }
+  /** A company service sold with a NEW company: it waits and is created on
+   *  that company when the formation creates it (createCompanyServicesOnFormation). */
+  | { kind: "wait" }
 
 /** Pure: where a start-at-payment service is created (see header). */
 export function decideStartServiceScope(p: {
@@ -220,12 +223,17 @@ export function decideStartServiceScope(p: {
    *  person-level service bundled there (Company Closure) is about the client's
    *  OLD company, never the one on the contract (plan §1.4). */
   newCompanyContract?: boolean
+  /** The contract forms a NEW company (a real formation): company-level
+   *  services wait for it (Antonio 2026-09-28 — a DBA / Incumbency of a company
+   *  that does not exist yet cannot go on the person or on another company). */
+  waitForNewCompany?: boolean
 }): StartServiceScope {
   // null = catalog scope unknown → legacy behaviour (contact-scoped), which is
   // what every start-at-payment service did before S1.
   if (p.contactScopedTypes === null) return { kind: "contact" }
   const personLevel = p.contactScopedTypes.includes(p.serviceType)
   if (personLevel && p.newCompanyContract) return { kind: "contact" }
+  if (!personLevel && p.waitForNewCompany) return { kind: "wait" }
   // Sold from a company page (Antonio 2026-09-27): a closure of THAT company, a
   // name change, a shipping… belongs to that company.
   if (p.accountId) return { kind: "account", accountId: p.accountId }
@@ -251,6 +259,8 @@ export async function createStartAtActivationSDs(p: {
   contactScopedTypes?: string[] | null
   /** See decideStartServiceScope. */
   newCompanyContract?: boolean
+  /** See decideStartServiceScope. */
+  waitForNewCompany?: boolean
   /** Types tagged `repeatable`: each purchase is a new job — an open one of the
    *  same type does not block creation (only this offer's own does). */
   repeatableTypes?: string[]
@@ -270,7 +280,12 @@ export async function createStartAtActivationSDs(p: {
         contactScopedTypes: p.contactScopedTypes ?? null,
         accountId: p.accountId ?? null,
         newCompanyContract: p.newCompanyContract ?? false,
+        waitForNewCompany: p.waitForNewCompany ?? false,
       })
+      if (scope.kind === "wait") {
+        steps.push({ step: "start_at_activation", status: "waiting", detail: `${serviceType} waits for the new company — created when the formation creates it` })
+        continue
+      }
       if (scope.kind === "skip") {
         const detail = `${serviceType} not created for ${who}: ${scope.reason} — add it by hand`
         steps.push({ step: "start_at_activation", status: "skipped", detail })
@@ -304,7 +319,11 @@ export async function createStartAtActivationSDs(p: {
       const repeatable = (p.repeatableTypes ?? []).includes(serviceType)
       let openFilter: string
       if (scope.kind === "account") {
-        openFilter = `account_id.eq.${scope.accountId}`
+        // Also an open one on the PERSON with no company (staff added it by hand
+        // while it was waiting — bug-hunter 2026-09-29): never create a second.
+        openFilter = p.contactId
+          ? `account_id.eq.${scope.accountId},and(contact_id.eq.${p.contactId},account_id.is.null)`
+          : `account_id.eq.${scope.accountId}`
       } else {
         const { data: links, error: linksErr } = await supabase
           .from("account_contacts")
@@ -420,6 +439,8 @@ export async function createBoughtStartAtActivationServices(p: {
    *  with a pipeline starts now (EIN, DBA, CMRA… sold alone created nothing
    *  before — S1 QA 2026-09-27), except banking (self-service until plan S8). */
   createAllBought?: boolean
+  /** The contract forms a NEW company: company-level services wait for it. */
+  waitForNewCompany?: boolean
 }): Promise<ActivationStep[]> {
   const steps = await createBoughtStartAtActivationServicesInner(p)
   // Silent = nothing created AND nothing already reported (a skip/error step
@@ -439,6 +460,7 @@ async function createBoughtStartAtActivationServicesInner(p: {
   contactId: string | null
   newCompanyContract?: boolean
   createAllBought?: boolean
+  waitForNewCompany?: boolean
 }): Promise<ActivationStep[]> {
   const who = `${p.clientName || "unknown client"} (offer ${p.offerToken})`
   let startTypes: string[] = []
@@ -478,6 +500,7 @@ async function createBoughtStartAtActivationServicesInner(p: {
     accountId: p.offer?.account_id ?? null,
     contactScopedTypes,
     newCompanyContract: p.newCompanyContract ?? false,
+    waitForNewCompany: p.waitForNewCompany ?? false,
     repeatableTypes,
   })
 }
@@ -503,10 +526,13 @@ const deliveredByFormation = (): string[] => [
  * re-confirmed 2026-09-29 on sandbox offer qa-s1b-b6-g1-2026).
  *
  * Bought = the same rule as the offer total (not an unticked optional). Left
- * out: what the formation delivers itself (above), what already started at
- * payment (start_at_activation), person-level services (contact_eligible —
- * e.g. ITIN, which starts from the formation form), and banking (self-service
- * until plan S8). Returns canonical pipeline names, deduplicated.
+ * out: what the formation delivers itself (above), person-level services
+ * (contact_eligible — ITIN starts from the formation form; a Company Closure is
+ * the client's OLD company, started at payment), and banking (self-service
+ * until plan S8). Company-level start-at-payment services (Incumbency, Change
+ * Name…) are INCLUDED: on a real formation they waited at payment
+ * (decideStartServiceScope "wait"). startAtActivationTypes is kept for callers
+ * but no longer excludes anything. Returns canonical names, deduplicated.
  */
 export function companyServicesToStartOnFormation(p: {
   services: unknown
@@ -517,7 +543,6 @@ export function companyServicesToStartOnFormation(p: {
   const skip = new Set<string>([
     ...deliveredByFormation(),
     ...Array.from(NEVER_STARTED_AT_PAYMENT),
-    ...p.startAtActivationTypes.map((t) => t.toLowerCase()),
     ...p.contactScopedTypes.map((t) => t.toLowerCase()),
   ])
   const services = Array.isArray(p.services) ? (p.services as Array<Record<string, unknown> | null>) : []
