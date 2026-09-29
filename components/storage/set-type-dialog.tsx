@@ -14,7 +14,7 @@ export interface StoreDocType { slug: string; name: string; personal: boolean; s
 
 type Question =
   | { kind: 'person'; typeName: string; people: Array<{ contactId: string; name: string }> }
-  | { kind: 'company'; typeName: string; personName: string; companies: Array<{ ownerId: string; name: string }> }
+  | { kind: 'company'; typeName: string; personName: string; companies: Array<{ ownerId: string; name: string }>; clientSees: boolean }
   | { kind: 'filed'; typeName: string }
 
 /** The storage's document types (shared cache: the row labels and this box read the same list). */
@@ -121,6 +121,7 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
             {question.kind === 'company' && (
               <>
                 <p className="mb-1 font-medium">{question.typeName} is a company document, and it is in {question.personName}&apos;s own storage. Move it to the company?</p>
+                {question.clientSees && <p className="mb-1 text-red-700">The client can see this file: once it is in a company, every member of that company sees it.</p>}
                 {question.companies.map((c) => radio(c.ownerId, `Move it to ${c.name}`))}
                 {radio('keep', `Keep it in ${question.personName}'s storage`)}
               </>

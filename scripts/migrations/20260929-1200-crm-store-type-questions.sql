@@ -1,7 +1,7 @@
 -- CRM Store — document-type questions (2026-09-29, job 685467b5). Sandbox first (R105). Idempotent (safe to re-run).
 --   · store_label_key(text): ONE spelling rule for a label — lower case, trimmed, inner spaces collapsed
 --     ("Lease  Agreement " = "lease agreement"); the same rule as labelKey() in lib/crm-store/type-names.ts
---   · one OPEN question per label and catalog (two batches never ask the same thing twice)
+--   · one OPEN question per label for the storage document types (two batches never ask the same thing twice)
 --   · store_unknown_document_type_names(min): the labels CRM records carry that the storage's document types do
 --     not know (by type number or name) and that were never asked about — "Look for unknown labels" + the Drive move
 --   · store_document_label_state(label): how many records carry it, whether it was asked, whether a type knows it
@@ -14,7 +14,8 @@ $$;
 
 DROP INDEX IF EXISTS public.uq_catalog_pending_open_value;
 CREATE UNIQUE INDEX uq_catalog_pending_open_value
-  ON public.catalog_pending_review (catalog_id, public.store_label_key(submitted_value)) WHERE status = 'pending';
+  ON public.catalog_pending_review (catalog_id, public.store_label_key(submitted_value))
+  WHERE status = 'pending' AND catalog_id = 'storage_document_types'; -- document types only: other catalogs (services) untouched
 
 CREATE OR REPLACE FUNCTION public.store_unknown_document_type_names(p_min integer)
 RETURNS TABLE (name text, records bigint) LANGUAGE sql STABLE AS $$

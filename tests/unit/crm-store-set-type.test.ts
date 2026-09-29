@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { questionFor } from "@/lib/crm-store/set-type"
+import { questionFor, autoCompanyAnswer } from "@/lib/crm-store/set-type"
 import { labelKey } from "@/lib/crm-store/type-names"
 import { typeOfRow } from "@/lib/crm-store/drive-import"
 
@@ -15,7 +15,8 @@ describe("set type — the question asked before anything changes", () => {
     expect(questionFor({ ...base, personal: true, hasPerson: true })).toBeNull()
   })
   it("a company type on a person's file asks which company (or keep), only when the person has a company storage", () => {
-    expect(questionFor({ ...base, ownerKind: "person" })).toMatchObject({ kind: "company", personName: "Anna" })
+    expect(questionFor({ ...base, ownerKind: "person" })).toMatchObject({ kind: "company", personName: "Anna", clientSees: false })
+    expect(questionFor({ ...base, ownerKind: "person", published: true })).toMatchObject({ kind: "company", clientSees: true })
     expect(questionFor({ ...base, ownerKind: "person", hasCompanyAnswer: true })).toBeNull()
     expect(questionFor({ ...base, ownerKind: "person", companies: [] })).toBeNull()
     expect(questionFor({ ...base, ownerKind: "person", personal: true })).toBeNull()
@@ -25,6 +26,14 @@ describe("set type — the question asked before anything changes", () => {
     expect(questionFor({ ...base, draftNeverVisible: true, published: true, filingStatus: "filed" })).toBeNull()
     expect(questionFor({ ...base, draftNeverVisible: true, published: false })).toBeNull()
     expect(questionFor({ ...base, draftNeverVisible: true, published: true, hasFiledAnswer: true })).toBeNull()
+  })
+  it("the company page answers the company question only when nobody can be surprised", () => {
+    const one = [{ ownerId: "o1" }]
+    expect(autoCompanyAnswer(one, "o1", false)).toBe("o1")
+    expect(autoCompanyAnswer(one, "o1", true)).toBeNull() // the client sees it → co-members would
+    expect(autoCompanyAnswer([...one, { ownerId: "o2" }], "o1", false)).toBeNull() // two companies → ask
+    expect(autoCompanyAnswer(one, "o2", false)).toBeNull()
+    expect(autoCompanyAnswer(one, null, false)).toBeNull()
   })
   it("a plain company type on a company's file needs no answer", () => {
     expect(questionFor(base)).toBeNull()

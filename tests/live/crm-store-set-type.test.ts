@@ -148,6 +148,29 @@ describe("Set type — correcting wrong labels (live sandbox)", () => {
     expect(await row(f.rowId)).toMatchObject({ contact_id: g.mario, category: 2 })
   }, 120_000)
 
+  it("a return goes into ITS year folder (the record's tax year), never whichever year folder comes first", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
+    const { createTaxYear } = await import("@/lib/crm-store/structure")
+    const annaOwner = await ensurePersonOwner(g.anna, `ZZ TYPE Anna ${tag}`)
+    const tax = await folder(annaOwner, "person_tax")
+    await createTaxYear(tax, "2022", actor)
+    const y2024 = await createTaxYear(tax, "2024", actor)
+    const f = await file(g.company, "company", "NR 2024.pdf", "operating_agreement", "Operating Agreement", false, { tax_year: 2024 })
+    await setStoreFileType({ fileId: f.fileId, typeSlug: "form_1040_nr", actorId: actor, personContactId: g.anna })
+    const after = (await db.from("store_files").select("folder_id, period_year").eq("id", f.fileId).single()).data
+    expect(after).toEqual({ folder_id: y2024.id, period_year: 2024 })
+  }, 120_000)
+
+  it("a file the client sees in a person's storage is never moved into a company without asking (co-members would see it)", async () => {
+    const { setStoreFileType, SetTypeQuestionError } = await import("@/lib/crm-store/set-type")
+    const f = await file(g.marioOwner, "personal", "Statement Mario.pdf", "passport", "Passport", true, { contact_id: g.mario, category: 2 })
+    let q: unknown = null
+    try { await setStoreFileType({ fileId: f.fileId, typeSlug: "office_lease", actorId: actor, viewingOwnerId: g.company }) } catch (e) { q = e instanceof SetTypeQuestionError ? e.question : e }
+    expect(q).toMatchObject({ kind: "company", clientSees: true })
+    expect((await sf(f.fileId)).owner_id).toBe(g.marioOwner)
+  }, 120_000)
+
   it("only the company's live people are offered (a former member is not)", async () => {
     const { setStoreFileType, SetTypeQuestionError } = await import("@/lib/crm-store/set-type")
     const gone = await insert("contacts", { first_name: "Zz", last_name: `Gone ${tag}`, full_name: `ZZ TYPE Gone ${tag}`, email: `zz-type-g-${tag}@example.test` })
@@ -187,7 +210,7 @@ describe("label questions + the move's Re-check (live sandbox)", () => {
     const run = await insert("store_import_runs", { account_id: g.account, owner_id: g.company, drive_folder_id: `zz-${tag}`, status: "done", started_by: actor })
     const item = await insert("store_import_items", { run_id: run, source: "drive", source_id: `zz-drive-b-${tag}`, drive_path: ["5. Correspondence"], name: "b.pdf", status: "done", store_file_id: w.fileId, reason: "The client could see this but it has no type — its CRM record still opens from Drive until it gets one (Needs a type).", repointed: [] })
     const { recheckRunTypes, runView } = await import("@/lib/crm-store/drive-import")
-    expect(await recheckRunTypes(run, actor)).toEqual({ typed: 1, needAnswer: 0, stillUnknown: 0 })
+    expect(await recheckRunTypes(run, actor)).toEqual({ typed: 1, needAnswer: 0, stillUnknown: 0, failed: 0 })
     expect((await sf(w.fileId))).toMatchObject({ document_type: "office_lease", published: true })
     const { data: rec } = await db.from("documents").select("drive_file_id, document_type_name, portal_visible").eq("drive_file_id", `store:${w.fileId}`).single()
     expect(rec).toEqual({ drive_file_id: `store:${w.fileId}`, document_type_name: "Office Lease", portal_visible: true })

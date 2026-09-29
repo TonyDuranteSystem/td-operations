@@ -96,6 +96,11 @@ export function pickPerson(p: { rowContactId: string | null; subfolder: string |
   return null
 }
 
+/** A file stored while its CRM record keeps opening from Drive (no type yet, or not showable as it is). */
+export const WAITING_RE = /\((Needs a type|Still on Drive)\)/
+/** Removes that sentence from a ledger note once the record has come over. */
+export const WAITING_SENTENCE_RE = /\s*The client could see (this|it) but [^(]*\((Needs a type|Still on Drive)\)\.?/
+
 /** Pure: the parity report of a run from its ledger rows. Parity holds when nothing failed and nothing is pending. */
 export function buildReport(items: ImportItem[], stillReadDrive: string[]): ImportReport {
   const byFolder = new Map<string, ImportReport["folders"][number]>()
@@ -120,7 +125,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     skipped: items.filter((it) => it.status === "skipped").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     failed: items.filter((it) => it.status === "failed").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     needsReview: items.filter((it) => /needs review/i.test(it.reason ?? "")).length,
-    waitingForType: items.filter((it) => /\(Needs a type\)/.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it), fileId: it.store_file_id })),
+    waitingForType: items.filter((it) => WAITING_RE.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it), fileId: it.store_file_id })),
     parityOk: items.every((it) => it.status !== "failed" && it.status !== "pending" && it.status !== "working"),
     stillReadDrive,
   }
@@ -447,15 +452,23 @@ async function moveOne(it: ImportItem, ctx: Ctx, saved: { fileId: string | null 
   let note: string | null = needsReview
   // a file the client could see but that has NO type: the portal never serves an untyped stored file, so its
   // CRM record keeps opening from Drive (the client sees exactly what they saw) until staff give it a type
-  const keepOnDrive = visible && !docType
+  // the same for a file the client sees that the new storage may not show as it is (Needs review, a staff-only
+  // type) or refuses to show: nothing changes for the client behind anyone's back — it is listed for staff
+  let keepOnDrive = visible && !docType
   if (keepOnDrive) {
     note = `${note ? `${note} ` : ""}The client could see this but it has no type — its CRM record still opens from Drive until it gets one (Needs a type).`
-  } else if (visible && !needsReview) {
+  } else if (visible && (needsReview || type?.staffOnly)) {
+    keepOnDrive = true
+    note = `${note ? `${note} ` : ""}The client could see this but the new storage cannot show it as it is (${needsReview ? "needs review" : "a staff-only type"}) — its CRM record still opens from Drive; check it (Still on Drive).`
+  } else if (visible) {
     // the client sees exactly what they saw before
     const { error } = await db().rpc("store_set_published", { p_file_id: w.fileId, p_published: true, p_actor: ctx.actorId })
-    if (error) note = `The client could see this before; the new storage keeps it hidden (${error.message.replace(/^store: /, "")}) — the CRM record still shows it. Check.`
+    if (error) {
+      keepOnDrive = true
+      note = `${note ? `${note} ` : ""}The client could see this but the new storage refused to show it (${error.message.replace(/^store: /, "")}) — its CRM record still opens from Drive; check it (Still on Drive).`
+    }
   }
-  const repointed = keepOnDrive ? [] : await repointRows(rows, w.fileId, ownerId, folderId, it, ctx, visible && !needsReview)
+  const repointed = keepOnDrive ? [] : await repointRows(rows, w.fileId, ownerId, folderId, it, ctx, visible)
   if (it.source === "drive") {
     const { error } = await db().rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: it.source_id, p_sha256: sha, p_drive_path: { area: "import", path: it.drive_path } })
     if (error) note = `${note ? `${note} ` : ""}The backup could not record the Drive original (${error.message}).`
@@ -727,7 +740,7 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
  * types and the answered labels. A file whose record's label now means a type gets it through Set type — the same
  * rules as by hand (a question it needs — whose passport? — leaves it listed for staff).
  */
-export async function recheckRunTypes(runId: string, actorId: string | null): Promise<{ typed: number; needAnswer: number; stillUnknown: number }> {
+export async function recheckRunTypes(runId: string, actorId: string | null): Promise<{ typed: number; needAnswer: number; stillUnknown: number; failed: number }> {
   const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status, account_id").eq("id", runId).maybeSingle()
   if (rErr) throw new Error(`Could not read the move (${rErr.message}).`)
   if (!run || !["done", "incomplete"].includes(run.status)) throw new Error("Re-check works on a finished move.")
@@ -740,7 +753,7 @@ export async function recheckRunTypes(runId: string, actorId: string | null): Pr
   const { data: items, error: iErr } = await db().from("store_import_items").select("source_id, store_file_id").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null)
   if (iErr) throw new Error(`Could not read the move's ledger (${iErr.message}).`)
   const fileIds = Array.from(new Set(((items ?? []) as { store_file_id: string }[]).map((i) => i.store_file_id)))
-  let typed = 0, needAnswer = 0, stillUnknown = 0
+  let typed = 0, needAnswer = 0, stillUnknown = 0, failed = 0
   const { storePointer } = await import("./document-pointer")
   const { setStoreFileType, SetTypeQuestionError } = await import("./set-type")
   for (const fileId of fileIds) {
@@ -758,13 +771,15 @@ export async function recheckRunTypes(runId: string, actorId: string | null): Pr
     const hit = mine.map((r) => typeOfRow(map, r)).find(Boolean)
     if (!hit) { stillUnknown++; continue }
     try {
-      await setStoreFileType({ fileId, typeSlug: hit.slug, actorId })
+      await setStoreFileType({ fileId, typeSlug: hit.slug, actorId, skipReportRefresh: true })
       typed++
     } catch (e) {
       if (e instanceof SetTypeQuestionError) { needAnswer++; continue }
-      throw e
+      if (e instanceof Error && /being undone|still running/.test(e.message)) throw e
+      failed++ // one file that can't be typed never stops the others (Set type on it shows why)
+      console.error(`[crm-store] re-check: ${fileId}: ${e instanceof Error ? e.message : e}`)
     }
   }
   await refreshRunReport(runId)
-  return { typed, needAnswer, stillUnknown }
+  return { typed, needAnswer, stillUnknown, failed }
 }
