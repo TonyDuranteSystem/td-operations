@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../../_auth"
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
+  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true, folderId: params.id }))
   if (denied) return denied
   const noAccess = await denyUnlessAreaAccess({ folderId: params.id })
   if (noAccess) return noAccess

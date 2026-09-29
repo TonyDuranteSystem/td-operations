@@ -437,3 +437,39 @@ describe("study copy — pick a client's Drive folder, copy it into our storage,
     await undoDriveImport(mv.id, actor)
   }, 240_000)
 })
+
+describe("removing a copy never trashes a person's REAL file it merely kept once", () => {
+  const k: Record<string, string> = {}
+  beforeAll(async () => {
+    const drive = await import("@/lib/google-drive")
+    const bytes = await pdf(`ZZ KEEP passport ${tag}`)
+    // the person already has their real passport in the new storage, shown in the portal
+    k.person = await insert("contacts", { first_name: "Zz", last_name: `Keep ${tag}`, full_name: `ZZ KEEP Person ${tag}`, email: `zz-keep-${tag}@example.test` })
+    const { ensurePersonOwner, folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const owner = await ensurePersonOwner(k.person, `ZZ KEEP Person ${tag}`)
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const w = await saveBytesToStore({ ownerId: owner, folderId: await folderOfKind(owner, "personal"), name: "Passport.pdf", mimeType: "application/pdf", bytes, callerKey: `zz-keep:${tag}`, contentChanged: true, documentType: "passport", published: false, actor })
+    k.file = w.fileId
+    k.row = await insert("documents", { drive_file_id: `store:${w.fileId}`, file_name: "Passport.pdf", contact_id: k.person, category: 2, document_type_name: "Passport", portal_visible: false, status: "classified" })
+    // an older company of theirs whose Drive folder holds the identical passport
+    const top = ((await drive.createFolder(TEST_DRIVE, `ZZ KEEP Co ${tag}`)) as { id: string }).id
+    const contacts = ((await drive.createFolder(top, "2. Contacts")) as { id: string }).id
+    await drive.uploadBinaryToDrive("Passport copy.pdf", bytes, "application/pdf", contacts)
+    k.account = await insert("accounts", { company_name: `ZZ KEEP LLC ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: top })
+    const { error } = await db.from("account_contacts").insert({ account_id: k.account, contact_id: k.person })
+    if (error) throw new Error(error.message)
+  }, 240_000)
+
+  it("the copy keeps the passport once; Remove copy leaves the real passport and its CRM record alone", async () => {
+    const { startDriveImport, continueDriveImport, undoDriveImport } = await import("@/lib/crm-store/drive-import")
+    let v = await startDriveImport(k.account, actor, { mode: "copy" })
+    for (let i = 0; i < 10 && v.status === "moving"; i++) v = await continueDriveImport(v.id, actor, { files: 25, ms: 120_000 })
+    expect(v.status).toBe("done")
+    const { data: it } = await db.from("store_import_items").select("status, store_file_id").eq("run_id", v.id).single()
+    expect(it).toEqual({ status: "merged", store_file_id: k.file })
+    const undone = await undoDriveImport(v.id, actor)
+    expect(undone.status).toBe("rolled_back")
+    expect((await db.from("store_files").select("state").eq("id", k.file).single()).data.state).toBe("live")
+    expect((await db.from("documents").select("drive_file_id").eq("id", k.row).single()).data.drive_file_id).toBe(`store:${k.file}`)
+  }, 300_000)
+})

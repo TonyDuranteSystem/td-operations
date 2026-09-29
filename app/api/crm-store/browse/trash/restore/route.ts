@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   try {
     const { ownerOfBatch, restoreFromTrash } = await import("@/lib/crm-store/trash")
     const owner = await ownerOfBatch(body.batchId)
-    const noAccess = (await denyUnlessAreaAccess({ ownerId: owner })) ?? (target ? await denyUnlessAreaAccess({ folderId: target }) : null)
+    const noAccess = (await denyUnlessStorePilotEnv({ study: true, ownerId: owner })) ?? (await denyUnlessAreaAccess({ ownerId: owner })) ?? (target ? await denyUnlessAreaAccess({ folderId: target }) : null)
     if (noAccess) return noAccess
     const { data: { user } } = await createClient().auth.getUser()
     return NextResponse.json(await restoreFromTrash(body.batchId, user?.id ?? null, target))

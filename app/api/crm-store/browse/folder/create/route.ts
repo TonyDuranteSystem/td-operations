@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   try {
     const s = await import("@/lib/crm-store/structure")
     if (typeof body.parentId !== "string" || typeof body.name !== "string") return NextResponse.json({ error: "Enter a folder name." }, { status: 400 })
-    const noParent = await denyUnlessAreaAccess({ folderId: body.parentId })
+    const noParent = (await denyUnlessStorePilotEnv({ study: true, folderId: body.parentId })) ?? (await denyUnlessAreaAccess({ folderId: body.parentId }))
     if (noParent) return noParent
     return NextResponse.json(await s.createFolder(body.parentId, body.name, user?.id ?? null))
   } catch (e) {

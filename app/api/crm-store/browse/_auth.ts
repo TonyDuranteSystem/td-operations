@@ -12,7 +12,7 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
 /** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run. `study: true` = an
  *  action that only organises files staff study (type, rename, move, folders, trash) — it also runs where the
  *  STUDY copy is switched on (production, STORE_STUDY_COPY=1); nothing the client could see is ever allowed there. */
-export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null } = {}): Promise<NextResponse | null> {
+export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null; folderId?: string | null; ownerId?: string | null } = {}): Promise<NextResponse | null> {
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
   if (pilotEnvironmentAllowed()) return null
   if (opts.study) {
@@ -22,8 +22,21 @@ export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: 
       const { data: { user } } = await createClient().auth.getUser()
       const { isOwnerOnly } = await import("@/lib/auth")
       if (!user || !isOwnerOnly(user)) return NextResponse.json({ error: "Owners only while the new storage holds study copies." }, { status: 403 })
+      const { supabaseAdmin } = await import("@/lib/supabase-admin")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+      const sdb = supabaseAdmin as any
+      // only a STUDY storage (one a copy created) can be changed here — never a real one
+      if (opts.fileId || opts.folderId || opts.ownerId) {
+        const { data: row, error } = opts.fileId
+          ? await sdb.from("store_files").select("store_owners!inner(study_only)").eq("id", opts.fileId).maybeSingle()
+          : opts.folderId
+            ? await sdb.from("store_folders").select("store_owners!inner(study_only)").eq("id", opts.folderId).maybeSingle()
+            : await sdb.from("store_owners").select("study_only").eq("id", opts.ownerId).maybeSingle()
+        if (error) return NextResponse.json({ error: "Could not check the storage — please try again." }, { status: 503 })
+        const study = opts.ownerId && !opts.fileId && !opts.folderId ? (row as { study_only?: boolean } | null)?.study_only : (row?.store_owners as { study_only?: boolean } | undefined)?.study_only
+        if (study !== true) return NextResponse.json({ error: "Only a study copy can be changed here." }, { status: 403 })
+      }
       if (opts.fileId) {
-        const { supabaseAdmin } = await import("@/lib/supabase-admin")
         const { count, error } = await supabaseAdmin.from("documents").select("id", { count: "exact", head: true }).eq("drive_file_id", `store:${opts.fileId}`)
         if (error) return NextResponse.json({ error: "Could not check the file — please try again." }, { status: 503 })
         if ((count ?? 0) > 0) return NextResponse.json({ error: "This file is listed in the CRM — it can't be changed from a study copy." }, { status: 403 })

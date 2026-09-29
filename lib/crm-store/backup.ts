@@ -249,8 +249,9 @@ export async function backupOwner(
   // a storage made by a study copy is never backed up: its company still lives in Drive (writing there would mix
   // study folders into the client's real folder)
   if (!opts.io) {
-    const { data: so } = await db().from("store_owners").select("study_only").eq("id", ownerId).maybeSingle()
-    if (so?.study_only === true) return { ...rep, status: "disabled", error: "A study copy — never backed up (its company still lives in Drive)." }
+    const { data: so, error: soErr } = await db().from("store_owners").select("study_only").eq("id", ownerId).maybeSingle()
+    if (soErr || !so) return { ...rep, status: "failed", error: `Could not check the storage (${soErr?.message ?? "not found"}) — not backed up.` }
+    if (so.study_only === true) return { ...rep, status: "disabled", error: "A study copy — never backed up (its company still lives in Drive)." }
   }
   const lease = await io.claim(ownerId)
   if (!lease.claimed || !lease.token) return { ...rep, status: "busy" }

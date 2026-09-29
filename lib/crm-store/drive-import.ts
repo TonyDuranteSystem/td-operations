@@ -785,7 +785,7 @@ export async function undoDriveImport(runId: string, actorId: string | null, bud
     }
     const name = items.find((it) => it.store_file_id === id)?.name ?? "a file"
     if (unrestored.has(id)) { problems.push(`${name}: kept in the new storage (its CRM record still points there)`); continue }
-    const { data: f } = await db().from("store_files").select("state, store_file_versions!store_files_current_version_fk(sha256, version_no)").eq("id", id).maybeSingle()
+    const { data: f } = await db().from("store_files").select("state, caller_key, store_file_versions!store_files_current_version_fk(sha256, version_no)").eq("id", id).maybeSingle()
     if (!f || f.state !== "live") {
       // already in the trash (an undo that stopped half-way and runs again): its import record goes too
       await db().from("store_external_refs").delete().eq("object_kind", "file").eq("object_id", id).eq("direction", "import")
@@ -793,6 +793,22 @@ export async function undoDriveImport(runId: string, actorId: string | null, bud
     }
     const cur = f.store_file_versions as { sha256: string; version_no: number } | null
     if (cur && (cur.version_no > 1 || (shaOf.get(id) && cur.sha256 !== shaOf.get(id)))) { problems.push(`${name}: changed since the move — kept`); continue }
+    // only a file an import CREATED (this one, or one already undone) is ever trashed — a person's real file a copy
+    // merely kept once (a passport saved before, maybe shown to the client) is never touched
+    const key = (f.caller_key as string | null) ?? ""
+    const m = key.match(/^drive-import:([0-9a-f-]{36}):/)
+    if (!m) { problems.push(`${name}: kept — it was in the new storage before this move/copy`); continue }
+    if (m[1] !== runId) {
+      const { data: creator } = await db().from("store_import_runs").select("status").eq("id", m[1]).maybeSingle()
+      if (creator?.status !== "rolled_back") { problems.push(`${name}: kept — another company's move or copy created it`); continue }
+    }
+    // and never while a CRM record still points at it (the records this undo put back no longer do)
+    const { count: listed, error: lErr } = await db().from("documents").select("id", { count: "exact", head: true }).eq("drive_file_id", `store:${id}`)
+    if (lErr) { problems.push(`${name}: kept — could not check its CRM record (${lErr.message})`); continue }
+    if ((listed ?? 0) > 0) {
+      const createdByThis = items.some((it) => it.store_file_id === id && (it.repointed ?? []).some((r) => r.created))
+      if (!createdByThis) { problems.push(`${name}: kept — a CRM record uses it`); continue }
+    }
     const { count: others } = await db().from("store_import_items").select("id, store_import_runs!inner(status)", { count: "exact", head: true })
       .eq("store_file_id", id).neq("run_id", runId).in("status", ["done", "merged"]).neq("store_import_runs.status", "rolled_back")
     if ((others ?? 0) > 0) { problems.push(`${name}: another company's move or copy also uses it — kept`); continue }
