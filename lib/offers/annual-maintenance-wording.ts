@@ -135,3 +135,30 @@ export function buildAnnualCostRows(p: {
   if (jan.symbol === jun.symbol) rows.push({ label: t.total(fullYear), price: `${jan.symbol}${(jan.amount + jun.amount).toLocaleString("en-US")}` })
   return rows
 }
+
+/**
+ * A formation or onboarding offer sells a company that then carries a yearly
+ * fee (January + June). Without those two amounts the offer page has no
+ * "Annual Costs" box and the contract has no yearly schedule — the client
+ * would sign with no yearly fee written anywhere. Two offers in a row
+ * (Emiliano Micheli, 2026-09-29) were saved that way because the builder let
+ * the two boxes stay empty. Every real formation/onboarding offer in
+ * production had them; the only ones without were QA tests.
+ *
+ * Multi-option offers are skipped: each option carries its own renewal amounts,
+ * already required when the offer is created.
+ *
+ * Returns the reason to refuse, or null when the offer is fine.
+ */
+export function yearlyFeeMissingReason(p: {
+  contractType: string | null | undefined
+  recurringCosts: unknown
+  packages?: unknown
+  currency?: string | null
+}): string | null {
+  const ct = String(p.contractType ?? "").toLowerCase()
+  if (ct !== "formation" && ct !== "onboarding") return null
+  if (Array.isArray(p.packages) && p.packages.length >= 2) return null
+  if (readJanJun(p.recurringCosts, p.currency)) return null
+  return "This offer has no yearly fee. Enter the January and June amounts (Annual Rates) before sending — otherwise the offer and the contract show no yearly fee."
+}

@@ -19,6 +19,7 @@
  *   - Allow publication from any status other than 'draft'
  */
 
+import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
@@ -53,7 +54,7 @@ export async function publishOffer(
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
-    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id")
+    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, contract_type, recurring_costs, installment_currency")
     .eq("token", token)
     .single()
 
@@ -63,6 +64,29 @@ export async function publishOffer(
 
   if (!offer.client_email) {
     return fail("Cannot publish: client_email is not set on this offer. Update it first.")
+  }
+
+  // A formation/onboarding offer must carry its yearly fee, or the client signs
+  // an offer + contract with no yearly fee written anywhere. Checked here because
+  // every send path (CRM button, MCP offer_send) goes through publishOffer.
+  let offerPackages: unknown = null
+  if (offer.contract_type === "formation" || offer.contract_type === "onboarding") {
+    const { data: pk } = await supabaseAdmin
+      .from("offers")
+      // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
+      .select("packages" as never)
+      .eq("token", token)
+      .maybeSingle()
+    offerPackages = (pk as unknown as { packages?: unknown } | null)?.packages ?? null
+  }
+  const yearlyFeeReason = yearlyFeeMissingReason({
+    contractType: offer.contract_type,
+    recurringCosts: offer.recurring_costs,
+    packages: offerPackages,
+    currency: offer.installment_currency,
+  })
+  if (yearlyFeeReason) {
+    return fail(`Cannot publish: ${yearlyFeeReason}`)
   }
 
   // Strict status gate: only 'draft' can be published

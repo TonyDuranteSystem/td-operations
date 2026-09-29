@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildAnnualMaintenanceWording, buildAnnualCostRows } from "@/lib/offers/annual-maintenance-wording"
+import { buildAnnualMaintenanceWording, buildAnnualCostRows, yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
 
 // The real rows of a live formation offer (Stefano Stella, 2026-09-28).
 const USD_ROWS = [
@@ -126,5 +126,45 @@ describe("buildAnnualCostRows — offer page 'Annual Costs' box", () => {
 
   it("unusual rows → null (the offer's own rows are shown)", () => {
     expect(buildAnnualCostRows({ recurringCosts: [{ label: "Fee", price: "$1000" }], viewDate: at(2026, 9, 29), language: "it" })).toBeNull()
+  })
+})
+
+
+describe("yearlyFeeMissingReason — formation/onboarding must carry a yearly fee", () => {
+  it("formation with no yearly rows is refused (Emiliano Micheli, 2026-09-29)", () => {
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: null })).toMatch(/no yearly fee/)
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [] })).toMatch(/no yearly fee/)
+  })
+
+  it("onboarding with no yearly rows is refused", () => {
+    expect(yearlyFeeMissingReason({ contractType: "onboarding", recurringCosts: undefined })).not.toBeNull()
+  })
+
+  it("only January (or only June) is refused", () => {
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "1st Installment (January)", price: "$1000" }] })).not.toBeNull()
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "2nd Installment (June)", price: "$1000" }] })).not.toBeNull()
+  })
+
+  it("zero amounts are refused", () => {
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "January", price: "$0" }, { label: "June", price: "$0" }] })).not.toBeNull()
+  })
+
+  it("the builder's normal rows pass", () => {
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: USD_ROWS })).toBeNull()
+    expect(yearlyFeeMissingReason({ contractType: "onboarding", recurringCosts: USD_ROWS })).toBeNull()
+  })
+
+  it("other contract types are never refused", () => {
+    for (const ct of ["itin", "tax_return", "closure", "renewal", null, undefined, ""]) {
+      expect(yearlyFeeMissingReason({ contractType: ct, recurringCosts: null })).toBeNull()
+    }
+  })
+
+  it("multi-option offers are skipped (each option carries its own amounts)", () => {
+    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: null, packages: [{}, {}] })).toBeNull()
+  })
+
+  it("contract type is matched case-insensitively", () => {
+    expect(yearlyFeeMissingReason({ contractType: "Formation", recurringCosts: null })).not.toBeNull()
   })
 })
