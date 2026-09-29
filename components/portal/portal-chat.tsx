@@ -114,7 +114,7 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null, persistEntityFromLink = false }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null; persistEntityFromLink?: boolean }) {
+export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
@@ -149,26 +149,23 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const deepLinkPagesRef = useRef(0)
   const activeTopicRef = useRef(activeTopic)
   activeTopicRef.current = activeTopic
-  // Remove the one-shot link parameters once they have done their job. Left in
-  // the address bar, `account` would override the company switcher on every
-  // re-render (the client could no longer switch company), and an unchanged
-  // `topic` would make a second click on the same notification a no-op.
-  const stripLinkParams = useCallback(() => {
+  // Remove ?topic= once it has done its job, so a second click on the same
+  // notification is a real change. (The company part of a link never reaches
+  // this page: /portal/chat/open saves it server-side and redirects here.)
+  const stripTopicParam = useCallback(() => {
     const url = new URL(window.location.href)
-    if (!url.searchParams.has('account') && !url.searchParams.has('topic')) return
-    url.searchParams.delete('account')
+    if (!url.searchParams.has('topic')) return
     url.searchParams.delete('topic')
     router.replace(`${url.pathname}${url.search}`, { scroll: false })
   }, [router])
 
-  // The client picked a tab themselves: stop any pending search for another,
-  // and consume the link (the search that would have stripped it is cancelled,
-  // and a leftover ?account= would pin the chat to the linked company).
+  // The client picked a tab themselves: stop any pending search for another
+  // (which would otherwise have been the one to consume ?topic=).
   const chooseTopic = useCallback((next: string | null) => {
     pendingTopicRef.current = null
     setActiveTopic(next)
-    stripLinkParams()
-  }, [stripLinkParams])
+    stripTopicParam()
+  }, [stripTopicParam])
 
   // Set by the "which company?" send popup just before it switches company and
   // sends: the message goes out in the tab that is open, so on arriving at the
@@ -177,14 +174,13 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // would hide the message the client just sent.
   const sendSwitchEntityRef = useRef<string | null>(null)
 
-  // The component is NOT remounted on a company switch or on a notification
-  // link clicked while already on the chat page (a remount would drop the
-  // draft, the send popup's answer and — on the same view — the live channel),
-  // so the per-view state is re-armed here:
+  // The component is NOT remounted on a company switch (a remount would drop
+  // the draft, the send popup's answer and the live channel), so the per-view
+  // state is re-armed here:
   //  - company changed → keep trying the tab that is open (e.g. the popup sent
-  //    the message to the other company in that tab), or the linked tab when a
-  //    link brought us here; not found in the new company → General.
-  //  - a new ?topic= on the same company (notification link) → go there.
+  //    the message to the other company in that tab); not in the new company
+  //    → General, never an empty tab.
+  //  - a new ?topic= arrived by soft navigation → go there.
   //  - ?topic= removed (we stripped it) → nothing to do.
   const lastEntityRef = useRef(selectedEntityId)
   const lastInitialTopic = useRef(initialTopic)
@@ -198,17 +194,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       sendSwitchEntityRef.current = null
       pendingTopicRef.current = null
     } else if (entityChanged) {
-      const linked = persistEntityFromLink && initialTopic
-      const topic = linked ? initialTopic : activeTopicRef.current
-      pendingTopicRef.current = topic ? { topic, allowPaging: !!linked } : null
+      const topic = activeTopicRef.current
+      pendingTopicRef.current = topic ? { topic, allowPaging: false } : null
       deepLinkPagesRef.current = 0
-      if (linked) setActiveTopic(initialTopic)
     } else if (topicChanged && initialTopic) {
       pendingTopicRef.current = { topic: initialTopic, allowPaging: true }
       deepLinkPagesRef.current = 0
       setActiveTopic(initialTopic)
     }
-  }, [selectedEntityId, initialTopic, persistEntityFromLink])
+  }, [selectedEntityId, initialTopic])
 
   useEffect(() => {
     // `ready` = the loaded messages belong to the CURRENT view; right after a
@@ -217,7 +211,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     if (!pending || !ready) return
     if (topics.includes(pending.topic)) {
       pendingTopicRef.current = null
-      stripLinkParams()
+      stripTopicParam()
       return
     }
     if (loadingMore) return
@@ -228,8 +222,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     }
     pendingTopicRef.current = null
     if (activeTopicRef.current === pending.topic) setActiveTopic(null)
-    stripLinkParams()
-  }, [ready, loadingMore, hasMore, topics, loadMore, stripLinkParams])
+    stripTopicParam()
+  }, [ready, loadingMore, hasMore, topics, loadMore, stripTopicParam])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -248,33 +242,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // the portal (portal_account_id / portal_formation; 'personal' sentinel).
   const selectEntity = useCallback((e: PortalChatEntity) => {
     writeEntityCookie(e)
-    // An explicit company choice ends any linked-tab search; a leftover
-    // ?account= would otherwise override the cookie just written and keep the
-    // view on the linked company (the message would go to the chosen one).
+    // An explicit company choice ends any linked-tab search.
     pendingTopicRef.current = null
-    const url = new URL(window.location.href)
-    if (url.searchParams.has('account') || url.searchParams.has('topic')) stripLinkParams()
-    else router.refresh()
-  }, [router, stripLinkParams])
-
-  // A deep link opened a different company than the saved selection (the page
-  // resolved ?account=). Persist it with the switcher's own cookies, then drop
-  // `account` from the address bar: left there, it would keep overriding the
-  // cookie on every re-render, so the client could no longer switch company
-  // in the chat (the sidebar would say B while the chat stayed on A, and a
-  // message sent to B would vanish from the A view). Keyed on the entity so a
-  // later link to a different company persists too.
-  const persistedEntityId = useRef<string | null>(null)
-  useEffect(() => {
-    // Forget once the page no longer comes from a link, so a LATER link back to
-    // the same company (after the client switched away) is persisted again.
-    if (!persistEntityFromLink) { persistedEntityId.current = null; return }
-    if (!currentEntity || persistedEntityId.current === currentEntity.id) return
-    persistedEntityId.current = currentEntity.id
-    writeEntityCookie(currentEntity)
-    // A pending tab search strips the link itself when it finishes.
-    if (!pendingTopicRef.current) stripLinkParams()
-  }, [persistEntityFromLink, currentEntity, stripLinkParams])
+    router.refresh()
+  }, [router])
 
   const draftKey = `chat_draft_${selectedEntityId || contactId}`
   const [input, setInput] = useState(() => {

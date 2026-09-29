@@ -104,9 +104,22 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         const deleted = idsSince(deletedMarksRef.current, startMark)
         pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
         // Fresh view: keep nothing from before except rows that arrived live
-        // while this fetch was in flight.
-        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live, deletedIds: deleted }).messages)
-        setHasMore(msgs.length >= 50)
+        // while this fetch was in flight. But if this view is ALREADY on screen
+        // (a second load of the same view landing late — e.g. React's dev
+        // double-mount, or a reload racing the linked-tab search), behave like
+        // a refresh: keep the older history already paged in. A blind replace
+        // here dropped the linked tab's messages right after they were found
+        // (caught in E2E QA: tab selected, chat empty).
+        const sameView = loadedKeyRef.current === q
+        setMessages(prev => mergeRefreshedMessages({
+          fetched: msgs,
+          held: sameView ? prev : prev.filter(m => live.has(m.id)),
+          limit: sameView ? 50 : Infinity,
+          liveIds: live,
+          deletedIds: deleted,
+        }).messages)
+        if (!sameView) setHasMore(msgs.length >= 50)
+        else if (msgs.length < 50) setHasMore(false)
         markLoaded(q)
         fetch('/api/portal/chat/read', {
           method: 'POST',

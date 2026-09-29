@@ -110,7 +110,7 @@ describe('pickDigestButtonHref', () => {
 
   it('goes straight to the one shared destination', () => {
     expect(pickDigestButtonHref(['/portal/sign', '/portal/sign'], BASE)).toBe(`${BASE}/portal/sign`)
-    expect(pickDigestButtonHref(['/portal/chat?account=A&topic=Tax%202026'], BASE)).toBe(`${BASE}/portal/chat?account=A&topic=Tax%202026`)
+    expect(pickDigestButtonHref(['/portal/chat/open?account=A&topic=Tax%202026'], BASE)).toBe(`${BASE}/portal/chat/open?account=A&topic=Tax%202026`)
   })
 
   it('mixed destinations → home', () => {

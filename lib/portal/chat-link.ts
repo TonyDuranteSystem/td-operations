@@ -11,14 +11,31 @@
  *
  * The link therefore carries BOTH:
  *  - `account` — the company id, or `personal` for a message with no company
- *    (resolved by the chat page to whichever view hosts personal messages);
+ *    (resolved to whichever view hosts personal messages);
  *  - `topic`   — the tab, omitted for General.
  * Topic names are free text with spaces/accents/quotes — always encoded here.
+ *
+ * It points at `/portal/chat/open`, a route that saves the company to the
+ * same cookies the company switcher writes and THEN redirects to the chat. The
+ * company must be decided server-side before the portal renders: an earlier
+ * version applied it in the browser after load, which left the sidebar showing
+ * the old company, and a leftover ?account= overrode the client's next switch
+ * (both caught in E2E QA).
  */
 
 import type { PortalChatEntity } from '@/lib/portal/queries'
 
 export const PERSONAL_CHAT_LINK = 'personal'
+
+/**
+ * A chat deep link must be opened with a FULL page load (plain <a>), not a
+ * client-side <Link>: the route sets the company cookie, and an in-app
+ * navigation keeps the portal layout — so the sidebar would still show the
+ * previous company.
+ */
+export function needsFullPageLoad(link: string): boolean {
+  return link.startsWith('/portal/chat/open')
+}
 
 /** Relative portal path for a chat message's deep link. */
 export function buildPortalChatLink(opts: { accountId?: string | null; topic?: string | null }): string {
@@ -28,7 +45,41 @@ export function buildPortalChatLink(opts: { accountId?: string | null; topic?: s
   if (topic) params.set('topic', topic)
   // URLSearchParams encodes spaces as '+'; use %20 so the link reads the same
   // everywhere it is pasted (email href, push url, bell Link).
-  return `/portal/chat?${params.toString().replace(/\+/g, '%20')}`
+  return `/portal/chat/open?${params.toString().replace(/\+/g, '%20')}`
+}
+
+/** Where /portal/chat/open sends the client after saving the company. */
+export function chatPathForTopic(topic: string | null | undefined): string {
+  const t = typeof topic === 'string' ? topic.trim().slice(0, 100) : ''
+  return t ? `/portal/chat?topic=${encodeURIComponent(t)}` : '/portal/chat'
+}
+
+export interface EntityCookieWrite {
+  name: 'portal_account_id' | 'portal_formation' | 'portal_onboarding'
+  value: string
+  /** 0 = delete */
+  maxAge: number
+}
+
+const ONE_YEAR = 31536000
+
+/**
+ * The cookie writes that select `e` — identical to the sidebar CompanySwitcher
+ * (selectAccount / selectFormation) and the chat's own switch, so a link
+ * leaves the portal in exactly the state a manual switch would.
+ */
+export function entityCookieWrites(e: PortalChatEntity): EntityCookieWrite[] {
+  if (e.kind === 'formation') {
+    return [
+      { name: 'portal_formation', value: e.id, maxAge: ONE_YEAR },
+      { name: 'portal_onboarding', value: '', maxAge: 0 },
+    ]
+  }
+  return [
+    { name: 'portal_account_id', value: e.kind === 'personal' ? PERSONAL_CHAT_LINK : (e.accountId as string), maxAge: ONE_YEAR },
+    { name: 'portal_formation', value: '', maxAge: 0 },
+    { name: 'portal_onboarding', value: '', maxAge: 0 },
+  ]
 }
 
 /** Does this chat view show the contact's personal (company-less) messages? */

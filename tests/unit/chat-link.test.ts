@@ -1,22 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { buildPortalChatLink, resolveChatEntityFromLink } from '@/lib/portal/chat-link'
+import { buildPortalChatLink, chatPathForTopic, entityCookieWrites, needsFullPageLoad, resolveChatEntityFromLink } from '@/lib/portal/chat-link'
 import type { PortalChatEntity } from '@/lib/portal/queries'
 
 describe('buildPortalChatLink', () => {
   it('carries company and topic, encoding spaces as %20', () => {
     expect(buildPortalChatLink({ accountId: 'acc-1', topic: 'Documenti da firmare' }))
-      .toBe('/portal/chat?account=acc-1&topic=Documenti%20da%20firmare')
+      .toBe('/portal/chat/open?account=acc-1&topic=Documenti%20da%20firmare')
   })
 
   it('omits topic for General (null, empty, whitespace)', () => {
-    expect(buildPortalChatLink({ accountId: 'acc-1', topic: null })).toBe('/portal/chat?account=acc-1')
-    expect(buildPortalChatLink({ accountId: 'acc-1', topic: '' })).toBe('/portal/chat?account=acc-1')
-    expect(buildPortalChatLink({ accountId: 'acc-1', topic: '   ' })).toBe('/portal/chat?account=acc-1')
+    expect(buildPortalChatLink({ accountId: 'acc-1', topic: null })).toBe('/portal/chat/open?account=acc-1')
+    expect(buildPortalChatLink({ accountId: 'acc-1', topic: '' })).toBe('/portal/chat/open?account=acc-1')
+    expect(buildPortalChatLink({ accountId: 'acc-1', topic: '   ' })).toBe('/portal/chat/open?account=acc-1')
   })
 
   it('uses the personal marker for a company-less message', () => {
-    expect(buildPortalChatLink({ accountId: null })).toBe('/portal/chat?account=personal')
-    expect(buildPortalChatLink({})).toBe('/portal/chat?account=personal')
+    expect(buildPortalChatLink({ accountId: null })).toBe('/portal/chat/open?account=personal')
+    expect(buildPortalChatLink({})).toBe('/portal/chat/open?account=personal')
   })
 
   it('encodes quotes, ampersands and accents so the link cannot break out of an href', () => {
@@ -65,5 +65,45 @@ describe('resolveChatEntityFromLink', () => {
 
   it('personal: returns null when no view hosts personal messages', () => {
     expect(resolveChatEntityFromLink([sharedB], 'personal', sharedB)).toBeNull()
+  })
+})
+
+describe('chatPathForTopic', () => {
+  it('General → plain chat', () => {
+    expect(chatPathForTopic(null)).toBe('/portal/chat')
+    expect(chatPathForTopic('  ')).toBe('/portal/chat')
+  })
+  it('encodes the topic', () => {
+    expect(chatPathForTopic('Documenti da firmare')).toBe('/portal/chat?topic=Documenti%20da%20firmare')
+  })
+  it('caps the topic at 100 chars like the chat page', () => {
+    expect(chatPathForTopic('x'.repeat(150))).toBe(`/portal/chat?topic=${'x'.repeat(100)}`)
+  })
+})
+
+describe('entityCookieWrites (same state as the company switcher)', () => {
+  it('company → account id, clears formation + onboarding', () => {
+    expect(entityCookieWrites(company('A', true))).toEqual([
+      { name: 'portal_account_id', value: 'A', maxAge: 31536000 },
+      { name: 'portal_formation', value: '', maxAge: 0 },
+      { name: 'portal_onboarding', value: '', maxAge: 0 },
+    ])
+  })
+  it('personal → the personal sentinel', () => {
+    expect(entityCookieWrites(personal)[0]).toEqual({ name: 'portal_account_id', value: 'personal', maxAge: 31536000 })
+  })
+  it('formation → formation id, clears onboarding, leaves the account cookie alone', () => {
+    expect(entityCookieWrites(formation)).toEqual([
+      { name: 'portal_formation', value: 'f1', maxAge: 31536000 },
+      { name: 'portal_onboarding', value: '', maxAge: 0 },
+    ])
+  })
+})
+
+describe('needsFullPageLoad', () => {
+  it('only chat deep links', () => {
+    expect(needsFullPageLoad(buildPortalChatLink({ accountId: 'A' }))).toBe(true)
+    expect(needsFullPageLoad('/portal/chat')).toBe(false)
+    expect(needsFullPageLoad('/portal/sign')).toBe(false)
   })
 })
