@@ -12,7 +12,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const { data: { user } } = await createClient().auth.getUser()
   if (!user || !isOwnerOnly(user)) return NextResponse.json({ error: "Owners only." }, { status: 403 })
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
-  if (!pilotEnvironmentAllowed()) return NextResponse.json({ error: "The new storage is not switched on here." }, { status: 403 })
+  const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
+  if (!pilotEnvironmentAllowed() && !studyCopyAllowed()) return NextResponse.json({ error: "The new storage is not switched on here." }, { status: 403 })
   const b = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const { answerTypeQuestion } = await import("@/lib/crm-store/type-names")
   try {

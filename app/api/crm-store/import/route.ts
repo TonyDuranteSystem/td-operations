@@ -24,7 +24,8 @@ export async function GET(req: NextRequest) {
   if (!pilotEnvironmentAllowed()) return NextResponse.json({ allowed: false, run: null })
   try {
     const { latestRunFor } = await import("@/lib/crm-store/drive-import")
-    return NextResponse.json({ allowed: true, run: await latestRunFor(accountId) }, { headers: { "Cache-Control": "no-store" } })
+    // the company page's panel is the real MOVE; a study copy is shown in the Drive picker, never as a move
+    return NextResponse.json({ allowed: true, run: await latestRunFor(accountId, "move") }, { headers: { "Cache-Control": "no-store" } })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Could not read the move." }, { status: 500 })
   }
@@ -33,11 +34,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = await owner()
   if (!user) return NextResponse.json({ error: "Owners only." }, { status: 403 })
-  const body = (await req.json().catch(() => ({}))) as { accountId?: string }
+  const body = (await req.json().catch(() => ({}))) as { accountId?: string; mode?: string }
   if (!body.accountId) return NextResponse.json({ error: "accountId is required" }, { status: 400 })
   try {
     const { startDriveImport } = await import("@/lib/crm-store/drive-import")
-    return NextResponse.json(await startDriveImport(body.accountId, user.id))
+    // "copy" = the study copy (the client's records stay on Drive); anything else = the real move (sandbox only)
+    return NextResponse.json(await startDriveImport(body.accountId, user.id, { mode: body.mode === "copy" ? "copy" : "move" }))
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "The move could not start." }, { status: 400 })
   }

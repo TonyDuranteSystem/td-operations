@@ -144,9 +144,11 @@ async function logEvent(f: { id: string; owner_id: string; folder_id: string; na
 /** The Drive moves that stored this file: refused while one is running or being undone; the items, and the first
  *  record per item the move left on Drive (the move's own company's records only — the same filter the move uses). */
 async function moveContext(fileId: string): Promise<{ items: Array<{ id: string; repointed: LedgerEntry[] }>; waiting: WaitingRow[]; runIds: string[] }> {
-  const { data, error } = await db().from("store_import_items").select("id, run_id, source, source_id, repointed, store_import_runs!inner(status, account_id, updated_at)").eq("store_file_id", fileId)
+  const { data, error } = await db().from("store_import_items").select("id, run_id, source, source_id, repointed, store_import_runs!inner(status, account_id, updated_at, mode)").eq("store_file_id", fileId)
   if (error) throw new Error(`Could not read the move's ledger — please try again (${error.message}).`)
-  const list = (data ?? []) as { id: string; run_id: string; source: string; source_id: string; repointed: LedgerEntry[] | null; store_import_runs: { status: string; account_id: string; updated_at: string } }[]
+  // a STUDY copy never switches a client: its runs never bring a record over (only a real move does)
+  const list = ((data ?? []) as { id: string; run_id: string; source: string; source_id: string; repointed: LedgerEntry[] | null; store_import_runs: { status: string; account_id: string; updated_at: string; mode?: string } }[])
+    .filter((i) => i.store_import_runs.mode !== "copy")
   if (list.some((i) => i.store_import_runs.status === "undoing")) throw new Error("This company's move is being undone — try again when it has finished.")
   // a move still running (touched in the last 10 minutes, or a batch mid-file) → wait; one left half-way long ago
   // (the page was closed) does not block the files it already stored

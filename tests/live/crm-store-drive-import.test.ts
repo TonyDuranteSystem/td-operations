@@ -322,3 +322,87 @@ describe("move — identical copies with and without a type, a retried file, a f
     expect((await db.from("documents").select("drive_file_id").eq("id", g.rowB).single()).data.drive_file_id).toBe(g.bPassport)
   }, 240_000)
 })
+
+// ───────────────────────────── the STUDY copy ("Import from Google Drive"): nothing changes for the client
+describe("study copy — pick a client's Drive folder, copy it into our storage, the client's records untouched", () => {
+  const c: Record<string, string> = {}
+  beforeAll(async () => {
+    const drive = await import("@/lib/google-drive")
+    const mk = async (parent: string, name: string) => ((await drive.createFolder(parent, name)) as { id: string }).id
+    const up = async (parent: string, name: string, text: string) => ((await drive.uploadBinaryToDrive(name, await pdf(text), "application/pdf", parent)) as { id: string }).id
+    c.top = await mk(TEST_DRIVE, `ZZ STUDY Co ${tag}`)
+    const company = await mk(c.top, "1. Company"), contacts = await mk(c.top, "2. Contacts")
+    c.oa = await up(company, "Operating Agreement.pdf", `ZZ STUDY OA ${tag}`)
+    c.passport = await up(contacts, "Passport.pdf", `ZZ STUDY passport ${tag}`)
+    c.account = await insert("accounts", { company_name: `ZZ STUDY LLC ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: c.top })
+    c.person = await insert("contacts", { first_name: "Zz", last_name: `Study ${tag}`, full_name: `ZZ STUDY Person ${tag}`, email: `zz-study-${tag}@example.test` })
+    const { error } = await db.from("account_contacts").insert({ account_id: c.account, contact_id: c.person })
+    if (error) throw new Error(error.message)
+    const legacy = async (slug: string) => (await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", slug).single()).data.metadata.legacy_document_type_id as number
+    c.rowOa = await insert("documents", { drive_file_id: c.oa, file_name: "Operating Agreement.pdf", account_id: c.account, document_type_id: await legacy("operating_agreement"), document_type_name: "Operating Agreement", category: 1, portal_visible: true, status: "classified" })
+    c.rowPassport = await insert("documents", { drive_file_id: c.passport, file_name: "Passport.pdf", account_id: c.account, contact_id: c.person, document_type_id: await legacy("passport"), document_type_name: "Passport", category: 2, portal_visible: true, status: "classified" })
+  }, 240_000)
+
+  it("the picker lists the client's folder with its company", async () => {
+    const { listDriveFolders } = await import("@/lib/crm-store/drive-import")
+    const top = await listDriveFolders(null)
+    const row = top.folders.find((f) => f.id === c.top)
+    expect(row?.company).toMatchObject({ accountId: c.account })
+    expect(row?.copy).toBeNull()
+    // inside the client's folder: its sub-folders, none a client
+    const inside = await listDriveFolders(c.top)
+    expect(inside.folders.map((f) => f.name).sort()).toEqual(["1. Company", "2. Contacts"])
+    await expect(listDriveFolders(PROD_DRIVE)).rejects.toThrow(/not in the Shared Drive/)
+  }, 120_000)
+
+  it("the copy stores every file (typed from its record, hidden), the client's records and visibility are untouched", async () => {
+    const { startDriveImport, continueDriveImport, movedAt, listDriveFolders } = await import("@/lib/crm-store/drive-import")
+    let v = await startDriveImport(c.account, actor, { mode: "copy" })
+    c.run = v.id
+    expect(v.mode).toBe("copy")
+    for (let i = 0; i < 10 && v.status === "moving"; i++) v = await continueDriveImport(v.id, actor, { files: 25, ms: 120_000 })
+    expect(v.status, JSON.stringify(v.report?.failed)).toBe("done")
+    expect(v.counts).toMatchObject({ total: 2, done: 2, failed: 0 })
+    // the client's records: exactly as before (Drive, visible)
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", c.rowOa).single()).data).toEqual({ drive_file_id: c.oa, portal_visible: true })
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", c.rowPassport).single()).data).toEqual({ drive_file_id: c.passport, portal_visible: true })
+    // the copies: typed, hidden, the passport in the person's storage; no CRM record points at them
+    const { data: items } = await db.from("store_import_items").select("source_id, store_file_id").eq("run_id", c.run)
+    const fid = (src: string) => items.find((x: { source_id: string }) => x.source_id === src).store_file_id as string
+    const { data: oa } = await db.from("store_files").select("document_type, published").eq("id", fid(c.oa)).single()
+    expect(oa).toEqual({ document_type: "operating_agreement", published: false })
+    const { data: pp } = await db.from("store_files").select("document_type, published, store_owners(kind, contact_id)").eq("id", fid(c.passport)).single()
+    expect(pp).toMatchObject({ document_type: "passport", published: false, store_owners: { kind: "person", contact_id: c.person } })
+    const { count } = await db.from("documents").select("id", { count: "exact", head: true }).in("drive_file_id", [`store:${fid(c.oa)}`, `store:${fid(c.passport)}`])
+    expect(count).toBe(0)
+    // the company is NOT switched: its page keeps Drive; the backup window never starts
+    expect(await movedAt(c.account)).toBeNull()
+    const { data: state } = await db.from("store_backup_state").select("switched_at").eq("owner_id", v.ownerId).maybeSingle()
+    expect(state?.switched_at ?? null).toBeNull()
+    // the picker says copied
+    const top = await listDriveFolders(null)
+    expect(top.folders.find((f) => f.id === c.top)?.copy).toMatchObject({ mode: "copy", status: "done", files: 2 })
+    // a second copy, or a real move, is refused while the copy exists
+    await expect(startDriveImport(c.account, actor, { mode: "copy" })).rejects.toThrow(/already copied/)
+    await expect(startDriveImport(c.account, actor)).rejects.toThrow(/already copied/)
+    c.oaFile = fid(c.oa)
+  }, 300_000)
+
+  it("organising the copy (Set type) never brings the client's Drive record over", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    await setStoreFileType({ fileId: c.oaFile, typeSlug: "articles_of_organization", actorId: actor })
+    expect((await db.from("store_files").select("document_type").eq("id", c.oaFile).single()).data.document_type).toBe("articles_of_organization")
+    expect((await db.from("documents").select("drive_file_id, document_type_name, portal_visible").eq("id", c.rowOa).single()).data)
+      .toEqual({ drive_file_id: c.oa, document_type_name: "Operating Agreement", portal_visible: true })
+  }, 120_000)
+
+  it("Remove copy trashes the copies, the client's records stay, and it can be copied again", async () => {
+    const { undoDriveImport, startDriveImport } = await import("@/lib/crm-store/drive-import")
+    expect((await undoDriveImport(c.run, actor)).status).toBe("rolled_back")
+    expect((await db.from("store_files").select("state").eq("id", c.oaFile).single()).data.state).toBe("trashed")
+    expect((await db.from("documents").select("drive_file_id").eq("id", c.rowOa).single()).data.drive_file_id).toBe(c.oa)
+    const again = await startDriveImport(c.account, actor, { mode: "copy" })
+    expect(again.mode).toBe("copy")
+    await undoDriveImport(again.id, actor)
+  }, 180_000)
+})

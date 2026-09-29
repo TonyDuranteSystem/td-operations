@@ -92,3 +92,12 @@ describe("drive import — pure rules", () => {
     expect(r.parityOk).toBe(true)
   })
 })
+
+describe("study copy switch", () => {
+  it("runs only where STORE_STUDY_COPY=1 is set", async () => {
+    const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
+    expect(studyCopyAllowed({ STORE_STUDY_COPY: "1" })).toBe(true)
+    expect(studyCopyAllowed({ STORE_STUDY_COPY: "true" })).toBe(false)
+    expect(studyCopyAllowed({})).toBe(false)
+  })
+})

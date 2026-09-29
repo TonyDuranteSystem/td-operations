@@ -9,11 +9,17 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
   return null
 }
 
-/** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run. */
-export async function denyUnlessStorePilotEnv(): Promise<NextResponse | null> {
+/** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run. `study: true` = an
+ *  action that only organises files staff study (type, rename, move, folders, trash) — it also runs where the
+ *  STUDY copy is switched on (production, STORE_STUDY_COPY=1); nothing the client could see is ever allowed there. */
+export async function denyUnlessStorePilotEnv(opts: { study?: boolean } = {}): Promise<NextResponse | null> {
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
-  if (!pilotEnvironmentAllowed()) return NextResponse.json({ error: "The new storage is not switched on here." }, { status: 403 })
-  return null
+  if (pilotEnvironmentAllowed()) return null
+  if (opts.study) {
+    const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
+    if (studyCopyAllowed()) return null
+  }
+  return NextResponse.json({ error: "The new storage is not switched on here." }, { status: 403 })
 }
 
 /**

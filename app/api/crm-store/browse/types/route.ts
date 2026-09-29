@@ -14,7 +14,7 @@ export async function GET() {
 
 /** POST { name, folderKind } — add a staff document type (today's "Custom…"), via the catalog framework. */
 export async function POST(req: NextRequest) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
+  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
   if (denied) return denied
   const body = (await req.json().catch(() => ({}))) as { name?: unknown; folderKind?: unknown }
   if (typeof body.name !== "string") return NextResponse.json({ error: "Enter a name for the new document type." }, { status: 400 })

@@ -197,3 +197,14 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | N9 | Moved company → report → "Re-check types" | Files whose label is now answered get their type; "Waiting for a type" shrinks |
 | N10 | Report → "Waiting for a type" → Set type | The file gets its type, its record opens from the new storage, the client sees it as before |
 | N11 | Undo the move after N9/N10 | Every record opens from Drive again |
+
+## O. Import from Google Drive (study copy)
+| # | Do | Expect |
+|---|---|---|
+| O1 | Storage → new storage → "Import from Google Drive" (as an owner) | The Shared Drive's folders; staff who aren't owners don't see the button |
+| O2 | Open folders; a client folder | Shows its company name (and status if not Active); "not a client folder" for others |
+| O3 | "Copy into our storage" → Yes | Progress "Copying … N of M files"; then "Copied (N files)" + Open |
+| O4 | Open | The client's storage with every file in the same folders, typed from its CRM label; passports in the person's storage |
+| O5 | CRM company page + View as client | Unchanged: still Drive, the client sees exactly what they saw |
+| O6 | Organise the copy: Set type, Rename, Move | Works; the company page and the client still unchanged |
+| O7 | "Remove copy" | Files go to the new storage's trash; the folder can be copied again |

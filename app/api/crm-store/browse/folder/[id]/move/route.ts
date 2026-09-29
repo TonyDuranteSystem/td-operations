@@ -16,7 +16,7 @@ function hideChoice(v: unknown): "none" | "all" | { ids: string[] } {
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
+  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
   if (denied) return denied
   const noAccess = await denyUnlessAreaAccess({ folderId: params.id })
   if (noAccess) return noAccess

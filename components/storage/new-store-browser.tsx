@@ -18,12 +18,13 @@ import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
-  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag,
+  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag, HardDriveDownload,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
+import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
@@ -255,6 +256,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [typing, setTyping] = useState<File_ | null>(null)
+  // "Import from Google Drive" (owners, where copying is switched on — the server says)
+  const [importOpen, setImportOpen] = useState(false)
+  const { data: importProbe } = useQuery<{ allowed: boolean }>({
+    queryKey: ['crm-store-drive-import-probe'],
+    queryFn: async () => { const r = await fetch('/api/crm-store/drive-folders?probe=1'); return r.ok ? r.json() : { allowed: false } },
+    staleTime: 300_000,
+    enabled: !scopedOwnerId,
+  })
   const { data: docTypes } = useStoreDocTypes()
   const typeNameOf = (slug: string | null) => (slug ? docTypes?.find((t) => t.slug === slug)?.name ?? slug : null)
   const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean; left?: boolean } | null>(null)
@@ -1985,6 +1994,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           )}
         </div>
       )}
+      {importOpen && (
+        <DriveImportDialog onClose={() => setImportOpen(false)}
+          onOpenStorage={(oid) => { setImportOpen(false); void loadNav(); void openOwner(oid) }} />
+      )}
       {typing && (
         <SetTypeDialog file={typing} viewingOwnerId={ownerId} onClose={() => setTyping(null)}
           onDone={() => { setTyping(null); void refreshAll() }} />
@@ -2307,6 +2320,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <button type="button" onClick={() => { void openSharedWithMe() }}
                 className={`flex w-full items-center gap-2 rounded-md py-1 pl-6 pr-1 text-left text-sm font-medium hover:bg-zinc-50 ${sharedView ? 'bg-blue-50' : ''}`}>
                 <User className="h-4 w-4 text-zinc-400" /><span className="flex-1">Shared with me</span>
+              </button>
+            </li>
+          )}
+          {!scopedOwnerId && importProbe?.allowed && (
+            <li className="pt-2">
+              <button type="button" onClick={() => setImportOpen(true)}
+                className="flex w-full items-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-1 pl-2 pr-1 text-left text-sm font-medium text-blue-800 hover:bg-blue-100">
+                <HardDriveDownload className="h-4 w-4" /><span className="flex-1">Import from Google Drive</span>
               </button>
             </li>
           )}

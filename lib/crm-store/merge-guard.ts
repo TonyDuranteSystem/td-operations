@@ -22,7 +22,9 @@ export async function storeMergeBlocker(loserId: string, winnerId: string, deps?
 
 async function defaultDeps(): Promise<MergeGuardDeps | null> {
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return null
+  const { studyCopyAllowed } = await import("./drive-import")
+  // study copies create people's storage in production too — a contact merge must respect it there as well
+  if (!pilotEnvironmentAllowed() && !studyCopyAllowed()) return null
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   return {
     personOwners: async (ids) => {
