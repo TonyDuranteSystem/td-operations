@@ -11,6 +11,7 @@ import type { Offer } from '@/lib/types/offer'
 import { PackagePicker } from './package-picker'
 import { PaymentChoicePicker } from './payment-choice-picker'
 import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 // ─── Bilingual Labels ───────────────────────────────────────
 
@@ -55,6 +56,7 @@ const LABELS = {
     accountNumber: 'Account Number',
     routingNumber: 'Routing Number',
     bankAddress: 'Address',
+    bankAddressEuro: 'Bank address',
     reference: 'Reference',
     expired: 'Offer Expired',
     expiredMessage: 'This offer is no longer available. Contact Tony Durante for a new proposal.',
@@ -122,6 +124,7 @@ const LABELS = {
     accountNumber: 'Numero Conto',
     routingNumber: 'Routing Number',
     bankAddress: 'Indirizzo',
+    bankAddressEuro: 'Indirizzo banca',
     reference: 'Causale',
     expired: 'Offerta Scaduta',
     expiredMessage: 'Questa offerta non è più disponibile. Contatta Tony Durante per una nuova proposta.',
@@ -929,7 +932,7 @@ export default function OfferPageWithCode() {
                       <div className="offer-bank-row"><span className="offer-bank-label">{L.bank}</span><span className="offer-bank-value">{o.bank_details.bank_name}</span></div>
                     )}
                     {(o.bank_details.bank_address || (o.bank_details as any).address) && (
-                      <div className="offer-bank-row"><span className="offer-bank-label">{L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address || (o.bank_details as any).address}</span></div>
+                      <div className="offer-bank-row"><span className="offer-bank-label">{euroBankAddress(o.bank_details) ? L.bankAddressEuro : L.bankAddress}</span><span className="offer-bank-value">{o.bank_details.bank_address || (o.bank_details as any).address}</span></div>
                     )}
                     {o.bank_details.reference && (
                       <div className="offer-bank-ref">{L.reference}: {o.bank_details.reference}</div>

@@ -5,6 +5,7 @@ import { supabasePublic } from '@/lib/supabase/public-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import type { Offer } from '@/lib/types/offer'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -383,6 +384,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
           if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">IBAN</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
           if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">BIC / SWIFT</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
           if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">Bank</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
+          if (euroBankAddress(b)) sh += `<div class="contract-bank-row"><span class="contract-bank-label">Bank address</span><span class="contract-bank-value">${esc(euroBankAddress(b) as string)}</span></div>`
           if (b.reference) sh += `<div class="contract-bank-ref">Reference: ${esc(b.reference)}</div>`
           sh += '</div>'
           sh += '<div class="contract-receipt-upload">'
