@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizeTaxPayloadForPdf,
+  formatTaxMoneyForPdf,
   generateFormSummaryPDF,
   FORM_CONFIGS,
 } from '@/lib/form-to-drive'
@@ -195,5 +196,34 @@ describe('normalized payload rendered through generateFormSummaryPDF', () => {
     expect(text).not.toContain('Llc Ein')
     expect(text).not.toContain('Personal Email')
     expect(text).not.toContain('Related Party Transactions 0 Rpt')
+  })
+})
+
+// Dev job 89195c68 — money amounts print as "$80,000.00" in the accountant
+// PDF; strings (legacy raw text like "1.500") print exactly as stored.
+
+describe('formatTaxMoneyForPdf', () => {
+  it('formats real numbers on money keys, top-level and in folded transactions', () => {
+    const out = formatTaxMoneyForPdf(normalizeTaxPayloadForPdf(rptPayload()))
+    expect(out.personal_expenses).toBe('$34,659.79')
+    const txs = out.related_party_transactions as Array<Record<string, unknown>>
+    expect(txs[0].rpt_amount).toBe('$3,000.00')
+  })
+  it('leaves strings verbatim and non-money numbers alone', () => {
+    const out = formatTaxMoneyForPdf({
+      distributions_withdrawals: '1.500',
+      corp_distributions: 80,
+      member_ownership_pct: 50,
+      related_party_transactions: [{ rpt_amount: '24513.80', rpt_company_name: 'X' }],
+    })
+    expect(out.distributions_withdrawals).toBe('1.500')
+    expect(out.corp_distributions).toBe('$80.00')
+    expect(out.member_ownership_pct).toBe(50)
+    expect((out.related_party_transactions as Array<Record<string, unknown>>)[0].rpt_amount).toBe('24513.80')
+  })
+  it('does not mutate the input', () => {
+    const data = { personal_expenses: 10 }
+    formatTaxMoneyForPdf(data)
+    expect(data.personal_expenses).toBe(10)
   })
 })

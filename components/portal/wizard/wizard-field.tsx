@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { MoneyInput } from '@/components/forms/money-input'
+import { moneyOptionsFor } from '@/lib/portal/wizard-money'
 
 export interface FieldConfig {
   name: string
@@ -41,8 +43,13 @@ export interface FieldConfig {
   /** Live-format the input as the user types. `ein` strips non-digits and
    *  auto-inserts the dash after the second digit, capped at 9 digits.
    *  Display always ends up in canonical XX-XXXXXXX regardless of what the
-   *  user pastes. Phase E2. */
-  format?: 'ein'
+   *  user pastes. Phase E2.
+   *  `money` renders the shared MoneyInput (dev job 89195c68): a text box that
+   *  reads both US and Italian number formats and ASKS the client when an
+   *  amount is ambiguous ("80.000" = $80,000 or $80.00?) instead of guessing.
+   *  Keep `type: 'number'` on such fields — everything downstream still reads
+   *  a number once the amount is settled. */
+  format?: 'ein' | 'money'
   /** Render a non-functional "✨ Generate" placeholder button beside a
    *  `textarea` (TD Communication brand-audit description). The AI wiring is a
    *  later phase — the button is disabled and only signals the intent. Ignored
@@ -105,6 +112,8 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
   // SUPPORTED_LOCALES, and falls through to the exact same it/en behavior
   // as before whenever it has nothing for a given phrase.
   const { translations } = useLocale()
+  const inputId = useId()
+  const isMoney = field.format === 'money'
   const pick = (en: string | undefined, it: string | undefined): string | undefined => {
     if (!en) return en
     return translations[en] ?? (locale === 'it' && it ? it : en)
@@ -145,7 +154,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1">
-        <label className="flex items-center gap-1 text-sm font-medium text-zinc-700">
+        <label htmlFor={isMoney ? inputId : undefined} className="flex items-center gap-1 text-sm font-medium text-zinc-700">
           {label}
           {field.required && <span className="text-red-500">*</span>}
           {field.prefilled && value && (
@@ -443,6 +452,19 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
             </div>
           )
         })()
+      ) : isMoney ? (
+        <MoneyInput
+          id={inputId}
+          value={value}
+          onChange={v => onChange(field.name, v)}
+          locale={locale}
+          otherLanguage={Object.keys(translations).length > 0}
+          pick={(en, it) => pick(en, it) ?? en}
+          options={moneyOptionsFor(field)}
+          placeholder={placeholder}
+          error={error}
+          className={inputClass}
+        />
       ) : (
         <input
           type={field.type}
@@ -463,7 +485,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
         />
       )}
 
-      {field.type === 'number' && field.min !== undefined && value !== '' && value !== null && value !== undefined &&
+      {!isMoney && field.type === 'number' && field.min !== undefined && value !== '' && value !== null && value !== undefined &&
         !Number.isNaN(Number(value)) && Number(value) < field.min && (
         <p className="text-xs text-red-500">
           {field.min === 0
@@ -471,7 +493,7 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
             : interpolateString(pick('Must be at least {min}.', 'Deve essere almeno {min}.')!, { min: field.min })}
         </p>
       )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && !isMoney && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
 }

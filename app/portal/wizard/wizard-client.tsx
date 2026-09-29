@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
 import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
+import { isFieldVisible, findMoneyProblems, listMoneyKeys, normalizeMoneyData, stepIndexForKey, moneyProblemMessage, type MoneyProblem } from '@/lib/portal/wizard-money'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
@@ -17,6 +18,8 @@ const UPLOAD_BUCKET = 'onboarding-uploads'
 interface FieldError {
   field: string
   message: string
+  /** Italian text of `message`, when the server sends one (money backstop). */
+  message_it?: string
 }
 
 /**
@@ -112,24 +115,17 @@ interface WizardClientProps {
   closureOtherPendingCount?: number | null
 }
 
-// A conditional field is visible only if its condition matches AND its parent
-// field is itself visible — the WHOLE ancestor chain must hold. Without this,
-// a child kept demanding its upload after the grandparent flipped to No: the
-// parent's stale answer stayed in the draft, the child checked only its direct
-// parent, and Next blocked on an invisible field (crypto-CSV repro:
-// answer 1099=No, then crypto=No). Pure module-level — no hook deps.
-function isFieldVisible(field: FieldConfig, stepFields: FieldConfig[], data: Record<string, unknown>, depth = 0): boolean {
-  if (!field.conditional || depth > 10) return true
-  if (String(data[field.conditional.field]) !== field.conditional.value) return false
-  const parent = stepFields.find(f => f.name === field.conditional!.field)
-  return parent ? isFieldVisible(parent, stepFields, data, depth + 1) : true
-}
+// isFieldVisible lives in lib/portal/wizard-money.ts (dev job 89195c68) so
+// the wizard-submit backstop applies the identical visibility rule.
 
 // A filled number below the field's domain minimum (e.g. a negative money
 // amount) blocks the step even when the field is optional. Empty values are
 // the required-check's business, not this one's. Pure module-level — no hook deps.
-function belowFieldMin(field: { min?: number }, val: unknown): boolean {
+function belowFieldMin(field: { min?: number; format?: string }, val: unknown): boolean {
   if (field.min === undefined) return false
+  // Money fields own their sign rule (lib/money-input.ts via findMoneyProblems)
+  // — Number("-80.000") here would give a second, contradictory message.
+  if (field.format === 'money') return false
   if (val === undefined || val === null || val === '' || typeof val === 'boolean') return false
   const n = Number(val)
   return !Number.isNaN(n) && n < field.min
@@ -364,7 +360,10 @@ export function WizardClient({
   const filteredSaved = Object.fromEntries(
     Object.entries(savedData).filter(([, v]) => v !== '' && v !== null && v !== undefined)
   )
-  const initialData = { ...prefillData, ...filteredSaved }
+  // Money fields (dev job 89195c68): a stored string that reads cleanly
+  // (legacy "5000") becomes a number on load so the step gate and the server
+  // agree; an unanswered "80.000" stays a string and re-asks its question.
+  const initialData = normalizeMoneyData(steps, fields, { ...prefillData, ...filteredSaved }, { clearHiddenPending: false })
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
@@ -422,6 +421,10 @@ export function WizardClient({
     })
     return counts
   })
+  // Bumped when a repeater row is removed: the rows below slide up a slot and
+  // are keyed by index, so their inputs are remounted to drop any per-row
+  // local state (e.g. a money box's "Saved as" line) — dev job 89195c68.
+  const [repeaterVersion, setRepeaterVersion] = useState<Record<string, number>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
@@ -596,9 +599,18 @@ export function WizardClient({
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
   const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
 
-  const getStepErrors = useCallback((): Record<string, string> => {
+  // Localized text for a money problem (dev job 89195c68) — the same wording
+  // the server backstop sends, so client and server read identically.
+  const moneyMsg = useCallback((p: Pick<MoneyProblem, 'problem' | 'detail'>, value: unknown): string => {
+    const m = moneyProblemMessage(p, value)
+    return pickText(m.en, m.it)!
+  }, [pickText])
+
+  // Errors for an EXPLICIT step index (not only the current one) so the
+  // submit check can compute another step's errors before jumping to it.
+  const computeStepErrors = useCallback((stepIndex: number): Record<string, string> => {
     const errs: Record<string, string> = {}
-    const stepId = steps[currentStep].id
+    const stepId = steps[stepIndex].id
     const stepFields = fields[stepId] || []
 
     if (stepId === 'prepare') {
@@ -680,8 +692,19 @@ export function WizardClient({
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
       else if (malformedEin(field, formData[field.name])) errs[field.name] = einMsg
     }
+    // Money amounts (dev job 89195c68): an unanswered "80.000" question, an
+    // unreadable amount, too many decimals (legacy 10.596) or a negative in a
+    // min-0 field blocks the step — including optional fields. Same rule as
+    // the wizard-submit backstop, so the client never passes what the server
+    // refuses.
+    for (const p of findMoneyProblems(steps, fields, formData)) {
+      if (p.stepIndex !== stepIndex || errs[p.key]) continue
+      errs[p.key] = moneyMsg(p, formData[p.key])
+    }
     return errs
-  }, [currentStep, steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText])
+  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg])
+
+  const getStepErrors = useCallback(() => computeStepErrors(currentStep), [computeStepErrors, currentStep])
 
   const validateStep = useCallback(() => Object.keys(getStepErrors()).length === 0, [getStepErrors])
 
@@ -689,7 +712,11 @@ export function WizardClient({
   // error list + the highlighted field read plainly (not `member_0_member_zip`).
   const labelForKey = useCallback((key: string): string => {
     if (key === '__members_ownership') return pickText('Member ownership', 'Quote dei soci')!
-    const stepId = steps[currentStep].id
+    // Search the current step first, then every other step — a submit-time
+    // error (money check / server 400) can name a field on another step, and
+    // must still read as its plain label, never the raw key.
+    const owner = stepIndexForKey(steps, fields, key)
+    const stepId = steps[owner >= 0 ? owner : currentStep].id
     const stepFields = fields[stepId] || []
     const pick = (f: FieldConfig) => pickText(f.label, f.labelIt) || f.name
     // member_{idx}_{name}
@@ -712,6 +739,20 @@ export function WizardClient({
     if (top) return pick(top)
     return key
   }, [currentStep, steps, fields, pickText])
+
+  // After a jump to another step, scroll to the offending field once that
+  // step has rendered (querying before the render found nothing and fell back
+  // to scroll-top). Cleared after use.
+  const [scrollToKey, setScrollToKey] = useState<string | null>(null)
+  // Shown at the top of the step the submit check jumped back to.
+  const [moneyJumpBanner, setMoneyJumpBanner] = useState(false)
+  useEffect(() => {
+    if (!scrollToKey || typeof document === 'undefined') return
+    const el = document.querySelector(`[data-field-key="${CSS.escape(scrollToKey)}"]`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    else window.scrollTo({ top: 0, behavior: 'smooth' })
+    setScrollToKey(null)
+  }, [scrollToKey, currentStep])
 
   // Compute the step's errors and PUBLISH them (highlight + summary). Returns
   // true when the step is BLOCKED (has errors). Used by forward navigation and
@@ -800,6 +841,30 @@ export function WizardClient({
 
   // Submit wizard
   const handleSubmit = useCallback(async () => {
+    // Money amounts across ALL steps (dev job 89195c68). A resumed draft opens
+    // on its last saved step, so earlier steps' amounts were never re-checked;
+    // an unanswered "80.000" there would otherwise be submitted. Settle clean
+    // strings to numbers and clear pending text left in fields the client has
+    // since hidden — into a LOCAL copy, which is what gets posted (a state
+    // update would not reach this closure's fetch).
+    const submitData = normalizeMoneyData(steps, fields, formData, { clearHiddenPending: true })
+    const moneyProblems = findMoneyProblems(steps, fields, submitData)
+    if (moneyProblems.length > 0) {
+      const target = moneyProblems[0].stepIndex
+      const errs = moneyProblems
+        .filter(p => p.stepIndex === target)
+        .map(p => ({ field: p.key, message: moneyMsg(p, submitData[p.key]) }))
+      setFormData(submitData)
+      setFieldErrors(errs)
+      if (target !== currentStep) {
+        setMoneyJumpBanner(true)
+        setCurrentStep(target)
+      }
+      setScrollToKey(errs[0].field)
+      toast.error(pickText('Complete the highlighted fields to submit', 'Completa i campi evidenziati per inviare')!)
+      return
+    }
+
     // Clarify fix: highlight the exact missing fields on the final step + explain,
     // instead of a generic "fill all required fields" toast over a grey button.
     if (raiseStepErrors()) {
@@ -919,7 +984,7 @@ export function WizardClient({
             // verbatim, and it is formation MATERIALIZATION that re-resolves
             // from the signed contract and overrules this if they disagree.
             entity_type: effectiveEntityType,
-            data: formData,
+            data: submitData,
             account_id: accountId || null,
             contact_id: contactId || null,
             lead_id: leadId || null,
@@ -944,9 +1009,24 @@ export function WizardClient({
         // problem, never retried.
         const err = await res.json().catch(() => ({} as { error?: string; fields?: FieldError[] }))
         if (res.status === 400 && Array.isArray(err?.fields) && err.fields.length > 0) {
-          setFieldErrors(err.fields)
-          const first = err.fields[0]
-          toast.error(`${first.field}: ${first.message}`)
+          // Localize (money backstop sends message_it) and name the field by
+          // its plain label, never the raw key; jump to the step that owns it.
+          const localized: FieldError[] = err.fields.map((f: FieldError) => ({
+            field: f.field,
+            message: locale === 'it' && f.message_it ? f.message_it : (pickText(f.message, f.message_it) ?? f.message),
+          }))
+          setFieldErrors(localized)
+          const first = localized[0]
+          const owner = stepIndexForKey(steps, fields, first.field)
+          if (owner >= 0 && owner !== currentStep) {
+            // The amount banner only when the error IS an amount — other
+            // server errors (a blank required text field) jump without it.
+            const moneyKeys = new Set(listMoneyKeys(steps, fields, submitData).map(r => r.key))
+            setMoneyJumpBanner(moneyKeys.has(first.field))
+            setCurrentStep(owner)
+          }
+          setScrollToKey(first.field)
+          toast.error(`${labelForKey(first.field)}: ${first.message}`)
           setIsSubmitting(false)
           return
         }
@@ -968,7 +1048,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId, steps, fields, moneyMsg, currentStep, locale, labelForKey])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -981,6 +1061,7 @@ export function WizardClient({
     } else {
       setFieldErrors([])
     }
+    setMoneyJumpBanner(false)
     setCurrentStep(step)
     // Auto-save in background (only if user has entered data)
     const hasData = Object.keys(formData).some(k => formData[k] !== undefined && formData[k] !== '')
@@ -1213,6 +1294,11 @@ export function WizardClient({
   const stepFields = fields[stepId] || []
   const isMembersStep = stepId === 'members'
   const isPrepareStep = stepId === 'prepare'
+  // Money note (dev job 89195c68): a box shows a settled amount in US format
+  // ("80,000"), which an Italian reads as eighty — so every step with amounts
+  // says it outright, statically (it survives a draft reload).
+  const stepHasMoney = stepFields.some(f =>
+    f.format === 'money' || (f.type === 'repeater' && (f.repeaterFields ?? []).some(rf => rf.format === 'money')))
 
   return (
     <WizardShell
@@ -1273,6 +1359,35 @@ export function WizardClient({
               )}
             </p>
           </div>
+        </div>
+      )}
+
+      {moneyJumpBanner && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4" data-testid="wizard-money-jump">
+          <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-900">
+            {pickText(
+              'One amount on this page needs a quick check before you can submit. Nothing you entered has been lost.',
+              "Un importo in questa pagina va controllato prima dell'invio. Nulla di ciò che hai inserito è andato perso.",
+            )}
+          </p>
+        </div>
+      )}
+
+      {stepHasMoney && !isPrepareStep && (
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-4 text-xs text-blue-900 space-y-1" data-testid="wizard-money-note">
+          <p>
+            {pickText(
+              'Amounts are shown in US format: 80,000.00 = eighty thousand dollars.',
+              'Gli importi sono mostrati nel formato americano: 80,000.00 = ottantamila dollari (in Italia: 80.000,00).',
+            )}
+          </p>
+          <p>
+            {pickText(
+              'Tip: you can type just the digits, e.g. 80000 for eighty thousand dollars.',
+              'Suggerimento: puoi scrivere solo le cifre, ad es. 80000 per ottantamila dollari.',
+            )}
+          </p>
         </div>
       )}
 
@@ -1489,6 +1604,12 @@ export function WizardClient({
                             onClick={() => {
                               const newCount = count - 1
                               setRepeaterCounts(prev => ({ ...prev, [field.name]: newCount }))
+                              setRepeaterVersion(prev => ({ ...prev, [field.name]: (prev[field.name] ?? 0) + 1 }))
+                              // Rows slide up a slot, so a raised error keyed by
+                              // row index would land on the wrong row — drop this
+                              // repeater's row errors (the next Avanti re-raises
+                              // any that still apply).
+                              setFieldErrors(prev => prev.filter(e => !e.field.startsWith(`${field.name}_`)))
                               handleFieldChange(`${field.name}_count`, newCount)
                               setFormData(prev => {
                                 // Shift every row ABOVE the removed one down a
@@ -1524,7 +1645,7 @@ export function WizardClient({
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           {field.repeaterFields?.map(rf => (
-                            <div key={rf.name} data-field-key={`${field.name}_${idx}_${rf.name}`} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
+                            <div key={`${rf.name}-${repeaterVersion[field.name] ?? 0}`} data-field-key={`${field.name}_${idx}_${rf.name}`} className={rf.type === 'textarea' || rf.type === 'file' ? 'md:col-span-2' : ''}>
                               <WizardField
                                 field={rf}
                                 value={formData[`${field.name}_${idx}_${rf.name}`] ?? ''}
