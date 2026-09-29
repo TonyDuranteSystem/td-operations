@@ -26,6 +26,31 @@
 import type { PortalChatEntity } from '@/lib/portal/queries'
 
 export const PERSONAL_CHAT_LINK = 'personal'
+export const CHAT_LINK_MARKER = 'chatlink'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Cut to at most `max` characters without splitting an emoji / surrogate pair. */
+function safeTopic(topic: string | null | undefined, max = 100): string {
+  if (typeof topic !== 'string') return ''
+  return Array.from(topic.trim()).slice(0, max).join('')
+}
+
+/**
+ * On the login page: if the client arrived from a chat deep link while signed
+ * out, where to send them after login (else null → the normal portal home).
+ * Only a well-formed account value is carried; everything is re-encoded, and
+ * the result is always a /portal/chat/open path on this site.
+ */
+export function chatLinkAfterLogin(search: string): string | null {
+  const q = new URLSearchParams(search)
+  if (q.get(CHAT_LINK_MARKER) !== '1') return null
+  const account = q.get('account')
+  if (account && account !== PERSONAL_CHAT_LINK && !UUID_RE.test(account)) return null
+  return buildPortalChatLink({
+    accountId: !account || account === PERSONAL_CHAT_LINK ? null : account,
+    topic: safeTopic(q.get('topic')),
+  })
+}
 
 /**
  * A chat deep link must be opened with a FULL page load (plain <a>), not a
@@ -40,8 +65,12 @@ export function needsFullPageLoad(link: string): boolean {
 /** Relative portal path for a chat message's deep link. */
 export function buildPortalChatLink(opts: { accountId?: string | null; topic?: string | null }): string {
   const params = new URLSearchParams()
+  // Marker: a signed-out client is bounced to /portal/login with this query
+  // intact (the path is dropped) — the login page uses it to send them on to
+  // the linked chat instead of the portal home. See chatLinkAfterLogin.
+  params.set(CHAT_LINK_MARKER, '1')
   params.set('account', opts.accountId ? opts.accountId : PERSONAL_CHAT_LINK)
-  const topic = typeof opts.topic === 'string' ? opts.topic.trim() : ''
+  const topic = safeTopic(opts.topic)
   if (topic) params.set('topic', topic)
   // URLSearchParams encodes spaces as '+'; use %20 so the link reads the same
   // everywhere it is pasted (email href, push url, bell Link).
@@ -50,7 +79,7 @@ export function buildPortalChatLink(opts: { accountId?: string | null; topic?: s
 
 /** Where /portal/chat/open sends the client after saving the company. */
 export function chatPathForTopic(topic: string | null | undefined): string {
-  const t = typeof topic === 'string' ? topic.trim().slice(0, 100) : ''
+  const t = safeTopic(topic)
   return t ? `/portal/chat?topic=${encodeURIComponent(t)}` : '/portal/chat'
 }
 
@@ -83,7 +112,7 @@ export function entityCookieWrites(e: PortalChatEntity): EntityCookieWrite[] {
 }
 
 /** Does this chat view show the contact's personal (company-less) messages? */
-function hostsPersonal(e: PortalChatEntity): boolean {
+export function hostsPersonal(e: PortalChatEntity): boolean {
   return e.kind === 'personal' || e.kind === 'formation' || e.includePersonalNull
 }
 
@@ -111,4 +140,25 @@ export function resolveChatEntityFromLink(
   const match = entities.find(e => e.kind === 'company' && e.accountId === accountParam)
   if (!match || match === currentlySelected) return null
   return match
+}
+
+/**
+ * The entity a chat link should leave SELECTED: the one it switches to, or —
+ * when the link points at what is already selected — the current one. Null
+ * when the link is unusable (not this client's, or no view hosts personal).
+ * The /portal/chat/open route writes the switcher cookies for this entity
+ * every time (idempotent), which also clears a stale onboarding selection that
+ * would otherwise make the sidebar disagree with the chat.
+ */
+export function chatLinkTargetEntity(
+  entities: PortalChatEntity[],
+  accountParam: string | null | undefined,
+  current: PortalChatEntity | undefined,
+): PortalChatEntity | null {
+  if (!accountParam) return null
+  const linked = resolveChatEntityFromLink(entities, accountParam, current)
+  if (linked) return linked
+  if (!current) return null
+  if (accountParam === PERSONAL_CHAT_LINK) return hostsPersonal(current) ? current : null
+  return current.kind === 'company' && current.accountId === accountParam ? current : null
 }

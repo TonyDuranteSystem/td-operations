@@ -3,7 +3,7 @@ import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getChatEntities } from '@/lib/portal/queries'
-import { chatPathForTopic, entityCookieWrites, resolveChatEntityFromLink } from '@/lib/portal/chat-link'
+import { chatLinkTargetEntity, chatPathForTopic, entityCookieWrites } from '@/lib/portal/chat-link'
 
 /**
  * GET /portal/chat/open?account=<id|personal>&topic=<name>
@@ -45,10 +45,17 @@ export async function GET(request: NextRequest) {
       (accountId ? byId.get(accountId) : undefined) ??
       entities[0]
 
-    const linked = resolveChatEntityFromLink(entities, accountParam, current)
-    if (linked) {
-      for (const c of entityCookieWrites(linked)) {
+    // Write the switcher's cookies for the target EVERY time (idempotent):
+    // even a link to the already-selected company must clear a leftover
+    // onboarding selection, or the sidebar and the chat disagree.
+    const target = chatLinkTargetEntity(entities, accountParam, current)
+    if (target) {
+      for (const c of entityCookieWrites(target)) {
         response.cookies.set(c.name, c.value, { path: '/portal', maxAge: c.maxAge, sameSite: 'lax' })
+      }
+      // Like the switcher: choosing a company leaves partner mode.
+      if (cookieStore.get('portal_mode')?.value === 'partner') {
+        response.cookies.set('portal_mode', 'client', { path: '/portal', maxAge: 31536000, sameSite: 'lax' })
       }
     }
   } catch (err) {
