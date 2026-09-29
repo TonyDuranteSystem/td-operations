@@ -1,6 +1,7 @@
 /**
  * The "Annual Maintenance" sentence printed in the client contracts (formation
- * MSA + onboarding agreement).
+ * MSA + onboarding agreement), and the same schedule as rows for the offer
+ * page's "Annual Costs" box (buildAnnualCostRows).
  *
  * It used to print the offer's recurring rows verbatim under "from next year",
  * e.g. "$1000 -- First Installment (January): $1000 -- Second Installment (June):
@@ -49,6 +50,27 @@ function noonIso(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T12:00:00`
 }
 
+type Leg = { amount: number; symbol: string }
+
+/** January + June amounts from the offer's recurring rows (totals ignored), or null. */
+function readJanJun(recurringCosts: unknown, currency?: string | null): { jan: Leg; jun: Leg } | null {
+  const rows = Array.isArray(recurringCosts) ? (recurringCosts as RecurringRow[]) : []
+  let jan: Leg | null = null
+  let jun: Leg | null = null
+  for (const row of rows) {
+    const label = String(row?.label ?? "").toLowerCase()
+    if (label.includes("annual") || label.includes("total") || label.includes("annuale")) continue
+    const amount = rowAmount(row)
+    if (amount == null) continue
+    const symbol = rowSymbol(row, currency)
+    if (!jan && (label.includes("jan") || label.includes("genn"))) jan = { amount, symbol }
+    else if (!jun && (label.includes("jun") || label.includes("giugno"))) jun = { amount, symbol }
+  }
+  return jan && jun ? { jan, jun } : null
+}
+
+const money = (x: Leg) => `${x.symbol}${x.amount.toLocaleString("en-US")}`
+
 export function buildAnnualMaintenanceWording(p: {
   recurringCosts: unknown
   /** offer.installment_currency, else the setup currency. */
@@ -56,28 +78,60 @@ export function buildAnnualMaintenanceWording(p: {
   /** The day the client signs (the contract's effective date). */
   signDate: Date
 }): AnnualMaintenanceWording | null {
-  const rows = Array.isArray(p.recurringCosts) ? (p.recurringCosts as RecurringRow[]) : []
-  let jan: { amount: number; symbol: string } | null = null
-  let jun: { amount: number; symbol: string } | null = null
-  for (const row of rows) {
-    const label = String(row?.label ?? "").toLowerCase()
-    if (label.includes("annual") || label.includes("total") || label.includes("annuale")) continue
-    const amount = rowAmount(row)
-    if (amount == null) continue
-    const symbol = rowSymbol(row, p.currency)
-    if (!jan && (label.includes("jan") || label.includes("genn"))) jan = { amount, symbol }
-    else if (!jun && (label.includes("jun") || label.includes("giugno"))) jun = { amount, symbol }
-  }
-  if (!jan || !jun) return null
-
-  const money = (x: { amount: number; symbol: string }) => `${x.symbol}${x.amount.toLocaleString("en-US")}`
+  const legs = readJanJun(p.recurringCosts, p.currency)
+  if (!legs) return null
+  const { jan, jun } = legs
   const total = jan.symbol === jun.symbol ? `${jan.symbol}${(jan.amount + jun.amount).toLocaleString("en-US")}` : null
   const both = (year: number) =>
-    `From ${year}: ${money(jan!)} in January and ${money(jun!)} in June${total ? ` (${total} per year)` : ""}`
+    `From ${year}: ${money(jan)} in January and ${money(jun)} in June${total ? ` (${total} per year)` : ""}`
 
   const schedule = getInstallmentSchedule(noonIso(p.signDate))
   const lines = schedule.skipFirstJanuary
     ? [`June ${schedule.firstJuneYear}: ${money(jun)}`, both(schedule.firstJanuaryYear as number)]
     : [both(schedule.firstJuneYear)]
   return { lines, sentence: lines.join(". ") + "." }
+}
+
+export interface AnnualCostRow {
+  label: string
+  price: string
+}
+
+const ROW_TEXT = {
+  en: {
+    first: (y: number) => `First payment — June ${y}`,
+    jan: (y: number) => `From ${y} — January`,
+    jun: (y: number) => `From ${y} — June`,
+    total: (y: number) => `Annual total (from ${y})`,
+  },
+  it: {
+    first: (y: number) => `Prima rata — giugno ${y}`,
+    jan: (y: number) => `Dal ${y} — gennaio`,
+    jun: (y: number) => `Dal ${y} — giugno`,
+    total: (y: number) => `Totale annuo (dal ${y})`,
+  },
+} as const
+
+/**
+ * The same schedule as rows for the offer page's "Annual Costs" box, in the
+ * offer's language, dated from the day the client views the offer (= the day
+ * they sign). Null → the caller keeps the offer's own rows.
+ */
+export function buildAnnualCostRows(p: {
+  recurringCosts: unknown
+  currency?: string | null
+  viewDate: Date
+  language: "en" | "it"
+}): AnnualCostRow[] | null {
+  const legs = readJanJun(p.recurringCosts, p.currency)
+  if (!legs) return null
+  const { jan, jun } = legs
+  const t = ROW_TEXT[p.language] ?? ROW_TEXT.en
+  const schedule = getInstallmentSchedule(noonIso(p.viewDate))
+  const fullYear = schedule.skipFirstJanuary ? (schedule.firstJanuaryYear as number) : schedule.firstJuneYear
+  const rows: AnnualCostRow[] = []
+  if (schedule.skipFirstJanuary) rows.push({ label: t.first(schedule.firstJuneYear), price: money(jun) })
+  rows.push({ label: t.jan(fullYear), price: money(jan) }, { label: t.jun(fullYear), price: money(jun) })
+  if (jan.symbol === jun.symbol) rows.push({ label: t.total(fullYear), price: `${jan.symbol}${(jan.amount + jun.amount).toLocaleString("en-US")}` })
+  return rows
 }
