@@ -1483,6 +1483,23 @@ export async function materializeFormationCompany(
       steps.push({ step: "formation_financial_fill", status: "skipped", detail: "No resolved offer token to read amounts from" })
     }
 
+    // 10f. Company services bought on the formation offer that had to WAIT for
+    // the company (a DBA — Antonio 2026-09-28) start now, on this company.
+    // Keyed on the formation SD's own offer token, else the offer just linked.
+    // Idempotent + never throws (see createCompanyServicesOnFormation).
+    const formationOfferToken = resolvedSd?.source_offer_token ?? resolvedOfferToken
+    if (formationOfferToken) {
+      const { createCompanyServicesOnFormation } = await import("@/lib/operations/activation-start-services")
+      const companySteps = await createCompanyServicesOnFormation({
+        offerToken: formationOfferToken,
+        accountId,
+        contactId: params.contact_id,
+      })
+      for (const cs of companySteps) {
+        steps.push({ step: cs.step, status: cs.status === "error" ? "error" : cs.status === "created" ? "ok" : "skipped", detail: cs.detail })
+      }
+    }
+
     // 10a. Backfill account_id on flow-stamped documents. The workspace "Filed
     // with State" stage uploads the Articles of Organization BEFORE the company
     // is materialized, so the documents row is stamped with the formation SD but

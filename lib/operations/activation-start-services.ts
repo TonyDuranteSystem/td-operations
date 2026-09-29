@@ -40,7 +40,7 @@
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createSD } from "@/lib/operations/service-delivery"
 import { reportSystemError } from "@/lib/system-errors"
-import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes } from "@/lib/services"
+import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes, LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
 
 export interface ActivationStep {
   step: string
@@ -480,4 +480,110 @@ async function createBoughtStartAtActivationServicesInner(p: {
     newCompanyContract: p.newCompanyContract ?? false,
     repeatableTypes,
   })
+}
+
+/**
+ * Types a formation itself (or the yearly management it starts) already
+ * delivers — never created again as a separate "company service".
+ * Company Formation = the formation; EIN = obtained by the formation (SS-4);
+ * the management bundle (CMRA, RA renewal, annual report, tax return) is
+ * created when the formation closes / by the yearly engine, as today.
+ */
+const deliveredByFormation = (): string[] => [
+  "company formation",
+  "ein",
+  ...LLC_MANAGEMENT_BUNDLE_TYPES.map((t) => t.toLowerCase()),
+]
+
+/**
+ * Pure: the company services bought on a formation offer that must start when
+ * the NEW company exists (Antonio 2026-09-28: "it has to wait when the company
+ * is formed"). A DBA sold with a formation cannot exist before its company;
+ * nothing created it, so it was paid for and never started (S1 QA 2026-09-28,
+ * re-confirmed 2026-09-29 on sandbox offer qa-s1b-b6-g1-2026).
+ *
+ * Bought = the same rule as the offer total (not an unticked optional). Left
+ * out: what the formation delivers itself (above), what already started at
+ * payment (start_at_activation), person-level services (contact_eligible —
+ * e.g. ITIN, which starts from the formation form), and banking (self-service
+ * until plan S8). Returns canonical pipeline names, deduplicated.
+ */
+export function companyServicesToStartOnFormation(p: {
+  services: unknown
+  selectedServices: unknown
+  startAtActivationTypes: string[]
+  contactScopedTypes: string[]
+}): { pipelines: string[]; multiQuantity: string[] } {
+  const skip = new Set<string>([
+    ...deliveredByFormation(),
+    ...Array.from(NEVER_STARTED_AT_PAYMENT),
+    ...p.startAtActivationTypes.map((t) => t.toLowerCase()),
+    ...p.contactScopedTypes.map((t) => t.toLowerCase()),
+  ])
+  const services = Array.isArray(p.services) ? (p.services as Array<Record<string, unknown> | null>) : []
+  const selected = Array.isArray(p.selectedServices) ? (p.selectedServices as unknown[]).map(String) : []
+  const out = new Map<string, string>()
+  const count = new Map<string, number>()
+  const multi = new Set<string>()
+  for (const l of services) {
+    if (!l || typeof l !== "object") continue
+    const type = typeof l.pipeline_type === "string" ? l.pipeline_type.trim() : ""
+    if (!type || skip.has(type.toLowerCase())) continue
+    const name = typeof l.name === "string" ? l.name : ""
+    if (l.optional && !selected.includes(name)) continue
+    const key = type.toLowerCase()
+    if (!out.has(key)) out.set(key, type)
+    count.set(key, (count.get(key) ?? 0) + 1)
+    if ((typeof l.quantity === "number" && l.quantity > 1) || (count.get(key) ?? 0) > 1) multi.add(out.get(key) as string)
+  }
+  return { pipelines: Array.from(out.values()), multiQuantity: Array.from(multi) }
+}
+
+/**
+ * When the formation creates the company: start the company services bought
+ * on the same offer (see companyServicesToStartOnFormation), ON that company.
+ * Idempotent (one per offer per type — createStartAtActivationSDs dedupes by
+ * source_offer_token), never throws, every skip/error reported.
+ */
+export async function createCompanyServicesOnFormation(p: {
+  offerToken: string
+  accountId: string
+  contactId: string | null
+}): Promise<ActivationStep[]> {
+  try {
+    const { data: offer, error } = await supabase
+      .from("offers")
+      .select("services, selected_services, client_name")
+      .eq("token", p.offerToken)
+      .maybeSingle()
+    if (error) throw new Error(`offer lookup failed: ${error.message}`)
+    if (!offer) return [{ step: "company_services_on_formation", status: "skipped", detail: `offer ${p.offerToken} not found` }]
+    const [startTypes, contactScopedTypes, repeatableTypes] = await Promise.all([
+      getStartAtActivationServiceTypes(),
+      getContactEligibleServiceTypes(),
+      getRepeatableServiceTypes(),
+    ])
+    const pick = companyServicesToStartOnFormation({
+      services: offer.services,
+      selectedServices: offer.selected_services,
+      startAtActivationTypes: startTypes,
+      contactScopedTypes,
+    })
+    if (pick.pipelines.length === 0) return []
+    const steps = await createStartAtActivationSDs({
+      offerToken: p.offerToken,
+      clientName: (offer.client_name as string | null) ?? null,
+      contactId: p.contactId,
+      selection: { pipelines: pick.pipelines, mismatches: [], multiQuantity: pick.multiQuantity },
+      accountId: p.accountId,
+      contactScopedTypes,
+      newCompanyContract: false,
+      repeatableTypes,
+    })
+    return steps.map((s) => ({ ...s, step: "company_services_on_formation" }))
+  } catch (err) {
+    const detail = `company services bought with the formation NOT started for offer ${p.offerToken}: ${err instanceof Error ? err.message : String(err)} — add them by hand`
+    report(detail, { offerToken: p.offerToken, accountId: p.accountId })
+    return [{ step: "company_services_on_formation", status: "error", detail }]
+  }
 }

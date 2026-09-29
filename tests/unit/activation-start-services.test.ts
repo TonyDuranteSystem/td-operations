@@ -53,7 +53,7 @@ vi.mock("@/lib/supabase-admin", () => {
 const listEntries = vi.fn()
 vi.mock("@/lib/catalog/framework", async (orig) => ({ ...(await orig<object>()), listEntries: (...a: unknown[]) => listEntries(...a) }))
 
-import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation, confirmedPaymentInvoiceLabel, allBoughtStartTypes } from "@/lib/operations/activation-start-services"
+import { selectStartAtActivationPipelines, createStartAtActivationSDs, contractBoughtService, decideStartServiceScope, createBoughtStartAtActivationServices, isFormationContractWithoutFormation, confirmedPaymentInvoiceLabel, allBoughtStartTypes, companyServicesToStartOnFormation } from "@/lib/operations/activation-start-services"
 import { getStartAtActivationServiceTypes, _resetServicesCache } from "@/lib/services"
 
 const TYPES = ["Company Closure"]
@@ -526,5 +526,59 @@ describe("allBoughtStartTypes (formation-type contract that sold no formation)",
   })
   it("no duplicates across lines and the service list (case-insensitive)", () => {
     expect(allBoughtStartTypes(["EIN"], [{ pipeline_type: "ein" }], ["EIN"])).toEqual(["EIN"])
+  })
+})
+
+
+describe("companyServicesToStartOnFormation — company add-ons wait for the new company (Antonio 2026-09-28)", () => {
+  const START = ["Company Closure", "Company Change Name", "EIN Change Name"]
+  const PERSON = ["ITIN", "Company Closure", "Tax Return"]
+  const run = (services: unknown, selected: unknown = []) =>
+    companyServicesToStartOnFormation({ services, selectedServices: selected, startAtActivationTypes: START, contactScopedTypes: PERSON })
+
+  it("Formation + ITIN + DBA → only the DBA waits for the company (sandbox qa-s1b-b6-g1-2026)", () => {
+    const r = run([
+      { name: "Company Formation", pipeline_type: "Company Formation" },
+      { name: "ITIN Application", pipeline_type: "ITIN" },
+      { name: "DBA Registration", pipeline_type: "DBA" },
+    ])
+    expect(r.pipelines).toEqual(["DBA"])
+    expect(r.multiQuantity).toEqual([])
+  })
+
+  it("never re-creates what the formation or yearly management delivers", () => {
+    const r = run([
+      { name: "Company Formation", pipeline_type: "Company Formation" },
+      { name: "EIN", pipeline_type: "EIN" },
+      { name: "Mailing address", pipeline_type: "CMRA Mailing Address" },
+      { name: "RA", pipeline_type: "State RA Renewal" },
+      { name: "AR", pipeline_type: "State Annual Report" },
+      { name: "Tax Return", pipeline_type: "Tax Return" },
+    ])
+    expect(r.pipelines).toEqual([])
+  })
+
+  it("services that already started at payment and banking are left out", () => {
+    const r = run([
+      { name: "Closure", pipeline_type: "Company Closure" },
+      { name: "Change Name", pipeline_type: "Company Change Name" },
+      { name: "Banking", pipeline_type: "Banking Fintech" },
+    ])
+    expect(r.pipelines).toEqual([])
+  })
+
+  it("an unticked optional line is not bought; a ticked one is", () => {
+    expect(run([{ name: "DBA Registration", pipeline_type: "DBA", optional: true }]).pipelines).toEqual([])
+    expect(run([{ name: "DBA Registration", pipeline_type: "DBA", optional: true }], ["DBA Registration"]).pipelines).toEqual(["DBA"])
+  })
+
+  it("two DBA lines or quantity > 1 are flagged (only one created, the rest reported)", () => {
+    expect(run([{ name: "DBA 1", pipeline_type: "DBA" }, { name: "DBA 2", pipeline_type: "DBA" }])).toEqual({ pipelines: ["DBA"], multiQuantity: ["DBA"] })
+    expect(run([{ name: "DBA", pipeline_type: "dba", quantity: 2 }]).multiQuantity).toEqual(["dba"])
+  })
+
+  it("lines without a service type and junk are ignored", () => {
+    expect(run([{ name: "Notary" }, null, "x", { pipeline_type: "  " }]).pipelines).toEqual([])
+    expect(run(null).pipelines).toEqual([])
   })
 })
