@@ -85,6 +85,19 @@ const MAX_ATTACHMENTS = 5
 /** How many older pages (50 each) a topic deep link may load looking for its tab. */
 const MAX_DEEP_LINK_PAGES = 10
 
+/** Same cookies the sidebar CompanySwitcher writes (portal_account_id / portal_formation). */
+function writeEntityCookie(e: PortalChatEntity): void {
+  if (e.kind === 'formation') {
+    document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
+  } else if (e.kind === 'personal') {
+    document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+  } else {
+    document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+  }
+}
+
 interface PendingFile {
   file: File
   previewUrl?: string // for images
@@ -134,6 +147,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // topic shows up; only then give up and fall back.
   const initialTopicChecked = useRef(false)
   const deepLinkPagesRef = useRef(0)
+  // A bell link clicked while already on the chat page is a soft navigation:
+  // the component stays mounted (a remount would drop the draft and the live
+  // channel), so follow the new ?topic= here and re-arm the deep-link search.
+  const lastInitialTopic = useRef(initialTopic)
+  useEffect(() => {
+    if (lastInitialTopic.current === initialTopic) return
+    lastInitialTopic.current = initialTopic
+    initialTopicChecked.current = false
+    deepLinkPagesRef.current = 0
+    setActiveTopic(initialTopic)
+  }, [initialTopic])
   useEffect(() => {
     if (initialTopicChecked.current || loading || !initialTopic) return
     if (topics.includes(initialTopic)) { initialTopicChecked.current = true; return }
@@ -163,28 +187,26 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // sidebar CompanySwitcher writes, so chat stays in lock-step with the rest of
   // the portal (portal_account_id / portal_formation; 'personal' sentinel).
   const selectEntity = useCallback((e: PortalChatEntity) => {
-    if (e.kind === 'formation') {
-      document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
-    } else if (e.kind === 'personal') {
-      document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
-      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-    } else {
-      document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
-      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-    }
+    writeEntityCookie(e)
     router.refresh()
   }, [router])
 
   // A deep link opened a different company than the saved selection (the page
-  // resolved ?account=). Persist it with the switcher's own cookies once, so
-  // the sidebar, the Messages tab link and later visits all agree with what is
-  // on screen instead of snapping back to the previous company.
-  const persistedFromLink = useRef(false)
+  // resolved ?account=). Persist it with the switcher's own cookies, then drop
+  // `account` from the address bar: left there, it would keep overriding the
+  // cookie on every re-render, so the client could no longer switch company
+  // in the chat (the sidebar would say B while the chat stayed on A, and a
+  // message sent to B would vanish from the A view). Keyed on the entity so a
+  // later link to a different company persists too.
+  const persistedEntityId = useRef<string | null>(null)
   useEffect(() => {
-    if (!persistEntityFromLink || persistedFromLink.current || !currentEntity) return
-    persistedFromLink.current = true
-    selectEntity(currentEntity)
-  }, [persistEntityFromLink, currentEntity, selectEntity])
+    if (!persistEntityFromLink || !currentEntity || persistedEntityId.current === currentEntity.id) return
+    persistedEntityId.current = currentEntity.id
+    writeEntityCookie(currentEntity)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('account')
+    router.replace(`${url.pathname}${url.search}`, { scroll: false })
+  }, [persistEntityFromLink, currentEntity, router])
 
   const draftKey = `chat_draft_${selectedEntityId || contactId}`
   const [input, setInput] = useState(() => {

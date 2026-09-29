@@ -48,13 +48,21 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // tear down and rebuild the channel on every render.
   const refreshRef = useRef<(o?: { markRead?: boolean }) => Promise<void>>(async () => {})
   // Fetch sequencing (dev job 05d997f2). Wake, reconnect (SUBSCRIBED) and the
-  // initial load can all be in flight at once and resolve out of order; only the
-  // LATEST fetch may write the list, or an older snapshot overwrites a newer one.
+  // initial load can all be in flight at once and resolve out of order. A
+  // response may be applied only if nothing NEWER has been applied yet — an
+  // older snapshot must never overwrite a newer one. (Deliberately "newer than
+  // the last APPLIED", not "is the latest STARTED": if the latest fetch then
+  // fails on a flaky network, the earlier good response must still land rather
+  // than leave the chat empty.)
   const fetchSeqRef = useRef(0)
-  // Ids received live (realtime INSERT or the client's own send) since the
-  // latest fetch started. That fetch's snapshot may predate them, so the merge
-  // keeps them instead of letting the replace wipe them off the screen.
-  const liveIdsRef = useRef<Set<string>>(new Set())
+  const appliedSeqRef = useRef(0)
+  // Live events stamped with a monotonic mark, so each fetch can ask "what
+  // arrived / was deleted AFTER I started?" — its snapshot may predate those:
+  //  - live: realtime INSERT or the client's own send → keep even if missing;
+  //  - deleted: realtime soft-delete → drop even if the snapshot still has it.
+  const eventMarkRef = useRef(0)
+  const liveMarksRef = useRef<Map<string, number>>(new Map())
+  const deletedMarksRef = useRef<Map<string, number>>(new Map())
 
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
@@ -65,17 +73,20 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     setLoading(true)
     setHasMore(true)
     const seq = ++fetchSeqRef.current
-    liveIdsRef.current = new Set()
+    const startMark = eventMarkRef.current
     try {
       const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
       if (res.ok) {
         const data = await res.json()
-        if (seq !== fetchSeqRef.current) return // a newer fetch owns the list
+        if (seq < appliedSeqRef.current) return // something newer is already on screen
+        appliedSeqRef.current = seq
         const msgs: PortalMessage[] = data.messages ?? []
-        const live = liveIdsRef.current
+        const live = idsSince(liveMarksRef.current, startMark)
+        const deleted = idsSince(deletedMarksRef.current, startMark)
+        pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
         // Fresh view: keep nothing from before except rows that arrived live
         // while this fetch was in flight.
-        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live }).messages)
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live, deletedIds: deleted }).messages)
         setHasMore(msgs.length >= 50)
         fetch('/api/portal/chat/read', {
           method: 'POST',
@@ -121,7 +132,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // helper for why a blind replace made messages vanish.
   const refresh = useCallback(async (opts?: { markRead?: boolean }) => {
     const seq = ++fetchSeqRef.current
-    liveIdsRef.current = new Set()
+    const startMark = eventMarkRef.current
     try {
       // Refetch at least as many as we already hold (the route caps at 100);
       // anything older than that window is kept by the merge, not refetched.
@@ -129,14 +140,22 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const res = await fetch(`/api/portal/chat?${queryParam}&limit=${limit}`)
       if (res.ok) {
         const data = await res.json()
-        if (seq !== fetchSeqRef.current) return // a newer fetch owns the list
+        if (seq < appliedSeqRef.current) return // something newer is already on screen
+        appliedSeqRef.current = seq
         const msgs: PortalMessage[] = data.messages ?? []
-        const live = liveIdsRef.current
-        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit, liveIds: live }).messages)
+        const live = idsSince(liveMarksRef.current, startMark)
+        const deleted = idsSince(deletedMarksRef.current, startMark)
+        pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
+        // Decide against the list as it is NOW (messagesRef lags one render at
+        // most; the updater below re-merges against the true latest state).
+        const probe = mergeRefreshedMessages({ fetched: msgs, held: messagesRef.current, limit, liveIds: live, deletedIds: deleted })
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit, liveIds: live, deletedIds: deleted }).messages)
         // A short response means the whole thread fits in it: nothing older exists.
-        // A full one leaves hasMore as it was — the paging state (load / loadMore)
-        // already knows whether older history is held or still on the server.
+        // A full one with a gap (more arrived while away than the window holds)
+        // restarts paging from the fetched window. Otherwise hasMore stays as the
+        // paging state (load / loadMore) left it.
         if (msgs.length < limit) setHasMore(false)
+        else if (probe.droppedForGap) setHasMore(true)
         if (opts?.markRead) {
           fetch('/api/portal/chat/read', {
             method: 'POST',
@@ -219,7 +238,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const nm = newMessage as { sender_type?: string; message?: string; account_id: string | null; contact_id: string | null }
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
       if (!belongs(nm)) return // wrong company / someone else's personal — never show
-      liveIdsRef.current.add(newMessage.id)
+      liveMarksRef.current.set(newMessage.id, ++eventMarkRef.current)
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -230,7 +249,8 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const updated = payload.new as PortalMessage & { deleted_at?: string | null }
       // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
       if (updated.deleted_at) {
-        liveIdsRef.current.delete(updated.id)
+        liveMarksRef.current.delete(updated.id)
+        deletedMarksRef.current.set(updated.id, ++eventMarkRef.current)
         setMessages(prev => prev.filter(m => m.id !== updated.id))
         return
       }
@@ -328,7 +348,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       // refresh. The component switches the view to match before sending, so this
       // is a belt-and-braces guard.
       if (newMsg && (!plan || messageVisibleInPlan(plan, newMsg))) {
-        liveIdsRef.current.add(newMsg.id)
+        liveMarksRef.current.set(newMsg.id, ++eventMarkRef.current)
         setMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev
           return [...prev, newMsg]
@@ -352,6 +372,21 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
 }
 
 type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }
+
+/** Ids whose live-event mark is newer than `since` (i.e. happened after a fetch started). */
+function idsSince(marks: Map<string, number>, since: number): Set<string> {
+  const out = new Set<string>()
+  marks.forEach((mark, id) => { if (mark > since) out.add(id) })
+  return out
+}
+
+/** Forget events at or before `upTo`. Safe once a response started at `upTo` is
+ *  applied: any response applied later started later, so it never needs them. */
+function pruneMarks(maps: Array<Map<string, number>>, upTo: number): void {
+  for (const marks of maps) {
+    marks.forEach((mark, id) => { if (mark <= upTo) marks.delete(id) })
+  }
+}
 
 /**
  * Translate a ChatScope into the GET query param, the mark-as-read body, the

@@ -56,6 +56,32 @@ describe('mergeRefreshedMessages', () => {
   })
 })
 
+describe('mergeRefreshedMessages — review round fixes', () => {
+  it('drops a message soft-deleted DURING the fetch even though the older snapshot still has it (R100)', () => {
+    const held = [m('a', 1), m('c', 3)] // X already removed from screen by the realtime delete
+    const fetched = [m('a', 1), m('x', 2), m('c', 3)]
+    const r = mergeRefreshedMessages({ fetched, held, limit: 50, liveIds: new Set(), deletedIds: new Set(['x']) })
+    expect(ids(r.messages)).toEqual(['a', 'c'])
+  })
+
+  it('no overlap after a burst bigger than the window: drops old rows instead of leaving a hidden gap', () => {
+    const held = [m('old1', 1), m('old2', 2)]
+    const fetched = [m('n1', 30), m('n2', 31)] // limit 2, full, shares nothing with held
+    const r = mergeRefreshedMessages({ fetched, held, limit: 2, liveIds: new Set() })
+    expect(ids(r.messages)).toEqual(['n1', 'n2'])
+    expect(r.droppedForGap).toBe(true)
+    expect(r.keptOlder).toBe(0)
+  })
+
+  it('with overlap, older paged history is kept and no gap is reported', () => {
+    const held = [m('old1', 1), m('w1', 10)]
+    const fetched = [m('w1', 10), m('w2', 11)]
+    const r = mergeRefreshedMessages({ fetched, held, limit: 2, liveIds: new Set() })
+    expect(ids(r.messages)).toEqual(['old1', 'w1', 'w2'])
+    expect(r.droppedForGap).toBe(false)
+  })
+})
+
 describe('sortMessagesAscending', () => {
   it('orders by time, then by the raw microsecond string when the millisecond is equal', () => {
     const x = { id: 'x', created_at: '2026-09-28T20:41:17.432385+00:00' }

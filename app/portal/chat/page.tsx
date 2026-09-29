@@ -139,9 +139,6 @@ export default async function PortalChatPage({
           selectedEntityId={selectedEntityId}
           initialTopic={initialTopic}
           persistEntityFromLink={entityFromLink}
-          // Re-initialise on a soft navigation (bell link while already on the
-          // chat page): useState(initialTopic) would otherwise ignore the new tab.
-          key={`${selectedEntityId}::${initialTopic ?? ''}`}
         />
       ) : (
         <div className="flex-1 overflow-y-auto">

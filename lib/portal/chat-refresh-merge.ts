@@ -16,7 +16,14 @@
  *     cap) would lose that history on every wake, and `loadMore` would stop.
  *     → held rows OLDER than the oldest fetched row are kept, but only when the
  *       window was full (a short response means we already have everything, so
- *       an older held row that isn't in it was deleted and must go).
+ *       an older held row that isn't in it was deleted and must go) AND the
+ *       response overlaps what we hold. No overlap means more messages arrived
+ *       while away than the window holds — keeping the old rows would leave a
+ *       silent hole in the middle that loadMore (which pages before the oldest
+ *       row) can never fill, so the old rows are dropped and paging restarts
+ *       from the fetched window.
+ *  3. A message soft-deleted DURING the fetch is still in the (older) snapshot.
+ *     → `deletedIds`: removed from the result even if the response has it.
  *
  * Rows inside the fetched window that are missing from the response are dropped
  * (deleted), unless they are in `liveIds`.
@@ -51,27 +58,36 @@ export function mergeRefreshedMessages<T extends MergeableMessage>(args: {
   limit: number
   /** Ids received live (realtime insert or own send) since the refetch started. */
   liveIds: ReadonlySet<string>
-}): { messages: T[]; windowFull: boolean; keptOlder: number } {
+  /** Ids soft-deleted (realtime UPDATE) since the refetch started. */
+  deletedIds?: ReadonlySet<string>
+}): { messages: T[]; windowFull: boolean; keptOlder: number; droppedForGap: boolean } {
   const { fetched, held, limit, liveIds } = args
+  const deletedIds = args.deletedIds ?? new Set<string>()
   const byId = new Map<string, T>()
-  for (const m of fetched) byId.set(m.id, m)
+  for (const m of fetched) if (!deletedIds.has(m.id)) byId.set(m.id, m)
+  const overlaps = held.some(m => byId.has(m.id))
 
   const windowFull = fetched.length >= limit
   let oldestFetched = Infinity
   for (const m of fetched) oldestFetched = Math.min(oldestFetched, ts(m))
 
   let keptOlder = 0
+  let droppedForGap = false
   for (const m of held) {
-    if (byId.has(m.id)) continue
+    if (byId.has(m.id) || deletedIds.has(m.id)) continue
     if (liveIds.has(m.id)) {
       byId.set(m.id, m)
       continue
     }
     if (windowFull && fetched.length > 0 && ts(m) < oldestFetched) {
-      byId.set(m.id, m)
-      keptOlder++
+      if (overlaps) {
+        byId.set(m.id, m)
+        keptOlder++
+      } else {
+        droppedForGap = true
+      }
     }
   }
 
-  return { messages: sortMessagesAscending(Array.from(byId.values())), windowFull, keptOlder }
+  return { messages: sortMessagesAscending(Array.from(byId.values())), windowFull, keptOlder, droppedForGap }
 }
