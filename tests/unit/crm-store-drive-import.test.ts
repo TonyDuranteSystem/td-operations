@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
-import { kindForTopFolder, pickPerson, buildReport, skipReasonFor, type ImportItem } from "@/lib/crm-store/drive-import"
+import { kindForTopFolder, pickPerson, buildReport, skipReasonFor, cleanImportName, type ImportItem } from "@/lib/crm-store/drive-import"
 
 const item = (p: Partial<ImportItem>): ImportItem => ({
   id: "i", run_id: "r", source: "drive", source_id: "d", drive_path: [], name: "f.pdf", mime_type: "application/pdf", size_bytes: 10,
@@ -33,6 +33,19 @@ describe("drive import — pure rules", () => {
     expect(skipReasonFor(null)).toBeNull()
     expect(skipReasonFor("application/vnd.google-apps.document")).toMatch(/Google Docs/)
     expect(skipReasonFor("application/vnd.google-apps.shortcut")).toMatch(/shortcut/)
+  })
+  it("cleans Drive file names the store would refuse, keeping the extension", () => {
+    expect(cleanImportName("Statement 01/2024.pdf")).toBe("Statement 01-2024.pdf")
+    expect(cleanImportName("a\\b.pdf")).toBe("a-b.pdf")
+    expect(cleanImportName("bad\u0007name.pdf")).toBe("badname.pdf")
+    expect(cleanImportName("  ")).toBe("Untitled")
+    const long = `${"x".repeat(300)}.pdf`
+    expect(cleanImportName(long)).toHaveLength(255)
+    expect(cleanImportName(long).endsWith(".pdf")).toBe(true)
+    expect(cleanImportName("città è 😀.pdf")).toBe("città è 😀.pdf")
+  })
+  it("a claimed (working) file keeps parity open", () => {
+    expect(buildReport([item({ status: "working" })], []).parityOk).toBe(false)
   })
   it("the report counts per top folder and holds parity only when nothing failed or is pending", () => {
     const items = [

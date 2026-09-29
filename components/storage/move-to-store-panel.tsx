@@ -20,7 +20,7 @@ interface Report {
 }
 interface Run {
   id: string; status: string; startedAt: string; finishedAt: string | null
-  counts: { total: number; pending: number; done: number; merged: number; skipped: number; failed: number }
+  counts: { total: number; pending: number; working?: number; done: number; merged: number; skipped: number; failed: number }
   report: Report | null
 }
 
@@ -104,7 +104,7 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
 
   if (!data?.allowed) return null
   const r = run
-  const finished = r && (r.status === 'done' || r.status === 'incomplete')
+  const finished = r && (r.status === 'done' || r.status === 'incomplete' || r.status === 'undoing')
   const counted = r ? r.counts.done + r.counts.merged + r.counts.skipped + r.counts.failed : 0
 
   return (
@@ -115,6 +115,7 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
         {r?.status === 'moving' && <span className="inline-flex items-center gap-1 text-xs text-zinc-600"><Loader2 className="h-3.5 w-3.5 animate-spin" />Moving… {counted} of {r.counts.total} files</span>}
         {r?.status === 'done' && <span className="inline-flex items-center gap-1 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Moved — every file checked</span>}
         {r?.status === 'incomplete' && <span className="inline-flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />Moved with problems</span>}
+        {r?.status === 'undoing' && <span className="inline-flex items-center gap-1 text-xs text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />Undo not finished — press Undo again</span>}
         <div className="ml-auto flex gap-2">
           {(!r || r.status === 'rolled_back' || r.status === 'failed') && !confirm && (
             <button type="button" disabled={busy} onClick={() => setConfirm('move')} className="rounded-md bg-blue-600 px-2.5 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50">Move this company to the new storage…</button>

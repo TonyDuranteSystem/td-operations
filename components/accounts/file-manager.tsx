@@ -886,7 +886,7 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
     return (
       <div className="space-y-2">
         <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-          {m.status === 'moving' ? 'Being moved to the new storage — files are still arriving.' : `Moved to the new storage on ${new Date(m.finishedAt ?? m.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`}{' '}
+          {m.status === 'moving' ? 'Being moved to the new storage — files are still arriving.' : m.status === 'incomplete' ? 'Moved to the new storage WITH PROBLEMS — some files did not come over (see the report above).' : `Moved to the new storage on ${new Date(m.finishedAt ?? m.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`}{' '}
           The Drive folder stays as a backup — work here.{' '}
           {driveFolderId && <a href={`https://drive.google.com/drive/folders/${driveFolderId}`} target="_blank" rel="noreferrer" className="underline">Open the old Drive folder (backup)</a>}
         </p>

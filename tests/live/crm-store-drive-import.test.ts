@@ -62,6 +62,7 @@ beforeAll(async () => {
   fx.corrLetter = await up(corr, "IRS letter.pdf", `irs ${tag}`)
   fx.loose = await up(top, "Loose note.pdf", `loose ${tag}`)
   fx.oldNote = await up(old, "Old note.pdf", `old ${tag}`)
+  fx.slashName = await up(corr, "Statement 01/2024.pdf", `slash ${tag}`)
   fx.top = top
   // the sandbox company + two members
   fx.account = await insert("accounts", { company_name: `ZZ MOVE LLC ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: top })
@@ -75,6 +76,8 @@ beforeAll(async () => {
   const legacy = async (slug: string) => (await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", slug).single()).data.metadata.legacy_document_type_id as number
   fx.rowArticles = await insert("documents", { drive_file_id: fx.articles, file_name: "Articles.pdf", account_id: fx.account, document_type_id: await legacy("articles_of_organization"), document_type_name: "Articles of Organization", category: 1, portal_visible: true, status: "classified" })
   fx.rowPassport = await insert("documents", { drive_file_id: fx.passport, file_name: "Passport Mario.pdf", account_id: fx.account, contact_id: fx.mario, document_type_id: await legacy("passport"), document_type_name: "Passport", category: 2, portal_visible: true, status: "classified" })
+  // a file the client could see that has NO type (106 such rows exist in production)
+  fx.rowUntyped = await insert("documents", { drive_file_id: fx.oldNote, file_name: "Old note.pdf", account_id: fx.account, category: 5, portal_visible: true, status: "classified" })
   fx.rowReturn = await insert("documents", { drive_file_id: fx.ret, file_name: "Form 1120 2024.pdf", account_id: fx.account, document_type_id: await legacy("form_1120"), document_type_name: "Form 1120", category: 3, portal_visible: false, tax_year: 2024, status: "classified" })
   // a row whose bytes are in Supabase Storage (a Drive walk never finds it)
   const sp = `crm-uploads/zz-move-${tag}/bank-statement.pdf`
@@ -90,20 +93,24 @@ describe("move a company from Drive to the new storage — live sandbox + TEST D
     const v = await startDriveImport(fx.account, actor)
     runId = v.id
     expect(v.status).toBe("moving")
-    expect(v.counts.total).toBe(10) // 9 Drive files + 1 storage row
+    expect(v.counts.total).toBe(11) // 10 Drive files + 1 storage row
     expect(v.ownerId).toBeTruthy()
     // a second start resumes the same run
     expect((await startDriveImport(fx.account, actor)).id).toBe(runId)
   }, 120_000)
 
-  it("moves in small batches until done (a stopped move simply continues), with parity", async () => {
+  it("moves in small batches until done — two batches at once (two tabs) never move the same file", async () => {
     const { continueDriveImport } = await import("@/lib/crm-store/drive-import")
+    // two batches in parallel: each claims its own files
+    const [a, b] = await Promise.all([continueDriveImport(runId, actor, { files: 3, ms: 60_000 }), continueDriveImport(runId, actor, { files: 3, ms: 60_000 })])
+    expect([a.status, b.status]).toEqual(["moving", "moving"])
     let v = await continueDriveImport(runId, actor, { files: 3, ms: 60_000 })
-    expect(v.status).toBe("moving")
-    expect(v.counts.pending).toBe(7)
     for (let i = 0; i < 10 && v.status === "moving"; i++) v = await continueDriveImport(runId, actor, { files: 3, ms: 60_000 })
     expect(v.status, JSON.stringify(v.report?.failed)).toBe("done")
-    expect(v.counts).toMatchObject({ total: 10, pending: 0, failed: 0, merged: 1, done: 9 })
+    expect(v.counts).toMatchObject({ total: 11, pending: 0, working: 0, failed: 0, merged: 1, done: 10 })
+    // no file stored twice by the parallel batches
+    const { data: its } = await db.from("store_import_items").select("store_file_id, status").eq("run_id", runId).eq("status", "done")
+    expect(new Set(its.map((x: { store_file_id: string }) => x.store_file_id)).size).toBe(10)
     expect(v.report?.parityOk).toBe(true)
     expect(v.report?.fromStorage).toBe(1)
   }, 300_000)
@@ -116,6 +123,11 @@ describe("move a company from Drive to the new storage — live sandbox + TEST D
     expect(by(fx.ret).landed_in).toBe("3. Tax › 2024")
     expect(by(fx.corrLetter).landed_in).toBe("5. Correspondence")
     expect(by(fx.oldNote).landed_in).toBe("5. Correspondence › Old stuff")
+    expect(by(fx.slashName).landed_in).toBe("5. Correspondence")
+    expect((await db.from("store_files").select("name").eq("id", by(fx.slashName).store_file_id).single()).data.name).toBe("Statement 01-2024.pdf")
+    // visible but untyped: copied, yet its record keeps opening from Drive (the portal never serves an untyped stored file)
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", fx.rowUntyped).single()).data).toEqual({ drive_file_id: fx.oldNote, portal_visible: true })
+    expect(by(fx.oldNote).reason).toMatch(/no type/)
     expect(by(fx.loose).landed_in).toBe("5. Correspondence")
     expect(by(fx.loose).reason).toMatch(/top of the company's Drive folder/)
     // personal: Mario by his row, Anna by her member-named folder, the copy kept once
@@ -166,9 +178,15 @@ describe("move a company from Drive to the new storage — live sandbox + TEST D
     await expect(startDriveImport(fx.account, actor)).rejects.toThrow(/already been moved/)
   })
 
-  it("undo puts every CRM record back on its Drive file, removes the rows the move listed, trashes the moved files", async () => {
+  it("undo puts every CRM record back on its Drive file, removes the rows the move listed, trashes the moved files — but keeps one staff changed", async () => {
     const { undoDriveImport } = await import("@/lib/crm-store/drive-import")
     const { data: items } = await db.from("store_import_items").select("*").eq("run_id", runId)
+    // staff save a new version of the IRS letter after the move
+    const irs = items.find((x: { source_id: string }) => x.source_id === fx.corrLetter)
+    const { data: irsFile } = await db.from("store_files").select("owner_id, folder_id, name, caller_key").eq("id", irs.store_file_id).single()
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const w2 = await saveBytesToStore({ ownerId: irsFile.owner_id, folderId: irsFile.folder_id, name: irsFile.name, mimeType: "application/pdf", bytes: await pdf(`irs v2 ${tag}`), callerKey: irsFile.caller_key, contentChanged: true, actor })
+    expect(w2.status).toBe("versioned")
     const v = await undoDriveImport(runId, actor)
     expect(v.status).toBe("rolled_back")
     const row = async (id: string) => (await db.from("documents").select("drive_file_id, portal_visible").eq("id", id).maybeSingle()).data
@@ -179,12 +197,27 @@ describe("move a company from Drive to the new storage — live sandbox + TEST D
     const created = items.flatMap((it: { repointed: Array<{ id: string; created?: boolean }> }) => it.repointed.filter((r) => r.created).map((r) => r.id))
     expect(created.length).toBeGreaterThan(0)
     for (const id of created) expect(await row(id)).toBeNull()
-    const fileIds = items.filter((it: { status: string }) => it.status === "done").map((it: { store_file_id: string }) => it.store_file_id)
+    const fileIds = items.filter((it: { status: string; source_id: string }) => it.status === "done" && it.source_id !== fx.corrLetter).map((it: { store_file_id: string }) => it.store_file_id)
     const { data: files } = await db.from("store_files").select("state").in("id", fileIds)
     expect(files.every((f: { state: string }) => f.state === "trashed")).toBe(true)
+    // the file staff changed is kept, and said so
+    expect((await db.from("store_files").select("state").eq("id", irs.store_file_id).single()).data.state).toBe("live")
+    const { data: runRow } = await db.from("store_import_runs").select("report").eq("id", runId).single()
+    expect(JSON.stringify(runRow.report.problems)).toMatch(/changed since the move — kept/)
     const { count } = await db.from("store_external_refs").select("id", { count: "exact", head: true }).in("object_id", fileIds).eq("direction", "import")
     expect(count).toBe(0)
   }, 240_000)
+
+  it("after an undo the company can be moved again", async () => {
+    const { startDriveImport, continueDriveImport, undoDriveImport } = await import("@/lib/crm-store/drive-import")
+    let v = await startDriveImport(fx.account, actor)
+    expect(v.id).not.toBe(runId)
+    for (let i = 0; i < 10 && v.status === "moving"; i++) v = await continueDriveImport(v.id, actor, { files: 25, ms: 120_000 })
+    expect(v.status, JSON.stringify(v.report?.failed)).toBe("done")
+    expect(v.counts.failed).toBe(0)
+    expect((await db.from("documents").select("drive_file_id").eq("id", fx.rowArticles).single()).data.drive_file_id).toMatch(/^store:/)
+    expect((await undoDriveImport(v.id, actor)).status).toBe("rolled_back")
+  }, 300_000)
 
   it("outside production a Drive folder that is not in the TEST Drive is refused (sandbox companies point at real folders)", async () => {
     const acc = await insert("accounts", { company_name: `ZZ MOVE Real ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: PROD_DRIVE })
