@@ -105,8 +105,8 @@ _Regenerated 2026-09-29 by directory scan._
 
 - CRM dashboard pages (50): `accounts` `addresses` `audit` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
-- API route groups (91)
-- Code modules (68): `ai-agent` `audit` `auth` `billing` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `code-tasks` `crm-storage` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
+- API route groups (92)
+- Code modules (69): `ai-agent` `audit` `auth` `billing` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `code-tasks` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `harbor-compliance` `hooks` `inbox` `itin` `jobs` `leads` `lease` `mcp` `members` `messaging` `nav` `notes` `notifications` `oa` `offers` `operations` `partners` `payments` `pdf` `per-record-activity` `portal` `portal-chats` `public-forms` `push` `research` `schemas` `security` `services` `ss4` `storage` `supabase` `system-health` `tasks` `tax` `td-communication` `team` `todo-board` `types` `ui` `utils`
 - Database tables: 175 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
@@ -180,7 +180,7 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-23)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-23)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-09-24)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-09-29)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-10)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
@@ -189,19 +189,19 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-18)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-25)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-26)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-25)_
-- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-07-09)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-25)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-09-25)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-25)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-26)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-09-26)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-29)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-29)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-28)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-29)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-24)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-26)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-23)_
@@ -221,5 +221,5 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-09)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-09-27)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-25)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-29)_
 <!-- /GENERATED:deep-docs -->

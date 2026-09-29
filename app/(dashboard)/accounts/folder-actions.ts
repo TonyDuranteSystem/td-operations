@@ -11,6 +11,8 @@ export async function createCompanyFolder(accountId: string): Promise<ActionResu
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { ensureCompanyFolder } = await import('@/lib/drive-folder-utils')
+    const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
+    await assertNotStoreOwnedAccount(accountId)
 
     // Get account info for folder naming
     const { data: account, error } = await supabaseAdmin
@@ -71,6 +73,8 @@ export async function linkDriveFolder(accountId: string, driveFolderId: string):
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { listFolderAnyDrive } = await import('@/lib/google-drive')
+    const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
+    await assertNotStoreOwnedAccount(accountId)
 
     // Verify the folder exists and is accessible
     const folderContents = await listFolderAnyDrive(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }

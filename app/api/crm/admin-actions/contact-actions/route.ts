@@ -756,8 +756,9 @@ export async function POST(req: NextRequest) {
         const targetContactId = doc.contact_id || contact_id
 
         try {
-          const { ocrDriveFile } = await import("@/lib/docai")
-          const ocrResult = await ocrDriveFile(doc.drive_file_id)
+          // store: pointer (CRM Store pilot) → read from the new store; else the Drive file as before
+          const { ocrByPointer } = await import("@/lib/crm-store/ocr")
+          const ocrResult = await ocrByPointer(doc.drive_file_id)
 
           if (!ocrResult.fullText) {
             result = { success: false, detail: "OCR returned no text" }

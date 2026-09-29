@@ -41,6 +41,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { NewStoreBrowser, useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
@@ -3075,6 +3076,16 @@ function ContactDocumentsTab({
   driveFolderId?: string | null
 }) {
   const [previewDoc, setPreviewDoc] = useState<ContactDocumentRecord | null>(null)
+  // CRM Store pilot (sandbox only): a person whose own documents live in the new storage gets that storage
+  // here (preview, upload, rename, move, delete, show / hide) instead of the Drive folder tools
+  const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
+  const personStoreId = storeOwner.data?.ownerId ?? null
+  const personStoreSection = personStoreId ? (
+    <div className="space-y-2">
+      <p className="text-xs text-zinc-500">This person&apos;s own documents live in the new CRM storage (pilot).</p>
+      <NewStoreBrowser ownerId={personStoreId} scopedKind="person" />
+    </div>
+  ) : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
@@ -3085,6 +3096,9 @@ function ContactDocumentsTab({
   const [ocrViewDocId, setOcrViewDocId] = useState<string | null>(null)
   const [togglingVis, setTogglingVis] = useState<string | null>(null)
   const [activeDocScope, setActiveDocScope] = useState<string>('personal')
+  const activeCompanyId = activeDocScope === 'personal' ? '' : activeDocScope
+  const activeCompanyStore = useStoreOwnerForAccount(activeCompanyId, !!personStoreId && activeCompanyId !== '')
+  const companyScopeInStore = !!personStoreId && activeCompanyId !== '' && !!activeCompanyStore.data?.ownerId
   const [folderAction, setFolderAction] = useState<'idle' | 'creating' | 'linking' | 'validating'>('idle')
   const [linkFolderId, setLinkFolderId] = useState('')
   const [validationResult, setValidationResult] = useState<{ valid: boolean; missingSubfolders: string[]; fileCount: number } | null>(null)
@@ -3274,12 +3288,15 @@ function ContactDocumentsTab({
   // contact belongs to. A doc carrying an account_id belongs to that company's
   // scope; a doc with no account_id is personal. Lets staff see each company's
   // files on its own tab instead of one merged pile (Adam Mihaly owns THW + LUMA).
+  // New storage (decision #28): the person's OWN documents live once in their personal storage — they count
+  // under "Personal" even though their listing also names the company it was filed from.
+  const isOwnStoreDoc = (d: ContactDocumentRecord) => (d.drive_file_id ?? '').startsWith('store:') && d.category === 2
   const docScopes = [
-    { key: 'personal', label: 'Personal', count: documents.filter(d => !d.account_id).length },
+    { key: 'personal', label: 'Personal', count: documents.filter(d => !d.account_id || isOwnStoreDoc(d)).length },
     ...accounts.map(a => ({
       key: a.id,
       label: a.company_name,
-      count: documents.filter(d => d.account_id === a.id).length,
+      count: documents.filter(d => d.account_id === a.id && !isOwnStoreDoc(d)).length,
     })),
   ]
   const scopedDocuments = activeDocScope === 'personal'
@@ -3503,12 +3520,12 @@ function ContactDocumentsTab({
               Open in Drive
             </a>
           )}
-          {uploadButton}
+          {!personStoreId && uploadButton}
         </div>
-        {uploadPanel}
-        {folderCreateSection}
-        {fileBrowserSection}
-        {!driveFolderId && (
+        {!personStoreId && uploadPanel}
+        {personStoreId ? personStoreSection : folderCreateSection}
+        {!personStoreId && fileBrowserSection}
+        {!driveFolderId && !personStoreId && (
           <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
             <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p>No documents linked to this contact</p>
@@ -3521,7 +3538,8 @@ function ContactDocumentsTab({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{scopedDocuments.length} documents</p>
+        {/* a tab shown from the new storage carries its own file count */}
+        <p className="text-sm text-muted-foreground">{personStoreId && (activeDocScope === 'personal' || companyScopeInStore) ? '' : `${scopedDocuments.length} documents`}</p>
         <div className="flex items-center gap-2">
           {driveFolderUrl && (
             <a
@@ -3534,11 +3552,11 @@ function ContactDocumentsTab({
               Open in Drive
             </a>
           )}
-          {uploadButton}
+          {!personStoreId && uploadButton}
         </div>
       </div>
-      {fileBrowserSection}
-      {uploadPanel}
+      {!personStoreId && fileBrowserSection}
+      {!personStoreId && uploadPanel}
 
       {/* Scope tabs: Personal (contact's own files) + one per company the contact belongs to */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
@@ -3554,24 +3572,31 @@ function ContactDocumentsTab({
             )}
           >
             {scope.label || 'Company'}
-            <span className={cn(
+            {!personStoreId && <span className={cn(
               'text-[10px] px-1.5 py-0.5 rounded-full',
               activeDocScope === scope.key ? 'bg-white/20 text-white' : 'bg-white text-zinc-500'
             )}>
               {scope.count}
-            </span>
+            </span>}
           </button>
         ))}
       </div>
 
-      {scopedDocuments.length === 0 && (
+      {/* New storage: "Personal" = the person's own storage; a company tab = that company's storage (when the
+          company is in the new storage too) — the same screen as the company page, with all its tools */}
+      {personStoreId && activeDocScope === 'personal' && personStoreSection}
+      {companyScopeInStore && activeCompanyStore.data?.ownerId && (
+        <NewStoreBrowser ownerId={activeCompanyStore.data.ownerId} />
+      )}
+
+      {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && scopedDocuments.length === 0 && (
         <div className="bg-white rounded-lg border p-8 text-center text-sm text-muted-foreground">
           <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
           <p>No documents in this section</p>
         </div>
       )}
 
-      {sortedCategories.map(category => (
+      {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && sortedCategories.map(category => (
         <div key={category} className="space-y-2">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             {category} ({grouped[category].length})

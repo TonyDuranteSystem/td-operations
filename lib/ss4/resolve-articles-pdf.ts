@@ -18,6 +18,8 @@
  * tests. `resolveArticlesForSs4` is the production wrapper.
  */
 
+import { parseStorePointer } from "@/lib/crm-store/document-pointer"
+
 const STORAGE_BUCKET = "onboarding-uploads"
 const STORAGE_PREFIX = "storage:"
 const ARTICLES_FLOW_STAGE = "Filed with State"
@@ -34,6 +36,8 @@ export interface ResolveArticlesDeps {
   downloadStorage: (bucket: string, path: string) => Promise<Buffer | null>
   /** Download a binary from Google Drive by file id; null if missing. */
   downloadDrive: (fileId: string) => Promise<Buffer | null>
+  /** Read a CRM Store file's current version (`store:<file id>` pointer); null if missing. */
+  downloadStore?: (fileId: string) => Promise<Buffer | null>
 }
 
 /**
@@ -45,6 +49,9 @@ export async function resolveArticlesPdf(deps: ResolveArticlesDeps): Promise<Buf
   try {
     const doc = await deps.findArticlesDoc()
     if (!doc?.drive_file_id) return null
+    // CRM Store pointer FIRST — "store:" is one letter from "storage:" and must never fall through to Drive.
+    const storeFileId = parseStorePointer(doc.drive_file_id)
+    if (storeFileId) return deps.downloadStore ? await deps.downloadStore(storeFileId) : null
     if (doc.drive_file_id.startsWith(STORAGE_PREFIX)) {
       const path = doc.drive_file_id.slice(STORAGE_PREFIX.length)
       return await deps.downloadStorage(STORAGE_BUCKET, path)
@@ -99,6 +106,10 @@ export async function resolveArticlesForSs4(params: {
     downloadStorage: async (bucket, path) => {
       const { data } = await supabaseAdmin.storage.from(bucket).download(path)
       return data ? Buffer.from(await data.arrayBuffer()) : null
+    },
+    downloadStore: async (fileId) => {
+      const { readStoreFile } = await import("@/lib/crm-store/document-pointer")
+      return (await readStoreFile(fileId)).bytes
     },
     downloadDrive: async (fileId) => {
       const { downloadFileBinary } = await import("@/lib/google-drive")

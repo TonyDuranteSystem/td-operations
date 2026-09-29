@@ -16,6 +16,9 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
+// The CRM Store refusal (pilot only) is not what these tests cover — keep it a no-op whatever the env says
+vi.mock('@/lib/crm-store/browse', () => ({ assertNotStoreOwnedAccount: vi.fn(async () => {}) }))
+
 // Mock google-drive
 const mockCreateFolder = vi.fn()
 const mockListFolderAnyDrive = vi.fn()

@@ -233,6 +233,11 @@ export async function ensureCompanyFolder(
     return { folderId: account.drive_folder_id, created: false, subfolders }
   }
 
+  // CRM Store pilot (sandbox only): a company whose files live in the new store never gets a Drive
+  // folder, whichever flow asks (tax intake, onboarding, RA switch, place-client …). Inert on production.
+  const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
+  await assertNotStoreOwnedAccount(accountId)
+
   // Determine parent folder by state
   const { createFolder, listFiles } = await getDriveHelpers()
   let parentId = STATE_FOLDER_MAP[stateOfFormation] || null

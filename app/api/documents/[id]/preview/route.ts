@@ -47,7 +47,21 @@ export async function GET(
     let bytes: Buffer
     let mimeType: string | null = (doc.mime_type as string | null) ?? null
 
-    if ((doc.drive_file_id as string).startsWith("storage:")) {
+    // CRM Store pointer FIRST ("store:" is one letter from "storage:").
+    const { parseStorePointer, readStoreFile, StoreFileUnavailableError } = await import("@/lib/crm-store/document-pointer")
+    const storeFileId = parseStorePointer(doc.drive_file_id as string)
+    if (storeFileId) {
+      try {
+        const f = await readStoreFile(storeFileId)
+        bytes = f.bytes
+        mimeType = f.mimeType || mimeType || "application/pdf"
+      } catch (e) {
+        if (e instanceof StoreFileUnavailableError) {
+          return NextResponse.json({ error: e.message }, { status: 404 })
+        }
+        throw e
+      }
+    } else if ((doc.drive_file_id as string).startsWith("storage:")) {
       // Supabase Storage shape: `storage:<path-within-onboarding-uploads>`.
       const path = (doc.drive_file_id as string).slice("storage:".length)
       const { data, error: dlErr } = await supabaseAdmin.storage
@@ -64,6 +78,11 @@ export async function GET(
       mimeType = mimeType || drive.mimeType
     }
 
+    if (storeFileId) {
+      // store bytes: the stored type is untrusted — only script-free types inline (lib/crm-store/serve.ts)
+      const { staffFileHeaders } = await import("@/lib/crm-store/serve")
+      return new NextResponse(new Uint8Array(bytes), { headers: staffFileHeaders(mimeType, (doc.file_name as string) || "document") })
+    }
     return new NextResponse(new Uint8Array(bytes), {
       headers: {
         "Content-Type": mimeType || "application/pdf",

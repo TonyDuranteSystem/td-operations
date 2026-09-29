@@ -413,7 +413,15 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
       }
     }
   } catch (e) {
-    result.steps.push(step("drive_folder", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+    const { isStoreOwnedRefusal, saveUploadsToStoreForAccount } = await import("@/lib/crm-store/account-uploads")
+    if (isStoreOwnedRefusal(e)) {
+      // CRM Store pilot company (sandbox only): no Drive folder — the uploads go to the new store instead
+      const r = await saveUploadsToStoreForAccount({ accountId: accountId!, flow: "tax-intake", paths: p.upload_paths || [] })
+      result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
+        `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+    } else {
+      result.steps.push(step("drive_folder", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+    }
   }
   await updateJobProgress(job.id, result)
 

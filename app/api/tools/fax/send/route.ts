@@ -141,9 +141,24 @@ export async function POST(req: NextRequest) {
       )
     }
     try {
-      const binary = await downloadFileBinary(doc.drive_file_id)
-      fileBase64 = binary.buffer.toString('base64')
-      fileName = doc.file_name || binary.fileName || 'document.pdf'
+      // CRM Store file (`store:<id>`) first — "store:" must never reach the Drive downloader.
+      const { parseStorePointer, readStoreFile, staffOnlyStorePointers } = await import('@/lib/crm-store/document-pointer')
+      const storeFileId = parseStorePointer(doc.drive_file_id)
+      if (storeFileId && (await staffOnlyStorePointers([doc.drive_file_id])).size > 0) {
+        return NextResponse.json(
+          { success: false, error: 'That document is staff-only (it holds other people\'s personal data) and cannot be faxed.' },
+          { status: 400 },
+        )
+      }
+      if (storeFileId) {
+        const f = await readStoreFile(storeFileId)
+        fileBase64 = f.bytes.toString('base64')
+        fileName = doc.file_name || f.name || 'document.pdf'
+      } else {
+        const binary = await downloadFileBinary(doc.drive_file_id)
+        fileBase64 = binary.buffer.toString('base64')
+        fileName = doc.file_name || binary.fileName || 'document.pdf'
+      }
     } catch (e) {
       return NextResponse.json(
         { success: false, error: `Could not download the selected document: ${e instanceof Error ? e.message : String(e)}` },

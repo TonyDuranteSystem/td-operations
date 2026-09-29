@@ -65,6 +65,34 @@ export async function POST(
     return NextResponse.json({ error: "This document has no Drive file to OCR." }, { status: 400 })
   }
 
+  // CRM Store pilot (job 685467b5): the bytes live in the new store, not in Drive. Read them there and
+  // save the text on THIS row. The document type is already known (it was chosen when the file was
+  // saved), so the Drive classifier is not run and the row's type / category / visibility stay as they are.
+  const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
+  const storeFileId = parseStorePointer(doc.drive_file_id)
+  if (storeFileId) {
+    try {
+      const { ocrByPointer } = await import("@/lib/crm-store/ocr")
+      const ocr = await ocrByPointer(doc.drive_file_id)
+      const { error: upErr } = await supabaseAdmin.from("documents").update({
+        ocr_text: ocr.fullText || null,
+        ocr_page_count: ocr.pageCount || null,
+        ocr_confidence: ocr.confidence || null,
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", id)
+      if (upErr) return NextResponse.json({ error: `The text was read but could not be saved: ${upErr.message}` }, { status: 500 })
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : "OCR failed" }, { status: 500 })
+    }
+    const { data: fresh } = await supabaseAdmin
+      .from("documents")
+      .select("id, file_name, document_type_name, ocr_text, ocr_page_count, ocr_confidence, status, processed_at")
+      .eq("id", id)
+      .maybeSingle()
+    return NextResponse.json(shapeOcr(fresh ?? doc))
+  }
+
   const { processFile } = await import("@/lib/mcp/tools/doc")
   const result = await processFile(
     doc.drive_file_id,

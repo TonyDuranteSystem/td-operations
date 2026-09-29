@@ -15,6 +15,7 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
+import { NewStoreBrowser, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -634,7 +635,11 @@ const ACCOUNT_UPLOAD_BASE_TYPES = [
 
 const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'] as const
 
-export function FileManager({ accountId, driveFolderId }: { accountId: string; driveFolderId: string | null; isAdmin?: boolean }) {
+export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: {
+  accountId: string; driveFolderId: string | null; isAdmin?: boolean
+  /** The account lists new-store (`store:`) documents — then look for its store view even with a Drive folder. */
+  hasStoreRows?: boolean
+}) {
   const queryClient = useQueryClient()
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null)
   const [ocrDocId, setOcrDocId] = useState<string | null>(null)
@@ -661,6 +666,10 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
     for (const t of typesData?.types ?? []) base.add(t)
     return Array.from(base).sort((a, b) => a.localeCompare(b))
   })()
+
+  // A company whose files live in the NEW store (Formation pilot, sandbox only) gets the store view
+  // instead of "Create / Link Drive folder". The route answers null outside the pilot environment.
+  const storeOwner = useStoreOwnerForAccount(accountId, !driveFolderId || hasStoreRows)
 
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
@@ -782,6 +791,19 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
     }
   }, [data, accountId, handleRefresh])
 
+  if (!driveFolderId && storeOwner.isLoading) {
+    return <div className="py-12 text-center text-sm text-zinc-400">Loading…</div>
+  }
+
+  if (!driveFolderId && storeOwner.data?.ownerId) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-zinc-500">This company&apos;s files live in the new CRM storage (pilot).</p>
+        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+      </div>
+    )
+  }
+
   if (!driveFolderId) {
     const handleCreate = async () => {
       setFolderAction('creating')
@@ -858,23 +880,54 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
     )
   }
 
+  // moved from Drive to the new storage: staff work there only — the Drive folder stays as the backup
+  if (storeOwner.data?.ownerId && storeOwner.data.moved) {
+    const m = storeOwner.data.moved
+    return (
+      <div className="space-y-2">
+        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          {m.status === 'moving' ? 'Being moved to the new storage — files are still arriving.' : m.status === 'incomplete' ? 'Moved to the new storage WITH PROBLEMS — some files did not come over (see the report above).' : `Moved to the new storage on ${new Date(m.finishedAt ?? m.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`}{' '}
+          The Drive folder stays as a backup — work here.{' '}
+          {driveFolderId && <a href={`https://drive.google.com/drive/folders/${driveFolderId}`} target="_blank" rel="noreferrer" className="underline">Open the old Drive folder (backup)</a>}
+        </p>
+        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+      </div>
+    )
+  }
+
+  // a company with BOTH (several open formations at company creation: Drive ran as today, then the store
+  // files were handed over) — its new-storage files are shown in every state of the Drive view (loading,
+  // Drive error, loaded), because the flat list above hides them
+  const storeSection = storeOwner.data?.ownerId ? (
+    <div className="mb-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+      <p className="text-xs text-amber-800">This company also has files in the new CRM storage (pilot):</p>
+      <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+    </div>
+  ) : null
+
   if (isLoading) {
     return (
+      <>
+      {storeSection}
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
         <span className="ml-2 text-sm text-zinc-400">Loading files from Drive...</span>
       </div>
+      </>
     )
   }
 
   if (error || data?.error) {
     return (
+      <>
+      {storeSection}
       <div className="text-center py-12 text-zinc-400">
         <p>Failed to load files</p>
         <button onClick={handleRefresh} className="mt-2 text-sm text-blue-600 hover:underline">
           Try again
         </button>
       </div>
+      </>
     )
   }
 
@@ -885,6 +938,7 @@ export function FileManager({ accountId, driveFolderId }: { accountId: string; d
 
   return (
     <div className="space-y-2">
+      {storeSection}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {/* Validation result banner */}
       {validationResult && (

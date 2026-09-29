@@ -23,9 +23,13 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const denied = await requireStaffRoute()
   if (denied) return denied
   try {
+    // The staff member's id — the CRM Store trash (pilot rows only) needs the person who did it.
+    const { createClient } = await import('@/lib/supabase/server')
+    const { data: { user } } = await createClient().auth.getUser()
     const result = await revertServiceDelivery({
       delivery_id: params.id,
       actor: 'flow-action',
+      actor_user_id: user?.id ?? null,
       notes: 'Reverted via flow Workspace "Go Back"',
     })
 
@@ -48,6 +52,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       documents_deleted: result.documents_deleted,
       status_reset: result.status_reset,
       renewal_date_reverted: result.renewal_date_reverted,
+      warnings: result.warnings ?? [],
     })
   } catch (e) {
     return NextResponse.json(

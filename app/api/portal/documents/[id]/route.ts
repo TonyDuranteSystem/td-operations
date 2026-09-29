@@ -70,7 +70,27 @@ export async function GET(
     let mimeType: string | null = null
     let fileName: string | null = null
 
-    if (doc.drive_file_id.startsWith('storage:')) {
+    // CRM Store pointer FIRST ("store:" is one letter from "storage:"). Until Stage 1 the portal is
+    // not on the store's own visibility rules: the account/contact check above decides access, exactly
+    // as for every other document. ONE store rule is absolute here already: a file of a staff-only type
+    // (the Formation Summary) is never served to a client, whatever its CRM row says.
+    const { parseStorePointer, readStoreFile, StoreFileUnavailableError, staffOnlyStorePointers } = await import('@/lib/crm-store/document-pointer')
+    const storeFileId = parseStorePointer(doc.drive_file_id)
+    if (storeFileId) {
+      if ((await staffOnlyStorePointers([doc.drive_file_id])).size > 0) {
+        return NextResponse.json({ error: 'Document file not found' }, { status: 404 })
+      }
+      try {
+        const f = await readStoreFile(storeFileId)
+        buffer = f.bytes
+        mimeType = f.mimeType
+      } catch (e) {
+        if (e instanceof StoreFileUnavailableError) {
+          return NextResponse.json({ error: 'Document file not found' }, { status: 404 })
+        }
+        throw e
+      }
+    } else if (doc.drive_file_id.startsWith('storage:')) {
       const path = doc.drive_file_id.slice('storage:'.length)
       const { data, error: dlErr } = await supabaseAdmin.storage
         .from('onboarding-uploads')
@@ -87,8 +107,15 @@ export async function GET(
       fileName = drive.fileName
     }
 
+    // CRM Store bytes carry an uploader-chosen type (untrusted): only script-free types keep it, the rest
+    // are plain bytes — the portal preview builds a blob from this response on the portal's own origin.
+    if (storeFileId) {
+      const { canPreviewInline } = await import('@/lib/crm-store/serve')
+      if (!canPreviewInline(mimeType)) mimeType = 'application/octet-stream'
+    }
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
+        'X-Content-Type-Options': 'nosniff',
         'Content-Type': mimeType || 'application/octet-stream',
         'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName || doc.file_name)}"`,
         'Content-Length': buffer.length.toString(),
