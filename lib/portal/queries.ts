@@ -1282,23 +1282,22 @@ export async function getContactOnlyNavVisibility(): Promise<PortalNavVisibility
 }
 
 /**
- * Count unread admin messages for a client.
- * Used for the chat badge in the sidebar.
- *
- * PR 2 Step 6 (2026-05-05): unified per-contact thread. The badge counts
- * unread admin messages across BOTH personal and company scopes for the
- * contact. Switching the company switcher in the sidebar no longer changes
- * the count.
+ * Count unread team messages for a client — the sidebar chat badge and the
+ * phone-icon badge. Covers every chat view the client can open (all their
+ * companies + their personal thread), so switching company doesn't change it.
  */
 export async function getUnreadChatCount(contactId: string): Promise<number> {
-  const { count } = await supabaseAdmin
-    .from('portal_messages')
-    .select('id', { count: 'exact', head: true })
-    .eq('contact_id', contactId)
-    .eq('sender_type', 'admin')
-    .or('read_at.is.null,client_kept_unread.eq.true')
-    .is('deleted_at', null)
-  return count ?? 0
+  // One definition of "unread" everywhere (dev job 05d997f2): the sidebar /
+  // phone-icon number is the same total the chat's tabs add up to. See
+  // lib/portal/client-chat-unread.ts for the rule and why the old
+  // contact_id-only count disagreed with what the client could see.
+  const { getClientChatUnread } = await import('@/lib/portal/client-chat-unread')
+  try {
+    return (await getClientChatUnread(contactId)).total
+  } catch (err) {
+    console.error('[getUnreadChatCount] failed:', err)
+    return 0
+  }
 }
 
 export async function getPortalTaxReturns(accountId: string) {

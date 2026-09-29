@@ -9,7 +9,8 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { CRM_BASE_URL, PORTAL_BASE_URL } from '@/lib/config'
 import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
-import { buildChatQueryPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { fetchClientUnreadRows, topicKey } from '@/lib/portal/client-chat-unread'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
@@ -223,7 +224,28 @@ export async function GET(request: NextRequest) {
     }
   }).reverse()
 
-  return NextResponse.json({ messages })
+  // Per-tab unread for the client's current view, from the DATABASE — not from
+  // whatever page of messages happens to be loaded (dev job 05d997f2). A tab
+  // whose unread message is older than the loaded page still shows its badge
+  // (and appears at all), so it can be opened and cleared. Same rule as the
+  // sidebar total (lib/portal/client-chat-unread). First page only.
+  let unreadByTopic: Record<string, number> | undefined
+  if (isClientUser && authContactId && scopedPlan && !before) {
+    try {
+      const planAccount = scopedPlan.mode === 'personal_only' ? [] : [scopedPlan.accountId]
+      const rows = await fetchClientUnreadRows(authContactId, planAccount)
+      unreadByTopic = {}
+      for (const r of rows) {
+        if (!messageVisibleInPlan(scopedPlan, r)) continue
+        const k = topicKey(r.topic)
+        unreadByTopic[k] = (unreadByTopic[k] ?? 0) + 1
+      }
+    } catch (err) {
+      console.error('[portal/chat GET] unread summary failed:', err)
+    }
+  }
+
+  return NextResponse.json({ messages, ...(unreadByTopic ? { unreadByTopic } : {}) })
 }
 
 export async function POST(request: NextRequest) {

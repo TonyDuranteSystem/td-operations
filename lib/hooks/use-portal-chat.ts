@@ -78,6 +78,10 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // lands). Lets the component wait for the NEW company's data before acting
   // on `topics` after a switch.
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
+  // Per-tab unread for this view as the SERVER counts it (all rows, not just
+  // the loaded page) — '' = General. Null until the first response (or for
+  // views the server doesn't summarise, e.g. teammates).
+  const [serverUnread, setServerUnread] = useState<Record<string, number> | null>(null)
   const loadedKeyRef = useRef<string | null>(null)
   const markLoaded = (q: string) => { loadedKeyRef.current = q; setLoadedKey(q) }
 
@@ -121,11 +125,10 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         if (!sameView) setHasMore(msgs.length >= 50)
         else if (msgs.length < 50) setHasMore(false)
         markLoaded(q)
-        fetch('/api/portal/chat/read', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(readBody),
-        }).catch(() => {})
+        // No marking here (dev job 05d997f2 Phase 2): opening the chat used to
+        // mark EVERY tab read. The component marks only the tab the client is
+        // actually looking at, via markRead() below.
+        setServerUnread(data.unreadByTopic ?? null)
       }
     } catch {
       // silent
@@ -164,7 +167,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // response (deletions) but keeps (a) rows that arrived live after this fetch
   // started and (b) paged-back history older than the fetched window. See that
   // helper for why a blind replace made messages vanish.
-  const refresh = useCallback(async (opts?: { markRead?: boolean }) => {
+  const refresh = useCallback(async (_opts?: { markRead?: boolean }) => {
     const seq = ++fetchSeqRef.current
     const startMark = eventMarkRef.current
     try {
@@ -201,13 +204,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // paging state (load / loadMore) left it.
         if (msgs.length < limit) setHasMore(false)
         else if (probe.droppedForGap) setHasMore(true)
-        if (opts?.markRead) {
-          fetch('/api/portal/chat/read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(readBody),
-          }).catch(() => {})
-        }
+        if (data.unreadByTopic) setServerUnread(data.unreadByTopic)
       }
     } catch {
       // silent
@@ -226,7 +223,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // layout with identical props, which does not re-run this hook. Same wake
   // signal the notification bell uses (20s-away gate + throttle). Marking stays
   // as on every other refresh path.
-  useWakeSignal({ onWake: () => { void refreshRef.current({ markRead: true }) } })
+  useWakeSignal({ onWake: () => { void refreshRef.current() } })
 
   // Load older messages
   const loadMore = useCallback(async () => {
@@ -289,6 +286,13 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
       if (!belongs(nm)) return // wrong company / someone else's personal — never show
       liveMarksRef.current.set(newMessage.id, ++eventMarkRef.current)
+      // A new team message is unread on its tab until the client looks at it
+      // (the component marks it at once if that tab is open and visible).
+      // (Skip duplicates: overlapping subscriptions can deliver the same row twice.)
+      if (nm.sender_type === 'admin' && !newMessage.read_at && !messagesRef.current.some(m => m.id === newMessage.id)) {
+        const key = newMessage.topic ?? ''
+        setServerUnread(prev => prev ? { ...prev, [key]: (prev[key] ?? 0) + 1 } : prev)
+      }
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -331,7 +335,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // disconnected is gone, and this hook appends deltas. So refetch
         // authoritative state on every (re)subscribe. Idempotent by design —
         // SUBSCRIBED can fire more than once per rejoin.
-        void refreshRef.current({ markRead: true })
+        void refreshRef.current()
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         console.warn(`[portal-chat] channel ${status}`)
       }
@@ -418,10 +422,49 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     new Set(messages.map(m => m.topic).filter((t): t is string => !!t))
   ).sort()
 
+  // Mark ONE tab read, up to the newest message the client has on screen.
+  // Returns nothing; broadcasts the client's new unread total so the sidebar
+  // and the phone icon follow (window event 'portal-chat-unread').
+  const markRead = useCallback(async (topic: string | null, upTo: string) => {
+    const key = topic ?? ''
+    // Optimistic: those rows are on screen and being read now.
+    const now = new Date().toISOString()
+    const upToMs = Date.parse(upTo)
+    setMessages(prev => prev.map(m =>
+      m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread && (m.topic ?? '') === key && Date.parse(m.created_at) <= upToMs
+        ? { ...m, read_at: now }
+        : m,
+    ))
+    setServerUnread(prev => {
+      if (!prev) return prev
+      const kept = messagesRef.current.filter(m => m.sender_type === 'admin' && m.client_kept_unread && (m.topic ?? '') === key).length
+      return { ...prev, [key]: kept }
+    })
+    try {
+      const res = await fetch('/api/portal/chat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // topic is ALWAYS sent (null = General): an absent key means "mark
+        // every tab" to the server, kept only for old cached app versions.
+        body: JSON.stringify({ ...readBody, topic, up_to: upTo }),
+      })
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
+        if (typeof data.unread === 'number' && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('portal-chat-unread', { detail: { total: data.unread } }))
+        }
+      }
+    } catch {
+      // silent — the next refresh/mark reconciles
+    }
+    // readBody is derived from the same inputs as queryParam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryParam])
+
   // True once the messages on screen belong to the view currently selected.
   const ready = !loading && loadedKey === queryParam
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready }
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead }
 }
 
 type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }

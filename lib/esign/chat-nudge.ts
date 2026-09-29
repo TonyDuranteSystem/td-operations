@@ -78,6 +78,12 @@ export async function postSignatureChatNudge(opts: {
       message: buildBody(opts.kind, opts.documentName || "Document", locale),
       topic: TOPIC[locale],
       attachments: [],
+      // Saved already read (Antonio, 2026-09-29, dev job 05d997f2): the nudge
+      // is visibility in the thread, not a new alert — the "document to sign"
+      // bell/email and the Sign page already carry the signal. Left unread, it
+      // would sit on the client's chat badge and phone icon until they opened
+      // the "Documents to sign" tab, even after signing.
+      read_at: new Date().toISOString(),
     })
     if (error) {
       console.error(`[esign-chat-nudge] could not post to the portal chat: ${error.message}`)

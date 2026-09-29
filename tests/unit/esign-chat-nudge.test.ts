@@ -39,6 +39,14 @@ describe("postSignatureChatNudge", () => {
     })
   })
 
+  it("is saved already read — visibility only, never a badge (dev job 05d997f2)", async () => {
+    maybeSingle.mockResolvedValue({ data: { language: "English" } })
+    await postSignatureChatNudge(base)
+    const row = insert.mock.calls[0][0]
+    expect(typeof row.read_at).toBe("string")
+    expect(Number.isNaN(Date.parse(row.read_at))).toBe(false)
+  })
+
   it("writes in Italian for an Italian client (language is free text)", async () => {
     maybeSingle.mockResolvedValue({ data: { language: "Italian" } })
     await postSignatureChatNudge(base)
