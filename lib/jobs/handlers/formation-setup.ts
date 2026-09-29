@@ -106,7 +106,7 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
  * The revision string proves the BUNDLE is fresh (it changes when this file
  * changes); the deployment id proves WHICH deployment served it.
  */
-const HANDLER_REVISION = "ca788354-resubmit-gate-v1"
+const HANDLER_REVISION = "ca788354-resubmit-gate-v1+crm-store-pilot-s6"
 
 /** The build identity line, emitted as the FIRST step of every run. */
 export function buildIdentityDetail(
@@ -338,7 +338,86 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // Phase 1: Create contact-level Drive folder (Contacts/{Name}/)
   // Documents will migrate to company folder when LLC name is selected (Phase 2)
   let contactDriveFolderId: string | null = null
-  if (p.contact_id) {
+
+  // ─── 2a.0. CRM STORE PILOT (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts) ───
+  // A formation already on file (made at payment) whose buyer is a pilot contact keeps its files in
+  // the new store: the passport goes to the buyer's personal storage (read by OCR from its bytes).
+  // Drive is skipped ONLY when that worked; any failure runs today's Drive step below unchanged.
+  let pilotSkipsDrive = false
+  if (p.contact_id && decision.action === "use_existing" && decision.deliveryId) {
+    try {
+      const pilot = await import("@/lib/crm-store/formation-pilot")
+      const { data: pilotSd } = !pilot.pilotEnvironmentAllowed() ? { data: null } : await supabaseAdmin
+        .from("service_deliveries")
+        .select("id, contact_id, account_id, service_type")
+        .eq("id", decision.deliveryId)
+        .maybeSingle()
+      const owner = pilotSd
+        ? await pilot.ensureFormationOwner(
+            {
+              id: String(pilotSd.id),
+              contact_id: (pilotSd.contact_id as string | null) ?? null,
+              account_id: (pilotSd.account_id as string | null) ?? null,
+              service_type: (pilotSd.service_type as string | null) ?? null,
+            },
+            await pilot.formationRootName(p.contact_id),
+          )
+        : null
+      if (owner) {
+        const passportPath = firstUploadPath(submitted.passport_owner)
+        if (!passportPath) {
+          pilotSkipsDrive = true
+          result.steps.push(step("store_passport", "skipped", "CRM Store pilot — no passport uploaded"))
+        } else {
+          const cleanPath = passportPath.replace(/^\/+/, "")
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
+          if (dlErr || !blob) {
+            result.steps.push(step("store_passport", "error", `CRM Store pilot — passport not readable (${dlErr?.message || "no data"}); using Drive`))
+          } else {
+            const content = await blob.arrayBuffer()
+            const mimeType = blob.type || "application/octet-stream"
+            const personName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token
+            const saved = await pilot.pilotSavePassport({
+              contactId: p.contact_id,
+              personName,
+              fileName: cleanPath.split("/").pop() || "passport.pdf",
+              bytes: Buffer.from(content),
+              mimeType,
+              buyerCaseId: decision.deliveryId,
+              row: {
+                document_type_name: "Passport", category: 2, category_name: "Contacts",
+                contact_id: p.contact_id, account_id: accountId, portal_visible: true,
+              },
+            })
+            if (saved.status === "saved") {
+              pilotSkipsDrive = true
+              result.steps.push(step("store_passport", "ok", `CRM Store: ${saved.write}`))
+              // Same OCR writeback as today, from the bytes — only for a passport that is new or changed.
+              if (saved.write !== "unchanged") {
+                const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+                const passportResult = await extractAndStorePassportData({
+                  contact_id: p.contact_id,
+                  content,
+                  file_name: cleanPath.split("/").pop() || "passport",
+                  mime_type: mimeType,
+                  skip_dob: !!submitted.owner_dob,
+                  contact_name: personName,
+                  account_id: accountId,
+                })
+                result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
+              }
+            } else {
+              result.steps.push(step("store_passport", "error", "CRM Store pilot — save failed (alarm raised); using Drive"))
+            }
+          }
+        }
+      }
+    } catch (e) {
+      result.steps.push(step("store_passport", "error", `CRM Store pilot — ${e instanceof Error ? e.message : String(e)}; using Drive`))
+    }
+  }
+
+  if (p.contact_id && !pilotSkipsDrive) {
     try {
       const { ensureContactFolder } = await import("@/lib/drive-folder-utils")
       const contactName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token
@@ -534,6 +613,78 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
           } else {
             result.steps.push(step("service_delivery", "error", msg))
           }
+        }
+      }
+
+      // ─── 2c-store. CRM STORE PILOT (sandbox only, job 685467b5) ───
+      // The formation's store owner (also when THIS run created the case — the payment step does not
+      // always make it) + the Formation Summary: the wizard answers as a PDF in the company-being-formed's
+      // "1. Company". Staff-only by its document type (it holds every member's personal data). One file
+      // per formation; the same answers render the same bytes → "unchanged", changed answers → a new
+      // version. Best-effort: never changes this job's outcome.
+      if (sdId && decision.action !== "refuse_finished" && decision.action !== "ambiguous") {
+        try {
+          const pilot = await import("@/lib/crm-store/formation-pilot")
+          const caseRow = pilot.pilotEnvironmentAllowed()
+            ? (await supabaseAdmin.from("service_deliveries").select("account_id, service_type").eq("id", sdId).maybeSingle()).data
+            : null
+          const owner = caseRow
+            ? await pilot.ensureFormationOwner(
+                {
+                  id: sdId,
+                  contact_id: sdContactId,
+                  account_id: (caseRow.account_id as string | null) ?? null,
+                  service_type: (caseRow.service_type as string | null) ?? null,
+                },
+                await pilot.formationRootName(sdContactId),
+              )
+            : null
+          if (owner) {
+            let submittedAt = "(not recorded)"
+            if (p.submission_id) {
+              const { data: subRow } = await supabaseAdmin
+                .from("formation_submissions")
+                .select("completed_at, created_at")
+                .eq("id", p.submission_id)
+                .maybeSingle()
+              submittedAt = String(subRow?.completed_at || subRow?.created_at || submittedAt)
+            }
+            const { generateFormSummaryPDF, FORM_CONFIGS, normalizeFormationPayloadForPdf } = await import("@/lib/form-to-drive")
+            const who = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ")
+            const pdf = await generateFormSummaryPDF(FORM_CONFIGS.formation, normalizeFormationPayloadForPdf(submitted), {
+              token: p.token,
+              submittedAt,
+              companyName: String(submitted.llc_name_1 || "") || undefined,
+              uploadCount: 0,
+              deterministic: true,
+            })
+            const saved = await pilot.pilotSaveCaseFile({
+              caseId: sdId,
+              folderKind: "company",
+              documentType: "formation_summary",
+              callerKey: `formation-summary:${sdId}`,
+              name: `Formation Summary${who ? ` - ${who}` : ""}.pdf`,
+              bytes: Buffer.from(pdf),
+              mimeType: "application/pdf",
+              published: false,
+              row: {
+                contact_id: sdContactId,
+                account_id: null,
+                service_delivery_id: sdId,
+                document_type_name: "Formation Summary",
+                category: 1,
+                category_name: "Company",
+                portal_visible: false,
+              },
+            })
+            result.steps.push(step(
+              "store_formation_summary",
+              saved.status === "saved" ? "ok" : saved.status === "not_pilot" ? "skipped" : "error",
+              saved.status === "saved" ? `CRM Store: ${saved.write}` : `CRM Store: ${saved.status}`,
+            ))
+          }
+        } catch (e) {
+          result.steps.push(step("store_formation_summary", "error", e instanceof Error ? e.message : String(e)))
         }
       }
 

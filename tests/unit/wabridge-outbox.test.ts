@@ -35,7 +35,7 @@ describe("parseEnqueueResult — always fails closed", () => {
 describe("refusalHttpStatus", () => {
   it("maps rule refusals to 409, bad input to 400, missing to 404, unknown to 500", () => {
     for (const c of ["paused", "no_inbound", "not_allowed", "inactive", "not_one_to_one", "not_wabridge"]) expect(refusalHttpStatus(c)).toBe(409)
-    for (const c of ["empty", "too_long", "bad_request"]) expect(refusalHttpStatus(c)).toBe(400)
+    for (const c of ["empty", "too_long", "bad_request", "bad_reply_to"]) expect(refusalHttpStatus(c)).toBe(400)
     expect(refusalHttpStatus("not_found")).toBe(404)
     expect(refusalHttpStatus("something_new")).toBe(500)
     expect(refusalHttpStatus("unreadable")).toBe(500)

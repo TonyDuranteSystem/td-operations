@@ -43,6 +43,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: 'Document not found' }, { status: 404 })
     }
 
+    // CRM Store files (pilot, sandbox only): the stored file goes to the STORE's trash (recoverable, legal
+    // holds apply) and its CRM listing is removed — the same as the storage screen's Delete.
+    const { parseStorePointer } = await import('@/lib/crm-store/document-pointer')
+    const storeFileId = parseStorePointer(doc.drive_file_id)
+    if (storeFileId) {
+      try {
+        const { deleteStoreFile } = await import('@/lib/crm-store/file-actions')
+        await deleteStoreFile(storeFileId, user?.id ?? null)
+      } catch (e) {
+        return NextResponse.json({ success: false, detail: e instanceof Error ? e.message : 'The document could not be deleted.' }, { status: 400 })
+      }
+      logAction({
+        actor: `dashboard:${user?.email?.split('@')[0] ?? 'unknown'}`,
+        action_type: 'delete',
+        table_name: 'documents',
+        record_id: document_id,
+        account_id: doc.account_id ?? undefined,
+        summary: `Document moved to the CRM Storage trash: ${doc.file_name}`,
+        details: { store_file_id: storeFileId, contact_id: doc.contact_id },
+      })
+      return NextResponse.json({ success: true, detail: `Moved to the trash (recoverable for 90 days): ${doc.file_name}` })
+    }
+
     let driveTrashed = false
 
     // Trash on Google Drive (soft delete — recoverable from trash)

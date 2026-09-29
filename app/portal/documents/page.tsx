@@ -112,7 +112,23 @@ export default async function PortalDocumentsPage() {
         .eq('portal_visible', true)
         .order('created_at', { ascending: false })
         .limit(50)
-      myDocs = [...((mdData ?? []) as unknown as DocRow[]), ...((pdData ?? []) as unknown as DocRow[])]
+      // PLUS the person's OWN documents kept in the new CRM storage (decision #28: one copy per person, shown
+      // in each of their companies). Such a file has ONE listing, tied to the company it was filed from — so
+      // without this, a member of two companies would see their passport under one company only. Only
+      // personal (category 2) rows of THIS contact; nothing of anyone else's. (Sandbox pilot only: no store
+      // rows exist in production.)
+      const { data: sdData } = await supabaseAdmin
+        .from('documents')
+        .select('id, file_name, document_type_name, category, drive_file_id, processed_at, created_at, service_delivery_id')
+        .eq('contact_id', contactId)
+        .eq('category', 2)
+        .eq('portal_visible', true)
+        .like('drive_file_id', 'store:%')
+        .order('created_at', { ascending: false })
+        .limit(50)
+      const seenMy = new Set<string>()
+      myDocs = [...((mdData ?? []) as unknown as DocRow[]), ...((pdData ?? []) as unknown as DocRow[]), ...((sdData ?? []) as unknown as DocRow[])]
+        .filter((d) => (seenMy.has(d.id) ? false : (seenMy.add(d.id), true)))
     }
 
     // Flow-linked docs — queried independently of category so any SD-stamped

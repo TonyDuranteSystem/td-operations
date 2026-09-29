@@ -111,6 +111,92 @@ export interface UpdateDocumentsBulkResult {
 
 // ─── updateDocument ────────────────────────────────────────
 
+/**
+ * Mirror a CRM share / unshare onto the CRM Store's own "published" flag for `store:` rows. Returns the
+ * ids of rows whose SHARE the store refused: those rows are put back to hidden here (before any client
+ * alert fires), so the CRM row never says "visible" while the store says no. An unshare the store
+ * refuses is only logged — the row is already hidden, which is the safe side.
+ */
+async function syncStorePublished(rows: { id: string; drive_file_id: string | null }[], visible: boolean): Promise<string[]> {
+  const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
+  const refused: string[] = []
+  for (const r of rows) {
+    const fileId = parseStorePointer(r.drive_file_id)
+    if (!fileId) continue
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+    const { error } = await (supabaseAdmin as any).rpc("store_set_published", { p_file_id: fileId, p_published: visible, p_actor: null })
+    if (error) {
+      console.error(`[updateDocument] store file ${fileId} published=${visible} not mirrored: ${error.message}`)
+      if (visible) refused.push(r.id)
+    }
+  }
+  if (refused.length > 0) {
+    const { error } = await supabaseAdmin.from("documents").update({ portal_visible: false, updated_at: new Date().toISOString() }).in("id", refused)
+    if (error) console.error(`[updateDocument] could not put refused store rows back to hidden: ${error.message}`)
+  }
+  return refused
+}
+
+/**
+ * A SHARE of `store:` rows asks the CRM Store FIRST, before anything is written or logged: if the store
+ * refuses, nothing changes. Returns an undo (restores each store file's previous flag) for when the row
+ * write that follows fails.
+ */
+async function storePrePublish(target: { ids: string[] } | { driveFileId: string }): Promise<{ error: string | null; undo: () => Promise<void> }> {
+  const none = { error: null, undo: async () => {} }
+  const { parseStorePointer } = await import("@/lib/crm-store/document-pointer")
+  let pointers: string[]
+  if ("driveFileId" in target) pointers = [target.driveFileId]
+  else {
+    const { data, error } = await supabaseAdmin.from("documents").select("drive_file_id").in("id", target.ids)
+    if (error) return { error: `Could not check whether this document may be shared (${error.message}) — please try again.`, undo: none.undo }
+    pointers = (data ?? []).map((r) => r.drive_file_id as string)
+  }
+  const fileIds = Array.from(new Set(pointers.map((p) => parseStorePointer(p)).filter((x): x is string => !!x)))
+  if (fileIds.length === 0) return none
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+  const store = supabaseAdmin as any
+  const { data: before, error: bErr } = await store.from("store_files").select("id, published").in("id", fileIds)
+  if (bErr) return { error: "Could not check the new CRM storage — please try again.", undo: none.undo }
+  const prev = new Map<string, boolean>(((before ?? []) as { id: string; published: boolean }[]).map((r) => [r.id, !!r.published]))
+  const done: string[] = []
+  const undo = async () => {
+    for (const id of done) if (prev.get(id) === false) await store.rpc("store_set_published", { p_file_id: id, p_published: false, p_actor: null })
+  }
+  for (const id of fileIds) {
+    const { error } = await store.rpc("store_set_published", { p_file_id: id, p_published: true, p_actor: null })
+    if (error) {
+      await undo()
+      return { error: "The new CRM storage does not allow this document to be shown to the client — nothing was changed.", undo: none.undo }
+    }
+    done.push(id)
+  }
+  return { error: null, undo }
+}
+
+/** Non-null = a refusal message: at least one target row is a staff-only CRM Store file. */
+async function refuseStaffOnlyShare(target: { ids: string[] } | { driveFileId: string }): Promise<string | null> {
+  const { isStorePointer, staffOnlyStorePointers } = await import("@/lib/crm-store/document-pointer")
+  let pointers: string[]
+  if ("driveFileId" in target) {
+    pointers = [target.driveFileId]
+  } else {
+    const { data, error } = await supabaseAdmin.from("documents").select("drive_file_id").in("id", target.ids)
+    if (error) return `Could not check whether this document may be shared (${error.message}) — please try again.`
+    pointers = (data ?? []).map((r) => r.drive_file_id as string)
+  }
+  if (!pointers.some((p) => isStorePointer(p))) return null
+  const staffOnly = await staffOnlyStorePointers(pointers)
+  if (staffOnly.size > 0) {
+    return "This document cannot be shown to the client: it is staff-only (it holds other people's personal data), or it has no document type yet — choose its type first."
+  }
+  const { personalStoreFilesOutsidePerson } = await import("@/lib/crm-store/document-pointer")
+  const misfiled = await personalStoreFilesOutsidePerson(pointers)
+  return misfiled.size > 0
+    ? "This is a personal document stored with the company — it must be in the person's own storage before it can be shown."
+    : null
+}
+
 export async function updateDocument(
   params: UpdateDocumentParams
 ): Promise<UpdateDocumentResult> {
@@ -121,6 +207,17 @@ export async function updateDocument(
     if (!params.patch || Object.keys(params.patch).length === 0) {
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
     }
+
+    // CRM Store: a file of a staff-only type (the Formation Summary) is NEVER shown to a
+    // client — refuse the share here, for every caller (contact-page toggle, MCP, process-and-share).
+    if (params.patch.portal_visible === true) {
+      const refusal = await refuseStaffOnlyShare(params.id ? { ids: [params.id] } : { driveFileId: params.drive_file_id! })
+      if (refusal) return { success: false, outcome: "error", error: refusal }
+    }
+    const pre = params.patch.portal_visible === true
+      ? await storePrePublish(params.id ? { ids: [params.id] } : { driveFileId: params.drive_file_id! })
+      : { error: null, undo: async () => {} }
+    if (pre.error) return { success: false, outcome: "error", error: pre.error }
 
     const nowIso = new Date().toISOString()
     const updates: DocumentUpdate = { ...params.patch, updated_at: nowIso }
@@ -164,10 +261,12 @@ export async function updateDocument(
     const { data, error } = await query.select("id, drive_file_id, account_id, updated_at")
 
     if (error) {
+      await pre.undo()
       return { success: false, outcome: "error", error: error.message }
     }
 
     if (!data || data.length === 0) {
+      await pre.undo()
       // Distinguish stale-lock miss from genuine not_found by re-reading.
       let readQuery = supabaseAdmin.from("documents").select("id, updated_at")
       if (params.id) readQuery = readQuery.eq("id", params.id)
@@ -194,6 +293,12 @@ export async function updateDocument(
       summary: params.summary || `Document updated (${changedFields.join(", ")})`,
       details: params.details || { fields: changedFields, patch: params.patch },
     })
+
+    // CRM Store: a share was already accepted by the store before the write (storePrePublish); an UNSHARE
+    // is mirrored onto the store's own flag now, so the two never disagree (Stage 1 reads the store's flag).
+    if (params.patch.portal_visible === false) {
+      await syncStorePublished(data as { id: string; drive_file_id: string | null }[], false)
+    }
 
     // Fire the client alert for rows that actually transitioned hidden→visible.
     // Fire-and-forget: alert delivery must never fail the document write.
@@ -234,6 +339,13 @@ export async function updateDocumentsBulk(
       return { success: false, outcome: "error", error: "patch must contain at least one field" }
     }
 
+    if (params.patch.portal_visible === true) {
+      const refusal = await refuseStaffOnlyShare({ ids: params.ids })
+      if (refusal) return { success: false, outcome: "error", error: refusal }
+    }
+    const pre = params.patch.portal_visible === true ? await storePrePublish({ ids: params.ids }) : { error: null, undo: async () => {} }
+    if (pre.error) return { success: false, outcome: "error", error: pre.error }
+
     const nowIso = new Date().toISOString()
     const updates: DocumentUpdate = { ...params.patch, updated_at: nowIso }
 
@@ -254,13 +366,15 @@ export async function updateDocumentsBulk(
       .from("documents")
       .update(updates)
       .in("id", params.ids)
-      .select("id")
+      .select("id, drive_file_id")
 
     if (error) {
+      await pre.undo()
       return { success: false, outcome: "error", error: error.message }
     }
 
     const count = data?.length ?? 0
+    if (count === 0) await pre.undo() // the rows vanished between the store check and the write
     const changedFields = Object.keys(params.patch)
 
     logAction({
@@ -277,6 +391,10 @@ export async function updateDocumentsBulk(
       },
     })
 
+    // CRM Store: shares were accepted before the write; an unshare is mirrored now.
+    if (params.patch.portal_visible === false) {
+      await syncStorePublished((data ?? []) as { id: string; drive_file_id: string | null }[], false)
+    }
     // Alert only rows that actually transitioned hidden→visible (opt-in).
     fireNewDocumentAlerts((data ?? []).map((r) => r.id).filter((id) => wasHiddenIds.has(id)))
 

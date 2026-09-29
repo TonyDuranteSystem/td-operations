@@ -730,8 +730,10 @@ export async function resolvePendingReview(
       source_metadata: newSourceMetadata as CatalogPendingReviewInsert["source_metadata"],
     })
     .eq("id", pendingId)
+    .eq("status", "pending") // two people answering at once: only the first answer counts
     .select()
-    .single()
+    .maybeSingle()
   if (error) throw new Error(`resolvePendingReview(${pendingId}): ${error.message}`)
+  if (!data) throw new Error(`resolvePendingReview: row ${pendingId} already resolved`)
   return data as CatalogPendingReview
 }

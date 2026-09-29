@@ -5,9 +5,11 @@ import { supabasePublic } from '@/lib/supabase/public-client'
 import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
+import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
+import { euroBankAddress } from '@/lib/offers/bank-address'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -32,7 +34,7 @@ const CL = {
     cardSurcharge: 'A 5% processing fee applies to card payments.',
     orSeparator: 'OR',
     bankTitle: 'Bank Transfer Details',
-    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', reference: 'Reference',
+    beneficiary: 'Beneficiary', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Bank', bankAddress: 'Bank address', reference: 'Reference',
     accountNumber: 'Account Number', routingNumber: 'Routing Number',
     receiptTitle: 'Upload Wire Transfer Receipt',
     receiptDesc: 'Once you complete the transfer, upload the receipt to start your services immediately.',
@@ -62,7 +64,7 @@ const CL = {
     cardSurcharge: 'Il pagamento con carta prevede una maggiorazione del 5%.',
     orSeparator: 'OPPURE',
     bankTitle: 'Coordinate Bancarie',
-    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', reference: 'Causale',
+    beneficiary: 'Beneficiario', iban: 'IBAN', bic: 'BIC / SWIFT', bank: 'Banca', bankAddress: 'Indirizzo banca', reference: 'Causale',
     accountNumber: 'Numero Conto', routingNumber: 'Routing Number',
     receiptTitle: 'Carica Ricevuta Bonifico',
     receiptDesc: 'Una volta completato il bonifico, carica la ricevuta per avviare i servizi immediatamente.',
@@ -250,6 +252,14 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
     if (!isNaN(numAmt) && !isTotal) annualFeeNum += numAmt
     installmentLines.push({ label: engLabel, amount: String(amt) })
   }
+
+  // Dated schedule with the after-September rule (billing already follows it).
+  // Null for unusual recurring rows — the verbatim list below is kept then.
+  const annualSchedule = buildAnnualMaintenanceWording({
+    recurringCosts: rc,
+    currency: (offer as { installment_currency?: string | null }).installment_currency || null,
+    signDate: new Date(),
+  })
 
   // Services from offer — filter by client selections, exclude recurring, only main contract_type
   const servicesList = services
@@ -476,6 +486,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           if (b.iban) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.iban}</span><span class="contract-bank-value">${esc(b.iban)}</span></div>`
           if (b.bic) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bic}</span><span class="contract-bank-value">${esc(b.bic)}</span></div>`
           if (b.bank_name) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bank}</span><span class="contract-bank-value">${esc(b.bank_name)}</span></div>`
+          if (euroBankAddress(b)) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.bankAddress}</span><span class="contract-bank-value">${esc(euroBankAddress(b) as string)}</span></div>`
           if (b.reference) sh += `<div class="contract-bank-ref">${cl.reference}: ${esc(b.reference)}</div>`
           sh += '</div>'
           sh += '<div class="contract-receipt-upload">'
@@ -751,7 +762,9 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           <table className="contract-key-terms">
             <tbody>
               <tr><th>{feeLabel}</th><td>{fee} (one-time, due upon signing)</td></tr>
-              {installmentLines.length >= 2 && (
+              {annualSchedule ? (
+                <tr><th>Annual Maintenance</th><td>{annualSchedule.lines.map((l, i) => <span key={i}>{i > 0 && <br />}{l}</span>)}</td></tr>
+              ) : installmentLines.length >= 2 && (
                 <tr><th>Annual Maintenance (from following year)</th><td>{installmentLines.map((inst, i) => <span key={i}>{i > 0 && <br />}&bull; {inst.label}: {inst.amount}</span>)}</td></tr>
               )}
             </tbody>
@@ -964,7 +977,7 @@ function LegalSections({ isOnboarding }: { isOnboarding: boolean }) {
       <div className="contract-section"><h3>5. Fees &amp; Payment</h3>
         <div className="contract-subsection"><h4>5.1 Service Fees</h4><p>The Client shall pay the {isOnboarding ? 'Onboarding Fee' : 'Setup Fee'} and any applicable Annual Maintenance Fee as specified in the Key Terms Summary and the applicable SOW.</p></div>
         <div className="contract-subsection"><h4>5.2 Payment Methods</h4><p>Payments may be made via:</p><ul><li><strong>Credit or debit card</strong> through the secure online checkout system;</li><li><strong>Bank wire transfer</strong> to the designated bank account.</li></ul></div>
-        <div className="contract-subsection"><h4>5.3 Payment Schedule</h4><p>The payment schedule shall be as specified in the Key Terms Summary.</p></div>
+        <div className="contract-subsection"><h4>5.3 Payment Schedule</h4><p>The payment schedule shall be as specified in the Key Terms Summary.</p><p><strong>One annual fee, paid in two installments.</strong> The Annual Maintenance Fee is a single fee for the entire Contract Year (January 1 &ndash; December 31). It is divided into two installments (January and June) solely as a courtesy to the Client, so that the fee does not have to be paid in one payment. The installments do not correspond to separate periods of service: the January installment is not a fee for January&ndash;June, and the June installment is not a fee for July&ndash;December. Once a Contract Year has begun, the full Annual Maintenance Fee for that year is owed, including any installment not yet paid, even if the Client terminates this Agreement or stops using the Services during that year.</p><p>For a company formed or onboarded after September 1, the {isOnboarding ? 'Onboarding Fee' : 'Setup Fee'} covers the rest of that year and only the June installment applies in the following year, as shown in the payment schedule.</p></div>
         <div className="contract-subsection"><h4>5.4 Late Payment</h4><p>A late fee of <strong>1.5% per month</strong> shall accrue on unpaid balances. Services may be <strong>suspended after thirty (30) days</strong> past due.</p></div>
         <div className="contract-subsection"><h4>5.5 Refund Policy</h4><p><strong>All fees paid under this Agreement are non-refundable.</strong></p></div>
         <div className="contract-subsection"><h4>5.6 Additional Fees</h4><p>Services not included in the SOW may incur additional charges with advance notification.</p></div></div>
@@ -977,7 +990,7 @@ function LegalSections({ isOnboarding }: { isOnboarding: boolean }) {
 
       <div className="contract-section"><h3>9. Data Protection &amp; Privacy</h3><p>Personal data shall be processed solely for performing the Services. For EU/EEA residents, processing is based on Article 6(1)(b) GDPR.</p></div>
 
-      <div className="contract-section"><h3>10. Tax Return Preparation</h3><p>If included in the SOW, the Consulting Firm shall arrange for preparation and filing of the LLC&apos;s annual U.S. tax return through a qualified third-party professional. The Client is solely responsible for providing accurate financial records.</p></div>
+      <div className="contract-section"><h3>10. Tax Return Preparation</h3><p>If included in the SOW, the Consulting Firm shall arrange for the preparation and filing of the LLC&apos;s annual U.S. tax return, directly or through a qualified third-party professional. The Client is solely responsible for providing accurate and complete financial records.</p><p><strong>Automatic extension.</strong> To protect the Client from late-filing penalties, the Consulting Firm files an extension with the IRS for every annual return on or before the original due date (March 15 for Multi-Member LLCs, April 15 for Single-Member LLCs). No action is required from the Client.</p><p><strong>When the return is filed.</strong> The return is prepared and filed after the Second Installment (June) has been paid and the Client has provided complete information, and before the extended deadline (September 15 for Multi-Member LLCs, October 15 for Single-Member LLCs). An extension gives more time to file the return, not to pay any tax that may be due.</p></div>
 
       <div className="contract-section"><h3>11. Contract Year &amp; Renewal</h3><p>The Contract Year runs <strong>January 1 through December 31</strong>. This Agreement shall <strong>automatically renew</strong> each year unless notice is provided by <strong>November 1</strong>. Clients onboarding after January 1 pay the full fee (no proration).</p></div>
 

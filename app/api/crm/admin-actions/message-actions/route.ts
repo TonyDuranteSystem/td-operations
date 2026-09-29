@@ -247,10 +247,15 @@ export async function POST(req: NextRequest) {
     const denied = await requireStaff()
     if (denied) return denied
     const body = await req.json()
-    const { message_id, contact_id, account_id, action_type, label, created_by } = body
+    const { message_id, contact_id, account_id, action_type, label, created_by, source_ref } = body
 
-    if (!message_id || !action_type) {
-      return NextResponse.json({ error: "Missing message_id or action_type" }, { status: 400 })
+    // A WhatsApp message tag has no row in portal_messages to point message_id at, so it identifies
+    // itself by source_ref instead (e.g. "wa_message:<messages.id>") — the SAME free-text pointer
+    // already used for staff-created cards with no message at all. The card renders from its own
+    // `label` (the text snapshot taken at creation time), same as any other message_id-less card —
+    // no board-side special case needed. Exactly one identity is required.
+    if ((!message_id && !source_ref) || !action_type) {
+      return NextResponse.json({ error: "Missing message_id (or source_ref) or action_type" }, { status: 400 })
     }
 
     const { valid, terminal } = await loadColumns()
@@ -262,11 +267,12 @@ export async function POST(req: NextRequest) {
     }
     const resolvedAt = terminal.has(action_type) ? new Date().toISOString() : null
 
-    // Upsert: one action per message.
+    // Upsert: one action per message (by message_id), or one per source_ref when there is no
+    // portal_messages row to point at (e.g. a WhatsApp message).
     const { data: existing } = await supabaseAdmin
       .from("message_actions")
       .select("id")
-      .eq("message_id", message_id)
+      .eq(message_id ? "message_id" : "source_ref", message_id || source_ref)
       .limit(1)
       .maybeSingle()
 
@@ -301,7 +307,8 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabaseAdmin
       .from("message_actions")
       .insert({
-        message_id,
+        message_id: message_id || null,
+        source_ref: source_ref || null,
         contact_id: contact_id || null,
         account_id: account_id || null,
         action_type,

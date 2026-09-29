@@ -166,6 +166,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       entity_type: accountRow?.entity_type ?? undefined,
     })
 
+    // 3-pilot. CRM Store pilot (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts): an
+    //    upload on a pilot Company Formation is saved into the new store FIRST. Only when that save
+    //    succeeded is today's Drive / bucket copy skipped; any store failure leaves today's path below
+    //    exactly as it is (and raises an alarm). Everyone else: not_pilot, nothing changes.
+    const { pilotSaveFormationUpload } = await import('@/lib/crm-store/formation-pilot')
+    const pilot = await pilotSaveFormationUpload({
+      sd: {
+        id: sd.id as string,
+        contact_id: contactId,
+        account_id: accountId,
+        service_type: (sd.service_type as string | null) ?? null,
+      },
+      flowStage,
+      fileName: effectiveName,
+      bytes: buffer,
+      mimeType: fileMime,
+    })
+
     // 3b. Decide where the canonical copy lives.
     //    Production, account-scoped SD: the account's Drive folder (400 if the
     //    account has none — staff must link one first).
@@ -213,7 +231,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let docFileId: string
     let docLink: string
 
-    if (!driveFolderId) {
+    if (pilot.status === 'saved') {
+      // Saved in the CRM Store; its documents row is already written (deduplicated on the pointer),
+      // so the insert below finds it and adds nothing.
+      docFileId = pilot.pointer
+      docLink = pilot.link
+    } else if (!driveFolderId) {
       // The file already lives in onboarding-uploads from the signed-URL PUT —
       // keep it (do NOT delete it in step 8). Synthetic, per-upload-unique
       // drive_file_id (the column is NOT NULL) that doubles as the idempotency
@@ -393,7 +416,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // 8. Best-effort storage cleanup — only when the canonical copy now lives in
     //    Drive. In the storage-fallback path the Storage object IS the document,
     //    so it must be kept.
-    if (!useStorageFallback) {
+    //    Also once the CRM Store holds it (pilot) — only here, at the very end of the request (after
+    //    the advance / company creation), never before the store copy is the one that counts.
+    if (!useStorageFallback || pilot.status === 'saved') {
       supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
     }
 

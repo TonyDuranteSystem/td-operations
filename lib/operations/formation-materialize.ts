@@ -493,6 +493,17 @@ export async function materializeFormationCompany(
           status: "skipped",
           detail: `"${acc.company_name}" (${acc.status}) already materialized for this contact — this formation is already a company.`,
         })
+        // CRM Store pilot (sandbox only, job 685467b5): a retry after a partial failure must still
+        // hand the formation's files to the company. Idempotent; not a pilot formation → nothing.
+        const { pilotCompleteHandover } = await import("@/lib/crm-store/formation-pilot")
+        const handover = await pilotCompleteHandover(acc.id, acc.company_name)
+        if (handover) {
+          steps.push({
+            step: "store_handover",
+            status: handover.status === "attached" ? "ok" : handover.status === "no_owner" ? "skipped" : "error",
+            detail: handover.status === "failed" ? handover.error : `CRM Store: ${handover.status}`,
+          })
+        }
         return { success: true, outcome: "already_materialized", account_id: acc.id, steps }
       }
       steps.push({
@@ -961,10 +972,40 @@ export async function materializeFormationCompany(
     // belong. Captured so step 10a-bis can relocate flow-uploaded Articles that
     // are still parked in Supabase Storage into Drive.
     let companyDocsSubfolderId: string | null = null
-    try {
+
+    // CRM Store pilot (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts): a formation
+    // whose files already live in the new store gets NO Drive company folder, NO Drive migration and
+    // NO Drive passport copies (Drive is the backup, made by the store's own backup). Every other
+    // formation runs the Drive steps below exactly as today.
+    const { pilotCaseForCompanyCreation, pilotSavePassport, attachFormationToCompany, raisePilotAlarm, storeOwnerForCase } =
+      await import("@/lib/crm-store/formation-pilot")
+    const pilotCase = await pilotCaseForCompanyCreation(params.contact_id)
+    const ownerHasOtherActiveAccountForPilot = (existingLinks ?? []).some(l => {
+      const acc = l.accounts as unknown as { status: string } | null
+      return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
+    })
+    const ensureDriveFolder = async () => {
       const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
       companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
       companyDocsSubfolderId = folderResult.subfolders["1. Company"] ?? null
+      return folderResult
+    }
+
+    if (pilotCase) {
+      steps.push({ step: "drive_folder", status: "skipped", detail: "CRM Store pilot — the company's files live in the new store; Drive gets the backup copy" })
+      if (ownerHasOtherActiveAccountForPilot) {
+        // Same CRM row as today's multi-company branch (the staging passport row now belongs to this
+        // company too); the passport itself stays in the owner's personal storage — no copy.
+        await supabaseAdmin
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("contact_id", params.contact_id)
+          .eq("document_type_name", "Passport")
+          .eq("category", 2)
+          .is("account_id", null)
+      }
+    } else try {
+      const folderResult = await ensureDriveFolder()
       steps.push({
         step: "drive_folder",
         status: "ok",
@@ -1064,12 +1105,78 @@ export async function materializeFormationCompany(
     }
 
     // 9b. Member passports (after company folder exists).
-    if (companyContactsSubfolderId && pendingMemberPassports.length > 0) {
+    // CRM Store pilot: each member's passport goes to that member's own personal storage first; only
+    // the ones the store could not take continue to today's Drive copy (the Drive company folder is then
+    // created for them — a file never ends up nowhere).
+    let drivePassports = pendingMemberPassports
+    if (pilotCase && pendingMemberPassports.length > 0) {
+      const failed: typeof pendingMemberPassports = []
+      for (const mp of pendingMemberPassports) {
+        try {
+          const cleanPath = mp.storage_path.replace(/^\/+/, "")
+          const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
+          if (!blob) {
+            // nothing to save anywhere (today's Drive copy reports the same) — never list a missing file
+            const reason = dlErr?.message || "Passport file not found in its upload location"
+            steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: reason })
+            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase.owner.id, what: "member passport", member: mp.contact_id, error: reason })
+            continue
+          }
+          const saved = await pilotSavePassport({
+            contactId: mp.contact_id,
+            personName: mp.contact_name,
+            fileName: cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`,
+            bytes: Buffer.from(await blob.arrayBuffer()),
+            mimeType: blob.type || "application/octet-stream",
+            companyAccountId: accountId,
+            row: {
+              document_type_name: "Passport", category: 2, category_name: "Contacts",
+              contact_id: mp.contact_id, account_id: accountId, portal_visible: true,
+            },
+          })
+          if (saved.status === "saved") {
+            steps.push({ step: `member_${mp.index}_passport`, status: "ok", detail: `CRM Store: ${saved.write}` })
+          } else failed.push(mp)
+        } catch {
+          failed.push(mp)
+        }
+      }
+      // Store could not take some: they are NOT copied to Drive (a Drive company folder would move the
+      // company's later steps — SS-4, IRS package — onto Drive). They stay where the wizard uploaded them
+      // and are listed from there (the same `storage:` pointer the workspace upload uses when there is no
+      // Drive folder). The alarm was raised by the failed save.
+      drivePassports = []
+      for (const mp of failed) {
+        try {
+          const cleanPath = mp.storage_path.replace(/^\/+/, "")
+          const pointer = `storage:${cleanPath}`
+          const { data: exists } = await supabaseAdmin.from("documents").select("id").eq("drive_file_id", pointer).limit(1)
+          if (exists && exists.length > 0) continue
+          const { data: signed } = await supabaseAdmin.storage.from("onboarding-uploads").createSignedUrl(cleanPath, 60 * 60 * 24 * 365)
+          await supabaseAdmin.from("documents").insert({
+            file_name: cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`,
+            drive_file_id: pointer,
+            drive_link: signed?.signedUrl ?? null,
+            document_type_name: "Passport",
+            category: 2,
+            category_name: "Contacts",
+            status: "classified",
+            contact_id: mp.contact_id,
+            account_id: accountId,
+            portal_visible: true,
+          })
+          steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: "CRM Store could not take it — listed from its upload location instead (alarm raised)" })
+        } catch (e) {
+          steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
+      }
+    }
+    if (companyContactsSubfolderId && drivePassports.length > 0) {
       // Duplicate-upload guard (LT Program incident class): skip files already
       // on Drive — the prior run also inserted their documents rows.
       const { folderFileNameMap } = await import("@/lib/google-drive")
       const contactsNames = await folderFileNameMap(companyContactsSubfolderId)
-      for (const mp of pendingMemberPassports) {
+      for (const mp of drivePassports) {
         try {
           const cleanPath = mp.storage_path.replace(/^\/+/, "")
           const dupName = cleanPath.split("/").pop() || `passport_member_${mp.index}.pdf`
@@ -1193,6 +1300,51 @@ export async function materializeFormationCompany(
       })
     } else {
       steps.push({ step: "sd_link", status: "skipped", detail: "No unlinked active Company Formation SD found for this contact" })
+    }
+
+    // 10-store. CRM Store pilot: the company-being-formed's storage becomes this company's storage in
+    // ONE logged step (same folders and files, root renamed to the company name). No single case
+    // linked → an alarm, never a guess. Never changes this step's outcome.
+    if (pilotCase) {
+      const linkedPilot = resolvedSd && updatedSds.some(u => u.id === pilotCase.caseId)
+      if (linkedPilot) {
+        const handover = await attachFormationToCompany(pilotCase.caseId, accountId, chosenName, actor)
+        steps.push({
+          step: "store_handover",
+          status: handover.status === "attached" ? "ok" : "error",
+          detail: handover.status === "attached" ? "CRM Store: company-in-formation storage handed to the company" : `CRM Store: ${handover.status === "failed" ? handover.error : handover.status}`,
+        })
+      } else {
+        await raisePilotAlarm("formation_case_not_linked", {
+          ownerId: pilotCase.owner.id, caseId: pilotCase.caseId, accountId,
+          resolvedCaseId: resolvedSd?.id ?? null,
+        })
+        steps.push({ step: "store_handover", status: "error", detail: "CRM Store: the formation case was not linked to the new company — files stay with the company-in-formation (alarm raised)" })
+      }
+    } else if (!resolvedSd && sdCandidates && sdCandidates.length > 1) {
+      // Several open formations and none could be linked (today's "needs manual review"): if any of
+      // them is store-owned, its files stay with the company-in-formation — raise the alarm.
+      for (const c of sdCandidates as { id: string }[]) {
+        const o = await storeOwnerForCase(c.id)
+        if (o) {
+          await raisePilotAlarm("formation_case_not_linked", { ownerId: o.id, caseId: c.id, accountId, reason: "several open formations, none linked" })
+          steps.push({ step: "store_handover", status: "error", detail: "CRM Store: several open formations and none was linked — the store files stay with the company-in-formation (alarm raised)" })
+        }
+      }
+    } else if (resolvedSd && updatedSds.some(u => u.id === resolvedSd!.id)) {
+      // Several open formations for this buyer: the pilot could not tell in advance which one this is, so
+      // the Drive steps above ran as today. If the case that WAS linked is store-owned, its files must
+      // still reach the company — hand them over, and raise an alarm so staff see the split.
+      const linkedOwner = await storeOwnerForCase(resolvedSd.id)
+      if (linkedOwner) {
+        await raisePilotAlarm("formation_pilot_undecided", { ownerId: linkedOwner.id, caseId: resolvedSd.id, accountId })
+        const handover = await attachFormationToCompany(resolvedSd.id, accountId, chosenName, actor)
+        steps.push({
+          step: "store_handover",
+          status: handover.status === "attached" ? "ok" : "error",
+          detail: `CRM Store: several open formations — Drive steps ran as today; store files ${handover.status === "attached" ? "handed to the company" : `NOT handed over (${handover.status === "failed" ? handover.error : handover.status})`} (alarm raised)`,
+        })
+      }
     }
 
     // 10d. Link the formation OFFER to the new account. The portal "Set up your

@@ -35,6 +35,7 @@ import type { ResolvedFlow } from '@/lib/flows/resolve-flows'
 import { DeactivateServiceButton, ReactivateServiceButton } from './service-status-actions'
 import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/place-client-wizard'
 import { FileManager } from './file-manager'
+import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
@@ -935,6 +936,8 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       )}
       {activeTab === 'documents' && (
         <div className="space-y-4">
+          {/* owners only, pilot environment only — renders nothing elsewhere */}
+          <MoveToStorePanel accountId={account.id} />
           {/* Documents the Drive tree below CANNOT show — Storage-backed
               formation/fax uploads and other sentinel pointers. It filters
               rather than listing everything, so a Drive-backed document no
@@ -944,8 +947,9 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
           <AccountDocumentsList
             documents={documents}
             accountHasDriveFolder={Boolean(account.drive_folder_id)}
+            accountId={account.id}
           />
-          <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} />
+          <FileManager accountId={account.id} driveFolderId={account.drive_folder_id} isAdmin={true} hasStoreRows={(documents ?? []).some((d: { drive_file_id: string | null }) => (d.drive_file_id ?? '').startsWith('store:'))} />
         </div>
       )}
       {activeTab === 'emails' && (

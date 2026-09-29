@@ -6,8 +6,8 @@
  *  - ss4_status: the ss4_applications status (signed → ready to fax;
  *    awaiting_signature → re-sent, waiting for the client to sign again).
  *  - package: the combined "SS-4 + Articles (IRS Package)" workspace document for
- *    this flow, with `faxable` (true only when Drive-backed — the fax engine can
- *    only fax a Drive file). null when the package wasn't built (e.g. Articles
+ *    this flow, with `faxable` (true when Drive- or CRM-Store-backed — the fax
+ *    engine reads those two). null when the package wasn't built (e.g. Articles
  *    missing → the ss4-signed route flags that separately).
  *  - already_faxed: the most recent fax_sent for this flow (drives the
  *    double-send confirm).
@@ -18,6 +18,7 @@
 
 export const dynamic = 'force-dynamic'
 
+import { isStorePointer } from '@/lib/crm-store/document-pointer'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -74,9 +75,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     ? {
         document_id: pkgRow.id as string,
         file_name: (pkgRow.file_name as string | null) ?? 'IRS Package.pdf',
-        // The fax engine downloads via Google Drive only; a `storage:` pointer
-        // (no-Drive-folder edge) can't be faxed by the one-click button.
-        faxable: !(pkgRow.drive_file_id as string).startsWith('storage:'),
+        // The fax engine reads a Drive file or a CRM Store file (`store:`); a
+        // `storage:` pointer (no-Drive-folder edge) can't be faxed by the one-click
+        // button. A Drive id never contains a colon.
+        faxable: !(pkgRow.drive_file_id as string).includes(':') || isStorePointer(pkgRow.drive_file_id as string),
       }
     : null
 

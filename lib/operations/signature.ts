@@ -165,6 +165,10 @@ export async function createSignatureRequest(
  * id whose bytes live in the `onboarding-uploads` bucket).
  */
 export async function fetchFlowDocumentPdf(driveFileId: string): Promise<Buffer> {
+  // CRM Store pointer FIRST ("store:" is one letter from "storage:").
+  const { parseStorePointer, readStoreFile } = await import("@/lib/crm-store/document-pointer")
+  const storeFileId = parseStorePointer(driveFileId)
+  if (storeFileId) return (await readStoreFile(storeFileId)).bytes
   if (driveFileId.startsWith("storage:")) {
     const path = driveFileId.slice("storage:".length)
     const { data, error } = await supabaseAdmin.storage

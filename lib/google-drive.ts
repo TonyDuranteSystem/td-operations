@@ -38,6 +38,11 @@ const IMPERSONATE_EMAIL = () =>
 const SHARED_DRIVE_ID = () =>
   process.env.GOOGLE_SHARED_DRIVE_ID || "0AOLZHXSfKUMHUk9PVA"
 
+/** The company Shared Drive every Drive call uses (the one setting — the CRM Store reads it from here too). */
+export function sharedDriveId(): string {
+  return SHARED_DRIVE_ID()
+}
+
 /**
  * The OWNER's own Google identity and the single folder tree in his personal
  * My Drive that owner-scoped search is allowed to reach.
@@ -73,6 +78,11 @@ const OWNER_DRIVE_ROOT_FOLDER_ID = () =>
  */
 function driveMocked(): boolean {
   return process.env.SANDBOX_MODE === "1" && process.env.GOOGLE_DRIVE_LIVE !== "1"
+}
+
+/** True when Drive calls are faked (sandbox without GOOGLE_DRIVE_LIVE) — the store backup refuses to run then. */
+export function driveIsMocked(): boolean {
+  return driveMocked()
 }
 
 /**
@@ -1204,4 +1214,284 @@ export async function findOrCreateYearFolder(taxFolderId: string, year: number):
   }
   const created = await createFolder(taxFolderId, String(year))
   return created.id
+}
+
+// ─── CRM store backup helpers (slice 5, job 685467b5) ───────────────────────
+// The backup tags every Drive folder/file it creates with the CRM id it mirrors (appProperties), so a
+// run that crashed between "created in Drive" and "recorded in the CRM" finds its own copy again
+// instead of creating a duplicate. Every write is guarded like the rest of this module.
+
+export interface DriveTaggedItem {
+  id: string
+  name: string
+  parents?: string[]
+  trashed?: boolean
+  size?: string
+  appProperties?: Record<string, string>
+}
+
+const TAGGED_FIELDS = "id,name,parents,trashed,size,appProperties"
+
+/**
+ * Items carrying appProperties[key] = value (not in Drive's trash), searched in EVERY given Shared
+ * Drive (default: the configured one) — the backup's private Drive must be searched too, or its
+ * crash-safety lookup would miss its own copies. Pages through all results.
+ */
+export async function findByAppProperty(key: string, value: string, driveIds?: string[]): Promise<DriveTaggedItem[]> {
+  if (driveMocked()) return []
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(key) || !/^[A-Za-z0-9_-]{1,124}$/.test(value)) throw new Error("findByAppProperty: unsafe key/value")
+  const out: DriveTaggedItem[] = []
+  for (const driveId of Array.from(new Set(driveIds && driveIds.length ? driveIds : [SHARED_DRIVE_ID()]))) {
+    let pageToken: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const params: Record<string, string> = {
+        q: `appProperties has { key='${key}' and value='${value}' } and trashed = false`,
+        corpora: "drive", driveId, fields: `nextPageToken,files(${TAGGED_FIELDS})`, pageSize: "100",
+      }
+      if (pageToken) params.pageToken = pageToken
+      const res = (await driveGet("/files", params)) as { files?: DriveTaggedItem[]; nextPageToken?: string }
+      out.push(...(res.files ?? []))
+      if (!res.nextPageToken) break
+      pageToken = res.nextPageToken
+    }
+  }
+  return out
+}
+
+/** Child FOLDERS of a folder (not in Drive's trash), all pages — used once to adopt an existing layout. */
+export async function listChildFolders(folderId: string, driveId?: string): Promise<DriveTaggedItem[]> {
+  if (driveMocked()) return []
+  if (!/^[A-Za-z0-9_-]{5,128}$/.test(folderId)) throw new Error("listChildFolders: unsafe folder id")
+  const out: DriveTaggedItem[] = []
+  let pageToken: string | undefined
+  for (let page = 0; page < 20; page++) {
+    const params: Record<string, string> = {
+      q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      corpora: "drive", driveId: driveId ?? SHARED_DRIVE_ID(), fields: `nextPageToken,files(${TAGGED_FIELDS})`, pageSize: "100",
+    }
+    if (pageToken) params.pageToken = pageToken
+    const res = (await driveGet("/files", params)) as { files?: DriveTaggedItem[]; nextPageToken?: string }
+    out.push(...(res.files ?? []))
+    if (!res.nextPageToken) break
+    pageToken = res.nextPageToken
+  }
+  return out
+}
+
+/** Metadata incl. trash state and tags, or null when the item no longer exists. */
+export async function getTaggedItem(fileId: string): Promise<DriveTaggedItem | null> {
+  if (driveMocked()) return null
+  try {
+    return (await driveGet(`/files/${fileId}`, { fields: TAGGED_FIELDS })) as DriveTaggedItem
+  } catch (e) {
+    if (e instanceof Error && /Drive API 404/.test(e.message)) return null
+    throw e
+  }
+}
+
+/** Create a folder carrying appProperties. */
+export async function createTaggedFolder(parentFolderId: string, folderName: string, appProperties: Record<string, string>): Promise<DriveTaggedItem> {
+  if (driveMocked()) {
+    console.warn("[SANDBOX] Drive write blocked:", { operation: "createTaggedFolder", folderName })
+    return { id: "sandbox-mock", name: folderName }
+  }
+  await guardDriveWrite({ kind: "shared", ids: [parentFolderId] })
+  const token = await getAccessToken()
+  const res = await fetch(`${DRIVE_API}/files?supportsAllDrives=true&fields=${TAGGED_FIELDS}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: folderName, mimeType: "application/vnd.google-apps.folder", parents: [parentFolderId], appProperties }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive create folder ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return res.json()
+}
+
+/** Rename and/or move an item and/or replace its tags in one call. */
+export async function patchTaggedItem(
+  fileId: string,
+  p: { name?: string; newParentId?: string; appProperties?: Record<string, string> },
+): Promise<DriveTaggedItem> {
+  if (driveMocked()) {
+    console.warn("[SANDBOX] Drive write blocked:", { operation: "patchTaggedItem", fileId })
+    return { id: fileId, name: p.name ?? "" }
+  }
+  await guardDriveWrite({ kind: "shared", ids: p.newParentId ? [fileId, p.newParentId] : [fileId] })
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files/${fileId}`)
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("fields", TAGGED_FIELDS)
+  if (p.newParentId) {
+    const meta = (await driveGet(`/files/${fileId}`, { fields: "parents" })) as { parents?: string[] }
+    url.searchParams.set("addParents", p.newParentId)
+    const remove = (meta.parents ?? []).filter((x) => x !== p.newParentId).join(",")
+    if (remove) url.searchParams.set("removeParents", remove)
+  }
+  const body: Record<string, unknown> = {}
+  if (p.name !== undefined) body.name = p.name
+  if (p.appProperties) body.appProperties = p.appProperties
+  const res = await fetch(url.toString(), {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive patch ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return res.json()
+}
+
+/** Chunk size for streamed uploads: a multiple of 256 KiB, as Drive's resumable protocol requires. */
+export const STREAM_UPLOAD_CHUNK = 8 * 1024 * 1024
+
+/**
+ * Stream bytes into Drive through a resumable session, CHUNK BY CHUNK (never the whole file in
+ * memory): mode "create" makes a new tagged file under parentId; mode "update" replaces the content
+ * of fileId (Drive keeps its own revision history) and its tags.
+ */
+export async function uploadStreamToDrive(p: {
+  mode: "create" | "update"
+  parentId?: string
+  fileId?: string
+  name: string
+  mimeType: string
+  size: number
+  stream: ReadableStream<Uint8Array>
+  appProperties: Record<string, string>
+}): Promise<DriveTaggedItem> {
+  if (driveMocked()) {
+    console.warn("[SANDBOX] Drive write blocked:", { operation: "uploadStreamToDrive", name: p.name })
+    return { id: p.fileId ?? "sandbox-mock", name: p.name }
+  }
+  const target = p.mode === "create" ? p.parentId : p.fileId
+  if (!target) throw new Error("uploadStreamToDrive: parentId (create) or fileId (update) is required")
+  await guardDriveWrite({ kind: "shared", ids: [target] })
+  const token = await getAccessToken()
+  const initUrl = p.mode === "create"
+    ? `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=${TAGGED_FIELDS}`
+    : `https://www.googleapis.com/upload/drive/v3/files/${p.fileId}?uploadType=resumable&supportsAllDrives=true&fields=${TAGGED_FIELDS}`
+  const meta = p.mode === "create"
+    ? { name: p.name, parents: [p.parentId], mimeType: p.mimeType, appProperties: p.appProperties }
+    : { name: p.name, appProperties: p.appProperties }
+  const init = await fetch(initUrl, {
+    method: p.mode === "create" ? "POST" : "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": p.mimeType,
+      "X-Upload-Content-Length": String(p.size),
+    },
+    body: JSON.stringify(meta),
+  })
+  if (!init.ok) {
+    const err = await init.json().catch(() => ({}))
+    throw new Error(`Drive resumable init ${init.status}: ${(err as { error?: { message?: string } }).error?.message || init.statusText}`)
+  }
+  const session = init.headers.get("location")
+  if (!session) throw new Error("Drive resumable init: no session URL")
+
+  // Every chunk declares the known total size; Drive's 308 "Range" says how much it really kept, and
+  // anything it did not keep is sent again. A file whose byte count differs from the saved size fails.
+  const reader = p.stream.getReader()
+  const pending: Uint8Array[] = []
+  let pendingLen = 0
+  let streamDone = false
+  let committed = 0            // bytes Drive has confirmed
+  let carry = new Uint8Array(0) // bytes sent but not confirmed, to send again
+  let result: DriveTaggedItem | null = null
+  const fill = async () => {
+    while (!streamDone && carry.length + pendingLen < STREAM_UPLOAD_CHUNK) {
+      const r = await reader.read()
+      if (r.done) { streamDone = true; break }
+      pending.push(r.value); pendingLen += r.value.length
+    }
+  }
+  for (let round = 0; !result; round++) {
+    if (round > 100000) throw new Error("uploadStreamToDrive: too many rounds")
+    await fill()
+    const joined = Buffer.concat([carry, ...pending])
+    pending.length = 0; pendingLen = 0
+    const take = Math.min(joined.length, STREAM_UPLOAD_CHUNK)
+    const chunk = joined.subarray(0, take)
+    const rest = joined.subarray(take)
+    const isLast = streamDone && rest.length === 0
+    if (isLast && committed + chunk.length !== p.size) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error(`uploadStreamToDrive: stream gave ${committed + chunk.length} bytes, expected ${p.size}`)
+    }
+    if (!isLast && chunk.length === 0) throw new Error("uploadStreamToDrive: nothing to send before the end")
+    const range = p.size === 0 ? "bytes */0" : `bytes ${committed}-${committed + chunk.length - 1}/${p.size}`
+    const put = await fetch(session, { method: "PUT", headers: { "Content-Range": range }, body: chunk })
+    if (put.status === 308) {
+      const r = put.headers.get("range")                      // "bytes=0-12345" → next byte 12346
+      const kept = r ? Number(r.split("-")[1]) + 1 : committed
+      if (!Number.isFinite(kept) || kept < committed || kept > committed + chunk.length) {
+        throw new Error(`uploadStreamToDrive: unexpected Range "${r}"`)
+      }
+      if (isLast && kept === committed + chunk.length) throw new Error("uploadStreamToDrive: Drive kept every byte but did not finish")
+      carry = Buffer.concat([chunk.subarray(kept - committed), rest])
+      committed = kept
+      continue
+    }
+    if (!put.ok) {
+      await reader.cancel().catch(() => undefined)
+      const err = await put.json().catch(() => ({}))
+      throw new Error(`Drive resumable upload ${put.status}: ${(err as { error?: { message?: string } }).error?.message || put.statusText}`)
+    }
+    result = (await put.json()) as DriveTaggedItem
+  }
+  return result
+}
+
+// ─── Read-only, any Shared Drive (CRM store: "Move this company to the new storage") ───
+// These three READ across drives (supportsAllDrives), so a sandbox move can read the separate TEST
+// Shared Drive. They never write. The caller (lib/crm-store/drive-import.ts) decides which drive may be
+// read: outside production only the TEST drive.
+
+export interface DriveListedItem { id: string; name: string; mimeType: string; size?: string; md5Checksum?: string; driveId?: string }
+
+/** One item's id, name, type and the Shared Drive it lives in. */
+export async function getDriveItemAnyDrive(fileId: string): Promise<DriveListedItem> {
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`)
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("fields", "id,name,mimeType,size,md5Checksum,driveId")
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return (await res.json()) as DriveListedItem
+}
+
+/** One page (up to 100) of a folder's children, with size + md5 for parity. */
+export async function listFolderPageAnyDrive(folderId: string, pageToken?: string | null): Promise<{ files: DriveListedItem[]; nextPageToken: string | null }> {
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files`)
+  url.searchParams.set("q", `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false`)
+  url.searchParams.set("corpora", "allDrives")
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("includeItemsFromAllDrives", "true")
+  url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,size,md5Checksum,driveId)")
+  url.searchParams.set("pageSize", "100")
+  url.searchParams.set("orderBy", "folder,name")
+  if (pageToken) url.searchParams.set("pageToken", pageToken)
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  const j = (await res.json()) as { files?: DriveListedItem[]; nextPageToken?: string }
+  return { files: j.files ?? [], nextPageToken: j.nextPageToken ?? null }
+}
+
+/** A binary file's real bytes (never mocked — the caller has checked which drive it is in). */
+export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
+  const token = await getAccessToken()
+  const res = await fetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Drive download ${res.status}: ${res.statusText}`)
+  return Buffer.from(await res.arrayBuffer())
 }

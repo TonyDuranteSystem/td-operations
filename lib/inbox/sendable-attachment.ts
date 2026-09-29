@@ -222,6 +222,22 @@ async function fetchDocumentBytes(
   driveFileId: string,
   fallbackName: string,
 ): Promise<{ bytes: Buffer; name: string; contentType?: string }> {
+  // CRM Store pointer FIRST ("store:" is one letter from "storage:").
+  const { parseStorePointer, readStoreFile, StoreFileUnavailableError, staffOnlyStorePointers } = await import("@/lib/crm-store/document-pointer")
+  const storeFileId = parseStorePointer(driveFileId)
+  if (storeFileId) {
+    // a staff-only store file (the Formation Summary: every member's personal data) is never sent
+    if ((await staffOnlyStorePointers([driveFileId])).size > 0) {
+      throw new SendableRefusal(`"${fallbackName}" is staff-only (it holds other people's personal data) and cannot be sent.`)
+    }
+    try {
+      const f = await readStoreFile(storeFileId)
+      return { bytes: f.bytes, name: fallbackName, contentType: f.mimeType || undefined }
+    } catch (e) {
+      if (e instanceof StoreFileUnavailableError) throw new SendableRefusal(`"${fallbackName}" — ${e.message}`)
+      throw e
+    }
+  }
   if (driveFileId.startsWith("storage:")) {
     const rest = driveFileId.slice("storage:".length)
     const slash = rest.indexOf("/")

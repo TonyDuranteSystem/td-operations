@@ -22,6 +22,8 @@ import { handleArchiveTaxSubmission } from "./handlers/archive-tax-submission"
 import { handleArchiveSubmission } from "./handlers/archive-submission"
 import { handleTranslateLanguage } from "./handlers/translate-language"
 import { handleClosureSetup } from "./handlers/closure-setup"
+import { handleCrmStoreRegisterUpload } from "./handlers/crm-store-register-upload"
+import { handleCrmStoreBackupOwner } from "./handlers/crm-store-backup-owner"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -83,6 +85,9 @@ const handlers: Record<string, JobHandler> = {
   // auto-chain, converged onto the same implementation the older emailed-link
   // closure flow already uses (see handlers/closure-setup.ts doc comment).
   closure_setup: handleClosureSetup,
+  // Added 2026-09-25 — CRM store slice 2: register a large staff browser upload (job 685467b5).
+  crm_store_register_upload: handleCrmStoreRegisterUpload,
+  crm_store_backup_owner: handleCrmStoreBackupOwner,
 }
 
 export function getJobHandler(jobType: string): JobHandler | null {

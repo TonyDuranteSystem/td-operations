@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     if (denied) return denied
 
     const body = await req.json()
-    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath, clientMsgId, attachmentMimeType } = body as {
+    const { conversationId, message, channel, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw, quoteMode: quoteModeRaw, attachmentPath, clientMsgId, attachmentMimeType, replyToId } = body as {
       conversationId: string
       message: string
       channel: "whatsapp" | "telegram" | "gmail"
@@ -59,6 +59,10 @@ export async function POST(req: NextRequest) {
       to?: string[]
       /** 'message' (default) | 'thread' | 'none' — how much to quote below the reply. */
       quoteMode?: string
+      /** Self-hosted WhatsApp line, text replies only: the message this one is replying to
+       *  (the "Reply" action in the per-message menu). Re-verified server-side against this
+       *  same chat — never trusted blindly. */
+      replyToId?: string
     }
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     const toOverride = Array.isArray(toOverrideRaw)
@@ -348,6 +352,7 @@ export async function POST(req: NextRequest) {
           p_body: message,
           p_client_msg_id: typeof clientMsgId === "string" ? clientMsgId : "",
           p_created_by: user?.id ?? null,
+          p_reply_to_id: typeof replyToId === "string" && replyToId ? replyToId : null,
         })
         const result = enqError ? parseEnqueueResult(null) : parseEnqueueResult(enq)
         if (result.ok === false) {

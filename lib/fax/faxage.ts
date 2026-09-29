@@ -13,6 +13,8 @@
  * Credentials NEVER come from the client — only from env, read by the caller.
  */
 
+import { isProductionDatabase } from '@/lib/google-drive-guard'
+
 export const FAXAGE_URL = 'https://www.faxage.com/httpsfax.php'
 
 /** Default IRS e-file fax number; overridable via FAXAGE_IRS_NUMBER. */
@@ -118,14 +120,29 @@ export function parseFaxageResponse(text: string, httpOk: boolean): FaxageResult
   return { ok: !isError, jobId, raw }
 }
 
+/** A real fax was attempted from a non-production environment (sandbox, local). */
+export class FaxRefusedOutsideProductionError extends Error {
+  constructor() {
+    super('Fax sending is blocked outside production — a fax to the IRS cannot be recalled, so the sandbox never sends one.')
+    this.name = 'FaxRefusedOutsideProductionError'
+  }
+}
+
 /**
  * Send a fax via Faxage. The fetch implementation is injectable for tests; the
  * default uses the global fetch. Network/parse errors throw.
+ *
+ * HARD BLOCK (CRM Storage pilot, job 685467b5): with the real network (the
+ * default fetch) a fax is only sent when this code runs against the PRODUCTION
+ * database — the same "is this production" signal as the Drive guard. The
+ * sandbox holds copies of real client records, and a fax cannot be taken back.
+ * Tests inject their own fetch and are unaffected.
  */
 export async function sendFax(
   input: SendFaxInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<FaxageResult> {
+  if (fetchImpl === globalThis.fetch && !isProductionDatabase()) throw new FaxRefusedOutsideProductionError()
   const params = buildFaxageParams(input)
   const res = await fetchImpl(FAXAGE_URL, {
     method: 'POST',

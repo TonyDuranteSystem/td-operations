@@ -1,7 +1,24 @@
 import type { User } from "@supabase/supabase-js"
 import { isStaffAuthRole } from "@/lib/team/workspace"
 
+// The protected admin (MFA self-only, admin by email). Deliberately ONE login.
 const ADMIN_EMAILS = ["antonio.durante@tonydurante.us"]
+
+// The OWNERS (Antonio 2026-09-28: Jodi "will see everything I see" — My Finances, My files, owner settings).
+// Kept SEPARATE from ADMIN_EMAILS so adding an owner never changes MFA protection or admin-by-email.
+// The FIRST entry is the primary owner: the owners' shared "My files" is kept under that login.
+// Only the primary owner by default. Further owners (Jodi) are added by ONE build setting —
+// NEXT_PUBLIC_EXTRA_OWNER_EMAILS="jodi@tonydurante.us" (public so the sidebar, which is browser code, agrees with
+// the server) — so giving her access to the owners' areas in an environment is Antonio's switch, never a side
+// effect of shipping other work. The sandbox has it set; production does not until Antonio says so.
+const PRIMARY_OWNER = "antonio.durante@tonydurante.us"
+function ownerEmails(): string[] {
+  const extra = (process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
+  return [PRIMARY_OWNER, ...extra]
+}
+
+/** The primary owner's email — the owners' shared "My files" storage area belongs to this login. */
+export const PRIMARY_OWNER_EMAIL = PRIMARY_OWNER
 
 export type CrmRole = 'admin' | 'team'
 
@@ -41,7 +58,8 @@ export function isProtectedAdminEmail(email: string | null | undefined): boolean
 }
 
 /**
- * My Finances (the owner's own private books) — Antonio's own account ONLY.
+ * My Finances (the owners' own private books) — the owners' own accounts ONLY (Antonio, and Jodi since
+ * 2026-09-28).
  * Deliberately stricter than isSecureAdmin(): a real account can legitimately
  * carry app_metadata.role === "admin" for OTHER admin-area testing/work
  * (e.g. the qa-staff@ account) without that meaning it should ever see
@@ -49,7 +67,7 @@ export function isProtectedAdminEmail(email: string | null | undefined): boolean
  */
 export function isOwnerOnly(user: User | null): boolean {
   if (!user) return false
-  return ADMIN_EMAILS.includes(user.email ?? "")
+  return ownerEmails().includes((user.email ?? "").toLowerCase())
 }
 
 export function isTeam(user: User | null): boolean {

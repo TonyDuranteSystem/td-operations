@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  FaxRefusedOutsideProductionError,
   normalizeFaxNo,
   isValidFaxNo,
   stripBase64Prefix,
@@ -155,6 +156,42 @@ describe('sendFax', () => {
     )
     expect(result.ok).toBe(false)
     expect(result.raw).toContain('bad number')
+  })
+
+  describe('hard block outside production (real network)', () => {
+    const input = { credentials: creds, faxno: '8552151627', fileName: 'x.pdf', fileBase64: 'AA==' }
+    const saved = { url: process.env.NEXT_PUBLIC_SUPABASE_URL, ref: process.env.EXPECTED_SUPABASE_REF }
+    afterEach(() => {
+      if (saved.url === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+      else process.env.NEXT_PUBLIC_SUPABASE_URL = saved.url
+      if (saved.ref === undefined) delete process.env.EXPECTED_SUPABASE_REF
+      else process.env.EXPECTED_SUPABASE_REF = saved.ref
+      vi.restoreAllMocks()
+    })
+
+    it('refuses a real fax on the sandbox database and never touches the network', async () => {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://xjcxlmlpeywtwkhstjlw.supabase.co'
+      process.env.EXPECTED_SUPABASE_REF = 'xjcxlmlpeywtwkhstjlw'
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('JobNum: 1'))
+      await expect(sendFax(input)).rejects.toBeInstanceOf(FaxRefusedOutsideProductionError)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('refuses when no database is configured at all (local / unknown)', async () => {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL
+      delete process.env.EXPECTED_SUPABASE_REF
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('JobNum: 1'))
+      await expect(sendFax(input)).rejects.toBeInstanceOf(FaxRefusedOutsideProductionError)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('sends on the production database', async () => {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://ydzipybqeebtpcvsbtvs.supabase.co'
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('JobNum: 7', { status: 200 }))
+      const r = await sendFax(input)
+      expect(r.jobId).toBe('7')
+      expect(spy).toHaveBeenCalledTimes(1)
+    })
   })
 })
 

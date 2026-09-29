@@ -1,5 +1,6 @@
 'use client'
 
+import { toast } from 'sonner'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2 } from 'lucide-react'
@@ -44,6 +45,7 @@ export function GoBackButton({ serviceDeliveryId, previousStageLabel }: GoBackBu
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Could not go back. Please try again.')
       }
+      for (const w of (data.warnings ?? []) as string[]) toast.warning(w, { duration: 12000 })
       router.refresh()
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not go back.')

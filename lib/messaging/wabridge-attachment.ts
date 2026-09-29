@@ -19,7 +19,7 @@ export type AttachmentKind = "voice" | "image" | "video" | "document"
 // file type: .bin"). This map is the SINGLE source of truth for the extension; the database function
 // (wabridge_enqueue_send) carries the exact same mapping and MUST be kept in step with this one by hand — the
 // two cannot share code, since one runs in the database and one in the browser/server.
-const MIME_EXTENSION: Record<string, string> = {
+export const MIME_EXTENSION: Record<string, string> = {
   "audio/mp4": "m4a",
   "audio/x-m4a": "m4a",
   "audio/aac": "aac",

@@ -44,6 +44,8 @@ import { buildReviewHistoryEntry, type ReviewStatus } from '@/lib/tax/review-sta
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 import { reportSystemError } from '@/lib/system-errors'
 import { markWizardProgressSubmitted } from '@/lib/portal/wizard-progress-write'
+import { getWizardConfig } from '@/components/portal/wizard/wizard-configs'
+import { findMoneyProblems, moneyProblemMessage, normalizeMoneyData } from '@/lib/portal/wizard-money'
 
 /** Extract file upload paths from wizard data.
  * All wizard uploads follow the pattern: {wizardType}/{identifier}/{fieldName}_{unique}_{filename}
@@ -214,6 +216,32 @@ export async function POST(req: NextRequest) {
   // returned 200 success). The client retried blindly, flooding the queue
   // with duplicate jobs. See dev_task 3d6800c8 for the Luca Gallacci case
   // that motivated this fix.
+  // ─── 0a. MONEY AMOUNTS BACKSTOP (dev job 89195c68) ───
+  // Same walker + rule as the wizard's own step gate: clean strings (legacy
+  // "5000") are stored as numbers, pending text left in a field the client has
+  // since hidden is cleared, and an unanswered "80.000" question, an
+  // unreadable amount, more than 2 decimals or a negative in a min-0 field is
+  // refused BEFORE anything is written. Catches an old browser tab that still
+  // runs the pre-fix number box (e.g. a 10.596 that meant 10,596).
+  if ((wizard_type === 'tax' || wizard_type === 'tax_return') && typeof data === 'object' && !Array.isArray(data)) {
+    const { steps: taxSteps, fields: taxFields } = getWizardConfig('tax', entity_type)
+    const settled = normalizeMoneyData(taxSteps, taxFields, data as Record<string, unknown>, { clearHiddenPending: true })
+    Object.assign(data, settled)
+    const moneyProblems = findMoneyProblems(taxSteps, taxFields, data as Record<string, unknown>)
+    if (moneyProblems.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          fields: moneyProblems.map(p => {
+            const m = moneyProblemMessage(p, (data as Record<string, unknown>)[p.key])
+            return { field: p.key, message: m.en, message_it: m.it }
+          }),
+        },
+        { status: 400 },
+      )
+    }
+  }
+
   const validation = validateWizardData(wizard_type, data as Record<string, unknown>, entity_type)
   if (!validation.valid) {
     return NextResponse.json(
