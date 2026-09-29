@@ -113,7 +113,7 @@ async function withRetry<T>(what: string, fn: () => Promise<T>, tries = 3): Prom
 }
 
 async function main() {
-  const { generateFormSummaryPDF, normalizeTaxPayloadForPdf, FORM_CONFIGS } = await import("@/lib/form-to-drive")
+  const { generateFormSummaryPDF, normalizeTaxPayloadForPdf, formatTaxMoneyForPdf, FORM_CONFIGS } = await import("@/lib/form-to-drive")
   const { listFolder, createFolder, uploadBinaryToDrive, renameFile } = await import("@/lib/google-drive")
 
   // Latest completed/reviewed submission per account+year, non-test accounts.
@@ -152,7 +152,7 @@ async function main() {
     const label = `[${idx + 1}/${items.length}] ${company}`
     try {
       // 1. Regenerate with the CURRENT (fixed) generator
-      const normalized = normalizeTaxPayloadForPdf(r.submitted_data || {})
+      const normalized = formatTaxMoneyForPdf(normalizeTaxPayloadForPdf(r.submitted_data || {}))
       const bytes = await generateFormSummaryPDF(FORM_CONFIGS.tax_return, normalized, {
         token: r.token,
         submittedAt: r.updated_at,
