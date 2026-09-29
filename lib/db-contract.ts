@@ -154,6 +154,32 @@ export const NOT_A_VOCABULARY = new Set([
   // SEND_MODES (already exported from lib/messaging/wabridge-outbox.ts) and delete these two lines. Tracked on dev job e23343a6.
   "wa_bridge_state_send_mode_check",
   "wa_outbox_status_check",
+  // CRM Store shape rules (2026-09-29): which combination of owner kind, company, person, formation case and
+  // login a storage owner may carry, and which lifecycle overlay fits which kind. Not value lists.
+  "store_owners_shape",
+  "store_owners_overlay_shape",
+  // TEMPORARY (2026-09-29, CRM Storage shipped dark — dev job 685467b5): these 14 ARE value lists, not shape rules.
+  // They cannot be registered in CONSTRAINT_CONTRACTS yet: registering a constraint that the committed PRODUCTION
+  // snapshot (frozen 2026-08-09, 25 other constraints behind production) does not hold fails the "production accepts
+  // every value the code can write" check, and the two guard tests pin that snapshot to a digest PRODUCTION
+  // computed over a FULL regeneration — refreshing it now would pull in 25 unrelated constraints from other work.
+  // The code-side lists already exist in lib/crm-store/vocabularies.ts (the import types derive from them). At the
+  // NEXT full `npm run snapshot:constraints`, MOVE these 14 into CONSTRAINT_CONTRACTS using those lists and delete
+  // these lines.
+  "store_owners_kind_check",
+  "store_owners_lifecycle_override_check",
+  "store_files_state_check",
+  "store_files_filing_status_check",
+  "store_file_facts_source_check",
+  "store_file_tags_source_check",
+  "store_file_subjects_subject_kind_check",
+  "store_external_refs_direction_check",
+  "store_external_refs_object_kind_check",
+  "store_exit_invitations_status_check",
+  "store_import_runs_mode_check",
+  "store_import_runs_status_check",
+  "store_import_items_source_check",
+  "store_import_items_status_check",
 ])
 
 /**

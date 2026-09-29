@@ -29,6 +29,7 @@
  * folder that sits in the TEST Shared Drive (sandbox companies are copies that point at REAL client folders).
  */
 import { labelKey, queueTypeName, typeNameAnswers } from "./type-names"
+import { IMPORT_ITEM_STATUSES, IMPORT_RUN_MODES } from "./vocabularies"
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
@@ -47,7 +48,7 @@ async function companyDrive(): Promise<string> {
   return sharedDriveId()
 }
 
-export type ItemStatus = "pending" | "working" | "done" | "merged" | "skipped" | "failed"
+export type ItemStatus = (typeof IMPORT_ITEM_STATUSES)[number]
 export interface ImportItem {
   id: string; run_id: string; source: "drive" | "storage"; source_id: string; drive_path: string[]; name: string
   mime_type: string | null; size_bytes: number | null; source_md5: string | null; status: ItemStatus; reason: string | null
@@ -189,7 +190,7 @@ async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "mo
   }
 }
 
-export type ImportMode = "move" | "copy"
+export type ImportMode = (typeof IMPORT_RUN_MODES)[number]
 
 /** A storage a study copy CREATED is "study only" (the CRM keeps using Drive for it); a real move makes it the
  *  company's / person's storage. A storage that already existed is never marked study only. */
