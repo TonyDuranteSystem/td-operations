@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { createClient } from '@/lib/supabase/client'
 import { CRM_STORAGE_BUCKET } from '@/lib/crm-storage/constants'
@@ -60,10 +61,21 @@ async function jsonOrThrow(resOrPromise: Response | Promise<Response>) {
   return res.json()
 }
 
+// Refresh used to always drop back to the root folder (Antonio, 2026-09-29: "when I
+// refresh the page ... it goes back to inbox instead of staying where I was" — same
+// complaint, this screen). Nothing ever put the open folder into the URL, so a refresh
+// had nothing to restore from. Read once at construction (not a Next.js route, so this
+// runs before the first paint) — this IS the initial `useEffect(() => loadContents(...))`
+// below's starting value, no separate restore step needed.
+function initialFolderIdFromUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get('folder')
+}
+
 export function StorageBrowserClient() {
   const [tree, setTree] = useState<FolderNode[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null)
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(initialFolderIdFromUrl)
   const [contents, setContents] = useState<ContentsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -133,6 +145,20 @@ export function StorageBrowserClient() {
   useEffect(() => { loadTree(); loadFavorites() }, [loadTree, loadFavorites])
   useEffect(() => { loadContents(selectedFolderId) }, [selectedFolderId, loadContents])
   useEffect(() => { setShowingFavorites(false) }, [selectedFolderId])
+
+  // Write the open folder into the page's own address as it changes (a real
+  // pushState step, not a route change — switching folders stays instant,
+  // nothing refetches twice) so a refresh restores it via
+  // initialFolderIdFromUrl above, and the browser Back arrow walks
+  // folder → folder before leaving the page — the same fix already shipped
+  // for Team Chat and Portal Chats (Antonio, 2026-07-26), reused here rather
+  // than a new mechanism. The root folder is `null`, which the hook already
+  // removes from the URL, so browsing back to root cleans up `?folder=`
+  // instead of leaving `?folder=` empty.
+  useSelectionHistory(
+    { folder: selectedFolderId },
+    (v) => setSelectedFolderId(v.folder ?? null),
+  )
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
