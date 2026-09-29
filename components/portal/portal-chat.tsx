@@ -248,8 +248,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // the portal (portal_account_id / portal_formation; 'personal' sentinel).
   const selectEntity = useCallback((e: PortalChatEntity) => {
     writeEntityCookie(e)
-    router.refresh()
-  }, [router])
+    // An explicit company choice ends any linked-tab search; a leftover
+    // ?account= would otherwise override the cookie just written and keep the
+    // view on the linked company (the message would go to the chosen one).
+    pendingTopicRef.current = null
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('account') || url.searchParams.has('topic')) stripLinkParams()
+    else router.refresh()
+  }, [router, stripLinkParams])
 
   // A deep link opened a different company than the saved selection (the page
   // resolved ?account=). Persist it with the switcher's own cookies, then drop
