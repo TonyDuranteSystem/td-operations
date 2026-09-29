@@ -8,6 +8,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { PortalChat } from '@/components/portal/portal-chat'
+import { resolveChatEntityFromLink } from '@/lib/portal/chat-link'
 import type { ChatScope } from '@/lib/hooks/use-portal-chat'
 import { LogTab } from '@/components/portal/chat/log-tab'
 import { cn } from '@/lib/utils'
@@ -15,18 +16,20 @@ import { cn } from '@/lib/utils'
 export default async function PortalChatPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; topic?: string }>
+  searchParams: Promise<{ view?: string; topic?: string; account?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
+  const { view, topic, account: accountLinkParam } = await searchParams
 
   let entities: PortalChatEntity[] = []
   let selectedEntityId = ''
   let scope: ChatScope
   let selectedAccountId: string | undefined
+  let entityFromLink = false
 
   if (contactId) {
     entities = await getChatEntities(contactId)
@@ -38,10 +41,18 @@ export default async function PortalChatPage({
     // precedence: a formation selection wins, then portal_account_id (which can
     // be a real account id OR the 'personal' sentinel), else the first entity.
     const byId = new Map(entities.map(e => [e.id, e]))
-    const selected =
+    const cookieSelected =
       (cookieFormationId ? byId.get(cookieFormationId) : undefined) ??
       (cookieAccountId ? byId.get(cookieAccountId) : undefined) ??
       entities[0]
+    // Deep link (dev job 05d997f2): a "new message" email / bell link carries
+    // ?account=<id|personal> so it opens the company the message belongs to,
+    // not whichever one the client looked at last. Only honoured for this
+    // client's own entities; PortalChat then persists it to the same cookies
+    // the switcher writes, so the sidebar and later visits agree.
+    const linked = resolveChatEntityFromLink(entities, accountLinkParam, cookieSelected)
+    const selected = linked ?? cookieSelected
+    entityFromLink = !!linked
 
     selectedEntityId = selected?.id ?? 'personal'
     selectedAccountId = selected?.accountId ?? undefined
@@ -75,7 +86,6 @@ export default async function PortalChatPage({
   }
 
   const locale = getLocale(user)
-  const { view, topic } = await searchParams
   // Deep-linked topic (Wave 2): tax notification links open the chat ON the
   // tax tab so the client's reply is tagged without them knowing anything.
   const initialTopic = typeof topic === 'string' && topic.trim() ? topic.trim().slice(0, 100) : null
@@ -128,6 +138,10 @@ export default async function PortalChatPage({
           entities={entities}
           selectedEntityId={selectedEntityId}
           initialTopic={initialTopic}
+          persistEntityFromLink={entityFromLink}
+          // Re-initialise on a soft navigation (bell link while already on the
+          // chat page): useState(initialTopic) would otherwise ignore the new tab.
+          key={`${selectedEntityId}::${initialTopic ?? ''}`}
         />
       ) : (
         <div className="flex-1 overflow-y-auto">

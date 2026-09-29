@@ -92,6 +92,7 @@ import { buildThreadContext, buildReplayTurns, type ReplayTurn } from "./thread-
 import { createThreadSummary, getThreadSummary, resolveThread } from "./thread-summaries"
 import { buildRelatedThreadsSuffix, embedThreadSummary } from "./thread-recall"
 import { isTransientStatus, retryDelayMs, canRetryWithin, MAX_TRANSIENT_RETRIES } from "./transient-errors"
+import { buildPortalChatLink } from "@/lib/portal/chat-link"
 
 /**
  * The complete read-only allow-list. Adding a tool here is a deliberate
@@ -1822,11 +1823,12 @@ export async function sendPortalMessageFromWorker(input: {
       type: "chat",
       title: "New message from Tony Durante Team",
       body: message.slice(0, 100),
-      link: "/portal/chat",
+      link: buildPortalChatLink({ accountId, topic }),
     }).catch(() => {})
     notifyClientOfAdminMessage({
       account_id: accountId,
       contact_id: resolvedContactId,
+      topic,
       messagePreview: message,
     }).catch(() => {})
   } catch {

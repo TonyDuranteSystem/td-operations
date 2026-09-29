@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendPushToAccount, sendPushToContact } from './web-push'
 import { PORTAL_BASE_URL } from '@/lib/config'
+import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { escapeHtml } from '@/lib/html-escape'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
 
@@ -326,9 +327,12 @@ export async function notifyClientOfAdminMessage({
   // behind this: in 14 months, zero client messages ever carried the tax topic;
   // every reply landed in General, because a send inherits the tab the client
   // is standing on and the chat opened on General.
-  const portalChatUrl = topic
-    ? `${PORTAL_BASE_URL}/portal/chat?topic=${encodeURIComponent(topic)}`
-    : `${PORTAL_BASE_URL}/portal/chat`
+  //
+  // 2026-09-29 (dev job 05d997f2): the link also carries the company
+  // (`account`), or `personal` for a company-less message — a client with
+  // two companies otherwise landed on whichever one they viewed last and the
+  // message was not on screen. Shared builder with the bell/digest link.
+  const portalChatUrl = `${PORTAL_BASE_URL}${buildPortalChatLink({ accountId: account_id ?? null, topic })}`
 
   for (const recipient of recipients) {
     // Skip email if this client already has active push subscriptions (PWA with

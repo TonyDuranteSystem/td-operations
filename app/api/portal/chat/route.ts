@@ -14,6 +14,7 @@ import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
+import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -506,7 +507,7 @@ export async function POST(request: NextRequest) {
       type: 'chat',
       title: 'New message from Tony Durante Team',
       body: (message || '').trim().slice(0, 100),
-      link: '/portal/chat',
+      link: buildPortalChatLink({ accountId: account_id || null, topic }),
     }).catch(() => {})
     notifyClientOfAdminMessage({
       account_id: account_id || null,

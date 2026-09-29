@@ -3,6 +3,7 @@ import {
   DEFAULT_TYPE_LABELS,
   mergeTypeLabels,
   buildDigestSections,
+  pickDigestButtonHref,
 } from '@/lib/portal/digest-render'
 
 describe('mergeTypeLabels', () => {
@@ -100,5 +101,47 @@ describe('buildDigestSections', () => {
       false
     )
     expect(section.match(/Same\.pdf/g)).toHaveLength(1)
+  })
+})
+
+describe('pickDigestButtonHref', () => {
+  const BASE = 'https://portal.tonydurante.us'
+  const HOME = `${BASE}/portal`
+
+  it('goes straight to the one shared destination', () => {
+    expect(pickDigestButtonHref(['/portal/sign', '/portal/sign'], BASE)).toBe(`${BASE}/portal/sign`)
+    expect(pickDigestButtonHref(['/portal/chat?account=A&topic=Tax%202026'], BASE)).toBe(`${BASE}/portal/chat?account=A&topic=Tax%202026`)
+  })
+
+  it('mixed destinations → home', () => {
+    expect(pickDigestButtonHref(['/portal/sign', '/portal/documents'], BASE)).toBe(HOME)
+  })
+
+  it('a missing link counts as home (so it mixes with any real destination)', () => {
+    expect(pickDigestButtonHref([null, '/portal/sign'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref([undefined], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref([], BASE)).toBe(HOME)
+  })
+
+  it('accepts an absolute link on the portal origin and normalises it', () => {
+    expect(pickDigestButtonHref(['https://portal.tonydurante.us/portal'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['https://portal.tonydurante.us/portal/services'], BASE)).toBe(`${BASE}/portal/services`)
+  })
+
+  it('treats an absolute home link and a relative home link as the same destination', () => {
+    expect(pickDigestButtonHref(['https://portal.tonydurante.us/portal', '/portal'], BASE)).toBe(HOME)
+  })
+
+  it('rejects foreign and look-alike hosts, protocol-relative and non-portal paths', () => {
+    expect(pickDigestButtonHref(['https://evil.com/portal/sign'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['https://portal.tonydurante.us.evil.com/portal/sign'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['//evil.com/portal/sign'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['/admin'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['/portalx'], BASE)).toBe(HOME)
+    expect(pickDigestButtonHref(['javascript:alert(1)'], BASE)).toBe(HOME)
+  })
+
+  it('tolerates a trailing slash on the base URL', () => {
+    expect(pickDigestButtonHref(['/portal/sign'], `${BASE}/`)).toBe(`${BASE}/portal/sign`)
   })
 })

@@ -82,6 +82,8 @@ function formatFileSize(bytes: number): string {
 }
 
 const MAX_ATTACHMENTS = 5
+/** How many older pages (50 each) a topic deep link may load looking for its tab. */
+const MAX_DEEP_LINK_PAGES = 10
 
 interface PendingFile {
   file: File
@@ -99,7 +101,7 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
+export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null, persistEntityFromLink = false }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null; persistEntityFromLink?: boolean }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
@@ -124,12 +126,26 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // Deep-link guard: if the linked topic has no messages for this client (an
   // old link, a topic on a different company), fall back to General instead of
   // stranding them on an empty tab they can't explain. Runs once, after load.
+  //
+  // 2026-09-29 (dev job 05d997f2): tabs are built from the loaded messages, so
+  // a linked topic whose messages are all older than the newest page used to
+  // fall straight back to General — the same "email says new message, chat
+  // shows nothing" failure. Page back through history (bounded) until the
+  // topic shows up; only then give up and fall back.
   const initialTopicChecked = useRef(false)
+  const deepLinkPagesRef = useRef(0)
   useEffect(() => {
     if (initialTopicChecked.current || loading || !initialTopic) return
+    if (topics.includes(initialTopic)) { initialTopicChecked.current = true; return }
+    if (loadingMore) return
+    if (hasMore && deepLinkPagesRef.current < MAX_DEEP_LINK_PAGES) {
+      deepLinkPagesRef.current++
+      void loadMore()
+      return
+    }
     initialTopicChecked.current = true
-    if (!topics.includes(initialTopic)) setActiveTopic(null)
-  }, [loading, topics, initialTopic])
+    setActiveTopic(null)
+  }, [loading, loadingMore, hasMore, topics, initialTopic, loadMore])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -158,6 +174,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     }
     router.refresh()
   }, [router])
+
+  // A deep link opened a different company than the saved selection (the page
+  // resolved ?account=). Persist it with the switcher's own cookies once, so
+  // the sidebar, the Messages tab link and later visits all agree with what is
+  // on screen instead of snapping back to the previous company.
+  const persistedFromLink = useRef(false)
+  useEffect(() => {
+    if (!persistEntityFromLink || persistedFromLink.current || !currentEntity) return
+    persistedFromLink.current = true
+    selectEntity(currentEntity)
+  }, [persistEntityFromLink, currentEntity, selectEntity])
 
   const draftKey = `chat_draft_${selectedEntityId || contactId}`
   const [input, setInput] = useState(() => {

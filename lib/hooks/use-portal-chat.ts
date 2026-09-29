@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { mergeRefreshedMessages, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 
 /**
  * The thread a client is currently viewing. Per-company scoping (2026-06-24):
@@ -45,6 +47,14 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // without making refresh a dependency of the subscription effect — that would
   // tear down and rebuild the channel on every render.
   const refreshRef = useRef<(o?: { markRead?: boolean }) => Promise<void>>(async () => {})
+  // Fetch sequencing (dev job 05d997f2). Wake, reconnect (SUBSCRIBED) and the
+  // initial load can all be in flight at once and resolve out of order; only the
+  // LATEST fetch may write the list, or an older snapshot overwrites a newer one.
+  const fetchSeqRef = useRef(0)
+  // Ids received live (realtime INSERT or the client's own send) since the
+  // latest fetch started. That fetch's snapshot may predate them, so the merge
+  // keeps them instead of letting the replace wipe them off the screen.
+  const liveIdsRef = useRef<Set<string>>(new Set())
 
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
@@ -54,12 +64,18 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   const load = useCallback(async () => {
     setLoading(true)
     setHasMore(true)
+    const seq = ++fetchSeqRef.current
+    liveIdsRef.current = new Set()
     try {
       const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
       if (res.ok) {
         const data = await res.json()
-        const msgs = data.messages ?? []
-        setMessages(msgs)
+        if (seq !== fetchSeqRef.current) return // a newer fetch owns the list
+        const msgs: PortalMessage[] = data.messages ?? []
+        const live = liveIdsRef.current
+        // Fresh view: keep nothing from before except rows that arrived live
+        // while this fetch was in flight.
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live }).messages)
         setHasMore(msgs.length >= 50)
         fetch('/api/portal/chat/read', {
           method: 'POST',
@@ -97,17 +113,30 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // at an unread badge for it — including on their phone's home-screen icon.
   // Only `load()` used to do this, so a wake refresh alone would light the badge
   // for something visibly on screen (found only by combining two changes).
+  //
+  // 2026-09-29 (dev job 05d997f2): the replace now goes through
+  // mergeRefreshedMessages, which still drops in-window rows missing from the
+  // response (deletions) but keeps (a) rows that arrived live after this fetch
+  // started and (b) paged-back history older than the fetched window. See that
+  // helper for why a blind replace made messages vanish.
   const refresh = useCallback(async (opts?: { markRead?: boolean }) => {
+    const seq = ++fetchSeqRef.current
+    liveIdsRef.current = new Set()
     try {
-      // Refetch at least as many as we already hold, so a client who paged back
-      // through history doesn't have it collapse to the newest 50 on every wake.
-      const limit = Math.max(50, messagesRef.current.length)
+      // Refetch at least as many as we already hold (the route caps at 100);
+      // anything older than that window is kept by the merge, not refetched.
+      const limit = Math.min(100, Math.max(50, messagesRef.current.length))
       const res = await fetch(`/api/portal/chat?${queryParam}&limit=${limit}`)
       if (res.ok) {
         const data = await res.json()
-        const msgs = data.messages ?? []
-        setMessages(msgs)
-        setHasMore(msgs.length >= limit)
+        if (seq !== fetchSeqRef.current) return // a newer fetch owns the list
+        const msgs: PortalMessage[] = data.messages ?? []
+        const live = liveIdsRef.current
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit, liveIds: live }).messages)
+        // A short response means the whole thread fits in it: nothing older exists.
+        // A full one leaves hasMore as it was — the paging state (load / loadMore)
+        // already knows whether older history is held or still on the server.
+        if (msgs.length < limit) setHasMore(false)
         if (opts?.markRead) {
           fetch('/api/portal/chat/read', {
             method: 'POST',
@@ -125,6 +154,16 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
 
   useEffect(() => { refreshRef.current = refresh }, [refresh])
 
+  // Catch up when the client comes back to an open portal (dev job 05d997f2).
+  // A phone that slept, or a tab left in the background, can hold a realtime
+  // socket that died silently — nothing refetched until it noticed and rejoined,
+  // so a message the client had just been emailed about could be missing for
+  // hours. The portal-wide wake (PortalWakeRefresh) only re-renders the server
+  // layout with identical props, which does not re-run this hook. Same wake
+  // signal the notification bell uses (20s-away gate + throttle). Marking stays
+  // as on every other refresh path.
+  useWakeSignal({ onWake: () => { void refreshRef.current({ markRead: true }) } })
+
   // Load older messages
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || messages.length === 0) return
@@ -141,7 +180,11 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         const older = data.messages ?? []
         setHasMore(older.length >= 50)
         if (older.length > 0) {
-          setMessages(prev => [...older, ...prev])
+          // Dedupe: a refresh racing this page may already hold some of these rows.
+          setMessages(prev => {
+            const have = new Set(prev.map(m => m.id))
+            return sortMessagesAscending([...older.filter((m: PortalMessage) => !have.has(m.id)), ...prev])
+          })
         }
       }
     } catch {
@@ -176,6 +219,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const nm = newMessage as { sender_type?: string; message?: string; account_id: string | null; contact_id: string | null }
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
       if (!belongs(nm)) return // wrong company / someone else's personal — never show
+      liveIdsRef.current.add(newMessage.id)
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -186,6 +230,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const updated = payload.new as PortalMessage & { deleted_at?: string | null }
       // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
       if (updated.deleted_at) {
+        liveIdsRef.current.delete(updated.id)
         setMessages(prev => prev.filter(m => m.id !== updated.id))
         return
       }
@@ -283,6 +328,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       // refresh. The component switches the view to match before sending, so this
       // is a belt-and-braces guard.
       if (newMsg && (!plan || messageVisibleInPlan(plan, newMsg))) {
+        liveIdsRef.current.add(newMsg.id)
         setMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev
           return [...prev, newMsg]
