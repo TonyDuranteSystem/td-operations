@@ -1,5 +1,6 @@
 # CRM Storage
-_Last verified against code: 2026-09-29 — Claude (**REFRESHING NO LONGER DROPS YOU BACK TO THE ROOT FOLDER** —
+_Last verified against code: 2026-09-29 — Claude (dev job 685467b5, CRM Storage ship). **The store's fixed value lists live in `lib/crm-store/vocabularies.ts`** (owner kinds, file states, filing statuses, import run/item statuses and modes …); the Drive-import types (`ItemStatus`, `ImportMode`) derive from it. The code↔database contract (`lib/db-contract.ts`) knows the store's 16 new CHECK constraints: 2 shape rules are listed in `NOT_A_VOCABULARY`, and the 14 value lists are listed there as TEMPORARY — they must move into `CONSTRAINT_CONTRACTS` (using the vocabularies file) at the next FULL `npm run snapshot:constraints`, because the committed production snapshot is frozen 2026-08-09 and 25 constraints behind production (refreshing it now would change every developer's check). The CI check "Sandbox still enforces what production enforces" is red on main for 13 older constraints (td_books_accounts_*, pwa_events_*, staff_captures_* …) — none are the store's.)_
+_Prior: 2026-09-29 — Claude (**REFRESHING NO LONGER DROPS YOU BACK TO THE ROOT FOLDER** —
 Antonio: "when I refresh the page ... it goes back to inbox instead of staying where I was", same complaint here.
 The open folder is now written into the page's own address as you browse (`?folder=<id>`), reusing the existing
 `useSelectionHistory` hook (`lib/hooks/use-selection-history.ts`) already proven in Team Chat and Portal Chats —
