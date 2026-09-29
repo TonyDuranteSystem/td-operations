@@ -209,3 +209,4 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | O6 | Organise the copy: Set type, Rename, Move | Works; the company page and the client still unchanged |
 | O7 | "Remove copy" | Files go to the new storage's trash; the folder can be copied again |
 | O8 | In "Import from Google Drive" type 2+ letters of a company name or folder name while inside ANY folder | Results from the whole Drive (companies first), not only the folders on screen; a piece inside a word finds the company; clearing the box returns to the folder you were in |
+| O9 | In Import from Google Drive press "Check contents" beside a finished copy | A list shows, per file, the type it has now and what the system thinks it is (from the words inside; a HEIC photo is converted first); possible duplicate pairs are listed with the exact words that differ; nothing in the storage changes |

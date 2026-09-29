@@ -8,7 +8,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { ChevronRight, Folder, Loader2, X, HardDriveDownload, CheckCircle2, AlertTriangle, Undo2 } from 'lucide-react'
+import { ChevronRight, Folder, Loader2, X, HardDriveDownload, CheckCircle2, AlertTriangle, Undo2, ScanText } from 'lucide-react'
+import { ContentsReport, type ContentReportData } from './contents-report'
 
 interface Row {
   id: string; name: string
@@ -96,6 +97,19 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
       if (alive.current) setRunning(null)
     }
   }
+  const [reading, setReading] = useState<string | null>(null)
+  const [contents, setContents] = useState<{ title: string; data: ContentReportData } | null>(null)
+  const checkContents = async (row: Row) => {
+    if (!row.copy) return
+    setReading(row.id)
+    try {
+      setContents({ title: row.company?.name ?? row.name, data: await send<ContentReportData>(`/api/crm-store/import/${row.copy.runId}/check-contents`, {}, 'The contents could not be checked.') })
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'The contents could not be checked.')
+    } finally {
+      if (alive.current) setReading(null)
+    }
+  }
   const [removing, setRemoving] = useState<string | null>(null)
   const removeCopy = async (row: Row, ask = true) => {
     if (!row.copy) return
@@ -173,6 +187,7 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
                         {r.copy.status === 'done' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}Copied ({r.copy.files} files){r.copy.status === 'incomplete' ? ' — some failed' : ''}
                       </span>
                       {r.copy.ownerId && <button type="button" onClick={() => onOpenStorage(r.copy!.ownerId!)} className="rounded-md bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700">Open</button>}
+                      <button type="button" disabled={!!running || !!removing || !!reading} onClick={() => void checkContents(r)} aria-label={`Check the contents of the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">{reading === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanText className="h-3 w-3" />}Check contents</button>
                       <button type="button" disabled={!!running || !!removing} onClick={() => void removeCopy(r)} aria-label={`Remove the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50"><Undo2 className="h-3 w-3" />Remove copy</button>
                     </>
                   ) : r.copy && (r.copy.status === 'moving' || r.copy.status === 'scanning') ? (
@@ -199,6 +214,7 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
             </li>
           ))}
         </ul>
+        {contents && <ContentsReport title={contents.title} data={contents.data} onClose={() => setContents(null)} />}
         {found === null && listing && listing.files > 0 && rows.length > 0 && <p className="mt-1 text-xs text-zinc-500">{listing.files} loose files in this folder are not listed.</p>}
         {found === null && listing?.cutOff && <p className="mt-1 text-xs text-amber-700">This folder is very large — only the first 5,000 entries are listed; use the search or open a sub-folder.</p>}
       </div>
