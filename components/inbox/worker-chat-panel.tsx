@@ -543,330 +543,431 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
           address, no subject, no mailbox, and a recipient that does not exist until
           the staff member picks one. */}
       {preparedSend && preparedSend.kind === 'portal' && (
-        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
-          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-2">
-            Send to the client&apos;s portal chat — confirm before sending
-          </p>
+        <div className="border-t border-amber-200 bg-amber-50 flex flex-col min-h-0 max-h-[70dvh]">
+          {/* SCROLLS. The card shrinks to fit the panel and the review content
+              scrolls inside; the action row below is OUTSIDE this box so Confirm
+              and Cancel are always on screen (Antonio, 2026-09-29: "I can't click
+              on send. I can't scroll down." — the old card never shrank, and on a
+              short window its bottom, buttons included, fell below the panel edge). */}
+          <div className="min-h-0 overflow-y-auto px-4 pt-3">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-2">
+              Send to the client&apos;s portal chat — confirm before sending
+            </p>
 
-          {/* WHO. The most important control on the card: this screen does not fix the
-              client, so this choice IS the safety. */}
-          {portalTarget ? (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-2.5 py-2">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-zinc-900 truncate">{portalTarget.name}</p>
-                <p className="text-[11px] text-zinc-500">
-                  {portalTarget.type === 'account'
-                    ? 'Company — every member of this company will see this message'
-                    : "Person — goes to this person's own portal chat"}
-                  {portalTarget.detail ? ` · ${portalTarget.detail}` : ''}
+            {/* WHO. The most important control on the card: this screen does not fix the
+                client, so this choice IS the safety. */}
+            {portalTarget ? (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-2.5 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-zinc-900 truncate">{portalTarget.name}</p>
+                  <p className="text-[11px] text-zinc-500">
+                    {portalTarget.type === 'account'
+                      ? 'Company — every member of this company will see this message'
+                      : "Person — goes to this person's own portal chat"}
+                    {portalTarget.detail ? ` · ${portalTarget.detail}` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setPortalTarget(null); setClientQuery('') }}
+                  disabled={confirming}
+                  className="ml-auto shrink-0 text-xs text-zinc-500 underline hover:text-zinc-800 disabled:opacity-50"
+                >
+                  Change
+                </button>
+              </div>
+            ) : (
+              <div>
+                <input
+                  value={clientQuery}
+                  onChange={e => setClientQuery(e.target.value)}
+                  disabled={confirming}
+                  placeholder="Type the client's name — company, person or lead…"
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400 disabled:opacity-50"
+                />
+                {/* The worker's guess, offered rather than applied. */}
+                {preparedSend.proposedName && !clientQuery ? (
+                  <button
+                    onClick={() =>
+                      setPortalTarget({
+                        type: preparedSend.proposedAccountId ? 'account' : 'contact',
+                        id: (preparedSend.proposedAccountId || preparedSend.proposedContactId) as string,
+                        name: preparedSend.proposedName as string,
+                      })
+                    }
+                    className="mt-1.5 text-xs text-blue-700 underline hover:text-blue-900"
+                  >
+                    Suggested: {preparedSend.proposedName} — click to use
+                  </button>
+                ) : null}
+                {searching ? <p className="mt-1.5 text-xs text-zinc-500">Searching…</p> : null}
+                {clientResults.length ? (
+                  <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
+                    {clientResults.map(t => (
+                      <button
+                        key={`${t.type}-${t.id}`}
+                        onClick={() => {
+                          // Leads are NO LONGER refused here. That refusal was wrong:
+                          // sending an offer creates a portal login for the person and
+                          // hangs it on a CONTACT, so the same human appears in this list
+                          // twice and the contact can receive messages. The reachability
+                          // check below resolves a lead to that contact, and only refuses
+                          // when there genuinely is no portal login to reach.
+                          setPortalTarget(t)
+                          setClientResults([])
+                        }}
+                        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-zinc-50"
+                      >
+                        <span className="text-sm text-zinc-800 truncate">{t.name}</span>
+                        <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
+                          {t.type === 'account' ? 'Company' : t.type}
+                        </span>
+                        {/* Two clients with near-identical names are one click apart, so
+                            show whatever distinguishes them. */}
+                        {t.detail ? <span className="shrink-0 text-[11px] text-zinc-500">{t.detail}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            {/* WHO ACTUALLY RECEIVES IT, AND WHETHER THEY HAVE EVER SIGNED IN.
+                Antonio, 2026-08-02. Two failures this replaces, found the same day:
+                a LEAD was refused outright ("there's no portal chat") while that same
+                person's contact — carrying their portal login, created when the offer
+                was sent — sat in the same search list; and a contact with NO portal at
+                all was fully sendable, producing a "you have a new message" email to a
+                portal they cannot open. */}
+            {portalTarget && (
+              <div className="mt-1.5 text-[11px]">
+                {reach.checking ? (
+                  <span className="text-zinc-500">Checking portal access…</span>
+                ) : reach.reachable === false ? (
+                  <span className="text-red-700">{reach.reason}</span>
+                ) : reach.recipients?.length ? (
+                  <div className="text-zinc-600">
+                    {reach.resolvedName ? (
+                      <span className="text-blue-700">Sending to {reach.resolvedName}&apos;s portal. </span>
+                    ) : null}
+                    {reach.recipients.map((r, i) => (
+                      <span key={i}>
+                        {i > 0 ? ' · ' : ''}
+                        {r.name ?? r.email}
+                        {r.lastSignInAt
+                          ? ` (last signed in ${new Date(r.lastSignInAt).toLocaleDateString()})`
+                          : ' (has access, never signed in)'}
+                      </span>
+                    ))}
+                    {reach.neverSignedIn ? (
+                      <span className="text-amber-700">
+                        {' '}— nobody here has ever opened the portal, so they may not see this.
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            {/* LANGUAGE. Switching it REWRITES the message on the card straight away.
+                Antonio, 2026-08-01: "it's better if when we switch language in the dropdown
+                we have it in the selected language instead of asking to reformulate."
+                (This supersedes his earlier "it's just a drop-down" — as a plain setting it
+                only affected the NEXT draft, which meant switching to Italian and then
+                having to ask for a rewrite as a second step.)
+                Costs a round trip per switch, so it is disabled while a send is in flight
+                or a turn is already running — otherwise a toggle mid-confirm races the send
+                and could deliver the version the staff member just switched away from. */}
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <span className="text-zinc-500">Language:</span>
+              <select
+                value={portalLocale}
+                onChange={e => {
+                  const next = e.target.value as 'en' | 'it'
+                  if (next === portalLocale) return
+                  const previous = portalLocale
+                  setPortalLocale(next)
+                  try { window.localStorage.setItem(localeKey, next) } catch { /* private mode */ }
+                  // If the rewrite never lands (timeout, the per-thread in-flight 409 when a
+                  // colleague has the same email open, a worker error), the card still shows
+                  // the OLD language while the dropdown claims the new one — and Confirm
+                  // would ship the language the dropdown says it is not. Put the dropdown
+                  // back so the card and the control cannot disagree.
+                  setLocaleRollback(() => previous)
+                  // Rewrite in the chosen language. Goes through the worker as a normal
+                  // turn, so it freezes a NEW draft and supersedes this one — the version
+                  // in the old language can never be the one that ships.
+                  send(
+                    `Rewrite the portal message in ${next === 'it' ? 'Italian' : 'English'}. Keep the same meaning and length. Then prepare it again.`,
+                    [],
+                    next,
+                  )
+                }}
+                disabled={confirming || pending}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+              >
+                <option value="en">English</option>
+                <option value="it">Italian</option>
+              </select>
+              <span className="text-zinc-400">
+                {pending ? 'rewriting…' : 'switching rewrites the message'}
+              </span>
+            </div>
+
+            {/* THE MESSAGE — exactly what will be sent. */}
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+              <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+            </div>
+
+            {/* THE LABEL MUST NOT BE ABLE TO LIE. Observed 2026-08-02: dropdown on
+                English, message in Italian, because the worker copied earlier turns
+                instead of following the setting it was told. Detected server-side with
+                the existing EN/IT detector, which stays silent on short or mixed text —
+                so this fires only when the text is confidently the wrong language. */}
+            {preparedSend.languageMismatch ? (
+              <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
+                <p className="text-xs font-semibold text-red-800">
+                  This message is in {preparedSend.languageMismatch === 'it' ? 'Italian' : 'English'}, but the
+                  language is set to {portalLocale === 'it' ? 'Italian' : 'English'}.
+                </p>
+                <p className="mt-0.5 text-[11px] text-red-700">
+                  Switch the dropdown to match, or press Reformulate to rewrite it in{' '}
+                  {portalLocale === 'it' ? 'Italian' : 'English'}.
                 </p>
               </div>
-              <button
-                onClick={() => { setPortalTarget(null); setClientQuery('') }}
-                disabled={confirming}
-                className="ml-auto shrink-0 text-xs text-zinc-500 underline hover:text-zinc-800 disabled:opacity-50"
-              >
-                Change
-              </button>
-            </div>
-          ) : (
-            <div>
-              <input
-                value={clientQuery}
-                onChange={e => setClientQuery(e.target.value)}
-                disabled={confirming}
-                placeholder="Type the client's name — company, person or lead…"
-                className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400 disabled:opacity-50"
-              />
-              {/* The worker's guess, offered rather than applied. */}
-              {preparedSend.proposedName && !clientQuery ? (
-                <button
-                  onClick={() =>
-                    setPortalTarget({
-                      type: preparedSend.proposedAccountId ? 'account' : 'contact',
-                      id: (preparedSend.proposedAccountId || preparedSend.proposedContactId) as string,
-                      name: preparedSend.proposedName as string,
-                    })
-                  }
-                  className="mt-1.5 text-xs text-blue-700 underline hover:text-blue-900"
-                >
-                  Suggested: {preparedSend.proposedName} — click to use
-                </button>
-              ) : null}
-              {searching ? <p className="mt-1.5 text-xs text-zinc-500">Searching…</p> : null}
-              {clientResults.length ? (
-                <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-zinc-200 bg-white">
-                  {clientResults.map(t => (
-                    <button
-                      key={`${t.type}-${t.id}`}
-                      onClick={() => {
-                        // Leads are NO LONGER refused here. That refusal was wrong:
-                        // sending an offer creates a portal login for the person and
-                        // hangs it on a CONTACT, so the same human appears in this list
-                        // twice and the contact can receive messages. The reachability
-                        // check below resolves a lead to that contact, and only refuses
-                        // when there genuinely is no portal login to reach.
-                        setPortalTarget(t)
-                        setClientResults([])
-                      }}
-                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-zinc-50"
-                    >
-                      <span className="text-sm text-zinc-800 truncate">{t.name}</span>
-                      <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-400">
-                        {t.type === 'account' ? 'Company' : t.type}
-                      </span>
-                      {/* Two clients with near-identical names are one click apart, so
-                          show whatever distinguishes them. */}
-                      {t.detail ? <span className="shrink-0 text-[11px] text-zinc-500">{t.detail}</span> : null}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          )}
+            ) : null}
 
-          {/* WHO ACTUALLY RECEIVES IT, AND WHETHER THEY HAVE EVER SIGNED IN.
-              Antonio, 2026-08-02. Two failures this replaces, found the same day:
-              a LEAD was refused outright ("there's no portal chat") while that same
-              person's contact — carrying their portal login, created when the offer
-              was sent — sat in the same search list; and a contact with NO portal at
-              all was fully sendable, producing a "you have a new message" email to a
-              portal they cannot open. */}
-          {portalTarget && (
-            <div className="mt-1.5 text-[11px]">
-              {reach.checking ? (
-                <span className="text-zinc-500">Checking portal access…</span>
-              ) : reach.reachable === false ? (
-                <span className="text-red-700">{reach.reason}</span>
-              ) : reach.recipients?.length ? (
-                <div className="text-zinc-600">
-                  {reach.resolvedName ? (
-                    <span className="text-blue-700">Sending to {reach.resolvedName}&apos;s portal. </span>
-                  ) : null}
-                  {reach.recipients.map((r, i) => (
-                    <span key={i}>
-                      {i > 0 ? ' · ' : ''}
-                      {r.name ?? r.email}
-                      {r.lastSignInAt
-                        ? ` (last signed in ${new Date(r.lastSignInAt).toLocaleDateString()})`
-                        : ' (has access, never signed in)'}
-                    </span>
-                  ))}
-                  {reach.neverSignedIn ? (
-                    <span className="text-amber-700">
-                      {' '}— nobody here has ever opened the portal, so they may not see this.
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          )}
-
-          {/* LANGUAGE. Switching it REWRITES the message on the card straight away.
-              Antonio, 2026-08-01: "it's better if when we switch language in the dropdown
-              we have it in the selected language instead of asking to reformulate."
-              (This supersedes his earlier "it's just a drop-down" — as a plain setting it
-              only affected the NEXT draft, which meant switching to Italian and then
-              having to ask for a rewrite as a second step.)
-              Costs a round trip per switch, so it is disabled while a send is in flight
-              or a turn is already running — otherwise a toggle mid-confirm races the send
-              and could deliver the version the staff member just switched away from. */}
-          <div className="mt-2 flex items-center gap-2 text-xs">
-            <span className="text-zinc-500">Language:</span>
-            <select
-              value={portalLocale}
-              onChange={e => {
-                const next = e.target.value as 'en' | 'it'
-                if (next === portalLocale) return
-                const previous = portalLocale
-                setPortalLocale(next)
-                try { window.localStorage.setItem(localeKey, next) } catch { /* private mode */ }
-                // If the rewrite never lands (timeout, the per-thread in-flight 409 when a
-                // colleague has the same email open, a worker error), the card still shows
-                // the OLD language while the dropdown claims the new one — and Confirm
-                // would ship the language the dropdown says it is not. Put the dropdown
-                // back so the card and the control cannot disagree.
-                setLocaleRollback(() => previous)
-                // Rewrite in the chosen language. Goes through the worker as a normal
-                // turn, so it freezes a NEW draft and supersedes this one — the version
-                // in the old language can never be the one that ships.
-                send(
-                  `Rewrite the portal message in ${next === 'it' ? 'Italian' : 'English'}. Keep the same meaning and length. Then prepare it again.`,
-                  [],
-                  next,
-                )
-              }}
-              disabled={confirming || pending}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
-            >
-              <option value="en">English</option>
-              <option value="it">Italian</option>
-            </select>
-            <span className="text-zinc-400">
-              {pending ? 'rewriting…' : 'switching rewrites the message'}
-            </span>
-          </div>
-
-          {/* THE MESSAGE — exactly what will be sent. */}
-          <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
-            <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
-          </div>
-
-          {/* THE LABEL MUST NOT BE ABLE TO LIE. Observed 2026-08-02: dropdown on
-              English, message in Italian, because the worker copied earlier turns
-              instead of following the setting it was told. Detected server-side with
-              the existing EN/IT detector, which stays silent on short or mixed text —
-              so this fires only when the text is confidently the wrong language. */}
-          {preparedSend.languageMismatch ? (
-            <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
-              <p className="text-xs font-semibold text-red-800">
-                This message is in {preparedSend.languageMismatch === 'it' ? 'Italian' : 'English'}, but the
-                language is set to {portalLocale === 'it' ? 'Italian' : 'English'}.
-              </p>
-              <p className="mt-0.5 text-[11px] text-red-700">
-                Switch the dropdown to match, or press Reformulate to rewrite it in{' '}
-                {portalLocale === 'it' ? 'Italian' : 'English'}.
-              </p>
-            </div>
-          ) : null}
-
-          {/* MISMATCH BACKSTOP. The message is written BEFORE the client is chosen, so
-              a name inside it is a guess the card cannot correct — and correcting it
-              server-side would edit text after a human approved it, which is the one
-              thing this card exists to prevent. On 2026-07-31 a message opening
-              "Hi Uxio" was delivered to a different client because the recipient was
-              changed here and the words could not follow.
-              The real fix is the prompt rule telling the worker not to put a client
-              name in the message at all; this catches what that misses. It fires only
-              when the worker actually proposed someone — a name invented inside the
-              text with no proposal is invisible here, which is why the prompt rule,
-              not this, is the primary control. */}
-          {recipientMismatch ? (
-            <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
-              <p className="text-xs font-semibold text-red-800">
-                This message was written for {preparedSend.proposedName}, not {portalTarget?.name}.
-              </p>
-              <p className="mt-0.5 text-[11px] text-red-700">
-                It may name the wrong client. Press Reformulate so the assistant rewrites it for{' '}
-                {portalTarget?.name}, then send.
-              </p>
-            </div>
-          ) : null}
-
-          {/* REFORMULATE. Goes back through the worker as a normal turn, which freezes
-              a NEW draft and cancels this one — so the wording that was rejected can
-              never be the wording that ships. Disabled while a send is in flight:
-              otherwise a slow Confirm plus an impatient rewrite delivers both. */}
-          {reformulating ? (
-            <div className="mt-2">
-              <input
-                value={reformulateText}
-                onChange={e => setReformulateText(e.target.value)}
-                placeholder="What should change? e.g. shorter, warmer, don't mention the rejection"
-                className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400"
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && reformulateText.trim()) {
-                    const t = reformulateText.trim()
-                    setReformulating(false)
-                    setReformulateText('')
-                    send(
-                      // Names the CHOSEN client when one is picked, so a rewrite
-                      // triggered by the mismatch warning actually lands on the right
-                      // person. Without it the worker rewrites blind and can repeat
-                      // the wrong name.
-                      portalTarget
-                        ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
-                        : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
-                      [],
-                    )
-                  }
-                }}
-              />
-              <div className="mt-1.5 flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const t = reformulateText.trim()
-                    if (!t) return
-                    setReformulating(false)
-                    setReformulateText('')
-                    send(
-                      // Names the CHOSEN client when one is picked, so a rewrite
-                      // triggered by the mismatch warning actually lands on the right
-                      // person. Without it the worker rewrites blind and can repeat
-                      // the wrong name.
-                      portalTarget
-                        ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
-                        : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
-                      [],
-                    )
-                  }}
-                  disabled={!reformulateText.trim() || pending}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium hover:bg-zinc-900 disabled:opacity-50"
-                >
-                  Rewrite
-                </button>
-                <button
-                  onClick={() => { setReformulating(false); setReformulateText('') }}
-                  className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100"
-                >
-                  Back
-                </button>
+            {/* MISMATCH BACKSTOP. The message is written BEFORE the client is chosen, so
+                a name inside it is a guess the card cannot correct — and correcting it
+                server-side would edit text after a human approved it, which is the one
+                thing this card exists to prevent. On 2026-07-31 a message opening
+                "Hi Uxio" was delivered to a different client because the recipient was
+                changed here and the words could not follow.
+                The real fix is the prompt rule telling the worker not to put a client
+                name in the message at all; this catches what that misses. It fires only
+                when the worker actually proposed someone — a name invented inside the
+                text with no proposal is invisible here, which is why the prompt rule,
+                not this, is the primary control. */}
+            {recipientMismatch ? (
+              <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-2">
+                <p className="text-xs font-semibold text-red-800">
+                  This message was written for {preparedSend.proposedName}, not {portalTarget?.name}.
+                </p>
+                <p className="mt-0.5 text-[11px] text-red-700">
+                  It may name the wrong client. Press Reformulate so the assistant rewrites it for{' '}
+                  {portalTarget?.name}, then send.
+                </p>
               </div>
-            </div>
-          ) : (
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              {(() => {
-                // Only a disabled-reason case gets a tooltip — the plain enabled
-                // button already carries its own label ("Confirm & send") as
-                // visible text, so no hover hint is needed (and FastTooltip's
-                // `label` prop can't take `undefined`).
-                const confirmTooltip = !portalTarget
-                  ? 'Choose which client this goes to first'
-                  : recipientMismatch
-                    ? 'This message was written for a different client — rewrite it first'
-                    : undefined
-                const confirmButton = (
-                  <button
-                    onClick={() => resolvePreparedSend('confirm')}
-                    // `pending` is LOAD-BEARING, not tidiness. A rewrite (language switch or
-                    // Reformulate) runs as a worker turn taking 20-60s. Without this, an
-                    // impatient click during that window confirms the row that is still
-                    // pending — delivering the PRE-rewrite text — and then the rewrite lands,
-                    // renders a second card, and the same message goes out again in the other
-                    // language. Supersede cannot save it: it only cancels rows still pending,
-                    // and the first one is already sent.
-                    disabled={
-                      confirming ||
-                      pending ||
-                      !portalTarget ||
-                      recipientMismatch ||
-                      // Wait for the access check rather than letting a click race it, and
-                      // never allow a send to someone who cannot open the portal — they
-                      // would get a "you have a new message" email pointing at a door they
-                      // have no key to, and nobody would ever read the message.
-                      reach.checking ||
-                      reach.reachable === false ||
-                      // Never send text whose language disagrees with the card's own label.
-                      !!preparedSend.languageMismatch
+            ) : null}
+
+            {/* REFORMULATE. Goes back through the worker as a normal turn, which freezes
+                a NEW draft and cancels this one — so the wording that was rejected can
+                never be the wording that ships. Disabled while a send is in flight:
+                otherwise a slow Confirm plus an impatient rewrite delivers both. */}
+          </div>
+          {/* PINNED action row — never scrolls away. */}
+          <div className="shrink-0 px-4 pb-3">
+            {reformulating ? (
+              <div className="mt-2">
+                <input
+                  value={reformulateText}
+                  onChange={e => setReformulateText(e.target.value)}
+                  placeholder="What should change? e.g. shorter, warmer, don't mention the rejection"
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-800 placeholder:text-zinc-400"
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && reformulateText.trim()) {
+                      const t = reformulateText.trim()
+                      setReformulating(false)
+                      setReformulateText('')
+                      send(
+                        // Names the CHOSEN client when one is picked, so a rewrite
+                        // triggered by the mismatch warning actually lands on the right
+                        // person. Without it the worker rewrites blind and can repeat
+                        // the wrong name.
+                        portalTarget
+                          ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
+                          : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
+                        [],
+                      )
                     }
-                    aria-label={confirmTooltip}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                  }}
+                />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const t = reformulateText.trim()
+                      if (!t) return
+                      setReformulating(false)
+                      setReformulateText('')
+                      send(
+                        // Names the CHOSEN client when one is picked, so a rewrite
+                        // triggered by the mismatch warning actually lands on the right
+                        // person. Without it the worker rewrites blind and can repeat
+                        // the wrong name.
+                        portalTarget
+                          ? `Rewrite the portal message that is going to ${portalTarget.name}: ${t}. Then prepare it again.`
+                          : `Rewrite the portal message for the client: ${t}. Then prepare it again.`,
+                        [],
+                      )
+                    }}
+                    disabled={!reformulateText.trim() || pending}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium hover:bg-zinc-900 disabled:opacity-50"
                   >
-                    {confirming ? 'Sending…' : 'Confirm & send'}
+                    Rewrite
                   </button>
-                )
-                return confirmTooltip ? (
-                  <FastTooltip label={confirmTooltip}>{confirmButton}</FastTooltip>
-                ) : (
-                  confirmButton
-                )
-              })()}
-              <button
-                onClick={() => setReformulating(true)}
-                disabled={confirming || pending}
-                className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+                  <button
+                    onClick={() => { setReformulating(false); setReformulateText('') }}
+                    className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100"
+                  >
+                    Back
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {(() => {
+                  // Only a disabled-reason case gets a tooltip — the plain enabled
+                  // button already carries its own label ("Confirm & send") as
+                  // visible text, so no hover hint is needed (and FastTooltip's
+                  // `label` prop can't take `undefined`).
+                  const confirmTooltip = !portalTarget
+                    ? 'Choose which client this goes to first'
+                    : recipientMismatch
+                      ? 'This message was written for a different client — rewrite it first'
+                      : undefined
+                  const confirmButton = (
+                    <button
+                      onClick={() => resolvePreparedSend('confirm')}
+                      // `pending` is LOAD-BEARING, not tidiness. A rewrite (language switch or
+                      // Reformulate) runs as a worker turn taking 20-60s. Without this, an
+                      // impatient click during that window confirms the row that is still
+                      // pending — delivering the PRE-rewrite text — and then the rewrite lands,
+                      // renders a second card, and the same message goes out again in the other
+                      // language. Supersede cannot save it: it only cancels rows still pending,
+                      // and the first one is already sent.
+                      disabled={
+                        confirming ||
+                        pending ||
+                        !portalTarget ||
+                        recipientMismatch ||
+                        // Wait for the access check rather than letting a click race it, and
+                        // never allow a send to someone who cannot open the portal — they
+                        // would get a "you have a new message" email pointing at a door they
+                        // have no key to, and nobody would ever read the message.
+                        reach.checking ||
+                        reach.reachable === false ||
+                        // Never send text whose language disagrees with the card's own label.
+                        !!preparedSend.languageMismatch
+                      }
+                      aria-label={confirmTooltip}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {confirming ? 'Sending…' : 'Confirm & send'}
+                    </button>
+                  )
+                  return confirmTooltip ? (
+                    <FastTooltip label={confirmTooltip}>{confirmButton}</FastTooltip>
+                  ) : (
+                    confirmButton
+                  )
+                })()}
+                <button
+                  onClick={() => setReformulating(true)}
+                  disabled={confirming || pending}
+                  className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+                >
+                  Reformulate
+                </button>
+                <button
+                  onClick={() => resolvePreparedSend('cancel')}
+                  disabled={confirming}
+                  className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                {!portalTarget ? (
+                  <span className="text-xs text-amber-800">Choose the client to enable sending.</span>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {preparedSend && preparedSend.kind !== 'portal' && (
+        <div className="border-t border-amber-200 bg-amber-50 flex flex-col min-h-0 max-h-[70dvh]">
+          {/* SCROLLS. The card shrinks to fit the panel and the review content
+              scrolls inside; the action row below is OUTSIDE this box so Confirm
+              and Cancel are always on screen (Antonio, 2026-09-29: "I can't click
+              on send. I can't scroll down." — the old card never shrank, and on a
+              short window its bottom, buttons included, fell below the panel edge). */}
+          <div className="min-h-0 overflow-y-auto px-4 pt-3">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
+            <p className="text-sm text-zinc-800">
+              Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
+            </p>
+            {preparedSend.subject ? (
+              <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
+            ) : null}
+            {/* THE MESSAGE ITSELF. Confirming an address without seeing the body is
+                how someone approves one draft while a different one goes out — the
+                exact failure the frozen-payload path exists to remove. Scrollable
+                rather than truncated: a cut-off body hides the part worth checking. */}
+            {preparedSend.body ? (
+              <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+                <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+              </div>
+            ) : null}
+            <ConfirmAttachments
+              preparedId={preparedSend.id}
+              attachments={preparedSend.attachments}
+              className="mt-1.5 space-y-1.5"
+              onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-zinc-500">From:</span>
+              <select
+                value={sendAs}
+                onChange={e => {
+                  const next = e.target.value as 'support' | 'antonio'
+                  setSendAs(next)
+                  // Coerce the STATE, not just the display: "hat" isn't on offer
+                  // for support, and the picker's visual fallback would otherwise
+                  // show "Full" while the POST still carries "hat" (harmless today
+                  // — support renders both identically — but a lie in waiting).
+                  if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
+                }}
+                disabled={confirming}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
               >
-                Reformulate
+                <option value="support">support@tonydurante.us</option>
+                <option value="antonio">antonio.durante@tonydurante.us</option>
+              </select>
+              {/* Same per-email chooser as manual compose/reply (Luca's request,
+                  Antonio approved 2026-08-07). The mailbox stays in the dropdown
+                  above, so only the signature select renders here. */}
+              <SignatureControls
+                sender={sendAs}
+                variant={signatureVariant}
+                onVariantChange={setSignatureVariant}
+                disabled={confirming}
+              />
+            </div>
+            {/* The chooser is blind without this — the signature is attached
+                server-side (same reason compose/reply preview it). Scrolls so the
+                full variant can't swallow the card on the phone PWA. */}
+            <div className="mt-2 max-h-36 overflow-y-auto">
+              <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} collapsible />
+            </div>
+          </div>
+          {/* PINNED action row — never scrolls away. */}
+          <div className="shrink-0 px-4 pb-3">
+            <div className="pt-2.5 flex items-center gap-2">
+              <button
+                onClick={() => resolvePreparedSend('confirm')}
+                disabled={confirming}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {confirming ? 'Sending…' : 'Confirm & send'}
               </button>
               <button
                 onClick={() => resolvePreparedSend('cancel')}
@@ -875,88 +976,7 @@ export function WorkerChatPanel({ conversation, mailbox, onClose }: WorkerChatPa
               >
                 Cancel
               </button>
-              {!portalTarget ? (
-                <span className="text-xs text-amber-800">Choose the client to enable sending.</span>
-              ) : null}
             </div>
-          )}
-        </div>
-      )}
-
-      {preparedSend && preparedSend.kind !== 'portal' && (
-        <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
-          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Confirm before sending</p>
-          <p className="text-sm text-zinc-800">
-            Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
-          </p>
-          {preparedSend.subject ? (
-            <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
-          ) : null}
-          {/* THE MESSAGE ITSELF. Confirming an address without seeing the body is
-              how someone approves one draft while a different one goes out — the
-              exact failure the frozen-payload path exists to remove. Scrollable
-              rather than truncated: a cut-off body hides the part worth checking. */}
-          {preparedSend.body ? (
-            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
-              <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
-            </div>
-          ) : null}
-          <ConfirmAttachments
-            preparedId={preparedSend.id}
-            attachments={preparedSend.attachments}
-            className="mt-1.5 space-y-1.5"
-            onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-zinc-500">From:</span>
-            <select
-              value={sendAs}
-              onChange={e => {
-                const next = e.target.value as 'support' | 'antonio'
-                setSendAs(next)
-                // Coerce the STATE, not just the display: "hat" isn't on offer
-                // for support, and the picker's visual fallback would otherwise
-                // show "Full" while the POST still carries "hat" (harmless today
-                // — support renders both identically — but a lie in waiting).
-                if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
-              }}
-              disabled={confirming}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
-            >
-              <option value="support">support@tonydurante.us</option>
-              <option value="antonio">antonio.durante@tonydurante.us</option>
-            </select>
-            {/* Same per-email chooser as manual compose/reply (Luca's request,
-                Antonio approved 2026-08-07). The mailbox stays in the dropdown
-                above, so only the signature select renders here. */}
-            <SignatureControls
-              sender={sendAs}
-              variant={signatureVariant}
-              onVariantChange={setSignatureVariant}
-              disabled={confirming}
-            />
-          </div>
-          {/* The chooser is blind without this — the signature is attached
-              server-side (same reason compose/reply preview it). Scrolls so the
-              full variant can't swallow the card on the phone PWA. */}
-          <div className="mt-2 max-h-36 overflow-y-auto">
-            <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} />
-          </div>
-          <div className="mt-2.5 flex items-center gap-2">
-            <button
-              onClick={() => resolvePreparedSend('confirm')}
-              disabled={confirming}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {confirming ? 'Sending…' : 'Confirm & send'}
-            </button>
-            <button
-              onClick={() => resolvePreparedSend('cancel')}
-              disabled={confirming}
-              className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}

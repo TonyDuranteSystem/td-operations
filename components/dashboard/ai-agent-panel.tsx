@@ -762,72 +762,82 @@ export function AiAgentPanel({ enabled = true }: { enabled?: boolean }) {
             without reading the body is how someone approves one draft while a
             different one goes out. */}
         {preparedSend && (
-          <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 shrink-0">
-            <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Check the address, then confirm</p>
-            <p className="text-sm text-zinc-800">
-              Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
-            </p>
-            {preparedSend.subject ? (
-              <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
-            ) : null}
-            {preparedSend.body ? (
-              <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
-                <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
-              </div>
-            ) : null}
-            <ConfirmAttachments
-              preparedId={preparedSend.id}
-              attachments={preparedSend.attachments ?? []}
-              onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
-            />
-            <div className="mt-2 flex items-center gap-2 text-xs">
-              <span className="text-zinc-500">From:</span>
-              <select
-                value={sendAs}
-                onChange={e => {
-                  const next = e.target.value as 'support' | 'antonio'
-                  setSendAs(next)
-                  // Coerce the STATE, not just the display: "hat" isn't offered
-                  // for support, so the control would read "Full" while the POST
-                  // still carried "hat".
-                  if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
-                }}
-                disabled={confirming}
-                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
-              >
-                <option value="support">support@tonydurante.us</option>
-                <option value="antonio">antonio.durante@tonydurante.us</option>
-              </select>
-              {/* Same per-email chooser as the Inbox card and manual compose
-                  (Antonio, 2026-08-07 — the Inbox-only picker left this surface
-                  silently sending the full signature). */}
-              <SignatureControls
-                sender={sendAs}
-                variant={signatureVariant}
-                onVariantChange={setSignatureVariant}
-                disabled={confirming}
+          <div className="border-t border-amber-200 bg-amber-50 flex flex-col min-h-0 max-h-[70dvh]">
+            {/* SCROLLS. The card shrinks to fit the panel and the review content
+                scrolls inside; the action row below is OUTSIDE this box so Confirm
+                and Cancel are always on screen (Antonio, 2026-09-29: "I can't click
+                on send. I can't scroll down." — the old card never shrank, and on a
+                short window its bottom, buttons included, fell below the panel edge). */}
+            <div className="min-h-0 overflow-y-auto px-4 pt-3">
+              <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-1">Check the address, then confirm</p>
+              <p className="text-sm text-zinc-800">
+                Email <span className="font-mono font-medium break-all">{preparedSend.to}</span>
+              </p>
+              {preparedSend.subject ? (
+                <p className="text-xs text-zinc-600 mt-0.5">Subject: {preparedSend.subject}</p>
+              ) : null}
+              {preparedSend.body ? (
+                <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white px-2.5 py-2">
+                  <p className="whitespace-pre-wrap break-words text-xs text-zinc-700">{preparedSend.body}</p>
+                </div>
+              ) : null}
+              <ConfirmAttachments
+                preparedId={preparedSend.id}
+                attachments={preparedSend.attachments ?? []}
+                onChange={files => setPreparedSend(p => (p ? { ...p, attachments: files } : p))}
               />
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <span className="text-zinc-500">From:</span>
+                <select
+                  value={sendAs}
+                  onChange={e => {
+                    const next = e.target.value as 'support' | 'antonio'
+                    setSendAs(next)
+                    // Coerce the STATE, not just the display: "hat" isn't offered
+                    // for support, so the control would read "Full" while the POST
+                    // still carried "hat".
+                    if (next === 'support' && signatureVariant === 'hat') setSignatureVariant('gala')
+                  }}
+                  disabled={confirming}
+                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs text-zinc-800 disabled:opacity-50"
+                >
+                  <option value="support">support@tonydurante.us</option>
+                  <option value="antonio">antonio.durante@tonydurante.us</option>
+                </select>
+                {/* Same per-email chooser as the Inbox card and manual compose
+                    (Antonio, 2026-08-07 — the Inbox-only picker left this surface
+                    silently sending the full signature). */}
+                <SignatureControls
+                  sender={sendAs}
+                  variant={signatureVariant}
+                  onVariantChange={setSignatureVariant}
+                  disabled={confirming}
+                />
+              </div>
+              {/* The chooser is blind without a preview — the signature is attached
+                  server-side. Scrolls so the full variant can't swallow the card. */}
+              <div className="mt-2 max-h-36 overflow-y-auto">
+                <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} collapsible />
+              </div>
             </div>
-            {/* The chooser is blind without a preview — the signature is attached
-                server-side. Scrolls so the full variant can't swallow the card. */}
-            <div className="mt-2 max-h-36 overflow-y-auto">
-              <SignaturePreview sender={sendAs} variant={signatureVariant} authorWritesClosing={false} />
-            </div>
-            <div className="mt-2.5 flex items-center gap-2">
-              <button
-                onClick={() => void resolvePreparedSend('confirm')}
-                disabled={confirming}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {confirming ? 'Sending…' : 'Confirm & send'}
-              </button>
-              <button
-                onClick={() => void resolvePreparedSend('cancel')}
-                disabled={confirming}
-                className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
-              >
-                Cancel
-              </button>
+            {/* PINNED action row — never scrolls away. */}
+            <div className="shrink-0 px-4 pb-3">
+              <div className="pt-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => void resolvePreparedSend('confirm')}
+                  disabled={confirming}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {confirming ? 'Sending…' : 'Confirm & send'}
+                </button>
+                <button
+                  onClick={() => void resolvePreparedSend('cancel')}
+                  disabled={confirming}
+                  className="px-3 py-1.5 rounded-lg border border-zinc-300 text-zinc-700 text-sm hover:bg-zinc-100 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         )}
