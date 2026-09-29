@@ -171,3 +171,18 @@ describe('real tax configs', () => {
     }
   })
 })
+
+describe('stored strings never accept a lone decimal comma (E2E QA 2026-09-29)', () => {
+  it('"80,00" left in form data blocks and is not coerced to 80', () => {
+    const data = { distributions: '80,00' }
+    expect(findMoneyProblems(steps, fields, data)).toEqual([
+      { key: 'distributions', stepIndex: 1, problem: 'unanswered', detail: 'unreadable' },
+    ])
+    expect(normalizeMoneyData(steps, fields, data, { clearHiddenPending: true }).distributions).toBe('80,00')
+  })
+  it('summary message matches the box for a wrong currency', () => {
+    const [p] = findMoneyProblems(steps, fields, { distributions: '€80.000' })
+    expect(p.detail).toBe('wrong_currency')
+    expect(moneyProblemMessage(p).en).toBe('Enter the amount in US dollars.')
+  })
+})

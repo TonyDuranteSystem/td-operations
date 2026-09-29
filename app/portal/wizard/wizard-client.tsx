@@ -10,7 +10,7 @@ import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
 import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
-import { isFieldVisible, findMoneyProblems, normalizeMoneyData, stepIndexForKey, moneyProblemMessage, type MoneyProblem } from '@/lib/portal/wizard-money'
+import { isFieldVisible, findMoneyProblems, listMoneyKeys, normalizeMoneyData, stepIndexForKey, moneyProblemMessage, type MoneyProblem } from '@/lib/portal/wizard-money'
 import { AlertCircle, CheckCircle, Lock, Pencil, Plus, Trash2 } from 'lucide-react'
 
 const UPLOAD_BUCKET = 'onboarding-uploads'
@@ -1019,7 +1019,10 @@ export function WizardClient({
           const first = localized[0]
           const owner = stepIndexForKey(steps, fields, first.field)
           if (owner >= 0 && owner !== currentStep) {
-            setMoneyJumpBanner(true)
+            // The amount banner only when the error IS an amount — other
+            // server errors (a blank required text field) jump without it.
+            const moneyKeys = new Set(listMoneyKeys(steps, fields, submitData).map(r => r.key))
+            setMoneyJumpBanner(moneyKeys.has(first.field))
             setCurrentStep(owner)
           }
           setScrollToKey(first.field)
@@ -1602,6 +1605,11 @@ export function WizardClient({
                               const newCount = count - 1
                               setRepeaterCounts(prev => ({ ...prev, [field.name]: newCount }))
                               setRepeaterVersion(prev => ({ ...prev, [field.name]: (prev[field.name] ?? 0) + 1 }))
+                              // Rows slide up a slot, so a raised error keyed by
+                              // row index would land on the wrong row — drop this
+                              // repeater's row errors (the next Avanti re-raises
+                              // any that still apply).
+                              setFieldErrors(prev => prev.filter(e => !e.field.startsWith(`${field.name}_`)))
                               handleFieldChange(`${field.name}_count`, newCount)
                               setFormData(prev => {
                                 // Shift every row ABOVE the removed one down a

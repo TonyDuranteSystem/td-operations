@@ -85,13 +85,21 @@ export function MoneyInput({
   // the prop — blur tidies ONLY edited text, never a loaded value (a legacy
   // 10.596 must stay 10.596 on screen, not silently turn into "10,596").
   const [edited, setEdited] = useState(false)
+  // True while the box holds text WE formatted US-style ("80,000") and the
+  // client edits it: a lone decimal comma is then refused, so deleting the
+  // last digit ("80,00") is never silently read as $80. Reset once the box
+  // is emptied (fresh typing may use an Italian decimal comma, "80,50").
+  const [fromFormatted, setFromFormatted] = useState(() => boxTextForValue(value).includes(','))
+  const parseOpts: MoneyParseOptions = { ...options, allowCommaDecimal: !fromFormatted && (options?.allowCommaDecimal ?? true) }
   const lastEmitted = useRef<MoneyValue>(value)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!Object.is(value, lastEmitted.current)) {
       lastEmitted.current = value
-      setText(boxTextForValue(value))
+      const t = boxTextForValue(value)
+      setText(t)
+      setFromFormatted(t.includes(','))
       setSavedAs(null)
       setEdited(false)
     }
@@ -106,7 +114,9 @@ export function MoneyInput({
     setText(t)
     setEdited(true)
     setSavedAs(null)
-    const r = parseMoneyInput(t, options)
+    const commaOk = t.trim() === '' ? true : !fromFormatted
+    if (t.trim() === '') setFromFormatted(false)
+    const r = parseMoneyInput(t, { ...parseOpts, allowCommaDecimal: commaOk && (options?.allowCommaDecimal ?? true) })
     if (r.kind === 'ok') emit(r.value)
     else if (r.kind === 'empty') emit('')
     else emit(t)
@@ -115,17 +125,20 @@ export function MoneyInput({
   const handleBlur = () => {
     setFocused(false)
     if (!edited) return
-    const r = parseMoneyInput(text, options)
+    const r = parseMoneyInput(text, parseOpts)
     if (r.kind !== 'ok') return
     const tidy = formatMoneyUS(r.value)
     if (tidy !== text) setText(tidy)
+    setFromFormatted(tidy.includes(','))
     if (r.normalized) setSavedAs(r.value)
     setEdited(false)
   }
 
   const choose = (n: number) => {
     emit(n)
-    setText(formatMoneyUS(n))
+    const t = formatMoneyUS(n)
+    setText(t)
+    setFromFormatted(t.includes(','))
     setSavedAs(n)
     setEdited(false)
   }
@@ -133,6 +146,7 @@ export function MoneyInput({
   const retype = () => {
     emit('')
     setText('')
+    setFromFormatted(false)
     setSavedAs(null)
     setEdited(false)
     inputRef.current?.focus()
@@ -161,7 +175,7 @@ export function MoneyInput({
   }
 
   // ── What the single slot under the box shows (one thing at a time) ──
-  const parsed = parseMoneyInput(text, options)
+  const parsed = parseMoneyInput(text, parseOpts)
   let slot: ReactNode = null
   let blocking = false
 
@@ -221,7 +235,7 @@ export function MoneyInput({
   } else if (!edited && typeof value === 'number') {
     // A stored number that no longer passes (legacy 10.596, or a negative in
     // a min-0 field) — shown unrounded above, explained here.
-    const problem = checkStoredMoney(value, options)
+    const problem = checkStoredMoney(value, parseOpts)
     if (problem) {
       blocking = true
       const m = moneyProblemMessage({ problem }, text || value)
@@ -236,7 +250,10 @@ export function MoneyInput({
   if (!slot && savedAs !== null) {
     slot = <p className="text-xs text-emerald-700">{savedAsLine(savedAs)}</p>
   }
-  if (!slot && error) {
+  // Not while the client is in the box: an "answer the question under the
+  // box" error with the question hidden (it shows on blur) would contradict
+  // itself.
+  if (!slot && error && !focused) {
     blocking = true
     slot = <p className="text-xs text-red-500">{error}</p>
   }

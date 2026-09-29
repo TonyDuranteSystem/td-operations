@@ -250,3 +250,21 @@ describe('amountInWords', () => {
     expect(amountInWords(-5, 'en')).toBeNull()
   })
 })
+
+describe('allowCommaDecimal (E2E QA 2026-09-29: editing "80,000" → "80,00")', () => {
+  it('a lone decimal comma is refused when turned off', () => {
+    expect(parseMoneyInput('80,00', { allowCommaDecimal: false })).toEqual(inv('unreadable'))
+    expect(parseMoneyInput('1,50', { allowCommaDecimal: false })).toEqual(inv('unreadable'))
+  })
+  it('US thousands and full European format still read', () => {
+    expect(parseMoneyInput('80,000', { allowCommaDecimal: false })).toEqual(ok(80000))
+    expect(parseMoneyInput('1.234,56', { allowCommaDecimal: false })).toEqual(ok(1234.56, true))
+  })
+  it('on by default', () => {
+    expect(parseMoneyInput('80,00')).toEqual(ok(80, true))
+  })
+  it('no mixed-notation words for amounts over 1000 with cents', () => {
+    expect(amountInWords(1234.56, 'it')).toBeNull()
+    expect(amountInWords(999.5, 'en')).toBe('999 dollars and 50 cents')
+  })
+})

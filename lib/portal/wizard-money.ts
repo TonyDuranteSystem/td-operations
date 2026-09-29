@@ -54,6 +54,14 @@ export function moneyOptionsFor(field: FieldConfig): MoneyParseOptions {
   return { allowNegative: field.min === undefined || field.min < 0, currency: 'USD', maxDecimals: 2 }
 }
 
+/** Options for judging a value ALREADY IN form data. A string there is never
+ *  a settled amount (the box sends a number once it reads cleanly), so a lone
+ *  decimal comma is NOT accepted: "80,00" left behind by deleting the last
+ *  digit of "80,000" must block, never be coerced to 80 at submit. */
+function storedOptionsFor(field: FieldConfig): MoneyParseOptions {
+  return { ...moneyOptionsFor(field), allowCommaDecimal: false }
+}
+
 export interface MoneyKeyRef {
   key: string
   field: FieldConfig
@@ -103,8 +111,9 @@ export interface MoneyProblem {
   stepIndex: number
   problem: StoredMoneyProblem
   /** 'ambiguous' when the stored string is an unanswered "80.000"-style
-   *  question, 'unreadable' when it simply can't be read. */
-  detail?: 'ambiguous' | 'unreadable'
+   *  question; otherwise why it can't be read (so the summary list says the
+   *  same thing as the box). */
+  detail?: 'ambiguous' | 'unreadable' | 'wrong_currency' | 'too_large'
 }
 
 /** Problems on VISIBLE money keys only (a hidden field can never block). */
@@ -117,12 +126,17 @@ export function findMoneyProblems(
   for (const ref of listMoneyKeys(steps, fields, data)) {
     if (!ref.visible) continue
     const value = data[ref.key]
-    const opts = moneyOptionsFor(ref.field)
+    const opts = storedOptionsFor(ref.field)
     const problem = checkStoredMoney(value, opts)
     if (!problem) continue
     let detail: MoneyProblem['detail']
     if (problem === 'unanswered' && typeof value === 'string') {
-      detail = parseMoneyInput(value, opts).kind === 'ambiguous' ? 'ambiguous' : 'unreadable'
+      const r = parseMoneyInput(value, opts)
+      detail = r.kind === 'ambiguous'
+        ? 'ambiguous'
+        : r.kind === 'invalid' && (r.reason === 'wrong_currency' || r.reason === 'too_large')
+          ? r.reason
+          : 'unreadable'
     }
     problems.push({ key: ref.key, stepIndex: ref.stepIndex, problem, detail })
   }
@@ -145,8 +159,7 @@ export function normalizeMoneyData<T extends Record<string, unknown>>(
   const next: Record<string, unknown> = { ...data }
   for (const ref of listMoneyKeys(steps, fields, data)) {
     if (!(ref.key in next)) continue
-    const opts = moneyOptionsFor(ref.field)
-    const coerced = coerceMoneyValue(next[ref.key], opts)
+    const coerced = coerceMoneyValue(next[ref.key], storedOptionsFor(ref.field))
     if (clearHiddenPending && !ref.visible && typeof coerced === 'string' && coerced !== '') {
       next[ref.key] = ''
     } else {
@@ -188,6 +201,12 @@ export function moneyProblemMessage(p: Pick<MoneyProblem, 'problem' | 'detail'>,
       }
     }
     case 'unanswered':
+      if (p.detail === 'wrong_currency') {
+        return { en: 'Enter the amount in US dollars.', it: "Inserisci l'importo in dollari USA." }
+      }
+      if (p.detail === 'too_large') {
+        return { en: 'This amount is too large. Please check it.', it: 'Questo importo è troppo grande. Controllalo.' }
+      }
       if (p.detail === 'ambiguous') {
         return {
           en: 'Which amount did you mean? Choose one of the options under the box.',

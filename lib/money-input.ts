@@ -41,6 +41,11 @@ export interface MoneyParseOptions {
   currency?: MoneyCurrency
   maxDecimals?: number
   max?: number
+  /** Accept a lone comma as the decimal mark ("80,50" = 80.50). The box turns
+   *  this OFF while the client is editing text it formatted US-style itself:
+   *  deleting the last digit of "80,000" leaves "80,00", which must never be
+   *  silently read as $80 (E2E QA 2026-09-29). */
+  allowCommaDecimal?: boolean
 }
 
 export type MoneyInvalidReason =
@@ -68,6 +73,7 @@ const DEFAULTS: Required<MoneyParseOptions> = {
   currency: 'USD',
   maxDecimals: 2,
   max: 1e13,
+  allowCommaDecimal: true,
 }
 
 // Currency tokens, longest first so "US$" is consumed before "$".
@@ -193,7 +199,7 @@ export function parseMoneyInput(text: string, options: MoneyParseOptions = {}): 
     // "80,000" — US thousands
     if (GROUPED(',').test(s)) return finish(Number(intPart + decPart), false)
     // "80,5" / "80,50" — decimal comma
-    if (decPart.length <= Math.min(2, opts.maxDecimals) && intPart !== '') {
+    if (opts.allowCommaDecimal && decPart.length <= Math.min(2, opts.maxDecimals) && intPart !== '') {
       return finish(withDecimals(intPart, decPart), true)
     }
     return { kind: 'invalid', reason: decPart.length > opts.maxDecimals ? 'too_many_decimals' : 'unreadable' }
@@ -383,7 +389,7 @@ export function amountInWords(n: number, lang: 'en' | 'it', currency: MoneyCurre
   const unitMany = currency === 'EUR' ? (lang === 'it' ? 'euro' : 'euros') : lang === 'it' ? 'dollari' : 'dollars'
 
   if (cents !== 0) {
-    if (whole >= 10000) return null
+    if (whole >= 1000) return null
     const centWord = lang === 'it' ? (cents === 1 ? 'centesimo' : 'centesimi') : cents === 1 ? 'cent' : 'cents'
     const joiner = lang === 'it' ? 'e' : 'and'
     return `${whole} ${whole === 1 ? unitOne : unitMany} ${joiner} ${cents} ${centWord}`
