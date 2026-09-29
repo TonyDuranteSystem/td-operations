@@ -35,6 +35,7 @@ import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identi
 import { createSD } from "@/lib/operations/service-delivery"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import type { Json } from "@/lib/database.types"
+import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 interface OnboardingPayload {
@@ -1155,8 +1156,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     // Check if tax return is bundled (included) in the client's offer
     let taxReturnIncludedInOffer = false
     if (p.lead_id || p.offer_id) {
-      let taxOfferQuery = supabaseAdmin.from("offers").select("services, bundled_pipelines")
-      taxOfferQuery = p.lead_id ? taxOfferQuery.eq("lead_id", p.lead_id) : taxOfferQuery.eq("id", p.offer_id!)
+      let taxOfferQuery = supabaseAdmin.from("offers").select("token, status, services, bundled_pipelines, selected_services")
+      // The offer this onboarding came from wins; the lead's newest offer is only a fallback.
+      taxOfferQuery = p.offer_id ? taxOfferQuery.eq("id", p.offer_id) : taxOfferQuery.eq("lead_id", p.lead_id!)
       const { data: offer } = await taxOfferQuery
         .in("status", ["completed", "signed", "viewed", "sent"])
         .order("created_at", { ascending: false })
@@ -1168,7 +1170,20 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         const services = Array.isArray(offer.services) ? offer.services : []
         if (pipelines.some((p: string) => /tax.return/i.test(p))) {
           // On the paid onboarding offer = paid, whatever its price (Antonio 2026-09-27).
-          if (offerSellsTaxReturn(services)) {
+          // Paid only if that offer was actually paid; optional lines count only if chosen.
+          const { data: act } = await supabaseAdmin
+            .from("pending_activations")
+            .select("status, payment_confirmed_at")
+            .eq("offer_token", offer.token)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          const paid = offerCountsAsPaid({
+            offerStatus: offer.status,
+            activationStatus: act?.status ?? null,
+            paymentConfirmedAt: act?.payment_confirmed_at ?? null,
+          })
+          if (paid && offerSellsTaxReturn(services, offer.selected_services)) {
             taxReturnIncludedInOffer = true
           }
         }

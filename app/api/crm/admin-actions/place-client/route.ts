@@ -24,6 +24,7 @@ import { canPerform } from "@/lib/permissions"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
+import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 // ─── Types ───
@@ -556,7 +557,7 @@ async function createTaxReturnRecord(
       if (lead?.id) {
         const { data: offer } = await supabaseAdmin
           .from("offers")
-          .select("services, bundled_pipelines")
+          .select("token, status, services, bundled_pipelines, selected_services")
           .eq("lead_id", lead.id)
           .in("status", ["completed", "signed", "viewed", "sent"])
           .order("created_at", { ascending: false })
@@ -567,7 +568,20 @@ async function createTaxReturnRecord(
           const pipelines = Array.isArray(offer.bundled_pipelines) ? offer.bundled_pipelines : []
           const services = Array.isArray(offer.services) ? offer.services : []
           if (pipelines.some((p: string) => /tax.return/i.test(p))) {
-            if (offerSellsTaxReturn(services)) isBundled = true
+            // Paid only if the offer itself was paid — a sent/viewed offer is not.
+            const { data: act } = await supabaseAdmin
+              .from("pending_activations")
+              .select("status, payment_confirmed_at")
+              .eq("offer_token", offer.token)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            const paid = offerCountsAsPaid({
+              offerStatus: offer.status,
+              activationStatus: act?.status ?? null,
+              paymentConfirmedAt: act?.payment_confirmed_at ?? null,
+            })
+            if (paid && offerSellsTaxReturn(services, offer.selected_services)) isBundled = true
           }
         }
       }

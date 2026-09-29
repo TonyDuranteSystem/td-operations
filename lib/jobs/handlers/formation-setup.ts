@@ -106,7 +106,7 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
  * The revision string proves the BUNDLE is fresh (it changes when this file
  * changes); the deployment id proves WHICH deployment served it.
  */
-const HANDLER_REVISION = "ca788354-resubmit-gate-v1+crm-store-pilot-s6"
+const HANDLER_REVISION = "ca788354-resubmit-gate-v1+crm-store-pilot-s6+s1-offer-anchor"
 
 /** The build identity line, emitted as the FIRST step of every run. */
 export function buildIdentityDetail(
