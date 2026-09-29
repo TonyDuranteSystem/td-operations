@@ -259,6 +259,29 @@ describe("label questions + the move's Re-check (live sandbox)", () => {
     expect((await sf(x.fileId)).published).toBe(false)
   }, 120_000)
 
+  it("two tabs setting the type of the same Drive-left file at once: one record on the store, one ledger entry, nothing reverted", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const x = await driveLeft("Left twice.pdf")
+    const res = await Promise.allSettled([
+      setStoreFileType({ fileId: x.fileId, typeSlug: "office_lease", actorId: actor }),
+      setStoreFileType({ fileId: x.fileId, typeSlug: "office_lease", actorId: actor }),
+    ])
+    expect(res.some((r) => r.status === "fulfilled")).toBe(true)
+    expect(await row(x.rowId)).toMatchObject({ drive_file_id: `store:${x.fileId}`, portal_visible: true })
+    expect((await sf(x.fileId)).published).toBe(true)
+    const { data: it } = await db.from("store_import_items").select("repointed").eq("source_id", x.driveId).single()
+    expect(it.repointed.filter((r: { id: string }) => r.id === x.rowId)).toHaveLength(1)
+  }, 120_000)
+
+  it("a file's own record that shows a file the storage keeps hidden is lined up (a staff-only type hides both)", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const f = await file(g.company, "company", "Mismatch.pdf", "operating_agreement", "Operating Agreement", false)
+    await db.from("documents").update({ portal_visible: true }).eq("id", f.rowId) // the mismatch an old path left
+    await setStoreFileType({ fileId: f.fileId, typeSlug: "formation_summary", actorId: actor })
+    expect((await sf(f.fileId)).published).toBe(false)
+    expect((await row(f.rowId)).portal_visible).toBe(false)
+  }, 120_000)
+
   it("a Drive-left visible file whose new home can't show it yet (Needs review) keeps opening from Drive — the client keeps it", async () => {
     const { setStoreFileType } = await import("@/lib/crm-store/set-type")
     const { markNeedsReview } = await import("@/lib/crm-store/structure")

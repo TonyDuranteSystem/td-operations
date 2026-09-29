@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
-import { kindForTopFolder, pickPerson, buildReport, skipReasonFor, cleanImportName, type ImportItem } from "@/lib/crm-store/drive-import"
+import { kindForTopFolder, pickPerson, buildReport, skipReasonFor, cleanImportName, WAITING_RE, WAITING_SENTENCE_RE, type ImportItem } from "@/lib/crm-store/drive-import"
 
 const item = (p: Partial<ImportItem>): ImportItem => ({
   id: "i", run_id: "r", source: "drive", source_id: "d", drive_path: [], name: "f.pdf", mime_type: "application/pdf", size_bytes: 10,
@@ -64,6 +64,18 @@ describe("drive import — pure rules", () => {
     expect(r.skipped).toEqual([{ name: "f.pdf", where: "top of the Drive folder", reason: "Google Docs" }])
     expect(buildReport([...items, item({ status: "failed", reason: "x" })], []).parityOk).toBe(false)
     expect(buildReport([...items, item({ status: "pending" })], []).parityOk).toBe(false)
+  })
+  it("the 'still opens from Drive' sentences are found and removed exactly (every wording, parentheses inside)", () => {
+    const cases = [
+      ["Kept once. The client could see it but it has no type — its CRM record still opens from Drive until it gets one (Needs a type).", "Kept once."],
+      ["The client could see this but the new storage cannot show it as it is (needs review) — its CRM record still opens from Drive; check it (Still on Drive).", ""],
+      ["Top. The client could see this but the new storage refused to show it (store: a draft is never shown) — its CRM record still opens from Drive; check it (Still on Drive). Backup ok.", "Top. Backup ok."],
+    ]
+    for (const [text, rest] of cases) {
+      expect(WAITING_RE.test(text)).toBe(true)
+      expect(text.replace(WAITING_SENTENCE_RE, "").replace(/\s+/g, " ").trim()).toBe(rest)
+    }
+    expect(WAITING_RE.test("Type set later: Passport.")).toBe(false)
   })
   it("lists the files the client sees that have no type (their records still open from Drive)", () => {
     const r = buildReport([

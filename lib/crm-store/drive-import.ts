@@ -99,7 +99,7 @@ export function pickPerson(p: { rowContactId: string | null; subfolder: string |
 /** A file stored while its CRM record keeps opening from Drive (no type yet, or not showable as it is). */
 export const WAITING_RE = /\((Needs a type|Still on Drive)\)/
 /** Removes that sentence from a ledger note once the record has come over. */
-export const WAITING_SENTENCE_RE = /\s*The client could see (this|it) but [^(]*\((Needs a type|Still on Drive)\)\.?/
+export const WAITING_SENTENCE_RE = /\s*The client could see (this|it) but .*?\((Needs a type|Still on Drive)\)\.?/
 
 /** Pure: the parity report of a run from its ledger rows. Parity holds when nothing failed and nothing is pending. */
 export function buildReport(items: ImportItem[], stillReadDrive: string[]): ImportReport {
@@ -556,20 +556,28 @@ async function mergeInto(it: ImportItem, fileId: string, rows: DocRow[], ctx: Ct
     // the kept file only has the placeholder row THIS move listed (its first copy had no CRM record): the real
     // record takes its place — the placeholder goes, the real one follows the store with its own visibility
     const placeholder = taken?.length ? await placeholderOf(ctx.runId, taken[0].id as string) : null
+    const vis = live.some((r) => r.portal_visible === true)
+    // the client sees it: the kept copy must be shown FIRST — if the new storage can't (a draft, staff-only,
+    // needs review …) the record keeps opening from Drive and is listed for staff (never a visible record on a
+    // file the storage keeps hidden)
+    if (vis && (!taken?.length || placeholder)) {
+      const { error } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: true, p_actor: ctx.actorId })
+      if (error) {
+        const { data: f } = await db().from("store_files").select("owner_id, folder_id").eq("id", fileId).maybeSingle()
+        return { status: "merged", store_file_id: fileId, reason: `${reason} The client could see it but the new storage refused to show the kept copy — ${error.message.replace(/^store: /, "")} — its CRM record still opens from Drive; check it (Still on Drive).`, repointed: [], landed_in: f ? await pathOf(f.folder_id, f.owner_id) : null }
+      }
+    }
     if (placeholder) {
       const { error } = await db().from("documents").delete().eq("id", placeholder.rowId).eq("drive_file_id", storePointer(fileId))
       if (error) throw new Error(`The listed copy could not be replaced by the CRM record (${error.message}).`)
       await db().from("store_import_items").update({ repointed: placeholder.rest, updated_at: new Date().toISOString() }).eq("id", placeholder.itemId)
     }
     if (!taken?.length || placeholder) {
-      const vis = live.some((r) => r.portal_visible === true)
       repointed = await repointRows(live, fileId, null, null, it, ctx, vis)
-      if (vis) {
-        const { error } = await db().rpc("store_set_published", { p_file_id: fileId, p_published: true, p_actor: ctx.actorId })
-        if (error) reason += ` The client could see it before; the new storage keeps it hidden (${error.message.replace(/^store: /, "")}) — check.`
-      }
     } else {
-      reason += " Its CRM record still points to Drive."
+      reason += vis
+        ? " The client could see it but the kept copy already has its own CRM record — this record still opens from Drive; check it (Still on Drive)."
+        : " Its CRM record still points to Drive."
     }
   }
   const { data: f } = await db().from("store_files").select("owner_id, folder_id").eq("id", fileId).maybeSingle()
@@ -775,7 +783,7 @@ export async function recheckRunTypes(runId: string, actorId: string | null): Pr
       typed++
     } catch (e) {
       if (e instanceof SetTypeQuestionError) { needAnswer++; continue }
-      if (e instanceof Error && /being undone|still running/.test(e.message)) throw e
+      if (e instanceof Error && /being undone/.test(e.message)) throw e
       failed++ // one file that can't be typed never stops the others (Set type on it shows why)
       console.error(`[crm-store] re-check: ${fileId}: ${e instanceof Error ? e.message : e}`)
     }

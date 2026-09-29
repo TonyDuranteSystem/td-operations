@@ -244,6 +244,9 @@ describe("move — identical copies with and without a type, a retried file, a f
     g.cNote = await up(contacts, "C note.pdf", `ZZ MOVE2 note ${tag}`)
     g.dNote = await up(contacts, "D note.pdf", `ZZ MOVE2 note ${tag}`)
     g.eId = await up(contacts, "E id.pdf", `ZZ MOVE2 id ${tag}`)
+    // a personal RETURN twice: the hidden copy is stored first (a draft), the copy the client sees merges onto it
+    g.fNr = await up(contacts, "F nr.pdf", `ZZ MOVE2 1040-NR ${tag}`)
+    g.gNr = await up(contacts, "G nr copy.pdf", `ZZ MOVE2 1040-NR ${tag}`)
     g.letter = await up(corr, "Letter.pdf", `ZZ MOVE2 letter ${tag}`)
     g.letter2 = await up(corr, "Letter two.pdf", `ZZ MOVE2 letter two ${tag}`)
     g.account = await insert("accounts", { company_name: `ZZ MOVE2 LLC ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: top })
@@ -252,6 +255,9 @@ describe("move — identical copies with and without a type, a retried file, a f
     if (error) throw new Error(error.message)
     const legacy = (await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", "passport").single()).data.metadata.legacy_document_type_id as number
     g.rowB = await insert("documents", { drive_file_id: g.bPassport, file_name: "B passport.pdf", account_id: g.account, contact_id: g.person, document_type_id: legacy, document_type_name: "Passport", category: 2, portal_visible: true, status: "classified" })
+    const nr = (await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", "form_1040_nr").single()).data.metadata.legacy_document_type_id as number | undefined
+    g.rowF = await insert("documents", { drive_file_id: g.fNr, file_name: "F nr.pdf", account_id: g.account, contact_id: g.person, document_type_id: nr ?? null, document_type_name: "Form 1040-NR", category: 3, portal_visible: false, status: "classified" })
+    g.rowG = await insert("documents", { drive_file_id: g.gNr, file_name: "G nr copy.pdf", account_id: g.account, contact_id: g.person, document_type_id: nr ?? null, document_type_name: "Form 1040-NR", category: 3, portal_visible: true, status: "classified" })
     g.rowD = await insert("documents", { drive_file_id: g.dNote, file_name: "D note.pdf", account_id: g.account, contact_id: g.person, category: 2, portal_visible: true, status: "classified" })
   }, 240_000)
 
@@ -274,6 +280,12 @@ describe("move — identical copies with and without a type, a retried file, a f
     expect(by(g.dNote).status).toBe("merged")
     expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", g.rowD).single()).data).toEqual({ drive_file_id: g.dNote, portal_visible: true })
     expect(v.report?.waitingForType.map((x) => x.name)).toContain("D note.pdf")
+    // the visible copy of a DRAFT return is never re-pointed onto the hidden draft: it keeps opening from Drive, listed
+    expect(by(g.gNr).status).toBe("merged")
+    expect(by(g.gNr).store_file_id).toBe(by(g.fNr).store_file_id)
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", g.rowG).single()).data).toEqual({ drive_file_id: g.gNr, portal_visible: true })
+    expect(by(g.gNr).reason).toMatch(/Still on Drive/)
+    expect(v.report?.waitingForType.map((x) => x.name)).toContain("G nr copy.pdf")
   }, 300_000)
 
   it("a personal file that runs again (a batch that died after saving) recognises its own copy — never 'merged into itself'", async () => {
