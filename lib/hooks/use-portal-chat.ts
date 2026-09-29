@@ -78,11 +78,17 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // lands). Lets the component wait for the NEW company's data before acting
   // on `topics` after a switch.
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
+  const loadedKeyRef = useRef<string | null>(null)
+  const markLoaded = (q: string) => { loadedKeyRef.current = q; setLoadedKey(q) }
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
     setLoading(true)
     setHasMore(true)
+    // Switching to a different view: never leave the previous company's
+    // messages on screen under the new company's header (e.g. if this load
+    // then fails). Same-view reloads keep what is shown.
+    if (loadedKeyRef.current !== queryParam) setMessages([])
     const seq = ++fetchSeqRef.current
     const startMark = eventMarkRef.current
     const q = queryParam
@@ -101,7 +107,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // while this fetch was in flight.
         setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live, deletedIds: deleted }).messages)
         setHasMore(msgs.length >= 50)
-        setLoadedKey(q)
+        markLoaded(q)
         fetch('/api/portal/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -165,8 +171,15 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
         // Decide against the list as it is NOW (messagesRef lags one render at
         // most; the updater below re-merges against the true latest state).
-        const probe = mergeRefreshedMessages({ fetched: msgs, held: messagesRef.current, limit, liveIds: live, deletedIds: deleted })
-        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit, liveIds: live, deletedIds: deleted }).messages)
+        // If this view's first load hasn't landed yet (the reconnect refresh
+        // won the race), what's on screen may still be the PREVIOUS company's
+        // list — merge against nothing, or its rows would be kept as "older
+        // history" of this view.
+        const sameView = loadedKeyRef.current === q
+        const probe = mergeRefreshedMessages({ fetched: msgs, held: sameView ? messagesRef.current : [], limit, liveIds: live, deletedIds: deleted })
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: sameView ? prev : [], limit, liveIds: live, deletedIds: deleted }).messages)
+        // Either load or refresh may be the one that lands first for a view.
+        if (!sameView) { markLoaded(q); setLoading(false) }
         // A short response means the whole thread fits in it: nothing older exists.
         // A full one with a gap (more arrived while away than the window holds)
         // restarts paging from the fetched window. Otherwise hasMore stays as the

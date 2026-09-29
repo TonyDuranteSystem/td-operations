@@ -136,56 +136,86 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // ruled on the whole-chat product question).
   const [activeTopic, setActiveTopic] = useState<string | null>(initialTopic)
   const [creatingTopic, setCreatingTopic] = useState(false)
-  // Deep-link guard: if the linked topic has no messages for this client (an
-  // old link, a topic on a different company), fall back to General instead of
-  // stranding them on an empty tab they can't explain. Runs once, after load.
-  //
-  // 2026-09-29 (dev job 05d997f2): tabs are built from the loaded messages, so
-  // a linked topic whose messages are all older than the newest page used to
-  // fall straight back to General — the same "email says new message, chat
-  // shows nothing" failure. Page back through history (bounded) until the
-  // topic shows up; only then give up and fall back.
-  const initialTopicChecked = useRef(false)
+  // Which tab we are still trying to open, and whether we may page back
+  // through history to find it (dev job 05d997f2). The tab bar is built from
+  // the LOADED messages, so a linked tab whose messages are all older than the
+  // newest page has no button yet; falling straight back to General there was
+  // the same "email says new message, chat shows nothing" failure. A linked
+  // tab pages back (bounded); a tab merely carried over from a company switch
+  // only checks what is loaded. Not found → General, never an empty tab.
+  const pendingTopicRef = useRef<{ topic: string; allowPaging: boolean } | null>(
+    initialTopic ? { topic: initialTopic, allowPaging: true } : null,
+  )
   const deepLinkPagesRef = useRef(0)
-  // The component is NOT remounted on a company switch or on a bell link
-  // clicked while already on the chat page (a remount would drop the draft, the
-  // send popup's answer and — on the same view — the live channel). So the
-  // per-view state is reset here instead:
-  //  - company changed → the open tab belongs to the old company. Go to the
-  //    linked tab if a link brought us here, else General (a tab carried over
-  //    to a company that doesn't have it shows an empty chat — the very
-  //    symptom this job fixes).
-  //  - only ?topic= changed (bell link, same company) → follow it.
-  // Either way the deep-link search re-arms and waits for the new view's data.
+  const activeTopicRef = useRef(activeTopic)
+  activeTopicRef.current = activeTopic
+  // The client picked a tab themselves: stop any pending search for another.
+  const chooseTopic = useCallback((next: string | null) => {
+    pendingTopicRef.current = null
+    setActiveTopic(next)
+  }, [])
+
+  // Remove the one-shot link parameters once they have done their job. Left in
+  // the address bar, `account` would override the company switcher on every
+  // re-render (the client could no longer switch company), and an unchanged
+  // `topic` would make a second click on the same notification a no-op.
+  const stripLinkParams = useCallback(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('account') && !url.searchParams.has('topic')) return
+    url.searchParams.delete('account')
+    url.searchParams.delete('topic')
+    router.replace(`${url.pathname}${url.search}`, { scroll: false })
+  }, [router])
+
+  // The component is NOT remounted on a company switch or on a notification
+  // link clicked while already on the chat page (a remount would drop the
+  // draft, the send popup's answer and — on the same view — the live channel),
+  // so the per-view state is re-armed here:
+  //  - company changed → keep trying the tab that is open (e.g. the popup sent
+  //    the message to the other company in that tab), or the linked tab when a
+  //    link brought us here; not found in the new company → General.
+  //  - a new ?topic= on the same company (notification link) → go there.
+  //  - ?topic= removed (we stripped it) → nothing to do.
   const lastEntityRef = useRef(selectedEntityId)
   const lastInitialTopic = useRef(initialTopic)
   useEffect(() => {
     const entityChanged = lastEntityRef.current !== selectedEntityId
     const topicChanged = lastInitialTopic.current !== initialTopic
-    if (!entityChanged && !topicChanged) return
     lastEntityRef.current = selectedEntityId
     lastInitialTopic.current = initialTopic
-    const next = entityChanged && !persistEntityFromLink ? null : initialTopic
-    initialTopicChecked.current = !next
-    deepLinkPagesRef.current = 0
-    setActiveTopic(next)
+    if (entityChanged) {
+      const linked = persistEntityFromLink && initialTopic
+      const topic = linked ? initialTopic : activeTopicRef.current
+      pendingTopicRef.current = topic ? { topic, allowPaging: !!linked } : null
+      deepLinkPagesRef.current = 0
+      if (linked) setActiveTopic(initialTopic)
+    } else if (topicChanged && initialTopic) {
+      pendingTopicRef.current = { topic: initialTopic, allowPaging: true }
+      deepLinkPagesRef.current = 0
+      setActiveTopic(initialTopic)
+    }
   }, [selectedEntityId, initialTopic, persistEntityFromLink])
+
   useEffect(() => {
     // `ready` = the loaded messages belong to the CURRENT view; right after a
     // switch `topics` still holds the previous company's tabs.
-    if (initialTopicChecked.current || !ready || !activeTopic) return
-    const wanted = activeTopic
-    if (wanted !== initialTopic) { initialTopicChecked.current = true; return }
-    if (topics.includes(wanted)) { initialTopicChecked.current = true; return }
+    const pending = pendingTopicRef.current
+    if (!pending || !ready) return
+    if (topics.includes(pending.topic)) {
+      pendingTopicRef.current = null
+      stripLinkParams()
+      return
+    }
     if (loadingMore) return
-    if (hasMore && deepLinkPagesRef.current < MAX_DEEP_LINK_PAGES) {
+    if (pending.allowPaging && hasMore && deepLinkPagesRef.current < MAX_DEEP_LINK_PAGES) {
       deepLinkPagesRef.current++
       void loadMore()
       return
     }
-    initialTopicChecked.current = true
-    setActiveTopic(null)
-  }, [ready, loadingMore, hasMore, topics, initialTopic, activeTopic, loadMore])
+    pendingTopicRef.current = null
+    if (activeTopicRef.current === pending.topic) setActiveTopic(null)
+    stripLinkParams()
+  }, [ready, loadingMore, hasMore, topics, loadMore, stripLinkParams])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -222,10 +252,9 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     if (!currentEntity || persistedEntityId.current === currentEntity.id) return
     persistedEntityId.current = currentEntity.id
     writeEntityCookie(currentEntity)
-    const url = new URL(window.location.href)
-    url.searchParams.delete('account')
-    router.replace(`${url.pathname}${url.search}`, { scroll: false })
-  }, [persistEntityFromLink, currentEntity, router])
+    // A pending tab search strips the link itself when it finishes.
+    if (!pendingTopicRef.current) stripLinkParams()
+  }, [persistEntityFromLink, currentEntity, stripLinkParams])
 
   const draftKey = `chat_draft_${selectedEntityId || contactId}`
   const [input, setInput] = useState(() => {
@@ -665,7 +694,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           return (
             <button
               key={key || '__general__'}
-              onClick={() => setActiveTopic(isGeneral ? null : (isActive ? null : key))}
+              onClick={() => chooseTopic(isGeneral ? null : (isActive ? null : key))}
               className={cn(
                 'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
                 isActive
@@ -695,7 +724,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             onChange={e => setNewTopicInput(e.target.value.slice(0, 100))}
             onKeyDown={e => {
               if (e.key === 'Enter' && newTopicInput.trim()) {
-                setActiveTopic(newTopicInput.trim())
+                chooseTopic(newTopicInput.trim())
                 setNewTopicInput('')
                 setCreatingTopic(false)
               } else if (e.key === 'Escape') {
@@ -705,7 +734,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             }}
             onBlur={() => {
               if (newTopicInput.trim()) {
-                setActiveTopic(newTopicInput.trim())
+                chooseTopic(newTopicInput.trim())
               }
               setNewTopicInput('')
               setCreatingTopic(false)
