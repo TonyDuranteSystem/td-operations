@@ -36,12 +36,12 @@ export async function typeNameAnswers(): Promise<Map<string, string>> {
 export async function queueTypeName(label: string, meta: Record<string, unknown>): Promise<boolean> {
   const clean = label.replace(/\s+/g, " ").trim()
   if (!clean) return false
-  const { data: asked, error: aErr } = await db().from("catalog_pending_review").select("id").eq("catalog_id", CATALOG).ilike("submitted_value", clean.replace(/[\\%_]/g, "\\$&")).limit(1)
-  if (aErr) throw new Error(`Could not check the questions (${aErr.message}).`)
-  if ((asked ?? []).length) return false
-  const { count, error: cErr } = await db().from("documents").select("id", { count: "exact", head: true }).ilike("document_type_name", clean.replace(/[\\%_]/g, "\\$&"))
-  if (cErr) throw new Error(`Could not count the records (${cErr.message}).`)
-  if ((count ?? 0) < QUESTION_MIN_RECORDS) return false
+  const { data: st, error: sErr } = await db().rpc("store_document_label_state", { p_label: clean })
+  if (sErr) throw new Error(`Could not check the label (${sErr.message}).`)
+  const state = ((st ?? []) as { records: number; asked: boolean; known: boolean }[])[0]
+  if (!state || state.asked || state.known) return false
+  const count = Number(state.records)
+  if (count < QUESTION_MIN_RECORDS) return false
   const { error } = await db().from("catalog_pending_review").insert({ catalog_id: CATALOG, submitted_value: clean, source: "admin_input", source_metadata: { ...meta, records: count }, status: "pending" })
   if (error && !/duplicate key|uq_catalog_pending_open_value/i.test(error.message)) throw new Error(`Could not ask about "${clean}" (${error.message}).`)
   return !error
@@ -67,8 +67,8 @@ export async function listTypeQuestions(): Promise<TypeQuestion[]> {
   const rows = (data ?? []) as { id: string; submitted_value: string; created_at: string }[]
   const out: TypeQuestion[] = []
   for (const r of rows) {
-    const { count } = await db().from("documents").select("id", { count: "exact", head: true }).ilike("document_type_name", r.submitted_value.replace(/[\\%_]/g, "\\$&"))
-    out.push({ id: r.id, label: r.submitted_value, records: count ?? 0, askedAt: r.created_at })
+    const { data: st } = await db().rpc("store_document_label_state", { p_label: r.submitted_value })
+    out.push({ id: r.id, label: r.submitted_value, records: Number(((st ?? []) as { records: number }[])[0]?.records ?? 0), askedAt: r.created_at })
   }
   return out.sort((a, b) => b.records - a.records || a.label.localeCompare(b.label))
 }
@@ -96,6 +96,15 @@ export async function answerTypeQuestion(id: string, answer: TypeAnswer, actorId
   const added = await addCustomDocumentType({ name: answer.name?.trim() || q.submitted_value, folderKind: answer.folderKind, actorId })
   const entry = await getEntry(CATALOG, added.slug)
   if (!entry) throw new Error("The new type could not be read back — please try again.")
-  await resolvePendingReview(id, added.created ? "approved_added" : "approved_aliased", entry.id, `"${q.submitted_value}" ${added.created ? "added as a new type" : `is the existing type "${entry.display_name}"`}`, actor)
+  try {
+    await resolvePendingReview(id, added.created ? "approved_added" : "approved_aliased", entry.id, `"${q.submitted_value}" ${added.created ? "added as a new type" : `is the existing type "${entry.display_name}"`}`, actor)
+  } catch (e) {
+    // someone else answered first: the type this answer just created is switched off again (never an orphan)
+    if (added.created) {
+      const { deprecateEntry } = await import("@/lib/catalog/framework")
+      await deprecateEntry(entry.id, "Created by an answer that lost to an earlier one", actor).catch(() => undefined)
+    }
+    throw e instanceof Error && /already resolved/.test(e.message) ? new Error("This question was already answered.") : e
+  }
   return { typeSlug: entry.slug }
 }

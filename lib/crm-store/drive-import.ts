@@ -630,6 +630,18 @@ async function finishRun(runId: string, ownerId: string): Promise<void> {
 
 // ─────────────────────────────────────────────────────────────── view + undo
 
+/** Rebuild a finished move's report from its ledger (after Set type / Re-check changed what it lists). */
+export async function refreshRunReport(runId: string): Promise<void> {
+  const { data: run, error } = await db().from("store_import_runs").select("status").eq("id", runId).maybeSingle()
+  if (error) throw new Error(`Could not read the move (${error.message}).`)
+  if (!run || !["done", "incomplete"].includes(run.status)) return
+  const { data: items, error: iErr } = await db().from("store_import_items").select("*").eq("run_id", runId)
+  if (iErr) throw new Error(`Could not read the move's files (${iErr.message}).`)
+  const report = buildReport((items ?? []) as ImportItem[], STILL_READ_DRIVE)
+  const { error: uErr } = await db().from("store_import_runs").update({ report, updated_at: new Date().toISOString() }).eq("id", runId).in("status", ["done", "incomplete"])
+  if (uErr) throw new Error(`Could not update the move's report (${uErr.message}).`)
+}
+
 export async function runView(runId: string): Promise<RunView> {
   const { data: run, error } = await db().from("store_import_runs").select("*").eq("id", runId).maybeSingle()
   if (error) throw new Error(`Could not read the move (${error.message}).`)
@@ -681,7 +693,8 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
     for (const r of it.repointed ?? []) {
       const { error: e } = r.created
         ? await db().from("documents").delete().eq("id", r.id).eq("drive_file_id", r.drive_file_id)
-        : await db().from("documents").update({ drive_file_id: r.drive_file_id, drive_link: r.drive_link, updated_at: new Date().toISOString() }).eq("id", r.id).like("drive_file_id", "store:%")
+        // what the record said before Set type changed it (type, category, company / person) comes back too
+        : await db().from("documents").update({ ...((r as { before?: Record<string, unknown> }).before ?? {}), drive_file_id: r.drive_file_id, drive_link: r.drive_link, updated_at: new Date().toISOString() }).eq("id", r.id).like("drive_file_id", "store:%")
       if (e) { problems.push(`${it.name}: its CRM record could not be put back (${e.message})`); if (it.store_file_id) unrestored.add(it.store_file_id) }
     }
   }
@@ -715,9 +728,12 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
  * rules as by hand (a question it needs — whose passport? — leaves it listed for staff).
  */
 export async function recheckRunTypes(runId: string, actorId: string | null): Promise<{ typed: number; needAnswer: number; stillUnknown: number }> {
-  const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status").eq("id", runId).maybeSingle()
+  const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status, account_id").eq("id", runId).maybeSingle()
   if (rErr) throw new Error(`Could not read the move (${rErr.message}).`)
   if (!run || !["done", "incomplete"].includes(run.status)) throw new Error("Re-check works on a finished move.")
+  const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id").eq("account_id", run.account_id)
+  if (lErr) throw new Error(`Could not read the company's people (${lErr.message}).`)
+  const memberIds = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)
   const { data: types, error: tErr } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("status", "active")
   if (tErr) throw new Error(`Could not read the document types (${tErr.message}).`)
   const map = await loadTypeMap(types ?? [])
@@ -730,9 +746,16 @@ export async function recheckRunTypes(runId: string, actorId: string | null): Pr
   for (const fileId of fileIds) {
     const { data: f } = await db().from("store_files").select("document_type, state").eq("id", fileId).maybeSingle()
     if (!f || f.state !== "live" || f.document_type) continue
+    // stop at once if an Undo started
+    const { data: now } = await db().from("store_import_runs").select("status").eq("id", runId).maybeSingle()
+    if (!now || !["done", "incomplete"].includes(now.status)) throw new Error("The move is being undone — Re-check stopped.")
     const sources = ((items ?? []) as { source_id: string; store_file_id: string }[]).filter((i) => i.store_file_id === fileId).map((i) => i.source_id)
-    const { data: rows } = await db().from("documents").select("document_type_id, document_type_name").in("drive_file_id", [storePointer(fileId), ...sources])
-    const hit = ((rows ?? []) as { document_type_id: number | null; document_type_name: string | null }[]).map((r) => typeOfRow(map, r)).find(Boolean)
+    const { data: rows, error: rowsErr } = await db().from("documents").select("document_type_id, document_type_name, account_id, contact_id").in("drive_file_id", [storePointer(fileId), ...sources])
+    if (rowsErr) throw new Error(`Could not read the CRM records (${rowsErr.message}).`)
+    // this company's records only (the same filter the move uses)
+    const mine = ((rows ?? []) as { document_type_id: number | null; document_type_name: string | null; account_id: string | null; contact_id: string | null }[])
+      .filter((r) => r.account_id === run.account_id || (!r.account_id && r.contact_id && memberIds.includes(r.contact_id)))
+    const hit = mine.map((r) => typeOfRow(map, r)).find(Boolean)
     if (!hit) { stillUnknown++; continue }
     try {
       await setStoreFileType({ fileId, typeSlug: hit.slug, actorId })
@@ -742,5 +765,6 @@ export async function recheckRunTypes(runId: string, actorId: string | null): Pr
       throw e
     }
   }
+  await refreshRunReport(runId)
   return { typed, needAnswer, stillUnknown }
 }

@@ -182,3 +182,18 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | M9 | "Undo the move…" → Yes | Records open from Drive again; the copies in the storage trash; the company page shows Drive again |
 | M10 | Move again after the undo | Works; same report |
 | M11 | Open the TEST Drive folder | Nothing changed there |
+
+## N. Set type and type questions
+| # | Do | Expect |
+|---|---|---|
+| N1 | Any file row → click its type label (or "Needs a type") | The Set type box opens with the current type |
+| N2 | A company file wrongly labelled (e.g. Operating Agreement) → set **Passport** | Asks "whose is it?"; after the answer the file is in that person's storage, shows in the company's "2. Contacts", the client still sees it if they did before |
+| N3 | A file in a person's storage → set a company type (EIN Letter) from the company page | It moves to that company's folder; from the person's own page it asks "move to <company> / keep it" |
+| N4 | A visible file → set **Formation Summary** (staff only) | Hidden from the client, said so |
+| N5 | A visible file → set **Form 1120** | Asks "filed copy / hide until filed"; each answer does what it says |
+| N6 | A filed return → change type | Refused (filed and frozen) |
+| N7 | Storage → Type questions → "Look for unknown labels" | Labels used by 2+ records listed with their record counts; one-offs not listed |
+| N8 | Answer one "Same as…", one "New type", one "Not a type" | Each disappears from the list; a new type appears in the Set type list |
+| N9 | Moved company → report → "Re-check types" | Files whose label is now answered get their type; "Waiting for a type" shrinks |
+| N10 | Report → "Waiting for a type" → Set type | The file gets its type, its record opens from the new storage, the client sees it as before |
+| N11 | Undo the move after N9/N10 | Every record opens from Drive again |

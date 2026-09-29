@@ -118,7 +118,7 @@ export function TypeQuestionsPanel() {
                     className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50">Add</button>
                 </div>
                 <button type="button" disabled={busy === q.id}
-                  onClick={() => void answer(q, { answer: 'reject' }, `"${q.label}" is not a type — those files are typed one by one`)}
+                  onClick={() => { if (window.confirm(`"${q.label}" is not a document type? It won't be asked again — the ${q.records} records with it are given their type one by one (Set type).`)) void answer(q, { answer: 'reject' }, `"${q.label}" is not a type — those files are typed one by one`) }}
                   className="rounded-md px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 disabled:opacity-50">Not a type</button>
               </>
             )}

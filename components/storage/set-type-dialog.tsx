@@ -42,8 +42,10 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
   const [slug, setSlug] = useState<string>(file.documentType ?? '')
   const [question, setQuestion] = useState<Question | null>(null)
   const [choice, setChoice] = useState<string>('')
+  // every answer given so far (a type can need two: whose passport, then "is it the filed copy?")
+  const [answers, setAnswers] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setQuestion(null); setChoice('') }, [slug])
+  useEffect(() => { setQuestion(null); setChoice(''); setAnswers({}) }, [slug])
 
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase()
@@ -53,10 +55,12 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
 
   const submit = async () => {
     if (!slug) return
-    const body: Record<string, unknown> = { type: slug, viewingOwnerId: viewingOwnerId ?? null }
-    if (question?.kind === 'person') body.personContactId = choice
-    if (question?.kind === 'company') body.companyOwnerId = choice
-    if (question?.kind === 'filed') body.filedAnswer = choice
+    const given = { ...answers }
+    if (question?.kind === 'person') given.personContactId = choice
+    if (question?.kind === 'company') given.companyOwnerId = choice
+    if (question?.kind === 'filed') given.filedAnswer = choice
+    setAnswers(given)
+    const body: Record<string, unknown> = { type: slug, viewingOwnerId: viewingOwnerId ?? null, ...given }
     setBusy(true)
     try {
       const r = await fetch(`/api/crm-store/browse/file/${file.id}/type`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -132,9 +136,9 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
         )}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">Cancel</button>
-          <button type="button" disabled={busy || !slug || (slug === file.documentType && !question) || (!!question && !choice)} onClick={() => void submit()}
+          <button type="button" disabled={busy || !slug || (!!question && !choice)} onClick={() => void submit()}
             className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 disabled:opacity-50">
-            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{question ? 'Confirm' : 'Save type'}
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{question ? 'Confirm' : slug === file.documentType ? 'Save again' : 'Save type'}
           </button>
         </div>
       </div>

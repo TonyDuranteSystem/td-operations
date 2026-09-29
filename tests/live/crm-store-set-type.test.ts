@@ -127,6 +127,38 @@ describe("Set type — correcting wrong labels (live sandbox)", () => {
     // a filed return keeps its type
     await expect(setStoreFileType({ fileId: b.fileId, typeSlug: "operating_agreement", actorId: actor })).rejects.toThrow(/filed and frozen/)
   }, 120_000)
+
+  it("a type needing TWO answers (Form 1040-NR on a company file the client sees): whose, then filed? — both kept, lands in the person's tax folder", async () => {
+    const { setStoreFileType, SetTypeQuestionError } = await import("@/lib/crm-store/set-type")
+    const f = await file(g.company, "company", "NR return.pdf", "operating_agreement", "Operating Agreement", true)
+    const ask = async (extra: Record<string, unknown>) => { try { await setStoreFileType({ fileId: f.fileId, typeSlug: "form_1040_nr", actorId: actor, ...extra }); return null } catch (e) { if (e instanceof SetTypeQuestionError) return e.question; throw e } }
+    expect(await ask({})).toMatchObject({ kind: "person" })
+    expect(await ask({ personContactId: g.anna })).toMatchObject({ kind: "filed" })
+    expect(await ask({ personContactId: g.anna, filedAnswer: "filed" })).toBeNull()
+    const after = await sf(f.fileId)
+    expect(after).toMatchObject({ document_type: "form_1040_nr", published: true, filing_status: "filed" })
+    expect(["person_tax_year", "person_tax"]).toContain(after.store_folders.kind)
+    expect(await row(f.rowId)).toMatchObject({ contact_id: g.anna, category: 2, portal_visible: true })
+  }, 120_000)
+
+  it("a personal type on a file already in a person's storage gives its record that person (never an unresolved personal document)", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const f = await file(g.marioOwner, "personal", "ID scan.pdf", "office_lease", "Office Lease", false, { contact_id: null, category: 1 })
+    await setStoreFileType({ fileId: f.fileId, typeSlug: "passport", actorId: actor })
+    expect(await row(f.rowId)).toMatchObject({ contact_id: g.mario, category: 2 })
+  }, 120_000)
+
+  it("only the company's live people are offered (a former member is not)", async () => {
+    const { setStoreFileType, SetTypeQuestionError } = await import("@/lib/crm-store/set-type")
+    const gone = await insert("contacts", { first_name: "Zz", last_name: `Gone ${tag}`, full_name: `ZZ TYPE Gone ${tag}`, email: `zz-type-g-${tag}@example.test` })
+    const { error } = await db.from("account_contacts").insert({ account_id: g.account, contact_id: gone, ended_at: new Date().toISOString() })
+    if (error) throw new Error(error.message)
+    const f = await file(g.company, "company", "Who.pdf", "operating_agreement", "Operating Agreement", false)
+    let q: { people?: { contactId: string }[] } | null = null
+    try { await setStoreFileType({ fileId: f.fileId, typeSlug: "passport", actorId: actor }) } catch (e) { q = e instanceof SetTypeQuestionError ? e.question as never : null }
+    expect(q?.people?.map((x) => x.contactId)).not.toContain(gone)
+    await expect(setStoreFileType({ fileId: f.fileId, typeSlug: "passport", actorId: actor, personContactId: gone })).rejects.toThrow(/not in this company/)
+  }, 120_000)
 })
 
 describe("label questions + the move's Re-check (live sandbox)", () => {
@@ -163,5 +195,57 @@ describe("label questions + the move's Re-check (live sandbox)", () => {
     expect(it.reason).not.toMatch(/Needs a type/)
     expect(it.repointed).toEqual([expect.objectContaining({ drive_file_id: `zz-drive-b-${tag}` })]) // Undo can put it back
     expect((await runView(run)).report?.waitingForType ?? []).toHaveLength(0)
+  }, 120_000)
+
+  it("Undo of that move puts the record back on Drive AND back to what it said before (label, category)", async () => {
+    const { undoDriveImport } = await import("@/lib/crm-store/drive-import")
+    const { data: it } = await db.from("store_import_items").select("run_id").eq("source_id", `zz-drive-b-${tag}`).single()
+    expect((await undoDriveImport(it.run_id, actor)).status).toBe("rolled_back")
+    const { data: back } = await db.from("documents").select("drive_file_id, document_type_name, category").eq("drive_file_id", `zz-drive-b-${tag}`).single()
+    expect(back).toEqual({ drive_file_id: `zz-drive-b-${tag}`, document_type_name: label, category: 1 })
+  }, 120_000)
+
+  /** a finished move that stored a file WITHOUT a type while the client sees its record on Drive */
+  async function driveLeft(name: string): Promise<{ fileId: string; rowId: string; driveId: string }> {
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const driveId = `zz-drive-${name.replace(/\W/g, "")}-${tag}`
+    const w = await saveBytesToStore({ ownerId: g.company, folderId: await folder(g.company, "correspondence"), name, mimeType: "application/pdf", bytes: await pdf(`${name} ${tag}`), callerKey: `zz-type:${tag}:left-${name}`, contentChanged: true, documentType: null, published: false, actor })
+    const rowId = await insert("documents", { drive_file_id: driveId, file_name: name, account_id: g.account, category: 5, portal_visible: true, status: "classified" })
+    const run = await insert("store_import_runs", { account_id: g.account, owner_id: g.company, drive_folder_id: `zz-${tag}-${name}`, status: "done", started_by: actor })
+    await insert("store_import_items", { run_id: run, source: "drive", source_id: driveId, drive_path: ["5. Correspondence"], name, status: "done", store_file_id: w.fileId, reason: "The client could see this but it has no type — its CRM record still opens from Drive until it gets one (Needs a type).", repointed: [] })
+    return { fileId: w.fileId, rowId, driveId }
+  }
+
+  it("a Drive-left visible file given a RETURN type asks 'filed copy?' (the client sees it); 'hide' → store and record both hidden, never a visible draft", async () => {
+    const { setStoreFileType, SetTypeQuestionError } = await import("@/lib/crm-store/set-type")
+    const x = await driveLeft("Left return.pdf")
+    let q: unknown = null
+    try { await setStoreFileType({ fileId: x.fileId, typeSlug: "form_1120", actorId: actor }) } catch (e) { q = e instanceof SetTypeQuestionError ? e.question : e }
+    expect(q).toMatchObject({ kind: "filed" })
+    await setStoreFileType({ fileId: x.fileId, typeSlug: "form_1120", actorId: actor, filedAnswer: "hide" })
+    expect(await sf(x.fileId)).toMatchObject({ published: false, filing_status: "draft" })
+    expect(await row(x.rowId)).toMatchObject({ drive_file_id: `store:${x.fileId}`, portal_visible: false })
+  }, 120_000)
+
+  it("a Drive-left visible file given a STAFF-ONLY type: record hidden with the store (the portal never lists it)", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const x = await driveLeft("Left summary.pdf")
+    const r = await setStoreFileType({ fileId: x.fileId, typeSlug: "formation_summary", actorId: actor })
+    expect(r.visible).toBe(false)
+    expect(await row(x.rowId)).toMatchObject({ drive_file_id: `store:${x.fileId}`, portal_visible: false })
+    expect((await sf(x.fileId)).published).toBe(false)
+  }, 120_000)
+
+  it("a Drive-left visible file whose new home can't show it yet (Needs review) keeps opening from Drive — the client keeps it", async () => {
+    const { setStoreFileType } = await import("@/lib/crm-store/set-type")
+    const { markNeedsReview } = await import("@/lib/crm-store/structure")
+    const x = await driveLeft("Left letter.pdf")
+    await markNeedsReview(x.fileId, "test", actor)
+    const r = await setStoreFileType({ fileId: x.fileId, typeSlug: "office_lease", actorId: actor })
+    expect(r.notes.join(" ")).toMatch(/still opens from Drive/)
+    expect(await row(x.rowId)).toMatchObject({ drive_file_id: x.driveId, portal_visible: true })
+    const { data: it } = await db.from("store_import_items").select("repointed, reason").eq("source_id", x.driveId).single()
+    expect(it.repointed).toEqual([])
+    expect(it.reason).toMatch(/Needs a type/) // still listed as waiting
   }, 120_000)
 })
