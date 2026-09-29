@@ -333,10 +333,10 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
     const msg = e instanceof Error ? e.message : String(e)
     // a filing step already ran (it only moves forward): the file keeps its new type and place — the record follows
     // on the next Save (never a return frozen under the old type, never a personal type back in a company folder)
-    if (filingRan) throw new Error(`${msg} The type is saved; its CRM record did not follow — press Save again.`)
     const problems: string[] = []
     // the hidden record the move had listed (removed to make room) is listed again — the file never ends unlisted
     if (track.placeholder) await relistPlaceholder(pointer, track.placeholder).catch((rErr) => problems.push(`its listed CRM record could not be put back (${rErr instanceof Error ? rErr.message : rErr})`))
+    if (filingRan) throw new Error(`${msg} The type is saved; its CRM record did not follow — press Save again.${problems.length ? ` Also: ${problems.join("; ")}.` : ""}`)
     if (typeSaved) {
       const { error: rErr } = await db().from("store_files").update({ document_type: f.document_type, period_year: f.period_year }).eq("id", f.id)
       if (rErr) problems.push(`the old type could not be put back (${rErr.message})`)
@@ -503,7 +503,9 @@ async function followRecords(
     // a listed record staff have worked on since the move is never removed to make room: both stay, staff check
     const { data: pr, error: prErr } = await db().from("documents").select("created_at, updated_at").eq("id", own.id as string).maybeSingle()
     if (prErr) throw new Error(`Could not read the listed CRM record (${prErr.message}).`)
-    if (pr && Date.parse(pr.updated_at) - Date.parse(pr.created_at) > 60_000) {
+    const mine = placeholderHolder.repointed.find((r) => r.id === own.id && r.created) as (LedgerEntry & { typed_at?: string }) | undefined
+    const since = Math.max(Date.parse(pr?.created_at ?? ""), Date.parse(mine?.typed_at ?? "") || 0)
+    if (pr && Date.parse(pr.updated_at) - since > 60_000) {
       notes.push("The CRM record listed for this file was changed since the move — the record still on Drive was left as it is; check both.")
       bring = null
     }
@@ -577,5 +579,11 @@ async function followRecords(
     throw new Error(`The CRM record could not follow (${error.message}) — press Save again.${back}`)
   }
   out.count = (done ?? []).length
+  // Set type's own write on the move's hidden listing is remembered, so it never counts as a staff edit later
+  if (record && placeholderHolder && !out.brought && placeholderHolder.repointed.some((r) => r.id === record!.id && r.created)) {
+    const next = placeholderHolder.repointed.map((r) => (r.id === record!.id && r.created ? { ...r, typed_at: new Date().toISOString() } : r))
+    const { error: tErr } = await db().from("store_import_items").update({ repointed: next, updated_at: new Date().toISOString() }).eq("id", placeholderHolder.id)
+    if (tErr) console.error(`[crm-store] could not note Set type on the listing: ${tErr.message}`)
+  }
   return out
 }
