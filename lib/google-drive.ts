@@ -38,6 +38,11 @@ const IMPERSONATE_EMAIL = () =>
 const SHARED_DRIVE_ID = () =>
   process.env.GOOGLE_SHARED_DRIVE_ID || "0AOLZHXSfKUMHUk9PVA"
 
+/** The company Shared Drive every Drive call uses (the one setting — the CRM Store reads it from here too). */
+export function sharedDriveId(): string {
+  return SHARED_DRIVE_ID()
+}
+
 /**
  * The OWNER's own Google identity and the single folder tree in his personal
  * My Drive that owner-scoped search is allowed to reach.

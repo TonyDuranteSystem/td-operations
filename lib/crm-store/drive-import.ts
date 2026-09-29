@@ -41,6 +41,11 @@ export const IMPORT_MAX_ITEMS = 5000
 export const IMPORT_MAX_FILE_BYTES = 50 * 1024 * 1024
 const GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 const PROD_DRIVE = "0AOLZHXSfKUMHUk9PVA"
+/** The company Shared Drive in production — read from the Drive module's own setting (one source). */
+async function companyDrive(): Promise<string> {
+  const { sharedDriveId } = await import("@/lib/google-drive")
+  return sharedDriveId()
+}
 
 export type ItemStatus = "pending" | "working" | "done" | "merged" | "skipped" | "failed"
 export interface ImportItem {
@@ -179,7 +184,7 @@ async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "mo
     const test = (process.env.STORE_TEST_DRIVE_ID || process.env.GOOGLE_SHARED_DRIVE_ID || "").trim()
     if (!test || test === PROD_DRIVE) throw new Error("No TEST Drive is set here — a move outside production only reads the TEST Drive.")
     if (item.driveId !== test) throw new Error("This company's Drive folder is not in the TEST Drive — outside production only test folders may be moved (sandbox companies point at real client folders).")
-  } else if (item.driveId !== PROD_DRIVE) {
+  } else if (item.driveId !== await companyDrive()) {
     throw new Error("This company's Drive folder is not in the company Shared Drive — only client folders there can be copied.")
   }
 }
@@ -880,7 +885,7 @@ export interface DriveFolderRow {
 /** The Shared Drive the picker opens: the TEST Drive outside production, the company Shared Drive in production. */
 export async function pickerRootDrive(): Promise<string> {
   const { isProductionDatabase } = await import("@/lib/google-drive-guard")
-  if (isProductionDatabase()) return PROD_DRIVE
+  if (isProductionDatabase()) return companyDrive()
   const test = (process.env.STORE_TEST_DRIVE_ID || process.env.GOOGLE_SHARED_DRIVE_ID || "").trim()
   if (!test || test === PROD_DRIVE) throw new Error("No TEST Drive is set here — the picker outside production only opens the TEST Drive.")
   return test
