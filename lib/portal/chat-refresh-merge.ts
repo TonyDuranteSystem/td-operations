@@ -34,9 +34,24 @@ export interface MergeableMessage {
   created_at: string
 }
 
-function ts(m: MergeableMessage): number {
-  const t = Date.parse(m.created_at)
+/**
+ * Parse a Postgres/realtime timestamp in any engine. Safari's Date.parse
+ * rejects the space-separated / short-offset forms Postgres can emit
+ * ("2026-09-29 10:00:00.123456+00"), so normalise to ISO first. Returns ms, or
+ * 0 when unparseable.
+ */
+export function parseTimestamp(value: string | null | undefined): number {
+  if (!value) return 0
+  let s = value.trim().replace(' ', 'T')
+  if (s.includes('T') && /T.*[+-]\d{2}$/.test(s)) s += ':00'
+  // Trim sub-millisecond digits some engines refuse.
+  s = s.replace(/(\.\d{3})\d+/, '$1')
+  const t = Date.parse(s)
   return Number.isNaN(t) ? 0 : t
+}
+
+function ts(m: MergeableMessage): number {
+  return parseTimestamp(m.created_at)
 }
 
 /** Ascending by created_at; ties broken by the raw string, then id, for a stable order. */

@@ -264,10 +264,12 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           filter: `contact_id=eq.${contactId}`,
         },
         (payload) => {
-          const newMsg = payload.new as { sender_type: string }
+          const newMsg = payload.new as { sender_type: string; read_at?: string | null }
           // Counted on the chat page too: if the client is looking at that tab
           // the chat marks it read at once and broadcasts the corrected total.
-          if (newMsg.sender_type === 'admin') {
+          // Rows born read (signature-reminder chat nudges) never count — nothing
+          // would ever broadcast a correction for them.
+          if (newMsg.sender_type === 'admin' && !newMsg.read_at) {
             setLiveUnreadCount(prev => prev + 1)
           }
         }

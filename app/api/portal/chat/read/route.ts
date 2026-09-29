@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -43,6 +44,14 @@ export async function POST(request: NextRequest) {
   // Verify access for clients
   if (!dashUser) {
     const authContactId = getClientContactId(user)
+    // Teammates (Portal Team Access) have no contact: they may only mark their
+    // ONE company's thread — previously any account_id was accepted.
+    if (!authContactId) {
+      const tmAccountId = await getTeammateScopeOrNull(user, 'chat')
+      if (!tmAccountId || !account_id || account_id !== tmAccountId || contact_id) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+    }
     if (authContactId && account_id) {
       const accountIds = await getClientAccountIds(authContactId)
       if (!accountIds.includes(account_id)) {
@@ -72,7 +81,9 @@ export async function POST(request: NextRequest) {
   const applyScopeFilters = <Q,>(q: Q): Q => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let r = q as any
-    if (topicFilterPresent) r = topicFilter === null ? r.is('topic', null) : r.eq('topic', topicFilter)
+    // General = no topic OR an empty-string topic (the chat shows both under
+    // General; marking only NULL would leave an '' row unread forever).
+    if (topicFilterPresent) r = topicFilter === null ? r.or('topic.is.null,topic.eq.') : r.eq('topic', topicFilter)
     if (upTo) r = r.lte('created_at', upTo)
     return r as Q
   }

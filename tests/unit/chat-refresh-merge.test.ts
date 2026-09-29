@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeRefreshedMessages, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
+import { mergeRefreshedMessages, parseTimestamp, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
 
 const m = (id: string, minute: number) => ({ id, created_at: `2026-09-28T20:${String(minute).padStart(2, '0')}:00.123456+00:00` })
 const ids = (list: { id: string }[]) => list.map(x => x.id)
@@ -93,5 +93,19 @@ describe('sortMessagesAscending', () => {
     const list = [m('b', 2), m('a', 1)]
     sortMessagesAscending(list)
     expect(ids(list)).toEqual(['b', 'a'])
+  })
+})
+
+describe('parseTimestamp (Safari-safe)', () => {
+  it('parses ISO, space-separated and short-offset Postgres forms to the same instant (ms)', () => {
+    const iso = parseTimestamp('2026-09-29T10:00:00.123456+00:00')
+    expect(iso).toBe(Date.UTC(2026, 8, 29, 10, 0, 0, 123))
+    expect(parseTimestamp('2026-09-29 10:00:00.123456+00')).toBe(iso)
+    expect(parseTimestamp('2026-09-29T10:00:00.123Z')).toBe(iso)
+  })
+  it('returns 0 for empty or garbage', () => {
+    expect(parseTimestamp('')).toBe(0)
+    expect(parseTimestamp(null)).toBe(0)
+    expect(parseTimestamp('not a date')).toBe(0)
   })
 })

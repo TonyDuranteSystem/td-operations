@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { parseTimestamp } from '@/lib/portal/chat-refresh-merge'
 import { usePortalChat, type ChatScope } from '@/lib/hooks/use-portal-chat'
 import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
@@ -82,8 +83,10 @@ function formatFileSize(bytes: number): string {
 }
 
 const MAX_ATTACHMENTS = 5
-/** How many older pages (50 each) a topic deep link may load looking for its tab. */
-const MAX_DEEP_LINK_PAGES = 10
+/** How many older pages (50 each) the chat may load looking for a linked or
+ *  unread tab (2000 messages). A tab the server says has unread messages must
+ *  be reachable, or its badge could never be cleared. */
+const MAX_DEEP_LINK_PAGES = 40
 
 /** Same cookies the sidebar CompanySwitcher writes (portal_account_id / portal_formation). */
 function writeEntityCookie(e: PortalChatEntity): void {
@@ -259,7 +262,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     if ((serverUnread[''] ?? 0) > 0) return
     const candidates = Object.entries(serverUnread).filter(([k, n]) => k && n > 0)
     if (candidates.length === 0) return
-    const lastAt = (k: string) => Math.max(0, ...messages.filter(m => (m.topic ?? '') === k).map(m => Date.parse(m.created_at) || 0))
+    const lastAt = (k: string) => Math.max(0, ...messages.filter(m => (m.topic ?? '') === k).map(m => parseTimestamp(m.created_at)))
     candidates.sort((a, b) => (b[1] - a[1]) || (lastAt(b[0]) - lastAt(a[0])))
     const target = candidates[0][0]
     if (!topics.includes(target)) {
@@ -292,7 +295,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     // Up to the newest message on screen in this tab — the raw server string,
     // so microseconds survive (a Date round-trip would cut them and leave the
     // newest row "after" the cut-off, unread forever).
-    const newest = inTab.reduce((a, b) => (Date.parse(b.created_at) > Date.parse(a.created_at) ? b : a))
+    const newest = inTab.reduce((a, b) => (parseTimestamp(b.created_at) > parseTimestamp(a.created_at) ? b : a))
     const markKey = `${selectedEntityId}|${key}|${newest.created_at}|${unreadHere ? 1 : 0}|${serverSays}`
     if (lastMarkRef.current === markKey) return
     lastMarkRef.current = markKey

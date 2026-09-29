@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
-import { mergeRefreshedMessages, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
+import { mergeRefreshedMessages, parseTimestamp, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 
 /**
@@ -205,6 +205,9 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         if (msgs.length < limit) setHasMore(false)
         else if (probe.droppedForGap) setHasMore(true)
         if (data.unreadByTopic) setServerUnread(data.unreadByTopic)
+        // First response for a NEW view without a summary: never keep the
+        // previous company's counts (auto-open would jump to its tab names).
+        else if (!sameView) setServerUnread(null)
       }
     } catch {
       // silent
@@ -429,9 +432,9 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     const key = topic ?? ''
     // Optimistic: those rows are on screen and being read now.
     const now = new Date().toISOString()
-    const upToMs = Date.parse(upTo)
+    const upToMs = parseTimestamp(upTo)
     setMessages(prev => prev.map(m =>
-      m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread && (m.topic ?? '') === key && Date.parse(m.created_at) <= upToMs
+      m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread && (m.topic ?? '') === key && parseTimestamp(m.created_at) <= upToMs
         ? { ...m, read_at: now }
         : m,
     ))
