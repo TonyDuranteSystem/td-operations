@@ -18,11 +18,12 @@ import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
-  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search,
+  Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
+import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 
 interface Fold { id: string; name: string; kind: string; trashed: boolean; locked?: boolean }
@@ -253,6 +254,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileInput = useRef<HTMLInputElement | null>(null)
   // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [typing, setTyping] = useState<File_ | null>(null)
+  const { data: docTypes } = useStoreDocTypes()
+  const typeNameOf = (slug: string | null) => (slug ? docTypes?.find((t) => t.slug === slug)?.name ?? slug : null)
   const [renaming, setRenaming] = useState<{ id: string; value: string; folder?: boolean; left?: boolean } | null>(null)
   const [newFolder, setNewFolder] = useState<NewFolder | null>(null)
   const [dragFile, setDragFile] = useState<{ id: string; from: string | null } | null>(null)
@@ -1495,7 +1499,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           </FastTooltip>
         )}
         {f.filingStatus === 'draft' && <Badge tone="gray">Draft</Badge>}
-        {!f.documentType && <Badge tone="amber">Needs a type</Badge>}
+        {(
+          <FastTooltip label={f.documentType ? 'The document type — click to change it' : 'Give this file its document type'}>
+            <button type="button" onClick={(e) => { e.stopPropagation(); setTyping(f) }}
+              className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${f.documentType ? 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50' : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}>
+              {f.documentType ? typeNameOf(f.documentType) : 'Needs a type'}
+            </button>
+          </FastTooltip>
+        )}
         {!f.listed && !internal && <Badge tone="amber">Not linked — client can&apos;t see it</Badge>}
         {f.versions > 1 && (
           <div className="relative">
@@ -1538,6 +1549,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
               <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
+              <MenuItem icon={Tag} label={f.documentType ? 'Change type…' : 'Set type…'} onClick={() => { setMenuFor(null); setTyping(f) }} />
               {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
               {f.filingStatus === 'draft' && !f.needsReview && <MenuItem icon={Check} label="Mark filed" onClick={() => markFiled(f)} />}
               <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
@@ -1972,6 +1984,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </dl>
           )}
         </div>
+      )}
+      {typing && (
+        <SetTypeDialog file={typing} viewingOwnerId={ownerId} onClose={() => setTyping(null)}
+          onDone={() => { setTyping(null); void refreshAll() }} />
       )}
       {trashOpen && (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" onClick={() => setTrashOpen(false)} role="dialog" aria-modal="true">

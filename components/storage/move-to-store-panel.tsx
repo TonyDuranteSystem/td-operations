@@ -10,16 +10,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowRightLeft, Loader2, CheckCircle2, AlertTriangle, Undo2 } from 'lucide-react'
+import { ArrowRightLeft, Loader2, CheckCircle2, AlertTriangle, Undo2, RefreshCw } from 'lucide-react'
+import { SetTypeDialog } from './set-type-dialog'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 interface Folder { folder: string; driveFiles: number; moved: number; merged: number; skipped: number; failed: number; checksumChecked: number }
 interface Report {
   folders: Folder[]; rowsRepointed: number; rowsCreated: number; fromStorage: number
   skipped: { name: string; where: string; reason: string }[]; failed: { name: string; where: string; reason: string }[]
-  needsReview: number; waitingForType?: { name: string; where: string }[]; parityOk: boolean; stillReadDrive: string[]
+  needsReview: number; waitingForType?: { name: string; where: string; fileId: string | null }[]; parityOk: boolean; stillReadDrive: string[]
 }
 interface Run {
-  id: string; status: string; startedAt: string; finishedAt: string | null
+  id: string; status: string; startedAt: string; finishedAt: string | null; ownerId?: string | null
   counts: { total: number; pending: number; working?: number; done: number; merged: number; skipped: number; failed: number }
   report: Report | null
 }
@@ -47,6 +49,7 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
   const [confirm, setConfirm] = useState<'move' | 'undo' | null>(null)
   const [busy, setBusy] = useState(false)
   const [stopped, setStopped] = useState<string | null>(null)
+  const [typing, setTyping] = useState<{ id: string; name: string } | null>(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
   useEffect(() => { if (data?.run) setRun(data.run) }, [data?.run])
@@ -102,6 +105,28 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
     } finally { setBusy(false) }
   }
 
+  const reload = async () => {
+    if (!run) return
+    try {
+      const r = await fetch(`/api/crm-store/import?account=${encodeURIComponent(accountId)}`)
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && (j as { run?: Run }).run) setRun((j as { run: Run }).run)
+    } catch { /* the next refresh shows it */ }
+    refreshAll()
+  }
+  const recheck = async () => {
+    if (!run) return
+    setBusy(true)
+    try {
+      const r = await postJson<{ typed: number; needAnswer: number; stillUnknown: number; run: Run }>(`/api/crm-store/import/${run.id}/recheck-types`, {}, 'The types could not be re-checked.')
+      setRun(r.run)
+      toast.success(`${r.typed} file${r.typed === 1 ? '' : 's'} got a type${r.needAnswer ? ` · ${r.needAnswer} need an answer (Set type on the file)` : ''}${r.stillUnknown ? ` · ${r.stillUnknown} still unknown` : ''}`)
+      refreshAll()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'The types could not be re-checked.')
+    } finally { setBusy(false) }
+  }
+
   if (!data?.allowed) return null
   const r = run
   const finished = r && (r.status === 'done' || r.status === 'incomplete' || r.status === 'undoing')
@@ -122,6 +147,12 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
           )}
           {r?.status === 'moving' && stopped && (
             <button type="button" disabled={busy} onClick={() => void drive(r)} className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs hover:bg-zinc-50">Continue</button>
+          )}
+          {(r?.status === 'done' || r?.status === 'incomplete') && !confirm && (
+            <FastTooltip label="Files stored without a type get the type their record's label now means (answered type questions)">
+              <button type="button" disabled={busy} onClick={() => void recheck()} aria-label="Re-check types"
+                className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs hover:bg-zinc-50 disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" />Re-check types</button>
+            </FastTooltip>
           )}
           {finished && !confirm && (
             <button type="button" disabled={busy} onClick={() => setConfirm('undo')} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs hover:bg-zinc-50"><Undo2 className="h-3.5 w-3.5" />Undo the move…</button>
@@ -164,10 +195,14 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
             </table>
           </div>
           {r.report.failed.length > 0 && <div><p className="font-medium text-red-700">Failed</p><ul className="list-disc pl-5">{r.report.failed.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
-          {(r.report.waitingForType?.length ?? 0) > 0 && <div><p className="font-medium text-amber-700">Waiting for a type (the client sees them — they still open from Drive until they get a type)</p><ul className="list-disc pl-5">{r.report.waitingForType!.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where})</li>)}</ul></div>}
+          {(r.report.waitingForType?.length ?? 0) > 0 && <div><p className="font-medium text-amber-700">Waiting for a type (the client sees them — they still open from Drive until they get a type)</p><ul className="list-disc pl-5">{r.report.waitingForType!.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}){x.fileId && <> — <button type="button" className="text-blue-700 hover:underline" onClick={() => setTyping({ id: x.fileId!, name: x.name })}>Set type</button></>}</li>)}</ul></div>}
           {r.report.skipped.length > 0 && <div><p className="font-medium">Not moved (still in Drive)</p><ul className="list-disc pl-5">{r.report.skipped.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
           <p className="text-zinc-500">Still read only from Drive for now (to switch before real clients): {r.report.stillReadDrive.join(', ')}.</p>
         </div>
+      )}
+      {typing && (
+        <SetTypeDialog file={{ id: typing.id, name: typing.name, documentType: null }} viewingOwnerId={r?.ownerId ?? null}
+          onClose={() => setTyping(null)} onDone={() => { setTyping(null); void reload() }} />
       )}
     </div>
   )

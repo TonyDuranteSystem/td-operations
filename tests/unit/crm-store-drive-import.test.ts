@@ -71,7 +71,7 @@ describe("drive import — pure rules", () => {
       item({ name: "Copy.pdf", drive_path: ["2. Contacts"], status: "merged", reason: "Kept once. The client could see it but it has no type — its CRM record still opens from Drive until it gets one (Needs a type)." }),
       item({ name: "Typed.pdf" }),
     ], [])
-    expect(r.waitingForType).toEqual([{ name: "Old note.pdf", where: "Old stuff" }, { name: "Copy.pdf", where: "2. Contacts" }])
+    expect(r.waitingForType).toEqual([{ name: "Old note.pdf", where: "Old stuff", fileId: null }, { name: "Copy.pdf", where: "2. Contacts", fileId: null }])
     expect(r.parityOk).toBe(true)
   })
 })

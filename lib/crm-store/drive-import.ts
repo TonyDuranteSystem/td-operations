@@ -28,6 +28,7 @@
  * Where it may run: the store's pilot environment only (sandbox) — and, outside production, only a Drive
  * folder that sits in the TEST Shared Drive (sandbox companies are copies that point at REAL client folders).
  */
+import { labelKey, queueTypeName, typeNameAnswers } from "./type-names"
 import { createHash } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
@@ -60,7 +61,7 @@ export interface ImportReport {
   failed: Array<{ name: string; where: string; reason: string }>
   needsReview: number
   /** copied, but the client could see them and they have no type — their CRM records still open from Drive */
-  waitingForType: Array<{ name: string; where: string }>
+  waitingForType: Array<{ name: string; where: string; fileId: string | null }>
   parityOk: boolean
   stillReadDrive: string[]
 }
@@ -119,7 +120,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     skipped: items.filter((it) => it.status === "skipped").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     failed: items.filter((it) => it.status === "failed").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     needsReview: items.filter((it) => /needs review/i.test(it.reason ?? "")).length,
-    waitingForType: items.filter((it) => /\(Needs a type\)/.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it) })),
+    waitingForType: items.filter((it) => /\(Needs a type\)/.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it), fileId: it.store_file_id })),
     parityOk: items.every((it) => it.status !== "failed" && it.status !== "pending" && it.status !== "working"),
     stillReadDrive,
   }
@@ -253,6 +254,33 @@ interface Ctx {
   folderByKind: Map<string, string>
 }
 
+type TypeInfo = Ctx["types"] extends Map<string, infer V> ? V : never
+
+/** The document types by slug / type number / name, plus the labels answered in the type questions. */
+async function loadTypeMap(types: unknown[]): Promise<Ctx["types"]> {
+  const typeMap = new Map<string, TypeInfo>()
+  for (const t of types as { slug: string; display_name: string; metadata: Record<string, unknown> | null }[]) {
+    const m = t.metadata ?? {}
+    const v = { slug: t.slug, display: t.display_name, personal: m.personal === true, staffOnly: m.staff_only === true, draftNeverVisible: m.draft_never_visible === true, legacyId: typeof m.legacy_document_type_id === "number" ? m.legacy_document_type_id : null }
+    typeMap.set(`slug:${t.slug}`, v)
+    typeMap.set(`name:${labelKey(t.display_name)}`, v)
+    if (v.legacyId != null) typeMap.set(`legacy:${v.legacyId}`, v)
+  }
+  // labels answered in the type questions ("Lease Agreement" = Office Lease …) — data, never a list in code
+  for (const [label, slug] of Array.from((await typeNameAnswers()).entries())) {
+    const v = typeMap.get(`slug:${slug}`)
+    if (v && !typeMap.has(`name:${label}`)) typeMap.set(`name:${label}`, v)
+  }
+  return typeMap
+}
+
+/** Pure: a CRM record's type — by its type number first, else its label. */
+export function typeOfRow(types: Map<string, { slug: string }>, row: { document_type_id: number | null; document_type_name: string | null } | null) {
+  if (!row) return null
+  return (row.document_type_id != null ? types.get(`legacy:${row.document_type_id}`) : undefined)
+    ?? (row.document_type_name ? types.get(`name:${labelKey(row.document_type_name)}`) : undefined) ?? null
+}
+
 /** Move the next batch of files. Returns the run's state; call again while it says "moving". */
 export async function continueDriveImport(runId: string, actorId: string | null, budget = { files: IMPORT_BATCH_FILES, ms: IMPORT_BATCH_MS }): Promise<RunView> {
   const t0 = Date.now()
@@ -291,14 +319,7 @@ async function loadCtx(runId: string, accountId: string, ownerId: string, actorI
   if (lErr || tErr || fErr) throw new Error(`Could not read the company's set-up (${(lErr ?? tErr ?? fErr).message}).`)
   const members = ((links ?? []) as { contact_id: string; contacts: { full_name: string | null } | null }[])
     .map((l) => ({ contactId: l.contact_id, name: l.contacts?.full_name ?? "" }))
-  const typeMap = new Map<string, Ctx["types"] extends Map<string, infer V> ? V : never>()
-  for (const t of (types ?? []) as { slug: string; display_name: string; metadata: Record<string, unknown> | null }[]) {
-    const m = t.metadata ?? {}
-    const v = { slug: t.slug, display: t.display_name, personal: m.personal === true, staffOnly: m.staff_only === true, draftNeverVisible: m.draft_never_visible === true, legacyId: typeof m.legacy_document_type_id === "number" ? m.legacy_document_type_id : null }
-    typeMap.set(`slug:${t.slug}`, v)
-    typeMap.set(`name:${t.display_name.trim().toLowerCase()}`, v)
-    if (v.legacyId != null) typeMap.set(`legacy:${v.legacyId}`, v)
-  }
+  const typeMap = await loadTypeMap(types ?? [])
   const folderByKind = new Map<string, string>()
   for (const f of (folders ?? []) as { id: string; kind: string; parent_id: string | null }[]) if (f.parent_id && !folderByKind.has(f.kind)) folderByKind.set(f.kind, f.id)
   return { runId, accountId, companyOwner: ownerId, actorId, members, types: typeMap, folderByKind }
@@ -348,7 +369,11 @@ async function moveOne(it: ImportItem, ctx: Ctx, saved: { fileId: string | null 
 
   // type, visibility, year — from the ONE row that will follow the store (a second row of the same file stays on Drive)
   const row0 = rows[0] ?? null
-  const type = row0 ? (row0.document_type_id != null ? ctx.types.get(`legacy:${row0.document_type_id}`) : undefined) ?? (row0.document_type_name ? ctx.types.get(`name:${row0.document_type_name.trim().toLowerCase()}`) : undefined) ?? null : null
+  const type = typeOfRow(ctx.types, row0) as TypeInfo | null
+  // a label the types don't know, used by several records → one question for staff (never fails the move)
+  if (!type && row0?.document_type_name) {
+    await queueTypeName(row0.document_type_name, { from: "drive-import", run: ctx.runId }).catch((e) => console.error(`[crm-store] could not ask about "${row0.document_type_name}": ${e instanceof Error ? e.message : e}`))
+  }
   const visible = row0?.portal_visible === true
 
   // where it lands
@@ -682,4 +707,40 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
   if (run.owner_id) await db().from("store_backup_state").update({ switched_at: null, updated_at: new Date().toISOString() }).eq("owner_id", run.owner_id)
   await db().from("store_import_runs").update({ status: "rolled_back", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { undone: true, problems } }).eq("id", runId)
   return runView(runId)
+}
+
+/**
+ * "Re-check types" (move report): files this move stored WITHOUT a type are looked at again against the current
+ * types and the answered labels. A file whose record's label now means a type gets it through Set type — the same
+ * rules as by hand (a question it needs — whose passport? — leaves it listed for staff).
+ */
+export async function recheckRunTypes(runId: string, actorId: string | null): Promise<{ typed: number; needAnswer: number; stillUnknown: number }> {
+  const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status").eq("id", runId).maybeSingle()
+  if (rErr) throw new Error(`Could not read the move (${rErr.message}).`)
+  if (!run || !["done", "incomplete"].includes(run.status)) throw new Error("Re-check works on a finished move.")
+  const { data: types, error: tErr } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("status", "active")
+  if (tErr) throw new Error(`Could not read the document types (${tErr.message}).`)
+  const map = await loadTypeMap(types ?? [])
+  const { data: items, error: iErr } = await db().from("store_import_items").select("source_id, store_file_id").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null)
+  if (iErr) throw new Error(`Could not read the move's ledger (${iErr.message}).`)
+  const fileIds = Array.from(new Set(((items ?? []) as { store_file_id: string }[]).map((i) => i.store_file_id)))
+  let typed = 0, needAnswer = 0, stillUnknown = 0
+  const { storePointer } = await import("./document-pointer")
+  const { setStoreFileType, SetTypeQuestionError } = await import("./set-type")
+  for (const fileId of fileIds) {
+    const { data: f } = await db().from("store_files").select("document_type, state").eq("id", fileId).maybeSingle()
+    if (!f || f.state !== "live" || f.document_type) continue
+    const sources = ((items ?? []) as { source_id: string; store_file_id: string }[]).filter((i) => i.store_file_id === fileId).map((i) => i.source_id)
+    const { data: rows } = await db().from("documents").select("document_type_id, document_type_name").in("drive_file_id", [storePointer(fileId), ...sources])
+    const hit = ((rows ?? []) as { document_type_id: number | null; document_type_name: string | null }[]).map((r) => typeOfRow(map, r)).find(Boolean)
+    if (!hit) { stillUnknown++; continue }
+    try {
+      await setStoreFileType({ fileId, typeSlug: hit.slug, actorId })
+      typed++
+    } catch (e) {
+      if (e instanceof SetTypeQuestionError) { needAnswer++; continue }
+      throw e
+    }
+  }
+  return { typed, needAnswer, stillUnknown }
 }
