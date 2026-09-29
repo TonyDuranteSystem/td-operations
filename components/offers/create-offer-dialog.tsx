@@ -9,6 +9,7 @@ import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode }
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import { deriveContractType } from '@/lib/offers/derive-contract-type'
+import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
 import {
@@ -708,6 +709,20 @@ export function CreateOfferDialog({
       .filter((p): p is string => !!p)
   }, [selected, catalog])
 
+  // Live preview of the dated yearly schedule — the same rows the offer page shows.
+  const annualPreview = useMemo(() => {
+    if (!(parseFloat(installment1.replace(/[^0-9.]/g, '')) > 0) || !(parseFloat(installment2.replace(/[^0-9.]/g, '')) > 0)) return null
+    return buildAnnualCostRows({
+      recurringCosts: [
+        { label: '1st Installment (January)', price: installment1, currency: installmentCurrency },
+        { label: '2nd Installment (June)', price: installment2, currency: installmentCurrency },
+      ],
+      currency: installmentCurrency,
+      viewDate: new Date(),
+      language: language === 'it' ? 'it' : 'en',
+    })
+  }, [installment1, installment2, installmentCurrency, language])
+
   const showAnnual = useMemo(() => {
     return selected.some(s => {
       const svc = catalog.find(c => c.id === s.id)
@@ -922,6 +937,13 @@ export function CreateOfferDialog({
 
     if (splitBlockReason) {
       toast.error(splitBlockReason)
+      return
+    }
+
+    // Formation / onboarding: the yearly fee is part of what the client signs.
+    // Left empty, the offer and the contract show no yearly fee at all (2026-09-29).
+    if (showAnnual && (!(parseFloat(installment1.replace(/[^0-9.]/g, '')) > 0) || !(parseFloat(installment2.replace(/[^0-9.]/g, '')) > 0))) {
+      toast.error('Enter the yearly fee: both the January and the June amount (Annual Rates)')
       return
     }
 
@@ -1894,7 +1916,7 @@ export function CreateOfferDialog({
           {showAnnual && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-medium">Annual Rates (Year 2+)</label>
+                <label className="block text-sm font-medium">Annual Rates — yearly fee (required)</label>
                 <select
                   value={installmentCurrency}
                   onChange={e => setInstallmentCurrency(e.target.value)}
@@ -1938,6 +1960,16 @@ export function CreateOfferDialog({
                   </div>
                 </div>
               </div>
+              {annualPreview ? (
+                <div className="mt-2 rounded-md border bg-zinc-50 px-3 py-2 text-xs">
+                  <div className="font-medium mb-1">What the client sees (if they sign today)</div>
+                  {annualPreview.map(r => (
+                    <div key={r.label} className="flex justify-between"><span>{r.label}</span><span>{r.price}</span></div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-amber-700">Required — enter both amounts, or the offer and contract show no yearly fee.</p>
+              )}
             </div>
           )}
 

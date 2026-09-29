@@ -19,6 +19,7 @@
  *   - Allow publication from any status other than 'draft'
  */
 
+import { yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
 import crypto from "node:crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { gmailPost } from "@/lib/gmail"
@@ -53,7 +54,7 @@ export async function publishOffer(
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
-    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id")
+    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, recurring_costs, installment_currency")
     .eq("token", token)
     .single()
 
@@ -63,6 +64,32 @@ export async function publishOffer(
 
   if (!offer.client_email) {
     return fail("Cannot publish: client_email is not set on this offer. Update it first.")
+  }
+
+  // A formation/onboarding offer must carry its yearly fee, or the client signs
+  // an offer + contract with no yearly fee written anywhere. Checked here because
+  // every send path (CRM button, MCP offer_send) goes through publishOffer.
+  // Which services carry a yearly fee comes from the service catalog (has_annual), not a list here.
+  const { data: annualRows } = await supabaseAdmin
+    .from("service_catalog")
+    .select("pipeline")
+    .eq("has_annual", true)
+  const annualPipelines = (annualRows ?? []).map((r) => r.pipeline).filter((x): x is string => !!x)
+  const { data: pk } = await supabaseAdmin
+    .from("offers")
+    // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
+    .select("packages" as never)
+    .eq("token", token)
+    .maybeSingle()
+  const yearlyFeeReason = yearlyFeeMissingReason({
+    services: offer.services,
+    annualPipelines,
+    recurringCosts: offer.recurring_costs,
+    packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
+    currency: offer.installment_currency,
+  })
+  if (yearlyFeeReason) {
+    return fail(`Cannot publish: ${yearlyFeeReason}`)
   }
 
   // Strict status gate: only 'draft' can be published

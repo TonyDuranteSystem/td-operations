@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildAnnualMaintenanceWording, buildAnnualCostRows } from "@/lib/offers/annual-maintenance-wording"
+import { buildAnnualMaintenanceWording, buildAnnualCostRows, yearlyFeeMissingReason } from "@/lib/offers/annual-maintenance-wording"
 
 // The real rows of a live formation offer (Stefano Stella, 2026-09-28).
 const USD_ROWS = [
@@ -126,5 +126,56 @@ describe("buildAnnualCostRows — offer page 'Annual Costs' box", () => {
 
   it("unusual rows → null (the offer's own rows are shown)", () => {
     expect(buildAnnualCostRows({ recurringCosts: [{ label: "Fee", price: "$1000" }], viewDate: at(2026, 9, 29), language: "it" })).toBeNull()
+  })
+})
+
+
+describe("yearlyFeeMissingReason — an offer selling a yearly-fee service must state the fee", () => {
+  const ANNUAL = ["Company Formation", "Client Onboarding"]
+  const FORMATION = [{ name: "Company Formation", pipeline_type: "Company Formation" }, { name: "ITIN Application", pipeline_type: "ITIN" }]
+  const ONBOARDING = [{ name: "Client Onboarding", pipeline_type: "Client Onboarding" }]
+  const run = (services: unknown, recurringCosts: unknown, packages?: unknown) =>
+    yearlyFeeMissingReason({ services, annualPipelines: ANNUAL, recurringCosts, packages })
+
+  it("formation + ITIN with no yearly rows is refused (Emiliano Micheli, 2026-09-29)", () => {
+    expect(run(FORMATION, null)).toMatch(/no yearly fee/)
+    expect(run(FORMATION, [])).toMatch(/no yearly fee/)
+  })
+
+  it("onboarding with no yearly rows is refused", () => {
+    expect(run(ONBOARDING, undefined)).not.toBeNull()
+  })
+
+  it("only January, only June, or zero amounts are refused", () => {
+    expect(run(FORMATION, [{ label: "1st Installment (January)", price: "$1000" }])).not.toBeNull()
+    expect(run(FORMATION, [{ label: "2nd Installment (June)", price: "$1000" }])).not.toBeNull()
+    expect(run(FORMATION, [{ label: "January", price: "$0" }, { label: "June", price: "$0" }])).not.toBeNull()
+  })
+
+  it("the builder's normal rows pass", () => {
+    expect(run(FORMATION, USD_ROWS)).toBeNull()
+    expect(run(ONBOARDING, USD_ROWS)).toBeNull()
+  })
+
+  it("add-ons sold alone are never refused, even when the offer fell back to contract type formation", () => {
+    // Real production offers: Change Name, Banking Setup, Closure sold alone.
+    expect(run([{ name: "Company Change Name", pipeline_type: "Company Change Name" }], null)).toBeNull()
+    expect(run([{ name: "Banking Setup", pipeline_type: "Banking Fintech" }], null)).toBeNull()
+    expect(run([{ name: "Account Closure", pipeline_type: "Company Closure" }], null)).toBeNull()
+    expect(run([{ name: "ITIN Application", pipeline_type: "ITIN" }], null)).toBeNull()
+  })
+
+  it("old hand-written offers without pipeline types are not refused", () => {
+    expect(run([{ name: "Option B — Full LLC Management (2026)", price: "$2,300" }], null)).toBeNull()
+    expect(run(null, null)).toBeNull()
+  })
+
+  it("multi-option offers are skipped (each option carries its own amounts)", () => {
+    expect(run(FORMATION, null, [{}, {}])).toBeNull()
+  })
+
+  it("pipeline names are matched case-insensitively and follow the catalog list", () => {
+    expect(run([{ pipeline_type: "company formation" }], null)).not.toBeNull()
+    expect(yearlyFeeMissingReason({ services: FORMATION, annualPipelines: [], recurringCosts: null })).toBeNull()
   })
 })

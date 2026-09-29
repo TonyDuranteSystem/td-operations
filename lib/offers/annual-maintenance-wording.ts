@@ -135,3 +135,38 @@ export function buildAnnualCostRows(p: {
   if (jan.symbol === jun.symbol) rows.push({ label: t.total(fullYear), price: `${jan.symbol}${(jan.amount + jun.amount).toLocaleString("en-US")}` })
   return rows
 }
+
+/**
+ * An offer that sells a service which carries a yearly fee (the service
+ * catalog's has_annual — today Company Formation and Client Onboarding) must
+ * state that fee: January + June. Without it the offer page has no "Annual
+ * Costs" box and the contract has no yearly schedule — the client would sign
+ * with no yearly fee written anywhere. Two offers in a row (Emiliano Micheli,
+ * 2026-09-29) were saved that way because the builder let the boxes stay empty.
+ *
+ * Keyed on the SERVICES sold, not on contract_type: an add-on sold alone
+ * (Change Name, Banking Setup, Closure) can carry contract_type "formation"
+ * as a fallback, and must not be refused for lacking a yearly fee.
+ *
+ * Multi-option offers are skipped: each option carries its own renewal amounts,
+ * already required when the offer is created.
+ *
+ * Returns the reason to refuse, or null when the offer is fine.
+ */
+export function yearlyFeeMissingReason(p: {
+  /** The offer's services (each with pipeline_type). */
+  services: unknown
+  /** Pipelines of the catalog services that carry a yearly fee (has_annual). */
+  annualPipelines: string[]
+  recurringCosts: unknown
+  packages?: unknown
+  currency?: string | null
+}): string | null {
+  const wanted = new Set(p.annualPipelines.map((x) => x.toLowerCase()))
+  const services = Array.isArray(p.services) ? (p.services as Array<{ pipeline_type?: unknown }>) : []
+  const sellsAnnual = services.some((s) => wanted.has(String(s?.pipeline_type ?? "").toLowerCase()))
+  if (!sellsAnnual) return null
+  if (Array.isArray(p.packages) && p.packages.length >= 2) return null
+  if (readJanJun(p.recurringCosts, p.currency)) return null
+  return "This offer has no yearly fee. Enter the January and June amounts (Annual Rates) before sending — otherwise the offer and the contract show no yearly fee."
+}
