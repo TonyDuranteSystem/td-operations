@@ -310,7 +310,17 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   // id and reports the chat's name/phone back via onChatInfo.
   const applyThreadParams = useCallback((params: URLSearchParams) => {
     const thread = params.get('thread')
-    if (!thread) { setSelected(null); return }
+    if (!thread) {
+      // Nothing open — Antonio (2026-09-29, follow-up): "it works if I'm in a
+      // specific message, it doesn't if I'm in whatsapp list messages". The
+      // conversation itself already carries its own channel (the gmail:/
+      // whatsapp: prefix on `thread`), but the LIST view has no thread to carry
+      // it, so the tab itself needs its own param here.
+      const channel = params.get('channel')
+      if (channel === 'whatsapp' || channel === 'gmail') setActiveChannel(channel)
+      setSelected(null)
+      return
+    }
     if (thread.startsWith('whatsapp:')) {
       setActiveChannel('whatsapp')
       setSelected({ id: thread, channel: 'whatsapp', name: '', preview: '', unread: 0, lastMessageAt: '' })
@@ -359,25 +369,32 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkDone])
 
-  // Keep the OPEN conversation in the page's own address as it changes (a real
-  // pushState step, not a route change — switching stays instant, nothing
-  // refetches) so a REFRESH restores it via applyThreadParams above, and the
-  // browser Back arrow walks conversation → conversation before leaving the
-  // page. `mailbox` collapses to null whenever nothing is selected — this
-  // deliberately does NOT track which TAB is showing on its own (Antonio only
-  // asked to stay on the same message, not to remember the tab), which also
-  // keeps a plain /inbox visit with nothing open from picking up a needless
-  // `?mailbox=support` on the very first load (that would differ from the
-  // arrival URL and push a spurious history step). Only wired once the initial
-  // deep-link/refresh read has happened — otherwise this would immediately
-  // overwrite whatever the URL arrived with, on the very first render.
+  // Keep the OPEN conversation — or, with nothing open, the active TAB itself
+  // (Antonio, 2026-09-29 follow-up: viewing the plain WhatsApp list and
+  // refreshing still dropped back to Gmail) — in the page's own address as it
+  // changes (a real pushState step, not a route change — switching stays
+  // instant, nothing refetches) so a REFRESH restores it via applyThreadParams
+  // above, and the browser Back arrow walks list/conversation → the previous
+  // one before leaving the page. `channel` is only carried on its own when
+  // NOTHING is selected — an open conversation's id already carries its
+  // channel via the gmail:/whatsapp: prefix, so tracking both would be
+  // redundant.
+  //
+  // NOT gated on `deepLinkDone` — an earlier version was, on the theory that
+  // it would stop this from firing before the initial URL read. That gate was
+  // itself the bug: it makes render 1 adopt `{}` (empty) as the hook's
+  // baseline, then render 2 (the instant `deepLinkDone` flips true) sees the
+  // REAL default values for the first time and — because they differ from
+  // that empty baseline — pushes them into the URL, even on a bare `/inbox`
+  // visit where nothing the user did actually changed. Passing the real
+  // values from render 1 onward lets the hook's own "first render adopts
+  // silently, no push" rule do its job correctly instead.
   useSelectionHistory(
-    deepLinkDone
-      ? {
-          thread: selected?.id ?? null,
-          mailbox: selected && activeChannel === 'gmail' ? activeMailbox : null,
-        }
-      : {},
+    {
+      thread: selected?.id ?? null,
+      channel: !selected ? activeChannel : null,
+      mailbox: activeChannel === 'gmail' ? activeMailbox : null,
+    },
     (v) => applyThreadParams(new URLSearchParams(Object.entries(v).filter(([, val]) => val != null) as [string, string][])),
   )
 
