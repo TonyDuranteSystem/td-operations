@@ -67,6 +67,17 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
   const { queryParam, readBody, realtimeFilters, plan } = resolveScope(scope)
+  // The view the component is showing NOW. The chat is not remounted when the
+  // client switches company (that would drop the draft and the send popup's
+  // state), so a response started for the PREVIOUS company can still resolve
+  // after the switch — it must be thrown away, or company A's messages land in
+  // company B's view (and then survive every refresh as "older history").
+  const currentQueryRef = useRef(queryParam)
+  currentQueryRef.current = queryParam
+  // Which view the messages on screen belong to (null until the first load
+  // lands). Lets the component wait for the NEW company's data before acting
+  // on `topics` after a switch.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -74,10 +85,12 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     setHasMore(true)
     const seq = ++fetchSeqRef.current
     const startMark = eventMarkRef.current
+    const q = queryParam
     try {
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
+      const res = await fetch(`/api/portal/chat?${q}&limit=50`)
       if (res.ok) {
         const data = await res.json()
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
         if (seq < appliedSeqRef.current) return // something newer is already on screen
         appliedSeqRef.current = seq
         const msgs: PortalMessage[] = data.messages ?? []
@@ -88,6 +101,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // while this fetch was in flight.
         setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: prev, limit: Infinity, liveIds: live, deletedIds: deleted }).messages)
         setHasMore(msgs.length >= 50)
+        setLoadedKey(q)
         fetch('/api/portal/chat/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -97,7 +111,8 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     } catch {
       // silent
     } finally {
-      setLoading(false)
+      // A superseded view's load must not clear the spinner of the current one.
+      if (q === currentQueryRef.current) setLoading(false)
     }
     // readBody is derived from contactId/accountId (same inputs as queryParam).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -137,9 +152,11 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       // Refetch at least as many as we already hold (the route caps at 100);
       // anything older than that window is kept by the merge, not refetched.
       const limit = Math.min(100, Math.max(50, messagesRef.current.length))
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=${limit}`)
+      const q = queryParam
+      const res = await fetch(`/api/portal/chat?${q}&limit=${limit}`)
       if (res.ok) {
         const data = await res.json()
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
         if (seq < appliedSeqRef.current) return // something newer is already on screen
         appliedSeqRef.current = seq
         const msgs: PortalMessage[] = data.messages ?? []
@@ -187,22 +204,27 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || messages.length === 0) return
     setLoadingMore(true)
+    const q = queryParam
+    const startMark = eventMarkRef.current
     try {
       const oldest = messages[0]
       // encodeURIComponent is REQUIRED: created_at carries a "+00:00" timezone
       // offset, and an unencoded "+" is decoded as a space server-side, which
       // made this request 500 ("invalid input syntax for timestamp") and the
       // load-older button silently fail. (2026-06-08)
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50&before=${encodeURIComponent(oldest.created_at)}`)
+      const res = await fetch(`/api/portal/chat?${q}&limit=50&before=${encodeURIComponent(oldest.created_at)}`)
       if (res.ok) {
         const data = await res.json()
-        const older = data.messages ?? []
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
+        const older: PortalMessage[] = data.messages ?? []
+        const deleted = idsSince(deletedMarksRef.current, startMark)
         setHasMore(older.length >= 50)
         if (older.length > 0) {
-          // Dedupe: a refresh racing this page may already hold some of these rows.
+          // Dedupe: a refresh racing this page may already hold some of these
+          // rows; and drop any soft-deleted while this page was loading (R100).
           setMessages(prev => {
             const have = new Set(prev.map(m => m.id))
-            return sortMessagesAscending([...older.filter((m: PortalMessage) => !have.has(m.id)), ...prev])
+            return sortMessagesAscending([...older.filter(m => !have.has(m.id) && !deleted.has(m.id)), ...prev])
           })
         }
       }
@@ -368,7 +390,10 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     new Set(messages.map(m => m.topic).filter((t): t is string => !!t))
   ).sort()
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics }
+  // True once the messages on screen belong to the view currently selected.
+  const ready = !loading && loadedKey === queryParam
+
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready }
 }
 
 type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }

@@ -115,7 +115,7 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null, persistEntityFromLink = false }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null; persistEntityFromLink?: boolean }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(scope, accountId || null, contactId)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
   // message is about via a first-send popup; the choice is the SEND TAG and the
@@ -147,20 +147,36 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // topic shows up; only then give up and fall back.
   const initialTopicChecked = useRef(false)
   const deepLinkPagesRef = useRef(0)
-  // A bell link clicked while already on the chat page is a soft navigation:
-  // the component stays mounted (a remount would drop the draft and the live
-  // channel), so follow the new ?topic= here and re-arm the deep-link search.
+  // The component is NOT remounted on a company switch or on a bell link
+  // clicked while already on the chat page (a remount would drop the draft, the
+  // send popup's answer and — on the same view — the live channel). So the
+  // per-view state is reset here instead:
+  //  - company changed → the open tab belongs to the old company. Go to the
+  //    linked tab if a link brought us here, else General (a tab carried over
+  //    to a company that doesn't have it shows an empty chat — the very
+  //    symptom this job fixes).
+  //  - only ?topic= changed (bell link, same company) → follow it.
+  // Either way the deep-link search re-arms and waits for the new view's data.
+  const lastEntityRef = useRef(selectedEntityId)
   const lastInitialTopic = useRef(initialTopic)
   useEffect(() => {
-    if (lastInitialTopic.current === initialTopic) return
+    const entityChanged = lastEntityRef.current !== selectedEntityId
+    const topicChanged = lastInitialTopic.current !== initialTopic
+    if (!entityChanged && !topicChanged) return
+    lastEntityRef.current = selectedEntityId
     lastInitialTopic.current = initialTopic
-    initialTopicChecked.current = false
+    const next = entityChanged && !persistEntityFromLink ? null : initialTopic
+    initialTopicChecked.current = !next
     deepLinkPagesRef.current = 0
-    setActiveTopic(initialTopic)
-  }, [initialTopic])
+    setActiveTopic(next)
+  }, [selectedEntityId, initialTopic, persistEntityFromLink])
   useEffect(() => {
-    if (initialTopicChecked.current || loading || !initialTopic) return
-    if (topics.includes(initialTopic)) { initialTopicChecked.current = true; return }
+    // `ready` = the loaded messages belong to the CURRENT view; right after a
+    // switch `topics` still holds the previous company's tabs.
+    if (initialTopicChecked.current || !ready || !activeTopic) return
+    const wanted = activeTopic
+    if (wanted !== initialTopic) { initialTopicChecked.current = true; return }
+    if (topics.includes(wanted)) { initialTopicChecked.current = true; return }
     if (loadingMore) return
     if (hasMore && deepLinkPagesRef.current < MAX_DEEP_LINK_PAGES) {
       deepLinkPagesRef.current++
@@ -169,7 +185,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     }
     initialTopicChecked.current = true
     setActiveTopic(null)
-  }, [loading, loadingMore, hasMore, topics, initialTopic, loadMore])
+  }, [ready, loadingMore, hasMore, topics, initialTopic, activeTopic, loadMore])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -200,7 +216,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // later link to a different company persists too.
   const persistedEntityId = useRef<string | null>(null)
   useEffect(() => {
-    if (!persistEntityFromLink || !currentEntity || persistedEntityId.current === currentEntity.id) return
+    // Forget once the page no longer comes from a link, so a LATER link back to
+    // the same company (after the client switched away) is persisted again.
+    if (!persistEntityFromLink) { persistedEntityId.current = null; return }
+    if (!currentEntity || persistedEntityId.current === currentEntity.id) return
     persistedEntityId.current = currentEntity.id
     writeEntityCookie(currentEntity)
     const url = new URL(window.location.href)
