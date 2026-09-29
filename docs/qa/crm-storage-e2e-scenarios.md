@@ -208,3 +208,4 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | O5 | CRM company page + View as client | Unchanged: still Drive, the client sees exactly what they saw |
 | O6 | Organise the copy: Set type, Rename, Move | Works; the company page and the client still unchanged |
 | O7 | "Remove copy" | Files go to the new storage's trash; the folder can be copied again |
+| O8 | In "Import from Google Drive" type 2+ letters of a company name or folder name while inside ANY folder | Results from the whole Drive (companies first), not only the folders on screen; a piece inside a word finds the company; clearing the box returns to the folder you were in |

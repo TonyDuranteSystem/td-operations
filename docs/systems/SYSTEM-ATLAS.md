@@ -189,7 +189,7 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-18)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-26)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-09-30)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-25)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
@@ -213,7 +213,7 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-18)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-09-29)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-09-30)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-09-29)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_

@@ -1488,6 +1488,30 @@ export async function listFolderPageAnyDrive(folderId: string, pageToken?: strin
   return { files: j.files ?? [], nextPageToken: j.nextPageToken ?? null }
 }
 
+/** Folders whose name contains the text, at ANY level of one Shared Drive (Drive matches whole words / word starts —
+ *  the CRM's company names cover "anywhere inside a word"). Read-only; never mocked. */
+export async function searchFoldersAnyDrive(driveId: string, text: string, limit = 30): Promise<DriveListedItem[]> {
+  const clean = text.trim()
+  if (!clean) return []
+  const token = await getAccessToken()
+  const url = new URL(`${DRIVE_API}/files`)
+  const esc = clean.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+  url.searchParams.set("q", `mimeType = 'application/vnd.google-apps.folder' and name contains '${esc}' and trashed = false`)
+  url.searchParams.set("corpora", "drive")
+  url.searchParams.set("driveId", driveId)
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("includeItemsFromAllDrives", "true")
+  url.searchParams.set("fields", "files(id,name,mimeType,driveId)")
+  url.searchParams.set("pageSize", String(Math.min(Math.max(limit, 1), 100)))
+  url.searchParams.set("orderBy", "name")
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive API ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return ((await res.json()) as { files?: DriveListedItem[] }).files ?? []
+}
+
 /** A binary file's real bytes (never mocked — the caller has checked which drive it is in). */
 export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
   const token = await getAccessToken()

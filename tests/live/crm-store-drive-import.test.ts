@@ -355,6 +355,29 @@ describe("study copy — pick a client's Drive folder, copy it into our storage,
     await expect(listDriveFolders(PROD_DRIVE)).rejects.toThrow(/not in the Shared Drive/)
   }, 120_000)
 
+  it("the search box looks in the WHOLE Drive: a company by a piece inside its name, a folder several levels down, odd characters never break it", async () => {
+    const { searchDriveFolders } = await import("@/lib/crm-store/drive-import")
+    // a company by a piece INSIDE a word (the CRM's name search), with its Drive folder and no copy yet
+    const byCompany = await searchDriveFolders(`TUDY LLC ${tag}`.slice(0, 12))
+    expect(byCompany.tooShort).toBe(false)
+    const hit = byCompany.results.find((r) => r.company?.accountId === c.account)
+    expect(hit).toMatchObject({ id: c.top, company: { accountId: c.account }, copy: null })
+    // a folder two levels down ("1. Company" inside the client's folder), from the top of the Drive — no need to open anything
+    const deep = await searchDriveFolders("Contacts")
+    expect(deep.results.map((r) => r.name)).toContain("2. Contacts")
+    // Drive-only folders show without a company; a client folder that is BOTH a company and a name match appears once
+    const both = await searchDriveFolders(`ZZ STUDY Co ${tag}`)
+    expect(both.results.filter((r) => r.id === c.top)).toHaveLength(1)
+    // one letter = nothing asked of Drive or the CRM; quotes, % and _ are just letters
+    expect((await searchDriveFolders("a")).tooShort).toBe(true)
+    for (const odd of ["O'Brien", "100%", "a_b", "back\\slash", `"quoted"`]) {
+      const r = await searchDriveFolders(odd)
+      expect(Array.isArray(r.results)).toBe(true)
+    }
+    // '%' is not a wildcard: it must not match every company
+    expect((await searchDriveFolders("%%")).results.filter((r) => r.company).length).toBe(0)
+  }, 120_000)
+
   it("the copy stores every file (typed from its record, hidden), the client's records and visibility are untouched", async () => {
     const { startDriveImport, continueDriveImport, movedAt, listDriveFolders } = await import("@/lib/crm-store/drive-import")
     let v = await startDriveImport(c.account, actor, { mode: "copy" })
