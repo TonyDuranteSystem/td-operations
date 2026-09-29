@@ -65,4 +65,13 @@ describe("drive import — pure rules", () => {
     expect(buildReport([...items, item({ status: "failed", reason: "x" })], []).parityOk).toBe(false)
     expect(buildReport([...items, item({ status: "pending" })], []).parityOk).toBe(false)
   })
+  it("lists the files the client sees that have no type (their records still open from Drive)", () => {
+    const r = buildReport([
+      item({ name: "Old note.pdf", drive_path: ["Old stuff"], reason: "The client could see this but it has no type — its CRM record still opens from Drive until it gets one (Needs a type)." }),
+      item({ name: "Copy.pdf", drive_path: ["2. Contacts"], status: "merged", reason: "Kept once. The client could see it but it has no type — its CRM record still opens from Drive until it gets one (Needs a type)." }),
+      item({ name: "Typed.pdf" }),
+    ], [])
+    expect(r.waitingForType).toEqual([{ name: "Old note.pdf", where: "Old stuff" }, { name: "Copy.pdf", where: "2. Contacts" }])
+    expect(r.parityOk).toBe(true)
+  })
 })

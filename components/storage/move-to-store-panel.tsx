@@ -16,7 +16,7 @@ interface Folder { folder: string; driveFiles: number; moved: number; merged: nu
 interface Report {
   folders: Folder[]; rowsRepointed: number; rowsCreated: number; fromStorage: number
   skipped: { name: string; where: string; reason: string }[]; failed: { name: string; where: string; reason: string }[]
-  needsReview: number; parityOk: boolean; stillReadDrive: string[]
+  needsReview: number; waitingForType?: { name: string; where: string }[]; parityOk: boolean; stillReadDrive: string[]
 }
 interface Run {
   id: string; status: string; startedAt: string; finishedAt: string | null
@@ -164,6 +164,7 @@ export function MoveToStorePanel({ accountId }: { accountId: string }) {
             </table>
           </div>
           {r.report.failed.length > 0 && <div><p className="font-medium text-red-700">Failed</p><ul className="list-disc pl-5">{r.report.failed.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
+          {(r.report.waitingForType?.length ?? 0) > 0 && <div><p className="font-medium text-amber-700">Waiting for a type (the client sees them — they still open from Drive until they get a type)</p><ul className="list-disc pl-5">{r.report.waitingForType!.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where})</li>)}</ul></div>}
           {r.report.skipped.length > 0 && <div><p className="font-medium">Not moved (still in Drive)</p><ul className="list-disc pl-5">{r.report.skipped.slice(0, 50).map((x, i) => <li key={i}>{x.name} ({x.where}) — {x.reason}</li>)}</ul></div>}
           <p className="text-zinc-500">Still read only from Drive for now (to switch before real clients): {r.report.stillReadDrive.join(', ')}.</p>
         </div>

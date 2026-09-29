@@ -167,3 +167,18 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | L7 | Console | No red errors during the whole run |
 | L8 | After every action | The changed folder updates within a couple of seconds; "Moving…/Renaming…" shows while it runs; a storage never looks empty while loading ("Loading…") |
 | L9 | Reload the Storage page | Opens on the tab used last on this computer |
+
+## M. Move a company from Drive (pilot company "ZZ Drive Pilot LLC", TEST Drive only)
+| # | Do | Expect |
+|---|---|---|
+| M1 | Company page → Documents → "Move this company to the new storage…" → Yes | Progress "Moving… N of M files"; then "Moved — every file checked" |
+| M2 | Read the report | Every Drive folder with In Drive = Moved + Kept once + Not moved; 0 failed; Google Docs listed under "Not moved"; untyped visible files under "Waiting for a type" |
+| M3 | Open the storage on the company page | Only the new storage + the note with the old Drive folder link; files in 1–5 folders, sub-folders and year folders as in Drive; the loose top file in Correspondence marked Needs review |
+| M4 | "2. Contacts" → each person | Their passport/ID in their own storage; the identical copy kept once |
+| M5 | Open a moved document from the CRM documents list | It opens (from the new storage) |
+| M6 | View as client → Documents | Exactly the same documents as before the move |
+| M7 | Press Move in a second tab while it runs | No file moved twice; one report |
+| M8 | Close the page mid-move, reopen, "Continue" | Finishes; nothing lost |
+| M9 | "Undo the move…" → Yes | Records open from Drive again; the copies in the storage trash; the company page shows Drive again |
+| M10 | Move again after the undo | Works; same report |
+| M11 | Open the TEST Drive folder | Nothing changed there |

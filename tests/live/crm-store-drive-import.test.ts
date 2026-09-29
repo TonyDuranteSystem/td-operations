@@ -227,3 +227,82 @@ describe("move a company from Drive to the new storage — live sandbox + TEST D
     expect(count).toBe(0)
   }, 60_000)
 })
+
+// ───────────────────────────── round 2 (bug-hunter): merge onto an untyped copy, retries, failures, undo re-run
+describe("move — identical copies with and without a type, a retried file, a failed file, an undo run twice", () => {
+  const g: Record<string, string> = {}
+  beforeAll(async () => {
+    const drive = await import("@/lib/google-drive")
+    const mk = async (parent: string, name: string) => ((await drive.createFolder(parent, name)) as { id: string }).id
+    const up = async (parent: string, name: string, text: string) => ((await drive.uploadBinaryToDrive(name, await pdf(text), "application/pdf", parent)) as { id: string }).id
+    const top = await mk(TEST_DRIVE, `ZZ MOVE2 Co ${tag}`)
+    const contacts = await mk(top, "2. Contacts"), corr = await mk(top, "5. Correspondence")
+    // processed in name order: the untyped copy first, then the typed + visible one with the same bytes
+    g.aCopy = await up(contacts, "A copy.pdf", `ZZ MOVE2 passport ${tag}`)
+    g.bPassport = await up(contacts, "B passport.pdf", `ZZ MOVE2 passport ${tag}`)
+    // two identical untyped copies, the second visible to the client
+    g.cNote = await up(contacts, "C note.pdf", `ZZ MOVE2 note ${tag}`)
+    g.dNote = await up(contacts, "D note.pdf", `ZZ MOVE2 note ${tag}`)
+    g.eId = await up(contacts, "E id.pdf", `ZZ MOVE2 id ${tag}`)
+    g.letter = await up(corr, "Letter.pdf", `ZZ MOVE2 letter ${tag}`)
+    g.letter2 = await up(corr, "Letter two.pdf", `ZZ MOVE2 letter two ${tag}`)
+    g.account = await insert("accounts", { company_name: `ZZ MOVE2 LLC ${tag}`, status: "Active", state_of_formation: "WY", drive_folder_id: top })
+    g.person = await insert("contacts", { first_name: "Zz", last_name: `Solo ${tag}`, full_name: `ZZ MOVE2 Solo ${tag}`, email: `zz-move2-${tag}@example.test` })
+    const { error } = await db.from("account_contacts").insert({ account_id: g.account, contact_id: g.person })
+    if (error) throw new Error(error.message)
+    const legacy = (await db.from("catalog_entries").select("metadata").eq("catalog_id", "storage_document_types").eq("slug", "passport").single()).data.metadata.legacy_document_type_id as number
+    g.rowB = await insert("documents", { drive_file_id: g.bPassport, file_name: "B passport.pdf", account_id: g.account, contact_id: g.person, document_type_id: legacy, document_type_name: "Passport", category: 2, portal_visible: true, status: "classified" })
+    g.rowD = await insert("documents", { drive_file_id: g.dNote, file_name: "D note.pdf", account_id: g.account, contact_id: g.person, category: 2, portal_visible: true, status: "classified" })
+  }, 240_000)
+
+  it("a typed, visible copy merged onto an untyped copy gives it its type; two untyped copies keep the visible record on Drive", async () => {
+    const { startDriveImport, continueDriveImport } = await import("@/lib/crm-store/drive-import")
+    let v = await startDriveImport(g.account, actor)
+    g.run = v.id
+    // one file per batch → the claim order (folder, then name) decides: the untyped copy is stored first
+    for (let i = 0; i < 20 && v.status === "moving"; i++) v = await continueDriveImport(v.id, actor, { files: 1, ms: 120_000 })
+    expect(v.status, JSON.stringify(v.report?.failed)).toBe("done")
+    const { data: items } = await db.from("store_import_items").select("*").eq("run_id", g.run)
+    const by = (id: string) => items.find((x: { source_id: string }) => x.source_id === id)
+    // A (untyped) kept, B merged into it: A now says Passport, B's record opens it and stays visible
+    expect(by(g.aCopy).status).toBe("done")
+    expect(by(g.bPassport).status).toBe("merged")
+    expect(by(g.bPassport).store_file_id).toBe(by(g.aCopy).store_file_id)
+    expect((await db.from("store_files").select("document_type").eq("id", by(g.aCopy).store_file_id).single()).data.document_type).toBe("passport")
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", g.rowB).single()).data).toEqual({ drive_file_id: `store:${by(g.aCopy).store_file_id}`, portal_visible: true })
+    // C and D both untyped, D visible: D's record keeps opening from Drive, listed as waiting for a type
+    expect(by(g.dNote).status).toBe("merged")
+    expect((await db.from("documents").select("drive_file_id, portal_visible").eq("id", g.rowD).single()).data).toEqual({ drive_file_id: g.dNote, portal_visible: true })
+    expect(v.report?.waitingForType.map((x) => x.name)).toContain("D note.pdf")
+  }, 300_000)
+
+  it("a personal file that runs again (a batch that died after saving) recognises its own copy — never 'merged into itself'", async () => {
+    const { continueDriveImport } = await import("@/lib/crm-store/drive-import")
+    const { data: before } = await db.from("store_import_items").select("id, store_file_id").eq("run_id", g.run).eq("source_id", g.eId).single()
+    await db.from("store_import_runs").update({ status: "moving" }).eq("id", g.run)
+    await db.from("store_import_items").update({ status: "pending" }).eq("id", before.id)
+    const v = await continueDriveImport(g.run, actor, { files: 25, ms: 120_000 })
+    expect(v.status).toBe("done")
+    const { data: after } = await db.from("store_import_items").select("status, store_file_id").eq("id", before.id).single()
+    expect(after).toEqual({ status: "done", store_file_id: before.store_file_id })
+  }, 120_000)
+
+  it("undo also trashes a file saved before a failure, and a second undo pass drops import records of files already in the trash", async () => {
+    const { undoDriveImport } = await import("@/lib/crm-store/drive-import")
+    const { deleteStoreFile } = await import("@/lib/crm-store/file-actions")
+    const { data: items } = await db.from("store_import_items").select("id, source_id, store_file_id").eq("run_id", g.run)
+    const failedOne = items.find((x: { source_id: string }) => x.source_id === g.letter)
+    const trashedOne = items.find((x: { source_id: string }) => x.source_id === g.letter2)
+    // a failure after the save: the ledger keeps the file id
+    await db.from("store_import_items").update({ status: "failed", reason: "test: failed after the save" }).eq("id", failedOne.id)
+    // an undo that stopped half-way already trashed this one (its import record is still there)
+    await deleteStoreFile(trashedOne.store_file_id, actor)
+    await db.from("store_import_runs").update({ status: "undoing" }).eq("id", g.run)
+    const v = await undoDriveImport(g.run, actor)
+    expect(v.status).toBe("rolled_back")
+    expect((await db.from("store_files").select("state").eq("id", failedOne.store_file_id).single()).data.state).toBe("trashed")
+    const { count } = await db.from("store_external_refs").select("id", { count: "exact", head: true }).in("object_id", [failedOne.store_file_id, trashedOne.store_file_id]).eq("direction", "import")
+    expect(count).toBe(0)
+    expect((await db.from("documents").select("drive_file_id").eq("id", g.rowB).single()).data.drive_file_id).toBe(g.bPassport)
+  }, 240_000)
+})

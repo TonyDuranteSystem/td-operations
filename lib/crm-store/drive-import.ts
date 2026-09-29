@@ -59,6 +59,8 @@ export interface ImportReport {
   skipped: Array<{ name: string; where: string; reason: string }>
   failed: Array<{ name: string; where: string; reason: string }>
   needsReview: number
+  /** copied, but the client could see them and they have no type — their CRM records still open from Drive */
+  waitingForType: Array<{ name: string; where: string }>
   parityOk: boolean
   stillReadDrive: string[]
 }
@@ -117,6 +119,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     skipped: items.filter((it) => it.status === "skipped").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     failed: items.filter((it) => it.status === "failed").map((it) => ({ name: it.name, where: where(it), reason: it.reason ?? "" })),
     needsReview: items.filter((it) => /needs review/i.test(it.reason ?? "")).length,
+    waitingForType: items.filter((it) => /\(Needs a type\)/.test(it.reason ?? "")).map((it) => ({ name: it.name, where: where(it) })),
     parityOk: items.every((it) => it.status !== "failed" && it.status !== "pending" && it.status !== "working"),
     stillReadDrive,
   }
@@ -270,7 +273,8 @@ export async function continueDriveImport(runId: string, actorId: string | null,
       break
     }
     let patch: Partial<ImportItem>
-    try { patch = await moveOne(it, ctx) } catch (e) { patch = { status: "failed", reason: e instanceof Error ? e.message : String(e) } }
+    const saved: { fileId: string | null } = { fileId: null }
+    try { patch = await moveOne(it, ctx, saved) } catch (e) { patch = { status: "failed", reason: e instanceof Error ? e.message : String(e), ...(saved.fileId ? { store_file_id: saved.fileId } : {}) } }
     await db().from("store_import_items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", it.id).eq("status", "working")
   }
   const { count } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("run_id", runId).in("status", ["pending", "working"])
@@ -302,7 +306,7 @@ async function loadCtx(runId: string, accountId: string, ownerId: string, actorI
 
 interface DocRow { id: string; drive_file_id: string; drive_link: string | null; document_type_id: number | null; document_type_name: string | null; category: number | null; contact_id: string | null; account_id: string | null; portal_visible: boolean | null; tax_year: number | null }
 
-async function moveOne(it: ImportItem, ctx: Ctx): Promise<Partial<ImportItem>> {
+async function moveOne(it: ImportItem, ctx: Ctx, saved: { fileId: string | null } = { fileId: null }): Promise<Partial<ImportItem>> {
   const skip = it.source === "drive" ? skipReasonFor(it.mime_type) : null
   if (skip) return { status: "skipped", reason: skip }
   if (it.size_bytes != null && it.size_bytes > IMPORT_MAX_FILE_BYTES) return { status: "failed", reason: `Too large for the new storage (${Math.round(it.size_bytes / 1048576)} MB, limit ${IMPORT_MAX_FILE_BYTES / 1048576} MB).` }
@@ -366,9 +370,9 @@ async function moveOne(it: ImportItem, ctx: Ctx): Promise<Partial<ImportItem>> {
       ownerId = await ensurePersonOwner(person, name)
       folderId = await folderOfKind(ownerId, "personal")
       subPath = [] // a person's own documents sit in "Personal documents"
-      // the same document already in this person's storage → kept once
-      const dup = await sameContentFile(ownerId, sha)
-      if (dup) return await mergeInto(it, dup, rows, ctx)
+      // the same document already in this person's storage → kept once (never this item's own earlier copy)
+      const dup = await sameContentFile(ownerId, sha, callerKeyOf(ctx, it))
+      if (dup) return await mergeInto(it, dup, rows, ctx, type?.slug ?? null)
     } else {
       folderId = mustFolder(ctx, "correspondence")
       needsReview = "Found in 2. Contacts — whose document is it? (Needs review)"
@@ -387,8 +391,7 @@ async function moveOne(it: ImportItem, ctx: Ctx): Promise<Partial<ImportItem>> {
     folderId = (await ensureFolderPath(folderId, subPath, ctx.actorId)).id
   }
 
-  // one key per move: after an undo the move can run again (the undone copies wait in the trash)
-  const callerKey = `drive-import:${ctx.runId}:${it.source}:${it.source_id}`
+  const callerKey = callerKeyOf(ctx, it)
   const name = await freeName(folderId, cleanImportName(it.name), callerKey)
   const { nearestYear } = await import("./structure")
   const year = row0?.tax_year ?? (await nearestYear(folderId))
@@ -400,6 +403,7 @@ async function moveOne(it: ImportItem, ctx: Ctx): Promise<Partial<ImportItem>> {
     ...(type?.draftNeverVisible ? { filingStatus: (visible ? "filed" : "draft") as "filed" | "draft" } : {}),
   })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") return { status: "failed", reason: `The new storage refused it (${w.status}).` }
+  saved.fileId = w.fileId
   // two batches may save the same personal document at the same moment: the EARLIEST copy is kept, a later one
   // steps back (goes to the trash) and becomes a "kept once" duplicate — both batches reach the same answer
   if (ownerId !== ctx.companyOwner) {
@@ -408,7 +412,7 @@ async function moveOne(it: ImportItem, ctx: Ctx): Promise<Partial<ImportItem>> {
       if (!ctx.actorId) throw new Error("A duplicate could not be folded without a signed-in staff member.")
       const { deleteStoreFile } = await import("./file-actions")
       await deleteStoreFile(w.fileId, ctx.actorId)
-      return await mergeInto(it, keep, rows, ctx)
+      return await mergeInto(it, keep, rows, ctx, docType)
     }
   }
   if (needsReview) {
@@ -469,11 +473,18 @@ function mustFolder(ctx: Ctx, kind: string): string {
   return id
 }
 
-async function sameContentFile(ownerId: string, sha: string): Promise<string | null> {
-  const { data, error } = await db().from("store_files").select("id, store_file_versions!store_files_current_version_fk!inner(sha256)")
-    .eq("owner_id", ownerId).eq("state", "live").eq("store_file_versions.sha256", sha).limit(1)
+/** One key per move and file: after an undo the move can run again (the undone copies wait in the trash). */
+function callerKeyOf(ctx: Ctx, it: ImportItem): string {
+  return `drive-import:${ctx.runId}:${it.source}:${it.source_id}`
+}
+
+/** A live file in this storage with exactly these bytes that is NOT this item's own copy (a retry), else null. */
+async function sameContentFile(ownerId: string, sha: string, ownKey: string): Promise<string | null> {
+  const { data, error } = await db().from("store_files").select("id, caller_key, created_at, store_file_versions!store_files_current_version_fk!inner(sha256)")
+    .eq("owner_id", ownerId).eq("state", "live").eq("store_file_versions.sha256", sha).order("created_at", { ascending: true }).order("id", { ascending: true })
   if (error) throw new Error(`Could not check for an identical file (${error.message}).`)
-  return ((data ?? [])[0]?.id as string | undefined) ?? null
+  const hit = ((data ?? []) as { id: string; caller_key: string | null }[]).find((f) => f.caller_key !== ownKey)
+  return hit?.id ?? null
 }
 
 /** The earliest-saved live file in this storage whose current bytes are exactly these (the one that is kept). */
@@ -484,13 +495,25 @@ async function earliestSameContent(ownerId: string, sha: string): Promise<string
   return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
 
-async function mergeInto(it: ImportItem, fileId: string, rows: DocRow[], ctx: Ctx): Promise<Partial<ImportItem>> {
+async function mergeInto(it: ImportItem, fileId: string, rows: DocRow[], ctx: Ctx, incomingType: string | null): Promise<Partial<ImportItem>> {
   // its rows follow the kept copy when that copy has no row yet (one row per stored file); else they stay on Drive
   const { storePointer } = await import("./document-pointer")
   const { data: taken } = await db().from("documents").select("id").eq("drive_file_id", storePointer(fileId)).limit(1)
   let repointed: ImportItem["repointed"] = []
   let reason = "The same document is already in this person's storage — kept once."
   const live = rows.filter((r) => !r.drive_file_id.startsWith("store:"))
+  // the kept copy has no type but this record says what it is → the kept copy takes the type (the portal never
+  // serves an untyped stored file); neither has one and the client could see it → the record stays on Drive
+  const { data: kept } = await db().from("store_files").select("document_type").eq("id", fileId).maybeSingle()
+  let keptType = (kept?.document_type as string | null | undefined) ?? null
+  if (!keptType && incomingType) {
+    const { error: tErr } = await db().from("store_files").update({ document_type: incomingType }).eq("id", fileId).is("document_type", null)
+    if (!tErr) keptType = incomingType
+  }
+  if (live.length && !keptType && live.some((r) => r.portal_visible === true)) {
+    const { data: f } = await db().from("store_files").select("owner_id, folder_id").eq("id", fileId).maybeSingle()
+    return { status: "merged", store_file_id: fileId, reason: `${reason} The client could see it but it has no type — its CRM record still opens from Drive until it gets one (Needs a type).`, repointed: [], landed_in: f ? await pathOf(f.folder_id, f.owner_id) : null }
+  }
   if (live.length) {
     // the kept file only has the placeholder row THIS move listed (its first copy had no CRM record): the real
     // record takes its place — the placeholder goes, the real one follows the store with its own visibility
@@ -602,7 +625,7 @@ export async function latestRunFor(accountId: string): Promise<RunView | null> {
 /** When this company was moved to the new storage (its latest move that was not undone), else null. */
 export async function movedAt(accountId: string): Promise<{ status: string; finishedAt: string | null; startedAt: string } | null> {
   const { data, error } = await db().from("store_import_runs").select("status, finished_at, started_at").eq("account_id", accountId)
-    .in("status", ["moving", "done", "incomplete"]).order("started_at", { ascending: false }).limit(1).maybeSingle()
+    .in("status", ["moving", "done", "incomplete", "undoing"]).order("started_at", { ascending: false }).limit(1).maybeSingle()
   if (error || !data) return null
   return { status: data.status, finishedAt: data.finished_at, startedAt: data.started_at }
 }
@@ -638,13 +661,17 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
     }
   }
   const { deleteStoreFile } = await import("./file-actions")
-  const fileIds = Array.from(new Set(items.filter((it) => (it.status === "done" || it.status === "working") && it.store_file_id).map((it) => it.store_file_id as string)))
+  const fileIds = Array.from(new Set(items.filter((it) => (it.status === "done" || it.status === "working" || it.status === "failed") && it.store_file_id).map((it) => it.store_file_id as string)))
   const shaOf = new Map(items.filter((it) => it.store_file_id && it.sha256).map((it) => [it.store_file_id as string, it.sha256 as string]))
   for (const id of fileIds) {
     const name = items.find((it) => it.store_file_id === id)?.name ?? "a file"
     if (unrestored.has(id)) { problems.push(`${name}: kept in the new storage (its CRM record still points there)`); continue }
     const { data: f } = await db().from("store_files").select("state, store_file_versions!store_files_current_version_fk(sha256, version_no)").eq("id", id).maybeSingle()
-    if (!f || f.state !== "live") continue
+    if (!f || f.state !== "live") {
+      // already in the trash (an undo that stopped half-way and runs again): its import record goes too
+      await db().from("store_external_refs").delete().eq("object_kind", "file").eq("object_id", id).eq("direction", "import")
+      continue
+    }
     const cur = f.store_file_versions as { sha256: string; version_no: number } | null
     if (cur && (cur.version_no > 1 || (shaOf.get(id) && cur.sha256 !== shaOf.get(id)))) { problems.push(`${name}: changed since the move — kept`); continue }
     const { count: others } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("store_file_id", id).neq("run_id", runId).in("status", ["done", "merged"])
