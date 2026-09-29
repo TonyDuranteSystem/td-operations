@@ -54,7 +54,7 @@ export async function publishOffer(
   // ─── 1. Fetch and validate offer ───
   const { data: offer, error: fetchError } = await supabaseAdmin
     .from("offers")
-    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, contract_type, recurring_costs, installment_currency")
+    .select("id, token, client_name, client_email, language, status, access_code, lead_id, account_id, services, recurring_costs, installment_currency")
     .eq("token", token)
     .single()
 
@@ -69,20 +69,23 @@ export async function publishOffer(
   // A formation/onboarding offer must carry its yearly fee, or the client signs
   // an offer + contract with no yearly fee written anywhere. Checked here because
   // every send path (CRM button, MCP offer_send) goes through publishOffer.
-  let offerPackages: unknown = null
-  if (offer.contract_type === "formation" || offer.contract_type === "onboarding") {
-    const { data: pk } = await supabaseAdmin
-      .from("offers")
-      // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
-      .select("packages" as never)
-      .eq("token", token)
-      .maybeSingle()
-    offerPackages = (pk as unknown as { packages?: unknown } | null)?.packages ?? null
-  }
+  // Which services carry a yearly fee comes from the service catalog (has_annual), not a list here.
+  const { data: annualRows } = await supabaseAdmin
+    .from("service_catalog")
+    .select("pipeline")
+    .eq("has_annual", true)
+  const annualPipelines = (annualRows ?? []).map((r) => r.pipeline).filter((x): x is string => !!x)
+  const { data: pk } = await supabaseAdmin
+    .from("offers")
+    // eslint-disable-next-line no-restricted-syntax -- packages postdates generated types (migration 20260826-1800)
+    .select("packages" as never)
+    .eq("token", token)
+    .maybeSingle()
   const yearlyFeeReason = yearlyFeeMissingReason({
-    contractType: offer.contract_type,
+    services: offer.services,
+    annualPipelines,
     recurringCosts: offer.recurring_costs,
-    packages: offerPackages,
+    packages: (pk as unknown as { packages?: unknown } | null)?.packages ?? null,
     currency: offer.installment_currency,
   })
   if (yearlyFeeReason) {

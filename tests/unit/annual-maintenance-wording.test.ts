@@ -130,41 +130,52 @@ describe("buildAnnualCostRows — offer page 'Annual Costs' box", () => {
 })
 
 
-describe("yearlyFeeMissingReason — formation/onboarding must carry a yearly fee", () => {
-  it("formation with no yearly rows is refused (Emiliano Micheli, 2026-09-29)", () => {
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: null })).toMatch(/no yearly fee/)
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [] })).toMatch(/no yearly fee/)
+describe("yearlyFeeMissingReason — an offer selling a yearly-fee service must state the fee", () => {
+  const ANNUAL = ["Company Formation", "Client Onboarding"]
+  const FORMATION = [{ name: "Company Formation", pipeline_type: "Company Formation" }, { name: "ITIN Application", pipeline_type: "ITIN" }]
+  const ONBOARDING = [{ name: "Client Onboarding", pipeline_type: "Client Onboarding" }]
+  const run = (services: unknown, recurringCosts: unknown, packages?: unknown) =>
+    yearlyFeeMissingReason({ services, annualPipelines: ANNUAL, recurringCosts, packages })
+
+  it("formation + ITIN with no yearly rows is refused (Emiliano Micheli, 2026-09-29)", () => {
+    expect(run(FORMATION, null)).toMatch(/no yearly fee/)
+    expect(run(FORMATION, [])).toMatch(/no yearly fee/)
   })
 
   it("onboarding with no yearly rows is refused", () => {
-    expect(yearlyFeeMissingReason({ contractType: "onboarding", recurringCosts: undefined })).not.toBeNull()
+    expect(run(ONBOARDING, undefined)).not.toBeNull()
   })
 
-  it("only January (or only June) is refused", () => {
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "1st Installment (January)", price: "$1000" }] })).not.toBeNull()
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "2nd Installment (June)", price: "$1000" }] })).not.toBeNull()
-  })
-
-  it("zero amounts are refused", () => {
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: [{ label: "January", price: "$0" }, { label: "June", price: "$0" }] })).not.toBeNull()
+  it("only January, only June, or zero amounts are refused", () => {
+    expect(run(FORMATION, [{ label: "1st Installment (January)", price: "$1000" }])).not.toBeNull()
+    expect(run(FORMATION, [{ label: "2nd Installment (June)", price: "$1000" }])).not.toBeNull()
+    expect(run(FORMATION, [{ label: "January", price: "$0" }, { label: "June", price: "$0" }])).not.toBeNull()
   })
 
   it("the builder's normal rows pass", () => {
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: USD_ROWS })).toBeNull()
-    expect(yearlyFeeMissingReason({ contractType: "onboarding", recurringCosts: USD_ROWS })).toBeNull()
+    expect(run(FORMATION, USD_ROWS)).toBeNull()
+    expect(run(ONBOARDING, USD_ROWS)).toBeNull()
   })
 
-  it("other contract types are never refused", () => {
-    for (const ct of ["itin", "tax_return", "closure", "renewal", null, undefined, ""]) {
-      expect(yearlyFeeMissingReason({ contractType: ct, recurringCosts: null })).toBeNull()
-    }
+  it("add-ons sold alone are never refused, even when the offer fell back to contract type formation", () => {
+    // Real production offers: Change Name, Banking Setup, Closure sold alone.
+    expect(run([{ name: "Company Change Name", pipeline_type: "Company Change Name" }], null)).toBeNull()
+    expect(run([{ name: "Banking Setup", pipeline_type: "Banking Fintech" }], null)).toBeNull()
+    expect(run([{ name: "Account Closure", pipeline_type: "Company Closure" }], null)).toBeNull()
+    expect(run([{ name: "ITIN Application", pipeline_type: "ITIN" }], null)).toBeNull()
+  })
+
+  it("old hand-written offers without pipeline types are not refused", () => {
+    expect(run([{ name: "Option B — Full LLC Management (2026)", price: "$2,300" }], null)).toBeNull()
+    expect(run(null, null)).toBeNull()
   })
 
   it("multi-option offers are skipped (each option carries its own amounts)", () => {
-    expect(yearlyFeeMissingReason({ contractType: "formation", recurringCosts: null, packages: [{}, {}] })).toBeNull()
+    expect(run(FORMATION, null, [{}, {}])).toBeNull()
   })
 
-  it("contract type is matched case-insensitively", () => {
-    expect(yearlyFeeMissingReason({ contractType: "Formation", recurringCosts: null })).not.toBeNull()
+  it("pipeline names are matched case-insensitively and follow the catalog list", () => {
+    expect(run([{ pipeline_type: "company formation" }], null)).not.toBeNull()
+    expect(yearlyFeeMissingReason({ services: FORMATION, annualPipelines: [], recurringCosts: null })).toBeNull()
   })
 })
