@@ -196,7 +196,12 @@ self.addEventListener('notificationclick', function (event) {
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windowClients) {
       for (var i = 0; i < windowClients.length; i++) {
         var client = windowClients[i]
-        if (client.url.indexOf('/portal') !== -1 && 'focus' in client) {
+        // Real portal pages only — a plain substring match also caught the CRM's
+        // /portal-chats (same origin on sandbox), which this worker can't move.
+        var path = ''
+        try { path = new URL(client.url).pathname } catch (e) { path = '' }
+        var isPortalPage = path === '/portal' || path.indexOf('/portal/') === 0
+        if (isPortalPage && 'focus' in client) {
           return client.focus().catch(function () { return client }).then(function (focused) {
             var win = focused || client
             var askPage = function () {
