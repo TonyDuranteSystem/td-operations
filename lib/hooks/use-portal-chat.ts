@@ -177,7 +177,9 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // history" of this view.
         const sameView = loadedKeyRef.current === q
         const probe = mergeRefreshedMessages({ fetched: msgs, held: sameView ? messagesRef.current : [], limit, liveIds: live, deletedIds: deleted })
-        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: sameView ? prev : [], limit, liveIds: live, deletedIds: deleted }).messages)
+        // (Rows that arrived LIVE for this view — e.g. the client's own send —
+        // are kept either way.)
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: sameView ? prev : prev.filter(m => live.has(m.id)), limit, liveIds: live, deletedIds: deleted }).messages)
         // Either load or refresh may be the one that lands first for a view.
         if (!sameView) { markLoaded(q); setLoading(false) }
         // A short response means the whole thread fits in it: nothing older exists.

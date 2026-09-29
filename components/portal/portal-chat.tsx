@@ -149,12 +149,6 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const deepLinkPagesRef = useRef(0)
   const activeTopicRef = useRef(activeTopic)
   activeTopicRef.current = activeTopic
-  // The client picked a tab themselves: stop any pending search for another.
-  const chooseTopic = useCallback((next: string | null) => {
-    pendingTopicRef.current = null
-    setActiveTopic(next)
-  }, [])
-
   // Remove the one-shot link parameters once they have done their job. Left in
   // the address bar, `account` would override the company switcher on every
   // re-render (the client could no longer switch company), and an unchanged
@@ -166,6 +160,22 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     url.searchParams.delete('topic')
     router.replace(`${url.pathname}${url.search}`, { scroll: false })
   }, [router])
+
+  // The client picked a tab themselves: stop any pending search for another,
+  // and consume the link (the search that would have stripped it is cancelled,
+  // and a leftover ?account= would pin the chat to the linked company).
+  const chooseTopic = useCallback((next: string | null) => {
+    pendingTopicRef.current = null
+    setActiveTopic(next)
+    stripLinkParams()
+  }, [stripLinkParams])
+
+  // Set by the "which company?" send popup just before it switches company and
+  // sends: the message goes out in the tab that is open, so on arriving at the
+  // new company that tab must stay open even before the message shows up there
+  // (with an attachment the upload takes seconds) — falling back to General
+  // would hide the message the client just sent.
+  const sendSwitchEntityRef = useRef<string | null>(null)
 
   // The component is NOT remounted on a company switch or on a notification
   // link clicked while already on the chat page (a remount would drop the
@@ -183,7 +193,11 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const topicChanged = lastInitialTopic.current !== initialTopic
     lastEntityRef.current = selectedEntityId
     lastInitialTopic.current = initialTopic
-    if (entityChanged) {
+    if (entityChanged && sendSwitchEntityRef.current === selectedEntityId) {
+      // Popup send: keep the open tab as is.
+      sendSwitchEntityRef.current = null
+      pendingTopicRef.current = null
+    } else if (entityChanged) {
       const linked = persistEntityFromLink && initialTopic
       const topic = linked ? initialTopic : activeTopicRef.current
       pendingTopicRef.current = topic ? { topic, allowPaging: !!linked } : null
@@ -513,7 +527,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const chooseEntity = (entity: PortalChatEntity) => {
     setTargetConfirmed(true)
     setPopupOpen(false)
-    if (entity.id !== selectedEntityId) selectEntity(entity)
+    if (entity.id !== selectedEntityId) {
+      if (input.trim() || pendingFiles.length > 0) sendSwitchEntityRef.current = entity.id
+      selectEntity(entity)
+    }
     // Send only if there's something drafted (the pill "switch" path may have none).
     if (input.trim() || pendingFiles.length > 0) doSend(entity)
   }
