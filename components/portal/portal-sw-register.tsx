@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { UpdateBanner } from '@/components/shared/update-banner'
-import { PORTAL_SW_PATH, PORTAL_SW_SCOPE, unregisterStrayPortalWorkers } from '@/lib/portal/sw-scope'
+import { PORTAL_SW_PATH, PORTAL_SW_SCOPE, portalUrlFromSwMessage, unregisterStrayPortalWorkers } from '@/lib/portal/sw-scope'
 
 /**
  * Portal service worker registration + update banner.
@@ -16,6 +16,19 @@ import { PORTAL_SW_PATH, PORTAL_SW_SCOPE, unregisterStrayPortalWorkers } from '@
 export function PortalSwRegister({ locale }: { locale?: string }) {
   useEffect(() => {
     void unregisterStrayPortalWorkers()
+  }, [])
+
+  // Fallback for a tapped push notification when the worker couldn't move this
+  // already-open window itself (see portal-sw.js notificationclick). Only
+  // same-origin /portal targets are followed.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+    const onMessage = (event: MessageEvent) => {
+      const url = portalUrlFromSwMessage(event.data, window.location.origin)
+      if (url) window.location.assign(url)
+    }
+    navigator.serviceWorker.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage)
   }, [])
 
   return <UpdateBanner swPath={PORTAL_SW_PATH} scope={PORTAL_SW_SCOPE} locale={locale} />
