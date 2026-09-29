@@ -9,3 +9,5 @@ if (existsSync(".env.sandbox.local")) config({ path: ".env.sandbox.local" })
 config({ path: ".env.local" })
 // Safety: force email-blocking so a live test can NEVER fire a real email.
 process.env.SANDBOX_MODE = "1"
+// The sandbox has Jodi as a second owner (production does not until Antonio says so).
+process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS = "jodi@tonydurante.us"

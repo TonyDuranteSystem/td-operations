@@ -154,12 +154,27 @@ describe("shareDiff", () => {
 import { isOwnerOnly, isProtectedAdminEmail, isSecureAdmin, PRIMARY_OWNER_EMAIL } from "@/lib/auth"
 describe("owners vs the protected admin (adding an owner never changes 2FA protection)", () => {
   const u = (email: string, role?: string) => ({ email, app_metadata: role ? { role } : {}, user_metadata: {} }) as never
-  it("Jodi is an owner but NOT the protected admin", () => {
+  it("by default only Antonio is an owner — Jodi is added by the NEXT_PUBLIC_EXTRA_OWNER_EMAILS setting alone", () => {
+    const saved = process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS
+    try {
+      delete process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS
+      expect(isOwnerOnly(u("jodi@tonydurante.us"))).toBe(false)
+      expect(isOwnerOnly(u("antonio.durante@tonydurante.us"))).toBe(true)
+      process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS = " Jodi@TonyDurante.us , "
+      expect(isOwnerOnly(u("jodi@tonydurante.us"))).toBe(true)
+      expect(isOwnerOnly(u("luca@tonydurante.us", "team"))).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS; else process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS = saved
+    }
+  })
+  it("Jodi (once added) is an owner but NOT the protected admin", () => {
+    process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS = "jodi@tonydurante.us"
     expect(isOwnerOnly(u("jodi@tonydurante.us"))).toBe(true)
     expect(isOwnerOnly(u("Jodi@TonyDurante.us"))).toBe(true)
     expect(isProtectedAdminEmail("jodi@tonydurante.us")).toBe(false)
     expect(isSecureAdmin(u("jodi@tonydurante.us"))).toBe(false)
     expect(isSecureAdmin(u("jodi@tonydurante.us", "admin"))).toBe(true)
+    delete process.env.NEXT_PUBLIC_EXTRA_OWNER_EMAILS
   })
   it("Antonio is both, and the primary owner; staff are neither", () => {
     expect(isOwnerOnly(u("antonio.durante@tonydurante.us"))).toBe(true)
