@@ -260,7 +260,14 @@ export async function setStoreFileType(p: SetTypeInput): Promise<SetTypeResult> 
   if (personal && ownerKind === "company") {
     const { ensurePersonOwner } = await import("./formation-pilot")
     const who = people.find((x) => x.contactId === p.personContactId)!
+    const { data: had } = await db().from("store_owners").select("id").eq("contact_id", who.contactId).eq("kind", "person").maybeSingle()
     const ownerId = await ensurePersonOwner(who.contactId, who.name)
+    // organising a study copy never turns a person's CRM onto the new storage
+    const { data: co } = await db().from("store_owners").select("study_only").eq("id", f.owner_id).maybeSingle()
+    if (!had && co?.study_only === true) {
+      const { markStudy } = await import("./drive-import")
+      await markStudy(ownerId, "copy", true)
+    }
     const pk = kind && ["personal", "itin", "person_tax", "person_tax_year"].includes(kind) ? kind : null
     const fo = await firstFolder(ownerId, [pk, pk === "person_tax_year" ? "person_tax" : null, "personal"], year)
     target = { folderId: fo.id, folderKind: fo.kind, accountId: f.store_owners.account_id, contactId: who.contactId }

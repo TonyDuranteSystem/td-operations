@@ -12,12 +12,24 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
 /** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run. `study: true` = an
  *  action that only organises files staff study (type, rename, move, folders, trash) — it also runs where the
  *  STUDY copy is switched on (production, STORE_STUDY_COPY=1); nothing the client could see is ever allowed there. */
-export async function denyUnlessStorePilotEnv(opts: { study?: boolean } = {}): Promise<NextResponse | null> {
+export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null } = {}): Promise<NextResponse | null> {
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
   if (pilotEnvironmentAllowed()) return null
   if (opts.study) {
     const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
-    if (studyCopyAllowed()) return null
+    if (studyCopyAllowed()) {
+      // study mode: owners only, and never a file a CRM record points at (study copies have none — a real one would)
+      const { data: { user } } = await createClient().auth.getUser()
+      const { isOwnerOnly } = await import("@/lib/auth")
+      if (!user || !isOwnerOnly(user)) return NextResponse.json({ error: "Owners only while the new storage holds study copies." }, { status: 403 })
+      if (opts.fileId) {
+        const { supabaseAdmin } = await import("@/lib/supabase-admin")
+        const { count, error } = await supabaseAdmin.from("documents").select("id", { count: "exact", head: true }).eq("drive_file_id", `store:${opts.fileId}`)
+        if (error) return NextResponse.json({ error: "Could not check the file — please try again." }, { status: 503 })
+        if ((count ?? 0) > 0) return NextResponse.json({ error: "This file is listed in the CRM — it can't be changed from a study copy." }, { status: 403 })
+      }
+      return null
+    }
   }
   return NextResponse.json({ error: "The new storage is not switched on here." }, { status: 403 })
 }

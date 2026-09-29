@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../../_auth"
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
+  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true, fileId: params.id }))
   if (denied) return denied
   const noAccess = await denyUnlessAreaAccess({ fileId: params.id })
   if (noAccess) return noAccess

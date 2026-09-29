@@ -246,6 +246,12 @@ export async function backupOwner(
     return { ...rep, status: "failed", error: msg }
   }
   const drives = [cfg.mainDriveId, cfg.privateDriveId]
+  // a storage made by a study copy is never backed up: its company still lives in Drive (writing there would mix
+  // study folders into the client's real folder)
+  if (!opts.io) {
+    const { data: so } = await db().from("store_owners").select("study_only").eq("id", ownerId).maybeSingle()
+    if (so?.study_only === true) return { ...rep, status: "disabled", error: "A study copy — never backed up (its company still lives in Drive)." }
+  }
   const lease = await io.claim(ownerId)
   if (!lease.claimed || !lease.token) return { ...rep, status: "busy" }
   const token = lease.token

@@ -15,7 +15,7 @@ interface Row {
   company: { accountId: string; name: string; status: string | null } | null
   copy: { runId: string; status: string; mode: 'move' | 'copy'; ownerId: string | null; files: number } | null
 }
-interface Listing { root: string; folderId: string; folders: Row[]; files: number }
+interface Listing { root: string; folderId: string; folders: Row[]; files: number; cutOff?: boolean }
 interface RunView { id: string; status: string; mode: string; ownerId: string | null; counts: { total: number; done: number; merged: number; skipped: number; failed: number; pending: number; working?: number } }
 
 async function send<T>(url: string, body: unknown, fallback: string): Promise<T> {
@@ -71,15 +71,22 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
       if (alive.current) setRunning(null)
     }
   }
-  const removeCopy = async (row: Row) => {
+  const [removing, setRemoving] = useState<string | null>(null)
+  const removeCopy = async (row: Row, ask = true) => {
     if (!row.copy) return
-    if (!window.confirm(`Remove the copy of ${row.company?.name ?? row.name} from the new storage? Google Drive is not touched.`)) return
+    if (ask && !window.confirm(`Remove the copy of ${row.company?.name ?? row.name} from the new storage? Google Drive is not touched.`)) return
+    setRemoving(row.id)
     try {
-      await send(`/api/crm-store/import/${row.copy.runId}/undo`, {}, 'The copy could not be removed.')
-      toast.success('Copy removed — the files are in the new storage\'s trash')
+      // a big copy is removed over several requests — keep going until it is gone
+      let r = await send<{ status: string }>(`/api/crm-store/import/${row.copy.runId}/undo`, {}, 'The copy could not be removed.')
+      for (let i = 0; i < 40 && alive.current && r.status === 'undoing'; i++) r = await send<{ status: string }>(`/api/crm-store/import/${row.copy.runId}/undo`, {}, 'The copy could not be removed — press Continue removing.')
+      if (r.status === 'rolled_back') toast.success('Copy removed — the files are in the new storage\'s trash')
       await load()
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'The copy could not be removed.')
+      await load()
+    } finally {
+      if (alive.current) setRemoving(null)
     }
   }
 
@@ -130,19 +137,24 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
                 <>
                   <span className="text-xs text-zinc-500">{r.company.name}{r.company.status && r.company.status !== 'Active' ? ` · ${r.company.status}` : ''}</span>
                   {r.copy?.mode === 'move' ? (
-                    <span className="text-xs text-emerald-700">Moved to the new storage</span>
+                    <span className="text-xs text-emerald-700">{r.copy.status === 'done' || r.copy.status === 'incomplete' ? 'Moved to the new storage' : 'Being moved…'}</span>
                   ) : r.copy && (r.copy.status === 'done' || r.copy.status === 'incomplete') ? (
                     <>
                       <span className={`inline-flex items-center gap-1 text-xs ${r.copy.status === 'done' ? 'text-emerald-700' : 'text-amber-700'}`}>
                         {r.copy.status === 'done' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}Copied ({r.copy.files} files){r.copy.status === 'incomplete' ? ' — some failed' : ''}
                       </span>
                       {r.copy.ownerId && <button type="button" onClick={() => onOpenStorage(r.copy!.ownerId!)} className="rounded-md bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700">Open</button>}
-                      <button type="button" disabled={!!running} onClick={() => void removeCopy(r)} aria-label={`Remove the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50"><Undo2 className="h-3 w-3" />Remove copy</button>
+                      <button type="button" disabled={!!running || !!removing} onClick={() => void removeCopy(r)} aria-label={`Remove the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50"><Undo2 className="h-3 w-3" />Remove copy</button>
                     </>
                   ) : r.copy && (r.copy.status === 'moving' || r.copy.status === 'scanning') ? (
-                    <button type="button" disabled={!!running} onClick={() => void copy(r)} className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50">Continue copy</button>
+                    <>
+                      <button type="button" disabled={!!running || !!removing} onClick={() => void copy(r)} className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50">Continue copy</button>
+                      <button type="button" disabled={!!running || !!removing} onClick={() => void removeCopy(r)} aria-label={`Remove the unfinished copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50"><Undo2 className="h-3 w-3" />Remove copy</button>
+                    </>
                   ) : r.copy?.status === 'undoing' ? (
-                    <span className="text-xs text-amber-700">Being removed…</span>
+                    removing === r.id
+                      ? <span className="inline-flex items-center gap-1 text-xs text-amber-700"><Loader2 className="h-3 w-3 animate-spin" />Removing…</span>
+                      : <button type="button" disabled={!!running} onClick={() => void removeCopy(r, false)} className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 hover:bg-amber-100">Continue removing</button>
                   ) : confirm?.id === r.id ? (
                     <span className="inline-flex items-center gap-1">
                       <button type="button" onClick={() => void copy(r)} className="rounded-md bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700">Yes, copy it</button>
@@ -159,6 +171,7 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
           ))}
         </ul>
         {listing && listing.files > 0 && rows.length > 0 && <p className="mt-1 text-xs text-zinc-500">{listing.files} loose files in this folder are not listed.</p>}
+        {listing?.cutOff && <p className="mt-1 text-xs text-amber-700">This folder is very large — only the first 5,000 entries are listed; use the search or open a sub-folder.</p>}
       </div>
     </div>
   )

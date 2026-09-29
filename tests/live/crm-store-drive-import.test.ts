@@ -396,13 +396,44 @@ describe("study copy — pick a client's Drive folder, copy it into our storage,
       .toEqual({ drive_file_id: c.oa, document_type_name: "Operating Agreement", portal_visible: true })
   }, 120_000)
 
-  it("Remove copy trashes the copies, the client's records stay, and it can be copied again", async () => {
+  it("the storage a copy made is study only: the CRM keeps using Drive for the company and its person", async () => {
+    const { storeOwnerForAccount, storeOwnerForContact, assertNotStoreOwnedAccount } = await import("@/lib/crm-store/browse")
+    const { data: owners } = await db.from("store_owners").select("kind, study_only").or(`account_id.eq.${c.account},contact_id.eq.${c.person}`)
+    expect(owners.map((o: { kind: string; study_only: boolean }) => `${o.kind}:${o.study_only}`).sort()).toEqual(["company:true", "person:true"])
+    expect(await storeOwnerForAccount(c.account)).toBeNull()
+    expect(await storeOwnerForContact(c.person)).toBeNull()
+    await expect(assertNotStoreOwnedAccount(c.account)).resolves.toBeUndefined()
+  }, 60_000)
+
+  it("where only the study copy is switched on (production): a copy runs, a real move is refused", async () => {
+    const saved = { sandbox: process.env.SANDBOX_MODE, study: process.env.STORE_STUDY_COPY }
+    try {
+      process.env.SANDBOX_MODE = ""
+      process.env.STORE_STUDY_COPY = "1"
+      const { startDriveImport, pickerRootDrive } = await import("@/lib/crm-store/drive-import")
+      expect(await pickerRootDrive()).toBe(TEST_DRIVE)
+      await expect(startDriveImport(c.account, actor)).rejects.toThrow(/not switched on here/)
+      process.env.STORE_STUDY_COPY = ""
+      await expect(startDriveImport(c.account, actor, { mode: "copy" })).rejects.toThrow(/not switched on here/)
+    } finally {
+      process.env.SANDBOX_MODE = saved.sandbox
+      process.env.STORE_STUDY_COPY = saved.study
+    }
+  }, 60_000)
+
+  it("Remove copy trashes the copies (in several steps for a big one), the client's records stay, and it can be copied again", async () => {
     const { undoDriveImport, startDriveImport } = await import("@/lib/crm-store/drive-import")
+    expect((await undoDriveImport(c.run, actor, 0)).status).toBe("undoing") // out of time at once: continues next request
     expect((await undoDriveImport(c.run, actor)).status).toBe("rolled_back")
     expect((await db.from("store_files").select("state").eq("id", c.oaFile).single()).data.state).toBe("trashed")
     expect((await db.from("documents").select("drive_file_id").eq("id", c.rowOa).single()).data.drive_file_id).toBe(c.oa)
     const again = await startDriveImport(c.account, actor, { mode: "copy" })
     expect(again.mode).toBe("copy")
     await undoDriveImport(again.id, actor)
-  }, 180_000)
+    // a REAL move afterwards makes the storage the company's (the study mark goes)
+    const mv = await startDriveImport(c.account, actor)
+    expect(mv.mode).toBe("move")
+    expect((await db.from("store_owners").select("study_only").eq("account_id", c.account).single()).data.study_only).toBe(false)
+    await undoDriveImport(mv.id, actor)
+  }, 240_000)
 })

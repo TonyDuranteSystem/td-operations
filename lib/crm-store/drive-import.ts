@@ -186,6 +186,14 @@ async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "mo
 
 export type ImportMode = "move" | "copy"
 
+/** A storage a study copy CREATED is "study only" (the CRM keeps using Drive for it); a real move makes it the
+ *  company's / person's storage. A storage that already existed is never marked study only. */
+export async function markStudy(ownerId: string, mode: ImportMode, createdNow: boolean): Promise<void> {
+  if (mode === "copy" && !createdNow) return
+  const { error } = await db().from("store_owners").update({ study_only: mode === "copy" }).eq("id", ownerId).eq("study_only", mode !== "copy")
+  if (error) throw new Error(`The storage could not be marked (${error.message}).`)
+}
+
 /** The STUDY copy (Antonio 2026-09-29: "pick one client's Drive folder, copy it into our storage, organise it and
  *  learn the rules") — reads Drive, writes only into the new storage, never touches a client's records, so it may
  *  run in PRODUCTION for owners when STORE_STUDY_COPY=1 is set there. The real switch-over ("move") stays sandbox-only. */
@@ -207,8 +215,12 @@ export async function startDriveImport(accountId: string, actorId: string | null
   const { data: acct, error: aErr } = await db().from("accounts").select("id, company_name, drive_folder_id").eq("id", accountId).maybeSingle()
   if (aErr) throw new Error(`Could not read the company (${aErr.message}).`)
   if (!acct) throw new Error("Company not found.")
+  // where may this run at all (checked before anything is touched)
+  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
+  if (!pilotEnvironmentAllowed() && !(mode === "copy" && studyCopyAllowed())) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
   // an open run continues — never a second one
-  const { data: open } = await db().from("store_import_runs").select("id, status, updated_at").eq("account_id", accountId).in("status", ["scanning", "moving", "undoing"]).maybeSingle()
+  const { data: open } = await db().from("store_import_runs").select("id, status, updated_at, mode").eq("account_id", accountId).in("status", ["scanning", "moving", "undoing"]).maybeSingle()
+  if (open && (open.mode === "copy") !== (mode === "copy")) throw new Error(open.mode === "copy" ? "A study copy of this company is open — finish or remove it first." : "A move of this company is running.")
   if (open?.status === "undoing") throw new Error("This company's copy / move is being undone — try again in a minute.")
   // a scan whose request died (never reached "moving") is closed after 10 minutes and a new one starts
   if (open?.status === "scanning" && Date.now() - new Date(open.updated_at as string).getTime() > 10 * 60_000) {
@@ -226,8 +238,10 @@ export async function startDriveImport(accountId: string, actorId: string | null
   if (rErr) throw new Error(/uq_store_import_runs_open|duplicate/i.test(rErr.message) ? "A move of this company is already running." : `The move could not start (${rErr.message}).`)
   try {
     // the company's storage and its 5 standard folders (idempotent)
+    const { data: had } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("kind", "company").maybeSingle()
     const { data: ownerId, error: oErr } = await db().rpc("store_ensure_owner", { p_kind: "company", p_ref: accountId })
     if (oErr || !ownerId) throw new Error(`The company's storage could not be created (${oErr?.message ?? "no id"}).`)
+    await markStudy(ownerId as string, mode, !had)
     const { COMPANY_TEMPLATE, storeSafeFolderName } = await import("./formation-pilot")
     const { error: tErr } = await db().rpc("store_apply_template", { p_owner_id: ownerId, p_template_slug: COMPANY_TEMPLATE, p_root_name: storeSafeFolderName(acct.company_name as string) })
     if (tErr) throw new Error(`The company's folders could not be created (${tErr.message}).`)
@@ -423,7 +437,9 @@ async function moveOne(it: ImportItem, ctx: Ctx, saved: { fileId: string | null 
     if (person) {
       const { ensurePersonOwner, folderOfKind } = await import("./formation-pilot")
       const name = ctx.members.find((m) => m.contactId === person)?.name || "Person"
+      const { data: had } = await db().from("store_owners").select("id").eq("contact_id", person).eq("kind", "person").maybeSingle()
       ownerId = await ensurePersonOwner(person, name)
+      await markStudy(ownerId, ctx.mode, !had)
       folderId = await folderOfKind(ownerId, "personal")
       subPath = [] // a person's own documents sit in "Personal documents"
       // the same document already in this person's storage → kept once (never this item's own earlier copy)
@@ -728,12 +744,14 @@ export async function movedAt(accountId: string): Promise<{ status: string; fini
  *  moved files go to the trash, the backup's import records are dropped. Drive was never changed. Refused while a
  *  batch is still moving a file. A file is NOT trashed when its record could not be restored, when staff changed
  *  it after the move, or when another move (another company of the same person) relies on it — each is reported. */
-export async function undoDriveImport(runId: string, actorId: string | null): Promise<RunView> {
+export async function undoDriveImport(runId: string, actorId: string | null, budgetMs = 240_000): Promise<RunView> {
+  const t0 = Date.now()
   if (!actorId) throw new Error("Only a signed-in staff member can undo a move.")
-  const { data: run, error } = await db().from("store_import_runs").select("id, status, owner_id").eq("id", runId).maybeSingle()
+  const { data: run, error } = await db().from("store_import_runs").select("id, status, owner_id, report").eq("id", runId).maybeSingle()
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run) throw new Error("Move not found.")
   if (run.status === "rolled_back") return runView(runId)
+  const earlier = run.status === "undoing" && Array.isArray((run.report as { problems?: unknown })?.problems) ? (run.report as { problems: string[] }).problems : []
   if (run.status === "scanning") throw new Error("Wait for the scan to finish, then undo.")
   // stop new batches FIRST, then wait for none to be mid-file
   const { data: took, error: uErr } = await db().from("store_import_runs").update({ status: "undoing", updated_at: new Date().toISOString() }).eq("id", runId).in("status", ["moving", "done", "incomplete", "failed", "undoing"]).select("id")
@@ -744,7 +762,7 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
   const { data: itemsRaw, error: iErr } = await db().from("store_import_items").select("*").eq("run_id", runId)
   if (iErr) throw new Error(`Could not read the move's files (${iErr.message}).`)
   const items = (itemsRaw ?? []) as ImportItem[]
-  const problems: string[] = []
+  const problems: string[] = [...earlier]
   const unrestored = new Set<string>() // store files whose record could not be put back
   for (const it of items) {
     for (const r of it.repointed ?? []) {
@@ -756,9 +774,15 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
     }
   }
   const { deleteStoreFile } = await import("./file-actions")
-  const fileIds = Array.from(new Set(items.filter((it) => (it.status === "done" || it.status === "working" || it.status === "failed") && it.store_file_id).map((it) => it.store_file_id as string)))
+  // merged items too: a person's file another move KEPT for both goes once the last move using it is undone
+  const fileIds = Array.from(new Set(items.filter((it) => (it.status === "done" || it.status === "working" || it.status === "failed" || it.status === "merged") && it.store_file_id).map((it) => it.store_file_id as string)))
   const shaOf = new Map(items.filter((it) => it.store_file_id && it.sha256).map((it) => [it.store_file_id as string, it.sha256 as string]))
   for (const id of fileIds) {
+    // a big company: the undo continues in the next request (everything here is safe to run again)
+    if (Date.now() - t0 > budgetMs) {
+      await db().from("store_import_runs").update({ updated_at: new Date().toISOString(), report: { undone: false, problems: Array.from(new Set(problems)) } }).eq("id", runId).eq("status", "undoing")
+      return runView(runId)
+    }
     const name = items.find((it) => it.store_file_id === id)?.name ?? "a file"
     if (unrestored.has(id)) { problems.push(`${name}: kept in the new storage (its CRM record still points there)`); continue }
     const { data: f } = await db().from("store_files").select("state, store_file_versions!store_files_current_version_fk(sha256, version_no)").eq("id", id).maybeSingle()
@@ -769,13 +793,14 @@ export async function undoDriveImport(runId: string, actorId: string | null): Pr
     }
     const cur = f.store_file_versions as { sha256: string; version_no: number } | null
     if (cur && (cur.version_no > 1 || (shaOf.get(id) && cur.sha256 !== shaOf.get(id)))) { problems.push(`${name}: changed since the move — kept`); continue }
-    const { count: others } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("store_file_id", id).neq("run_id", runId).in("status", ["done", "merged"])
-    if ((others ?? 0) > 0) { problems.push(`${name}: another company's move also uses it — kept`); continue }
+    const { count: others } = await db().from("store_import_items").select("id, store_import_runs!inner(status)", { count: "exact", head: true })
+      .eq("store_file_id", id).neq("run_id", runId).in("status", ["done", "merged"]).neq("store_import_runs.status", "rolled_back")
+    if ((others ?? 0) > 0) { problems.push(`${name}: another company's move or copy also uses it — kept`); continue }
     try { await deleteStoreFile(id, actorId) } catch (e) { problems.push(`${name}: ${e instanceof Error ? e.message : String(e)}`); continue }
     await db().from("store_external_refs").delete().eq("object_kind", "file").eq("object_id", id).eq("direction", "import")
   }
   if (run.owner_id) await db().from("store_backup_state").update({ switched_at: null, updated_at: new Date().toISOString() }).eq("owner_id", run.owner_id)
-  await db().from("store_import_runs").update({ status: "rolled_back", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { undone: true, problems } }).eq("id", runId)
+  await db().from("store_import_runs").update({ status: "rolled_back", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { undone: true, problems: Array.from(new Set(problems)) } }).eq("id", runId)
   return runView(runId)
 }
 
@@ -840,13 +865,13 @@ export interface DriveFolderRow {
 export async function pickerRootDrive(): Promise<string> {
   const { isProductionDatabase } = await import("@/lib/google-drive-guard")
   if (isProductionDatabase()) return PROD_DRIVE
-  const test = (process.env.STORE_TEST_DRIVE_ID || "").trim()
+  const test = (process.env.STORE_TEST_DRIVE_ID || process.env.GOOGLE_SHARED_DRIVE_ID || "").trim()
   if (!test || test === PROD_DRIVE) throw new Error("No TEST Drive is set here — the picker outside production only opens the TEST Drive.")
   return test
 }
 
 /** One Drive folder's sub-folders (never files), each with the CRM company it belongs to and its copy / move. */
-export async function listDriveFolders(folderId: string | null): Promise<{ root: string; folderId: string; folders: DriveFolderRow[]; files: number }> {
+export async function listDriveFolders(folderId: string | null): Promise<{ root: string; folderId: string; folders: DriveFolderRow[]; files: number; cutOff: boolean }> {
   const root = await pickerRootDrive()
   const id = folderId || root
   const { getDriveItemAnyDrive, listFolderPageAnyDrive } = await import("@/lib/google-drive")
@@ -858,34 +883,44 @@ export async function listDriveFolders(folderId: string | null): Promise<{ root:
   let files = 0
   let token: string | null = null
   let pages = 0
+  let cutOff = false
   do {
     const page = await listFolderPageAnyDrive(id, token)
     for (const f of page.files) { if (f.mimeType === GOOGLE_FOLDER) folders.push({ id: f.id, name: f.name }); else files++ }
     token = page.nextPageToken
-    if (++pages > 50) break // 5,000 entries — a Drive level is never that big
+    if (++pages >= 50 && token) { cutOff = true; break } // 5,000 entries — said so on screen
   } while (token)
   const rows: DriveFolderRow[] = folders.map((f) => ({ ...f, company: null, copy: null }))
   if (rows.length) {
-    const { data: accts, error } = await db().from("accounts").select("id, company_name, status, drive_folder_id").in("drive_folder_id", rows.map((r) => r.id))
-    if (error) throw new Error(`Could not match the folders to companies (${error.message}).`)
-    const byFolder = new Map(((accts ?? []) as { id: string; company_name: string; status: string | null; drive_folder_id: string }[]).map((a) => [a.drive_folder_id, a]))
+    // matched in chunks (a level can hold hundreds of client folders); a folder two companies share is shown as such
+    type Acct = { id: string; company_name: string; status: string | null; drive_folder_id: string }
+    const accts: Acct[] = []
+    for (let i = 0; i < rows.length; i += 100) {
+      const { data, error } = await db().from("accounts").select("id, company_name, status, drive_folder_id").in("drive_folder_id", rows.slice(i, i + 100).map((r) => r.id))
+      if (error) throw new Error(`Could not match the folders to companies (${error.message}).`)
+      accts.push(...((data ?? []) as Acct[]))
+    }
+    const byFolder = new Map<string, Acct>()
+    const shared = new Map<string, number>()
+    for (const a of accts) { if (byFolder.has(a.drive_folder_id)) shared.set(a.drive_folder_id, (shared.get(a.drive_folder_id) ?? 1) + 1); else byFolder.set(a.drive_folder_id, a) }
     const accountIds = Array.from(byFolder.values()).map((a) => a.id)
     const runs = new Map<string, { id: string; status: string; mode: string; owner_id: string | null }>()
-    if (accountIds.length) {
-      const { data: rs, error: rErr } = await db().from("store_import_runs").select("id, account_id, status, mode, owner_id, started_at").in("account_id", accountIds).neq("status", "rolled_back").neq("status", "failed").order("started_at", { ascending: false })
+    for (let i = 0; i < accountIds.length; i += 100) {
+      const { data: rs, error: rErr } = await db().from("store_import_runs").select("id, account_id, status, mode, owner_id, started_at").in("account_id", accountIds.slice(i, i + 100)).neq("status", "rolled_back").neq("status", "failed").order("started_at", { ascending: false })
       if (rErr) throw new Error(`Could not read the copies (${rErr.message}).`)
       for (const r of (rs ?? []) as { id: string; account_id: string; status: string; mode: string; owner_id: string | null }[]) if (!runs.has(r.account_id)) runs.set(r.account_id, r)
     }
-    for (const r of rows) {
+    await Promise.all(rows.map(async (r) => {
       const a = byFolder.get(r.id)
-      if (!a) continue
-      r.company = { accountId: a.id, name: a.company_name, status: a.status }
+      if (!a) return
+      const extra = shared.get(r.id)
+      r.company = { accountId: a.id, name: extra ? `${a.company_name} (+${extra - 1} other compan${extra - 1 === 1 ? "y" : "ies"} share this folder)` : a.company_name, status: a.status }
       const run = runs.get(a.id)
       if (run) {
         const { count } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("run_id", run.id)
         r.copy = { runId: run.id, status: run.status, mode: run.mode === "copy" ? "copy" : "move", ownerId: run.owner_id, files: count ?? 0 }
       }
-    }
+    }))
   }
-  return { root, folderId: id, folders: rows.sort((a, b) => a.name.localeCompare(b.name)), files }
+  return { root, folderId: id, folders: rows.sort((a, b) => a.name.localeCompare(b.name)), files, cutOff }
 }

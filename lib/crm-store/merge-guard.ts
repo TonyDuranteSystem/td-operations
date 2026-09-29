@@ -21,15 +21,14 @@ export async function storeMergeBlocker(loserId: string, winnerId: string, deps?
 }
 
 async function defaultDeps(): Promise<MergeGuardDeps | null> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  const { studyCopyAllowed } = await import("./drive-import")
-  // study copies create people's storage in production too — a contact merge must respect it there as well
-  if (!pilotEnvironmentAllowed() && !studyCopyAllowed()) return null
+  // runs wherever people's storage can exist (the pilot, study copies — and after a switch is turned off again,
+  // the storages are still there): where the store's tables don't exist yet there is nothing to guard
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   return {
     personOwners: async (ids) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
       const { data, error } = await (supabaseAdmin as any).from("store_owners").select("contact_id").in("contact_id", ids)
+      if (error && /does not exist|schema cache/i.test(error.message)) return { contactIds: [] }
       if (error) return { error: error.message as string }
       return { contactIds: ((data ?? []) as { contact_id: string }[]).map((x) => x.contact_id) }
     },

@@ -289,7 +289,8 @@ export async function storeOwnerForAccount(accountId: string): Promise<string | 
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
   if (!pilotEnvironmentAllowed()) return null
   try {
-    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).maybeSingle()
+    // a storage made by a study copy is not the company's storage yet (the CRM keeps using Drive for it)
+    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()
     return (data?.id as string | undefined) ?? null
   } catch {
     return null
@@ -336,7 +337,7 @@ export async function storeOwnerForContact(contactId: string): Promise<string | 
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
   if (!pilotEnvironmentAllowed()) return null
   try {
-    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").maybeSingle()
+    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).maybeSingle()
     return (data?.id as string | undefined) ?? null
   } catch {
     return null
@@ -400,7 +401,7 @@ export async function storeFilesShownForAccount(accountId: string, ownerId: stri
 export async function assertNotStoreOwnedAccount(accountId: string): Promise<void> {
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
   if (!pilotEnvironmentAllowed()) return
-  const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).maybeSingle()
+  const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()
   if (error) throw new Error("Could not check where this company's files live — please try again.")
   const { StoreOwnedAccountError } = await import("./account-uploads")
   if (data) throw new StoreOwnedAccountError("This company's files live in the new CRM storage — it does not get a Google Drive folder.")
