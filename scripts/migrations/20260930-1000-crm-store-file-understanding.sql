@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS public.store_file_analysis (
   ai_reason        text,
   ai_company       text,
   ai_year          integer,
+  ai_injection     boolean,                       -- the model (or the text scan) saw instructions aimed at the AI
+  ai_name_rejected boolean,                       -- the model proposed a name carrying an ID / tax number
+  owner_named      boolean,                       -- the document names the owner of the storage it sits in
   verdict          text,                          -- green | red (never decided by the AI's own confidence)
   red_reasons      jsonb NOT NULL DEFAULT '[]'::jsonb,
   crm_check        text,                          -- pass | fail | none
@@ -84,7 +87,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS store_ai_examples_version_type_uq ON public.st
 
 CREATE TABLE IF NOT EXISTS public.store_ai_decisions (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  analysis_id uuid NOT NULL REFERENCES public.store_file_analysis(id) ON DELETE CASCADE,
+  analysis_id uuid REFERENCES public.store_file_analysis(id) ON DELETE CASCADE,   -- null for a move made outside a suggestion
   file_id     uuid NOT NULL REFERENCES public.store_files(id) ON DELETE CASCADE,
   action      text NOT NULL,                      -- applied | changed | dismissed | linked | moved
   before_state jsonb,

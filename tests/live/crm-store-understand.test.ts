@@ -123,3 +123,51 @@ describe("the accuracy harness — real reader, real model", () => {
     expect((await listExamples(500)).some((e) => e.type_slug === "articles_of_organization" && e.name_pattern === "resolution")).toBe(false)
   }, 300_000)
 })
+
+describe("fixes found by the reviewers", () => {
+  it("a failed/absent AI is NOT frozen: switch it on later and the same file gets judged (and pays once)", async () => {
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const w = await saveBytesToStore({ ownerId: owner, folderId: folder, name: "Later.pdf", mimeType: "application/pdf", bytes: await pdf(CERT.map((l) => l.replace("ZZ Test", "ZZ Later"))), callerKey: `zz-und:${tag}:later`, contentChanged: true })
+    const { analyzeVersion } = await import("@/lib/crm-store/understand/analyze")
+    process.env.STORE_AI_ENABLED = "0"
+    const off = await analyzeVersion(w.versionId as string, { actor })
+    expect(off.redReasons).toContain("ai_failed"); expect(off.aiType).toBeNull()
+    process.env.STORE_AI_ENABLED = "1"
+    const on = await analyzeVersion(w.versionId as string, { actor })
+    expect(on.aiType).toBe("articles_of_organization"); expect(on.redReasons).not.toContain("ai_failed")
+    const again = await analyzeVersion(w.versionId as string, { actor })
+    expect(again.reused).toBe(true)
+  }, 300_000)
+
+  it("a document that does not name the storage's owner is RED as 'may belong to another client'", async () => {
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const w = await saveBytesToStore({ ownerId: owner, folderId: folder, name: "Someone.pdf", mimeType: "application/pdf", bytes: await pdf(["CERTIFICATE OF FORMATION OF Totally Different Holdings LLC", "State of Delaware Secretary of State Division of Corporations"]), callerKey: `zz-und:${tag}:other`, contentChanged: true })
+    const { analyzeVersion } = await import("@/lib/crm-store/understand/analyze")
+    const r = await analyzeVersion(w.versionId as string, { actor })
+    expect(r.verdict).toBe("red"); expect(r.redReasons).toContain("wrong_client")
+  }, 240_000)
+
+  it("Move to another client: lands hidden + unshared + unpublished, the CRM record follows, undo restores it exactly, once", async () => {
+    const contact2 = await insert("contacts", { first_name: "Zz", last_name: `Dest ${tag}`, full_name: `ZZ DEST Person ${tag}`, email: `zz-dest-${tag}@example.test` })
+    const { ensurePersonOwner, folderOfKind } = await import("@/lib/crm-store/formation-pilot")
+    const owner2 = await ensurePersonOwner(contact2, `ZZ DEST Person ${tag}`)
+    const folder2 = await folderOfKind(owner2, "personal")
+    const { saveBytesToStore } = await import("@/lib/crm-store/writer")
+    const w = await saveBytesToStore({ ownerId: owner, folderId: folder, name: "MoveMe.pdf", mimeType: "application/pdf", bytes: await pdf(["ZZ move fixture " + tag]), callerKey: `zz-und:${tag}:move`, contentChanged: true })
+    await db.from("store_files").update({ published: true }).eq("id", w.fileId)
+    const rec = await insert("documents", { drive_file_id: `store:${w.fileId}`, file_name: "MoveMe.pdf", contact_id: contact2 === "" ? null : (await insert("contacts", { first_name: "Zz", last_name: `Src ${tag}`, full_name: `ZZ SRC ${tag}`, email: `zz-src-${tag}@example.test` })), category: 2, portal_visible: true, status: "classified" })
+    const { moveFileToOwner, undoMove } = await import("@/lib/crm-store/understand/move-owner")
+    const m = await moveFileToOwner({ fileId: w.fileId, toFolderId: folder2, actor })
+    const { data: f } = await db.from("store_files").select("owner_id, published").eq("id", w.fileId).single()
+    expect(f.owner_id).toBe(owner2); expect(f.published).toBe(false)
+    const { data: r } = await db.from("documents").select("portal_visible, contact_id").eq("id", rec).single()
+    expect(r.portal_visible).toBe(false); expect(r.contact_id).toBe(contact2)
+    await undoMove(m.decisionId, actor)
+    const { data: back } = await db.from("store_files").select("owner_id, published").eq("id", w.fileId).single()
+    expect(back.owner_id).toBe(owner); expect(back.published).toBe(true)
+    const { data: r2 } = await db.from("documents").select("portal_visible").eq("id", rec).single()
+    expect(r2.portal_visible).toBe(true)
+    await expect(undoMove(m.decisionId, actor)).rejects.toThrow(/already undone/)
+  }, 240_000)
+})
+

@@ -6,7 +6,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessAreaAccess } from "../../browse/_auth"
 
-const ACTIONS = new Set(["applied", "changed", "dismissed", "linked", "moved"])
+// "moved" / "linked" are written by the move tool and the analysis themselves — a caller cannot claim them
+const ACTIONS = new Set(["applied", "changed", "dismissed"])
 
 export async function POST(req: NextRequest) {
   const denied = await denyUnlessStoreStaff()

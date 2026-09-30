@@ -120,9 +120,14 @@ export function keySurfaceInUse(): string { return surfaceApiKeyOverride(AI_SURF
 /** Today's AI spend from the audit rows (unknown-cost calls count a flat cent). */
 export async function spentTodayUsd(): Promise<number> {
   const since = new Date(); since.setUTCHours(0, 0, 0, 0)
-  const { data, error } = await db().from("store_ai_calls").select("cost_usd").gte("created_at", since.toISOString()).eq("status", "ok")
-  if (error) throw new Error(`Could not check today's AI spend (${error.message}).`)
-  return ((data ?? []) as { cost_usd: number | null }[]).reduce((s, r) => s + (r.cost_usd ?? 0.01), 0)
+  let total = 0
+  for (let from = 0; from < 50_000; from += 1000) {                                 // PostgREST returns 1000 rows at most
+    const { data, error } = await db().from("store_ai_calls").select("cost_usd").gte("created_at", since.toISOString()).eq("status", "ok").order("created_at").range(from, from + 999)
+    if (error) throw new Error(`Could not check today's AI spend (${error.message}).`)
+    total += ((data ?? []) as { cost_usd: number | null }[]).reduce((s, r) => s + (r.cost_usd ?? 0.01), 0)
+    if ((data ?? []).length < 1000) break
+  }
+  return total
 }
 
 export async function assertMayCall(): Promise<void> {

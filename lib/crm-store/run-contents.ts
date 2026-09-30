@@ -38,12 +38,20 @@ export interface UnderstandReport { runId: string; rows: UnderstandRow[]; unfini
 
 export async function understandRun(runId: string, actor: string | null, budgetMs = 240_000): Promise<UnderstandReport> {
   const started = Date.now()
-  const { data: items, error } = await db().from("store_import_items").select("store_file_id, name, landed_in").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null)
-  if (error) throw new Error(`Could not read the copy (${error.message}).`)
-  const list = (items ?? []) as { store_file_id: string; name: string; landed_in: string | null }[]
+  const list: { store_file_id: string; name: string; landed_in: string | null }[] = []
+  for (let from = 0; from < 20_000; from += 1000) {                                  // PostgREST returns 1000 rows at most
+    const { data: items, error } = await db().from("store_import_items").select("store_file_id, name, landed_in").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null).order("id").range(from, from + 999)
+    if (error) throw new Error(`Could not read the copy (${error.message}).`)
+    list.push(...((items ?? []) as typeof list))
+    if ((items ?? []).length < 1000) break
+  }
   const ids = list.map((i) => i.store_file_id)
-  const { data: files } = ids.length ? await db().from("store_files").select("id, name, document_type, current_version_id").in("id", ids) : { data: [] }
-  const fileOf = new Map<string, { id: string; name: string; document_type: string | null; current_version_id: string | null }>((files ?? []).map((f: { id: string }) => [f.id, f as never]))
+  const files: Array<{ id: string; name: string; document_type: string | null; current_version_id: string | null }> = []
+  for (let i = 0; i < ids.length; i += 200) {                                       // a long id list would overflow the request address
+    const { data } = await db().from("store_files").select("id, name, document_type, current_version_id").in("id", ids.slice(i, i + 200))
+    files.push(...((data ?? []) as typeof files))
+  }
+  const fileOf = new Map<string, { id: string; name: string; document_type: string | null; current_version_id: string | null }>(files.map((f) => [f.id, f]))
   const { data: cat } = await db().from("catalog_entries").select("slug, display_name").eq("catalog_id", "storage_document_types")
   const disp = new Map<string, string>((cat ?? []).map((c: { slug: string; display_name: string }) => [c.slug, c.display_name]))
 
@@ -59,7 +67,7 @@ export async function understandRun(runId: string, actor: string | null, budgetM
     const { data: a } = analysisId ? await db().from("store_file_analysis").select("*").eq("id", analysisId).maybeSingle() : { data: null }
     let twin: UnderstandRow["twin"] = null
     if (a?.duplicate_of) {
-      const { data: t } = await db().from("store_files").select("id, name, folder_id").eq("id", a.duplicate_of).maybeSingle()
+      const { data: t } = await db().from("store_files").select("id, name, folder_id").eq("id", a.duplicate_of).eq("state", "live").maybeSingle()   // a trashed twin is no longer a twin
       const { data: fo } = t ? await db().from("store_folders").select("name").eq("id", t.folder_id).maybeSingle() : { data: null }
       const d = (a.duplicate_diff ?? {}) as { note?: string; differences?: Array<{ onlyInA: string[]; onlyInB: string[] }> }
       if (t) twin = { fileId: t.id, name: t.name, folder: fo?.name ?? null, kind: a.duplicate_kind ?? "", note: d.note ?? (a.duplicate_kind === "same_bytes" ? "Identical files (every byte)." : ""), differences: (d.differences ?? []).slice(0, 5) }

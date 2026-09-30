@@ -54,7 +54,8 @@ export function ContentsReport({ title, data, onClose, onChanged }: { title: str
   }
   const removeCopy = async (row: UnderstandRow) => {
     if (!row.twin) return
-    if (!window.confirm(`Remove "${row.name}" (${row.folder ?? '—'})? The identical file "${row.twin.name}" (${row.twin.folder ?? '—'}) stays. The removed copy goes to the storage trash and can be restored.`)) return
+    const same = row.twin.kind === 'same_bytes' ? 'identical to' : 'has the same words as (it can still LOOK different — e.g. one may be signed)'
+    if (!window.confirm(`Remove "${row.name}" (${row.folder ?? '—'})? It is ${same} "${row.twin.name}" (${row.twin.folder ?? '—'}), which stays. The removed copy goes to the storage trash and can be restored.`)) return
     setBusy(row.fileId + 'r')
     try {
       await post(`/api/crm-store/browse/file/${row.fileId}/delete`, {}, 'The copy could not be removed.')

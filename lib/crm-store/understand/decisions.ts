@@ -5,6 +5,7 @@
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { recordExample } from "./examples"
+import { ownerWordsOf } from "./analyze"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -27,7 +28,7 @@ export async function recordDecision(p: { analysisId: string; action: DecisionAc
     let owner: string | null = null
     if (o?.account_id) owner = (await db().from("accounts").select("company_name").eq("id", o.account_id).maybeSingle()).data?.company_name ?? null
     else if (o?.contact_id) owner = (await db().from("contacts").select("full_name").eq("id", o.contact_id).maybeSingle()).data?.full_name ?? null
-    await recordExample({ fileId: f.id, versionId: a.version_id, typeSlug: f.document_type, name: f.name, folderKind: await effectiveKind(f.folder_id).catch(() => null), dropWords: [owner ?? ""], actor: p.actor, origin })
+    await recordExample({ fileId: f.id, versionId: a.version_id, typeSlug: f.document_type, name: f.name, folderKind: await effectiveKind(f.folder_id).catch(() => null), dropWords: await ownerWordsOf(o?.account_id ?? null, owner), actor: p.actor, origin })
     taught = true
   }
   if (p.action === "applied" || p.action === "changed") {
@@ -36,6 +37,9 @@ export async function recordDecision(p: { analysisId: string; action: DecisionAc
     action = f.document_type === a.ai_type ? "applied" : "changed"
     await teach(action === "applied" ? "confirmed" : "correction")
   }
+  // a double click must not write the same decision twice
+  const { data: dup } = await db().from("store_ai_decisions").select("id").eq("analysis_id", a.id).eq("actor", p.actor).eq("action", action).gte("created_at", new Date(Date.now() - 60_000).toISOString()).limit(1)
+  if ((dup ?? []).length > 0) return { recorded: action, taught }
   const { error: dErr } = await db().from("store_ai_decisions").insert({
     analysis_id: a.id, file_id: f.id, action, before_state: { ai_type: a.ai_type, ai_name: a.ai_name }, after_state: { document_type: f.document_type, name: f.name }, actor: p.actor,
   })

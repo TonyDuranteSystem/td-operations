@@ -14,12 +14,11 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Sign in first." }, { status: 401 })
   try {
     if (typeof body.undo === "string") {
-      const { supabaseAdmin } = await import("@/lib/supabase-admin")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: d } = await (supabaseAdmin as any).from("store_ai_decisions").select("file_id").eq("id", body.undo).maybeSingle()
-      if (!d) return NextResponse.json({ error: "Not found" }, { status: 404 })
-      const e1 = (await denyUnlessStorePilotEnv({ study: true })) ; if (e1) return e1
-      const { undoMove } = await import("@/lib/crm-store/understand/move-owner")
+      const { moveDecisionFile, undoMove } = await import("@/lib/crm-store/understand/move-owner")
+      const movedFile = await moveDecisionFile(body.undo)
+      if (!movedFile) return NextResponse.json({ error: "Not found" }, { status: 404 })
+      const e1 = await denyUnlessStorePilotEnv({ study: true, fileId: movedFile }); if (e1) return e1
+      const na = await denyUnlessAreaAccess({ fileId: movedFile }); if (na) return na
       await undoMove(body.undo, user.id)
       return NextResponse.json({ ok: true })
     }

@@ -89,8 +89,8 @@ export async function extractContent(bytes: Buffer, name: string, deps?: Extract
         const enough = layer.numpages > 0 && layer.text.replace(/\s+/g, "").length >= PDF_TEXT_MIN_CHARS_PER_PAGE * Math.min(layer.numpages, 3)
         if (enough) {
           const pages = layer.text.split(/\f|\n?---PAGE BREAK---\n?/).filter((p) => p.trim())
-          const partial = layer.numpages > LIMITS.maxPages
-          return { ...base, text: layer.text, pages: pages.length ? pages : [layer.text], pageCount: layer.numpages, pagesRead: Math.min(layer.numpages, LIMITS.maxPages), partial, problem: partial ? `Only the first ${LIMITS.maxPages} of ${layer.numpages} pages were read.` : null }
+          // the text layer of the WHOLE document is read for free, whatever its length — nothing is cut, so it is not 'partial'
+          return { ...base, text: layer.text, pages: pages.length ? pages : [layer.text], pageCount: layer.numpages, pagesRead: layer.numpages, partial: false, problem: null }
         }
         const r = await d.ocr(bytes, "application/pdf", name)   // a scan → Document AI, window by window
         const total = r.documentPageCount ?? r.pages.length

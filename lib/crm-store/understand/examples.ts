@@ -6,6 +6,7 @@
  * change the prompt for every client; examples first, lessons only if the scoreboard shows they are needed.)
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { ownerTokens } from "./privacy"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -14,6 +15,7 @@ const db = () => supabaseAdmin as any
 export function namePattern(name: string, dropWords: string[] = []): string {
   let n = name.replace(/\.[A-Za-z0-9]{1,5}$/, "").toLowerCase()
   for (const w of dropWords.map((x) => x.toLowerCase().trim()).filter((x) => x.length >= 3)) n = n.split(w).join(" ")
+  for (const t of dropWords.flatMap((x) => ownerTokens(x))) n = n.split(t).join(" ")      // every identifying word of the owner, too
   return n.replace(/\d+/g, "#").replace(/[^a-z#\s-]+/g, " ").replace(/\s+/g, " ").replace(/(\s*-\s*)+$/g, "").trim().slice(0, 60)
 }
 
@@ -42,6 +44,7 @@ export async function listExamples(limit = 40): Promise<ExampleRow[]> {
 export function exampleCheck(examples: ExampleRow[], aiType: string | null, name: string, folderKind: string | null, dropWords: string[] = []): "pass" | "fail" | "none" {
   if (!aiType) return "none"
   const pat = namePattern(name, dropWords)
+  if ((pat.match(/[a-z]/g) ?? []).length < 3) return "none"                       // a pattern like "#" says nothing and matches everything
   const similar = examples.filter((e) => (pat && e.name_pattern === pat) || (folderKind && e.folder_kind === folderKind && e.name_pattern && pat && (pat.includes(e.name_pattern) || e.name_pattern.includes(pat))))
   if (similar.length === 0) return "none"
   const agree = similar.filter((e) => e.type_slug === aiType).length
