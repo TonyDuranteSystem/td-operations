@@ -16,6 +16,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
+import { isOwnerOnly } from "@/lib/auth"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
@@ -777,6 +778,20 @@ export async function POST(request: Request) {
         if (!params.token) return NextResponse.json({ error: "Missing token" }, { status: 400 })
         const { cancelLeaseDraft } = await import("@/lib/operations/lease")
         const result = await cancelLeaseDraft(params.token)
+        if (!result.success) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json({ success: true, message: result.message })
+      }
+
+      case "admin_delete_lease": {
+        // OWNER ONLY — deletes a sent/viewed/signed lease (logged, reason required, the company keeps its suite).
+        if (!isOwnerOnly(user)) return NextResponse.json({ error: "Only the owner can delete a lease that has gone to the client." }, { status: 403 })
+        if (!params.token) return NextResponse.json({ error: "Missing token" }, { status: 400 })
+        const { deleteLeaseAsAdmin } = await import("@/lib/operations/lease")
+        const result = await deleteLeaseAsAdmin({
+          token: params.token,
+          reason: String(params.reason ?? ""),
+          actor: `dashboard:${user?.email?.split("@")[0] ?? "owner"}`,
+        })
         if (!result.success) return NextResponse.json({ error: result.error }, { status: 400 })
         return NextResponse.json({ success: true, message: result.message })
       }

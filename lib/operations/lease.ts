@@ -26,6 +26,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { dbWrite } from "@/lib/db"
 import {
+  adminDeleteLease,
   allocateCompanySuite,
   assignSpecificCompanySuite,
   normalizeSuiteNumber,
@@ -544,6 +545,63 @@ export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftR
   })
 
   return { success: true, message: "Draft lease cancelled." }
+}
+
+export interface AdminDeleteLeaseOutcome {
+  success: boolean
+  error?: string
+  message?: string
+  suite?: string | null
+  documentsHidden?: number
+}
+
+/**
+ * OWNER-ONLY, logged deletion of a lease of ANY status (a sent / viewed / signed lease is the client's
+ * document, so the plain draft-cancel refuses it). The caller must have checked the owner. A full copy of
+ * the lease is kept in suite_audit_log; the lease's signed PDF stays in storage but is HIDDEN from the
+ * client's portal (soft-hide, R100) — matched by "(Suite <suite>" in the file name on the same company.
+ * The company keeps its own suite, so the lease can be reissued straight away.
+ */
+export async function deleteLeaseAsAdmin(opts: { token: string; reason: string; actor: string }): Promise<AdminDeleteLeaseOutcome> {
+  if (!opts.reason || !opts.reason.trim()) return { success: false, error: "A reason is required." }
+  const { data: lease, error } = await supabaseAdmin
+    .from("lease_agreements")
+    .select("id, status, account_id, suite_number, tenant_company, contract_year")
+    .eq("token", opts.token)
+    .maybeSingle()
+  if (error) return { success: false, error: `Could not read the lease: ${error.message}` }
+  if (!lease) return { success: false, error: `Lease not found: ${opts.token}` }
+  try {
+    await adminDeleteLease({ leaseId: lease.id, reason: opts.reason.trim(), actor: opts.actor })
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  let hidden = 0
+  if (lease.suite_number && lease.account_id) {
+    const { data: docs } = await supabaseAdmin
+      .from("documents")
+      .update({ portal_visible: false })
+      .eq("account_id", lease.account_id)
+      .eq("portal_visible", true)
+      .ilike("file_name", `%(Suite ${lease.suite_number}%`)
+      .select("id")
+    hidden = docs?.length ?? 0
+  }
+  logAction({
+    actor: opts.actor,
+    action_type: "delete",
+    table_name: "lease_agreements",
+    record_id: lease.id,
+    account_id: lease.account_id ?? undefined,
+    summary: `Admin-deleted ${lease.status} lease for ${lease.tenant_company} (${lease.contract_year}), Suite ${lease.suite_number}: ${opts.reason.trim()}`,
+    details: { token: opts.token, status_before: lease.status, documents_hidden: hidden, source: "crm-admin-delete" },
+  })
+  return {
+    success: true,
+    suite: lease.suite_number,
+    documentsHidden: hidden,
+    message: `Lease deleted (${lease.status}). A copy is kept in the audit log${hidden ? `; ${hidden} signed PDF(s) hidden from the client portal` : ""}.`,
+  }
 }
 
 /**

@@ -49,7 +49,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_suite_number
 
 -- ─── 3. Helpers ──────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.td_suite_num(p text) RETURNS integer
-LANGUAGE sql IMMUTABLE AS $$ SELECT NULLIF(substring(p from '^3D-([0-9]+)$'), '')::integer $$;
+LANGUAGE sql IMMUTABLE AS $$ SELECT NULLIF(substring(p from '^3D-([0-9]{1,9})$'), '')::integer $$;
 
 -- The next free suite: one above the highest number EVER used anywhere (companies, leases,
 -- reservations, audit log), floor 100. Caller must hold the allocator lock.
@@ -66,6 +66,17 @@ LANGUAGE sql AS $$
   ) s
 $$;
 
+-- True when this suite must NOT be handed to p_account: it was issued/used for a DIFFERENT company, a
+-- released reservation, or sits on another company's lease. (A company may always get its own old suite back.)
+CREATE OR REPLACE FUNCTION public.td_suite_history_blocks(p_suite text, p_account uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+           SELECT 1 FROM public.suite_audit_log
+           WHERE (suite_number = p_suite OR old_suite = p_suite OR new_suite = p_suite)
+             AND ((account_id IS NOT NULL AND account_id IS DISTINCT FROM p_account) OR action = 'reservation_released'))
+      OR EXISTS (SELECT 1 FROM public.lease_agreements WHERE suite_number = p_suite AND account_id IS DISTINCT FROM p_account)
+$$;
+
 -- ─── 4. The allocator (the ONLY place a new number is created) ───────────────
 -- Give it a company (account_id) and/or the delivery it comes from.
 --  * company already has a suite  -> returns it (and drops a stale reservation);
@@ -75,7 +86,7 @@ CREATE OR REPLACE FUNCTION public._allocate_company_suite_impl(
   p_account_id uuid DEFAULT NULL, p_delivery_id uuid DEFAULT NULL, p_actor text DEFAULT 'system'
 ) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE v_suite text; v_res text;
+DECLARE v_suite text; v_res text; v_del uuid := p_delivery_id;
 BEGIN
   IF p_account_id IS NULL AND p_delivery_id IS NULL THEN
     RAISE EXCEPTION 'allocate_company_suite needs an account or a delivery';
@@ -91,19 +102,49 @@ BEGIN
     END IF;
   END IF;
 
+  -- 1. the reservation the caller named
   IF p_delivery_id IS NOT NULL THEN
     SELECT suite_number INTO v_res FROM suite_reservations WHERE delivery_id = p_delivery_id;
+  END IF;
+  -- 2. a retry / a later caller that does not know the delivery: find the reservation of a formation
+  --    delivery that is already linked to this company (materialization links it before the suite step)
+  IF v_res IS NULL AND p_account_id IS NOT NULL THEN
+    SELECT r.suite_number, r.delivery_id INTO v_res, v_del
+    FROM suite_reservations r JOIN service_deliveries sd ON sd.id = r.delivery_id
+    WHERE sd.account_id = p_account_id ORDER BY r.reserved_at LIMIT 1;
   END IF;
 
   IF v_res IS NOT NULL THEN
     IF p_account_id IS NULL THEN RETURN v_res; END IF;
-    DELETE FROM suite_reservations WHERE delivery_id = p_delivery_id;
+    DELETE FROM suite_reservations WHERE delivery_id = v_del;
     UPDATE accounts SET suite_number = v_res WHERE id = p_account_id;
     INSERT INTO suite_audit_log (suite_number, account_id, delivery_id, action, new_suite, actor)
-      VALUES (v_res, p_account_id, p_delivery_id, 'claimed', v_res, p_actor);
+      VALUES (v_res, p_account_id, v_del, 'claimed', v_res, p_actor);
     RETURN v_res;
   END IF;
 
+  -- 3. a company that already holds a suite on its OWN lease (legacy company, not loaded yet) ADOPTS it —
+  --    never issued a second, different number. A suite that appears on another company's lease/account,
+  --    or is reserved, is never adopted (the two known shared suites stay out until a human repairs them).
+  IF p_account_id IS NOT NULL THEN
+    SELECT ls.suite_number INTO v_suite
+    FROM lease_agreements ls JOIN accounts ac ON ac.id = ls.account_id
+    WHERE ls.account_id = p_account_id
+      AND lower(btrim(ls.tenant_company)) = lower(btrim(ac.company_name))
+      AND ls.suite_number ~ '^3D-[0-9]{3,4}$'
+      AND NOT EXISTS (SELECT 1 FROM lease_agreements l2 WHERE l2.suite_number = ls.suite_number AND l2.account_id <> p_account_id)
+      AND NOT EXISTS (SELECT 1 FROM accounts a2 WHERE a2.suite_number = ls.suite_number AND a2.id <> p_account_id)
+      AND NOT EXISTS (SELECT 1 FROM suite_reservations r2 WHERE r2.suite_number = ls.suite_number)
+    ORDER BY ls.created_at ASC LIMIT 1;
+    IF v_suite IS NOT NULL THEN
+      UPDATE accounts SET suite_number = v_suite WHERE id = p_account_id;
+      INSERT INTO suite_audit_log (suite_number, account_id, delivery_id, action, new_suite, actor)
+        VALUES (v_suite, p_account_id, p_delivery_id, 'adopted_from_lease', v_suite, p_actor);
+      RETURN v_suite;
+    END IF;
+  END IF;
+
+  -- 4. otherwise issue the next free number
   v_suite := td_next_suite();
   IF p_account_id IS NOT NULL THEN
     UPDATE accounts SET suite_number = v_suite WHERE id = p_account_id;
@@ -122,6 +163,7 @@ CREATE OR REPLACE FUNCTION public.release_suite_reservation(p_delivery_id uuid, 
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_suite text;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('td_suite_allocator'));
   DELETE FROM suite_reservations WHERE delivery_id = p_delivery_id RETURNING suite_number INTO v_suite;
   IF v_suite IS NOT NULL THEN
     INSERT INTO suite_audit_log (suite_number, delivery_id, action, old_suite, reason, actor)
@@ -150,6 +192,9 @@ BEGIN
      OR EXISTS (SELECT 1 FROM suite_reservations WHERE suite_number = p_suite) THEN
     RAISE EXCEPTION 'Suite % already belongs to another company', p_suite;
   END IF;
+  IF td_suite_history_blocks(p_suite, p_account_id) THEN
+    RAISE EXCEPTION 'Suite % was already used by another company (or released) — a suite number is never reused', p_suite;
+  END IF;
   UPDATE accounts SET suite_number = p_suite WHERE id = p_account_id;
   INSERT INTO suite_audit_log (suite_number, account_id, action, new_suite, actor)
     VALUES (p_suite, p_account_id, 'assigned_specific', p_suite, p_actor);
@@ -176,16 +221,23 @@ BEGIN
   IF p_new_suite IS NOT DISTINCT FROM v_old THEN
     RETURN jsonb_build_object('changed', false, 'suite', v_old);
   END IF;
+  IF p_new_suite IS NULL AND EXISTS (SELECT 1 FROM lease_agreements WHERE account_id = p_account_id) THEN
+    RAISE EXCEPTION 'This company still has lease(s) — delete them first (admin delete), then the suite can be taken off.';
+  END IF;
   IF p_new_suite IS NOT NULL AND (
        EXISTS (SELECT 1 FROM accounts WHERE suite_number = p_new_suite AND id <> p_account_id)
-       OR EXISTS (SELECT 1 FROM suite_reservations WHERE suite_number = p_new_suite)
-       OR EXISTS (SELECT 1 FROM lease_agreements WHERE suite_number = p_new_suite AND account_id <> p_account_id)) THEN
+       OR EXISTS (SELECT 1 FROM suite_reservations WHERE suite_number = p_new_suite)) THEN
     RAISE EXCEPTION 'Suite % already belongs to another company', p_new_suite;
   END IF;
+  IF p_new_suite IS NOT NULL AND td_suite_history_blocks(p_new_suite, p_account_id) THEN
+    RAISE EXCEPTION 'Suite % was already used by another company (or released) — a suite number is never reused', p_new_suite;
+  END IF;
   UPDATE accounts SET suite_number = p_new_suite WHERE id = p_account_id;
-  UPDATE lease_agreements SET suite_number = p_new_suite
-    WHERE account_id = p_account_id AND status <> 'signed';
-  GET DIAGNOSTICS v_moved = ROW_COUNT;
+  IF p_new_suite IS NOT NULL THEN
+    UPDATE lease_agreements SET suite_number = p_new_suite
+      WHERE account_id = p_account_id AND status <> 'signed';
+    GET DIAGNOSTICS v_moved = ROW_COUNT;
+  END IF;
   SELECT count(*) INTO v_signed FROM lease_agreements
     WHERE account_id = p_account_id AND status = 'signed' AND suite_number IS DISTINCT FROM p_new_suite;
   INSERT INTO suite_audit_log (suite_number, account_id, action, old_suite, new_suite, reason, actor, detail)
@@ -254,10 +306,14 @@ BEGIN
   RETURN v;
 END $$;
 
-REVOKE ALL ON FUNCTION public._allocate_company_suite_impl(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public._assign_specific_company_suite_impl(uuid, text, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public._admin_change_company_suite_impl(uuid, text, text, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public._admin_delete_lease_impl(uuid, text, text) FROM PUBLIC, anon, authenticated;
+-- the working functions are reachable ONLY through the wrappers above (which turn admin mode on)
+REVOKE ALL ON FUNCTION public._allocate_company_suite_impl(uuid, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._assign_specific_company_suite_impl(uuid, text, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._admin_change_company_suite_impl(uuid, text, text, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._admin_delete_lease_impl(uuid, text, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.td_suite_num(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.td_next_suite() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.td_suite_history_blocks(text, uuid) FROM PUBLIC, anon, authenticated;
 
 REVOKE ALL ON FUNCTION public.allocate_company_suite(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.release_suite_reservation(uuid, text) FROM PUBLIC, anon, authenticated;
@@ -319,6 +375,10 @@ BEGIN
     RAISE EXCEPTION 'This lease is signed — its suite cannot change. Delete and reissue it (admin).'
       USING ERRCODE = 'check_violation';
   END IF;
+  IF TG_OP = 'UPDATE' AND NEW.status = 'draft' AND OLD.status IN ('sent', 'viewed', 'signed') THEN
+    RAISE EXCEPTION 'A % lease cannot be set back to draft — it has already gone to the client.', OLD.status
+      USING ERRCODE = 'check_violation';
+  END IF;
   IF TG_OP = 'INSERT' OR NEW.suite_number IS DISTINCT FROM OLD.suite_number
      OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.tenant_company IS DISTINCT FROM OLD.tenant_company THEN
     SELECT suite_number, company_name INTO v_acc_suite, v_acc_name FROM public.accounts WHERE id = NEW.account_id;
@@ -337,7 +397,7 @@ END $$;
 
 DROP TRIGGER IF EXISTS trg_lease_suite_guard ON public.lease_agreements;
 CREATE TRIGGER trg_lease_suite_guard
-  BEFORE INSERT OR UPDATE OF suite_number, account_id, tenant_company ON public.lease_agreements
+  BEFORE INSERT OR UPDATE OF suite_number, account_id, tenant_company, status ON public.lease_agreements
   FOR EACH ROW EXECUTE FUNCTION public.trg_lease_suite_guard();
 
 -- A viewed or signed lease is client-visible: it cannot be deleted by accident.

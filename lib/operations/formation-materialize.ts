@@ -1319,8 +1319,10 @@ export async function materializeFormationCompany(
       const suite = await allocateCompanySuite({ accountId, deliveryId: resolvedSd?.id ?? null, actor })
       steps.push({
         step: "suite",
-        status: "ok",
-        detail: resolvedSd ? `${suite} (reserved when the formation started)` : `${suite} (issued now — no formation delivery was linked)`,
+        status: resolvedSd ? "ok" : "error",
+        detail: resolvedSd
+          ? `${suite} (reserved when the formation started)`
+          : `${suite} (issued now — NO formation delivery was linked, so the suite reserved when the formation started was not used; a human must link the delivery and release that reservation)`,
       })
     } catch (e) {
       steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
