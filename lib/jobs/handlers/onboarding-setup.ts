@@ -1256,7 +1256,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             result.steps.push(step(`tax_return:${tc.year}`, "skipped", `Already exists: ${existingTR.id}`))
           } else {
             const deadline = `${tc.year + 1}-${deadlineMonth}-15`
-            const isBundled = taxReturnIncludedInOffer
+            // A Tax Return sold on the onboarding offer pays the PREVIOUS year's
+            // return only; the current year's is paid by next year's
+            // installments (Master Rules C6/P5, KB "Payment → Tax Return Status
+            // Sync"; production precedent Truocchio / Invictus). Marking both
+            // years paid was an S1 end-to-end QA finding (2026-09-29).
+            const isBundled = taxReturnIncludedInOffer && tc.year === previousYear
             const { error: trErr } = await supabaseAdmin
               .from("tax_returns")
               .insert({
