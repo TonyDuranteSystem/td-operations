@@ -17,7 +17,8 @@
 --   Italiza and New E-commerce Solutions get NO suite (their two draft leases are removed).
 --   Growthlane / Ad Astra: their draft leases carry an old / misspelled tenant name — the company keeps the
 --   suite on its draft and the tenant name is corrected to the company's current name.
---   Every other client company gets the suite it already holds on its own lease loaded onto the company.
+--   Every other ACTIVE client company gets the suite it already holds on its own lease loaded onto the company
+--   (Degasper — suspended — and SupraEmerge — closed — are NOT loaded: their suites stay on their lease records).
 --   Every remaining ACTIVE client company (account type Client, no lease yet, ~108) is issued a suite now, oldest
 --   company first; one-time customers (e.g. Cleo Home LLC) and the two test accounts ("Test", "QA E2E Test LLC") are
 --   skipped; no address is written for them.
@@ -117,8 +118,10 @@ BEGIN
   IF v_shared IS NOT NULL THEN RAISE EXCEPTION 'Suite(s) % are still on leases of more than one company — resolve before loading', v_shared; END IF;
 END $$;
 
--- ─── 5a. Load: every client company gets the suite it already holds on its OWN lease ─────────
--- (earliest lease whose tenant is the company itself; test accounts and non-clients are skipped.)
+-- ─── 5a. Load: every ACTIVE client company gets the suite it already holds on its OWN lease ──
+-- (earliest lease whose tenant is the company itself. One-time customers, closed / suspended / inactive
+--  companies and test accounts are NOT loaded — their suite stays on the lease record and is never reissued;
+--  if one is ever reactivated or needs a lease, "Issue suite" adopts the suite it already holds.)
 UPDATE accounts a
 SET suite_number = l.suite_number
 FROM (
@@ -128,6 +131,7 @@ FROM (
   WHERE ls.suite_number ~ '^3D-[0-9]{3,4}$'
     AND COALESCE(ac.is_test, false) = false
     AND ac.account_type = 'Client'
+    AND ac.status = 'Active'
   ORDER BY ls.account_id, ls.created_at ASC
 ) l
 WHERE a.id = l.account_id AND a.suite_number IS NULL;
@@ -175,7 +179,7 @@ END $$;
 COMMIT;
 
 -- ─── VERIFY (read-only) ─────────────────────────────────────────────────────────────────────
--- A) how many companies now hold a suite, and that none is shared (expect 247 and 0):
+-- A) how many companies now hold a suite, and that none is shared (expect 245 and 0):
 -- SELECT count(*) FILTER (WHERE suite_number IS NOT NULL) AS with_suite,
 --        (SELECT count(*) FROM (SELECT suite_number FROM accounts WHERE suite_number IS NOT NULL GROUP BY 1 HAVING count(*) > 1) s) AS shared
 -- FROM accounts;
