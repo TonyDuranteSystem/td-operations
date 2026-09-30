@@ -1603,7 +1603,10 @@ export default function PortalChatsPage() {
   const { data: internalThreads, isLoading: internalThreadsLoading } = useQuery<InternalThread[]>({
     queryKey: ['internal-threads'],
     queryFn: () => fetch('/api/internal/threads').then(r => r.json()).then(d => d.threads ?? []),
-    refetchInterval: 10_000,
+    // 60s, not 10s (2026-09-30): each refresh of this list costs hundreds of database requests (one set per thread), and
+    // it was ~65% of ALL production API requests — the Supabase egress quota was exceeded. The sidebar badge (15s) and the
+    // floating chat (60s) keep unread counts current; this list is the detail view.
+    refetchInterval: 60_000,
   })
 
   const { data: internalMessages, isLoading: internalMessagesLoading } = useQuery<{ thread: InternalThread; messages: InternalMsg[] }>({

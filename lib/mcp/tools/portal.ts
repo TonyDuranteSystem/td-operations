@@ -13,6 +13,7 @@ import { downloadFileBinaryForSend, getFileMetadata } from "@/lib/google-drive"
 import { buildChatAttachmentPath } from "@/lib/portal/chat-attachment-path"
 import { guessMimeType } from "@/lib/mcp/tools/drive"
 import { validateChatAttachment } from "@/lib/portal/chat-attachment"
+import { buildPortalChatLink } from "@/lib/portal/chat-link"
 
 /**
  * Does this Drive file actually live inside the given account's own Drive
@@ -972,11 +973,12 @@ TOPIC (2026-09-23): the portal chat is organized into topic tabs (e.g. "Mailing 
           type: "chat",
           title: "New message from Tony Durante Team",
           body: msgText.slice(0, 100),
-          link: "/portal/chat",
+          link: buildPortalChatLink({ accountId: account_id || null, topic: resolvedTopic }),
         }).catch(() => {})
         notifyClientOfAdminMessage({
           account_id: account_id || null,
           contact_id: contact_id || null,
+          topic: resolvedTopic,
           messagePreview: msgText,
         }).catch(() => {})
 

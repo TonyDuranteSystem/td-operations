@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, Square, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { parseTimestamp } from '@/lib/portal/chat-refresh-merge'
 import { usePortalChat, type ChatScope } from '@/lib/hooks/use-portal-chat'
 import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
@@ -82,6 +83,23 @@ function formatFileSize(bytes: number): string {
 }
 
 const MAX_ATTACHMENTS = 5
+/** How many older pages (50 each) the chat may load looking for a linked or
+ *  unread tab (2000 messages). A tab the server says has unread messages must
+ *  be reachable, or its badge could never be cleared. */
+const MAX_DEEP_LINK_PAGES = 40
+
+/** Same cookies the sidebar CompanySwitcher writes (portal_account_id / portal_formation). */
+function writeEntityCookie(e: PortalChatEntity): void {
+  if (e.kind === 'formation') {
+    document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
+  } else if (e.kind === 'personal') {
+    document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+  } else {
+    document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
+    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
+  }
+}
 
 interface PendingFile {
   file: File
@@ -100,7 +118,7 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics } = usePortalChat(scope, accountId || null, contactId)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
   // message is about via a first-send popup; the choice is the SEND TAG and the
@@ -121,15 +139,168 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // ruled on the whole-chat product question).
   const [activeTopic, setActiveTopic] = useState<string | null>(initialTopic)
   const [creatingTopic, setCreatingTopic] = useState(false)
-  // Deep-link guard: if the linked topic has no messages for this client (an
-  // old link, a topic on a different company), fall back to General instead of
-  // stranding them on an empty tab they can't explain. Runs once, after load.
-  const initialTopicChecked = useRef(false)
+  // Which tab we are still trying to open, and whether we may page back
+  // through history to find it (dev job 05d997f2). The tab bar is built from
+  // the LOADED messages, so a linked tab whose messages are all older than the
+  // newest page has no button yet; falling straight back to General there was
+  // the same "email says new message, chat shows nothing" failure. A linked
+  // tab pages back (bounded); a tab merely carried over from a company switch
+  // only checks what is loaded. Not found → General, never an empty tab.
+  const pendingTopicRef = useRef<{ topic: string; allowPaging: boolean } | null>(
+    initialTopic ? { topic: initialTopic, allowPaging: true } : null,
+  )
+  const deepLinkPagesRef = useRef(0)
+  const activeTopicRef = useRef(activeTopic)
+  activeTopicRef.current = activeTopic
+  // Remove ?topic= once it has done its job, so a second click on the same
+  // notification is a real change. (The company part of a link never reaches
+  // this page: /portal/chat/open saves it server-side and redirects here.)
+  const stripTopicParam = useCallback(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('topic')) return
+    url.searchParams.delete('topic')
+    router.replace(`${url.pathname}${url.search}`, { scroll: false })
+  }, [router])
+
+  // The client picked a tab themselves: stop any pending search for another
+  // (which would otherwise have been the one to consume ?topic=).
+  const serverUnreadRef = useRef(serverUnread)
+  serverUnreadRef.current = serverUnread
+  const topicsRef = useRef(topics)
+  topicsRef.current = topics
+  // Set once the client picks a tab themselves — the automatic "open on the
+  // unread tab" never overrides a human choice (reset per company).
+  const userChoseTabRef = useRef(false)
+  const chooseTopic = useCallback((next: string | null) => {
+    userChoseTabRef.current = true
+    // A tab that exists only because the SERVER has an unread message in it
+    // (older than the loaded page) has nothing loaded yet — page back to it,
+    // like a deep link. A brand-new topic the client is creating has no
+    // messages anywhere and is simply opened.
+    const knownUnread = !!next && (serverUnreadRef.current?.[next] ?? 0) > 0
+    pendingTopicRef.current = next && knownUnread && !topicsRef.current.includes(next)
+      ? { topic: next, allowPaging: true }
+      : null
+    deepLinkPagesRef.current = 0
+    setActiveTopic(next)
+    stripTopicParam()
+  }, [stripTopicParam])
+
+  // Set by the "which company?" send popup just before it switches company and
+  // sends: the message goes out in the tab that is open, so on arriving at the
+  // new company that tab must stay open even before the message shows up there
+  // (with an attachment the upload takes seconds) — falling back to General
+  // would hide the message the client just sent.
+  const sendSwitchEntityRef = useRef<string | null>(null)
+
+  // The component is NOT remounted on a company switch (a remount would drop
+  // the draft, the send popup's answer and the live channel), so the per-view
+  // state is re-armed here:
+  //  - company changed → keep trying the tab that is open (e.g. the popup sent
+  //    the message to the other company in that tab); not in the new company
+  //    → General, never an empty tab.
+  //  - a new ?topic= arrived by soft navigation → go there.
+  //  - ?topic= removed (we stripped it) → nothing to do.
+  const lastEntityRef = useRef(selectedEntityId)
+  const lastInitialTopic = useRef(initialTopic)
+  // Which view the "open on the unread tab" rule already ran for.
+  const autoOpenedForRef = useRef<string | null>(initialTopic ? selectedEntityId : null)
   useEffect(() => {
-    if (initialTopicChecked.current || loading || !initialTopic) return
-    initialTopicChecked.current = true
-    if (!topics.includes(initialTopic)) setActiveTopic(null)
-  }, [loading, topics, initialTopic])
+    const entityChanged = lastEntityRef.current !== selectedEntityId
+    const topicChanged = lastInitialTopic.current !== initialTopic
+    lastEntityRef.current = selectedEntityId
+    lastInitialTopic.current = initialTopic
+    if (entityChanged && sendSwitchEntityRef.current === selectedEntityId) {
+      // Popup send: keep the open tab as is.
+      sendSwitchEntityRef.current = null
+      pendingTopicRef.current = null
+    } else if (entityChanged) {
+      const topic = activeTopicRef.current
+      pendingTopicRef.current = topic ? { topic, allowPaging: false } : null
+      deepLinkPagesRef.current = 0
+      userChoseTabRef.current = false
+      autoOpenedForRef.current = null
+    } else if (topicChanged && initialTopic) {
+      pendingTopicRef.current = { topic: initialTopic, allowPaging: true }
+      deepLinkPagesRef.current = 0
+      setActiveTopic(initialTopic)
+    }
+  }, [selectedEntityId, initialTopic])
+
+  useEffect(() => {
+    // `ready` = the loaded messages belong to the CURRENT view; right after a
+    // switch `topics` still holds the previous company's tabs.
+    const pending = pendingTopicRef.current
+    if (!pending || !ready) return
+    if (topics.includes(pending.topic)) {
+      pendingTopicRef.current = null
+      stripTopicParam()
+      return
+    }
+    if (loadingMore) return
+    if (pending.allowPaging && hasMore && deepLinkPagesRef.current < MAX_DEEP_LINK_PAGES) {
+      deepLinkPagesRef.current++
+      void loadMore()
+      return
+    }
+    pendingTopicRef.current = null
+    if (activeTopicRef.current === pending.topic) setActiveTopic(null)
+    stripTopicParam()
+  }, [ready, loadingMore, hasMore, topics, loadMore, stripTopicParam])
+
+  // Open on the tab that has unread messages (Antonio, 2026-09-29): when the
+  // General tab has nothing unread but another tab does, land there instead of
+  // on an empty-looking General — once per company view, never over a link's
+  // tab or a tab the client picked. Most unread wins; ties → most recent.
+  useEffect(() => {
+    if (!ready || !serverUnread || autoOpenedForRef.current === selectedEntityId) return
+    if (userChoseTabRef.current || pendingTopicRef.current || activeTopicRef.current !== null) {
+      autoOpenedForRef.current = selectedEntityId
+      return
+    }
+    autoOpenedForRef.current = selectedEntityId
+    if ((serverUnread[''] ?? 0) > 0) return
+    const candidates = Object.entries(serverUnread).filter(([k, n]) => k && n > 0)
+    if (candidates.length === 0) return
+    const lastAt = (k: string) => Math.max(0, ...messages.filter(m => (m.topic ?? '') === k).map(m => parseTimestamp(m.created_at)))
+    candidates.sort((a, b) => (b[1] - a[1]) || (lastAt(b[0]) - lastAt(a[0])))
+    const target = candidates[0][0]
+    if (!topics.includes(target)) {
+      pendingTopicRef.current = { topic: target, allowPaging: true }
+      deepLinkPagesRef.current = 0
+    }
+    setActiveTopic(target)
+  }, [ready, serverUnread, selectedEntityId, topics, messages])
+
+  // "Read" = the client is actually looking at it: the tab is open AND the
+  // page is on screen. A message that arrives while the app sits in the
+  // background, or in another tab, stays unread (dev job 05d997f2, Phase 2).
+  const [pageVisible, setPageVisible] = useState(true)
+  useEffect(() => {
+    const update = () => setPageVisible(document.visibilityState === 'visible')
+    update()
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+  const lastMarkRef = useRef<string>('')
+  useEffect(() => {
+    if (!ready || !pageVisible) return
+    const key = activeTopic ?? ''
+    const inTab = messages.filter(m => (m.topic ?? '') === key && !m.deleted_at)
+    if (inTab.length === 0) return
+    const unreadHere = inTab.some(m => m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread)
+    const keptHere = inTab.filter(m => m.sender_type === 'admin' && m.client_kept_unread).length
+    const serverSays = serverUnread?.[key] ?? 0
+    if (!unreadHere && serverSays <= keptHere) return
+    // Up to the newest message on screen in this tab — the raw server string,
+    // so microseconds survive (a Date round-trip would cut them and leave the
+    // newest row "after" the cut-off, unread forever).
+    const newest = inTab.reduce((a, b) => (parseTimestamp(b.created_at) > parseTimestamp(a.created_at) ? b : a))
+    const markKey = `${selectedEntityId}|${key}|${newest.created_at}|${unreadHere ? 1 : 0}|${serverSays}`
+    if (lastMarkRef.current === markKey) return
+    lastMarkRef.current = markKey
+    void markRead(activeTopic, newest.created_at)
+  }, [ready, pageVisible, activeTopic, messages, serverUnread, markRead, selectedEntityId])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -147,15 +318,9 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // sidebar CompanySwitcher writes, so chat stays in lock-step with the rest of
   // the portal (portal_account_id / portal_formation; 'personal' sentinel).
   const selectEntity = useCallback((e: PortalChatEntity) => {
-    if (e.kind === 'formation') {
-      document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
-    } else if (e.kind === 'personal') {
-      document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
-      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-    } else {
-      document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
-      document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-    }
+    writeEntityCookie(e)
+    // An explicit company choice ends any linked-tab search.
+    pendingTopicRef.current = null
     router.refresh()
   }, [router])
 
@@ -416,7 +581,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const chooseEntity = (entity: PortalChatEntity) => {
     setTargetConfirmed(true)
     setPopupOpen(false)
-    if (entity.id !== selectedEntityId) selectEntity(entity)
+    if (entity.id !== selectedEntityId) {
+      if (input.trim() || pendingFiles.length > 0) sendSwitchEntityRef.current = entity.id
+      selectEntity(entity)
+    }
     // Send only if there's something drafted (the pill "switch" path may have none).
     if (input.trim() || pendingFiles.length > 0) doSend(entity)
   }
@@ -495,13 +663,20 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     return () => cancelAnimationFrame(id)
   }, [filteredMessages, recomputeJumpState])
 
-  // Unread count per topic tab (admin messages not yet read by the client)
-  const unreadByTopic = messages.reduce<Record<string, number>>((acc, m) => {
+  // Unread count per topic tab. The SERVER count covers every message (not
+  // just the loaded page); the local count covers what just arrived live. The
+  // larger of the two is shown, so a badge never hides an unread message.
+  const localUnreadByTopic = messages.reduce<Record<string, number>>((acc, m) => {
     if (m.sender_type !== 'admin' || (m.read_at && !m.client_kept_unread)) return acc
     const key = m.topic ?? ''
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
+  const unreadByTopic: Record<string, number> = { ...localUnreadByTopic }
+  for (const [k, n] of Object.entries(serverUnread ?? {})) unreadByTopic[k] = Math.max(unreadByTopic[k] ?? 0, n)
+  // Tabs: every loaded topic, plus any topic the server says has unread
+  // messages even if none of them is loaded yet (older than the first page).
+  const tabTopics = Array.from(new Set([...topics, ...Object.keys(unreadByTopic).filter(k => k && unreadByTopic[k] > 0)]))
 
   // Tab order (2026-08-30, Antonio): unread topics first — General included,
   // not pinned — then most-recently-active first within each group. Mirrors
@@ -512,7 +687,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const t = new Date(m.created_at).getTime()
     if (!(key in topicLastActivity) || t > topicLastActivity[key]) topicLastActivity[key] = t
   }
-  const topicOrder = Array.from(new Set(['', ...topics])).sort((a, b) => {
+  const topicOrder = Array.from(new Set(['', ...tabTopics])).sort((a, b) => {
     const unreadA = (unreadByTopic[a] ?? 0) > 0 ? 1 : 0
     const unreadB = (unreadByTopic[b] ?? 0) > 0 ? 1 : 0
     if (unreadA !== unreadB) return unreadB - unreadA
@@ -597,7 +772,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           return (
             <button
               key={key || '__general__'}
-              onClick={() => setActiveTopic(isGeneral ? null : (isActive ? null : key))}
+              onClick={() => chooseTopic(isGeneral ? null : (isActive ? null : key))}
               className={cn(
                 'shrink-0 flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-full transition-colors border font-medium',
                 isActive
@@ -627,7 +802,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             onChange={e => setNewTopicInput(e.target.value.slice(0, 100))}
             onKeyDown={e => {
               if (e.key === 'Enter' && newTopicInput.trim()) {
-                setActiveTopic(newTopicInput.trim())
+                chooseTopic(newTopicInput.trim())
                 setNewTopicInput('')
                 setCreatingTopic(false)
               } else if (e.key === 'Escape') {
@@ -637,7 +812,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             }}
             onBlur={() => {
               if (newTopicInput.trim()) {
-                setActiveTopic(newTopicInput.trim())
+                chooseTopic(newTopicInput.trim())
               }
               setNewTopicInput('')
               setCreatingTopic(false)

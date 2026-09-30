@@ -25,6 +25,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { decideReminder, buildReminderMessage } from "@/lib/tasks/itin-processing-reminder"
 import { localeFromLanguage } from "@/lib/locale"
+import { buildPortalChatLink } from "@/lib/portal/chat-link"
 import { updateTask } from "@/lib/operations/task"
 
 export const maxDuration = 60
@@ -158,11 +159,12 @@ export async function GET(req: NextRequest) {
             type: "chat",
             title: "ITIN status update",
             body: messageBody.slice(0, 100),
-            link: "/portal/chat",
+            link: buildPortalChatLink({ accountId: task.account_id, topic: "ITIN" }),
           })
           await notifyClientOfAdminMessage({
             account_id: task.account_id,
             contact_id: contactId,
+            topic: "ITIN",
             messagePreview: messageBody,
           })
         } catch (err) {

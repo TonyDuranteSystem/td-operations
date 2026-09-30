@@ -76,16 +76,31 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
 
 /** The left side for this login: every client owner grouped, the Business area, and — for the owner-only
  *  login — their private "My files". Both areas are created on first use. */
+/**
+ * EVERY row of the owner list. PostgREST answers at most 1000 rows per request and says nothing when it cuts, so a
+ * plain `.rpc("store_navigation")` silently DROPPED owners past the 1000th (sandbox 2026-09-30: 1023 owners, the newest
+ * copy invisible; production would hit the same wall once every client has a storage). Read in pages, in a fixed order.
+ */
+export async function allNavigationRows(userId: string | null): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = []
+  for (let from = 0; from < 100_000; from += 1000) {
+    const { data, error } = await db().rpc("store_navigation", { p_user: userId }).order("id").range(from, from + 999)
+    if (error) throw new Error(`store navigation: ${error.message}`)
+    rows.push(...((data ?? []) as Array<Record<string, unknown>>))
+    if ((data ?? []).length < 1000) break
+  }
+  return rows
+}
+
 export async function navigation(user: { id: string; email?: string | null } | null, isOwnerOnlyUser: boolean): Promise<NavGroup[]> {
   await ensureArea("business", null)
   // the owners share ONE "My files" — the primary owner's (never a separate one per owner)
   const ownersArea = isOwnerOnlyUser && user ? await ownersAreaUserId() : null
   if (ownersArea) await ensureArea("private", ownersArea)
   // a private area is listed only for the owners, and only the owners' one (the database function returns no other)
-  const { data, error } = await db().rpc("store_navigation", { p_user: ownersArea })
-  if (error) throw new Error(`store navigation: ${error.message}`)
+  const data = await allNavigationRows(ownersArea)
   const { ownerLabel, ownerStatus } = await import("./browse")
-  return groupOwners(((data ?? []) as Array<{ id: string; kind: string; lifecycle_override: string | null; company_name: string | null; state_of_formation: string | null; account_status: string | null; person_name: string | null; root_name: string | null; file_count: number | string }>).map((o) => ({
+  return groupOwners((data as Array<{ id: string; kind: string; lifecycle_override: string | null; company_name: string | null; state_of_formation: string | null; account_status: string | null; person_name: string | null; root_name: string | null; file_count: number | string }>).map((o) => ({
     id: o.id, kind: o.kind,
     label: o.kind === "business" ? "Business" : o.kind === "private" ? "My files" : ownerLabel({ kind: o.kind, company: o.company_name, person: o.person_name, root: o.root_name }),
     status: ownerStatus(o.lifecycle_override), fileCount: Number(o.file_count) || 0,
@@ -458,8 +473,7 @@ export async function findIdenticalFiles(sha256: string, login: { id: string | n
     // an unreadable owner counts as private (fails closed); a private area only for its own login
     .filter((f) => !!f.store_owners && (f.store_owners.kind !== "private" || mayOpenPrivateArea(f.store_owners.private_user_id, login, ownersArea)))
   if (rows.length === 0) return []
-  const { data: nav, error: nErr } = await db().rpc("store_navigation", { p_user: ownersArea ?? userId })
-  if (nErr) throw new Error(`Could not look for the same file (${nErr.message}).`)
+  const nav = await allNavigationRows(ownersArea ?? userId).catch((e: Error) => { throw new Error(`Could not look for the same file (${e.message}).`) })
   const { ownerLabel } = await import("./browse")
   const labels = new Map<string, string>()
   for (const o of (nav ?? []) as Array<{ id: string; kind: string; company_name: string | null; person_name: string | null; root_name: string | null }>) {

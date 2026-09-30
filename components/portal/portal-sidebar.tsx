@@ -27,7 +27,7 @@ import {
   Landmark,
   Palette,
 } from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
@@ -202,7 +202,6 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
-  const pathnameRef = useRef(pathname)
   const { t, locale } = useLocale()
 
   // "NEW" badge on the Team nav item — shown to account-admins until they've seen
@@ -217,17 +216,22 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [canManageTeam])
 
-  // Keep pathname ref in sync for use inside realtime callback
+  // The count is no longer forced to 0 when the chat page opens (dev job
+  // 05d997f2, Phase 2): opening the chat no longer means "read everything" —
+  // a message in another tab stays unread until the client opens that tab.
+  // The chat broadcasts the exact server total after every mark, and a fresh
+  // server value from the layout (navigation / wake refresh) always wins.
   useEffect(() => {
-    pathnameRef.current = pathname
-  }, [pathname])
-
-  // Reset badge when user opens the chat page
+    setLiveUnreadCount(unreadChatCount)
+  }, [unreadChatCount])
   useEffect(() => {
-    if (pathname === '/portal/chat') {
-      setLiveUnreadCount(0)
+    const onUnread = (e: Event) => {
+      const total = (e as CustomEvent<{ total?: unknown }>).detail?.total
+      if (typeof total === 'number' && total >= 0) setLiveUnreadCount(total)
     }
-  }, [pathname])
+    window.addEventListener('portal-chat-unread', onUnread)
+    return () => window.removeEventListener('portal-chat-unread', onUnread)
+  }, [])
 
   // Sync PWA app icon badge with unread count
   useEffect(() => {
@@ -260,8 +264,12 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           filter: `contact_id=eq.${contactId}`,
         },
         (payload) => {
-          const newMsg = payload.new as { sender_type: string }
-          if (newMsg.sender_type === 'admin' && pathnameRef.current !== '/portal/chat') {
+          const newMsg = payload.new as { sender_type: string; read_at?: string | null }
+          // Counted on the chat page too: if the client is looking at that tab
+          // the chat marks it read at once and broadcasts the corrected total.
+          // Rows born read (signature-reminder chat nudges) never count — nothing
+          // would ever broadcast a correction for them.
+          if (newMsg.sender_type === 'admin' && !newMsg.read_at) {
             setLiveUnreadCount(prev => prev + 1)
           }
         }

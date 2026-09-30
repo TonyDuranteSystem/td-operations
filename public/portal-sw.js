@@ -22,7 +22,7 @@
 // inside the worker — it does NOT depend on page JavaScript, which is exactly what
 // a poisoned shell cannot run. Without it the fix would install, park in "waiting"
 // forever, and never reach the clients it exists to rescue.
-const SW_VERSION = 'td-portal-20260721-nocache'
+const SW_VERSION = 'td-portal-20260929-pushnav'
 
 self.addEventListener('install', function () {
   // Unconditional: this is a recovery release. There is no version-skew risk
@@ -179,16 +179,45 @@ self.addEventListener('notificationclick', function (event) {
   }
 
   var url = event.notification.data && event.notification.data.url ? event.notification.data.url : '/portal'
+  // Absolute, and never off-site: a push only ever points into the portal.
+  var target = new URL(url, self.location.origin)
+  if (target.origin !== self.location.origin) target = new URL('/portal', self.location.origin)
+  var href = target.href
 
+  // 2026-09-29 (dev job 05d997f2): an ALREADY-OPEN portal window used to be
+  // focused and left where it was, so tapping "new message" brought back
+  // whatever page the client had open — not the message. Now it is taken to
+  // the notification's target (same pattern as dashboard-sw.js). Focus first,
+  // while the tap's user activation is still fresh. WindowClient.navigate()
+  // rejects for windows this worker doesn't control and isn't available
+  // everywhere, so the page itself is asked to navigate as a fallback
+  // (listener in components/portal/portal-sw-register.tsx).
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windowClients) {
       for (var i = 0; i < windowClients.length; i++) {
         var client = windowClients[i]
-        if (client.url.indexOf('/portal') !== -1 && 'focus' in client) {
-          return client.focus()
+        // Real portal pages only — a plain substring match also caught the CRM's
+        // /portal-chats (same origin on sandbox), which this worker can't move.
+        var path = ''
+        try { path = new URL(client.url).pathname } catch (e) { path = '' }
+        var isPortalPage = path === '/portal' || path.indexOf('/portal/') === 0
+        if (isPortalPage && 'focus' in client) {
+          return client.focus().catch(function () { return client }).then(function (focused) {
+            var win = focused || client
+            var askPage = function () {
+              try { win.postMessage({ type: 'PORTAL_OPEN_URL', url: href }) } catch (e) { /* window gone */ }
+            }
+            if ('navigate' in win) {
+              return win.navigate(href).then(function (navigated) {
+                if (!navigated) askPage()
+              }).catch(askPage)
+            }
+            askPage()
+            return undefined
+          })
         }
       }
-      return clients.openWindow(url)
+      return clients.openWindow(href)
     })
   )
 })

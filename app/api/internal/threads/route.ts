@@ -19,83 +19,13 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
 
-  const { data: threads, error } = await supabaseAdmin
-    .from('internal_threads')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(100)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  try {
+    // ONE database request for the whole list (was hundreds per refresh — see lib/internal/thread-list.ts)
+    const { listInternalThreads } = await import('@/lib/internal/thread-list')
+    return NextResponse.json({ threads: await listInternalThreads(user.id) })
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not load the threads' }, { status: 500 })
   }
-
-  // Enrich with company/contact names, unread counts, source message text
-  const enriched = await Promise.all((threads ?? []).map(async (thread) => {
-    // Company name or contact name
-    let accountName: string | null = null
-    let contactName: string | null = null
-
-    if (thread.account_id) {
-      const { data: account } = await supabaseAdmin
-        .from('accounts')
-        .select('company_name')
-        .eq('id', thread.account_id)
-        .single()
-      accountName = account?.company_name ?? null
-    }
-
-    if (thread.contact_id) {
-      const { data: contact } = await supabaseAdmin
-        .from('contacts')
-        .select('full_name')
-        .eq('id', thread.contact_id)
-        .single()
-      contactName = contact?.full_name ?? null
-    }
-
-    // Unread count (messages not sent by current user and not read)
-    const { count: unreadCount } = await supabaseAdmin
-      .from('internal_messages')
-      .select('id', { count: 'exact', head: true })
-      .eq('thread_id', thread.id)
-      .neq('sender_id', user.id)
-      .is('read_at', null)
-
-    // Last message
-    const { data: lastMsg } = await supabaseAdmin
-      .from('internal_messages')
-      .select('created_at, message')
-      .eq('thread_id', thread.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single()
-
-    // Source message text
-    let sourceMessage: string | null = null
-    if (thread.source_message_id) {
-      const { data: srcMsg } = await supabaseAdmin
-        .from('portal_messages')
-        .select('message')
-        .eq('id', thread.source_message_id)
-        .single()
-      sourceMessage = srcMsg?.message ?? null
-    }
-
-    return {
-      ...thread,
-      company_name: accountName ?? contactName ?? thread.title ?? 'Team Thread',
-      contact_name: contactName,
-      unread_count: unreadCount ?? 0,
-      last_message_at: lastMsg?.created_at ?? thread.created_at,
-      last_message_preview: lastMsg?.message?.slice(0, 80) ?? null,
-      source_message: sourceMessage,
-    }
-  }))
-
-  // Sort by last_message_at descending
-  enriched.sort((a, b) => new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime())
-
-  return NextResponse.json({ threads: enriched })
 }
 
 export async function POST(request: NextRequest) {

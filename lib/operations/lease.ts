@@ -108,16 +108,85 @@ function buildCompanySlug(companyName: string): string {
     .replace(/^-|-$/g, "")
 }
 
-async function nextSuiteNumber(): Promise<string> {
-  const { data: lastLeases } = await supabaseAdmin
-    .from("lease_agreements")
+/**
+ * Canonical form of a suite typed by staff: "3D-318". Accepts "3d318", "3D 318",
+ * "Suite 3D-318"; returns null for anything else (the caller rejects it).
+ */
+export function normalizeSuiteNumber(input: string | null | undefined): string | null {
+  const m = /^\s*(?:suite\s*)?3D\s*-?\s*(\d{2,4})\s*$/i.exec(input ?? "")
+  return m ? `3D-${parseInt(m[1], 10).toString().padStart(3, "0")}` : null
+}
+
+/** "3D-318" -> 318. Anything not shaped like a numbered TD suite -> null. */
+export function suiteNumericPart(suite: string | null | undefined): number | null {
+  const m = /^\s*3D-(\d+)\s*$/i.exec(suite ?? "")
+  return m ? parseInt(m[1], 10) : null
+}
+
+/**
+ * The next free suite. The highest number is taken NUMERICALLY (a string sort
+ * would rank "3D-999" above "3D-1000") across BOTH places a suite can live:
+ * lease_agreements.suite_number and accounts.suite_number — so a suite that was
+ * assigned to a company but has no lease yet is never handed to someone else.
+ * The accounts read is tolerant: before its column exists it just contributes
+ * nothing, so this never breaks a deploy that lands ahead of the migration.
+ */
+export async function nextSuiteNumber(): Promise<string> {
+  return `3D-${((await highestSuiteNumber()) + 1).toString().padStart(3, "0")}`
+}
+
+/**
+ * The highest suite number in use anywhere (leases + assigned company suites),
+ * or 100 when none exist. A failed read must NEVER look like "no suites exist" —
+ * that would hand out 3D-101, a real client's suite. The lease read must
+ * succeed. The accounts read may fail ONLY because the column does not exist
+ * yet (Postgres 42703, a deploy that landed ahead of the migration); any other
+ * error also throws.
+ */
+export async function highestSuiteNumber(): Promise<number> {
+  const leaseSuites = await readAllSuites("lease_agreements", false)
+  const accountSuites = await readAllSuites("accounts", true)
+  let max = 100
+  for (const value of [...leaseSuites, ...accountSuites]) {
+    const n = suiteNumericPart(value)
+    if (n !== null && n > max) max = n
+  }
+  return max
+}
+
+/** Every non-null suite_number in a table, paged (PostgREST caps a page at 1000 rows). */
+async function readAllSuites(table: "lease_agreements" | "accounts", tolerateMissingColumn: boolean): Promise<string[]> {
+  const PAGE = 1000
+  const out: string[] = []
+  for (let from = 0; from < 50 * PAGE; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from(table)
+      .select("suite_number")
+      .not("suite_number", "is", null)
+      .order("suite_number", { ascending: false })
+      .range(from, from + PAGE - 1)
+    if (error) {
+      if (tolerateMissingColumn && (error as { code?: string }).code === "42703") return out
+      throw new Error(`Could not read ${table}.suite_number: ${error.message}`)
+    }
+    const rows = Array.isArray(data) ? (data as Array<{ suite_number?: string | null }>) : []
+    for (const r of rows) if (typeof r.suite_number === "string") out.push(r.suite_number)
+    if (rows.length < PAGE) break
+  }
+  return out
+}
+
+/** The suite staff assigned to a company (accounts.suite_number), or null. Never throws. */
+async function getAssignedSuite(accountId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from("accounts")
     .select("suite_number")
-    .order("suite_number", { ascending: false })
-    .limit(1)
-  if (!lastLeases?.length) return "3D-101"
-  const lastNum = parseInt(lastLeases[0].suite_number.replace("3D-", ""), 10)
-  if (isNaN(lastNum)) return "3D-101"
-  return `3D-${(lastNum + 1).toString().padStart(3, "0")}`
+    .eq("id", accountId)
+    .maybeSingle()
+  // Only a well-formed suite counts. The column is free text, so any writer other
+  // than the CRM save could have stored "TBD" or "Suite 3D-318"; those must not
+  // reach a lease — fall through to prior-lease reuse instead.
+  return normalizeSuiteNumber((data as { suite_number?: string | null } | null)?.suite_number)
 }
 
 // ─── createLease ────────────────────────────────────────────
@@ -219,8 +288,13 @@ export async function createLease(
     // overwrote accounts.physical_address to the new address. Fix: reuse the suite
     // this account already holds (its earliest prior lease); only a genuinely NEW
     // account with no prior lease gets a fresh number. An explicit suite always
-    // wins (staff override).
+    // wins (staff override). Next comes the suite staff ASSIGNED to the company
+    // (accounts.suite_number, the "Suite assigned" field in Company Info) — that
+    // field is the source of truth when set — then the prior-lease reuse.
     let suiteNumber = params.suite_number
+    if (!suiteNumber) {
+      suiteNumber = (await getAssignedSuite(params.account_id)) ?? undefined
+    }
     if (!suiteNumber) {
       // Scope to the SAME TENANT, not just the account. An account can carry more
       // than one lease with different suites — e.g. Imperium Commerce LLC has a
@@ -317,6 +391,16 @@ export async function createLease(
       .from("accounts")
       .update({ physical_address: `10225 Ulmerton Rd, Suite ${suiteNumber}, Largo, FL 33771` })
       .eq("id", params.account_id)
+
+    // 7b. Record the suite on the company ("Suite assigned") if none is set yet,
+    // so the field is filled for every company that gets a lease. Best-effort and
+    // separate from the write above: it must never fail a lease (and before the
+    // column exists it simply errors and is ignored).
+    await supabaseAdmin
+      .from("accounts")
+      .update({ suite_number: suiteNumber })
+      .eq("id", params.account_id)
+      .is("suite_number", null)
 
     // 8. Log
     logAction({
@@ -533,8 +617,11 @@ export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftR
   // (that address is what a legacy account's client sees as their registered
   // mailing address). If we delete the draft and leave it, the account keeps
   // pointing at a suite no longer backed by any lease — and because suite numbers
-  // are handed out as global-max+1, the freed number is recycled to the next new
-  // account, so two clients could display the same suite. Recompute the address
+  // are handed out as global-max+1, the freed number could be recycled to the next
+  // new account, so two clients could display the same suite. (Since the company's
+  // "Suite Assigned" field: the field is cleared below when it holds this draft's
+  // suite and the company has no other lease, so the number is free again.)
+  // Recompute the address
   // from the account's REMAINING leases (reuse the earliest same-tenant suite, or
   // clear it if none remain) — but only when the stored address still reflects the
   // cancelled suite, so a manually-set address is never clobbered.
@@ -560,6 +647,23 @@ export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftR
         .from("accounts")
         .update({ physical_address: restored })
         .eq("id", lease.account_id)
+    }
+
+    // The lease had written this suite onto the company ("Suite Assigned"). If the
+    // company holds no other lease, release it — otherwise a draft cancelled
+    // because it was made for the WRONG company leaves that suite stuck on it.
+    // Best-effort, exact-match only (never clears a different suite).
+    const { data: otherLeases } = await supabaseAdmin
+      .from("lease_agreements")
+      .select("id")
+      .eq("account_id", lease.account_id)
+      .limit(1)
+    if (!otherLeases?.length) {
+      await supabaseAdmin
+        .from("accounts")
+        .update({ suite_number: null })
+        .eq("id", lease.account_id)
+        .eq("suite_number", lease.suite_number)
     }
   }
 

@@ -1152,8 +1152,8 @@ export default async function PortalDashboardPage() {
             <AddressInfoRow
               icon={FileText}
               accent="amber"
-              label={t('dashboard.legalAddress', locale, translations)}
-              description={t('addresses.legalSubtitle', locale, translations)}
+              label={t('dashboard.principalOffice', locale, translations)}
+              description={t('addresses.principalSubtitle', locale, translations)}
               parts={account.legal_address_parts}
               legacyValue={account.legal_address}
               emptyText={t('dashboard.addressNotOnFile', locale, translations)}

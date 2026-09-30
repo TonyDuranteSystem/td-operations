@@ -5,6 +5,7 @@ import { Bell, MessageCircle, FileText, Activity, Calendar, Receipt } from 'luci
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import Link from 'next/link'
+import { needsFullPageLoad } from '@/lib/portal/chat-link'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 
 interface Notification {
@@ -130,8 +131,12 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
                     {!n.read_at && <div className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 shrink-0" />}
                   </div>
                 )
+                // Chat deep links set the company server-side → full page load
+                // so the sidebar follows (see needsFullPageLoad).
                 return n.link ? (
-                  <Link key={n.id} href={n.link} onClick={() => setOpen(false)}>{content}</Link>
+                  needsFullPageLoad(n.link)
+                    ? <a key={n.id} href={n.link} onClick={() => setOpen(false)}>{content}</a>
+                    : <Link key={n.id} href={n.link} onClick={() => setOpen(false)}>{content}</Link>
                 ) : (
                   <div key={n.id}>{content}</div>
                 )

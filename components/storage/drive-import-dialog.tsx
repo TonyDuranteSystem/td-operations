@@ -8,7 +8,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { ChevronRight, Folder, Loader2, X, HardDriveDownload, CheckCircle2, AlertTriangle, Undo2 } from 'lucide-react'
+import { ChevronRight, Folder, Loader2, X, HardDriveDownload, CheckCircle2, AlertTriangle, Undo2, ScanText } from 'lucide-react'
+import { ContentsReport, type ContentReportData } from './contents-report'
 
 interface Row {
   id: string; name: string
@@ -30,6 +31,13 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
   const [listing, setListing] = useState<Listing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
+  // the search box looks in the WHOLE Shared Drive (company names anywhere inside a word + folders at any level),
+  // whichever folder is open — not just the folders on screen
+  const [found, setFound] = useState<Row[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
+  const q = filter.trim()
   const [running, setRunning] = useState<{ row: Row; run: RunView } | null>(null)
   const [confirm, setConfirm] = useState<Row | null>(null)
   const alive = useRef(true)
@@ -48,6 +56,24 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
     }
   }, [here.id])
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (q.length < 2) { setFound(null); setSearchError(null); setSearching(false); return }
+    let cancelled = false
+    setSearching(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/crm-store/drive-folders?search=${encodeURIComponent(q)}`)
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error((j as { error?: string }).error || 'The search failed — please try again.')
+        if (!cancelled) { setFound((j as { results: Row[] }).results); setSearchError(null) }
+      } catch (e) {
+        if (!cancelled) setSearchError(e instanceof Error && e.message ? e.message : 'The search failed — please try again.')
+      } finally {
+        if (!cancelled) setSearching(false)
+      }
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [q, tick])
 
   const copy = async (row: Row) => {
     setConfirm(null)
@@ -63,12 +89,25 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
       if (run.status === 'done' || run.status === 'incomplete') {
         toast.success(`${row.company.name}: ${run.counts.done} files copied${run.counts.merged ? `, ${run.counts.merged} identical copies kept once` : ''}${run.counts.skipped ? `, ${run.counts.skipped} not copied (listed)` : ''}${run.counts.failed ? `, ${run.counts.failed} failed` : ''}`)
       }
-      await load()
+      await load(); setTick((n) => n + 1)
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'The copy could not run — please try again.')
-      await load()
+      await load(); setTick((n) => n + 1)
     } finally {
       if (alive.current) setRunning(null)
+    }
+  }
+  const [reading, setReading] = useState<string | null>(null)
+  const [contents, setContents] = useState<{ title: string; data: ContentReportData } | null>(null)
+  const checkContents = async (row: Row) => {
+    if (!row.copy) return
+    setReading(row.id)
+    try {
+      setContents({ title: row.company?.name ?? row.name, data: await send<ContentReportData>(`/api/crm-store/import/${row.copy.runId}/check-contents`, {}, 'The contents could not be checked.') })
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'The contents could not be checked.')
+    } finally {
+      if (alive.current) setReading(null)
     }
   }
   const [removing, setRemoving] = useState<string | null>(null)
@@ -81,16 +120,17 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
       let r = await send<{ status: string }>(`/api/crm-store/import/${row.copy.runId}/undo`, {}, 'The copy could not be removed.')
       for (let i = 0; i < 40 && alive.current && r.status === 'undoing'; i++) r = await send<{ status: string }>(`/api/crm-store/import/${row.copy.runId}/undo`, {}, 'The copy could not be removed — press Continue removing.')
       if (r.status === 'rolled_back') toast.success('Copy removed — the files are in the new storage\'s trash')
-      await load()
+      await load(); setTick((n) => n + 1)
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'The copy could not be removed.')
-      await load()
+      await load(); setTick((n) => n + 1)
     } finally {
       if (alive.current) setRemoving(null)
     }
   }
 
-  const rows = (listing?.folders ?? []).filter((r) => !filter.trim() || `${r.name} ${r.company?.name ?? ''}`.toLowerCase().includes(filter.trim().toLowerCase()))
+  // 2+ letters typed = search results from the whole Drive; otherwise the folders of the open level
+  const rows = found !== null ? found : (listing?.folders ?? [])
   const counted = running ? running.run.counts.done + running.run.counts.merged + running.run.counts.skipped + running.run.counts.failed : 0
 
   return (
@@ -114,8 +154,11 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
             </span>
           ))}
         </nav>
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search this folder…" aria-label="Search this folder"
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search all of Google Drive — a company or folder name…" aria-label="Search all of Google Drive"
           className="mb-2 w-full rounded-md border border-zinc-300 px-2 py-1 text-sm" />
+        {searching && <p className="mb-1 flex items-center gap-1 text-xs text-zinc-500"><Loader2 className="h-3 w-3 animate-spin" />Searching all of Google Drive…</p>}
+        {searchError && <p className="mb-1 text-xs text-red-700">{searchError}</p>}
+        {found !== null && !searching && !searchError && <p className="mb-1 text-xs text-zinc-500">{found.length === 0 ? `Nothing in Google Drive matches "${q}".` : `${found.length} match${found.length === 1 ? '' : 'es'} in all of Google Drive for "${q}" — companies first.`}</p>}
 
         {running && (
           <div className="mb-2 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
@@ -126,10 +169,10 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
         {!listing && !error && <p className="text-xs text-zinc-500">Loading…</p>}
 
         <ul className="min-h-0 flex-1 divide-y divide-zinc-100 overflow-y-auto rounded-md border border-zinc-200">
-          {listing && rows.length === 0 && <li className="px-3 py-2 text-xs text-zinc-500">No folders here{listing.files ? ` (${listing.files} loose files)` : ''}.</li>}
+          {found === null && listing && rows.length === 0 && <li className="px-3 py-2 text-xs text-zinc-500">No folders here{listing.files ? ` (${listing.files} loose files)` : ''}.</li>}
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
-              <button type="button" disabled={!!running} onClick={() => { setFilter(''); setPath([...path, { id: r.id, name: r.name }]) }}
+              <button type="button" disabled={!!running} onClick={() => { setFilter(''); setPath(found !== null ? [path[0], { id: r.id, name: r.name }] : [...path, { id: r.id, name: r.name }]) }}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left hover:underline disabled:opacity-50">
                 <Folder className="h-4 w-4 shrink-0 text-amber-500" /><span className="truncate">{r.name}</span>
               </button>
@@ -144,6 +187,7 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
                         {r.copy.status === 'done' ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}Copied ({r.copy.files} files){r.copy.status === 'incomplete' ? ' — some failed' : ''}
                       </span>
                       {r.copy.ownerId && <button type="button" onClick={() => onOpenStorage(r.copy!.ownerId!)} className="rounded-md bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700">Open</button>}
+                      <button type="button" disabled={!!running || !!removing || !!reading} onClick={() => void checkContents(r)} aria-label={`Check the contents of the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50">{reading === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanText className="h-3 w-3" />}Check contents</button>
                       <button type="button" disabled={!!running || !!removing} onClick={() => void removeCopy(r)} aria-label={`Remove the copy of ${r.company.name}`} className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50"><Undo2 className="h-3 w-3" />Remove copy</button>
                     </>
                   ) : r.copy && (r.copy.status === 'moving' || r.copy.status === 'scanning') ? (
@@ -170,8 +214,9 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
             </li>
           ))}
         </ul>
-        {listing && listing.files > 0 && rows.length > 0 && <p className="mt-1 text-xs text-zinc-500">{listing.files} loose files in this folder are not listed.</p>}
-        {listing?.cutOff && <p className="mt-1 text-xs text-amber-700">This folder is very large — only the first 5,000 entries are listed; use the search or open a sub-folder.</p>}
+        {contents && <ContentsReport title={contents.title} data={contents.data} onClose={() => setContents(null)} onChanged={() => { const row = rows.find((x) => (x.company?.name ?? x.name) === contents.title); if (row) void checkContents(row) }} />}
+        {found === null && listing && listing.files > 0 && rows.length > 0 && <p className="mt-1 text-xs text-zinc-500">{listing.files} loose files in this folder are not listed.</p>}
+        {found === null && listing?.cutOff && <p className="mt-1 text-xs text-amber-700">This folder is very large — only the first 5,000 entries are listed; use the search or open a sub-folder.</p>}
       </div>
     </div>
   )

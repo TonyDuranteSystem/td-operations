@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -13,10 +14,19 @@ import { NextRequest, NextResponse } from 'next/server'
  * - Admin calling: marks client messages as read (admin has seen them)
  * - Client calling: marks admin messages as read (client has seen them)
  *
- * Optional `topic` param (admin only):
- *   - Omitted: marks all messages (backwards compat)
- *   - null: marks only general (null-topic) messages
+ * Optional `topic` param (staff AND clients, dev job 05d997f2):
+ *   - Omitted: marks all messages (backwards compat — old cached client
+ *     bundles; the current portal always sends it)
+ *   - null or '': marks only General (null-topic) messages
  *   - string: marks only messages in that specific topic
+ *
+ * Optional `up_to` (clients): only rows created at or before this timestamp
+ * are marked — the newest message the client actually has on screen, so a
+ * message that lands between the fetch and this call stays unread. Passed
+ * through as the raw server string (microseconds intact).
+ *
+ * Client callers get `unread` back: their new total (lib/portal/client-chat-unread),
+ * the same number the sidebar and the phone icon show.
  */
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -34,6 +44,14 @@ export async function POST(request: NextRequest) {
   // Verify access for clients
   if (!dashUser) {
     const authContactId = getClientContactId(user)
+    // Teammates (Portal Team Access) have no contact: they may only mark their
+    // ONE company's thread — previously any account_id was accepted.
+    if (!authContactId) {
+      const tmAccountId = await getTeammateScopeOrNull(user, 'chat')
+      if (!tmAccountId || !account_id || account_id !== tmAccountId || contact_id) {
+        return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      }
+    }
     if (authContactId && account_id) {
       const accountIds = await getClientAccountIds(authContactId)
       if (!accountIds.includes(account_id)) {
@@ -48,9 +66,39 @@ export async function POST(request: NextRequest) {
   // Mark opposite sender's messages as read
   const senderTypeToMark = dashUser ? 'client' : 'admin'
 
-  // topic filter (admin only): null = general tab, string = named topic, absent = all
-  const topicFilterPresent = dashUser && 'topic' in body
-  const topicFilter: string | null = topicFilterPresent ? (body.topic ?? null) : null
+  // topic filter: null/'' = General tab, string = named topic, absent = all.
+  // Clients too since 2026-09-29: "read" means the client opened THAT tab —
+  // marking every tab on page open wiped the badge of a message in another tab
+  // before the client ever saw it (William Canzi's signature reminders).
+  const topicFilterPresent = 'topic' in body
+  const rawTopic = topicFilterPresent ? body.topic : null
+  const topicFilter: string | null = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic : null
+  if (!dashUser && !topicFilterPresent) {
+    console.warn('[portal/chat/read] client mark-read without topic (legacy bundle) — marking all tabs')
+  }
+  const upTo: string | null = !dashUser && typeof body.up_to === 'string' && !Number.isNaN(Date.parse(body.up_to)) ? body.up_to : null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- supabase-js builder type
+  const applyScopeFilters = <Q,>(q: Q): Q => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let r = q as any
+    // General = no topic OR an empty-string topic (the chat shows both under
+    // General; marking only NULL would leave an '' row unread forever).
+    if (topicFilterPresent) r = topicFilter === null ? r.or('topic.is.null,topic.eq.') : r.eq('topic', topicFilter)
+    if (upTo) r = r.lte('created_at', upTo)
+    return r as Q
+  }
+  // Client callers: report their new unread total alongside the result.
+  const respond = async (marked: number) => {
+    const authContactId = dashUser ? null : getClientContactId(user)
+    if (!authContactId) return NextResponse.json({ marked })
+    try {
+      const { getClientChatUnread } = await import('@/lib/portal/client-chat-unread')
+      const summary = await getClientChatUnread(authContactId)
+      return NextResponse.json({ marked, unread: summary.total })
+    } catch {
+      return NextResponse.json({ marked })
+    }
+  }
 
   const now = new Date().toISOString()
 
@@ -73,6 +121,7 @@ export async function POST(request: NextRequest) {
         .is('read_at', null)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq('client_kept_unread', false)
+      q = applyScopeFilters(q)
       const { error, count } = await q
       if (error) return { error }
       return { count: count ?? 0 }
@@ -89,6 +138,7 @@ export async function POST(request: NextRequest) {
         .is('read_at', null)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
       q = (q as any).eq('client_kept_unread', false)
+      q = applyScopeFilters(q)
       const { error, count } = await q
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
       marked += count ?? 0
@@ -104,7 +154,7 @@ export async function POST(request: NextRequest) {
       if (r.error) return NextResponse.json({ error: r.error.message }, { status: 500 })
       marked += r.count
     }
-    return NextResponse.json({ marked })
+    return respond(marked)
   }
 
   if (account_id) {
@@ -123,12 +173,10 @@ export async function POST(request: NextRequest) {
     // Skip messages the client explicitly kept unread.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
     q = (q as any).eq('client_kept_unread', false)
-    if (topicFilterPresent) {
-      q = topicFilter === null ? q.is('topic', null) : q.eq('topic', topicFilter)
-    }
+    q = applyScopeFilters(q)
     const { error, count } = await q
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ marked: count ?? 0 })
+    return respond(count ?? 0)
   }
 
   // Contact-scoped: mark the messages that BELONG to the contact thread.
@@ -167,9 +215,7 @@ export async function POST(request: NextRequest) {
   // Skip messages the client explicitly kept unread.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
   q1 = (q1 as any).eq('client_kept_unread', false)
-  if (topicFilterPresent) {
-    q1 = topicFilter === null ? q1.is('topic', null) : q1.eq('topic', topicFilter)
-  }
+  q1 = applyScopeFilters(q1)
   const { error: e1, count: c1 } = await q1
   if (e1) return NextResponse.json({ error: e1.message }, { status: 500 })
 
@@ -189,13 +235,11 @@ export async function POST(request: NextRequest) {
     // Skip messages the client explicitly kept unread.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- client_kept_unread predates generated types
     q2 = (q2 as any).eq('client_kept_unread', false)
-    if (topicFilterPresent) {
-      q2 = topicFilter === null ? q2.is('topic', null) : q2.eq('topic', topicFilter)
-    }
+    q2 = applyScopeFilters(q2)
     const { error: e2, count } = await q2
     if (e2) return NextResponse.json({ error: e2.message }, { status: 500 })
     c2 = count ?? 0
   }
 
-  return NextResponse.json({ marked: (c1 ?? 0) + c2 })
+  return respond((c1 ?? 0) + c2)
 }

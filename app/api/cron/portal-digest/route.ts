@@ -4,7 +4,8 @@ import { getGreeting } from '@/lib/greeting'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { getAppSetting } from '@/lib/settings'
-import { buildDigestSections, mergeTypeLabels } from '@/lib/portal/digest-render'
+import { buildDigestSections, mergeTypeLabels, pickDigestButtonHref } from '@/lib/portal/digest-render'
+import { escapeHtml } from '@/lib/html-escape'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
 
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
 
     const { data: pending, error } = await supabaseAdmin
       .from('portal_notifications')
-      .select('id, account_id, contact_id, type, title, body, created_at')
+      .select('id, account_id, contact_id, type, title, body, link, created_at')
       .is('email_sent_at', null)
       .lt('created_at', cutoff)
       .order('created_at', { ascending: true })
@@ -202,6 +203,9 @@ export async function GET(request: NextRequest) {
         : 'You have new updates in your portal:'
 
       const buttonText = isItalian ? 'Apri Portale' : 'Open Portal'
+      // Land on the one place this email is about (chat tab, signing page, …)
+      // when every update in it points there; mixed digests keep the home page.
+      const buttonHref = pickDigestButtonHref(emailNotifs.map(n => n.link), PORTAL_BASE_URL)
 
       const html = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -213,7 +217,7 @@ export async function GET(request: NextRequest) {
             <p style="font-size: 14px; color: #4b5563; margin-bottom: 20px;">${introText}</p>
             ${sections.join('')}
             <div style="margin-top: 24px; text-align: center;">
-              <a href="${PORTAL_BASE_URL}/portal" style="display: inline-block; padding: 12px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px;">
+              <a href="${escapeHtml(buttonHref)}" style="display: inline-block; padding: 12px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px;">
                 ${buttonText}
               </a>
             </div>

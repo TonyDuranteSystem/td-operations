@@ -6,6 +6,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { teammateLogin, partnerLoginAllowed } from './actions'
 import Link from 'next/link'
+import { chatLinkAfterLogin } from '@/lib/portal/chat-link'
 
 // Shown both when a suspended client attempts to log in (auth returns
 // 'user_banned') and when middleware bounces an active suspended session here
@@ -29,7 +30,13 @@ export default function PortalLoginPage() {
     }
   }, [])
 
-  const finishLogin = (destination = '/portal') => {
+  // Signed out when they clicked a "new message" link? The middleware bounced
+  // them here with the link's query intact — send them on to that chat after
+  // login instead of the portal home (dev job 05d997f2: the email said "new
+  // message", the client logged in, and landed somewhere the message wasn't).
+  const clientHome = () => chatLinkAfterLogin(window.location.search) ?? '/portal'
+
+  const finishLogin = (destination = clientHome()) => {
     // Audit log login (fire-and-forget)
     fetch('/api/portal/audit', {
       method: 'POST',
@@ -104,7 +111,7 @@ export default function PortalLoginPage() {
       }
     }
 
-    finishLogin(role === 'partner' ? '/collab' : '/portal')
+    finishLogin(role === 'partner' ? '/collab' : clientHome())
   }
 
   return (

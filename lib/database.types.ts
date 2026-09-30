@@ -215,6 +215,7 @@ export type Database = {
           setup_fee_invoice: string | null
           setup_fee_paid_date: string | null
           state_of_formation: string | null
+          suite_number: string | null
           status: Database["public"]["Enums"]["account_status"] | null
           updated_at: string | null
           welcome_package_status: string | null
@@ -300,6 +301,7 @@ export type Database = {
           setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
           state_of_formation?: string | null
+          suite_number?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
           welcome_package_status?: string | null
@@ -385,6 +387,7 @@ export type Database = {
           setup_fee_invoice?: string | null
           setup_fee_paid_date?: string | null
           state_of_formation?: string | null
+          suite_number?: string | null
           status?: Database["public"]["Enums"]["account_status"] | null
           updated_at?: string | null
           welcome_package_status?: string | null

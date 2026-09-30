@@ -20,6 +20,8 @@ interface State {
   acct: { physical_address: string | null } | null
   remaining: Array<{ suite_number: string }>
   accountUpdate: Record<string, unknown> | undefined
+  suiteUpdate: Record<string, unknown> | undefined // the "Suite Assigned" release
+  otherLeases: Array<{ id: string }>
 }
 
 let state: State
@@ -41,11 +43,13 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (ctx.selectCols.includes("status") && ctx.selectCols.includes("suite_number")) {
             return { data: state.leaseRow, error: null }
           }
+          if (ctx.selectCols === "id") return { data: state.otherLeases, error: null } // any-other-lease read
           return { data: state.remaining, error: null } // remaining-suite read
         }
         if (table === "accounts") {
           if (ctx.op === "update") {
-            state.accountUpdate = ctx.payload ?? undefined
+            if (ctx.payload && "suite_number" in ctx.payload) state.suiteUpdate = ctx.payload
+            else state.accountUpdate = ctx.payload ?? undefined
             return { data: null, error: null }
           }
           return { data: state.acct, error: null }
@@ -98,6 +102,8 @@ beforeEach(() => {
     acct: null,
     remaining: [],
     accountUpdate: undefined,
+    suiteUpdate: undefined,
+    otherLeases: [],
   }
   actionLogCalls.length = 0
 })
@@ -170,5 +176,25 @@ describe("cancelLeaseDraft", () => {
     const res = await cancelLeaseDraft("acme-2026")
     expect(res.success).toBe(true)
     expect(state.accountUpdate).toBeUndefined()
+  })
+  it("releases the company's Suite Assigned when it held the cancelled suite and no other lease exists", async () => {
+    state.leaseRow = { id: "L3", status: "draft", tenant_company: "Wrong Co LLC", account_id: "A2", contract_year: 2026, suite_number: "3D-250" }
+    state.deletedRows = [{ id: "L3" }]
+    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-250, Largo, FL 33771" }
+    state.otherLeases = []
+    const res = await cancelLeaseDraft("wrong-2026")
+    expect(res.success).toBe(true)
+    expect(state.suiteUpdate).toEqual({ suite_number: null })
+  })
+
+  it("keeps Suite Assigned when the company still has another lease", async () => {
+    state.leaseRow = { id: "L4", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2027, suite_number: "3D-113" }
+    state.deletedRows = [{ id: "L4" }]
+    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-113, Largo, FL 33771" }
+    state.remaining = [{ suite_number: "3D-113" }]
+    state.otherLeases = [{ id: "older-lease" }]
+    const res = await cancelLeaseDraft("acme-2027")
+    expect(res.success).toBe(true)
+    expect(state.suiteUpdate).toBeUndefined()
   })
 })

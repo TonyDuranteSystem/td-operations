@@ -99,7 +99,7 @@ export default async function PortalProfilePage() {
             <InfoField label={t('profile.filingId', locale)} value={account.filing_id ?? '\u2014'} />
             {account.legal_address && (
               <div className="sm:col-span-2">
-                <InfoField label={t('dashboard.legalAddress', locale)} value={account.legal_address} />
+                <InfoField label={t('dashboard.principalOffice', locale)} value={account.legal_address} />
               </div>
             )}
             {account.physical_address && (

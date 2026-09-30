@@ -24,7 +24,8 @@ type AddrRow = MailingAddressRow & {
  * all set per-account in the CRM (Antonio, dev job 254834cc, 2026-09-17) —
  * nothing here is hardcoded:
  *   1. Registered Agent address (registered_agent_address/_provider).
- *   2. Legal address (business_legal_address_id) — from the Articles of
+ *   2. Principal office address (business_legal_address_id — the DB kind keeps
+ *      its old name; only the label changed) — as filed in the Articles of
  *      Organization.
  *   3. CMRA Office address (business_mailing_address_id) — normally Tony
  *      Durante's own Largo office, but a per-account link set in the CRM
@@ -124,17 +125,17 @@ export default async function PortalAddressesPage() {
         translations={translations}
       />
 
-      {/* Legal address */}
+      {/* Principal office address */}
       <AddressCard
         icon={FileText}
         accent="amber"
-        title={t('addresses.legalTitle', locale, translations)}
-        subtitle={t('addresses.legalSubtitle', locale, translations)}
+        title={t('addresses.principalTitle', locale, translations)}
+        subtitle={t('addresses.principalSubtitle', locale, translations)}
         name={(legal?.name as string | null) ?? companyName}
         addr={legal}
         legacyText={null}
         country={(legal?.country as string | null) ?? null}
-        empty={t('addresses.legalEmpty', locale, translations)}
+        empty={t('addresses.principalEmpty', locale, translations)}
         locale={locale}
         translations={translations}
       />

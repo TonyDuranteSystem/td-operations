@@ -883,6 +883,58 @@ export interface DriveFolderRow {
   copy: { runId: string; status: string; mode: ImportMode; ownerId: string | null; files: number } | null
 }
 
+/** Match Drive folders to the CRM companies that use them, and to their copies / moves. */
+async function attachCompanies(rows: DriveFolderRow[]): Promise<void> {
+  if (!rows.length) return
+  // matched in chunks (a level can hold hundreds of client folders); a folder two companies share is shown as such
+  type Acct = { id: string; company_name: string; status: string | null; drive_folder_id: string }
+  const accts: Acct[] = []
+  for (let i = 0; i < rows.length; i += 100) {
+    const { data, error } = await db().from("accounts").select("id, company_name, status, drive_folder_id").in("drive_folder_id", rows.slice(i, i + 100).map((r) => r.id))
+    if (error) throw new Error(`Could not match the folders to companies (${error.message}).`)
+    accts.push(...((data ?? []) as Acct[]))
+  }
+  const byFolder = new Map<string, Acct>()
+  const shared = new Map<string, number>()
+  for (const a of accts) { if (byFolder.has(a.drive_folder_id)) shared.set(a.drive_folder_id, (shared.get(a.drive_folder_id) ?? 1) + 1); else byFolder.set(a.drive_folder_id, a) }
+  const accountIds = Array.from(byFolder.values()).map((a) => a.id)
+  const runs = new Map<string, { id: string; status: string; mode: string; owner_id: string | null }>()
+  for (let i = 0; i < accountIds.length; i += 100) {
+    const { data: rs, error: rErr } = await db().from("store_import_runs").select("id, account_id, status, mode, owner_id, started_at").in("account_id", accountIds.slice(i, i + 100)).neq("status", "rolled_back").neq("status", "failed").order("started_at", { ascending: false })
+    if (rErr) throw new Error(`Could not read the copies (${rErr.message}).`)
+    for (const r of (rs ?? []) as { id: string; account_id: string; status: string; mode: string; owner_id: string | null }[]) if (!runs.has(r.account_id)) runs.set(r.account_id, r)
+  }
+  await Promise.all(rows.map(async (r) => {
+    const a = byFolder.get(r.id)
+    if (!a) return
+    const extra = shared.get(r.id)
+    r.company = { accountId: a.id, name: extra ? `${a.company_name} (+${extra - 1} other compan${extra - 1 === 1 ? "y" : "ies"} share this folder)` : a.company_name, status: a.status }
+    const run = runs.get(a.id)
+    if (run) {
+      const { count } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("run_id", run.id)
+      r.copy = { runId: run.id, status: run.status, mode: run.mode === "copy" ? "copy" : "move", ownerId: run.owner_id, files: count ?? 0 }
+    }
+  }))
+}
+
+/** "Search everything" for the picker: CRM companies whose name contains the text (anywhere inside a word) and have a
+ *  Drive folder, plus Drive folders at any level whose name contains it. Companies first. */
+export async function searchDriveFolders(text: string): Promise<{ root: string; query: string; results: DriveFolderRow[]; tooShort: boolean }> {
+  const root = await pickerRootDrive()
+  const q = text.trim().replace(/\s+/g, " ")
+  if (q.length < 2) return { root, query: q, results: [], tooShort: true }
+  const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`
+  const { data: accts, error } = await db().from("accounts").select("company_name, drive_folder_id").not("drive_folder_id", "is", null).ilike("company_name", like).order("company_name").limit(30)
+  if (error) throw new Error(`Could not search the companies (${error.message}).`)
+  const rows: DriveFolderRow[] = ((accts ?? []) as { company_name: string; drive_folder_id: string }[]).map((a) => ({ id: a.drive_folder_id, name: a.company_name, company: null, copy: null }))
+  const seen = new Set(rows.map((r) => r.id))
+  const { searchFoldersAnyDrive } = await import("@/lib/google-drive")
+  for (const f of await searchFoldersAnyDrive(root, q, 30)) if (!seen.has(f.id)) { seen.add(f.id); rows.push({ id: f.id, name: f.name, company: null, copy: null }) }
+  await attachCompanies(rows)
+  // a CRM company whose folder is not in this Shared Drive is not offered (the copy would refuse it anyway)
+  return { root, query: q, results: rows, tooShort: false }
+}
+
 /** The Shared Drive the picker opens: the TEST Drive outside production, the company Shared Drive in production. */
 export async function pickerRootDrive(): Promise<string> {
   const { isProductionDatabase } = await import("@/lib/google-drive-guard")
@@ -913,36 +965,6 @@ export async function listDriveFolders(folderId: string | null): Promise<{ root:
     if (++pages >= 50 && token) { cutOff = true; break } // 5,000 entries — said so on screen
   } while (token)
   const rows: DriveFolderRow[] = folders.map((f) => ({ ...f, company: null, copy: null }))
-  if (rows.length) {
-    // matched in chunks (a level can hold hundreds of client folders); a folder two companies share is shown as such
-    type Acct = { id: string; company_name: string; status: string | null; drive_folder_id: string }
-    const accts: Acct[] = []
-    for (let i = 0; i < rows.length; i += 100) {
-      const { data, error } = await db().from("accounts").select("id, company_name, status, drive_folder_id").in("drive_folder_id", rows.slice(i, i + 100).map((r) => r.id))
-      if (error) throw new Error(`Could not match the folders to companies (${error.message}).`)
-      accts.push(...((data ?? []) as Acct[]))
-    }
-    const byFolder = new Map<string, Acct>()
-    const shared = new Map<string, number>()
-    for (const a of accts) { if (byFolder.has(a.drive_folder_id)) shared.set(a.drive_folder_id, (shared.get(a.drive_folder_id) ?? 1) + 1); else byFolder.set(a.drive_folder_id, a) }
-    const accountIds = Array.from(byFolder.values()).map((a) => a.id)
-    const runs = new Map<string, { id: string; status: string; mode: string; owner_id: string | null }>()
-    for (let i = 0; i < accountIds.length; i += 100) {
-      const { data: rs, error: rErr } = await db().from("store_import_runs").select("id, account_id, status, mode, owner_id, started_at").in("account_id", accountIds.slice(i, i + 100)).neq("status", "rolled_back").neq("status", "failed").order("started_at", { ascending: false })
-      if (rErr) throw new Error(`Could not read the copies (${rErr.message}).`)
-      for (const r of (rs ?? []) as { id: string; account_id: string; status: string; mode: string; owner_id: string | null }[]) if (!runs.has(r.account_id)) runs.set(r.account_id, r)
-    }
-    await Promise.all(rows.map(async (r) => {
-      const a = byFolder.get(r.id)
-      if (!a) return
-      const extra = shared.get(r.id)
-      r.company = { accountId: a.id, name: extra ? `${a.company_name} (+${extra - 1} other compan${extra - 1 === 1 ? "y" : "ies"} share this folder)` : a.company_name, status: a.status }
-      const run = runs.get(a.id)
-      if (run) {
-        const { count } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("run_id", run.id)
-        r.copy = { runId: run.id, status: run.status, mode: run.mode === "copy" ? "copy" : "move", ownerId: run.owner_id, files: count ?? 0 }
-      }
-    }))
-  }
+  await attachCompanies(rows)
   return { root, folderId: id, folders: rows.sort((a, b) => a.name.localeCompare(b.name)), files, cutOff }
 }

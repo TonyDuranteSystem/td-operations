@@ -62,3 +62,25 @@ export async function unregisterStrayPortalWorkers(): Promise<void> {
     // Non-fatal: a stray registration now runs the same no-cache worker anyway.
   }
 }
+
+/**
+ * The service worker asks an already-open portal window to navigate when a
+ * push notification is tapped and it can't move the window itself
+ * (`{ type: 'PORTAL_OPEN_URL', url }`, see public/portal-sw.js). Returns the
+ * URL to follow, or null — only same-origin /portal paths are ever followed,
+ * so a stray or spoofed message can't send the client off-site.
+ */
+export function portalUrlFromSwMessage(data: unknown, origin: string): string | null {
+  if (!data || typeof data !== 'object') return null
+  const msg = data as { type?: unknown; url?: unknown }
+  if (msg.type !== 'PORTAL_OPEN_URL' || typeof msg.url !== 'string') return null
+  let u: URL
+  try {
+    u = new URL(msg.url, origin)
+  } catch {
+    return null
+  }
+  if (u.origin !== origin) return null
+  if (u.pathname !== '/portal' && !u.pathname.startsWith('/portal/')) return null
+  return u.href
+}

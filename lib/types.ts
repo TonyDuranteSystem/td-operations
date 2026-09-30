@@ -137,6 +137,10 @@ export interface Account {
   mailing_link_verified: boolean | null
   ra_link_verified: boolean | null
   shipping_link_verified: boolean | null
+  // The TD office suite assigned to this company (e.g. "3D-318"). The source of
+  // truth for the client's suite once set: createLease reuses it, nextSuiteNumber
+  // never hands it out again. Edited in CRM Company Info → "Suite assigned".
+  suite_number: string | null
   member_structure: 'single_member' | 'multi_member' | null
   // Authoritative member count for MMLLC — source of truth for OA generation
   // pre-flight. Backfilled from ss4_applications.member_count; manually set
