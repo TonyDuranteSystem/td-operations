@@ -81,7 +81,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 
 ## Appendix A — MCP tools
 <!-- GENERATED:mcp-tools -->
-_Regenerated 2026-09-29. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
+_Regenerated 2026-09-30. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
 **49 active tool groups**, **219 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
@@ -90,7 +90,7 @@ _Regenerated 2026-09-29. Source of truth: uncommented `register*Tools(server)` i
 
 ## Appendix B — Hooks & guardrails
 <!-- GENERATED:hooks -->
-_Regenerated 2026-09-29. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
+_Regenerated 2026-09-30. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
 **26 hook scripts**, of which **24 are registered** in settings.
 
@@ -101,7 +101,7 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 
 ## Appendix C — Surface area
 <!-- GENERATED:surface -->
-_Regenerated 2026-09-29 by directory scan._
+_Regenerated 2026-09-30 by directory scan._
 
 - CRM dashboard pages (50): `accounts` `addresses` `audit` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `research` `sandbox-mail` `service-catalog` `services` `storage` `system-health` `tasks` `tax-returns` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-09-29 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
+_Regenerated 2026-09-30 from the R-rule list in CLAUDE.md — **42 rules**, highest is R113._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -176,10 +176,10 @@ _Regenerated 2026-09-29 from the R-rule list in CLAUDE.md — **42 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-23)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-23)_
+- [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-29)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-29)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-09-29)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-10)_
@@ -191,7 +191,7 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-09-30)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
-- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-25)_
+- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-29)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-26)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-26)_
@@ -204,11 +204,11 @@ _Regenerated 2026-09-29. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-26)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
-- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-23)_
+- [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-27)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-09-29)_
-- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-08-22)_
+- [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-09-29)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
