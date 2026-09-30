@@ -1,5 +1,5 @@
 /**
- * GET /api/offer/[token]/contract-pdf?code=<accessCode>[&preview=td]
+ * GET /api/offer/[token]/contract-pdf?code=<accessCode>[&preview=td]  (renewals: ?pass=<grant>)
  *
  * Returns { url } — a short-lived signed URL to the client's OWN signed contract PDF.
  * Token-gated, NOT session-gated (added to middleware PUBLIC_PREFIXES). REPLACES the
@@ -22,8 +22,7 @@ export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { accessCodeError } from "@/lib/esign/access-guard"
-import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { resolvePublicOfferAccess } from "@/lib/offers/public-offer-access"
 import { createRecordedSignedUrl } from "@/lib/storage/signed-download"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,32 +31,24 @@ const db = supabaseAdmin as any
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
   const url = new URL(req.url)
-  const code = url.searchParams.get("code") || ""
-  const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
 
   if (!token) {
     return NextResponse.json({ error: "Signed contract not available." }, { status: 404 })
   }
 
-  // The offer carries the access-code credential.
-  const { data: offer } = await db
-    .from("offers")
-    .select("token, access_code")
-    .eq("token", token)
-    .maybeSingle()
-
-  if (!offer) {
-    return NextResponse.json({ error: "Signed contract not available." }, { status: 404 })
-  }
-
-  // Access-code gate — constant-time, rate-limited, fail-closed on a blank code.
-  const codeErr = accessCodeError(req, {
-    token,
-    expected: offer.access_code ? String(offer.access_code) : "",
-    provided: code,
-    isPreview,
-  })
-  if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
+  // One credential rule for every public offer route (N0, dev job f907220c): the offer's
+  // access code, a renewal agreement's portal pass/grant, or a real staff preview.
+  const access = await resolvePublicOfferAccess(
+    req,
+    {
+      token,
+      code: url.searchParams.get("code") || "",
+      pass: url.searchParams.get("pass") || "",
+      preview: url.searchParams.get("preview") === "td",
+    },
+    { offerColumns: "token, access_code", renewalColumns: "id, token" },
+  )
+  if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
 
   // Latest contract row for this offer (renewals/re-signs create additional rows).
   const { data: rows } = await db

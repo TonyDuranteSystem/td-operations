@@ -324,7 +324,7 @@ export function ReferralsDashboard({ referrals, stats, referrers }: Props) {
                                     <div className="flex items-center gap-1">
                                       <span className="text-zinc-500">Offer:</span>
                                       <a
-                                        href={`/offer/${r.offer_token}?preview=1`}
+                                        href={`/api/crm/offer-preview?token=${encodeURIComponent(r.offer_token)}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-blue-500 hover:underline inline-flex items-center gap-0.5"

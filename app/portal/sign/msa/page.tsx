@@ -14,6 +14,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { APP_BASE_URL } from '@/lib/config'
+import { signRenewalPass } from '@/lib/offers/renewal-pass'
 import { PortalMSAClient } from './portal-msa-client'
 import { cookies } from 'next/headers'
 import { t, getLocale } from '@/lib/portal/i18n'
@@ -65,11 +66,11 @@ export default async function PortalSignMSAPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: msa } = await (supabaseAdmin as any)
     .from('annual_agreements')
-    .select('token, status, client_name, agreement_year')
+    .select('id, token, status, client_name, agreement_year')
     .eq('account_id', selectedAccountId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle() as { data: { token: string; status: string; client_name: string | null; agreement_year: number | null } | null }
+    .maybeSingle() as { data: { id: string; token: string; status: string; client_name: string | null; agreement_year: number | null } | null }
 
   if (!msa) {
     return (
@@ -82,8 +83,12 @@ export default async function PortalSignMSAPage() {
     )
   }
 
-  // Construct URL — the annual agreement contract page with portal=true
-  const msaUrl = `${APP_BASE_URL}/offer/${msa.token}/contract?portal=true`
+  // The annual agreement contract page, framed. N0 (dev job f907220c): renewal agreements
+  // have no access code, so this page — having resolved the logged-in client and confirmed
+  // the agreement belongs to one of THEIR companies — mints a short-lived pass bound to this
+  // agreement. The contract page exchanges it for a longer grant on its first call.
+  const pass = await signRenewalPass({ agreementId: msa.id, kind: 'portal' })
+  const msaUrl = `${APP_BASE_URL}/offer/${encodeURIComponent(msa.token)}/contract?portal=true&pass=${encodeURIComponent(pass)}`
   const isSigned = msa.status === 'signed' || msa.status === 'completed'
   const year = msa.agreement_year ?? new Date().getUTCFullYear()
 

@@ -4,6 +4,7 @@ import { resolveBillableSelection } from "@/lib/payments/billable-selection"
 import { computeOfferPayable } from "@/lib/offers/compute-offer-totals"
 import { computeCardTotal } from "@/lib/payments/card-fee"
 import { resolveChargeRate } from "@/lib/payments/card-fee-config"
+import { resolvePublicOfferAccess } from "@/lib/offers/public-offer-access"
 
 export const dynamic = "force-dynamic"
 
@@ -19,10 +20,18 @@ export const dynamic = "force-dynamic"
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { token } = body as { token: string; selected_services?: string[] }
+    const { token, code } = body as { token: string; code?: string; selected_services?: string[] }
 
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 })
+    }
+
+    // N0 (dev job f907220c): this route rewrites the offer's payment link. With the
+    // token alone (the client's name + the year) anyone could do that; it now needs the
+    // offer's access code, like every other public offer route.
+    const access = await resolvePublicOfferAccess(req, { token, code: code || "" }, { offerColumns: "token, access_code", clientAction: true })
+    if (access.error || access.kind !== "offer") {
+      return NextResponse.json({ error: access.error || "Offer not found" }, { status: access.status || 404 })
     }
 
     // Fresh DB client per request

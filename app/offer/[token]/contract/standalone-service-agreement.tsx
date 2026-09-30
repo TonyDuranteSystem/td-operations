@@ -1,14 +1,10 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { isClientFacingError } from '@/lib/public-forms/signing-failures'
+import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/lib/offers/offer-api-client'
 import type { Offer } from '@/lib/types/offer'
-import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { euroBankAddress } from '@/lib/offers/bank-address'
-
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -24,6 +20,8 @@ interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
   contractType?: 'tax_return' | 'itin' | 'closure'
+  /** The offer's access code (N0) — every write goes through /api/offers with it. */
+  cred: OfferCredential
 }
 
 // Service-specific content based on contract type — exported for inline addon rendering
@@ -154,7 +152,7 @@ export const SERVICE_CONTENT = {
   },
 } as const
 
-export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return' }: StandaloneServiceAgreementProps) {
+export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
   const ct = SERVICE_CONTENT[contractType]
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
@@ -281,58 +279,10 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const pdfBlob = await (html2pdf() as any).set(opt).from(bodyRef.current).outputPdf('blob')
 
-      // Upload PDF
+      // N0 (dev job f907220c): upload through a one-time link, then the server checks the
+      // PDF, writes the contracts row, flips the offer to signed and runs the follow-up.
       setStatusMsg('Uploading signed agreement...')
-      const pdfPath = `${token}/tax-agreement-signed-${Date.now()}.pdf`
-      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
-        body: pdfBlob
-      })
-      if (storageWriteFailed(pdfRes)) {
-        console.error('[standalone-agreement] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
-        throw new SigningFailure('document_upload', signingLang(offer.language))
-      }
-
-      // Save contract record
-      const { error: contractErr } = await supabasePublic.from('contracts').insert({
-        offer_token: token,
-        client_name: name,
-        client_email: email,
-        signed_at: new Date().toISOString(),
-        pdf_path: pdfPath,
-        status: 'signed',
-      })
-      if (contractErr) {
-        console.error('[standalone-agreement] contract row insert failed:', contractErr.message)
-        throw new SigningFailure('record', signingLang(offer.language))
-      }
-
-      // Update offer status
-      let statusUpdated = false
-      let lastStatusErr: string | null = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', token)
-          if (!pErr) { statusUpdated = true; break }
-          lastStatusErr = pErr.message
-        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
-      }
-      if (!statusUpdated) {
-        console.error('[standalone-agreement] status update failed after 3 attempts:', lastStatusErr)
-        throw new SigningFailure('status', signingLang(offer.language))
-      }
-
-      // Notify webhook
-      try {
-        await fetch('/api/webhooks/offer-signed', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
-          body: JSON.stringify({ offer_token: token })
-        })
-      } catch (e) {
-        console.warn('[tax-agreement] Failed to notify offer-signed webhook:', e)
-      }
+      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_${ct.pdfPrefix}_${token}.pdf`, { client_name: name, client_email: email }, offer.language)
 
       // Show payment options — ensure real bank details (replace placeholders)
       const { ensureBankDetails } = await import('./bank-defaults')
@@ -400,7 +350,7 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         }
 
         sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${ct.successNote}</p>`
-        sh += `<a href="/offer/${encodeURIComponent(token)}" class="contract-success-link">&larr; Back to Offer</a>`
+        sh += `<a href="${esc(cred.code ? `/offer/${encodeURIComponent(token)}/${encodeURIComponent(cred.code)}` : `/offer/${encodeURIComponent(token)}`)}" class="contract-success-link">&larr; Back to Offer</a>`
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
@@ -436,21 +386,13 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
             receiptBtn.textContent = 'Uploading...'
             receiptStatus.textContent = ''
             try {
-              const ext = receiptFile.name.split('.').pop() || 'pdf'
-              const path = `${token}/wire-receipt-${Date.now()}.${ext}`
-              const uploadRes = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
-                method: 'POST',
-                headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
-                body: receiptFile
-              })
-              if (!uploadRes.ok) throw new Error('Upload failed')
-              await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', token)
+              await submitWireReceipt(cred, receiptFile)
               receiptStatus.innerHTML = '<span style="color:var(--c-green);font-weight:600">Receipt uploaded successfully! We will verify your payment shortly.</span>'
               receiptBtn.textContent = 'Uploaded'
               const dropEl = document.getElementById('receipt-drop')
               if (dropEl) dropEl.style.borderColor = 'var(--c-green)'
             } catch (e: any) {
-              receiptStatus.innerHTML = `<span style="color:var(--c-red)">Upload failed: ${e.message}</span>`
+              receiptStatus.innerHTML = `<span style="color:var(--c-red)">Upload failed: ${esc(e?.message || '')}</span>`
               receiptBtn.disabled = false
               receiptBtn.textContent = 'Upload Receipt'
             }

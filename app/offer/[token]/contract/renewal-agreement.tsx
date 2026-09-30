@@ -1,15 +1,12 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { isClientFacingError } from '@/lib/public-forms/signing-failures'
+import { uploadAndSignOffer, submitWireReceipt, createOfferCheckout, type OfferCredential } from '@/lib/offers/offer-api-client'
 import type { Offer } from '@/lib/types/offer'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
-import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -25,9 +22,11 @@ function esc(v: string) {
 interface RenewalAgreementProps {
   offer: Offer
   token: string
+  /** The portal pass / grant for this agreement (N0) — every write goes through /api/offers with it. */
+  cred: OfferCredential
 }
 
-export default function RenewalAgreement({ offer, token }: RenewalAgreementProps) {
+export default function RenewalAgreement({ offer, token, cred }: RenewalAgreementProps) {
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
   // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
@@ -164,67 +163,14 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       const pdfBlob = await (html2pdf() as any).set(opt).from(bodyRef.current).outputPdf('blob')
       pdfBlobRef.current = pdfBlob
 
-      // Upload PDF
+      // N0 (dev job f907220c): upload through a one-time link, then the server checks the
+      // PDF, writes the contracts row and runs the renewal follow-up in-process (flips the
+      // agreement to signed — which the page's public-key update never actually did — and
+      // creates the 1st-installment invoice, whose number becomes the wire reference).
       setStatusMsg('Uploading signed agreement...')
-      const pdfPath = `${token}/annual-agreement-signed-${Date.now()}.pdf`
-      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
-        body: pdfBlob
-      })
-      if (storageWriteFailed(pdfRes)) {
-        console.error('[renewal-agreement] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
-        throw new SigningFailure('document_upload', signingLang(offer.language))
-      }
-
-      // Save contract record
-      const { error: contractErr } = await supabasePublic.from('contracts').insert({
-        offer_token: token,
-        client_name: name,
-        client_email: email,
-        signed_at: new Date().toISOString(),
-        pdf_path: pdfPath,
-        status: 'signed',
-      })
-      if (contractErr) {
-        console.error('[renewal-agreement] contract row insert failed:', contractErr.message)
-        throw new SigningFailure('record', signingLang(offer.language))
-      }
-
-      // Update annual agreement status
-      let statusUpdated = false
-      let lastStatusErr: string | null = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error: pErr } = await supabasePublic
-            .from('annual_agreements')
-            .update({ status: 'signed', signed_at: new Date().toISOString() })
-            .eq('token', token)
-          if (!pErr) { statusUpdated = true; break }
-          lastStatusErr = pErr.message
-        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
-      }
-      if (!statusUpdated) {
-        console.error('[renewal-agreement] status update failed after 3 attempts:', lastStatusErr)
-        throw new SigningFailure('status', signingLang(offer.language))
-      }
-
-      // Notify webhook — read response to get invoice number
+      const signedRes = await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_Annual_Agreement_${contractYear}_${token}.pdf`, { client_name: name, client_email: email }, offer.language)
       setStatusMsg('Processing...')
-      let invoiceNumber = ''
-      try {
-        const webhookRes = await fetch('/api/webhooks/agreement-signed', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
-          body: JSON.stringify({ agreement_token: token })
-        })
-        if (webhookRes.ok) {
-          const wData = await webhookRes.json()
-          invoiceNumber = wData.invoice_number || ''
-        }
-      } catch (e) {
-        console.warn('[renewal-agreement] Failed to notify offer-signed webhook:', e)
-      }
+      const invoiceNumber = signedRes.invoiceNumber || ''
 
       // Build bank details — renewals are USD → Relay
       const bankDetails = ensureBankDetails(undefined, offer.cost_summary as unknown[])
@@ -236,16 +182,9 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
       let stripeUrl: string | null = null
       let stripeLabel: string | null = null
       try {
-        const checkoutRes = await fetch('/api/offers/create-checkout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token })
-        })
-        if (checkoutRes.ok) {
-          const cd = await checkoutRes.json()
-          stripeUrl = cd.checkoutUrl || null
-          stripeLabel = cd.label || null
-        }
+        const cd = await createOfferCheckout(cred)
+        stripeUrl = cd.checkoutUrl || null
+        stripeLabel = cd.label || null
       } catch (e) {
         console.warn('[renewal-agreement] Stripe checkout unavailable:', e)
       }
@@ -367,7 +306,7 @@ export default function RenewalAgreement({ offer, token }: RenewalAgreementProps
           token={token}
           pdfBlob={pdfBlobRef.current}
           offerToken={offer.token}
-          accessCode={offer.access_code || ''}
+          cred={cred}
         />
       )}
     </>
@@ -383,7 +322,7 @@ function RenewalPaymentPanel({
   token,
   pdfBlob,
   offerToken,
-  accessCode,
+  cred,
 }: {
   invoiceNumber: string
   bankDetails: BankDetails
@@ -392,7 +331,7 @@ function RenewalPaymentPanel({
   token: string
   pdfBlob: Blob | null
   offerToken: string
-  accessCode: string
+  cred: OfferCredential
 }) {
   const [showBank, setShowBank] = useState(false)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
@@ -405,15 +344,7 @@ function RenewalPaymentPanel({
     setReceiptUploading(true)
     setReceiptError('')
     try {
-      const ext = receiptFile.name.split('.').pop() || 'pdf'
-      const path = `${token}/wire-receipt-${Date.now()}.${ext}`
-      const res = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
-        body: receiptFile,
-      })
-      if (!res.ok) throw new Error('Upload failed')
-      await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offerToken)
+      await submitWireReceipt(cred, receiptFile)
       setReceiptDone(true)
     } catch (e: unknown) {
       setReceiptError(e instanceof Error ? e.message : 'Upload failed')
@@ -428,7 +359,7 @@ function RenewalPaymentPanel({
         // Server doorway: verifies the offer's access code, signs the EXACT
         // recorded contract path, returns a one-minute link. Replaces the old
         // anon list()+download(newest) so signed-contracts needs no anon read.
-        const res = await fetch(`/api/offer/${encodeURIComponent(offerToken)}/contract-pdf?code=${encodeURIComponent(accessCode)}`)
+        const res = await fetch(`/api/offer/${encodeURIComponent(offerToken)}/contract-pdf?${cred.pass ? `pass=${encodeURIComponent(cred.pass)}` : `code=${encodeURIComponent(cred.code || '')}`}`)
         if (res.ok) {
           const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
           if (signedUrl) {
