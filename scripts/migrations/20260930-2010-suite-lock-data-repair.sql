@@ -18,8 +18,9 @@
 --   Growthlane / Ad Astra: their draft leases carry an old / misspelled tenant name — the company keeps the
 --   suite on its draft and the tenant name is corrected to the company's current name.
 --   Every other client company gets the suite it already holds on its own lease loaded onto the company.
---   Every remaining ACTIVE client company (no lease yet, ~109) is issued a suite now, oldest company first; the
---   two test accounts ("Test", "QA E2E Test LLC") are skipped; no address is written for them.
+--   Every remaining ACTIVE client company (account type Client, no lease yet, ~108) is issued a suite now, oldest
+--   company first; one-time customers (e.g. Cleo Home LLC) and the two test accounts ("Test", "QA E2E Test LLC") are
+--   skipped; no address is written for them.
 --   Uxio Test (is_test) is left alone.
 --
 -- Deletions go through admin_delete_lease, which keeps a full copy of the lease in suite_audit_log.
@@ -174,7 +175,7 @@ END $$;
 COMMIT;
 
 -- ─── VERIFY (read-only) ─────────────────────────────────────────────────────────────────────
--- A) how many companies now hold a suite, and that none is shared (expect 248 and 0):
+-- A) how many companies now hold a suite, and that none is shared (expect 247 and 0):
 -- SELECT count(*) FILTER (WHERE suite_number IS NOT NULL) AS with_suite,
 --        (SELECT count(*) FROM (SELECT suite_number FROM accounts WHERE suite_number IS NOT NULL GROUP BY 1 HAVING count(*) > 1) s) AS shared
 -- FROM accounts;
