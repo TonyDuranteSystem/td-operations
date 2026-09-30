@@ -218,7 +218,7 @@ _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-09-24)_
-- [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-09)_
+- [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-30)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-09-27)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
 - [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-29)_
