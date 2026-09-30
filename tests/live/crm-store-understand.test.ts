@@ -171,3 +171,15 @@ describe("fixes found by the reviewers", () => {
   }, 240_000)
 })
 
+describe("the storage list is never cut at 1000 owners", () => {
+  it("reads EVERY owner (PostgREST answers 1000 rows at most and says nothing) — the sandbox holds more than 1000", async () => {
+    const { count } = await db.from("store_owners").select("id", { count: "exact", head: true }).neq("kind", "private")
+    const { allNavigationRows } = await import("@/lib/crm-store/structure")
+    const rows = await allNavigationRows(null)
+    expect(count).toBeGreaterThan(1000)          // the positive control: this only proves something while the list is longer than one page
+    expect(rows.length).toBe(count)
+    expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length)     // no owner twice across pages
+    expect(rows.some((r) => String(r.company_name ?? "").includes("ZZ STUDY LLC"))).toBe(true)
+  }, 120_000)
+})
+
