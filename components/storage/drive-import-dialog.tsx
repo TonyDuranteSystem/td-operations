@@ -214,7 +214,7 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
             </li>
           ))}
         </ul>
-        {contents && <ContentsReport title={contents.title} data={contents.data} onClose={() => setContents(null)} />}
+        {contents && <ContentsReport title={contents.title} data={contents.data} onClose={() => setContents(null)} onChanged={() => { const row = rows.find((x) => (x.company?.name ?? x.name) === contents.title); if (row) void checkContents(row) }} />}
         {found === null && listing && listing.files > 0 && rows.length > 0 && <p className="mt-1 text-xs text-zinc-500">{listing.files} loose files in this folder are not listed.</p>}
         {found === null && listing?.cutOff && <p className="mt-1 text-xs text-amber-700">This folder is very large — only the first 5,000 entries are listed; use the search or open a sub-folder.</p>}
       </div>

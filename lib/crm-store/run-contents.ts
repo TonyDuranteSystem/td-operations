@@ -1,100 +1,76 @@
 /**
- * CRM Store — "Check contents" of a finished copy (job 685467b5, Antonio 2026-09-30). READ-ONLY.
- *
- * Reads what is inside every file the copy stored, says what the system thinks each one is next to the type it
- * got from the old CRM record, and lists file pairs that might be the same document — byte-identical copies,
- * or same-named files whose WORDS are compared one by one. It changes nothing: no retype, rename or delete.
- * A person looks at the answer; only then do rules get made.
+ * CRM Store — "Check contents" of a finished copy (job 685467b5). Reads every file of the copy through the File
+ * Understanding layer (`understand/analyze.ts`): what is INSIDE each file, what the AI thinks it is, whether the
+ * CRM/examples agree (green/red), and which files look like the same document. It changes nothing.
+ * A person then applies a suggestion with the ordinary Set type / Rename / Remove buttons, and that decision teaches
+ * the system (examples). Replaces the fixed word-rule reading (2026-09-30: "the AI can't have a fixed list of rules").
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { readStoreFileContent, type ContentReading } from "./read-content"
-import { compareTexts, type TextDifference } from "./content-compare"
+import { analyzeVersion } from "./understand/analyze"
+import { aiEnabled, spentTodayUsd, dailyCapUsd } from "./understand/judge"
+import { RED_REASON_TEXT } from "./understand/vocab"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => supabaseAdmin as any
 
-export interface ContentFileRow {
+export interface UnderstandRow {
   fileId: string
+  analysisId: string | null
   name: string
   folder: string | null
+  currentTypeSlug: string | null
   currentType: string | null
-  suggestedType: string | null
-  suggestionStrength: "high" | "medium" | "low" | null
-  /** "agree" | "differ" (both typed, not the same) | "new" (untyped, system has a guess) | "unknown" (nothing to say) */
-  verdict: "agree" | "differ" | "new" | "unknown"
-  converted: boolean
-  pageCount: number
+  kind: string | null
+  status: string
+  verdict: "green" | "red" | null
+  reasons: string[]
+  reasonTexts: string[]
+  aiTypeSlug: string | null
+  aiType: string | null
+  aiName: string | null
+  aiReason: string | null
+  identity: boolean
   words: number
-  /** the first words found — so a person can see what the system saw */
-  snippet: string
   problem: string | null
+  twin: { fileId: string; name: string; folder: string | null; kind: string; note: string; differences: Array<{ onlyInA: string[]; onlyInB: string[] }> } | null
 }
+export interface UnderstandReport { runId: string; rows: UnderstandRow[]; unfinished: number; aiOn: boolean; spentTodayUsd: number; capUsd: number }
 
-export interface DuplicatePair {
-  a: { fileId: string; name: string; folder: string | null }
-  b: { fileId: string; name: string; folder: string | null }
-  /** identical bytes / identical words (bytes differ) / words differ */
-  kind: "same_bytes" | "same_words" | "different_words" | "not_compared"
-  differences: TextDifference[]
-  tooDifferentToList: boolean
-  note: string
-}
-
-export interface ContentReport { runId: string; files: ContentFileRow[]; pairs: DuplicatePair[]; unread: number; budgetHit: boolean }
-
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "")
-
-export async function checkRunContents(runId: string, budgetMs = 240_000): Promise<ContentReport> {
+export async function understandRun(runId: string, actor: string | null, budgetMs = 240_000): Promise<UnderstandReport> {
   const started = Date.now()
-  const { data: items, error } = await db().from("store_import_items")
-    .select("store_file_id, name, sha256, landed_in, status").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null)
+  const { data: items, error } = await db().from("store_import_items").select("store_file_id, name, landed_in").eq("run_id", runId).in("status", ["done", "merged"]).not("store_file_id", "is", null)
   if (error) throw new Error(`Could not read the copy (${error.message}).`)
-  const rows = (items ?? []) as { store_file_id: string; name: string; sha256: string | null; landed_in: string | null }[]
-  const ids = rows.map((r) => r.store_file_id)
-  const { data: files } = ids.length ? await db().from("store_files").select("id, document_type").in("id", ids) : { data: [] }
-  const typeOf = new Map<string, string | null>((files ?? []).map((f: { id: string; document_type: string | null }) => [f.id, f.document_type]))
+  const list = (items ?? []) as { store_file_id: string; name: string; landed_in: string | null }[]
+  const ids = list.map((i) => i.store_file_id)
+  const { data: files } = ids.length ? await db().from("store_files").select("id, name, document_type, current_version_id").in("id", ids) : { data: [] }
+  const fileOf = new Map<string, { id: string; name: string; document_type: string | null; current_version_id: string | null }>((files ?? []).map((f: { id: string }) => [f.id, f as never]))
   const { data: cat } = await db().from("catalog_entries").select("slug, display_name").eq("catalog_id", "storage_document_types")
-  const nameOfType = new Map<string, string>((cat ?? []).map((c: { slug: string; display_name: string }) => [c.slug, c.display_name]))
+  const disp = new Map<string, string>((cat ?? []).map((c: { slug: string; display_name: string }) => [c.slug, c.display_name]))
 
-  const readings = new Map<string, ContentReading>()
-  let budgetHit = false
-  for (const r of rows) {
-    if (Date.now() - started > budgetMs) { budgetHit = true; break }
-    readings.set(r.store_file_id, await readStoreFileContent(r.store_file_id))
-  }
-
-  const out: ContentFileRow[] = rows.map((r) => {
-    const rd = readings.get(r.store_file_id)
-    const slug = typeOf.get(r.store_file_id) ?? null
-    const currentType = slug ? (nameOfType.get(slug) ?? slug) : null
-    const suggested = rd?.suggestedType ?? null
-    const verdict: ContentFileRow["verdict"] = !suggested ? "unknown" : !currentType ? "new" : norm(currentType) === norm(suggested) ? "agree" : "differ"
-    const text = rd?.text ?? ""
-    return {
-      fileId: r.store_file_id, name: r.name, folder: r.landed_in, currentType, suggestedType: suggested,
-      suggestionStrength: rd?.suggestionStrength ?? null, verdict, converted: !!rd?.converted, pageCount: rd?.pageCount ?? 0,
-      words: text.split(/\s+/).filter(Boolean).length, snippet: text.replace(/\s+/g, " ").slice(0, 160),
-      problem: rd ? rd.problem : "Not read yet (time ran out) — press Check contents again.",
+  let unfinished = 0
+  const rows: UnderstandRow[] = []
+  for (const it of list) {
+    const f = fileOf.get(it.store_file_id)
+    if (!f?.current_version_id) { unfinished++; continue }
+    if (Date.now() - started > budgetMs) { unfinished++; continue }
+    let analysisId: string | null = null
+    let problem: string | null = null
+    try { analysisId = (await analyzeVersion(f.current_version_id, { actor, withAi: true })).id } catch (e) { problem = e instanceof Error ? e.message : "The file could not be analysed." }
+    const { data: a } = analysisId ? await db().from("store_file_analysis").select("*").eq("id", analysisId).maybeSingle() : { data: null }
+    let twin: UnderstandRow["twin"] = null
+    if (a?.duplicate_of) {
+      const { data: t } = await db().from("store_files").select("id, name, folder_id").eq("id", a.duplicate_of).maybeSingle()
+      const { data: fo } = t ? await db().from("store_folders").select("name").eq("id", t.folder_id).maybeSingle() : { data: null }
+      const d = (a.duplicate_diff ?? {}) as { note?: string; differences?: Array<{ onlyInA: string[]; onlyInB: string[] }> }
+      if (t) twin = { fileId: t.id, name: t.name, folder: fo?.name ?? null, kind: a.duplicate_kind ?? "", note: d.note ?? (a.duplicate_kind === "same_bytes" ? "Identical files (every byte)." : ""), differences: (d.differences ?? []).slice(0, 5) }
     }
-  })
-
-  const pairs: DuplicatePair[] = []
-  for (let i = 0; i < rows.length; i++) {
-    for (let j = i + 1; j < rows.length; j++) {
-      const x = rows[i]; const y = rows[j]
-      const sameBytes = !!x.sha256 && x.sha256 === y.sha256
-      const sameName = norm(x.name) === norm(y.name)
-      if (!sameBytes && !sameName) continue
-      const side = (r: typeof x) => ({ fileId: r.store_file_id, name: r.name, folder: r.landed_in })
-      if (sameBytes) { pairs.push({ a: side(x), b: side(y), kind: "same_bytes", differences: [], tooDifferentToList: false, note: "Identical files (every byte)." }); continue }
-      const ta = readings.get(x.store_file_id)?.text; const tb = readings.get(y.store_file_id)?.text
-      if (!ta?.trim() || !tb?.trim()) { pairs.push({ a: side(x), b: side(y), kind: "not_compared", differences: [], tooDifferentToList: false, note: "Same name; the words of one or both could not be read, so they were not compared." }); continue }
-      const c = compareTexts(ta, tb)
-      pairs.push({
-        a: side(x), b: side(y), kind: c.identical ? "same_words" : "different_words", differences: c.differences, tooDifferentToList: c.tooDifferentToList,
-        note: c.identical ? "Every word is the same." : c.tooDifferentToList ? "The words differ a lot — not the same document." : `${c.differences.length} place(s) where the words differ.`,
-      })
-    }
+    const reasons = (a?.red_reasons ?? []) as string[]
+    rows.push({
+      fileId: f.id, analysisId, name: f.name, folder: it.landed_in, currentTypeSlug: f.document_type, currentType: f.document_type ? (disp.get(f.document_type) ?? f.document_type) : null,
+      kind: a?.kind ?? null, status: a?.status ?? "failed", verdict: (a?.verdict as "green" | "red" | null) ?? null, reasons, reasonTexts: reasons.map((r) => RED_REASON_TEXT[r] ?? r),
+      aiTypeSlug: a?.ai_type ?? null, aiType: a?.ai_type ? (disp.get(a.ai_type) ?? a.ai_type) : null, aiName: a?.ai_name ?? null, aiReason: a?.ai_reason ?? null,
+      identity: a?.identity_class === true, words: a?.word_count ?? 0, problem: problem ?? a?.problem ?? null, twin,
+    })
   }
-  return { runId, files: out, pairs, unread: out.filter((f) => f.problem).length, budgetHit }
+  return { runId, rows, unfinished, aiOn: aiEnabled(), spentTodayUsd: await spentTodayUsd().catch(() => 0), capUsd: dailyCapUsd() }
 }

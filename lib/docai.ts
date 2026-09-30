@@ -13,7 +13,7 @@
  */
 
 import { SignJWT, importPKCS8 } from "jose"
-import { selectWindow, isEmptyWindow, type PageRange } from "@/lib/docai-windows"
+import { selectWindow, isEmptyWindow, DOCAI_SYNC_PAGE_LIMIT, type PageRange } from "@/lib/docai-windows"
 
 // ─── Configuration ──────────────────────────────────────────
 
@@ -576,5 +576,49 @@ export async function ocrRawContent(
     confidence: parsed.confidenceCount > 0 ? parsed.confidenceSum / parsed.confidenceCount : 0,
     documentPageCount: parsed.pages.length,
     windowStart: 1,
+  }
+}
+
+/**
+ * Read ALL the pages of a file that is already in memory (job 685467b5, File Understanding).
+ * `ocrRawContent` above sends the whole file in ONE call, which Document AI refuses over 15 pages / 15MB, and it
+ * reports the number of pages it read as if it were the document's length. This one:
+ *   · PDF   → reads the document window by window (15 pages each) up to `maxPages`, and says plainly when it stopped
+ *             early (`partial`) and how long the document really is (`documentPageCount`);
+ *   · image → shrinks an oversized photo to fit (a disposable copy — the stored original is never touched);
+ *   · a locked PDF throws the "password-protected" error (never a silent empty read).
+ */
+export async function ocrBytesAllPages(
+  buffer: Buffer,
+  mimeType: string,
+  name: string,
+  opts: { maxPages?: number } = {},
+): Promise<OcrResult & { partial: boolean }> {
+  const maxPages = Math.max(1, opts.maxPages ?? 60)
+  if (mimeType !== "application/pdf") {
+    const data = buffer.length > DOCAI_INLINE_MAX_BYTES && SHRINKABLE_IMAGE_MIMES.has(mimeType) ? await shrinkImageToFit(buffer, DOCAI_INLINE_MAX_BYTES) : buffer
+    const parsed = await processWithDocai(data, data === buffer ? mimeType : "image/jpeg")
+    return {
+      fullText: parsed.fullText, pages: parsed.pages, pageCount: parsed.pages.length, fileName: name, mimeType,
+      confidence: parsed.confidenceCount > 0 ? parsed.confidenceSum / parsed.confidenceCount : 0,
+      documentPageCount: parsed.pages.length, windowStart: 1, partial: false,
+    }
+  }
+  const first = await ocrPdfWindow(buffer, mimeType, name, [1, DOCAI_SYNC_PAGE_LIMIT] as PageRange, DOCAI_SYNC_PAGE_LIMIT)
+  const total = first.documentPageCount ?? first.pageCount
+  const pages = [...first.pages]
+  let confSum = first.confidence * first.pageCount
+  let start = DOCAI_SYNC_PAGE_LIMIT + 1
+  while (start <= Math.min(total, maxPages)) {
+    const end = Math.min(start + DOCAI_SYNC_PAGE_LIMIT - 1, total, maxPages)
+    const w = await ocrPdfWindow(buffer, mimeType, name, [start, end] as PageRange, DOCAI_SYNC_PAGE_LIMIT)
+    pages.push(...w.pages)
+    confSum += w.confidence * w.pageCount
+    start = end + 1
+  }
+  return {
+    fullText: pages.join("\n---PAGE BREAK---\n"), pages, pageCount: pages.length, fileName: name, mimeType,
+    confidence: pages.length ? confSum / pages.length : 0, documentPageCount: total, windowStart: 1,
+    partial: pages.length < total,
   }
 }

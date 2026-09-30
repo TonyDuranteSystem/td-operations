@@ -1,5 +1,6 @@
-/** POST — "Check contents" on a finished copy (owners only, READ-ONLY): reads what is inside each stored file,
- *  says what the system thinks it is next to its current type, and lists possible duplicate pairs. Changes nothing. */
+/** POST — "Check contents" on a finished copy (owners only): the File Understanding layer reads what is inside each
+ *  stored file, the AI says what it is, green/red is decided by proofs, and look-alike files are listed. It records what it
+ *  found; it NEVER retypes, renames, moves or deletes — a person applies a suggestion. */
 export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
@@ -14,8 +15,8 @@ export async function POST(_req: Request, { params }: { params: { runId: string 
   const { studyCopyAllowed, runIsCopy } = await import("@/lib/crm-store/drive-import")
   if (!pilotEnvironmentAllowed() && !(studyCopyAllowed() && await runIsCopy(params.runId))) return NextResponse.json({ error: "Reading a copy's files is not switched on here." }, { status: 403 })
   try {
-    const { checkRunContents } = await import("@/lib/crm-store/run-contents")
-    return NextResponse.json(await checkRunContents(params.runId))
+    const { understandRun } = await import("@/lib/crm-store/run-contents")
+    return NextResponse.json(await understandRun(params.runId, user.id))
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "The contents could not be checked." }, { status: 400 })
   }
