@@ -12,6 +12,14 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }))
 
+// The suite allocator is the database's job (covered in operations-suite.test.ts + the sandbox DB
+// tests); here it is a double so createSD's hook can be observed.
+const { allocateCompanySuite, syncPhysicalAddressToSuite } = vi.hoisted(() => ({
+  allocateCompanySuite: vi.fn(),
+  syncPhysicalAddressToSuite: vi.fn(),
+}))
+vi.mock("@/lib/operations/suite", () => ({ allocateCompanySuite, syncPhysicalAddressToSuite }))
+
 // Catalog lookup is mocked so createSD's FK resolution is isolated from the
 // catalog framework's DB layer (covered separately in catalog-framework.test).
 const { catalogLookup } = vi.hoisted(() => ({
@@ -201,6 +209,9 @@ beforeEach(() => {
   }
   catalogLookup.mockReset()
   catalogLookup.mockResolvedValue(null)
+  allocateCompanySuite.mockReset()
+  allocateCompanySuite.mockResolvedValue("3D-321")
+  syncPhysicalAddressToSuite.mockReset()
 })
 
 // ─── createSD ──────────────────────────────────────────
@@ -971,5 +982,47 @@ describe("createSD — non-ITIN person-link hygiene", () => {
       account_id: null,
       contact_id: "solo-contact",
     })
+  })
+})
+
+// ─── the company's suite is issued at the START ─────────
+
+describe("createSD — issues the company's suite at the start of formation / onboarding", () => {
+  function sdReturning(service_type: string, account_id: string | null) {
+    pipelineFixture = { [service_type]: [{ stage_name: "First", stage_order: 1 }] }
+    insertResponse = {
+      data: { id: "sd-77", service_type, service_name: service_type, stage: "First", stage_order: 1, account_id, contact_id: "c1" },
+      error: null,
+    }
+  }
+
+  it("a Company Formation delivery (no company yet) RESERVES a suite on the delivery", async () => {
+    sdReturning("Company Formation", null)
+    await createSD({ service_type: "Company Formation", contact_id: "c1" })
+    expect(allocateCompanySuite).toHaveBeenCalledWith({ accountId: null, deliveryId: "sd-77", actor: "system:createSD" })
+    expect(syncPhysicalAddressToSuite).not.toHaveBeenCalled()
+  })
+
+  it("a Client Onboarding delivery puts the suite straight on its company and syncs the address", async () => {
+    sdReturning("Client Onboarding", "acct-9")
+    await createSD({ service_type: "Client Onboarding", account_id: "acct-9" })
+    expect(allocateCompanySuite).toHaveBeenCalledWith({ accountId: "acct-9", deliveryId: "sd-77", actor: "system:createSD" })
+    expect(syncPhysicalAddressToSuite).toHaveBeenCalledWith("acct-9", "3D-321")
+  })
+
+  it("other services never issue a suite", async () => {
+    sdReturning("EIN", "acct-9")
+    await createSD({ service_type: "EIN", account_id: "acct-9" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
+  })
+
+  it("a failed allocation never fails the delivery (the lease flow issues one too) — it is only logged", async () => {
+    sdReturning("Company Formation", null)
+    allocateCompanySuite.mockRejectedValue(new Error("Could not issue a suite: down"))
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const sd = await createSD({ service_type: "Company Formation", contact_id: "c1" })
+    expect(sd.id).toBe("sd-77")
+    expect(errSpy).toHaveBeenCalled()
+    errSpy.mockRestore()
   })
 })

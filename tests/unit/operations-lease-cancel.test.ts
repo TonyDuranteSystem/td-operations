@@ -2,9 +2,8 @@
  * Unit tests for cancelLeaseDraft() in lib/operations/lease.ts
  *
  * Covers: lease-not-found / refuses any non-draft status (the safety guard) /
- * happy-path draft delete / TOCTOU (delete affected nothing) / physical_address
- * restore after cancel (null when no lease remains, prior suite when one does,
- * untouched when the stored address doesn't reflect the cancelled suite).
+ * happy-path draft delete / TOCTOU (delete affected nothing) / cancelling a draft
+ * never touches the company's locked suite or address.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -149,52 +148,19 @@ describe("cancelLeaseDraft", () => {
     expect(actionLogCalls).toHaveLength(0)
   })
 
-  it("clears physical_address when the cancelled suite was the account's only lease", async () => {
-    state.leaseRow = { id: "L1", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2026, suite_number: "3D-113" }
-    state.deletedRows = [{ id: "L1" }]
-    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-113, Largo, FL 33771" }
-    state.remaining = [] // nothing left
-    const res = await cancelLeaseDraft("acme-2026")
-    expect(res.success).toBe(true)
-    expect(state.accountUpdate).toEqual({ physical_address: null })
-  })
-
-  it("restores physical_address to a remaining prior-year suite", async () => {
-    state.leaseRow = { id: "L2", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2026, suite_number: "3D-113" }
-    state.deletedRows = [{ id: "L2" }]
-    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-113, Largo, FL 33771" }
-    state.remaining = [{ suite_number: "3D-050" }] // last year's signed lease
-    const res = await cancelLeaseDraft("acme-2026")
-    expect(res.success).toBe(true)
-    expect(state.accountUpdate).toEqual({ physical_address: "10225 Ulmerton Rd, Suite 3D-050, Largo, FL 33771" })
-  })
-
-  it("never clobbers a stored address that does not reflect the cancelled suite", async () => {
-    state.leaseRow = { id: "L1", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2026, suite_number: "3D-113" }
-    state.deletedRows = [{ id: "L1" }]
-    state.acct = { physical_address: "123 Main St, Someplace, TX 75001" } // manually set, unrelated
-    const res = await cancelLeaseDraft("acme-2026")
-    expect(res.success).toBe(true)
-    expect(state.accountUpdate).toBeUndefined()
-  })
-  it("releases the company's Suite Assigned when it held the cancelled suite and no other lease exists", async () => {
-    state.leaseRow = { id: "L3", status: "draft", tenant_company: "Wrong Co LLC", account_id: "A2", contract_year: 2026, suite_number: "3D-250" }
-    state.deletedRows = [{ id: "L3" }]
-    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-250, Largo, FL 33771" }
-    state.otherLeases = []
-    const res = await cancelLeaseDraft("wrong-2026")
-    expect(res.success).toBe(true)
-    expect(state.suiteUpdate).toEqual({ suite_number: null })
-  })
-
-  it("keeps Suite Assigned when the company still has another lease", async () => {
-    state.leaseRow = { id: "L4", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2027, suite_number: "3D-113" }
-    state.deletedRows = [{ id: "L4" }]
-    state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-113, Largo, FL 33771" }
-    state.remaining = [{ suite_number: "3D-113" }]
-    state.otherLeases = [{ id: "older-lease" }]
-    const res = await cancelLeaseDraft("acme-2027")
-    expect(res.success).toBe(true)
-    expect(state.suiteUpdate).toBeUndefined()
+  it("never touches the company's suite or address when a draft is cancelled — the suite is locked (only the owner's admin change releases it)", async () => {
+    for (const other of [[], [{ id: "older-lease" }]]) {
+      state.accountUpdate = undefined
+      state.suiteUpdate = undefined
+      state.leaseRow = { id: "L1", status: "draft", tenant_company: "Acme LLC", account_id: "A1", contract_year: 2026, suite_number: "3D-113" }
+      state.deletedRows = [{ id: "L1" }]
+      state.acct = { physical_address: "10225 Ulmerton Rd, Suite 3D-113, Largo, FL 33771" }
+      state.otherLeases = other
+      state.remaining = other.length ? [{ suite_number: "3D-113" }] : []
+      const res = await cancelLeaseDraft("acme-2026")
+      expect(res.success).toBe(true)
+      expect(state.accountUpdate).toBeUndefined()
+      expect(state.suiteUpdate).toBeUndefined()
+    }
   })
 })

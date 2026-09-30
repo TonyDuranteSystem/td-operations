@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, isTdLargoAddressRow } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -214,5 +214,40 @@ describe('resolveMailingAddress', () => {
   it('returns null when both are absent', () => {
     expect(resolveMailingAddress(null, null)).toBeNull()
     expect(resolveMailingAddress(undefined, undefined)).toBeNull()
+  })
+})
+
+// ── withCompanySuite — a Largo office row shows THIS company's own suite ──────
+
+describe('withCompanySuite / isTdLargoAddressRow', () => {
+  const largo = { address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-205', city: 'Largo', state: 'FL', zip: '33771' }
+  const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
+
+  it('recognises our Largo office row (and only it)', () => {
+    expect(isTdLargoAddressRow(largo)).toBe(true)
+    expect(isTdLargoAddressRow({ address_line1: '10225 Ulmerton Road' })).toBe(true)
+    expect(isTdLargoAddressRow(seminole)).toBe(false)
+    expect(isTdLargoAddressRow(null)).toBe(false)
+  })
+
+  it("replaces the shared row's suite text with the company's own suite", () => {
+    expect(withCompanySuite(largo, '3D-318')).toEqual({ ...largo, address_line2: 'Suite 3D-318' })
+  })
+
+  it('leaves every other address (Seminole UPS box, registered agent) untouched', () => {
+    expect(withCompanySuite(seminole, '3D-318')).toBe(seminole)
+  })
+
+  it('a company with no suite keeps whatever the row says', () => {
+    expect(withCompanySuite(largo, null)).toBe(largo)
+    expect(withCompanySuite(largo, undefined)).toBe(largo)
+    expect(withCompanySuite(null, '3D-318')).toBeNull()
+  })
+
+  it('resolveMailingAddress prints the company suite for a Largo row, and the row as-is for Seminole', () => {
+    expect(resolveMailingAddress(largo, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
+    // no suite argument → unchanged (existing behavior)
+    expect(resolveMailingAddress(largo, null)).toBe('10225 Ulmerton Rd, Suite 3D-205, Largo FL 33771')
   })
 })

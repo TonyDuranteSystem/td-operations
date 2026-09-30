@@ -50,12 +50,36 @@ export function formatAddressString(addr: MailingAddressRow | null | undefined):
   return parts.join(', ')
 }
 
+// Our Largo office line. A company's client suite (the number after 3D) lives on the COMPANY
+// (accounts.suite_number), never on a shared address row — so wherever a Largo office row is
+// shown or printed for a company, the company's own suite is what appears.
+const TD_LARGO_LINE1 = /^\s*10225\s+ulmerton\s+r(?:oa)?d\b/i
+
+export function isTdLargoAddressRow(row: { address_line1?: string | null } | null | undefined): boolean {
+  return !!row?.address_line1 && TD_LARGO_LINE1.test(row.address_line1)
+}
+
+/**
+ * The address row as it should be shown for THIS company: a Largo office row gets the company's own
+ * suite ("Suite 3D-318") in line 2; every other address (Seminole, registered agent, …) is returned
+ * untouched, and a company with no suite yet keeps whatever the row says.
+ */
+export function withCompanySuite<T extends { address_line1?: string | null; address_line2?: string | null }>(
+  row: T | null | undefined,
+  companySuite: string | null | undefined,
+): T | null | undefined {
+  if (!row || !companySuite || !isTdLargoAddressRow(row)) return row
+  return { ...row, address_line2: `Suite ${companySuite}` }
+}
+
 // Prefer the FK-joined address row; fall back to the legacy physical_address text column.
+// Pass the company's suite so a Largo office row prints THIS company's suite.
 export function resolveMailingAddress(
   mailingRow: MailingAddressRow | null | undefined,
   legacyPhysical: string | null | undefined,
+  companySuite?: string | null,
 ): string | null {
-  const formatted = formatAddressString(mailingRow)
+  const formatted = formatAddressString(withCompanySuite(mailingRow, companySuite))
   return formatted ?? legacyPhysical ?? null
 }
 

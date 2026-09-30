@@ -12,7 +12,8 @@ import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
-import { normalizeSuiteNumber, suiteNumericPart, highestSuiteNumber } from '@/lib/operations/lease'
+import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
+import { isOwnerOnly } from '@/lib/auth'
 import type { Json } from '@/lib/database.types'
 
 const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
@@ -41,8 +42,6 @@ export async function updateAccountField(
     'communication_email',
     // Path 2 address FK columns
     'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id', 'shipping_address_id',
-    // TD office suite assigned to the company (e.g. 3D-318) — Company Info → "Suite assigned"
-    'suite_number',
     // Path 2 verified flags
     'legal_link_verified', 'mailing_link_verified', 'ra_link_verified', 'shipping_link_verified',
     // Dunning / payment-reminder config (Phase 4)
@@ -91,32 +90,6 @@ export async function updateAccountField(
       return { success: false, error: `Invalid EIN format: "${value}". Expected 9 digits (e.g., 30-1482516).` }
     }
     coercedValue = normalized
-  } else if (field === 'suite_number') {
-    // Normalised to the canonical TD form "3D-318" (also accepts "Suite 3D-318" /
-    // "3d318"); empty clears it. Anything else is rejected so the suite counter
-    // (which reads the number) can never be confused by a stray string.
-    const trimmed = value.trim()
-    if (trimmed === '') {
-      coercedValue = null
-    } else {
-      const normalized = normalizeSuiteNumber(trimmed)
-      if (!normalized) {
-        return { success: false, error: `Suite must look like 3D-318 (got "${value}").` }
-      }
-      // One typo ("3D-3180" for "3D-318") would otherwise become the new global
-      // maximum and the next new client would be issued 3D-3181. A suite far above
-      // anything in use is refused; the company's own current value is always allowed.
-      const { data: current } = await supabaseAdmin.from('accounts').select('suite_number').eq('id', accountId).maybeSingle()
-      if (current?.suite_number !== normalized) {
-        const n = suiteNumericPart(normalized) ?? 0
-        let highest = 0
-        try { highest = await highestSuiteNumber() } catch { highest = 0 }
-        if (highest > 0 && n > highest + 50) {
-          return { success: false, error: `${normalized} is far above the highest suite in use (3D-${highest}). Check for a typo.` }
-        }
-      }
-      coercedValue = normalized
-    }
   } else {
     coercedValue = value || null
   }
@@ -206,52 +179,52 @@ export async function updateAccountField(
     }
   }
 
-  // A suite is meant to belong to ONE company. Saving still succeeds (the CRM must
-  // stay usable while the two known duplicates are being cleaned up), but staff
-  // are told straight away when the same suite is already held by someone else.
-  if (result.success && field === 'suite_number' && typeof coercedValue === 'string' && coercedValue) {
-    const holders = await suiteHoldersOtherThan(accountId, coercedValue)
-    if (holders.length > 0) {
-      return { ...result, warning: `Saved, but suite ${coercedValue} is also assigned to: ${holders.join(', ')}.` }
-    }
-    // The company's own leases and address text are NOT rewritten by this edit (a
-    // signed lease is the signed record). Say so when they say something else.
-    const { data: ownLeases } = await supabaseAdmin
-      .from('lease_agreements')
-      .select('suite_number, status')
-      .eq('account_id', accountId)
-      .neq('suite_number', coercedValue)
-      .limit(3)
-    if (ownLeases && ownLeases.length > 0) {
-      const list = ownLeases.map(l => `${l.suite_number} (${l.status})`).join(', ')
-      return { ...result, warning: `Saved. Its lease still says ${list} — leases and the address text are not changed by this field.` }
-    }
-  }
-
   return result
 }
 
-/** Names of OTHER companies that hold this suite (on the company or on a lease). Never throws. */
-async function suiteHoldersOtherThan(accountId: string, suite: string): Promise<string[]> {
+/**
+ * Issue the company's suite (Company Info → "Suite Assigned" → Issue). The system picks the next free
+ * number — nobody types one. Idempotent: a company that already has a suite just gets it back.
+ */
+export async function issueCompanySuite(accountId: string): Promise<ActionResult & { suite?: string }> {
   try {
-    const names = new Set<string>()
-    const { data: accs } = await supabaseAdmin
-      .from('accounts')
-      .select('company_name')
-      .eq('suite_number', suite)
-      .neq('id', accountId)
-      .limit(5)
-    for (const a of accs ?? []) if (a.company_name) names.add(a.company_name)
-    const { data: leases } = await supabaseAdmin
-      .from('lease_agreements')
-      .select('tenant_company')
-      .eq('suite_number', suite)
-      .neq('account_id', accountId)
-      .limit(5)
-    for (const l of leases ?? []) if (l.tenant_company) names.add(l.tenant_company)
-    return Array.from(names)
-  } catch {
-    return []
+    const suite = await allocateCompanySuite({ accountId, actor: await getDashboardActor() })
+    await syncPhysicalAddressToSuite(accountId, suite)
+    revalidatePath(`/accounts/${accountId}`)
+    return { success: true, suite }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Could not issue the suite' }
+  }
+}
+
+/**
+ * Change or remove a company's locked suite. OWNER ONLY, a reason is required, and the change is
+ * logged. Unsigned leases follow the new suite; signed leases are reported back so they can be
+ * deleted and reissued (the lease screen has the admin delete).
+ */
+export async function changeCompanySuite(
+  accountId: string,
+  newSuite: string | null,
+  reason: string,
+): Promise<ActionResult & { signedLeasesToReplace?: number }> {
+  try {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!isOwnerOnly(user)) {
+      return { success: false, error: 'Only the owner can change a locked suite.' }
+    }
+    if (!reason || !reason.trim()) return { success: false, error: 'A reason is required.' }
+    const result = await adminChangeCompanySuite({
+      accountId,
+      newSuite,
+      reason: reason.trim(),
+      actor: await getDashboardActor(),
+    })
+    if (result.new) await syncPhysicalAddressToSuite(accountId, result.new)
+    revalidatePath(`/accounts/${accountId}`)
+    return { success: true, signedLeasesToReplace: result.signed_leases_to_replace ?? 0 }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Could not change the suite' }
   }
 }
 

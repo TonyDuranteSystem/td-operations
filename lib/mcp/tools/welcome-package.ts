@@ -30,7 +30,7 @@ export function registerWelcomePackageTools(server: McpServer) {
 
 Creates all missing pieces in one call:
 - Operating Agreement (if not exists) — draft, needs admin preview
-- Lease Agreement (if not exists) — needs suite_number
+- Lease Agreement (if not exists) — uses the company's own suite (issued by the system)
 - Relay banking form (if not exists) — USD business account
 - Payset banking form (if not exists) — EUR IBAN
 
@@ -43,12 +43,11 @@ DOES NOT SEND THE EMAIL. After Antonio reviews, use gmail_send to send it with t
 Prerequisites:
 - Account must exist with EIN, formation_date, Drive folder
 - Account must have a linked contact
-- Lease requires suite_number (auto-assigns next available if not provided)`,
+- The lease uses the company's own locked suite (issued by the system if the company has none)`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
-      suite_number: z.string().optional().describe("Suite number for lease (e.g. '3D-107'). Auto-assigns next available if omitted."),
     },
-    async ({ account_id, suite_number }) => {
+    async ({ account_id }) => {
       try {
         const steps: { step: string; status: "created" | "existing" | "skipped" | "error"; detail: string }[] = []
 
@@ -221,7 +220,6 @@ Prerequisites:
           const { createLease } = await import("@/lib/operations/lease")
           const leaseResult = await createLease({
             account_id,
-            suite_number,
             effective_date: today,
             term_start_date: today,
             language: lang as "en" | "it",

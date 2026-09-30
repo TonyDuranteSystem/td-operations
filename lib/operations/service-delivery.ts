@@ -456,6 +456,31 @@ export async function createSD(
     }
   }
 
+  // ─── Company suite: issued at the START of formation / onboarding ─────
+  //
+  // Every company gets exactly one suite, issued ONCE by the allocator and then locked by the
+  // database (lib/operations/suite.ts). A Company Formation SD has no company row yet, so its suite
+  // is RESERVED on the delivery and moved onto the company when materialization creates it; a
+  // Client Onboarding SD already has its company, so the suite goes straight onto it. Idempotent
+  // (a company that already has a suite just keeps it). Non-fatal: the lease flow issues one too,
+  // so a failure here can never strand a company without a suite — it is only logged.
+  if (row.service_type === "Company Formation" || row.service_type === "Client Onboarding") {
+    try {
+      const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import("@/lib/operations/suite")
+      const suite = await allocateCompanySuite({
+        accountId: row.account_id,
+        deliveryId: row.id,
+        actor: "system:createSD",
+      })
+      if (row.account_id) await syncPhysicalAddressToSuite(row.account_id, suite)
+    } catch (err) {
+      console.error(
+        `[createSD] suite issue failed (non-fatal) for SD ${row.id} (${row.service_type}):`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
   return {
     id: row.id,
     service_type: row.service_type,
@@ -1013,6 +1038,16 @@ export async function deactivateSD(
       delivery_id: params.delivery_id,
       service_type: sd.service_type,
       error: "This service was modified concurrently. Refresh and try again.",
+    }
+  }
+
+  // A formation that never produced a company: free its reserved suite (never reused).
+  if (!sd.account_id) {
+    try {
+      const { releaseSuiteReservation } = await import("@/lib/operations/suite")
+      await releaseSuiteReservation(sd.id, actor)
+    } catch (err) {
+      console.error(`[deactivateSD] could not release the reserved suite for SD ${sd.id}:`, err instanceof Error ? err.message : err)
     }
   }
 

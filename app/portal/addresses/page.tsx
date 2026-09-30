@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow } from '@/lib/addresses'
+import { type MailingAddressRow, withCompanySuite } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -82,7 +82,7 @@ export default async function PortalAddressesPage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, suite_number, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
@@ -93,8 +93,10 @@ export default async function PortalAddressesPage() {
     raRow = (acct?.registered_agent as AddrRow | null) ?? null
     raLegacyAddress = raRow?.address_line1 ? null : ((acct?.registered_agent_address as string | null) ?? null)
     raProvider = (raRow?.provider as string | null) ?? (acct?.registered_agent_provider as string | null) ?? null
-    legal = (acct?.legal as AddrRow | null) ?? null
-    cmra = (acct?.mailing as AddrRow | null) ?? null
+    // A Largo office row shows THIS company's own suite, never the shared row's text.
+    const companySuite = (acct?.suite_number as string | null) ?? null
+    legal = withCompanySuite((acct?.legal as AddrRow | null) ?? null, companySuite) ?? null
+    cmra = withCompanySuite((acct?.mailing as AddrRow | null) ?? null, companySuite) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }

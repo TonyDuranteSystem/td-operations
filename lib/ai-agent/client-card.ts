@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { formatAddressString, type MailingAddressRow } from "@/lib/addresses"
+import { formatAddressString, withCompanySuite, type MailingAddressRow } from "@/lib/addresses"
 
 /** Cap + flatten a client-typed value so it can't inject structure or rules. */
 export function sanitizeCardValue(v: string | null | undefined, max = 140): string | null {
@@ -170,7 +170,7 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       const { data: acct } = await db
         .from("accounts")
         .select(
-          "company_name, entity_type, state_of_formation, status, registered_agent_address, registered_agent_provider, physical_address, business_mailing_address_id"
+          "company_name, entity_type, state_of_formation, status, registered_agent_address, registered_agent_provider, physical_address, business_mailing_address_id, suite_number"
         )
         .eq("id", accountId)
         .maybeSingle()
@@ -189,7 +189,7 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
           .select("address_line1, address_line2, city, state, zip")
           .eq("id", acct.business_mailing_address_id)
           .maybeSingle()
-        d.mailingAddress = sanitizeCardValue(formatAddressString((addr ?? null) as MailingAddressRow | null))
+        d.mailingAddress = sanitizeCardValue(formatAddressString(withCompanySuite((addr ?? null) as MailingAddressRow | null, acct.suite_number) ?? null))
       }
       if (!d.mailingAddress) d.mailingAddress = sanitizeCardValue(acct.physical_address)
 

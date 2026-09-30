@@ -352,7 +352,6 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
       : undefined) ?? (params.contract_year as number | undefined)
   const result = await createLease({
     account_id: accountId,
-    suite_number: params.suite_number as string | undefined,
     contract_year: contractYear,
     effective_date: params.effective_date as string | undefined,
     term_start_date: termStartDate,
@@ -790,8 +789,6 @@ export async function POST(request: Request) {
 
       case "generate_welcome_package": {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
-        const suiteNumber = params.suite_number as string
-
         const results: Record<string, unknown> = {}
         const errors: string[] = []
 
@@ -801,15 +798,11 @@ export async function POST(request: Request) {
         else if ("exists" in oaResult) results.oa = { skipped: true, token: oaResult.token, status: oaResult.status }
         else results.oa = oaResult
 
-        // Generate Lease if missing (need suite number)
-        if (suiteNumber) {
-          const leaseResult = await generateLease(account_id, { suite_number: suiteNumber })
-          if ("error" in leaseResult) errors.push(`Lease: ${leaseResult.error}`)
-          else if ("exists" in leaseResult) results.lease = { skipped: true, token: leaseResult.token, status: leaseResult.status }
-          else results.lease = leaseResult
-        } else {
-          errors.push("Lease: Suite number required")
-        }
+        // Generate Lease if missing — it uses the company's own suite (issued if the company has none)
+        const leaseResult = await generateLease(account_id, {})
+        if ("error" in leaseResult) errors.push(`Lease: ${leaseResult.error}`)
+        else if ("exists" in leaseResult) results.lease = { skipped: true, token: leaseResult.token, status: leaseResult.status }
+        else results.lease = leaseResult
 
         // Generate SS-4 if missing
         const ss4Result = await generateSS4(account_id)

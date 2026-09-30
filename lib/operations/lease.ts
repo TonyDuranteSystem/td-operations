@@ -25,6 +25,15 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { dbWrite } from "@/lib/db"
+import {
+  allocateCompanySuite,
+  assignSpecificCompanySuite,
+  normalizeSuiteNumber,
+  syncPhysicalAddressToSuite,
+} from "@/lib/operations/suite"
+
+// Kept for existing importers — the canonical home is lib/operations/suite.ts.
+export { normalizeSuiteNumber, suiteNumericPart } from "@/lib/operations/suite"
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -41,7 +50,12 @@ export interface CreateLeaseParams {
    * dev job 9ad76300-6181-4250-a1de-c77f37933f82).
    */
   contact_id?: string
-  /** Auto-assigned ("3D-NNN") if not provided. */
+  /**
+   * ONLY for placing an EXISTING client that already has a known suite (Place Client). Normally
+   * omit it: the lease uses the company's own suite, issued by the system at the start of
+   * formation/onboarding (issued now if the company has none yet). The database refuses a suite
+   * that belongs to another company, and a company that already has a different suite.
+   */
   suite_number?: string
   /** Default: current year. */
   contract_year?: number
@@ -106,87 +120,6 @@ function buildCompanySlug(companyName: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
-}
-
-/**
- * Canonical form of a suite typed by staff: "3D-318". Accepts "3d318", "3D 318",
- * "Suite 3D-318"; returns null for anything else (the caller rejects it).
- */
-export function normalizeSuiteNumber(input: string | null | undefined): string | null {
-  const m = /^\s*(?:suite\s*)?3D\s*-?\s*(\d{2,4})\s*$/i.exec(input ?? "")
-  return m ? `3D-${parseInt(m[1], 10).toString().padStart(3, "0")}` : null
-}
-
-/** "3D-318" -> 318. Anything not shaped like a numbered TD suite -> null. */
-export function suiteNumericPart(suite: string | null | undefined): number | null {
-  const m = /^\s*3D-(\d+)\s*$/i.exec(suite ?? "")
-  return m ? parseInt(m[1], 10) : null
-}
-
-/**
- * The next free suite. The highest number is taken NUMERICALLY (a string sort
- * would rank "3D-999" above "3D-1000") across BOTH places a suite can live:
- * lease_agreements.suite_number and accounts.suite_number — so a suite that was
- * assigned to a company but has no lease yet is never handed to someone else.
- * The accounts read is tolerant: before its column exists it just contributes
- * nothing, so this never breaks a deploy that lands ahead of the migration.
- */
-export async function nextSuiteNumber(): Promise<string> {
-  return `3D-${((await highestSuiteNumber()) + 1).toString().padStart(3, "0")}`
-}
-
-/**
- * The highest suite number in use anywhere (leases + assigned company suites),
- * or 100 when none exist. A failed read must NEVER look like "no suites exist" —
- * that would hand out 3D-101, a real client's suite. The lease read must
- * succeed. The accounts read may fail ONLY because the column does not exist
- * yet (Postgres 42703, a deploy that landed ahead of the migration); any other
- * error also throws.
- */
-export async function highestSuiteNumber(): Promise<number> {
-  const leaseSuites = await readAllSuites("lease_agreements", false)
-  const accountSuites = await readAllSuites("accounts", true)
-  let max = 100
-  for (const value of [...leaseSuites, ...accountSuites]) {
-    const n = suiteNumericPart(value)
-    if (n !== null && n > max) max = n
-  }
-  return max
-}
-
-/** Every non-null suite_number in a table, paged (PostgREST caps a page at 1000 rows). */
-async function readAllSuites(table: "lease_agreements" | "accounts", tolerateMissingColumn: boolean): Promise<string[]> {
-  const PAGE = 1000
-  const out: string[] = []
-  for (let from = 0; from < 50 * PAGE; from += PAGE) {
-    const { data, error } = await supabaseAdmin
-      .from(table)
-      .select("suite_number")
-      .not("suite_number", "is", null)
-      .order("suite_number", { ascending: false })
-      .range(from, from + PAGE - 1)
-    if (error) {
-      if (tolerateMissingColumn && (error as { code?: string }).code === "42703") return out
-      throw new Error(`Could not read ${table}.suite_number: ${error.message}`)
-    }
-    const rows = Array.isArray(data) ? (data as Array<{ suite_number?: string | null }>) : []
-    for (const r of rows) if (typeof r.suite_number === "string") out.push(r.suite_number)
-    if (rows.length < PAGE) break
-  }
-  return out
-}
-
-/** The suite staff assigned to a company (accounts.suite_number), or null. Never throws. */
-async function getAssignedSuite(accountId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin
-    .from("accounts")
-    .select("suite_number")
-    .eq("id", accountId)
-    .maybeSingle()
-  // Only a well-formed suite counts. The column is free text, so any writer other
-  // than the CRM save could have stored "TBD" or "Suite 3D-318"; those must not
-  // reach a lease — fall through to prior-lease reuse instead.
-  return normalizeSuiteNumber((data as { suite_number?: string | null } | null)?.suite_number)
 }
 
 // ─── createLease ────────────────────────────────────────────
@@ -281,36 +214,32 @@ export async function createLease(
       }
     }
 
-    // 4. Suite number. A suite is the client's REGISTERED ADDRESS — the address
-    // they give their bank — so it must stay STABLE across the years. Previously
-    // every lease took the next number from a single global counter, so a renewal
-    // (a new contract_year) silently reassigned a DIFFERENT suite and then step 7
-    // overwrote accounts.physical_address to the new address. Fix: reuse the suite
-    // this account already holds (its earliest prior lease); only a genuinely NEW
-    // account with no prior lease gets a fresh number. An explicit suite always
-    // wins (staff override). Next comes the suite staff ASSIGNED to the company
-    // (accounts.suite_number, the "Suite assigned" field in Company Info) — that
-    // field is the source of truth when set — then the prior-lease reuse.
-    let suiteNumber = params.suite_number
-    if (!suiteNumber) {
-      suiteNumber = (await getAssignedSuite(params.account_id)) ?? undefined
-    }
-    if (!suiteNumber) {
-      // Scope to the SAME TENANT, not just the account. An account can carry more
-      // than one lease with different suites — e.g. Imperium Commerce LLC has a
-      // company lease (3D-111) and a separate PERSONAL lease for its owner
-      // (3D-112) created the same day. createLease always writes
-      // tenant_company = account.company_name, so match on it: a company renewal
-      // reuses the company's own suite and can never inherit the personal one.
-      const { data: priorLeases } = await supabaseAdmin
-        .from("lease_agreements")
-        .select("suite_number")
-        .eq("account_id", params.account_id)
-        .eq("tenant_company", account.company_name)
-        .not("suite_number", "is", null)
-        .order("created_at", { ascending: true })
-        .limit(1)
-      suiteNumber = priorLeases?.[0]?.suite_number ?? (await nextSuiteNumber())
+    // 4. Suite number. The suite belongs to the COMPANY (accounts.suite_number), issued once by the
+    // system at the start of formation/onboarding and locked by the database. A lease never picks
+    // one: it uses the company's suite — issued right now if the company somehow has none yet.
+    // (Only "Place Client" may pass an explicit suite, for an existing client; the database
+    // refuses one that belongs to another company or that contradicts the company's own.)
+    let suiteNumber: string
+    try {
+      if (params.suite_number) {
+        const wanted = normalizeSuiteNumber(params.suite_number)
+        if (!wanted) {
+          return {
+            success: false,
+            outcome: "error",
+            error: `"${params.suite_number}" is not a valid suite — it must look like 3D-318.`,
+          }
+        }
+        suiteNumber = await assignSpecificCompanySuite(params.account_id, wanted, params.actor || "system")
+      } else {
+        suiteNumber = await allocateCompanySuite({ accountId: params.account_id, actor: params.actor || "system" })
+      }
+    } catch (suiteErr) {
+      return {
+        success: false,
+        outcome: "error",
+        error: suiteErr instanceof Error ? suiteErr.message : String(suiteErr),
+      }
     }
 
     // 5. Token + dates + rent defaults
@@ -386,21 +315,9 @@ export async function createLease(
       }
     }
 
-    // 7. Sync physical_address on the account so OA generation picks up the suite
-    await supabaseAdmin
-      .from("accounts")
-      .update({ physical_address: `10225 Ulmerton Rd, Suite ${suiteNumber}, Largo, FL 33771` })
-      .eq("id", params.account_id)
-
-    // 7b. Record the suite on the company ("Suite assigned") if none is set yet,
-    // so the field is filled for every company that gets a lease. Best-effort and
-    // separate from the write above: it must never fail a lease (and before the
-    // column exists it simply errors and is ignored).
-    await supabaseAdmin
-      .from("accounts")
-      .update({ suite_number: suiteNumber })
-      .eq("id", params.account_id)
-      .is("suite_number", null)
+    // 7. Keep the address the Operating Agreement prints in step with the company's suite
+    // (never overwrites a manually entered address).
+    await syncPhysicalAddressToSuite(params.account_id, suiteNumber)
 
     // 8. Log
     logAction({
@@ -612,60 +529,9 @@ export async function cancelLeaseDraft(token: string): Promise<CancelLeaseDraftR
     }
   }
 
-  // Undo the side effect createLease left on the account. When this draft was
-  // generated, createLease wrote the account's physical_address to this suite
-  // (that address is what a legacy account's client sees as their registered
-  // mailing address). If we delete the draft and leave it, the account keeps
-  // pointing at a suite no longer backed by any lease — and because suite numbers
-  // are handed out as global-max+1, the freed number could be recycled to the next
-  // new account, so two clients could display the same suite. (Since the company's
-  // "Suite Assigned" field: the field is cleared below when it holds this draft's
-  // suite and the company has no other lease, so the number is free again.)
-  // Recompute the address
-  // from the account's REMAINING leases (reuse the earliest same-tenant suite, or
-  // clear it if none remain) — but only when the stored address still reflects the
-  // cancelled suite, so a manually-set address is never clobbered.
-  if (lease.suite_number) {
-    const { data: acct } = await supabaseAdmin
-      .from("accounts")
-      .select("physical_address")
-      .eq("id", lease.account_id)
-      .maybeSingle()
-    if (acct?.physical_address?.includes(`Suite ${lease.suite_number}`)) {
-      const { data: remaining } = await supabaseAdmin
-        .from("lease_agreements")
-        .select("suite_number")
-        .eq("account_id", lease.account_id)
-        .eq("tenant_company", lease.tenant_company)
-        .not("suite_number", "is", null)
-        .order("created_at", { ascending: true })
-        .limit(1)
-      const restored = remaining?.[0]?.suite_number
-        ? `10225 Ulmerton Rd, Suite ${remaining[0].suite_number}, Largo, FL 33771`
-        : null
-      await supabaseAdmin
-        .from("accounts")
-        .update({ physical_address: restored })
-        .eq("id", lease.account_id)
-    }
-
-    // The lease had written this suite onto the company ("Suite Assigned"). If the
-    // company holds no other lease, release it — otherwise a draft cancelled
-    // because it was made for the WRONG company leaves that suite stuck on it.
-    // Best-effort, exact-match only (never clears a different suite).
-    const { data: otherLeases } = await supabaseAdmin
-      .from("lease_agreements")
-      .select("id")
-      .eq("account_id", lease.account_id)
-      .limit(1)
-    if (!otherLeases?.length) {
-      await supabaseAdmin
-        .from("accounts")
-        .update({ suite_number: null })
-        .eq("id", lease.account_id)
-        .eq("suite_number", lease.suite_number)
-    }
-  }
+  // The suite is the COMPANY's and is locked (see lib/operations/suite.ts): deleting a draft lease
+  // never releases it, and the company's address stays as it is. A draft made for the WRONG
+  // company is corrected through the admin suite change, not by silently freeing a number.
 
   logAction({
     actor: "crm-admin",
