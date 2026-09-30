@@ -514,6 +514,8 @@ async function createBoughtStartAtActivationServicesInner(p: {
  */
 const deliveredByFormation = (): string[] => [
   "company formation",
+  // The onboarding creates its own Client Onboarding service (onboarding-setup).
+  "client onboarding",
   "ein",
   ...LLC_MANAGEMENT_BUNDLE_TYPES.map((t) => t.toLowerCase()),
 ]

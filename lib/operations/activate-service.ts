@@ -762,6 +762,10 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
       contactId,
       newCompanyContract: true,
+      // Company add-ons wait for the onboarded company to be in the CRM (created
+      // at staff Confirm by onboarding-setup, which then creates them on it) —
+      // unless the offer already names that company.
+      waitForNewCompany: !(offer as { account_id?: string | null } | null)?.account_id,
     }))
   } else if (pipelines.length > 0) {
     // Get first pipeline stage for each type (including auto_tasks for task creation)

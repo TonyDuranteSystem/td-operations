@@ -547,6 +547,16 @@ describe("companyServicesToStartOnFormation — company add-ons wait for the new
     expect(r.multiQuantity).toEqual([])
   })
 
+  it("onboarding + add-ons: the onboarding itself is not re-created, the add-ons are (scenario ★1)", () => {
+    const r = run([
+      { name: "Client Onboarding", pipeline_type: "Client Onboarding" },
+      { name: "DBA Registration", pipeline_type: "DBA" },
+      { name: "Certificate of Incumbency", pipeline_type: "Certificate of Incumbency" },
+      { name: "Company Change Name", pipeline_type: "Company Change Name" },
+    ])
+    expect(r.pipelines).toEqual(["DBA", "Certificate of Incumbency", "Company Change Name"])
+  })
+
   it("never re-creates what the formation or yearly management delivers", () => {
     const r = run([
       { name: "Company Formation", pipeline_type: "Company Formation" },

@@ -57,6 +57,34 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
   return { name, status, detail, timestamp: new Date().toISOString() }
 }
 
+/**
+ * The onboarding offer this setup belongs to. The portal wizard enqueues the
+ * job with lead_id and offer_id both null (only the contact), so keying on
+ * those alone found nothing — the bought add-ons and the paid tax return were
+ * never seen (S1 end-to-end QA 2026-09-29). Order: the job's offer, its lead,
+ * then the contact (an offer made on a lead links to the contact only through
+ * leads.converted_to_contact_id). Newest signed/completed onboarding offer wins.
+ */
+async function resolveOnboardingOfferId(p: { offer_id?: string | null; lead_id?: string | null }, contactId: string | null | undefined): Promise<string | null> {
+  if (p.offer_id) return p.offer_id
+  const pick = async (col: "lead_id" | "contact_id", ids: string[]) => {
+    if (ids.length === 0) return null
+    const { data } = await supabaseAdmin.from("offers").select("id")
+      .in(col, ids).eq("contract_type", "onboarding").in("status", ["signed", "completed"])
+      .order("created_at", { ascending: false }).limit(1).maybeSingle()
+    return data?.id ?? null
+  }
+  if (p.lead_id) {
+    const byLead = await pick("lead_id", [p.lead_id])
+    if (byLead) return byLead
+  }
+  if (!contactId) return null
+  const byContact = await pick("contact_id", [contactId])
+  if (byContact) return byContact
+  const { data: leads } = await supabaseAdmin.from("leads").select("id").eq("converted_to_contact_id", contactId)
+  return pick("lead_id", (leads ?? []).map((l) => l.id as string))
+}
+
 export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   const p = job.payload as unknown as OnboardingPayload
   const result: JobResult = { steps: [] }
@@ -1089,6 +1117,31 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
     }
 
+    // 3a-bis. Company services bought on the onboarding offer (DBA, Incumbency,
+    // Change Name…) waited at payment for the company to be in the CRM
+    // (Antonio 2026-09-28 — a company add-on waits for its company). Create them
+    // now ON the onboarded company. Idempotent (one per offer per type) and never
+    // throws — same helper the formation uses when it creates its company.
+    try {
+      let onbOfferToken: string | null = null
+      const onbOfferId = await resolveOnboardingOfferId(p, contact_id)
+      if (onbOfferId) {
+        const { data: o } = await supabaseAdmin.from("offers").select("token").eq("id", onbOfferId).maybeSingle()
+        onbOfferToken = o?.token ?? null
+      }
+      if (onbOfferToken && account_id) {
+        const { createCompanyServicesOnFormation } = await import("@/lib/operations/activation-start-services")
+        const companySteps = await createCompanyServicesOnFormation({ offerToken: onbOfferToken, accountId: account_id, contactId: contact_id || null })
+        for (const cs of companySteps) {
+          result.steps.push(step("company_services_on_onboarding", cs.status === "error" ? "error" : "ok", cs.detail ?? cs.status))
+        }
+      } else {
+        result.steps.push(step("company_services_on_onboarding", "skipped", "no onboarding offer found — check by hand whether the client bought company services (e.g. a DBA) with this onboarding"))
+      }
+    } catch (e) {
+      result.steps.push(step("company_services_on_onboarding", "error", e instanceof Error ? e.message : String(e)))
+    }
+
     // 3b. Create follow-up tasks linked to service delivery
     const taskDefs = [
       { title: `Registered Agent change — ${company_name}`, assigned_to: "Luca", category: "Formation", priority: "High" },
@@ -1155,14 +1208,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     // Check if tax return is bundled (included) in the client's offer
     let taxReturnIncludedInOffer = false
-    if (p.lead_id || p.offer_id) {
-      let taxOfferQuery = supabaseAdmin.from("offers").select("token, status, services, bundled_pipelines, selected_services")
-      // The offer this onboarding came from wins; the lead's newest offer is only a fallback.
-      taxOfferQuery = p.offer_id ? taxOfferQuery.eq("id", p.offer_id) : taxOfferQuery.eq("lead_id", p.lead_id!)
-      const { data: offer } = await taxOfferQuery
-        .in("status", ["completed", "signed", "viewed", "sent"])
-        .order("created_at", { ascending: false })
-        .limit(1)
+    const taxOfferId = await resolveOnboardingOfferId(p, contact_id)
+    if (taxOfferId) {
+      // The offer this onboarding came from (job offer → lead → contact).
+      const { data: offer } = await supabaseAdmin.from("offers")
+        .select("token, status, services, bundled_pipelines, selected_services")
+        .eq("id", taxOfferId)
         .maybeSingle()
 
       if (offer?.services && offer?.bundled_pipelines) {
