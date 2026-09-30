@@ -3,8 +3,10 @@
  *
  * GET /api/offers/plan-status?account_id=<uuid>
  *
- * Session-gated by the middleware (deliberately NOT in PUBLIC_PREFIXES — this is a staff
- * surface; a client must never see plan mechanics or raise buttons).
+ * STAFF ONLY, checked HERE. The comment used to say "session-gated by the middleware", but
+ * '/api/offers' IS a public prefix (the client offer pages call its siblings), so this route
+ * answered anyone who knew an account id. N0 (dev job f907220c) added the staff check below;
+ * a client or partner must never see plan mechanics, commissions or raise buttons.
  *
  * This is the shared plan-state resolver's first production caller — the account page's plan
  * section, the client schedule and the raise decision all read the SAME answer, which is the
@@ -16,11 +18,15 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { hasStaffSession } from "@/lib/offers/public-offer-access"
 import { planStatusForOffer, computePlanSettlementFromStatus, isRaisable } from "@/lib/offers/payment-plan-state"
 import { trancheInvoiceDescription } from "@/lib/offers/payment-plan"
 import { hasWorkingPartnerPayout, shouldReleasePlanReferrerCredit } from "@/lib/partners/partner-deal"
 
 export async function GET(req: NextRequest) {
+  if (!(await hasStaffSession())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
   try {
     const accountId = req.nextUrl.searchParams.get("account_id")
     if (!accountId) {
