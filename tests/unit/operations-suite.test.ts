@@ -55,6 +55,8 @@ import {
   waiveSuiteForDelivery,
   unwaiveSuiteForDelivery,
   claimCompanySuite,
+  releaseCompanySuiteIfFree,
+  releaseEndedSuites,
 } from "@/lib/operations/suite"
 
 beforeEach(() => {
@@ -244,5 +246,24 @@ describe("the required Suite step (workspace)", () => {
     expect(rpcCalls[0]).toEqual({ fn: "claim_company_suite", args: { p_account: "a1", p_delivery: "d1", p_actor: "t" } })
     rpcResult = { data: null, error: null }
     expect(await claimCompanySuite("a1", null)).toBeNull()
+  })
+})
+
+describe("releasing a closed company's suite back to the pool", () => {
+  it("releaseCompanySuiteIfFree returns the released suite, or null when nothing was free to release", async () => {
+    rpcResult = { data: "3D-106", error: null }
+    expect(await releaseCompanySuiteIfFree("a1", "lease ended", "tester")).toBe("3D-106")
+    expect(rpcCalls[0]).toEqual({ fn: "release_company_suite_if_free", args: { p_account: "a1", p_reason: "lease ended", p_actor: "tester" } })
+    rpcResult = { data: null, error: null }
+    expect(await releaseCompanySuiteIfFree("a1")).toBeNull()
+  })
+  it("the daily sweep returns how many suites it released", async () => {
+    rpcResult = { data: 3, error: null }
+    expect(await releaseEndedSuites("cron")).toBe(3)
+    expect(rpcCalls[0]).toEqual({ fn: "release_ended_suites", args: { p_actor: "cron" } })
+  })
+  it("a failed sweep throws (the cron reports the error), never pretends nothing was due", async () => {
+    rpcResult = { data: null, error: { message: "permission denied" } }
+    await expect(releaseEndedSuites()).rejects.toThrow("Could not release ended suites")
   })
 })

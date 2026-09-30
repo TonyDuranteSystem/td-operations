@@ -12,7 +12,7 @@
 --   Vanallen keeps 3D-115, Kasabi keeps 3D-210. SEuforia and AWY lose their shared suite (old signed
 --   lease deleted + its PDF hidden from the portal) and each gets a NEW suite; their new leases are
 --   created afterwards from the CRM (draft → Antonio reviews → sends).
---   Imperium's signed PERSONAL lease 3D-112 is deleted (the company keeps 3D-111; 3D-112 is never reused).
+--   Imperium's signed PERSONAL lease 3D-112 is deleted (the company keeps 3D-111; 3D-112 stays a gap — it was never on the company, so it is not put back in the pool).
 --     (Its three "Office Lease … Bence Koncz" PDFs are already hidden from the portal — checked 2026-09-30.)
 --   Italiza and New E-commerce Solutions get NO suite (their two draft leases are removed).
 --   Growthlane / Ad Astra: their draft leases carry an old / misspelled tenant name — the company keeps the

@@ -1020,7 +1020,7 @@ export async function deactivateSD(
     }
   }
 
-  // A formation that never produced a company: free its reserved suite (never reused).
+  // A formation that never produced a company: free its reserved suite (back to the pool).
   if (!sd.account_id) {
     try {
       const { releaseSuiteReservation } = await import("@/lib/operations/suite")

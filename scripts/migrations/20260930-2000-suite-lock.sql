@@ -12,8 +12,9 @@
 --     (never a person) — signed leases can't change suite, and viewed/signed leases can't be
 --     deleted except through the logged admin function;
 --   * a formation client has no company row yet — its suite is RESERVED on the delivery and moved
---     onto the company when it is created (or released if the delivery is cancelled; numbers are
---     never reused because every issued number is written to the audit log).
+--     onto the company when it is created (or released back to the pool if the delivery is cancelled /
+--     the suite is waived). A number is handed out again only from the pool of RELEASED numbers —
+--     see 20260930-2040-suite-release.sql (closed / cancelled company with no lease in force).
 --
 -- Run 20260930-1900-accounts-suite-number.sql first. Safe to re-run.
 -- PRODUCTION ORDER (Antonio): run this file, THEN deploy code, THEN the data repair.
@@ -40,7 +41,17 @@ CREATE TABLE IF NOT EXISTS public.suite_audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_suite_audit_log_account ON public.suite_audit_log (account_id);
 
+-- Numbers released by a closed company (or a cancelled/waived reservation) and free to hand out again — oldest first.
+-- Nothing is ever put here by the code paths of Part 1; the release rule (20260930-2040) and the reservation release do.
+CREATE TABLE IF NOT EXISTS public.suite_pool (
+  suite_number          text PRIMARY KEY CHECK (suite_number ~ '^3D-[0-9]{3,4}$'),
+  released_at           timestamptz NOT NULL DEFAULT now(),
+  released_from_account uuid,
+  reason                text
+);
+
 ALTER TABLE public.suite_reservations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suite_pool ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.suite_audit_log ENABLE ROW LEVEL SECURITY;
 
 -- ─── 2. One company per suite ────────────────────────────────────────────────
@@ -66,15 +77,19 @@ LANGUAGE sql AS $$
   ) s
 $$;
 
--- True when this suite must NOT be handed to p_account: it was issued/used for a DIFFERENT company, a
--- released reservation, or sits on another company's lease. (A company may always get its own old suite back.)
+-- True when this suite must NOT be handed to p_account by hand: it was issued/used for a DIFFERENT company, a
+-- released reservation, or sits on another company's lease — UNLESS it is in the pool of released numbers (free).
+-- (A company may always get its own old suite back.)
 CREATE OR REPLACE FUNCTION public.td_suite_history_blocks(p_suite text, p_account uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
-  SELECT EXISTS (
-           SELECT 1 FROM public.suite_audit_log
-           WHERE (suite_number = p_suite OR old_suite = p_suite OR new_suite = p_suite)
-             AND ((account_id IS NOT NULL AND account_id IS DISTINCT FROM p_account) OR action = 'reservation_released'))
-      OR EXISTS (SELECT 1 FROM public.lease_agreements WHERE suite_number = p_suite AND account_id IS DISTINCT FROM p_account)
+  SELECT NOT EXISTS (SELECT 1 FROM public.suite_pool WHERE suite_number = p_suite)
+     AND (
+       EXISTS (
+         SELECT 1 FROM public.suite_audit_log
+         WHERE (suite_number = p_suite OR old_suite = p_suite OR new_suite = p_suite)
+           AND ((account_id IS NOT NULL AND account_id IS DISTINCT FROM p_account) OR action = 'reservation_released'))
+       OR EXISTS (SELECT 1 FROM public.lease_agreements WHERE suite_number = p_suite AND account_id IS DISTINCT FROM p_account)
+     )
 $$;
 
 -- ─── 4. The allocator (the ONLY place a new number is created) ───────────────
@@ -144,8 +159,17 @@ BEGIN
     END IF;
   END IF;
 
-  -- 4. otherwise issue the next free number
-  v_suite := td_next_suite();
+  -- 4. otherwise issue: the OLDEST released number from the pool first, else the next new number
+  -- (a pool row for a number that is held by a company or reserved is stale — drop it, never hand it out)
+  DELETE FROM suite_pool p
+   WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.suite_number = p.suite_number)
+      OR EXISTS (SELECT 1 FROM suite_reservations r WHERE r.suite_number = p.suite_number);
+  SELECT suite_number INTO v_suite FROM suite_pool ORDER BY released_at, suite_number LIMIT 1 FOR UPDATE SKIP LOCKED;
+  IF v_suite IS NOT NULL THEN
+    DELETE FROM suite_pool WHERE suite_number = v_suite;
+  ELSE
+    v_suite := td_next_suite();
+  END IF;
   IF p_account_id IS NOT NULL THEN
     UPDATE accounts SET suite_number = v_suite WHERE id = p_account_id;
   ELSE
@@ -157,8 +181,8 @@ BEGIN
   RETURN v_suite;
 END $$;
 
--- A formation/onboarding that never produced a company: free the reservation. The number is
--- NOT reused (it stays in the audit log, so the allocator counts past it).
+-- A formation/onboarding that never produced a company (or whose suite was waived): free the reservation. The
+-- number goes back to the pool of released numbers and is handed out again, oldest first.
 CREATE OR REPLACE FUNCTION public.release_suite_reservation(p_delivery_id uuid, p_actor text DEFAULT 'system')
 RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_suite text;
@@ -167,7 +191,10 @@ BEGIN
   DELETE FROM suite_reservations WHERE delivery_id = p_delivery_id RETURNING suite_number INTO v_suite;
   IF v_suite IS NOT NULL THEN
     INSERT INTO suite_audit_log (suite_number, delivery_id, action, old_suite, reason, actor)
-      VALUES (v_suite, p_delivery_id, 'reservation_released', v_suite, 'delivery cancelled', p_actor);
+      VALUES (v_suite, p_delivery_id, 'reservation_released', v_suite, 'delivery cancelled or waived', p_actor);
+    -- a reserved number was never given to a company: it goes straight back to the pool
+    INSERT INTO suite_pool (suite_number, released_from_account, reason)
+      VALUES (v_suite, NULL, 'reservation released') ON CONFLICT (suite_number) DO NOTHING;
   END IF;
   RETURN v_suite;
 END $$;
@@ -193,16 +220,17 @@ BEGIN
     RAISE EXCEPTION 'Suite % already belongs to another company', p_suite;
   END IF;
   IF td_suite_history_blocks(p_suite, p_account_id) THEN
-    RAISE EXCEPTION 'Suite % was already used by another company (or released) — a suite number is never reused', p_suite;
+    RAISE EXCEPTION 'Suite % was already used by another company (or released) — this number is not free: it becomes available only when that company is closed / cancelled and its lease has ended', p_suite;
   END IF;
   UPDATE accounts SET suite_number = p_suite WHERE id = p_account_id;
+  DELETE FROM suite_pool WHERE suite_number = p_suite;
   INSERT INTO suite_audit_log (suite_number, account_id, action, new_suite, actor)
     VALUES (p_suite, p_account_id, 'assigned_specific', p_suite, p_actor);
   RETURN p_suite;
 END $$;
 
 -- ─── 5. Admin functions: the ONLY way to change or remove a locked suite / lease ─────────────
--- p_new_suite NULL = take the suite off the company (released, never reused).
+-- p_new_suite NULL = take the suite off the company (refused while it has any lease).
 -- Draft/sent/viewed leases of the company follow the new suite; SIGNED leases are left alone and
 -- reported so the caller deletes + reissues them (admin_delete_lease).
 CREATE OR REPLACE FUNCTION public._admin_change_company_suite_impl(
@@ -230,10 +258,11 @@ BEGIN
     RAISE EXCEPTION 'Suite % already belongs to another company', p_new_suite;
   END IF;
   IF p_new_suite IS NOT NULL AND td_suite_history_blocks(p_new_suite, p_account_id) THEN
-    RAISE EXCEPTION 'Suite % was already used by another company (or released) — a suite number is never reused', p_new_suite;
+    RAISE EXCEPTION 'Suite % was already used by another company (or released) — this number is not free: it becomes available only when that company is closed / cancelled and its lease has ended', p_new_suite;
   END IF;
   UPDATE accounts SET suite_number = p_new_suite WHERE id = p_account_id;
   IF p_new_suite IS NOT NULL THEN
+    DELETE FROM suite_pool WHERE suite_number = p_new_suite;
     UPDATE lease_agreements SET suite_number = p_new_suite
       WHERE account_id = p_account_id AND status <> 'signed';
     GET DIAGNOSTICS v_moved = ROW_COUNT;

@@ -89,7 +89,7 @@ export async function allocateCompanySuite(opts: {
   return data
 }
 
-/** A delivery that never produced a company (cancelled): free its reserved suite (never reused). */
+/** A delivery that never produced a company (cancelled / waived): free its reserved suite — it goes back to the pool. */
 export async function releaseSuiteReservation(deliveryId: string, actor = "system"): Promise<string | null> {
   const { data, error } = await rpc("release_suite_reservation", { p_delivery_id: deliveryId, p_actor: actor })
   if (error) throw new Error(`Could not release the reserved suite: ${cleanMessage(error.message)}`)
@@ -125,7 +125,7 @@ export interface AdminChangeResult {
 
 /**
  * The ONLY way to change or remove a company's suite once assigned (admin, logged, reason required).
- * newSuite = null takes the suite off the company (released, never reused). Unsigned leases follow
+ * newSuite = null takes the suite off the company (refused while it has any lease). Unsigned leases follow
  * the new suite; SIGNED leases are left alone and counted in signed_leases_to_replace so the caller
  * deletes + reissues them with adminDeleteLease.
  */
@@ -220,6 +220,26 @@ export async function claimCompanySuite(accountId: string, deliveryId: string | 
   const { data, error } = await rpc("claim_company_suite", { p_account: accountId, p_delivery: deliveryId, p_actor: actor })
   if (error) throw new Error(cleanMessage(error.message))
   return typeof data === "string" ? data : null
+}
+
+// ─── releasing a closed company's suite back to the pool ────────────────────────────────────────────
+
+/**
+ * Release one company's suite to the pool IF it is truly free: the company is Closed or Cancelled AND it has no lease in
+ * force. Returns the released suite, or null when nothing was released (not closed/cancelled, lease still in force, or
+ * no suite). The database does this automatically the moment a company is closed; this is for the sweep and on demand.
+ */
+export async function releaseCompanySuiteIfFree(accountId: string, reason?: string, actor = "system"): Promise<string | null> {
+  const { data, error } = await rpc("release_company_suite_if_free", { p_account: accountId, p_reason: reason ?? null, p_actor: actor })
+  if (error) throw new Error(cleanMessage(error.message))
+  return typeof data === "string" ? data : null
+}
+
+/** The daily sweep: every Closed / Cancelled company whose last lease has now ended gives its suite back. Returns how many. */
+export async function releaseEndedSuites(actor = "cron"): Promise<number> {
+  const { data, error } = await rpc("release_ended_suites", { p_actor: actor })
+  if (error) throw new Error(`Could not release ended suites: ${cleanMessage(error.message)}`)
+  return typeof data === "number" ? data : Number(data ?? 0)
 }
 
 /**
