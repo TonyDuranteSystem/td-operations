@@ -179,7 +179,7 @@ _Regenerated 2026-09-30 from the R-rule list in CLAUDE.md — **42 rules**, high
 _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-29)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-29)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-30)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-09-29)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-10)_
@@ -205,7 +205,7 @@ _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-27)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-29)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-09-29)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-09-29)_

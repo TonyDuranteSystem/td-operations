@@ -1,6 +1,7 @@
 # Portal Chats (staff composer)
 
-_Last verified against code: 2026-09-27 — Claude (**The "Create Task / Service / Invoice"
+_Last verified against code: 2026-09-29 — Claude (**Worker confirm card restructured so Confirm & send is always on screen** (dev job `2e017425`, reported on the Inbox Worker panel — see `docs/systems/inbox.md` 2026-09-29b for the root cause). `components/portal-chats/thread-worker-panel.tsx`'s "Confirm before sending" email card was `shrink-0` with no internal scroll; it is now a flex column capped at 70dvh with a scrolling review body and a pinned Confirm/Cancel row, and its signature preview starts folded (`collapsible`). The indigo "Which language should this go in?" card is three buttons tall and was left as is. Layout only.)_
+_Prior: 2026-09-27 — Claude (**The "Create Task / Service / Invoice"
 dialog (`QuickCreateModal`) moved out of this page into its own shared file**
 (`components/dashboard/quick-create-modal.tsx`), so the new WhatsApp per-message
 menu (`docs/systems/messaging.md`'s newest entry) can raise the exact same

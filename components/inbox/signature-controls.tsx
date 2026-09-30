@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   buildSignatureHtml,
   hasSignature,
@@ -124,6 +124,16 @@ interface SignaturePreviewProps {
    * attach the block without "Best regards," (bug-hunter fix, 2026-08-05).
    */
   authorWritesClosing?: boolean
+  /**
+   * Start folded, with a Show/Hide toggle. For the worker confirm cards,
+   * which sit in a side panel that must ALSO keep the Confirm button on
+   * screen: the full rendered signature was the tallest block on that card
+   * and pushed the buttons below the window edge (Antonio, 2026-09-29).
+   * The chooser above already names the variant; the picture is a check,
+   * not something that needs to be open on every send. Compose/reply keep
+   * the always-open preview — they live in a taller surface.
+   */
+  collapsible?: boolean
   className?: string
 }
 
@@ -145,8 +155,10 @@ export function SignaturePreview({
   sender,
   variant,
   authorWritesClosing = true,
+  collapsible = false,
   className = '',
 }: SignaturePreviewProps) {
+  const [open, setOpen] = useState(!collapsible)
   const html = useMemo(
     () =>
       hasSignature(variant)
@@ -162,15 +174,31 @@ export function SignaturePreview({
 
   return (
     <div className={`rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2 ${className}`}>
-      <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-400 mb-1">
-        Signature preview — added when you send
-      </p>
-      {html ? (
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          className={`flex w-full items-center justify-between gap-2 text-left ${open ? 'mb-1' : ''}`}
+        >
+          <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+            Signature preview — added when you send
+          </span>
+          <span className="shrink-0 text-[11px] text-blue-700 underline">{open ? 'Hide' : 'Show'}</span>
+        </button>
+      ) : (
+        <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-400 mb-1">
+          Signature preview — added when you send
+        </p>
+      )}
+      {!html ? (
+        // One line, so it stays visible even when folded — "no signature" is
+        // the case worth noticing without a click.
+        <p className="text-xs text-zinc-400 italic">No signature — the email ends with your text.</p>
+      ) : open ? (
         // Our own generated markup, no user input — safe to inject.
         <div className="bg-white rounded-md p-3 overflow-x-auto" dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <p className="text-xs text-zinc-400 italic">No signature — the email ends with your text.</p>
-      )}
+      ) : null}
     </div>
   )
 }
