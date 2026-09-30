@@ -168,6 +168,60 @@ export async function adminDeleteLease(opts: { leaseId: string; reason: string; 
   return data as AdminDeleteLeaseResult
 }
 
+// ─── the required "Suite" step in the Formation / Onboarding workspaces ─────────────────────────────
+
+export interface SuiteStepState {
+  delivery_id: string
+  account_id: string | null
+  /** The company's own suite, if it has one. */
+  account_suite: string | null
+  /** A suite reserved on the delivery (a formation with no company yet). */
+  reserved_suite: string | null
+  waived: boolean
+  waived_at: string | null
+  waived_by: string | null
+  waived_reason: string | null
+  /** True when the step is done: the company has a suite, one is reserved, or staff waived it. */
+  satisfied: boolean
+}
+
+/** Current state of the Suite step for one delivery. Throws on a read failure (never "not needed"). */
+export async function getSuiteStepState(deliveryId: string): Promise<SuiteStepState> {
+  const { data, error } = await rpc("suite_step_state", { p_delivery: deliveryId })
+  if (error || !data) throw new Error(`Could not read the suite step: ${cleanMessage(error?.message ?? "delivery not found")}`)
+  return data as SuiteStepState
+}
+
+/** "Issue suite" in the workspace: clears a waiver, then issues (company) or reserves (formation, no company yet). */
+export async function issueSuiteForDelivery(deliveryId: string, actor = "system"): Promise<string> {
+  const { data, error } = await rpc("issue_delivery_suite", { p_delivery: deliveryId, p_actor: actor })
+  if (error || typeof data !== "string") throw new Error(cleanMessage(error?.message ?? "Could not issue the suite"))
+  return data
+}
+
+/** "No suite for this client": a reason is required; frees a reserved number; refused if the company already has one. */
+export async function waiveSuiteForDelivery(deliveryId: string, reason: string, actor = "system"): Promise<void> {
+  if (!reason || !reason.trim()) throw new Error("A reason is required.")
+  const { error } = await rpc("waive_delivery_suite", { p_delivery: deliveryId, p_reason: reason.trim(), p_actor: actor })
+  if (error) throw new Error(cleanMessage(error.message))
+}
+
+/** Take the waiver off (the workspace then asks for Issue / waive again). */
+export async function unwaiveSuiteForDelivery(deliveryId: string, actor = "system"): Promise<void> {
+  const { error } = await rpc("unwaive_delivery_suite", { p_delivery: deliveryId, p_actor: actor })
+  if (error) throw new Error(cleanMessage(error.message))
+}
+
+/**
+ * Materialization: move the suite RESERVED for this formation onto its new company. CLAIM ONLY — it never issues a
+ * number (a waived formation's company simply has no suite). Returns the suite, or null when there was nothing to claim.
+ */
+export async function claimCompanySuite(accountId: string, deliveryId: string | null, actor = "system"): Promise<string | null> {
+  const { data, error } = await rpc("claim_company_suite", { p_account: accountId, p_delivery: deliveryId, p_actor: actor })
+  if (error) throw new Error(cleanMessage(error.message))
+  return typeof data === "string" ? data : null
+}
+
 /**
  * Keep accounts.physical_address (what the Operating Agreement prints) in step with the company's
  * suite. Only writes when the address is empty or is one our own lease flow wrote before

@@ -29,6 +29,7 @@ import {
   adminDeleteLease,
   allocateCompanySuite,
   assignSpecificCompanySuite,
+  getCompanySuite,
   normalizeSuiteNumber,
   syncPhysicalAddressToSuite,
 } from "@/lib/operations/suite"
@@ -58,6 +59,12 @@ export interface CreateLeaseParams {
    * that belongs to another company, and a company that already has a different suite.
    */
   suite_number?: string
+  /**
+   * Default true (a STAFF action issues the company's suite if it has none). AUTOMATIC jobs (onboarding setup,
+   * welcome package) pass false: they never issue a suite — the company's suite is an explicit, required step in
+   * the workspace — so with no suite they stop with a clear message instead of deciding for staff.
+   */
+  issue_suite_if_missing?: boolean
   /** Default: current year. */
   contract_year?: number
   /** Default: today. */
@@ -232,6 +239,16 @@ export async function createLease(
           }
         }
         suiteNumber = await assignSpecificCompanySuite(params.account_id, wanted, params.actor || "system")
+      } else if (params.issue_suite_if_missing === false) {
+        const existing = await getCompanySuite(params.account_id)
+        if (!existing) {
+          return {
+            success: false,
+            outcome: "error",
+            error: "This company has no suite yet — issue it first (workspace Suite step or the account page), then create the lease.",
+          }
+        }
+        suiteNumber = existing
       } else {
         suiteNumber = await allocateCompanySuite({ accountId: params.account_id, actor: params.actor || "system" })
       }

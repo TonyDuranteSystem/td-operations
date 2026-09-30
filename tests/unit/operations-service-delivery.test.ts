@@ -985,9 +985,9 @@ describe("createSD — non-ITIN person-link hygiene", () => {
   })
 })
 
-// ─── the company's suite is issued at the START ─────────
+// ─── createSD never issues a suite (the workspace's required Suite step does) ─────────
 
-describe("createSD — issues the company's suite at the start of formation / onboarding", () => {
+describe("createSD — never issues a suite by itself", () => {
   function sdReturning(service_type: string, account_id: string | null) {
     pipelineFixture = { [service_type]: [{ stage_name: "First", stage_order: 1 }] }
     insertResponse = {
@@ -996,33 +996,22 @@ describe("createSD — issues the company's suite at the start of formation / on
     }
   }
 
-  it("a Company Formation delivery (no company yet) RESERVES a suite on the delivery", async () => {
+  it("a Company Formation delivery does not reserve a suite — staff press Issue suite (or waive) in the workspace", async () => {
     sdReturning("Company Formation", null)
     await createSD({ service_type: "Company Formation", contact_id: "c1" })
-    expect(allocateCompanySuite).toHaveBeenCalledWith({ accountId: null, deliveryId: "sd-77", actor: "system:createSD" })
-    expect(syncPhysicalAddressToSuite).not.toHaveBeenCalled()
-  })
-
-  it("a Client Onboarding delivery puts the suite straight on its company and syncs the address", async () => {
-    sdReturning("Client Onboarding", "acct-9")
-    await createSD({ service_type: "Client Onboarding", account_id: "acct-9" })
-    expect(allocateCompanySuite).toHaveBeenCalledWith({ accountId: "acct-9", deliveryId: "sd-77", actor: "system:createSD" })
-    expect(syncPhysicalAddressToSuite).toHaveBeenCalledWith("acct-9", "3D-321")
-  })
-
-  it("other services never issue a suite", async () => {
-    sdReturning("EIN", "acct-9")
-    await createSD({ service_type: "EIN", account_id: "acct-9" })
     expect(allocateCompanySuite).not.toHaveBeenCalled()
   })
 
-  it("a failed allocation never fails the delivery (the lease flow issues one too) — it is only logged", async () => {
-    sdReturning("Company Formation", null)
-    allocateCompanySuite.mockRejectedValue(new Error("Could not issue a suite: down"))
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-    const sd = await createSD({ service_type: "Company Formation", contact_id: "c1" })
-    expect(sd.id).toBe("sd-77")
-    expect(errSpy).toHaveBeenCalled()
-    errSpy.mockRestore()
+  it("a Client Onboarding delivery does not issue one either, and never touches the company's address", async () => {
+    sdReturning("Client Onboarding", "acct-9")
+    await createSD({ service_type: "Client Onboarding", account_id: "acct-9" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
+    expect(syncPhysicalAddressToSuite).not.toHaveBeenCalled()
+  })
+
+  it("no other service issues one", async () => {
+    sdReturning("EIN", "acct-9")
+    await createSD({ service_type: "EIN", account_id: "acct-9" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
   })
 })

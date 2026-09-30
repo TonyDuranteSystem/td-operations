@@ -504,11 +504,12 @@ export async function materializeFormationCompany(
             detail: handover.status === "failed" ? handover.error : `CRM Store: ${handover.status}`,
           })
         }
-        // A retry after a partial failure must still leave the company with its suite.
+        // A retry after a partial failure: CLAIM the suite reserved for this formation if the first run never did
+        // (claim only — a waived formation's company simply has no suite, nothing is ever issued here).
         try {
-          const { allocateCompanySuite } = await import("@/lib/operations/suite")
-          const suite = await allocateCompanySuite({ accountId: acc.id, actor })
-          steps.push({ step: "suite", status: "ok", detail: suite })
+          const { claimCompanySuite } = await import("@/lib/operations/suite")
+          const suite = await claimCompanySuite(acc.id, null, actor)
+          steps.push({ step: "suite", status: "ok", detail: suite ?? "no suite reserved for this formation (waived or not yet issued)" })
         } catch (e) {
           steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
@@ -1310,19 +1311,22 @@ export async function materializeFormationCompany(
       steps.push({ step: "sd_link", status: "skipped", detail: "No unlinked active Company Formation SD found for this contact" })
     }
 
-    // 10-suite. The company's suite. The formation delivery RESERVED one when it started; claiming it
-    // with the resolved delivery moves that exact number onto the company. With no resolved delivery
-    // (none found / several could not be narrowed) the company is issued a fresh one — never left
-    // without — and the step says so, because the unclaimed reservation then needs a human look.
+    // 10-suite. The company's suite. The Formation workspace's required "Suite" step RESERVED a number on the
+    // delivery (or staff waived it). Claiming moves that exact reserved number onto the company — CLAIM ONLY:
+    // nothing is ever issued here, so a waived formation's company simply has no suite. With no resolved delivery
+    // (none found / several could not be narrowed) the reservation cannot be matched: the step says so and a human
+    // must link the delivery and claim/release it.
     try {
-      const { allocateCompanySuite } = await import("@/lib/operations/suite")
-      const suite = await allocateCompanySuite({ accountId, deliveryId: resolvedSd?.id ?? null, actor })
+      const { claimCompanySuite } = await import("@/lib/operations/suite")
+      const suite = await claimCompanySuite(accountId, resolvedSd?.id ?? null, actor)
       steps.push({
         step: "suite",
         status: resolvedSd ? "ok" : "error",
-        detail: resolvedSd
-          ? `${suite} (reserved when the formation started)`
-          : `${suite} (issued now — NO formation delivery was linked, so the suite reserved when the formation started was not used; a human must link the delivery and release that reservation)`,
+        detail: suite
+          ? `${suite} (reserved when staff issued the suite in the workspace)`
+          : resolvedSd
+            ? "no suite reserved for this formation (waived, or never issued) — the company has no suite; staff can issue one from the account page"
+            : "NO formation delivery was linked, so no reserved suite could be claimed — a human must link the delivery, then claim or release its reservation",
       })
     } catch (e) {
       steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })

@@ -6,6 +6,7 @@ import { categorizeSubmittedFields } from '@/lib/flows/onboarding-field-categori
 import { OnboardingWorkspaceDetail } from './components/onboarding-workspace-detail'
 import { OnboardingRaSwitchStep } from '@/components/flows/onboarding-ra-switch-step'
 import { FlowChat } from '@/components/flows/flow-chat'
+import { SuitePanel } from '@/components/flows/suite-panel'
 import type { OnboardingReviewEntry } from '../page'
 
 export const dynamic = 'force-dynamic'
@@ -177,7 +178,12 @@ export default async function OnboardingWorkspacePage({ params }: { params: { id
               Registered Agent switched. Onboarding complete.
             </div>
           ) : onboardingSd ? (
-            <OnboardingRaSwitchStep submissionId={sub.id} />
+            <>
+              {/* The required Suite step: normally already decided on the Confirm screen; shown here so a case confirmed
+                  without a decision (e.g. from chat) can be finished — onboarding cannot move past this stage without it. */}
+              <SuitePanel serviceDeliveryId={onboardingSd.id} />
+              <OnboardingRaSwitchStep submissionId={sub.id} />
+            </>
           ) : sub.account_id ? (
             <p className="text-sm text-zinc-500">
               Setting up the account&apos;s services — refresh in a moment to switch the Registered Agent.

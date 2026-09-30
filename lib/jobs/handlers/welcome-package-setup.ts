@@ -406,6 +406,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
       effective_date: today,
       term_start_date: today,
       language: lang as "en" | "it",
+      issue_suite_if_missing: false, // automatic job: never issues a suite (required workspace step)
       actor: "system:welcome-package-setup",
       summary: `Auto-created lease during welcome package setup for ${account.company_name}`,
     })

@@ -211,18 +211,6 @@ async function createServiceDelivery(
       return { name: "service_delivery", status: "error", detail: sdErr?.message || "Insert failed" }
     }
 
-    // A placed formation / onboarding company gets its suite too (this raw insert does not go through
-    // createSD's issue-at-start hook). Idempotent; non-fatal — the lease step issues one as well.
-    if (serviceType === "Company Formation" || serviceType === "Client Onboarding") {
-      try {
-        const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import("@/lib/operations/suite")
-        const suite = await allocateCompanySuite({ accountId, deliveryId: sd.id, actor: "crm-admin:place-client" })
-        await syncPhysicalAddressToSuite(accountId, suite)
-      } catch (suiteErr) {
-        console.error("[place-client] suite issue failed (non-fatal):", suiteErr instanceof Error ? suiteErr.message : suiteErr)
-      }
-    }
-
     // Create auto-tasks from pipeline_stages
     const { data: pipelineStage } = await supabaseAdmin
       .from("pipeline_stages")

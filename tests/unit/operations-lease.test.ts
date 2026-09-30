@@ -36,6 +36,7 @@ let duplicateLeases: Array<{ id: string; token: string; status: string }> = []
 // The suite module (allocator / locked explicit assign / address sync) is the DATABASE's job and is
 // tested against the real sandbox DB + tests/unit/operations-suite.test.ts; here they are doubles.
 let allocatedSuite = "3D-151"
+let companySuiteNow: string | null = null
 let allocateError: string | null = null
 let specificError: string | null = null
 const allocateCalls: Array<Record<string, unknown>> = []
@@ -173,6 +174,7 @@ vi.mock("@/lib/operations/suite", async () => {
     syncPhysicalAddressToSuite: vi.fn(async (accountId: string, suite: string) => {
       syncCalls.push({ accountId, suite })
     }),
+    getCompanySuite: vi.fn(async () => companySuiteNow),
   }
 })
 
@@ -200,6 +202,7 @@ beforeEach(() => {
   extraContactsById = {}
   duplicateLeases = []
   allocatedSuite = "3D-151"
+  companySuiteNow = null
   allocateError = null
   specificError = null
   allocateCalls.length = 0
@@ -459,6 +462,26 @@ describe("createLease — happy path", () => {
     expect(result.outcome).toBe("error")
     expect(result.error).toContain("already belongs to another company")
     expect(insertCalls).toHaveLength(0)
+  })
+
+  it("an AUTOMATIC job (issue_suite_if_missing:false) never issues a suite: with none it stops with a clear message and writes no lease", async () => {
+    companySuiteNow = null
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1", issue_suite_if_missing: false })
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/no suite yet/i)
+    expect(allocateCalls).toHaveLength(0)
+    expect(insertCalls).toHaveLength(0)
+  })
+
+  it("an AUTOMATIC job uses the company's suite when it already has one (never issues)", async () => {
+    companySuiteNow = "3D-222"
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1", issue_suite_if_missing: false })
+    expect(result.success).toBe(true)
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-222")
+    expect(allocateCalls).toHaveLength(0)
   })
 
   it("an allocator failure stops the lease — never a lease with a missing or guessed suite", async () => {

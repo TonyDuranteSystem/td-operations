@@ -167,4 +167,27 @@ describe("confirmPortalWizardOnboarding", () => {
     expect(result.pending).toBe(false)
     expect(result.account_id).toBe("acc-already-there")
   })
+
+  it("carries staff's required SUITE choice into the setup job: issue", async () => {
+    submissionRow = makeSubmission()
+    await confirmPortalWizardOnboarding("sub-1", "antonio.durante@tonydurante.us", { choice: "issue" })
+    const [enqueueArgs] = enqueueJobMock.mock.calls[0] as unknown as [{ payload: { suite_choice?: string; suite_waive_reason?: string | null } }]
+    expect(enqueueArgs.payload.suite_choice).toBe("issue")
+    expect(enqueueArgs.payload.suite_waive_reason).toBeNull()
+  })
+
+  it("carries staff's required SUITE choice into the setup job: 'No suite for this client' with the reason", async () => {
+    submissionRow = makeSubmission()
+    await confirmPortalWizardOnboarding("sub-1", "antonio.durante@tonydurante.us", { choice: "waive", reason: "one-time customer" })
+    const [enqueueArgs] = enqueueJobMock.mock.calls[0] as unknown as [{ payload: { suite_choice?: string; suite_waive_reason?: string | null } }]
+    expect(enqueueArgs.payload.suite_choice).toBe("waive")
+    expect(enqueueArgs.payload.suite_waive_reason).toBe("one-time customer")
+  })
+
+  it("a caller that passes no choice (the chat command) decides nothing — the job payload carries no suite choice", async () => {
+    submissionRow = makeSubmission()
+    await confirmPortalWizardOnboarding("sub-1", "claude")
+    const [enqueueArgs] = enqueueJobMock.mock.calls[0] as unknown as [{ payload: Record<string, unknown> }]
+    expect("suite_choice" in enqueueArgs.payload).toBe(false)
+  })
 })

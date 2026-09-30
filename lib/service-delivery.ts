@@ -293,6 +293,44 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4d. Suite step (Antonio 2026-09-30) — a Company Formation cannot move past "Wizard Submitted", and a Client
+  // Onboarding cannot move past "Review & CRM Setup", until the company's suite is issued / reserved, or staff
+  // explicitly ticked "No suite for this client". Same deterministic up-front shape as 4b/4c (refuse before the stage
+  // move commits). Keyed on the GATE ORDER, not on one target name, so a forward JUMP from the stepper cannot skip it.
+  // The database rule on service_deliveries (20260930-2030-suite-step.sql) is the safety net for every other writer.
+  // Test deliveries are exempt; cases already past the gate are never touched (the rule only fires on crossing).
+  if (
+    (delivery.service_type === "Company Formation" || delivery.service_type === "Client Onboarding") &&
+    !(delivery as { is_test?: boolean | null }).is_test
+  ) {
+    const gateName = delivery.service_type === "Company Formation" ? "Wizard Submitted" : "Review & CRM Setup"
+    const gateOrder = stages.find(s => s.stage_name === gateName)?.stage_order
+    if (gateOrder != null && currentOrder <= gateOrder && targetStage.stage_order > gateOrder) {
+      try {
+        const { getSuiteStepState } = await import("@/lib/operations/suite")
+        const suiteState = await getSuiteStepState(delivery_id)
+        if (!suiteState.satisfied) {
+          return {
+            success: false,
+            error: `Issue the company's suite (or tick "No suite for this client") in the Suite step before moving this case past "${gateName}".`,
+            from_stage: delivery.stage || "New",
+            to_stage: targetStage.stage_name,
+            to_order: targetStage.stage_order,
+            total_stages: stages.length,
+            is_completed: false,
+            created_tasks: [],
+            failed_tasks: [],
+            auto_triggers: [],
+          }
+        }
+      } catch (suiteErr) {
+        // A guard, not a new failure mode: if the CHECK itself errors (transient read) fall through — the database rule
+        // on service_deliveries still refuses the stage write itself.
+        console.warn("[advanceServiceDelivery] suite step check failed (non-blocking):", suiteErr)
+      }
+    }
+  }
+
   // 5. Build stage history entry
   const historyEntry = {
     from_stage: delivery.stage || "New",

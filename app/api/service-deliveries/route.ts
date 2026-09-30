@@ -67,17 +67,5 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // A formation / onboarding created here gets its company's suite too (this raw insert does not go through
-  // createSD's issue-at-start hook). Idempotent; non-fatal — the lease flow issues one as well.
-  if (service_type === 'Company Formation' || service_type === 'Client Onboarding') {
-    try {
-      const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import('@/lib/operations/suite')
-      const suite = await allocateCompanySuite({ accountId: account_id, deliveryId: data.id, actor: 'crm:quick-create' })
-      await syncPhysicalAddressToSuite(account_id, suite)
-    } catch (suiteErr) {
-      console.error('[service-deliveries] suite issue failed (non-fatal):', suiteErr instanceof Error ? suiteErr.message : suiteErr)
-    }
-  }
-
   return NextResponse.json({ id: data.id })
 }

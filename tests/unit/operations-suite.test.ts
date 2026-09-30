@@ -50,6 +50,11 @@ import {
   adminChangeCompanySuite,
   adminDeleteLease,
   syncPhysicalAddressToSuite,
+  getSuiteStepState,
+  issueSuiteForDelivery,
+  waiveSuiteForDelivery,
+  unwaiveSuiteForDelivery,
+  claimCompanySuite,
 } from "@/lib/operations/suite"
 
 beforeEach(() => {
@@ -192,5 +197,52 @@ describe("syncPhysicalAddressToSuite", () => {
     accountReadError = { message: "down" }
     accountRow = null
     await expect(syncPhysicalAddressToSuite("a1", "3D-318")).resolves.toBeUndefined()
+  })
+})
+
+describe("the required Suite step (workspace)", () => {
+  it("reads the state of the step for a delivery", async () => {
+    rpcResult = { data: { delivery_id: "d1", satisfied: false, waived: false, account_suite: null, reserved_suite: null }, error: null }
+    const st = await getSuiteStepState("d1")
+    expect(st.satisfied).toBe(false)
+    expect(rpcCalls[0]).toEqual({ fn: "suite_step_state", args: { p_delivery: "d1" } })
+  })
+  it("a failed read throws — it is never mistaken for 'not needed'", async () => {
+    rpcResult = { data: null, error: { message: "timeout" } }
+    await expect(getSuiteStepState("d1")).rejects.toThrow("Could not read the suite step")
+    rpcResult = { data: null, error: null }
+    await expect(getSuiteStepState("d1")).rejects.toThrow("Could not read the suite step")
+  })
+  it("Issue suite calls the database function and returns the suite", async () => {
+    rpcResult = { data: "3D-330", error: null }
+    expect(await issueSuiteForDelivery("d1", "dashboard:luca")).toBe("3D-330")
+    expect(rpcCalls[0]).toEqual({ fn: "issue_delivery_suite", args: { p_delivery: "d1", p_actor: "dashboard:luca" } })
+  })
+  it("Issue suite surfaces the database's refusal", async () => {
+    rpcResult = { data: null, error: { message: "error: Suite 3D-330 already belongs to another company CONTEXT: x" } }
+    await expect(issueSuiteForDelivery("d1")).rejects.toThrow(/^Suite 3D-330 already belongs to another company/)
+  })
+  it("the waiver needs a reason and is trimmed; nothing is called without one", async () => {
+    await expect(waiveSuiteForDelivery("d1", "   ")).rejects.toThrow("A reason is required")
+    expect(rpcCalls).toHaveLength(0)
+    rpcResult = { data: { waived: true }, error: null }
+    await waiveSuiteForDelivery("d1", "  one-time customer ", "dashboard:antonio")
+    expect(rpcCalls[0]).toEqual({ fn: "waive_delivery_suite", args: { p_delivery: "d1", p_reason: "one-time customer", p_actor: "dashboard:antonio" } })
+  })
+  it("a waiver the company already has a suite for is refused with the database's words", async () => {
+    rpcResult = { data: null, error: { message: "This company already has suite 3D-311 — there is nothing to waive." } }
+    await expect(waiveSuiteForDelivery("d1", "x")).rejects.toThrow("nothing to waive")
+  })
+  it("removes a waiver", async () => {
+    rpcResult = { data: true, error: null }
+    await unwaiveSuiteForDelivery("d1", "t")
+    expect(rpcCalls[0]).toEqual({ fn: "unwaive_delivery_suite", args: { p_delivery: "d1", p_actor: "t" } })
+  })
+  it("claim-only returns the claimed suite, or null when nothing was reserved (it never issues)", async () => {
+    rpcResult = { data: "3D-305", error: null }
+    expect(await claimCompanySuite("a1", "d1", "t")).toBe("3D-305")
+    expect(rpcCalls[0]).toEqual({ fn: "claim_company_suite", args: { p_account: "a1", p_delivery: "d1", p_actor: "t" } })
+    rpcResult = { data: null, error: null }
+    expect(await claimCompanySuite("a1", null)).toBeNull()
   })
 })
