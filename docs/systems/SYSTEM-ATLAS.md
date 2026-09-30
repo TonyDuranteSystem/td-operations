@@ -197,7 +197,7 @@ _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [formation.md](formation.md) — Company Formation _(verified 2026-09-26)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-29)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-30)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-08-30)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-09-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-28)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-29)_
@@ -207,7 +207,7 @@ _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-29)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-29)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-09-30)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-09-29)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_

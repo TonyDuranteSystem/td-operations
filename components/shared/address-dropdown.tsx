@@ -22,12 +22,28 @@ function subtitleLine(row: AddressRow): string {
   return [row.city, row.state, row.zip].filter(Boolean).join(' ')
 }
 
+/** The whole address, one field per line: street, suite/unit, then city state ZIP. */
+function AddressLines({ row, emphasise = false }: { row: AddressRow; emphasise?: boolean }) {
+  return (
+    <span className="block text-xs text-zinc-600 leading-snug whitespace-normal break-words">
+      <span className="block">{row.address_line1}</span>
+      {row.address_line2 && (
+        <span className={cn('block', emphasise && 'font-semibold text-zinc-900')}>{row.address_line2}</span>
+      )}
+      <span className="block">{subtitleLine(row)}</span>
+    </span>
+  )
+}
+
 function matchesSearch(row: AddressRow, q: string): boolean {
   const lower = q.toLowerCase()
   return (
     row.name.toLowerCase().includes(lower) ||
+    row.address_line1.toLowerCase().includes(lower) ||
+    (row.address_line2?.toLowerCase().includes(lower) ?? false) ||
     row.city.toLowerCase().includes(lower) ||
     row.state.toLowerCase().includes(lower) ||
+    row.zip.toLowerCase().includes(lower) ||
     (row.county?.toLowerCase().includes(lower) ?? false)
   )
 }
@@ -124,12 +140,10 @@ export function AddressDropdown({
           <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
           {selectedRow ? (
             <div className="min-w-0 flex-1 text-left">
-              <span className="block truncate font-medium text-zinc-900 text-sm">
+              <span className="block font-medium text-zinc-900 text-sm whitespace-normal break-words">
                 {selectedRow.name}
               </span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {subtitleLine(selectedRow)}
-              </span>
+              <AddressLines row={selectedRow} emphasise />
             </div>
           ) : (
             <span className="text-sm">{placeholder}</span>
@@ -166,7 +180,7 @@ export function AddressDropdown({
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Filter by name, city, state..."
+                placeholder="Filter by name, street, suite, city..."
                 className="w-full pl-8 pr-3 py-1.5 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
             </div>
@@ -201,16 +215,16 @@ export function AddressDropdown({
                   <div className="flex-1 min-w-0">
                     <span
                       className={cn(
-                        'block truncate font-medium',
+                        'block font-medium whitespace-normal break-words',
                         value === row.id && 'text-blue-700'
                       )}
                     >
                       {row.name}
                     </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {subtitleLine(row)}
-                      {row.county ? ` · ${row.county} County` : ''}
-                    </span>
+                    <AddressLines row={row} emphasise />
+                    {row.county && (
+                      <span className="block text-xs text-muted-foreground">{row.county} County</span>
+                    )}
                   </div>
                   {row.linked_account_count > 0 && (
                     <span className="shrink-0 self-center text-xs text-muted-foreground bg-zinc-100 px-1.5 py-0.5 rounded-full">

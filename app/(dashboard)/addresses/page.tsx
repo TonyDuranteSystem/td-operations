@@ -34,7 +34,7 @@ const EMPTY_FORM: AddressForm = {
 
 const TABS: { kind: TabKind; label: string }[] = [
   { kind: 'registered_agent', label: 'Registered Agents' },
-  { kind: 'business_legal', label: 'Legal Addresses' },
+  { kind: 'business_legal', label: 'Principal Offices' },
   { kind: 'business_mailing', label: 'CMRA Addresses' },
   { kind: 'shipping', label: 'Mailing Addresses' },
 ]
@@ -59,13 +59,6 @@ function rowToForm(row: AddressRow): AddressForm {
 
 function formValid(form: AddressForm): boolean {
   return !!(form.name.trim() && form.address_line1.trim() && form.city.trim() && form.state.trim() && form.zip.trim())
-}
-
-function fmtAddress(row: AddressRow): string {
-  const parts = [row.address_line1]
-  if (row.address_line2) parts.push(row.address_line2)
-  parts.push(`${row.city}, ${row.state} ${row.zip}`)
-  return parts.join(', ')
 }
 
 // ─── Form fields ─────────────────────────────────────────────────────────────
@@ -310,7 +303,11 @@ function AddressRowItem({
             )}
           </div>
 
-          <p className="text-xs text-zinc-500 mt-0.5">{fmtAddress(row)}</p>
+          <div className="mt-1 text-sm text-zinc-700 leading-snug">
+            <div>{row.address_line1}</div>
+            {row.address_line2 && <div className="font-semibold text-zinc-900">{row.address_line2}</div>}
+            <div>{row.city}, {row.state} {row.zip}</div>
+          </div>
 
           {kind === 'registered_agent' && (
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-zinc-400">
@@ -450,7 +447,7 @@ export default function AddressesPage() {
             <MapPin className="h-5 w-5 text-zinc-400" />
             <div>
               <h1 className="text-lg font-semibold">Address Registry</h1>
-              <p className="text-xs text-muted-foreground">Shared address records for legal, mailing, and registered agent addresses</p>
+              <p className="text-xs text-muted-foreground">Shared address records for principal office, CMRA, mailing, and registered agent addresses</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
