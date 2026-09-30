@@ -211,6 +211,18 @@ async function createServiceDelivery(
       return { name: "service_delivery", status: "error", detail: sdErr?.message || "Insert failed" }
     }
 
+    // A placed formation / onboarding company gets its suite too (this raw insert does not go through
+    // createSD's issue-at-start hook). Idempotent; non-fatal — the lease step issues one as well.
+    if (serviceType === "Company Formation" || serviceType === "Client Onboarding") {
+      try {
+        const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import("@/lib/operations/suite")
+        const suite = await allocateCompanySuite({ accountId, deliveryId: sd.id, actor: "crm-admin:place-client" })
+        await syncPhysicalAddressToSuite(accountId, suite)
+      } catch (suiteErr) {
+        console.error("[place-client] suite issue failed (non-fatal):", suiteErr instanceof Error ? suiteErr.message : suiteErr)
+      }
+    }
+
     // Create auto-tasks from pipeline_stages
     const { data: pipelineStage } = await supabaseAdmin
       .from("pipeline_stages")
@@ -431,7 +443,7 @@ async function createOA(
 
 async function createLeaseForPlacement(
   accountId: string,
-  suiteNumber: string,
+  suiteNumber?: string,
 ): Promise<StepResult> {
   // No explicit contact_id — createLease resolves the tenant/signer itself
   // from the account's members table (is_signer flag), not from the generic
@@ -440,9 +452,10 @@ async function createLeaseForPlacement(
   const { createLease } = await import("@/lib/operations/lease")
   const result = await createLease({
     account_id: accountId,
-    suite_number: suiteNumber,
+    // Only when staff typed one (an existing client's known suite); otherwise the lease uses the company's own suite.
+    ...(suiteNumber ? { suite_number: suiteNumber } : {}),
     actor: "crm-admin:place-client",
-    summary: `Created lease during Place Client flow (Suite ${suiteNumber})`,
+    summary: `Created lease during Place Client flow${suiteNumber ? ` (Suite ${suiteNumber})` : ""}`,
   })
 
   if (result.outcome === "duplicate" && result.existing) {
@@ -695,10 +708,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Primary contact not found: ${ctErr?.message || "no data"}` }, { status: 400 })
     }
 
-    // Validate suite_number if lease is requested
-    if (actions.lease && !suite_number) {
-      return NextResponse.json({ error: "Suite number is required for lease creation" }, { status: 400 })
-    }
+    // suite_number is OPTIONAL: blank = the lease uses the company's own suite (issued if it has none).
+    // Typing one is only for an existing client whose known suite is being placed — the database refuses
+    // a suite that belongs to another company or contradicts the company's own.
 
     // ─── Execute steps ───
     const results: StepResult[] = []
@@ -730,8 +742,8 @@ export async function POST(request: Request) {
     }
 
     // 4. Lease
-    if (actions.lease && suite_number) {
-      const r = await createLeaseForPlacement(account_id, suite_number)
+    if (actions.lease) {
+      const r = await createLeaseForPlacement(account_id, suite_number?.trim() || undefined)
       results.push(r)
     }
 

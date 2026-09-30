@@ -46,7 +46,7 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
     if (result.success) {
       toast.success('Suite changed')
       if ((result.signedLeasesToReplace ?? 0) > 0) {
-        toast.warning(`${result.signedLeasesToReplace} signed lease(s) still show the old suite — delete and reissue them.`)
+        toast.warning(`${result.signedLeasesToReplace} signed lease(s) still show the old suite — use Delete lease in Documents, then create a corrected lease.`)
       }
       setChanging(false)
       setNewSuite('')

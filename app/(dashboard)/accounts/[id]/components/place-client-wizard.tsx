@@ -128,10 +128,6 @@ export function PlaceClientWizard({
   const stages = serviceCategory === 'formation' ? FORMATION_STAGES : ONBOARDING_STAGES
 
   const handleExecute = () => {
-    if (actions.lease && !suiteNumber.trim()) {
-      toast.error('Suite number is required for lease creation')
-      return
-    }
     if (!reason.trim()) {
       toast.error('Please provide a reason')
       return
@@ -356,7 +352,7 @@ export function PlaceClientWizard({
                       />
                       {actions.lease && !existing?.lease && (
                         <div className="ml-9">
-                          <label className="text-xs text-muted-foreground">Suite Number (required)</label>
+                          <label className="text-xs text-muted-foreground">Suite Number (optional — leave blank to use the company&apos;s own suite)</label>
                           <input
                             type="text"
                             value={suiteNumber}

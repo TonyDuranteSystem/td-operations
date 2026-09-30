@@ -200,7 +200,7 @@ export async function issueCompanySuite(accountId: string): Promise<ActionResult
 /**
  * Change or remove a company's locked suite. OWNER ONLY, a reason is required, and the change is
  * logged. Unsigned leases follow the new suite; signed leases are reported back so they can be
- * deleted and reissued (the lease screen has the admin delete).
+ * deleted and reissued (the account's Documents panel has the owner-only "Delete lease").
  */
 export async function changeCompanySuite(
   accountId: string,
