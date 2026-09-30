@@ -770,7 +770,11 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         contactId: p.contact_id,
         leadId: p.lead_id,
         submitted,
-        offerToken: p.token,
+        // The formation OFFER's token (bug-hunter + E2E ★6, 2026-09-29) — p.token
+        // is the wizard submission's token, which stamped ITINs with a value no
+        // offer lookup could ever match. Fallback kept for a formation without
+        // a resolvable offer (legacy).
+        offerToken: offerToken ?? p.token,
       })
       if (itin.created === 0 && itin.skipped === 0) {
         result.steps.push(step("itin_deliveries", "skipped", "No one applied for ITIN"))
