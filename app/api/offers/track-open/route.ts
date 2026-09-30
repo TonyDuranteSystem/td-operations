@@ -15,9 +15,10 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(req: NextRequest) {
   const r = await readOfferRequest(req)
-  const access = await resolvePublicOfferAccess(req, { ...r, preview: false }, { offerColumns: 'id, token, access_code, status, view_count' })
+  const access = await resolvePublicOfferAccess(req, r, { offerColumns: 'id, token, access_code, status, view_count', clientAction: true })
   if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
   if (access.kind !== 'offer') return NextResponse.json({ ok: true, skipped: 'not_an_offer' })
+  if (access.staffPreview) return NextResponse.json({ ok: true, skipped: 'staff_preview' })
 
   const o = access.offer
   const status = o.status === 'draft' || o.status === 'sent' || o.status === 'published' ? 'viewed' : o.status

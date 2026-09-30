@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     // N0 (dev job f907220c): this route rewrites the offer's payment link. With the
     // token alone (the client's name + the year) anyone could do that; it now needs the
     // offer's access code, like every other public offer route.
-    const access = await resolvePublicOfferAccess(req, { token, code: code || "", preview: false }, { offerColumns: "token, access_code" })
+    const access = await resolvePublicOfferAccess(req, { token, code: code || "" }, { offerColumns: "token, access_code", clientAction: true })
     if (access.error || access.kind !== "offer") {
       return NextResponse.json({ error: access.error || "Offer not found" }, { status: access.status || 404 })
     }

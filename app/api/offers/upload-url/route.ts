@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(req: NextRequest) {
   const r = await readOfferRequest(req)
-  const access = await resolvePublicOfferAccess(req, r, { offerColumns: 'id, token, access_code, status, contract_type' })
+  const access = await resolvePublicOfferAccess(req, r, { offerColumns: 'id, token, access_code, status, contract_type', clientAction: true })
   if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
 
   const token = access.kind === 'offer' ? String(access.offer.token) : String(access.agreement.token)

@@ -36,12 +36,18 @@ const ROOT = process.cwd()
 
 /**
  * What the browser genuinely requires. Derived from the code, not guessed.
- * `contracts` is the only table the browser INSERTs into (offer signing).
+ * Since N0 (2026-09-30) the browser INSERTs into no table with the anon key.
  * `member_info_requests` is read-only from the browser — its writes go through
  * a service-key route.
  */
 const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
-  annual_agreements: ["SELECT", "UPDATE"],
+  // NO annual_agreements / contracts / offers entries — N0 (dev job f907220c,
+  // 2026-09-30): the offer page, the email-gate page, the contract page and all four
+  // signing components (formation MSA, onboarding, standalone, annual renewal) read and
+  // write ONLY through the server routes under /api/offers (service key, access code /
+  // renewal portal pass / staff session). Signed PDFs and wire receipts upload through
+  // server-issued one-time links. The anon grants on these three tables are revoked by
+  // the N0 lock migration, run only after this code is live.
   // NO banking_submissions entry — both banking-form pages (the bare
   // email-gated page and the [code] page) moved fully server-side
   // (service key) 2026-09-20: /api/banking-form/[token]/data (fetch,
@@ -54,7 +60,6 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // final submit) and /api/closure-form/[token]/gate (the pre-code email
   // gate, which used to fetch the FULL row — including the real access_code
   // and owner_email — before any email was even checked).
-  contracts: ["INSERT", "UPDATE"],
   form_8832_applications: ["SELECT", "UPDATE"],
   // NO formation_submissions entry — both formation-form pages moved fully
   // server-side (service key) 2026-09-20, same shape as tax_return_submissions:
@@ -83,7 +88,6 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // That closes the last anon-write hole and unblocks revoking the anon UPDATE
   // grant on oa_agreements (migration 20260811-2100). The signed-oa BUCKET stays
   // anon-reachable (the canonical page still downloads signature images from it).
-  offers: ["SELECT", "UPDATE"],
   // NO onboarding_submissions entry — both onboarding-form pages moved fully
   // server-side (service key) 2026-09-20, same shape as formation_submissions
   // above: /api/onboarding-form/[token]/data + /api/onboarding-form/[token]/gate.

@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
 import type { Offer } from '@/lib/types/offer'
 import StandaloneServiceAgreement, { SERVICE_CONTENT } from './standalone-service-agreement'
 import RenewalAgreement from './renewal-agreement'
@@ -12,12 +11,16 @@ import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
-import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
-import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { isClientFacingError } from '@/lib/public-forms/signing-failures'
+import { fetchOfferView, submitWireReceipt, uploadAndSignOffer, createOfferCheckout, type OfferCredential } from '@/lib/offers/offer-api-client'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+/** "Back to offer" keeps the client's access code, so they are not sent back to the email gate. */
+function offerBackHref(token: string, cred: OfferCredential): string {
+  return cred.code
+    ? `/offer/${encodeURIComponent(token)}/${encodeURIComponent(cred.code)}`
+    : `/offer/${encodeURIComponent(token)}`
+}
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -96,7 +99,7 @@ interface FormData {
   passport_exp: string
 }
 
-function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { offer: Offer; cl: typeof CL['en']; hasCard: boolean; hasBank: boolean; token: string }) {
+function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token, cred }: { offer: Offer; cl: typeof CL['en']; hasCard: boolean; hasBank: boolean; token: string; cred: OfferCredential }) {
   // Ensure real bank details (replace placeholders with EUR/USD defaults)
   const offer = useMemo(() => {
     if (!rawOffer.bank_details) return rawOffer
@@ -137,6 +140,7 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
   const amountIsUnstateable = Boolean(payable.planRefusal)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
   const [uploadStatus, setUploadStatus] = useState<string>('')
+  const [uploadError, setUploadError] = useState<string>('')
   const [uploading, setUploading] = useState(false)
 
   async function handleUpload() {
@@ -144,17 +148,12 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
     setUploading(true)
     setUploadStatus('')
     try {
-      const ext = receiptFile.name.split('.').pop() || 'pdf'
-      const path = `${token}/wire-receipt-${Date.now()}.${ext}`
-      const res = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
-        body: receiptFile
-      })
-      if (!res.ok) throw new Error(cl.receiptFail)
-      await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', token)
+      // Server-issued one-time upload link + server-side record (N0) — the browser no
+      // longer writes the bucket or the contracts row with the public key.
+      await submitWireReceipt(cred, receiptFile)
       setUploadStatus('success')
-    } catch {
+    } catch (e) {
+      setUploadError(e instanceof Error && e.message ? e.message : '')
       setUploadStatus('error')
       setUploading(false)
     }
@@ -229,13 +228,13 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token }: { off
                 {uploading ? cl.receiptUploading : uploadStatus === 'success' ? cl.uploaded : cl.receiptBtn}
               </button>
               {uploadStatus === 'success' && <p style={{ fontSize: '9pt', color: 'var(--c-green)', fontWeight: 600, marginTop: 8 }}>{cl.receiptDone}</p>}
-              {uploadStatus === 'error' && <p style={{ fontSize: '9pt', color: 'var(--c-red)', marginTop: 8 }}>{cl.receiptFail}</p>}
+              {uploadStatus === 'error' && <p style={{ fontSize: '9pt', color: 'var(--c-red)', marginTop: 8 }}>{cl.receiptFail}{uploadError ? `: ${uploadError}` : ''}</p>}
             </div>
           </div>
         )}
 
         <p style={{ fontSize: '9.5pt', color: 'var(--c-muted)', marginTop: 24 }}>{cl.afterPayment}</p>
-        <a href={`/offer/${encodeURIComponent(token)}`} className="contract-success-link" dangerouslySetInnerHTML={{ __html: cl.backToOffer }} />
+        <a href={offerBackHref(token, cred)} className="contract-success-link" dangerouslySetInnerHTML={{ __html: cl.backToOffer }} />
       </div>
     </div>
   )
@@ -247,6 +246,16 @@ export default function ContractPage() {
   const searchParams = useSearchParams()
   const token = params.token as string
   const isCheckoutPreview = searchParams.get('checkout') === '1'
+  // N0: the page carries the offer's access code (?c=) — or, for a renewal agreement opened
+  // from the portal, a short-lived pass (?pass=) that the first server call exchanges for a
+  // longer grant kept in memory. Every read and write goes through /api/offers with it.
+  const [grant, setGrant] = useState<string>('')
+  const cred: OfferCredential = useMemo(() => ({
+    token,
+    code: searchParams.get('c') || '',
+    pass: grant || searchParams.get('pass') || '',
+    preview: searchParams.get('preview') === 'td',
+  }), [token, searchParams, grant])
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -281,26 +290,16 @@ export default function ContractPage() {
   async function loadOffer() {
     try {
       let rawData: any = null
-      const { data: offerData, error: offerErr } = await supabasePublic.from('offers').select('*').eq('token', token).single()
-      if (!offerErr && offerData) {
-        rawData = offerData
-      } else {
-        // Fallback: check annual_agreements (new table for renewal contracts)
-        const { data: agData } = await supabasePublic
-          .from('annual_agreements')
-          .select('token, client_name, client_email, language, effective_date, services, cost_summary, payment_type, status, agreement_year')
-          .eq('token', token)
-          .single()
-        if (agData) {
-          rawData = {
-            ...agData,
-            contract_type: 'renewal',
-            installment_currency: 'USD',
-            currency: 'USD',
-            cost_summary: agData.cost_summary || [],
-            services: agData.services || [],
-          }
-        }
+      // One server call for both an offer and a renewal agreement (the server shapes a
+      // renewal exactly as this page used to). The row never carries the access code.
+      try {
+        const view = await fetchOfferView(cred)
+        rawData = view.offer
+        if (view.grant) setGrant(view.grant)
+      } catch (e) {
+        setError(e instanceof Error && e.message ? e.message : 'Offer not found.')
+        setLoading(false)
+        return
       }
       if (!rawData) { setError('Offer not found.'); setLoading(false); return }
       const o = rawData as Offer
@@ -313,7 +312,7 @@ export default function ContractPage() {
       // others. Send them back to the real picker instead of rendering
       // anything signable.
       if (Array.isArray(o.packages) && o.packages.length > 0 && !o.package_locked_at) {
-        router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(o.access_code || '')}`)
+        router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(cred.code || '')}`)
         return
       }
       // Safeguard: parse JSONB fields that may be stored as strings
@@ -346,7 +345,7 @@ export default function ContractPage() {
           payment_plan: null,
         })
         if (gatePayable.gross > 0) {
-          router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(o.access_code || '')}`)
+          router.replace(`/offer/${encodeURIComponent(token as string)}/${encodeURIComponent(cred.code || '')}`)
           return
         }
       }
@@ -636,26 +635,7 @@ export default function ContractPage() {
       // Save blob for client download
       pdfBlobRef.current = pdfBlob
 
-      // Upload PDF
       setStatusMsg('Uploading signed contract...')
-      const pdfPath = `${offer.token}/contract-signed-${Date.now()}.pdf`
-      // The signed PDF must reach storage BEFORE the contract row is written.
-      // This POST used to be unchecked: a rejected upload (RLS, network, size)
-      // fell straight through to the insert, the "signed" status flip and the
-      // success screen, leaving TD with a signed offer and no signed document.
-      // Ordering invariant for this whole handler: artifact -> record -> status
-      // -> webhook, each one gating the next.
-      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
-        body: pdfBlob
-      })
-      if (storageWriteFailed(pdfRes)) {
-        // Detail goes to us, never to the client (see signing-failures.ts).
-        console.error('[contract] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
-        throw new SigningFailure('document_upload', signingLang(offer.language))
-      }
-
       // Save contract record — include business fields from offer
       // Derive LLC type: prefer offer.entity_type (canonical source since the
       // MMLLC build, 2026-04-22). Fall back to string-matching service names
@@ -694,8 +674,13 @@ export default function ContractPage() {
         ? new Date(offer.offer_date).getFullYear().toString()
         : new Date().getFullYear().toString()
 
-      const contractData: Record<string, any> = {
-        offer_token: offer.token,
+      // N0 (dev job f907220c): the server now does what this page used to do with the
+      // public key — checks the uploaded PDF, writes the contracts row, flips the offer to
+      // signed (payment links cleared, wire amount = net due now, computed server-side with
+      // the SAME engine and rules that used to run here — lib/offers/public-signing.ts) and
+      // runs the signing follow-up in-process. Order and failure messages are unchanged;
+      // a retry after a lost response now finishes whatever did not complete.
+      const signed = await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_Contract_${offer.token}.pdf`, {
         client_name: form.name,
         client_email: form.email,
         client_phone: form.phone,
@@ -707,121 +692,14 @@ export default function ContractPage() {
         client_nationality: form.nationality,
         client_passport: form.passport,
         client_passport_exp: form.passport_exp,
-        signed_at: new Date().toISOString(),
-        pdf_path: pdfPath,
-        status: 'signed',
         llc_type: llcType,
         annual_fee: annualFee > 0 ? annualFee.toString() : null,
         contract_year: contractYear,
         installments: annualFee > 0 ? JSON.stringify({ jan: installmentJan, jun: installmentJun }) : null,
-      }
-      // supabase-js RETURNS errors, it does not throw — this insert used to
-      // discard the result entirely, so a rejected write still reached the
-      // status flip, the activation webhook and the success screen. A client
-      // could sign, pay by wire, and leave no contract row at all.
-      // NOTE: contracts.offer_token carries a plain index, NOT a unique
-      // constraint (verified against production 2026-07-20), so a legitimate
-      // re-sign inserts a second row rather than failing here.
-      const { error: contractErr } = await supabasePublic.from('contracts').insert(contractData)
-      if (contractErr) {
-        console.error('[contract] contract row insert failed:', contractErr.message)
-        throw new SigningFailure('record', signingLang(offer.language))
-      }
-
-      // Recalculate correct amount from selected_services for bank_details
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const selSet = new Set(Array.isArray((offer as any).selected_services) ? (offer as any).selected_services as string[] : [])
-      // WS-A3 site #6: the bank-reference amount recalculated at signing.
-      // NOTE (documented divergence, deliberately preserved): unlike the
-      // displayed setup fee above, this total does NOT filter by contract type
-      // — the wire covers everything the client is signing for across bundled
-      // agreements. Both semantics are intentional; the engine expresses each
-      // explicitly instead of two look-alike inline loops.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const correctCurrency = (offer as any).currency === 'USD' ? '$' : '€'
-      // NET, not gross. This is the amount the client is TOLD TO WIRE, so it must
-      // equal the invoice of record like every other rail. It previously ignored
-      // the credit entirely, so a credit-holding client was shown one figure on
-      // the offer page and a larger one on the contract's bank panel — and the
-      // overpayment would land nowhere, because settlement caps at the invoice.
-      //
-      // WS-C: DUE NOW, not the whole commitment. When the setup fee is paid in parts, the
-      // wire panel must quote the part that falls due at signing — the client is signing for
-      // the full amount but transferring the first part. `dueNow` equals `net` on every offer
-      // without a plan, so this is unchanged for all of them.
-      const correctPayable = computeOfferPayable(
-        {
-          services: offer.services,
-          cost_summary: offer.cost_summary,
-          selected_services: Array.from(selSet),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          currency: (offer as any).currency,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          credit_amount: (offer as any).credit_amount,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          payment_plan: (offer as any).payment_plan,
-        },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { currencyOverride: (offer as any).currency === 'USD' ? 'USD' : 'EUR' },
-      )
-      const correctTotal = correctPayable.dueNow
-
-      // Update offer status + recalculated bank amount (retry).
-      // This submit handler runs only for NEW contracts
-      // (formation/onboarding/tax_return/itin). Renewals are rendered by
-      // the RenewalAgreement component (page.tsx:837), which has its own
-      // submit flow that fires /api/webhooks/agreement-signed instead.
-      // ⛔ AN UNUSABLE PLAN QUOTES NO WIRE FIGURE AT ALL.
-      //
-      // When the plan cannot be trusted (a revision changed the offer's total so the parts no
-      // longer add up, say) the amount engine falls back to the whole net. Printing that on the
-      // bank panel is the one genuinely harmful option: the client wires the FULL amount, the
-      // invoice of record settles at the FIRST PART, and the surplus floats — and there is no
-      // disposition for a floating surplus yet. That is an overpayment the system cannot resolve,
-      // not a mismatch between two screens.
-      //
-      // So the panel keeps whatever it already said and we quote nothing new. The client asks,
-      // which is recoverable; an unexplained EUR1,250 sitting in the bank is not. The card rail
-      // already refuses such an offer outright, so both rails now decline rather than disagree.
-      const bankUpdate = correctTotal > 0 && offer.bank_details && !correctPayable.planRefusal
-        ? { bank_details: { ...offer.bank_details, amount: `${correctCurrency}${correctTotal.toLocaleString('en-US')}` } }
-        : {}
-      if (correctPayable.planRefusal) {
-        console.error(`[offer-contract] wire amount NOT quoted — ${correctPayable.planRefusal}`)
-      }
-      // This loop used to exit NORMALLY when all three attempts failed, which is
-      // worse than an unchecked call because it LOOKS like it handles errors:
-      // the client saw "signed", the offer stayed unsigned, and the activation
-      // webhook below fired anyway. Track success explicitly and stop if it
-      // never happened.
-      let statusUpdated = false
-      let lastStatusErr: string | null = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed', payment_links: null, ...bankUpdate }).eq('token', offer.token)
-          if (!pErr) { statusUpdated = true; break }
-          lastStatusErr = pErr.message
-        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
-      }
-      if (!statusUpdated) {
-        // The signature IS saved at this point (PDF stored, contract row
-        // written), so the message must NOT tell the client it is unsigned —
-        // it asks them to contact us to confirm. The webhook below is skipped:
-        // firing it would create a pending activation for an offer we could not
-        // mark signed.
-        console.error('[contract] offer status update failed after 3 attempts:', lastStatusErr)
-        throw new SigningFailure('status', signingLang(offer.language))
-      }
-
-      // Notify backend that contract was signed → creates pending_activation
-      try {
-        await fetch('/api/webhooks/offer-signed', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
-          body: JSON.stringify({ offer_token: offer.token })
-        })
-      } catch (e) {
-        console.warn('[contract] Failed to notify offer-signed webhook:', e)
+      }, offer.language)
+      const correctPayable = { planRefusal: signed.planRefusal }
+      if (signed.planRefusal) {
+        console.error(`[offer-contract] wire amount NOT quoted — ${signed.planRefusal}`)
       }
 
       // Post-sign behavior — show payment choice buttons
@@ -831,13 +709,8 @@ export default function ContractPage() {
 
       if (isCheckoutOffer) {
         try {
-          const checkoutRes = await fetch('/api/offers/create-checkout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: offer.token }),
-          })
-          if (checkoutRes.ok) {
-            const checkoutData = await checkoutRes.json()
+          const checkoutData = await createOfferCheckout(cred)
+          if (checkoutData?.checkoutUrl) {
             stripeLink = { url: checkoutData.checkoutUrl, amount: checkoutData.label }
           }
         } catch (e) {
@@ -852,6 +725,9 @@ export default function ContractPage() {
 
       const hasCard = !!stripeLink
       const hasBank = !!offer.bank_details
+      // The amount the server just stored (net, due now) — the panel used to show the
+      // figure the page loaded BEFORE signing, which could differ from the stored one.
+      const shownBankAmount = signed.bankAmount || offer.bank_details?.amount || ''
       const successEl = document.getElementById('success-state')
 
       // Shared by BOTH post-sign panels (with and without payment): serve the
@@ -862,7 +738,7 @@ export default function ContractPage() {
           try {
             let blob = pdfBlobRef.current
             if (!blob) {
-              const res = await fetch(`/api/offer/${encodeURIComponent(offer.token)}/contract-pdf?code=${encodeURIComponent(offer.access_code || '')}`)
+              const res = await fetch(`/api/offer/${encodeURIComponent(offer.token)}/contract-pdf?code=${encodeURIComponent(cred.code || '')}`)
               if (res.ok) {
                 const { url: signedUrl } = await res.json().catch(() => ({ url: null }))
                 if (signedUrl) {
@@ -914,7 +790,7 @@ export default function ContractPage() {
           sh += `<button id="choose-bank" class="ps-choice-btn ps-choice-bank" type="button">`
           sh += `<span class="ps-choice-icon">&#127974;</span>`
           sh += `<span class="ps-choice-label">${cl.payByTransfer}</span>`
-          sh += `<span class="ps-choice-price">${esc(offer.bank_details!.amount || '')}</span>`
+          sh += `<span class="ps-choice-price">${esc(shownBankAmount)}</span>`
           sh += '</button>'
         }
         sh += '</div>'
@@ -925,7 +801,7 @@ export default function ContractPage() {
           sh += '<div id="bank-panel" style="display:none;">'
           sh += `<div class="post-sign-option">`
           sh += `<div class="post-sign-option-label">&#127974; ${cl.payByTransfer}</div>`
-          if (b.amount) sh += `<div class="post-sign-bank-amount">${esc(b.amount)}</div>`
+          if (shownBankAmount) sh += `<div class="post-sign-bank-amount">${esc(shownBankAmount)}</div>`
           sh += `<div class="contract-bank-details-box"><h3>${cl.bankTitle}</h3>`
           if (b.beneficiary) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.beneficiary}</span><span class="contract-bank-value">${esc(b.beneficiary)}</span></div>`
           if (b.account_number) sh += `<div class="contract-bank-row"><span class="contract-bank-label">${cl.accountNumber}</span><span class="contract-bank-value">${esc(b.account_number)}</span></div>`
@@ -955,7 +831,7 @@ export default function ContractPage() {
         sh += '<button id="download-pdf-btn" style="padding:10px 32px;font-size:14px;font-weight:600;background:#0A3161;color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:Georgia,serif;">Download Signed PDF</button>'
         sh += '</div>'
         sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${cl.afterPayment}</p>`
-        sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
+        sh += `<a href="${esc(offerBackHref(offer.token, cred))}" class="contract-success-link">${cl.backToOffer}</a>`
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
@@ -993,21 +869,13 @@ export default function ContractPage() {
             receiptBtn.textContent = cl.receiptUploading
             receiptStatus.textContent = ''
             try {
-              const ext = receiptFile.name.split('.').pop() || 'pdf'
-              const path = `${offer.token}/wire-receipt-${Date.now()}.${ext}`
-              const uploadRes = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
-                method: 'POST',
-                headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
-                body: receiptFile
-              })
-              if (!uploadRes.ok) throw new Error(cl.receiptFail)
-              await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
+              await submitWireReceipt(cred, receiptFile)
               receiptStatus.innerHTML = `<span style="color:var(--c-green);font-weight:600">${cl.receiptDone}</span>`
               receiptBtn.textContent = cl.uploaded
               const dropEl = document.getElementById('receipt-drop')
               if (dropEl) dropEl.style.borderColor = 'var(--c-green)'
             } catch (e: any) {
-              receiptStatus.innerHTML = `<span style="color:var(--c-red)">${cl.receiptFail}: ${e.message}</span>`
+              receiptStatus.innerHTML = `<span style="color:var(--c-red)">${cl.receiptFail}: ${esc(e?.message || '')}</span>`
               receiptBtn.disabled = false
               receiptBtn.textContent = cl.receiptBtn
             }
@@ -1028,7 +896,7 @@ export default function ContractPage() {
         sh += '<div style="margin-top:8px;padding-top:16px;border-top:1px solid #d4e8d4;">'
         sh += '<button id="download-pdf-btn" style="padding:10px 32px;font-size:14px;font-weight:600;background:#0A3161;color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:Georgia,serif;">Download Signed PDF</button>'
         sh += '</div>'
-        sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
+        sh += `<a href="${esc(offerBackHref(offer.token, cred))}" class="contract-success-link">${cl.backToOffer}</a>`
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
@@ -1064,7 +932,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <CheckoutPreview offer={offer} cl={cl} hasCard={!!hasCard} hasBank={hasBank} token={token} />
+        <CheckoutPreview offer={offer} cl={cl} hasCard={!!hasCard} hasBank={hasBank} token={token} cred={cred} />
       </>
     )
   }
@@ -1074,7 +942,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <RenewalAgreement offer={offer} token={token} />
+        <RenewalAgreement offer={offer} token={token} cred={cred} />
       </>
     )
   }
@@ -1084,7 +952,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="tax_return" />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="tax_return" cred={cred} />
       </>
     )
   }
@@ -1094,7 +962,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="itin" />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="itin" cred={cred} />
       </>
     )
   }
@@ -1104,7 +972,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="closure" />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="closure" cred={cred} />
       </>
     )
   }
@@ -1114,7 +982,7 @@ export default function ContractPage() {
     return (
       <>
         <ContractStyles />
-        <ServiceAgreement offer={offer} token={token} />
+        <ServiceAgreement offer={offer} token={token} cred={cred} />
       </>
     )
   }

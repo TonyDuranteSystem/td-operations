@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
+import { fetchOfferView, trackOfferOpen, saveOfferSelection, createOfferCheckout, contractCredentialQuery, type OfferCredential } from '@/lib/offers/offer-api-client'
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { openCheckoutTab, deliverCheckout, closeCheckoutTab } from '@/lib/payments/checkout-redirect'
@@ -161,16 +161,6 @@ function formatDate(d: string, lang: 'en' | 'it') {
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`
 }
 
-const COOKIE_NAME = 'offer_verified'
-
-function setVerifiedCookie(token: string) {
-  document.cookie = `${COOKIE_NAME}_${token}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Strict`
-}
-
-function hasVerifiedCookie(token: string): boolean {
-  return document.cookie.includes(`${COOKIE_NAME}_${token}=1`)
-}
-
 // ─── Component ──────────────────────────────────────────────
 
 export default function OfferPageWithCode() {
@@ -182,9 +172,12 @@ export default function OfferPageWithCode() {
   const [offer, setOffer] = useState<Offer | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [verified, setVerified] = useState(false)
-  const [emailInput, setEmailInput] = useState('')
-  const [emailError, setEmailError] = useState(false)
+  // N0: the access code in this link is the credential for every server call.
+  // (`pass` = a CRM-minted staff preview pass — see /api/crm/offer-preview.)
+  const previewPass = searchParams.get('pass') || ''
+  const cred: OfferCredential = useMemo(() => ({ token, code: accessCode, pass: previewPass, preview: isPreview }), [token, accessCode, previewPass, isPreview])
+  const [selectionError, setSelectionError] = useState<string | null>(null)
+  const [savingSelection, setSavingSelection] = useState(false)
   const [lang, setLang] = useState<'en' | 'it'>('it')
   const [selectedOptional, setSelectedOptional] = useState<Set<string>>(new Set())
   const [checkoutLoading, setCheckoutLoading] = useState(false)
@@ -278,13 +271,18 @@ export default function OfferPageWithCode() {
 
   const loadOffer = useCallback(async () => {
     try {
-      const { data, error: err } = await supabasePublic
-        .from('offers')
-        .select('*')
-        .eq('token', token)
-        .single()
-
-      if (err || !data) { setError('not_found'); setLoading(false); return }
+      // N0 (dev job f907220c): the server checks the access code and returns the offer
+      // without it (and without commissions, partner terms, notes or CRM links).
+      let data: Offer | null = null
+      let viaStaffPreview = false
+      try {
+        const view = await fetchOfferView(cred)
+        data = view.offer as Offer
+        viaStaffPreview = view.staffPreview
+      } catch {
+        setError('not_found'); setLoading(false); return
+      }
+      if (!data) { setError('not_found'); setLoading(false); return }
 
       let o = data as Offer
 
@@ -295,13 +293,6 @@ export default function OfferPageWithCode() {
         if (typeof val === 'string') {
           try { (o as any)[f] = JSON.parse(val) } catch { (o as any)[f] = [] }
         }
-      }
-
-      // Check access code
-      if (o.access_code && accessCode && o.access_code !== accessCode) {
-        setError('not_found')
-        setLoading(false)
-        return
       }
 
       if (o.expires_at && new Date(o.expires_at) < new Date()) {
@@ -336,48 +327,13 @@ export default function OfferPageWithCode() {
         if (recommended.size > 0) setSelectedOptional(recommended)
       }
 
-      // Check if already verified via cookie, admin preview, or valid access code in URL
-      const hasValidCode = !!(accessCode && o.access_code && accessCode === o.access_code)
-      if (hasVerifiedCookie(token) || isPreview || hasValidCode) {
-        setVerified(true)
-        if (hasValidCode) setVerifiedCookie(token) // persist for page reloads
-      }
-
-      // Track view (only once verified or no email gate needed)
-      // NEVER track views in admin preview mode — prevents viewed_at pollution
-      if (!isPreview && (hasVerifiedCookie(token) || !o.client_email || hasValidCode)) {
-        trackView(o)
-      }
+      // Track the view — never for a real staff preview (keeps viewed_at clean).
+      if (!viaStaffPreview) trackOfferOpen(cred)
     } catch {
       setError('load_error')
       setLoading(false)
     }
-  }, [token, accessCode, isPreview])
-
-  function trackView(o: Offer) {
-    supabasePublic
-      .from('offers')
-      .update({
-        view_count: (o.view_count || 0) + 1,
-        viewed_at: new Date().toISOString(),
-        status: o.status === 'draft' || o.status === 'sent' || o.status === 'published' ? 'viewed' : o.status,
-      })
-      .eq('id', o.id)
-      .then(() => {})
-  }
-
-  function handleEmailVerify(e: React.FormEvent) {
-    e.preventDefault()
-    if (!offer) return
-    if (emailInput.toLowerCase().trim() === (offer.client_email || '').toLowerCase().trim()) {
-      setVerified(true)
-      setEmailError(false)
-      setVerifiedCookie(token)
-      trackView(offer)
-    } else {
-      setEmailError(true)
-    }
-  }
+  }, [cred])
 
   useEffect(() => {
     if (!token) { setError('invalid_link'); setLoading(false); return }
@@ -420,36 +376,6 @@ export default function OfferPageWithCode() {
 
   if (!offer) return null
 
-  // Email verification gate
-  if (!verified && offer.client_email) {
-    return (
-      <>
-        <OfferStyles />
-        <div className="offer-gate">
-          <div className="offer-gate-box">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/logo.jpg" alt="Tony Durante LLC" className="offer-gate-logo" />
-            <h2>{L.emailGateTitle}</h2>
-            <p>{L.emailGateMessage}</p>
-            <form onSubmit={handleEmailVerify}>
-              <input
-                type="email"
-                value={emailInput}
-                onChange={(e) => { setEmailInput(e.target.value); setEmailError(false) }}
-                placeholder={L.emailPlaceholder}
-                className={`offer-gate-input${emailError ? ' offer-gate-input-error' : ''}`}
-                required
-                autoFocus
-              />
-              {emailError && <div className="offer-gate-error-msg">{L.emailGateError}</div>}
-              <button type="submit" className="offer-gate-btn">{L.emailGateButton}</button>
-            </form>
-          </div>
-        </div>
-      </>
-    )
-  }
-
   // Multi-option offers (dev job 3c1bb5fa): show the picker instead of the
   // normal flow until the client has locked a choice. The moment
   // package_locked_at is set (or the offer never had packages at all), every
@@ -472,6 +398,8 @@ export default function OfferPageWithCode() {
 
   const o = offer
   const isSigned = o.status === 'signed' || o.status === 'completed'
+  // The contract page carries this link's access code (N0) — without it the server refuses.
+  const contractHref = `/offer/${encodeURIComponent(token)}/contract?${contractCredentialQuery(cred)}`
   const isCompleted = o.status === 'completed'
   const needsPayment = o.status === 'signed'
 
@@ -842,12 +770,7 @@ export default function OfferPageWithCode() {
                         const tab = openCheckoutTab(window)
                         setCheckoutLoading(true)
                         try {
-                          const res = await fetch('/api/offers/create-checkout', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ token }),
-                          })
-                          const payUrl = res.ok ? (await res.json())?.checkoutUrl : null
+                          const payUrl = await createOfferCheckout(cred).then((d) => d?.checkoutUrl || null).catch(() => null)
                           if (payUrl) {
                             // If the popup was blocked we cannot detect a refused
                             // top-navigation (browsers fail it SILENTLY) — so surface
@@ -1026,17 +949,33 @@ export default function OfferPageWithCode() {
                     onChosen={loadOffer}
                   />
                 ) : (
-                  <a href={`/offer/${encodeURIComponent(token)}/contract${selectedOptional.size > 0 ? '?sel=' + encodeURIComponent(Array.from(selectedOptional).join('|')) : ''}`}
+                  <>
+                  <a href={contractHref}
                     className="offer-accept-btn"
-                    onClick={async () => {
+                    aria-disabled={savingSelection}
+                    onClick={async (e) => {
+                      // The contract renders and bills from the STORED selection, so it must be
+                      // saved before the contract opens — and a failed save must stop here
+                      // (an empty stored list would mean "every optional line"). N0: saved
+                      // through the server with this link's access code.
+                      e.preventDefault()
+                      if (savingSelection) return
+                      setSelectionError(null)
+                      setSavingSelection(true)
                       const allSelected = (o.services || [])
                         .filter(sv => !(sv as any).optional || selectedOptional.has(sv.name))
                         .map(sv => sv.name)
                       try {
-                        await supabasePublic.from('offers').update({ selected_services: allSelected }).eq('token', token)
-                      } catch { /* non-blocking */ }
+                        await saveOfferSelection(cred, allSelected)
+                        window.location.href = contractHref
+                      } catch (err) {
+                        setSelectionError(err instanceof Error && err.message ? err.message : 'Please try again.')
+                        setSavingSelection(false)
+                      }
                     }}
                   >&#9997;&#65039; {L.acceptAndSign}</a>
+                  {selectionError && <p className="offer-gate-error-msg" style={{ marginTop: 8 }}>{selectionError}</p>}
+                  </>
                 )}
               </div>
             )}

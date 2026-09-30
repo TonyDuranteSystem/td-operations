@@ -870,7 +870,7 @@ export default async function PortalDashboardPage() {
   const pendingOffer = user.email
     ? await supabaseAdmin
         .from('offers')
-        .select('token')
+        .select('token, access_code')
         .eq('client_email', user.email)
         .in('status', ['sent', 'viewed'])
         .order('created_at', { ascending: false })
@@ -957,7 +957,7 @@ export default async function PortalDashboardPage() {
       {/* Offer banner — persistent until the offer is completed or expired */}
       {pendingOffer && (
         <OfferBanner
-          offerUrl={`${APP_BASE_URL}/offer/${pendingOffer.token}`}
+          offerUrl={`${APP_BASE_URL}/offer/${pendingOffer.token}${pendingOffer.access_code ? `/${pendingOffer.access_code}` : ''}`}
           locale={locale}
         />
       )}

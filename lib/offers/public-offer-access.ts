@@ -10,6 +10,8 @@
  *     plus the year.
  *   • A RENEWAL agreement (no access code exists) needs a portal pass / grant bound
  *     to that agreement (lib/offers/renewal-pass.ts) or a staff preview.
+ *   • A staff PREVIEW is a real admin/team session, or a CRM-minted preview pass bound to
+ *     the offer (lib/offers/offer-preview-pass.ts). Either way the view is not counted.
  *
  * Staff preview uses isStaffUser (admin/team) — NOT isDashboardUser, which also
  * lets a partner through. A query flag alone is never proof of staff (see the
@@ -25,6 +27,7 @@ import { accessCodeError } from '@/lib/esign/access-guard'
 import { createClient } from '@/lib/supabase/server'
 import { isStaffUser } from '@/lib/auth'
 import { verifyRenewalPass } from '@/lib/offers/renewal-pass'
+import { verifyOfferPreviewPass } from '@/lib/offers/offer-preview-pass'
 
 export interface PublicOfferAccess {
   error: string | null
@@ -57,7 +60,13 @@ export async function hasStaffSession(): Promise<boolean> {
 export async function resolvePublicOfferAccess(
   req: NextRequest,
   input: { token?: string | null; code?: string | null; pass?: string | null; preview?: boolean },
-  opts: { offerColumns?: string; renewalColumns?: string } = {},
+  /**
+   * clientAction: the request does something only the CLIENT's credential may do (sign,
+   * save a selection, upload, pay). A staff preview is then NOT accepted in place of the
+   * access code / renewal pass — but `staffPreview` is still reported, so e.g. the view
+   * counter can skip a staff visit that also carries the code.
+   */
+  opts: { offerColumns?: string; renewalColumns?: string; clientAction?: boolean } = {},
 ): Promise<PublicOfferAccess> {
   const token = typeof input.token === 'string' ? input.token.trim() : ''
   if (!token) return denied(400, 'Missing offer link.')
@@ -71,7 +80,11 @@ export async function resolvePublicOfferAccess(
   const staffPreview = input.preview === true ? await hasStaffSession() : false
 
   if (offer) {
-    if (staffPreview) {
+    // A CRM-minted preview pass bound to this offer is proof of staff on the client host,
+    // where the staff session cookie does not exist (lib/offers/offer-preview-pass.ts).
+    const viaPreviewPass = !staffPreview && !!input.pass && (await verifyOfferPreviewPass(input.pass, token))
+    const isStaffView = staffPreview || viaPreviewPass
+    if (isStaffView && !opts.clientAction) {
       return { error: null, status: 200, kind: 'offer', offer, agreement: null, staffPreview: true }
     }
     const codeErr = accessCodeError(req, {
@@ -82,7 +95,7 @@ export async function resolvePublicOfferAccess(
       isPreview: false,
     })
     if (codeErr) return denied(codeErr.status === 403 ? 404 : codeErr.status, codeErr.status === 403 ? 'Offer not found.' : codeErr.error)
-    return { error: null, status: 200, kind: 'offer', offer, agreement: null, staffPreview: false }
+    return { error: null, status: 200, kind: 'offer', offer, agreement: null, staffPreview: isStaffView }
   }
 
   // Not an offer — maybe an annual renewal agreement.
@@ -94,12 +107,12 @@ export async function resolvePublicOfferAccess(
     .maybeSingle()
   if (!agreement) return denied(404, 'Offer not found.')
 
-  if (staffPreview) {
+  if (staffPreview && !opts.clientAction) {
     return { error: null, status: 200, kind: 'renewal', offer: null, agreement, staffPreview: true }
   }
   const pass = await verifyRenewalPass(input.pass, String(agreement.id))
   if (!pass) {
     return denied(403, 'Please open your annual agreement from your client portal.')
   }
-  return { error: null, status: 200, kind: 'renewal', offer: null, agreement, staffPreview: false }
+  return { error: null, status: 200, kind: 'renewal', offer: null, agreement, staffPreview }
 }

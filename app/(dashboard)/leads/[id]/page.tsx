@@ -8,7 +8,6 @@ import {
   Calendar, Tag, ExternalLink, FileText, CreditCard, CheckCircle2,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
-import { APP_BASE_URL } from '@/lib/config'
 import { isDashboardUser } from '@/lib/auth'
 import { LeadActions } from './components/lead-actions'
 import { LeadLifecycleBar } from './components/lead-lifecycle-bar'
@@ -462,7 +461,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             {offer.token && (
               <div className="mt-4">
                 <a
-                  href={`${APP_BASE_URL}/offer/${offer.token}`}
+                  href={`/api/crm/offer-preview?token=${encodeURIComponent(offer.token)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
@@ -515,7 +514,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
                       </div>
                     </div>
                     <a
-                      href={`${APP_BASE_URL}/offer/${prev.token}`}
+                      href={`/api/crm/offer-preview?token=${encodeURIComponent(prev.token)}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs text-blue-600 hover:underline flex items-center gap-1"

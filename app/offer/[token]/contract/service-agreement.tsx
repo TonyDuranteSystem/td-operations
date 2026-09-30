@@ -1,18 +1,14 @@
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { supabasePublic } from '@/lib/supabase/public-client'
-import { SigningFailure, isClientFacingError, signingLang, storageWriteFailed } from '@/lib/public-forms/signing-failures'
+import { isClientFacingError } from '@/lib/public-forms/signing-failures'
+import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/lib/offers/offer-api-client'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
-import { internalWebhookHeaders } from '@/lib/internal-webhook-client'
 import { euroBankAddress } from '@/lib/offers/bank-address'
-
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SB_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -91,9 +87,11 @@ interface FormData {
 interface Props {
   offer: Offer
   token: string
+  /** The offer's access code (N0) — every write goes through /api/offers with it. */
+  cred: OfferCredential
 }
 
-export default function ServiceAgreement({ offer, token: _token }: Props) {
+export default function ServiceAgreement({ offer, token: _token, cred }: Props) {
   const cl = CL[offer.language || 'en']
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
@@ -365,22 +363,10 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
       }
       const pdfBlob = await (html2pdf() as any).set(opt).from(element).outputPdf('blob')
 
-      // Upload PDF
+      // N0 (dev job f907220c): upload through a one-time link, then the server checks the
+      // PDF, writes the contracts row, flips the offer to signed and runs the follow-up.
       setStatusMsg('Uploading signed contract...')
-      const pdfPath = `${offer.token}/service-agreement-signed-${Date.now()}.pdf`
-      const pdfRes = await fetch(`${SB_URL}/storage/v1/object/signed-contracts/${pdfPath}`, {
-        method: 'POST',
-        headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': 'application/pdf' },
-        body: pdfBlob
-      })
-      if (storageWriteFailed(pdfRes)) {
-        console.error('[service-agreement] signed PDF upload failed:', pdfRes?.status, await pdfRes.text().catch(() => ''))
-        throw new SigningFailure('document_upload', signingLang(offer.language))
-      }
-
-      // Save contract record
-      const contractData: Record<string, any> = {
-        offer_token: offer.token,
+      const fields: Record<string, unknown> = {
         client_name: form.name,
         client_email: form.email,
         client_phone: form.phone,
@@ -392,9 +378,6 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         client_nationality: form.nationality,
         client_passport: form.passport,
         client_passport_exp: form.passport_exp,
-        signed_at: new Date().toISOString(),
-        pdf_path: pdfPath,
-        status: 'signed',
         llc_type: llcType.includes('Multi') ? 'MMLLC' : 'SMLLC',
         annual_fee: annualFeeNum > 0 ? annualFeeNum.toString() : null,
         contract_year: year.toString(),
@@ -402,37 +385,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
           ? JSON.stringify({ jan: parseFloat(String(installmentLines[0].amount).replace(/[^0-9.]/g, '')), jun: parseFloat(String(installmentLines[1].amount).replace(/[^0-9.]/g, '')) })
           : null,
       }
-      const { error: contractErr } = await supabasePublic.from('contracts').insert(contractData)
-      if (contractErr) {
-        console.error('[service-agreement] contract row insert failed:', contractErr.message)
-        throw new SigningFailure('record', signingLang(offer.language))
-      }
-
-      // Update offer status
-      let statusUpdated = false
-      let lastStatusErr: string | null = null
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const { error: pErr } = await supabasePublic.from('offers').update({ status: 'signed' }).eq('token', offer.token)
-          if (!pErr) { statusUpdated = true; break }
-          lastStatusErr = pErr.message
-        } catch (e) { lastStatusErr = e instanceof Error ? e.message : String(e) }
-      }
-      if (!statusUpdated) {
-        console.error('[service-agreement] status update failed after 3 attempts:', lastStatusErr)
-        throw new SigningFailure('status', signingLang(offer.language))
-      }
-
-      // Notify backend
-      try {
-        await fetch('/api/webhooks/offer-signed', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...internalWebhookHeaders() },
-          body: JSON.stringify({ offer_token: offer.token })
-        })
-      } catch (e) {
-        console.warn('[service-agreement] Failed to notify offer-signed webhook:', e)
-      }
+      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_Service_Agreement_${offer.token}.pdf`, fields, offer.language)
 
       // Post-sign: show payment options — ensure real bank details (replace placeholders)
       const { ensureBankDetails } = await import('./bank-defaults')
@@ -502,7 +455,7 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
         }
 
         sh += `<p style="font-size:9.5pt;color:var(--c-muted);margin-top:24px;">${isOnboarding ? cl.afterPaymentOnboarding : cl.afterPayment}</p>`
-        sh += `<a href="/offer/${encodeURIComponent(offer.token)}" class="contract-success-link">${cl.backToOffer}</a>`
+        sh += `<a href="${esc(cred.code ? `/offer/${encodeURIComponent(offer.token)}/${encodeURIComponent(cred.code)}` : `/offer/${encodeURIComponent(offer.token)}`)}" class="contract-success-link">${cl.backToOffer}</a>`
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
@@ -536,33 +489,15 @@ export default function ServiceAgreement({ offer, token: _token }: Props) {
             receiptBtn.textContent = cl.receiptUploading
             receiptStatus.textContent = ''
             try {
-              const ext = receiptFile.name.split('.').pop() || 'pdf'
-              const path = `${offer.token}/wire-receipt-${Date.now()}.${ext}`
-              const uploadRes = await fetch(`${SB_URL}/storage/v1/object/wire-receipts/${path}`, {
-                method: 'POST',
-                headers: { 'apikey': SB_ANON, 'Authorization': `Bearer ${SB_ANON}`, 'Content-Type': receiptFile.type },
-                body: receiptFile
-              })
-              if (!uploadRes.ok) {
-                // Surface the real reason instead of a generic string (R099) —
-                // this silently hid a missing storage bucket in sandbox that a
-                // hardcoded "Upload failed" would never have revealed.
-                let detail = ''
-                try {
-                  const body = await uploadRes.json()
-                  detail = body?.message || body?.error || ''
-                } catch {
-                  // response wasn't JSON — fall through with no extra detail
-                }
-                throw new Error(detail || cl.receiptFail)
-              }
-              await supabasePublic.from('contracts').update({ wire_receipt_path: path }).eq('offer_token', offer.token)
+              // Server-issued upload link + server-side record (N0); the server's reason
+              // reaches the client on failure (R099).
+              await submitWireReceipt(cred, receiptFile)
               receiptStatus.innerHTML = `<span style="color:var(--c-green);font-weight:600">${cl.receiptDone}</span>`
               receiptBtn.textContent = cl.uploaded
               const dropEl = document.getElementById('receipt-drop')
               if (dropEl) dropEl.style.borderColor = 'var(--c-green)'
             } catch (e: any) {
-              receiptStatus.innerHTML = `<span style="color:var(--c-red)">${cl.receiptFail}: ${e.message}</span>`
+              receiptStatus.innerHTML = `<span style="color:var(--c-red)">${cl.receiptFail}: ${esc(e?.message || '')}</span>`
               receiptBtn.disabled = false
               receiptBtn.textContent = cl.receiptBtn
             }

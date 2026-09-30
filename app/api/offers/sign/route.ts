@@ -17,14 +17,15 @@ export const maxDuration = 60
  *   pdf_path — the path /api/offers/upload-url issued; the PDF must already be uploaded
  *   fields   — the client's typed details for the contracts row (whitelisted per kind)
  *
- * A staff preview can never sign. Errors carry a short machine code ('document_upload',
+ * A staff preview on its own can never sign — only the client's access code / renewal pass
+ * can (clientAction). Errors carry a short machine code ('document_upload',
  * 'record', 'status') for the pages' existing client-facing signing messages, or a
  * sentence the page shows as-is. A retry after a lost response returns the same
  * success (see lib/offers/sign-public-offer.ts).
  */
 export async function POST(req: NextRequest) {
   const r = await readOfferRequest(req)
-  const access = await resolvePublicOfferAccess(req, { ...r, preview: false })
+  const access = await resolvePublicOfferAccess(req, r, { clientAction: true })
   if (access.error) return NextResponse.json({ error: access.error }, { status: access.status })
 
   const fields = r.body.fields && typeof r.body.fields === 'object' ? (r.body.fields as Record<string, unknown>) : {}

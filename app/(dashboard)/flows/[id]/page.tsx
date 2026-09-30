@@ -12,7 +12,6 @@ import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
 import { filedName, type NameCheck } from '@/lib/flows/name-checks'
-import { APP_BASE_URL } from '@/lib/config'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from '@/components/flows/types'
 
 export const dynamic = 'force-dynamic'
@@ -273,7 +272,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
           }
         : null,
     }
-    itinContractUrl = offer?.token ? `${APP_BASE_URL}/offer/${offer.token}?preview=td` : null
+    itinContractUrl = offer?.token ? `/api/crm/offer-preview?token=${encodeURIComponent(offer.token)}` : null
   }
 
   return (

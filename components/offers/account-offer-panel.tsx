@@ -224,10 +224,6 @@ function OfferCard({
       setActivatingNow(false)
     }
   }
-  // Use the current host so the View Offer link works on the sandbox preview
-  // and any other branch deployment. Falls back to production for SSR (window
-  // is undefined during the server render of this 'use client' component).
-  const appBaseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://app.tonydurante.us'
 
   const doSendOffer = async () => {
     setSendingOffer(true)
@@ -410,7 +406,7 @@ function OfferCard({
         <div className="flex flex-wrap gap-2 pt-1">
           {/* View Offer */}
           <a
-            href={`${appBaseUrl}/offer/${offer.token}?preview=td`}
+            href={`/api/crm/offer-preview?token=${encodeURIComponent(offer.token)}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 transition-colors"
