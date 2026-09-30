@@ -18,6 +18,7 @@ export interface AddressPickerProps {
   value: string | null       // business_legal_address_id, business_mailing_address_id, or shipping_address_id
   verified: boolean          // legal_link_verified, mailing_link_verified, or shipping_link_verified
   onChange: () => void       // call after any successful mutation; parent re-fetches account
+  companySuite?: string | null // the company's own suite — a Largo office row shows it (what the client gets)
 }
 
 // Which accounts column each kind writes to.
@@ -163,6 +164,7 @@ export function AddressPicker({
   value,
   verified,
   onChange,
+  companySuite = null,
 }: AddressPickerProps) {
   const [dropdownKey, setDropdownKey] = useState(0)
   const [fetchedRows, setFetchedRows] = useState<AddressRow[]>([])
@@ -353,6 +355,7 @@ export function AddressPicker({
           onChange={handleDropdownChange}
           disabled={pickSaving || saving}
           className="flex-1 min-w-0"
+          companySuite={companySuite}
         />
 
         {/* Edit button — only when a row is selected */}

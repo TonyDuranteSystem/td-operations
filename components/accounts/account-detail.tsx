@@ -2484,6 +2484,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
                 value={account.business_legal_address_id ?? null}
                 verified={account.legal_link_verified ?? false}
                 onChange={() => router.refresh()}
+                companySuite={account.suite_number ?? null}
               />
             </div>
             <div>
@@ -2495,6 +2496,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
                 value={account.business_mailing_address_id ?? null}
                 verified={account.mailing_link_verified ?? false}
                 onChange={() => router.refresh()}
+                companySuite={account.suite_number ?? null}
               />
             </div>
             <div>
