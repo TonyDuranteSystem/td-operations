@@ -82,9 +82,24 @@ export function getInvoiceDescription(
   contract_type: string | null | undefined,
   selected_services: string[] | null | undefined,
   client_name: string,
+  /** The offer's service lines. A "formation" contract that sells NO Company
+   *  Formation (a name change, a closure — the dialog's fallback type) is named
+   *  after what was bought, never "LLC Formation Package" (S1 E2E ★7,
+   *  2026-09-29; same rule as confirmedPaymentInvoiceLabel for staff Confirm). */
+  services?: unknown,
 ): string {
   if (selected_services && selected_services.length > 0) {
     return `${selected_services.join(", ")} - ${client_name}`
+  }
+  if (contract_type === "formation" && Array.isArray(services)) {
+    const lines = (services as Array<Record<string, unknown> | null>)
+      .filter((l): l is Record<string, unknown> => !!l && typeof l === "object" && !l.optional)
+    const typed = lines.filter((l) => typeof l.pipeline_type === "string" && (l.pipeline_type as string).trim())
+    const sellsFormation = typed.some((l) => String(l.pipeline_type).trim().toLowerCase() === "company formation")
+    const names = Array.from(new Set(lines.map((l) => (typeof l.name === "string" ? l.name.trim() : "")).filter(Boolean)))
+    if (typed.length > 0 && !sellsFormation && names.length > 0) {
+      return `${names.join(" + ")} - ${client_name}`
+    }
   }
   return `${getServiceLabel(contract_type)} Package - ${client_name}`
 }

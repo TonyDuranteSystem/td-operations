@@ -245,7 +245,7 @@ export async function POST(req: NextRequest) {
       offerToken: offer_token,
       offerGross: totalAmount,
       offerCurrency,
-      baseDescription: getInvoiceDescription(contractType, selectedServices, offer.client_name),
+      baseDescription: getInvoiceDescription(contractType, selectedServices, offer.client_name, offer.services),
     })
     if (signingBill.planIgnored) {
       // A refusal must NOT abort the signing — the client has already signed and the signature
