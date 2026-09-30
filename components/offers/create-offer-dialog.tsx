@@ -251,11 +251,16 @@ export function CreateOfferDialog({
   // billing entity, or a company typed here, e.g. a lead's own company).
   const defaultBillTo = accountId ? `company:${accountId}` : 'person'
   const [billToChoice, setBillToChoice] = useState<string>(defaultBillTo)
-  const [billToOptions, setBillToOptions] = useState<{ companies: Array<{ id: string; name: string }>; entities: Array<{ id: string; name: string }> }>({ companies: [], entities: [] })
+  const [billToOptions, setBillToOptions] = useState<{ companies: Array<{ id: string; name: string }>; entities: Array<{ id: string; name: string }>; personName?: string | null }>({ companies: [], entities: [] })
+  // Staff picked "Invoice to" / typed the client name themselves → never overridden below.
+  const [billToTouched, setBillToTouched] = useState(false)
+  const [clientNameTouched, setClientNameTouched] = useState(false)
   const [newPayer, setNewPayer] = useState({ name: '', address: '', country: '', vat_number: '' })
   useEffect(() => {
     if (!open) return
     setBillToChoice(accountId ? `company:${accountId}` : 'person')
+    setBillToTouched(false)
+    setClientNameTouched(false)
     setNewPayer({ name: '', address: '', country: '', vat_number: '' })
     if (!contactId && !accountId) { setBillToOptions({ companies: [], entities: [] }); return }
     const qs = new URLSearchParams()
@@ -263,7 +268,7 @@ export function CreateOfferDialog({
     if (accountId) qs.set('account_id', accountId)
     fetch(`/api/crm/admin-actions/offer-bill-to-options?${qs.toString()}`)
       .then(r => (r.ok ? r.json() : { companies: [], entities: [] }))
-      .then(d => setBillToOptions({ companies: d.companies ?? [], entities: d.entities ?? [] }))
+      .then(d => setBillToOptions({ companies: d.companies ?? [], entities: d.entities ?? [], personName: d.personName ?? null }))
       .catch(() => setBillToOptions({ companies: [], entities: [] }))
   }, [open, contactId, accountId])
   const billToPayload = (): Record<string, unknown> | null => {
@@ -736,6 +741,17 @@ export function CreateOfferDialog({
       .map(s => catalog.find(c => c.id === s.id)?.pipeline)
       .filter((p): p is string => !!p)
   }, [selected, catalog])
+
+  // A NEW company sold from an existing company's page (S1 E2E ★3, 2026-09-29):
+  // the default payer and client name must be the PERSON, not the old company —
+  // S1's rule is that a new-company formation is never billed to an unrelated
+  // existing company. Only while staff haven't chosen themselves.
+  const sellsNewCompany = derivedPipelines.includes('Company Formation')
+  useEffect(() => {
+    if (!open || !accountId) return
+    if (!billToTouched) setBillToChoice(sellsNewCompany ? 'person' : `company:${accountId}`)
+    if (!clientNameTouched && billToOptions.personName) setClientNameValue(sellsNewCompany ? billToOptions.personName : clientName)
+  }, [open, accountId, sellsNewCompany, billToTouched, clientNameTouched, billToOptions.personName, clientName])
 
   // Live preview of the dated yearly schedule — the same rows the offer page shows.
   const annualPreview = useMemo(() => {
@@ -1332,7 +1348,7 @@ export function CreateOfferDialog({
               <input
                 type="text"
                 value={clientNameValue}
-                onChange={e => setClientNameValue(e.target.value)}
+                onChange={e => { setClientNameValue(e.target.value); setClientNameTouched(true) }}
                 className="w-full text-sm font-medium bg-white border border-zinc-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 placeholder="Client name"
               />
@@ -1680,10 +1696,10 @@ export function CreateOfferDialog({
             <label className="block text-xs font-medium mb-1">Invoice to</label>
             <select
               value={billToChoice}
-              onChange={e => setBillToChoice(e.target.value)}
+              onChange={e => { setBillToChoice(e.target.value); setBillToTouched(true) }}
               className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="person">{clientNameValue || 'The client'} (person)</option>
+              <option value="person">{billToOptions.personName || clientNameValue || 'The client'} (person)</option>
               {billToOptions.companies.map(c => (
                 <option key={c.id} value={`company:${c.id}`}>{c.name} (company)</option>
               ))}

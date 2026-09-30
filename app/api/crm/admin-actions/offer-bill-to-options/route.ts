@@ -29,6 +29,13 @@ export async function GET(req: Request) {
     if (data) companies.set(data.id, data.company_name ?? "Company")
   }
   let entities: Array<{ id: string; name: string }> = []
+  // The person's own name — the "(person)" choice must never be labelled with a
+  // company's name (on a company page the client name defaults to the company).
+  let personName: string | null = null
+  if (contactId) {
+    const { data: c } = await supabaseAdmin.from("contacts").select("full_name").eq("id", contactId).maybeSingle()
+    personName = (c?.full_name as string | null) ?? null
+  }
   if (contactId) {
     const { data: links } = await supabaseAdmin
       .from("account_contacts")
@@ -48,5 +55,6 @@ export async function GET(req: Request) {
   return NextResponse.json({
     companies: Array.from(companies, ([id, name]) => ({ id, name })),
     entities,
+    personName,
   })
 }
