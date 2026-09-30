@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Bell, CheckCircle2, Loader2, FileText, MessageCircle, Cog, Calendar, CreditCard } from 'lucide-react'
+import { Bell, Loader2, FileText, MessageCircle, Cog, Calendar, CreditCard } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
 import Link from 'next/link'
+import { needsFullPageLoad } from '@/lib/portal/chat-link'
 
 interface Notification {
   id: string
@@ -98,7 +99,9 @@ export default function NotificationsPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   {n.link ? (
-                    <Link href={n.link} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</Link>
+                    needsFullPageLoad(n.link)
+                      ? <a href={n.link} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</a>
+                      : <Link href={n.link} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</Link>
                   ) : (
                     <p className="text-sm font-medium text-zinc-900">{n.title}</p>
                   )}

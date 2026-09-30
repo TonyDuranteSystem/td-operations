@@ -105,3 +105,49 @@ export function buildDigestSections(
   }
   return sections
 }
+
+/**
+ * Where the digest email's single "Open Portal" button should land
+ * (dev job 05d997f2). It used to be hardcoded to the portal home, so a digest
+ * about a chat message or a document to sign dropped the client on the
+ * dashboard and they had to hunt for it.
+ *
+ * Rule: if every notification in THIS email shares one link, go there;
+ * otherwise (mixed updates) the portal home. Pass only the notifications that
+ * are actually rendered in the email. Links are normalised and must stay on the
+ * portal's own origin — anything else (a foreign host, a look-alike host such
+ * as `portal.example.com.evil.com`, a protocol-relative `//host`, junk) falls
+ * back to the home page. A missing link counts as the home page.
+ */
+export function pickDigestButtonHref(links: Array<string | null | undefined>, portalBaseUrl: string): string {
+  const base = portalBaseUrl.replace(/\/+$/, '')
+  const home = `${base}/portal`
+  let baseOrigin: string
+  try {
+    baseOrigin = new URL(base).origin
+  } catch {
+    return home
+  }
+
+  const normalise = (link: string | null | undefined): string => {
+    if (!link || typeof link !== 'string') return home
+    const trimmed = link.trim()
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+      return trimmed === '/portal' || trimmed.startsWith('/portal/') || trimmed.startsWith('/portal?')
+        ? `${base}${trimmed}`
+        : home
+    }
+    try {
+      const u = new URL(trimmed)
+      if (u.origin !== baseOrigin) return home
+      if (u.pathname !== '/portal' && !u.pathname.startsWith('/portal/')) return home
+      return `${base}${u.pathname}${u.search}`
+    } catch {
+      return home
+    }
+  }
+
+  if (links.length === 0) return home
+  const targets = new Set(links.map(normalise))
+  return targets.size === 1 ? Array.from(targets)[0] : home
+}

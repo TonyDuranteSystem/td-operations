@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
+import { mergeRefreshedMessages, parseTimestamp, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 
 /**
  * The thread a client is currently viewing. Per-company scoping (2026-06-24):
@@ -45,32 +47,94 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // without making refresh a dependency of the subscription effect — that would
   // tear down and rebuild the channel on every render.
   const refreshRef = useRef<(o?: { markRead?: boolean }) => Promise<void>>(async () => {})
+  // Fetch sequencing (dev job 05d997f2). Wake, reconnect (SUBSCRIBED) and the
+  // initial load can all be in flight at once and resolve out of order. A
+  // response may be applied only if nothing NEWER has been applied yet — an
+  // older snapshot must never overwrite a newer one. (Deliberately "newer than
+  // the last APPLIED", not "is the latest STARTED": if the latest fetch then
+  // fails on a flaky network, the earlier good response must still land rather
+  // than leave the chat empty.)
+  const fetchSeqRef = useRef(0)
+  const appliedSeqRef = useRef(0)
+  // Live events stamped with a monotonic mark, so each fetch can ask "what
+  // arrived / was deleted AFTER I started?" — its snapshot may predate those:
+  //  - live: realtime INSERT or the client's own send → keep even if missing;
+  //  - deleted: realtime soft-delete → drop even if the snapshot still has it.
+  const eventMarkRef = useRef(0)
+  const liveMarksRef = useRef<Map<string, number>>(new Map())
+  const deletedMarksRef = useRef<Map<string, number>>(new Map())
 
   // Resolve the read query param, the mark-as-read body, the realtime
   // subscription filters, and the drop-filter plan from the active scope.
   const { queryParam, readBody, realtimeFilters, plan } = resolveScope(scope)
+  // The view the component is showing NOW. The chat is not remounted when the
+  // client switches company (that would drop the draft and the send popup's
+  // state), so a response started for the PREVIOUS company can still resolve
+  // after the switch — it must be thrown away, or company A's messages land in
+  // company B's view (and then survive every refresh as "older history").
+  const currentQueryRef = useRef(queryParam)
+  currentQueryRef.current = queryParam
+  // Which view the messages on screen belong to (null until the first load
+  // lands). Lets the component wait for the NEW company's data before acting
+  // on `topics` after a switch.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+  // Per-tab unread for this view as the SERVER counts it (all rows, not just
+  // the loaded page) — '' = General. Null until the first response (or for
+  // views the server doesn't summarise, e.g. teammates).
+  const [serverUnread, setServerUnread] = useState<Record<string, number> | null>(null)
+  const loadedKeyRef = useRef<string | null>(null)
+  const markLoaded = (q: string) => { loadedKeyRef.current = q; setLoadedKey(q) }
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
     setLoading(true)
     setHasMore(true)
+    // Switching to a different view: never leave the previous company's
+    // messages on screen under the new company's header (e.g. if this load
+    // then fails). Same-view reloads keep what is shown.
+    if (loadedKeyRef.current !== queryParam) setMessages([])
+    const seq = ++fetchSeqRef.current
+    const startMark = eventMarkRef.current
+    const q = queryParam
     try {
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50`)
+      const res = await fetch(`/api/portal/chat?${q}&limit=50`)
       if (res.ok) {
         const data = await res.json()
-        const msgs = data.messages ?? []
-        setMessages(msgs)
-        setHasMore(msgs.length >= 50)
-        fetch('/api/portal/chat/read', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(readBody),
-        }).catch(() => {})
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
+        if (seq < appliedSeqRef.current) return // something newer is already on screen
+        appliedSeqRef.current = seq
+        const msgs: PortalMessage[] = data.messages ?? []
+        const live = idsSince(liveMarksRef.current, startMark)
+        const deleted = idsSince(deletedMarksRef.current, startMark)
+        pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
+        // Fresh view: keep nothing from before except rows that arrived live
+        // while this fetch was in flight. But if this view is ALREADY on screen
+        // (a second load of the same view landing late — e.g. React's dev
+        // double-mount, or a reload racing the linked-tab search), behave like
+        // a refresh: keep the older history already paged in. A blind replace
+        // here dropped the linked tab's messages right after they were found
+        // (caught in E2E QA: tab selected, chat empty).
+        const sameView = loadedKeyRef.current === q
+        setMessages(prev => mergeRefreshedMessages({
+          fetched: msgs,
+          held: sameView ? prev : prev.filter(m => live.has(m.id)),
+          limit: sameView ? 50 : Infinity,
+          liveIds: live,
+          deletedIds: deleted,
+        }).messages)
+        if (!sameView) setHasMore(msgs.length >= 50)
+        else if (msgs.length < 50) setHasMore(false)
+        markLoaded(q)
+        // No marking here (dev job 05d997f2 Phase 2): opening the chat used to
+        // mark EVERY tab read. The component marks only the tab the client is
+        // actually looking at, via markRead() below.
+        setServerUnread(data.unreadByTopic ?? null)
       }
     } catch {
       // silent
     } finally {
-      setLoading(false)
+      // A superseded view's load must not clear the spinner of the current one.
+      if (q === currentQueryRef.current) setLoading(false)
     }
     // readBody is derived from contactId/accountId (same inputs as queryParam).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -97,24 +161,53 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // at an unread badge for it — including on their phone's home-screen icon.
   // Only `load()` used to do this, so a wake refresh alone would light the badge
   // for something visibly on screen (found only by combining two changes).
-  const refresh = useCallback(async (opts?: { markRead?: boolean }) => {
+  //
+  // 2026-09-29 (dev job 05d997f2): the replace now goes through
+  // mergeRefreshedMessages, which still drops in-window rows missing from the
+  // response (deletions) but keeps (a) rows that arrived live after this fetch
+  // started and (b) paged-back history older than the fetched window. See that
+  // helper for why a blind replace made messages vanish.
+  const refresh = useCallback(async (_opts?: { markRead?: boolean }) => {
+    const seq = ++fetchSeqRef.current
+    const startMark = eventMarkRef.current
     try {
-      // Refetch at least as many as we already hold, so a client who paged back
-      // through history doesn't have it collapse to the newest 50 on every wake.
-      const limit = Math.max(50, messagesRef.current.length)
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=${limit}`)
+      // Refetch at least as many as we already hold (the route caps at 100);
+      // anything older than that window is kept by the merge, not refetched.
+      const limit = Math.min(100, Math.max(50, messagesRef.current.length))
+      const q = queryParam
+      const res = await fetch(`/api/portal/chat?${q}&limit=${limit}`)
       if (res.ok) {
         const data = await res.json()
-        const msgs = data.messages ?? []
-        setMessages(msgs)
-        setHasMore(msgs.length >= limit)
-        if (opts?.markRead) {
-          fetch('/api/portal/chat/read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(readBody),
-          }).catch(() => {})
-        }
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
+        if (seq < appliedSeqRef.current) return // something newer is already on screen
+        appliedSeqRef.current = seq
+        const msgs: PortalMessage[] = data.messages ?? []
+        const live = idsSince(liveMarksRef.current, startMark)
+        const deleted = idsSince(deletedMarksRef.current, startMark)
+        pruneMarks([liveMarksRef.current, deletedMarksRef.current], startMark)
+        // Decide against the list as it is NOW (messagesRef lags one render at
+        // most; the updater below re-merges against the true latest state).
+        // If this view's first load hasn't landed yet (the reconnect refresh
+        // won the race), what's on screen may still be the PREVIOUS company's
+        // list — merge against nothing, or its rows would be kept as "older
+        // history" of this view.
+        const sameView = loadedKeyRef.current === q
+        const probe = mergeRefreshedMessages({ fetched: msgs, held: sameView ? messagesRef.current : [], limit, liveIds: live, deletedIds: deleted })
+        // (Rows that arrived LIVE for this view — e.g. the client's own send —
+        // are kept either way.)
+        setMessages(prev => mergeRefreshedMessages({ fetched: msgs, held: sameView ? prev : prev.filter(m => live.has(m.id)), limit, liveIds: live, deletedIds: deleted }).messages)
+        // Either load or refresh may be the one that lands first for a view.
+        if (!sameView) { markLoaded(q); setLoading(false) }
+        // A short response means the whole thread fits in it: nothing older exists.
+        // A full one with a gap (more arrived while away than the window holds)
+        // restarts paging from the fetched window. Otherwise hasMore stays as the
+        // paging state (load / loadMore) left it.
+        if (msgs.length < limit) setHasMore(false)
+        else if (probe.droppedForGap) setHasMore(true)
+        if (data.unreadByTopic) setServerUnread(data.unreadByTopic)
+        // First response for a NEW view without a summary: never keep the
+        // previous company's counts (auto-open would jump to its tab names).
+        else if (!sameView) setServerUnread(null)
       }
     } catch {
       // silent
@@ -125,23 +218,42 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
 
   useEffect(() => { refreshRef.current = refresh }, [refresh])
 
+  // Catch up when the client comes back to an open portal (dev job 05d997f2).
+  // A phone that slept, or a tab left in the background, can hold a realtime
+  // socket that died silently — nothing refetched until it noticed and rejoined,
+  // so a message the client had just been emailed about could be missing for
+  // hours. The portal-wide wake (PortalWakeRefresh) only re-renders the server
+  // layout with identical props, which does not re-run this hook. Same wake
+  // signal the notification bell uses (20s-away gate + throttle). Marking stays
+  // as on every other refresh path.
+  useWakeSignal({ onWake: () => { void refreshRef.current() } })
+
   // Load older messages
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || messages.length === 0) return
     setLoadingMore(true)
+    const q = queryParam
+    const startMark = eventMarkRef.current
     try {
       const oldest = messages[0]
       // encodeURIComponent is REQUIRED: created_at carries a "+00:00" timezone
       // offset, and an unencoded "+" is decoded as a space server-side, which
       // made this request 500 ("invalid input syntax for timestamp") and the
       // load-older button silently fail. (2026-06-08)
-      const res = await fetch(`/api/portal/chat?${queryParam}&limit=50&before=${encodeURIComponent(oldest.created_at)}`)
+      const res = await fetch(`/api/portal/chat?${q}&limit=50&before=${encodeURIComponent(oldest.created_at)}`)
       if (res.ok) {
         const data = await res.json()
-        const older = data.messages ?? []
+        if (q !== currentQueryRef.current) return // the client switched view meanwhile
+        const older: PortalMessage[] = data.messages ?? []
+        const deleted = idsSince(deletedMarksRef.current, startMark)
         setHasMore(older.length >= 50)
         if (older.length > 0) {
-          setMessages(prev => [...older, ...prev])
+          // Dedupe: a refresh racing this page may already hold some of these
+          // rows; and drop any soft-deleted while this page was loading (R100).
+          setMessages(prev => {
+            const have = new Set(prev.map(m => m.id))
+            return sortMessagesAscending([...older.filter(m => !have.has(m.id) && !deleted.has(m.id)), ...prev])
+          })
         }
       }
     } catch {
@@ -176,6 +288,14 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const nm = newMessage as { sender_type?: string; message?: string; account_id: string | null; contact_id: string | null }
       if (nm.sender_type === 'system' && /<!--\s*chat-event:/.test(nm.message ?? '')) return
       if (!belongs(nm)) return // wrong company / someone else's personal — never show
+      liveMarksRef.current.set(newMessage.id, ++eventMarkRef.current)
+      // A new team message is unread on its tab until the client looks at it
+      // (the component marks it at once if that tab is open and visible).
+      // (Skip duplicates: overlapping subscriptions can deliver the same row twice.)
+      if (nm.sender_type === 'admin' && !newMessage.read_at && !messagesRef.current.some(m => m.id === newMessage.id)) {
+        const key = newMessage.topic ?? ''
+        setServerUnread(prev => prev ? { ...prev, [key]: (prev[key] ?? 0) + 1 } : prev)
+      }
       setMessages(prev => {
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
@@ -186,6 +306,8 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       const updated = payload.new as PortalMessage & { deleted_at?: string | null }
       // Client view: a soft-delete removes the message from view entirely (decision #2 — fully vanish).
       if (updated.deleted_at) {
+        liveMarksRef.current.delete(updated.id)
+        deletedMarksRef.current.set(updated.id, ++eventMarkRef.current)
         setMessages(prev => prev.filter(m => m.id !== updated.id))
         return
       }
@@ -216,7 +338,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         // disconnected is gone, and this hook appends deltas. So refetch
         // authoritative state on every (re)subscribe. Idempotent by design —
         // SUBSCRIBED can fire more than once per rejoin.
-        void refreshRef.current({ markRead: true })
+        void refreshRef.current()
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         console.warn(`[portal-chat] channel ${status}`)
       }
@@ -283,6 +405,7 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       // refresh. The component switches the view to match before sending, so this
       // is a belt-and-braces guard.
       if (newMsg && (!plan || messageVisibleInPlan(plan, newMsg))) {
+        liveMarksRef.current.set(newMsg.id, ++eventMarkRef.current)
         setMessages(prev => {
           if (prev.some(m => m.id === newMsg.id)) return prev
           return [...prev, newMsg]
@@ -302,10 +425,67 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     new Set(messages.map(m => m.topic).filter((t): t is string => !!t))
   ).sort()
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics }
+  // Mark ONE tab read, up to the newest message the client has on screen.
+  // Returns nothing; broadcasts the client's new unread total so the sidebar
+  // and the phone icon follow (window event 'portal-chat-unread').
+  const markRead = useCallback(async (topic: string | null, upTo: string) => {
+    const key = topic ?? ''
+    // Optimistic: those rows are on screen and being read now.
+    const now = new Date().toISOString()
+    const upToMs = parseTimestamp(upTo)
+    setMessages(prev => prev.map(m =>
+      m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread && (m.topic ?? '') === key && parseTimestamp(m.created_at) <= upToMs
+        ? { ...m, read_at: now }
+        : m,
+    ))
+    setServerUnread(prev => {
+      if (!prev) return prev
+      const kept = messagesRef.current.filter(m => m.sender_type === 'admin' && m.client_kept_unread && (m.topic ?? '') === key).length
+      return { ...prev, [key]: kept }
+    })
+    try {
+      const res = await fetch('/api/portal/chat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // topic is ALWAYS sent (null = General): an absent key means "mark
+        // every tab" to the server, kept only for old cached app versions.
+        body: JSON.stringify({ ...readBody, topic, up_to: upTo }),
+      })
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
+        if (typeof data.unread === 'number' && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('portal-chat-unread', { detail: { total: data.unread } }))
+        }
+      }
+    } catch {
+      // silent — the next refresh/mark reconciles
+    }
+    // readBody is derived from the same inputs as queryParam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryParam])
+
+  // True once the messages on screen belong to the view currently selected.
+  const ready = !loading && loadedKey === queryParam
+
+  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead }
 }
 
 type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }
+
+/** Ids whose live-event mark is newer than `since` (i.e. happened after a fetch started). */
+function idsSince(marks: Map<string, number>, since: number): Set<string> {
+  const out = new Set<string>()
+  marks.forEach((mark, id) => { if (mark > since) out.add(id) })
+  return out
+}
+
+/** Forget events at or before `upTo`. Safe once a response started at `upTo` is
+ *  applied: any response applied later started later, so it never needs them. */
+function pruneMarks(maps: Array<Map<string, number>>, upTo: number): void {
+  for (const marks of maps) {
+    marks.forEach((mark, id) => { if (mark <= upTo) marks.delete(id) })
+  }
+}
 
 /**
  * Translate a ChatScope into the GET query param, the mark-as-read body, the

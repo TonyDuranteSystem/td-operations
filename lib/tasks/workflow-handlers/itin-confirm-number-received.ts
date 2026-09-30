@@ -25,6 +25,7 @@
 import { updateContact } from "@/lib/operations/contact"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
+import { buildPortalChatLink } from "@/lib/portal/chat-link"
 import type { HandlerContext, HandlerResult, SideEffect, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
@@ -227,6 +228,7 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
     resolvedContactId = primary?.contact_id ?? null
   }
 
+  const itinTopic = ctx.workflow.auto_topic ?? "ITIN"
   const { data: portalMsg, error: portalErr } = await supabaseAdmin
     .from("portal_messages")
     .insert({
@@ -235,7 +237,7 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
       sender_type: "admin",
       sender_id: ADMIN_SENDER_ID,
       message: clientNotice,
-      topic: ctx.workflow.auto_topic ?? "ITIN",
+      topic: itinTopic,
       attachments: [],
     })
     .select("id, created_at")
@@ -270,11 +272,12 @@ export const itinConfirmNumberReceived: WorkflowHandler = async (
           type: "chat",
           title: "Your ITIN number is in your portal",
           body: clientNotice.slice(0, 100),
-          link: "/portal/chat",
+          link: buildPortalChatLink({ accountId: ctx.task.account_id ?? null, topic: itinTopic }),
         })
         await notifyClientOfAdminMessage({
           account_id: ctx.task.account_id ?? null,
           contact_id: ctx.task.contact_id ?? null,
+          topic: itinTopic,
           messagePreview: clientNotice,
         })
       } catch (err) {

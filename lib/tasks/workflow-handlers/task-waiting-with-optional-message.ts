@@ -23,6 +23,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { localeFromLanguage } from "@/lib/locale"
+import { buildPortalChatLink } from "@/lib/portal/chat-link"
 import type { HandlerContext, HandlerResult, WorkflowHandler } from "@/lib/tasks/types"
 
 /** Re-export the central client-safe schema for the workflow editor. */
@@ -141,7 +142,7 @@ export const taskWaitingWithOptionalMessage: WorkflowHandler = async (
         type: "chat",
         title: "New message from Tony Durante Team",
         body: messageBody.slice(0, 100),
-        link: "/portal/chat",
+        link: buildPortalChatLink({ accountId }),
       })
       await notifyClientOfAdminMessage({
         account_id: accountId,

@@ -22,6 +22,7 @@ export default async function PortalChatPage({
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
+  const { view, topic } = await searchParams
 
   let entities: PortalChatEntity[] = []
   let selectedEntityId = ''
@@ -38,6 +39,8 @@ export default async function PortalChatPage({
     // precedence: a formation selection wins, then portal_account_id (which can
     // be a real account id OR the 'personal' sentinel), else the first entity.
     const byId = new Map(entities.map(e => [e.id, e]))
+    // (A "new message" link's company is applied BEFORE this page renders, by
+    // /portal/chat/open, which saves it to these same cookies — dev job 05d997f2.)
     const selected =
       (cookieFormationId ? byId.get(cookieFormationId) : undefined) ??
       (cookieAccountId ? byId.get(cookieAccountId) : undefined) ??
@@ -75,7 +78,6 @@ export default async function PortalChatPage({
   }
 
   const locale = getLocale(user)
-  const { view, topic } = await searchParams
   // Deep-linked topic (Wave 2): tax notification links open the chat ON the
   // tax tab so the client's reply is tagged without them knowing anything.
   const initialTopic = typeof topic === 'string' && topic.trim() ? topic.trim().slice(0, 100) : null
