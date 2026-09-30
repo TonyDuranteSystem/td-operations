@@ -28,6 +28,13 @@
 
 BEGIN;
 
+-- Row security must be ON for the policies below to mean anything. It is already on in
+-- production (checked 2026-09-30); the local/sandbox copies had it OFF on offers and
+-- contracts (drift), where every grant below would otherwise be the only gate.
+ALTER TABLE public.offers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contracts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.annual_agreements ENABLE ROW LEVEL SECURITY;
+
 -- ── offers ──────────────────────────────────────────────────────────────
 DROP POLICY IF EXISTS "Allow public read by token" ON public.offers;
 DROP POLICY IF EXISTS "Allow service update" ON public.offers;
