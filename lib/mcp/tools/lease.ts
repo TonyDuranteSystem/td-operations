@@ -32,7 +32,7 @@ Prerequisites:
 
 Defaults: premises=10225 Ulmerton Rd, Largo FL 33771, monthly_rent=$100, deposit=$150, term=12 months, sq_ft=120.
 
-Suite number format: "3D-XXX" (e.g. 3D-107). REQUIRED — each client gets a unique suite.
+The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, this issues it. It is locked: one company = one suite, one suite = one company.
 
 The lease is created as 'draft'. Use lease_send to approve and create the Gmail draft.
 
@@ -41,7 +41,6 @@ Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path
 Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
-      suite_number: z.string().optional().describe("Suite number assigned to tenant (e.g. '3D-107'). Auto-assigned if omitted."),
       effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
       term_start_date: z.string().optional().describe("Lease start date YYYY-MM-DD (default: today)"),
       term_end_date: z.string().optional().describe("Lease end date YYYY-MM-DD (default: December 31 of current year)"),
@@ -59,7 +58,6 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
         const { createLease } = await import("@/lib/operations/lease")
         const result = await createLease({
           account_id: params.account_id,
-          suite_number: params.suite_number,
           contract_year: params.contract_year,
           effective_date: params.effective_date,
           term_start_date: params.term_start_date,
@@ -241,13 +239,19 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
   // ───────────────────────────────────────────────────────────
   server.tool(
     "lease_update",
-    `Update fields on an existing lease agreement by token. Only provided fields are changed. Use lease_get first to review current values. Common updates: suite_number, monthly_rent, status, term dates.`,
+    `Update fields on an existing lease agreement by token. Only provided fields are changed. Use lease_get first to review current values. Common updates: monthly_rent, status, term dates. The suite, tenant and company of a lease CANNOT be changed here — the suite is the company's and is locked (owner changes it in the CRM, Company Info → Suite Assigned).`,
     {
       token: z.string().describe("Lease token to update"),
-      updates: z.record(z.string(), z.any()).describe("Fields to update as key-value pairs (e.g. {suite_number: '3D-108', monthly_rent: 150})"),
+      updates: z.record(z.string(), z.any()).describe("Fields to update as key-value pairs (e.g. {monthly_rent: 150})"),
     },
     async (params) => {
       try {
+        // The suite, the company and the tenant are the company's locked identity — never editable here.
+        const forbidden = ["suite_number", "account_id", "tenant_company"].filter((k) => k in (params.updates ?? {}))
+        if (forbidden.length > 0) {
+          return { content: [{ type: "text" as const, text: `❌ ${forbidden.join(", ")} cannot be changed on a lease. The suite belongs to the company and is locked (the owner changes it in the CRM: Company Info → Suite Assigned).` }] }
+        }
+
         // Fetch current lease
         const { data: existing, error: fetchErr } = await supabaseAdmin
           .from("lease_agreements")

@@ -225,7 +225,7 @@ export async function sendTDInvoice(
 
   const { data: account } = await (supabaseAdmin as any)
     .from("accounts")
-    .select("company_name, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
+    .select("company_name, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
     .eq("id", payment.account_id)
     .single()
 
@@ -292,7 +292,7 @@ export async function sendTDInvoice(
       : {
           name: account?.company_name ?? "Client",
           email: recipientEmail,
-          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
         },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),
@@ -447,7 +447,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
   const { data: account } = payment.account_id
     ? await (supabaseAdmin as any)
         .from("accounts")
-        .select("company_name, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
+        .select("company_name, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
         .eq("id", payment.account_id)
         .single()
     : { data: null as { company_name: string | null; physical_address: string | null; mailing_address?: unknown } | null }
@@ -506,7 +506,7 @@ export async function sendPaidReceipt(paymentId: string): Promise<void> {
       : {
           name: account?.company_name ?? "Client",
           email: recipientEmail,
-          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
         },
     items: items ?? [],
     subtotal: Number(payment.subtotal ?? 0),

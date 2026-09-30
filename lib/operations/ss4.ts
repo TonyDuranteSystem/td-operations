@@ -20,7 +20,7 @@ import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
-import { formatCountyAndState } from "@/lib/addresses"
+import { formatCountyAndState, withCompanySuite } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
 
@@ -87,7 +87,7 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account, error: accErr } = await (supabaseAdmin as any)
     .from("accounts")
-    .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
+    .select("id, company_name, entity_type, state_of_formation, formation_date, ein_number, registered_agent_id, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
     .eq("id", params.account_id)
     .single()
 
@@ -292,7 +292,9 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
 
   // ─── 7. MAILING ADDRESS ───
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ma = (account as any).mailing_address ?? null
+  // A Largo office row prints THIS company's own suite (accounts.suite_number), never the shared row's text.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ma = withCompanySuite((account as any).mailing_address ?? null, (account as any).suite_number ?? null) ?? null
   const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
   const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
   let mailingStreet: string

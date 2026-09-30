@@ -504,6 +504,14 @@ export async function materializeFormationCompany(
             detail: handover.status === "failed" ? handover.error : `CRM Store: ${handover.status}`,
           })
         }
+        // A retry after a partial failure must still leave the company with its suite.
+        try {
+          const { allocateCompanySuite } = await import("@/lib/operations/suite")
+          const suite = await allocateCompanySuite({ accountId: acc.id, actor })
+          steps.push({ step: "suite", status: "ok", detail: suite })
+        } catch (e) {
+          steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
         return { success: true, outcome: "already_materialized", account_id: acc.id, steps }
       }
       steps.push({
@@ -1300,6 +1308,22 @@ export async function materializeFormationCompany(
       })
     } else {
       steps.push({ step: "sd_link", status: "skipped", detail: "No unlinked active Company Formation SD found for this contact" })
+    }
+
+    // 10-suite. The company's suite. The formation delivery RESERVED one when it started; claiming it
+    // with the resolved delivery moves that exact number onto the company. With no resolved delivery
+    // (none found / several could not be narrowed) the company is issued a fresh one — never left
+    // without — and the step says so, because the unclaimed reservation then needs a human look.
+    try {
+      const { allocateCompanySuite } = await import("@/lib/operations/suite")
+      const suite = await allocateCompanySuite({ accountId, deliveryId: resolvedSd?.id ?? null, actor })
+      steps.push({
+        step: "suite",
+        status: "ok",
+        detail: resolvedSd ? `${suite} (reserved when the formation started)` : `${suite} (issued now — no formation delivery was linked)`,
+      })
+    } catch (e) {
+      steps.push({ step: "suite", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // 10-store. CRM Store pilot: the company-being-formed's storage becomes this company's storage in

@@ -14,6 +14,7 @@ import {
 import { ACCOUNT_TYPE } from '@/lib/constants'
 import { AccountCommunications } from './account-communications'
 import { EditableField } from './editable-field'
+import { SuiteAssignedField } from './suite-assigned-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { PortalUserButton } from './portal-user-button'
@@ -2401,8 +2402,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     const result = await updateAccountField(account.id, field, value, account.updated_at)
     if (result.success) {
       toast.success('Saved')
-      // e.g. "Saved, but suite 3D-115 is also assigned to: …" — the save went through
-      // but staff must see the overlap straight away.
+      // A save can carry a non-blocking warning — show it straight away.
       const warning = (result as { warning?: string }).warning
       if (warning) toast.warning(warning)
     } else toast.error(result.error ?? 'Failed')
@@ -2470,7 +2470,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Shield} label="EIN" value={account.ein_number ?? ''} onSave={makeAccountSaver('ein_number')} />
           <EditableField icon={Mail} label="Business Email" value={account.communication_email ?? ''} onSave={makeAccountSaver('communication_email')} />
           <EditableField icon={FileText} label="Filing ID" value={account.filing_id ?? ''} onSave={makeAccountSaver('filing_id')} />
-          <EditableField icon={MapPin} label="Suite Assigned" value={account.suite_number ?? ''} onSave={makeAccountSaver('suite_number')} />
+          <SuiteAssignedField accountId={account.id} suite={account.suite_number ?? null} isAdmin={_isAdmin} />
 
           {/* Address Registry — structured FK links */}
           <div className="border-t pt-3 mt-1 space-y-3">

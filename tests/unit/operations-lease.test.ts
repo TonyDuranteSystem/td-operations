@@ -33,19 +33,14 @@ let membersRows: Array<{
 // stays reachable by "contact-1" so existing tests are untouched.
 let extraContactsById: Record<string, { id: string; full_name: string; email: string | null; language?: string | null }> = {}
 let duplicateLeases: Array<{ id: string; token: string; status: string }> = []
-let lastSuiteLeases: Array<{ suite_number: string }> = []
-// The account's OWN prior lease(s) — the reuse-the-suite lookup (ordered by
-// created_at). Empty = brand-new account, so createLease falls through to the
-// global nextSuiteNumber().
-let priorAccountLeases: Array<{ suite_number: string }> = []
-// The suite staff ASSIGNED to the company (accounts.suite_number) — read by
-// createLease (getAssignedSuite) — and the list of every company suite that the
-// global counter must never re-issue (nextSuiteNumber's accounts read).
-let assignedSuite: string | null = null
-let accountSuiteRows: Array<{ suite_number: string }> = []
-// Simulated read errors for nextSuiteNumber's two suite reads.
-let leaseSuiteReadError: { message: string; code?: string } | null = null
-let accountSuiteReadError: { message: string; code?: string } | null = null
+// The suite module (allocator / locked explicit assign / address sync) is the DATABASE's job and is
+// tested against the real sandbox DB + tests/unit/operations-suite.test.ts; here they are doubles.
+let allocatedSuite = "3D-151"
+let allocateError: string | null = null
+let specificError: string | null = null
+const allocateCalls: Array<Record<string, unknown>> = []
+const specificCalls: Array<{ accountId: string; suite: string }> = []
+const syncCalls: Array<{ accountId: string; suite: string }> = []
 let insertReturnsRow: { id: string; token: string; access_code: string; suite_number: string; contract_year: number; contact_id: string } | null = null
 let insertError: { message: string } | null = null
 
@@ -63,8 +58,6 @@ vi.mock("@/lib/supabase-admin", () => ({
       let selectCols = ""
       let pendingInsert: Record<string, unknown> | null = null
       let pendingUpdate: Record<string, unknown> | null = null
-      let orderCol: string | undefined
-      let orderAsc = true
       let _limitVal: number | undefined
       let inCol: string | undefined
       let inVals: string[] = []
@@ -94,11 +87,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         not: vi.fn(() => chain),
         is: vi.fn(() => chain),
         range: vi.fn(() => chain),
-        order: vi.fn((col: string, opts?: { ascending?: boolean }) => {
-          orderCol = col
-          orderAsc = opts?.ascending ?? true
-          return chain
-        }),
+        order: vi.fn(() => chain),
         limit: vi.fn((n: number) => {
           _limitVal = n
           return chain
@@ -123,15 +112,6 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
         // Read path
         if (table === "accounts") {
-          // nextSuiteNumber(): every assigned company suite (a list, no id filter).
-          if (selectCols === "suite_number" && filters.id === undefined) {
-            if (accountSuiteReadError) return { data: null, error: accountSuiteReadError }
-            return { data: accountSuiteRows, error: null }
-          }
-          // getAssignedSuite(): this one company's assigned suite.
-          if (selectCols === "suite_number") {
-            return { data: { suite_number: assignedSuite }, error: null }
-          }
           return { data: accountRow, error: null }
         }
         if (table === "members") {
@@ -161,15 +141,6 @@ vi.mock("@/lib/supabase-admin", () => ({
           return { data: contactRow, error: null }
         }
         if (table === "lease_agreements") {
-          // nextSuiteNumber(): global max suite, ordered suite_number DESC.
-          if (orderCol === "suite_number" && !orderAsc) {
-            if (leaseSuiteReadError) return { data: null, error: leaseSuiteReadError }
-            return { data: lastSuiteLeases, error: null }
-          }
-          // The reuse-the-suite lookup: this account's own prior lease, created_at ASC.
-          if (orderCol === "created_at") {
-            return { data: priorAccountLeases, error: null }
-          }
           // The duplicate check (account_id + contract_year).
           return { data: duplicateLeases, error: null }
         }
@@ -184,6 +155,26 @@ vi.mock("@/lib/supabase-admin", () => ({
     },
   },
 }))
+
+vi.mock("@/lib/operations/suite", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/operations/suite")>("@/lib/operations/suite")
+  return {
+    ...actual,
+    allocateCompanySuite: vi.fn(async (opts: Record<string, unknown>) => {
+      allocateCalls.push(opts)
+      if (allocateError) throw new Error(allocateError)
+      return allocatedSuite
+    }),
+    assignSpecificCompanySuite: vi.fn(async (accountId: string, suite: string) => {
+      specificCalls.push({ accountId, suite })
+      if (specificError) throw new Error(specificError)
+      return suite
+    }),
+    syncPhysicalAddressToSuite: vi.fn(async (accountId: string, suite: string) => {
+      syncCalls.push({ accountId, suite })
+    }),
+  }
+})
 
 vi.mock("@/lib/mcp/action-log", () => ({
   logAction: vi.fn((params: Record<string, unknown>) => {
@@ -208,12 +199,12 @@ beforeEach(() => {
   membersRows = []
   extraContactsById = {}
   duplicateLeases = []
-  priorAccountLeases = [] // default: brand-new account, no prior lease
-  assignedSuite = null // default: no suite assigned on the company yet
-  accountSuiteRows = []
-  leaseSuiteReadError = null
-  accountSuiteReadError = null
-  lastSuiteLeases = [{ suite_number: "3D-150" }]
+  allocatedSuite = "3D-151"
+  allocateError = null
+  specificError = null
+  allocateCalls.length = 0
+  specificCalls.length = 0
+  syncCalls.length = 0
   insertReturnsRow = {
     id: "lease-1",
     token: "example-llc-2026",
@@ -423,81 +414,60 @@ describe("createLease — happy path", () => {
     expect(insert.tenant_contact_name).toBe("Override Contact")
   })
 
-  it("auto-assigns 3D-101 when no leases exist", async () => {
-    lastSuiteLeases = []
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1" })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-101")
-  })
-
-  it("auto-assigns next suite number based on last lease", async () => {
-    lastSuiteLeases = [{ suite_number: "3D-207" }]
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1" })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-208")
-  })
-
-  it("REUSES the account's existing suite on renewal — no address drift", async () => {
-    // The account already holds Suite 3D-140. A renewal must keep it, NOT take the
-    // next global number (3D-151 here) — the suite is the client's registered
-    // address. This is the fix for the year-over-year address drift.
-    priorAccountLeases = [{ suite_number: "3D-140" }]
-    lastSuiteLeases = [{ suite_number: "3D-150" }] // global counter would give 3D-151
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", contract_year: 2027 })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-140")
-    // and the account address is re-synced to the SAME suite, so it does not drift
-    const acctUpdate = updateCalls.find(u => u.table === "accounts")
-    expect((acctUpdate?.payload as Record<string, unknown>)?.physical_address).toContain("Suite 3D-140")
-  })
-
-  it("an explicit suite_number still wins over the account's prior suite", async () => {
-    priorAccountLeases = [{ suite_number: "3D-140" }]
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", suite_number: "3D-999" })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-999")
-  })
-
-  it("uses explicit suite_number when provided", async () => {
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", suite_number: "3D-999" })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-999")
-  })
-
-  it("uses the suite ASSIGNED on the company before any prior lease or the counter", async () => {
-    // Staff typed 3D-330 into Company Info → Suite Assigned; the company has no lease yet.
-    assignedSuite = "3D-330"
-    priorAccountLeases = [{ suite_number: "3D-140" }]
-    lastSuiteLeases = [{ suite_number: "3D-150" }]
+  it("uses the company's OWN suite, issued by the allocator (never picked by the lease)", async () => {
+    allocatedSuite = "3D-330"
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1" })
     const insert = insertCalls[0].payload as Record<string, unknown>
     expect(insert.suite_number).toBe("3D-330")
-    const acctUpdate = updateCalls.find(u => u.table === "accounts")
-    expect((acctUpdate?.payload as Record<string, unknown>)?.physical_address).toContain("Suite 3D-330")
+    expect(allocateCalls).toHaveLength(1)
+    expect(allocateCalls[0].accountId).toBe("acct-1")
+    expect(specificCalls).toHaveLength(0)
   })
 
-  it("an explicit suite_number still wins over the company's assigned suite", async () => {
-    assignedSuite = "3D-330"
+  it("a renewal gets the SAME suite again (the allocator is idempotent per company)", async () => {
+    allocatedSuite = "3D-140"
     const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", suite_number: "3D-999" })
+    await createLease({ account_id: "acct-1", contract_year: 2027 })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-140")
+    expect(syncCalls).toEqual([{ accountId: "acct-1", suite: "3D-140" }])
+  })
+
+  it("an explicit suite (Place Client, existing client) goes through the LOCKED assign — the allocator is not used", async () => {
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", suite_number: "3d 999" })
+    expect(specificCalls).toEqual([{ accountId: "acct-1", suite: "3D-999" }])
+    expect(allocateCalls).toHaveLength(0)
     const insert = insertCalls[0].payload as Record<string, unknown>
     expect(insert.suite_number).toBe("3D-999")
   })
 
-  it("records the suite on the company when it had none (best-effort second write)", async () => {
+  it("refuses an explicit suite that is not shaped like 3D-NNN — no lease is written", async () => {
     const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1" })
-    const suiteWrite = updateCalls.find(
-      (c) => c.table === "accounts" && "suite_number" in (c.payload as Record<string, unknown>)
-    )
-    expect(suiteWrite).toBeDefined()
-    expect((suiteWrite!.payload as Record<string, unknown>).suite_number).toBe("3D-151")
+    const result = await createLease({ account_id: "acct-1", suite_number: "318" })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("not a valid suite")
+    expect(insertCalls).toHaveLength(0)
+  })
+
+  it("the database refusing an explicit suite (another company's, or a different one than the company holds) stops the lease", async () => {
+    specificError = "Suite 3D-999 already belongs to another company"
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1", suite_number: "3D-999" })
+    expect(result.success).toBe(false)
+    expect(result.outcome).toBe("error")
+    expect(result.error).toContain("already belongs to another company")
+    expect(insertCalls).toHaveLength(0)
+  })
+
+  it("an allocator failure stops the lease — never a lease with a missing or guessed suite", async () => {
+    allocateError = "Could not issue a suite: connection reset"
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1" })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("Could not issue a suite")
+    expect(insertCalls).toHaveLength(0)
   })
 
   it("derives language='it' from contact.language", async () => {
@@ -587,13 +557,10 @@ describe("createLease — happy path", () => {
     expect(insert.token).toBe("acme-co-llc-2026")
   })
 
-  it("syncs accounts.physical_address with the assigned suite after insert", async () => {
+  it("keeps the address the Operating Agreement prints in step with the company's suite", async () => {
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1" })
-    const upd = updateCalls.find((c) => c.table === "accounts")
-    expect(upd).toBeDefined()
-    const payload = upd!.payload as Record<string, unknown>
-    expect(payload.physical_address).toBe("10225 Ulmerton Rd, Suite 3D-151, Largo, FL 33771")
+    expect(syncCalls).toEqual([{ accountId: "acct-1", suite: "3D-151" }])
   })
 })
 
@@ -608,78 +575,6 @@ describe("createLease — db error", () => {
     expect(result.success).toBe(false)
     expect(result.outcome).toBe("error")
     expect(result.error).toContain("duplicate key")
-  })
-})
-
-// ─── nextSuiteNumber — numeric max across leases AND assigned company suites ───
-
-describe("nextSuiteNumber", () => {
-  it("compares NUMERICALLY, not as strings (3D-1000 is above 3D-999)", async () => {
-    lastSuiteLeases = [{ suite_number: "3D-999" }, { suite_number: "3D-1000" }]
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await nextSuiteNumber()).toBe("3D-1001")
-  })
-
-  it("is not fooled by a hand-typed value that sorts first as a string", async () => {
-    // A stray "Suite 3D-318" / short "3D-5" used to sort above the real top and
-    // reset the counter (parseInt -> NaN -> 3D-101, an existing client's suite).
-    lastSuiteLeases = [{ suite_number: "Suite 3D-318" }, { suite_number: "3D-5" }, { suite_number: "3D-207" }]
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await nextSuiteNumber()).toBe("3D-208")
-  })
-
-  it("never re-issues a suite assigned on a company that has no lease yet", async () => {
-    lastSuiteLeases = [{ suite_number: "3D-150" }]
-    accountSuiteRows = [{ suite_number: "3D-340" }]
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await nextSuiteNumber()).toBe("3D-341")
-  })
-
-  it("starts at 3D-101 when nothing exists anywhere", async () => {
-    lastSuiteLeases = []
-    accountSuiteRows = []
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await nextSuiteNumber()).toBe("3D-101")
-  })
-})
-
-describe("nextSuiteNumber — read failures never look like an empty table", () => {
-  it("throws when the lease read fails (must not hand out 3D-101)", async () => {
-    leaseSuiteReadError = { message: "statement timeout" }
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    await expect(nextSuiteNumber()).rejects.toThrow("lease_agreements.suite_number")
-  })
-
-  it("tolerates a missing accounts.suite_number column (code 42703) — deploy ahead of the migration", async () => {
-    lastSuiteLeases = [{ suite_number: "3D-150" }]
-    accountSuiteReadError = { message: 'column accounts.suite_number does not exist', code: "42703" }
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await nextSuiteNumber()).toBe("3D-151")
-  })
-
-  it("throws on any OTHER accounts read error", async () => {
-    accountSuiteReadError = { message: "connection reset" }
-    const { nextSuiteNumber } = await import("@/lib/operations/lease")
-    await expect(nextSuiteNumber()).rejects.toThrow("accounts.suite_number")
-  })
-
-  it("createLease returns a clean error when the suite counter cannot be read", async () => {
-    leaseSuiteReadError = { message: "statement timeout" }
-    const { createLease } = await import("@/lib/operations/lease")
-    const result = await createLease({ account_id: "acct-1" })
-    expect(result.success).toBe(false)
-    expect(insertCalls.length).toBe(0)
-  })
-})
-
-describe("getAssignedSuite is validated (via createLease)", () => {
-  it("ignores a malformed suite stored on the company and falls through to the counter", async () => {
-    assignedSuite = "TBD"
-    lastSuiteLeases = [{ suite_number: "3D-150" }]
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1" })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.suite_number).toBe("3D-151")
   })
 })
 
@@ -710,19 +605,5 @@ describe("normalizeSuiteNumber", () => {
     expect(normalizeSuiteNumber("Suite 104-153")).toBeNull()
     expect(normalizeSuiteNumber("3D-1")).toBeNull()
     expect(normalizeSuiteNumber(null)).toBeNull()
-  })
-})
-
-describe("highestSuiteNumber", () => {
-  it("returns the numeric max across leases and assigned company suites", async () => {
-    lastSuiteLeases = [{ suite_number: "3D-207" }]
-    accountSuiteRows = [{ suite_number: "3D-340" }]
-    const { highestSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await highestSuiteNumber()).toBe(340)
-  })
-  it("is 100 when nothing exists (so the first suite is 3D-101)", async () => {
-    lastSuiteLeases = []
-    const { highestSuiteNumber } = await import("@/lib/operations/lease")
-    expect(await highestSuiteNumber()).toBe(100)
   })
 })

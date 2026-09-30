@@ -403,7 +403,6 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     const { createLease } = await import("@/lib/operations/lease")
     const leaseResult = await createLease({
       account_id: p.account_id,
-      suite_number: p.suite_number,
       effective_date: today,
       term_start_date: today,
       language: lang as "en" | "it",
