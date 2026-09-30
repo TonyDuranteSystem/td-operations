@@ -18,6 +18,8 @@
 --   Growthlane / Ad Astra: their draft leases carry an old / misspelled tenant name — the company keeps the
 --   suite on its draft and the tenant name is corrected to the company's current name.
 --   Every other client company gets the suite it already holds on its own lease loaded onto the company.
+--   Every remaining ACTIVE client company (no lease yet, ~109) is issued a suite now, oldest company first; the
+--   two test accounts ("Test", "QA E2E Test LLC") are skipped; no address is written for them.
 --   Uxio Test (is_test) is left alone.
 --
 -- Deletions go through admin_delete_lease, which keeps a full copy of the lease in suite_audit_log.
@@ -150,10 +152,29 @@ WHERE id IN ('2809f939-5462-4d18-8f40-15a71283fa88', '39876d6f-82b2-44d5-aede-d9
   AND suite_number IS NOT NULL
   AND (physical_address IS NULL OR btrim(physical_address) = '' OR physical_address ILIKE '10225 Ulmerton Rd%');
 
+-- ─── 6b. Every other ACTIVE client company gets a suite now (Antonio 2026-09-30: "now") ─────────
+-- These companies have no lease yet. Issued in order of when the company was created (oldest first), by the
+-- same allocator as everything else. Test accounts are skipped. Only the suite is issued — NO address is
+-- written (a company with no EIN and no mailing address would otherwise see its EIN application switch from
+-- the Seminole fallback to Largo). Their leases (January) and the Operating Agreement pick the suite up later.
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT a.id FROM accounts a
+    WHERE a.status = 'Active' AND a.account_type = 'Client' AND COALESCE(a.is_test, false) = false
+      AND a.suite_number IS NULL
+      AND a.company_name !~* '(^test$|qa e2e|^zz |sandbox|demo)'
+    ORDER BY a.created_at ASC, a.id ASC
+  LOOP
+    PERFORM allocate_company_suite(r.id, NULL, 'antonio:repair-backfill');
+  END LOOP;
+END $$;
+
 COMMIT;
 
 -- ─── VERIFY (read-only) ─────────────────────────────────────────────────────────────────────
--- A) how many companies now hold a suite, and that none is shared (expect 139 and 0):
+-- A) how many companies now hold a suite, and that none is shared (expect 248 and 0):
 -- SELECT count(*) FILTER (WHERE suite_number IS NOT NULL) AS with_suite,
 --        (SELECT count(*) FROM (SELECT suite_number FROM accounts WHERE suite_number IS NOT NULL GROUP BY 1 HAVING count(*) > 1) s) AS shared
 -- FROM accounts;
