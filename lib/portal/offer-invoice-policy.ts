@@ -68,6 +68,8 @@ export function getServiceLabel(contract_type: string | null | undefined): strin
       return "Tax Return"
     case "itin":
       return "ITIN Application"
+    case "closure":
+      return "Company Closure"
     default:
       return "Service"
   }

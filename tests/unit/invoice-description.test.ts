@@ -29,3 +29,9 @@ describe("getInvoiceDescription — the invoice created at signing", () => {
     expect(getInvoiceDescription("formation", ["Company Change Name"], "DF", [{ name: "Other", pipeline_type: "Other" }])).toBe("Company Change Name - DF")
   })
 })
+
+describe("getInvoiceDescription — closure contracts (S1 E2E ★8)", () => {
+  it("a closure sold alone is 'Company Closure Package', not 'Service Package'", () => {
+    expect(getInvoiceDescription("closure", [], "Quinto Esempio Ventures")).toBe("Company Closure Package - Quinto Esempio Ventures")
+  })
+})

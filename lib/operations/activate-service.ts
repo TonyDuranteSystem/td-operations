@@ -915,6 +915,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage_order: -1,
                 status: "active",
                 notes: `Auto-created from offer ${activation.offer_token}`,
+                source_offer_token: activation.offer_token,
               }
             } else {
               createParams = {
@@ -925,6 +926,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage: "1st Installment Paid",
                 status: taxPausedBundled ? "on_hold" : "active",
                 notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
+                source_offer_token: activation.offer_token,
               }
             }
           } else if (pipeline === "ITIN") {
@@ -937,6 +939,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               account_id: null,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
+              source_offer_token: activation.offer_token,
             }
           } else {
             // All other pipelines — createSD resolves the first stage
@@ -947,6 +950,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               account_id: accountId,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
+              // Stamped like every other path (S1 E2E ★8): traceability + the
+              // per-offer unique indexes guard a retried activation.
+              source_offer_token: activation.offer_token,
             }
           }
 
