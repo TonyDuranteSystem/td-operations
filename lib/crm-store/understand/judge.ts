@@ -20,6 +20,8 @@ const db = () => supabaseAdmin as any
 export const AI_SURFACE = "crm_store"
 export class AiDisabledError extends Error {}
 export class AiCapError extends Error {}
+/** another check of the SAME file version is already being paid for (a double click, or two people) */
+export class AiBusyError extends Error {}
 
 export interface TypeChoice { slug: string; displayName: string; personal: boolean; description: string | null }
 export interface ExampleHint { typeSlug: string; namePattern: string | null; folderKind: string | null }
@@ -117,7 +119,8 @@ function apiKey(): string {
 }
 export function keySurfaceInUse(): string { return surfaceApiKeyOverride(AI_SURFACE) ? AI_SURFACE : "shared" }
 
-/** Today's AI spend from the audit rows (unknown-cost calls count a flat cent). */
+/** Today's AI spend from the audit rows (unknown-cost calls count a flat cent). A call that has been CLAIMED but not finished
+ *  ('pending', under 5 minutes old) also counts a flat cent, so a burst of parallel checks cannot all pass the cap unseen. */
 export async function spentTodayUsd(): Promise<number> {
   const since = new Date(); since.setUTCHours(0, 0, 0, 0)
   let total = 0
@@ -127,7 +130,8 @@ export async function spentTodayUsd(): Promise<number> {
     total += ((data ?? []) as { cost_usd: number | null }[]).reduce((s, r) => s + (r.cost_usd ?? 0.01), 0)
     if ((data ?? []).length < 1000) break
   }
-  return total
+  const { count } = await db().from("store_ai_calls").select("id", { count: "exact", head: true }).eq("status", "pending").gte("created_at", new Date(Date.now() - PENDING_MS).toISOString())
+  return total + (count ?? 0) * 0.01
 }
 
 export async function assertMayCall(): Promise<void> {
@@ -135,12 +139,32 @@ export async function assertMayCall(): Promise<void> {
   if ((await spentTodayUsd()) >= dailyCapUsd()) throw new AiCapError(`Today's AI spend cap ($${dailyCapUsd()}) is reached.`)
 }
 
-export async function recordCall(row: { analysisId: string | null; versionId: string | null; purpose: "classify" | "compare"; model: string; pagesSent: number | null; bytesSent: number | null; input: number | null; output: number | null; status: "ok" | "error" | "refused"; error?: string }): Promise<void> {
-  const { error } = await db().from("store_ai_calls").insert({
+const PENDING_MS = 5 * 60_000
+
+/**
+ * CLAIM a file version before paying for it: write a 'pending' audit row first, then look at who holds the OLDEST live claim for that
+ * version — only that one may call the AI; the others remove their row and stop. Two clicks, or two people, never pay twice.
+ */
+export async function claimCall(versionId: string | null, model: string): Promise<string | null> {
+  if (!versionId) return null
+  const { data: mine, error } = await db().from("store_ai_calls").insert({ version_id: versionId, purpose: "classify", provider: "anthropic", model, key_surface: keySurfaceInUse(), status: "pending" }).select("id, created_at").single()
+  if (error || !mine) throw new Error(`Could not start the check (${error?.message ?? "no row"}).`)
+  const { data: first } = await db().from("store_ai_calls").select("id").eq("version_id", versionId).eq("status", "pending").gte("created_at", new Date(Date.now() - PENDING_MS).toISOString()).order("created_at", { ascending: true }).order("id", { ascending: true }).limit(1)
+  if ((first ?? [])[0]?.id !== mine.id) {
+    await db().from("store_ai_calls").delete().eq("id", mine.id)
+    throw new AiBusyError("This file is already being checked.")
+  }
+  return mine.id as string
+}
+
+export async function recordCall(row: { analysisId: string | null; versionId: string | null; purpose: "classify" | "compare"; model: string; pagesSent: number | null; bytesSent: number | null; input: number | null; output: number | null; status: "ok" | "error" | "refused"; error?: string; claimId?: string | null }): Promise<void> {
+  const values = {
     analysis_id: row.analysisId, version_id: row.versionId, purpose: row.purpose, provider: "anthropic", model: row.model,
     key_surface: keySurfaceInUse(), pages_sent: row.pagesSent, bytes_sent: row.bytesSent, input_tokens: row.input, output_tokens: row.output,
     cost_usd: row.input != null && row.output != null ? costUsd(row.model, row.input, row.output) : null, status: row.status, error: row.error?.slice(0, 300) ?? null,
-  })
+  }
+  // a claimed call FINISHES its own pending row (so it is counted once); any other call writes a new row
+  const { error } = row.claimId ? await db().from("store_ai_calls").update(values).eq("id", row.claimId) : await db().from("store_ai_calls").insert(values)
   if (error) console.error(`[store-ai] audit row not written: ${error.message}`)
 }
 
@@ -191,15 +215,16 @@ export function parseClassifyResult(res: { content: Array<{ type: string; input?
 export async function classifyFile(i: ClassifyInput, ctx: { analysisId: string | null; versionId: string | null }, call: ClaudeCall = realCall): Promise<ClassifyOutput> {
   await assertMayCall()
   const model = aiModel()
+  const claimId = await claimCall(ctx.versionId, model)                                    // a second check of the same version stops here
   const { body, pagesSent, bytesSent } = buildClassifyBody(i, model)
   try {
     const res = await call(body, apiKey())
     const parsed = parseClassifyResult(res, new Set(i.types.map((t) => t.slug)))
     const usage = { input: res.usage?.input_tokens ?? 0, output: res.usage?.output_tokens ?? 0, model }
-    await recordCall({ analysisId: ctx.analysisId, versionId: ctx.versionId, purpose: "classify", model, pagesSent, bytesSent, input: usage.input, output: usage.output, status: "ok" })
+    await recordCall({ analysisId: ctx.analysisId, versionId: ctx.versionId, purpose: "classify", model, pagesSent, bytesSent, input: usage.input, output: usage.output, status: "ok", claimId })
     return { ...parsed, injectionSuspected: parsed.injectionSuspected || looksLikeInjection(i.pages.join(" ")), usage, pagesSent, bytesSent }
   } catch (e) {
-    await recordCall({ analysisId: ctx.analysisId, versionId: ctx.versionId, purpose: "classify", model, pagesSent, bytesSent, input: null, output: null, status: "error", error: e instanceof Error ? e.message : "error" })
+    await recordCall({ analysisId: ctx.analysisId, versionId: ctx.versionId, purpose: "classify", model, pagesSent, bytesSent, input: null, output: null, status: "error", error: e instanceof Error ? e.message : "error", claimId })
     throw e
   }
 }
