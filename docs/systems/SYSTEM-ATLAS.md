@@ -194,14 +194,14 @@ _Regenerated 2026-09-30. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-29)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-26)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-09-27)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-09-29)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-29)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-30)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-09-30)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-09-28)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-29)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-26)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-29)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
