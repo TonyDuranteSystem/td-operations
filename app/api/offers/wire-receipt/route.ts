@@ -34,10 +34,18 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     )
   }
-  const { error } = await supabaseAdmin
+  const { data: updated, error } = await supabaseAdmin
     .from('contracts')
     .update({ wire_receipt_path: path })
     .eq('offer_token', token)
+    .select('id')
   if (error) return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
+  if (!updated || updated.length === 0) {
+    // No signed contract on file to attach it to — never tell the client it was received.
+    return NextResponse.json(
+      { error: 'We could not attach your receipt to a signed contract. Please send it to us in the portal chat.' },
+      { status: 409 },
+    )
+  }
   return NextResponse.json({ ok: true })
 }

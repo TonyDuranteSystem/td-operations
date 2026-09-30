@@ -95,11 +95,11 @@ export function signingOfferUpdate(
   kind: SignKind,
 ): { update: Record<string, unknown>; planRefusal: string | null } {
   if (kind !== 'main') return { update: {}, planRefusal: null }
-  const selected = Array.isArray(offer?.selected_services) ? (offer.selected_services as string[]) : []
+  const selected = asList(offer?.selected_services) as string[]
   const payable = computeOfferPayable(
     {
-      services: offer?.services,
-      cost_summary: offer?.cost_summary,
+      services: asList(offer?.services) as never,
+      cost_summary: asList(offer?.cost_summary) as never,
       selected_services: Array.from(new Set(selected)),
       currency: offer?.currency,
       credit_amount: offer?.credit_amount,
@@ -114,6 +114,15 @@ export function signingOfferUpdate(
     update.bank_details = { ...offer.bank_details, amount: `${symbol}${total.toLocaleString('en-US')}` }
   }
   return { update, planRefusal: payable.planRefusal ?? null }
+}
+
+/** A JSONB list some legacy rows store as a JSON string (the pages have always parsed both). */
+export function asList(v: unknown): unknown[] {
+  if (Array.isArray(v)) return v
+  if (typeof v === 'string') {
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
+  }
+  return []
 }
 
 /** Offer statuses from which a client may sign. */
@@ -146,9 +155,9 @@ export function offerSignRefusal(
   }
   if (offer?.allow_split_payment_choice && !offer?.payment_choice_made_at) {
     const gate = computeOfferPayable({
-      services: offer.services,
-      cost_summary: offer.cost_summary,
-      selected_services: offer.selected_services,
+      services: asList(offer.services) as never,
+      cost_summary: asList(offer.cost_summary) as never,
+      selected_services: asList(offer.selected_services) as string[],
       currency: offer.currency,
       credit_amount: offer.credit_amount,
       payment_plan: null,
@@ -170,7 +179,7 @@ export function validateSelection(
   requested: unknown,
 ): string[] | null {
   if (!Array.isArray(requested)) return null
-  const services: Array<{ name?: string; optional?: boolean }> = Array.isArray(offer?.services) ? offer.services : []
+  const services = asList(offer?.services) as Array<{ name?: string; optional?: boolean }>
   const names = new Set(services.map((s) => s?.name).filter((n): n is string => typeof n === 'string'))
   const out: string[] = []
   for (const n of requested) {
@@ -206,7 +215,9 @@ export const WIRE_RECEIPT_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'heic', 'we
 
 export function wireReceiptPathFor(token: string, fileName: unknown, now: number = Date.now()): string | null {
   const raw = typeof fileName === 'string' ? fileName : ''
-  const ext = (raw.split('.').pop() || 'pdf').toLowerCase()
+  // No extension (phones sometimes send none): name it .pdf — the file's REAL type is
+  // checked from its first bytes when it is recorded, never from its name.
+  const ext = raw.includes('.') ? (raw.split('.').pop() || 'pdf').toLowerCase() : 'pdf'
   if (!(WIRE_RECEIPT_EXTENSIONS as readonly string[]).includes(ext)) return null
   return `${token}/wire-receipt-${now}.${ext}`
 }

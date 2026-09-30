@@ -156,6 +156,9 @@ describe('selection of optional services', () => {
     expect(validateSelection(offer, ['A', 'C'])).toEqual(['A', 'C'])
     expect(validateSelection(offer, ['A'])).toEqual(['A'])
   })
+  it('reads services stored as a JSON string (legacy rows) the same way', () => {
+    expect(validateSelection({ services: JSON.stringify(offer.services) }, ['A', 'B'])).toEqual(['A', 'B'])
+  })
   it('refuses unknown names, a dropped required line, or a non-list', () => {
     expect(validateSelection(offer, ['A', 'Z'])).toBeNull()
     expect(validateSelection(offer, ['B'])).toBeNull()
@@ -175,6 +178,7 @@ describe('server-issued storage paths', () => {
   it('wire receipts accept images and PDFs only', () => {
     expect(wireReceiptPathFor('t', 'IMG_1.HEIC', 5)).toBe('t/wire-receipt-5.heic')
     expect(wireReceiptPathFor('t', 'x.exe', 5)).toBeNull()
+    expect(wireReceiptPathFor('t', 'receipt', 5)).toBe('t/wire-receipt-5.pdf')
     expect(isOwnWireReceiptPath('t', 't/wire-receipt-5.heic')).toBe(true)
     expect(isOwnWireReceiptPath('t', 'u/wire-receipt-5.heic')).toBe(false)
   })

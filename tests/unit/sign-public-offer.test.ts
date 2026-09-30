@@ -90,11 +90,28 @@ describe('signing an offer on the server', () => {
     expect(w.log.some((l) => l.startsWith('flip'))).toBe(false)
   })
 
-  it('a failed status flip reports it (signature stored) and does not run the follow-up', async () => {
+  it('a failed status flip reports it, drops its own record (no duplicate on retry) and runs no follow-up', async () => {
     const w = world({ flipFails: true })
     const r = await signPublicOffer({ offer: w.offer, fields: {}, pdfPath: PDF }, w.deps)
     expect(r.error).toBe('status')
+    expect(w.log).toContain('delete c1')
+    expect(w.contracts()).toBe(0)
     expect(w.log.some((l) => l.startsWith('followup'))).toBe(false)
+  })
+
+  it('RETRY on a signed offer whose plan disagrees with it still quotes no wire figure', async () => {
+    const w = world({ status: 'signed', contracts: 1 })
+    const offer = {
+      ...w.offer,
+      bank_details: { iban: 'DK89', amount: '€2,500' },
+      payment_plan: [
+        { seq: 1, amount: 1250, currency: 'EUR', trigger: { kind: 'signing' } },
+        { seq: 2, amount: 900, currency: 'EUR', trigger: { kind: 'manual' } },
+      ],
+    }
+    const r = await signPublicOffer({ offer, fields: {}, pdfPath: undefined }, w.deps)
+    expect(r.error).toBeNull()
+    expect(r.planRefusal).toBeTruthy()
   })
 
   it('two concurrent signs: the loser drops its duplicate row and still answers success', async () => {

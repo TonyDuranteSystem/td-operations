@@ -13,9 +13,11 @@
  *      is logged and re-run on the client's retry.
  *
  * RESUMABLE: a retry on an offer that is already signed (lost response, timeout after
- * step 3) is not an error. It re-checks the contracts row and re-runs the follow-up, so
- * whatever did not finish the first time finishes now, and the client gets the same
- * success answer.
+ * step 3) is not an error. It re-checks the contracts row and re-runs the follow-up, and
+ * the client gets the same success answer. Limit (unchanged from the old webhook): the
+ * follow-up treats an existing pending activation as "done", so if a first run created the
+ * activation but died before the invoice, the retry does not create the invoice — that
+ * case is only logged by the follow-up and needs a staff follow-up.
  *
  * All I/O is injected so every step's failure-and-retry is unit-tested
  * (tests/unit/sign-public-offer.test.ts).
@@ -93,7 +95,9 @@ export async function signPublicOffer(
       if (ins.error) return fail(500, 'record')
     }
     await followUpOffer(deps, token)
-    return { error: null, status: 200, alreadySigned: true, bankAmount: offer?.bank_details?.amount ?? null, planRefusal: null, invoiceNumber: null }
+    // The stored figure was written by the first run; when the plan disagrees with the
+    // offer the page must still quote nothing (same rule as a first signing).
+    return { error: null, status: 200, alreadySigned: true, bankAmount: offer?.bank_details?.amount ?? null, planRefusal: signingOfferUpdate(offer, kind).planRefusal, invoiceNumber: null }
   }
 
   const refusal = offerSignRefusal(offer, deps.now())
@@ -109,7 +113,9 @@ export async function signPublicOffer(
   const { update, planRefusal } = signingOfferUpdate(offer, kind)
   const flip = await deps.flipOfferSigned(token, { status: 'signed', ...update }, SIGNABLE_OFFER_STATUSES)
   if (flip.error) {
-    // The signature IS stored (PDF + contracts row); only the status did not move.
+    // The status did not move, so this signing did not happen: drop the row this request
+    // wrote (a retry writes a fresh one — no duplicate rows), keep the stored PDF.
+    await deps.deleteContract(ins.id)
     return fail(500, 'status')
   }
   if (flip.changed === 0) {
@@ -117,7 +123,7 @@ export async function signPublicOffer(
     // the record. Drop the duplicate row this request wrote, then resume like a retry.
     await deps.deleteContract(ins.id)
     await followUpOffer(deps, token)
-    return { error: null, status: 200, alreadySigned: true, bankAmount: null, planRefusal: null, invoiceNumber: null }
+    return { error: null, status: 200, alreadySigned: true, bankAmount: null, planRefusal, invoiceNumber: null }
   }
 
   await followUpOffer(deps, token)

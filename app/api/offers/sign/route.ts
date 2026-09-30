@@ -3,6 +3,7 @@ import { readOfferRequest } from '@/lib/offers/public-offer-request'
 import { resolvePublicOfferAccess } from '@/lib/offers/public-offer-access'
 import { signPublicOffer, signRenewalAgreement } from '@/lib/offers/sign-public-offer'
 import { realSignDeps } from '@/lib/offers/sign-deps'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export const dynamic = 'force-dynamic'
 // The in-process follow-up (activation, invoice, PDF archive) can take a while.
@@ -34,10 +35,18 @@ export async function POST(req: NextRequest) {
     : await signPublicOffer({ offer: access.offer, fields, pdfPath: r.body.pdf_path }, realSignDeps)
 
   if (result.error) return NextResponse.json({ error: result.error }, { status: result.status })
+
+  // A request that lost a race to a concurrent sign (or a retry) reports the wire amount
+  // the winner actually stored, so both answers show the client the same figure.
+  let bankAmount = result.bankAmount
+  if (access.kind === 'offer' && result.alreadySigned) {
+    const { data: fresh } = await supabaseAdmin.from('offers').select('bank_details').eq('token', access.offer.token).maybeSingle()
+    bankAmount = (fresh?.bank_details as { amount?: string } | null)?.amount ?? bankAmount
+  }
   return NextResponse.json({
     ok: true,
     alreadySigned: result.alreadySigned,
-    bankAmount: result.bankAmount,
+    bankAmount,
     planRefusal: result.planRefusal,
     invoiceNumber: result.invoiceNumber,
   })

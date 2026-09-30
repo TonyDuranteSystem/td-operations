@@ -21,11 +21,18 @@ export async function POST(req: NextRequest) {
   if (access.staffPreview) return NextResponse.json({ ok: true, skipped: 'staff_preview' })
 
   const o = access.offer
-  const status = o.status === 'draft' || o.status === 'sent' || o.status === 'published' ? 'viewed' : o.status
+  const now = new Date().toISOString()
   const { error } = await supabaseAdmin
     .from('offers')
-    .update({ view_count: (o.view_count || 0) + 1, viewed_at: new Date().toISOString(), status })
+    .update({ view_count: (o.view_count || 0) + 1, viewed_at: now })
     .eq('id', o.id)
   if (error) return NextResponse.json({ error: 'Could not record the view.' }, { status: 500 })
+  // Only an unopened offer becomes 'viewed' — conditionally, so a view recorded at the
+  // same moment as a signature can never turn a signed offer back to 'viewed'.
+  await supabaseAdmin
+    .from('offers')
+    .update({ status: 'viewed' })
+    .eq('id', o.id)
+    .in('status', ['draft', 'sent', 'published'])
   return NextResponse.json({ ok: true })
 }
