@@ -10,6 +10,9 @@
 --     (stepper, buttons, MCP, routes, SQL) can skip the step. Test deliveries (is_test) are exempt.
 -- Deliveries already past those stages are untouched (the rule only fires when a case CROSSES the gate).
 
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
 -- ─── 1. The waiver flag ──────────────────────────────────────────────────────
 ALTER TABLE public.service_deliveries
   ADD COLUMN IF NOT EXISTS suite_waived_at     timestamptz,
@@ -59,12 +62,14 @@ END $$;
 -- ─── 4. "No suite for this client": needs a reason; frees any reservation; refused if a suite already exists ──
 CREATE OR REPLACE FUNCTION public.waive_delivery_suite(p_delivery uuid, p_reason text, p_actor text DEFAULT 'system') RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE v_acc uuid; v_suite text; v_released text;
+DECLARE v_acc uuid; v_suite text; v_released text; v_already timestamptz;
 BEGIN
   IF COALESCE(btrim(p_reason), '') = '' THEN RAISE EXCEPTION 'A reason is required'; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('td_suite_allocator'));
-  SELECT account_id INTO v_acc FROM public.service_deliveries WHERE id = p_delivery FOR UPDATE;
+  SELECT account_id, suite_waived_at INTO v_acc, v_already FROM public.service_deliveries WHERE id = p_delivery FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'delivery % not found', p_delivery; END IF;
+  -- already waived: nothing to do (a retried job must not re-stamp the waiver or add a second history row)
+  IF v_already IS NOT NULL THEN RETURN jsonb_build_object('waived', true, 'already', true); END IF;
   IF v_acc IS NOT NULL THEN
     SELECT suite_number INTO v_suite FROM public.accounts WHERE id = v_acc;
     IF v_suite IS NOT NULL THEN
@@ -105,7 +110,13 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('td_suite_allocator'));
   SELECT suite_number INTO v_suite FROM accounts WHERE id = p_account FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'account % not found', p_account; END IF;
-  IF v_suite IS NOT NULL THEN RETURN v_suite; END IF;
+  IF v_suite IS NOT NULL THEN
+    -- the company already has its number: a leftover reservation of this delivery (if any) is stale — free it
+    IF p_delivery IS NOT NULL THEN
+      PERFORM public.release_suite_reservation(p_delivery, p_actor);
+    END IF;
+    RETURN v_suite;
+  END IF;
   IF p_delivery IS NOT NULL THEN
     SELECT suite_number INTO v_res FROM suite_reservations WHERE delivery_id = p_delivery;
   END IF;
@@ -174,3 +185,5 @@ GRANT EXECUTE ON FUNCTION public.issue_delivery_suite(uuid, text) TO service_rol
 GRANT EXECUTE ON FUNCTION public.waive_delivery_suite(uuid, text, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.unwaive_delivery_suite(uuid, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.claim_company_suite(uuid, uuid, text) TO service_role;
+
+COMMIT;

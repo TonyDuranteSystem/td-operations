@@ -916,6 +916,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82.
   if (!autoDocumentCreationEnabled()) {
     result.steps.push(step("lease", "skipped", "Automatic lease creation is off — create it manually from the account page."))
+  } else if (p.suite_choice === "waive") {
+    // staff ticked "No suite for this client" on Confirm — there is nothing to lease (not an error)
+    result.steps.push(step("lease", "skipped", "No suite for this client — no lease."))
   } else if (account_id && company_name) {
     try {
       const { createLease } = await import("@/lib/operations/lease")

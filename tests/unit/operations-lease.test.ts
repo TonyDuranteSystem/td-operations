@@ -202,7 +202,7 @@ beforeEach(() => {
   extraContactsById = {}
   duplicateLeases = []
   allocatedSuite = "3D-151"
-  companySuiteNow = null
+  companySuiteNow = "3D-151" // the company already holds its suite (a lease never issues one by default)
   allocateError = null
   specificError = null
   allocateCalls.length = 0
@@ -417,19 +417,29 @@ describe("createLease — happy path", () => {
     expect(insert.tenant_contact_name).toBe("Override Contact")
   })
 
-  it("uses the company's OWN suite, issued by the allocator (never picked by the lease)", async () => {
-    allocatedSuite = "3D-330"
+  it("uses the company's OWN suite (never picked by the lease, never issued by default)", async () => {
+    companySuiteNow = "3D-330"
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1" })
     const insert = insertCalls[0].payload as Record<string, unknown>
     expect(insert.suite_number).toBe("3D-330")
-    expect(allocateCalls).toHaveLength(1)
-    expect(allocateCalls[0].accountId).toBe("acct-1")
+    expect(allocateCalls).toHaveLength(0)
     expect(specificCalls).toHaveLength(0)
   })
 
-  it("a renewal gets the SAME suite again (the allocator is idempotent per company)", async () => {
-    allocatedSuite = "3D-140"
+  it("only an explicit issue_suite_if_missing:true asks the allocator for a suite", async () => {
+    companySuiteNow = null
+    allocatedSuite = "3D-330"
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", issue_suite_if_missing: true })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-330")
+    expect(allocateCalls).toHaveLength(1)
+    expect(allocateCalls[0].accountId).toBe("acct-1")
+  })
+
+  it("a renewal gets the SAME suite again (the company's own suite)", async () => {
+    companySuiteNow = "3D-140"
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1", contract_year: 2027 })
     const insert = insertCalls[0].payload as Record<string, unknown>
@@ -464,10 +474,10 @@ describe("createLease — happy path", () => {
     expect(insertCalls).toHaveLength(0)
   })
 
-  it("an AUTOMATIC job (issue_suite_if_missing:false) never issues a suite: with none it stops with a clear message and writes no lease", async () => {
+  it("by DEFAULT a lease never issues a suite: with none (waived / not issued) it stops with a clear message and writes no lease", async () => {
     companySuiteNow = null
     const { createLease } = await import("@/lib/operations/lease")
-    const result = await createLease({ account_id: "acct-1", issue_suite_if_missing: false })
+    const result = await createLease({ account_id: "acct-1" })
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/no suite yet/i)
     expect(allocateCalls).toHaveLength(0)
@@ -485,9 +495,10 @@ describe("createLease — happy path", () => {
   })
 
   it("an allocator failure stops the lease — never a lease with a missing or guessed suite", async () => {
+    companySuiteNow = null
     allocateError = "Could not issue a suite: connection reset"
     const { createLease } = await import("@/lib/operations/lease")
-    const result = await createLease({ account_id: "acct-1" })
+    const result = await createLease({ account_id: "acct-1", issue_suite_if_missing: true })
     expect(result.success).toBe(false)
     expect(result.error).toContain("Could not issue a suite")
     expect(insertCalls).toHaveLength(0)

@@ -143,7 +143,11 @@ async function checkAndAutoAdvance(taskId: string): Promise<string | null> {
     .eq("id", delivery.id)
     .eq("stage_order", delivery.stage_order) // optimistic lock
 
-  if (advErr) return null
+  if (advErr) {
+    // the database can refuse the move (e.g. the required Suite step is not done) — tell the caller instead of staying silent
+    // (Postgres reports a refused move as a check violation; a lost optimistic-lock race returns no error and no row)
+    return `⚠️ All tasks for "${delivery.stage}" are done, but the case could not move to "${nextStage.stage_name}": ${advErr.message}`
+  }
 
   // 7. Create auto-tasks for the new stage
   const createdTasks: string[] = []

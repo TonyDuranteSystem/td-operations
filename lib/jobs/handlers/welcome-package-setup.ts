@@ -401,17 +401,22 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     // (the generic first-linked-contact fetched above for OA/banking/portal
     // purposes, which is the wrong source for a Multi-Member LLC's signer).
     const { createLease } = await import("@/lib/operations/lease")
-    const leaseResult = await createLease({
+    const { getCompanySuite } = await import("@/lib/operations/suite")
+    // No suite = either the client was waived ("No suite for this client") or it was never issued: there is nothing to
+    // lease, and that is a decision, not a failure (it must not mark the whole package "prepared_with_errors").
+    const hasSuite = await getCompanySuite(p.account_id)
+    const leaseResult = hasSuite ? await createLease({
       account_id: p.account_id,
       effective_date: today,
       term_start_date: today,
       language: lang as "en" | "it",
-      issue_suite_if_missing: false, // automatic job: never issues a suite (required workspace step)
       actor: "system:welcome-package-setup",
       summary: `Auto-created lease during welcome package setup for ${account.company_name}`,
-    })
+    }) : null
 
-    if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+    if (!leaseResult) {
+      result.steps.push(step("lease", "skipped", "This company has no suite — no lease. (Issue the suite from the account page first if one is needed.)"))
+    } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
       result.steps.push(step("lease", "skipped", `Already exists: ${leaseResult.existing.token}`))
     } else if (leaseResult.success && leaseResult.lease) {
       result.steps.push(step("lease", "ok", `${leaseResult.lease.token} (suite ${leaseResult.lease.suite_number})`))

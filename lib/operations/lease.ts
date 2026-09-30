@@ -60,9 +60,9 @@ export interface CreateLeaseParams {
    */
   suite_number?: string
   /**
-   * Default true (a STAFF action issues the company's suite if it has none). AUTOMATIC jobs (onboarding setup,
-   * welcome package) pass false: they never issue a suite — the company's suite is an explicit, required step in
-   * the workspace — so with no suite they stop with a clear message instead of deciding for staff.
+   * Default FALSE: a lease never issues a suite — with none it stops with a clear message. The suite is an explicit,
+   * required step (workspace Suite step / "Issue suite" on the account page). Pass true only from a place where a staff
+   * member has just deliberately chosen to issue one.
    */
   issue_suite_if_missing?: boolean
   /** Default: current year. */
@@ -239,18 +239,21 @@ export async function createLease(
           }
         }
         suiteNumber = await assignSpecificCompanySuite(params.account_id, wanted, params.actor || "system")
-      } else if (params.issue_suite_if_missing === false) {
+      } else if (params.issue_suite_if_missing === true) {
+        suiteNumber = await allocateCompanySuite({ accountId: params.account_id, actor: params.actor || "system" })
+      } else {
+        // DEFAULT: a lease never issues a suite. Issuing is an explicit, required step (workspace Suite step or the
+        // "Issue suite" button on the account page) — so a client who was waived ("No suite for this client") or who is
+        // closed never gets a number by the back door.
         const existing = await getCompanySuite(params.account_id)
         if (!existing) {
           return {
             success: false,
             outcome: "error",
-            error: "This company has no suite yet — issue it first (workspace Suite step or the account page), then create the lease.",
+            error: "This company has no suite yet — issue it first (workspace Suite step or the \"Issue suite\" button on the account page), then create the lease. If this client is not getting a suite, no lease can be created.",
           }
         }
         suiteNumber = existing
-      } else {
-        suiteNumber = await allocateCompanySuite({ accountId: params.account_id, actor: params.actor || "system" })
       }
     } catch (suiteErr) {
       return {

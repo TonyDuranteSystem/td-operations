@@ -8,6 +8,7 @@ import { parseStageLayout } from '@/lib/flows/stage-layout'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
+import { SuitePanel } from '@/components/flows/suite-panel'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
@@ -339,6 +340,13 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
           serviceDeliveryId={serviceDelivery.id}
         />
       </div>
+
+      {/* Client Onboarding has no stage_layout (its hand-built workspace carries the suite choice on Confirm), but a case placed
+          by "Place Client" sits at "Review & CRM Setup" with no Confirm screen — it needs the same required Suite step here,
+          or staff would have no way to waive the suite. Formation gets its card from the stage layout. */}
+      {serviceDelivery.service_type === 'Client Onboarding' && serviceDelivery.stage === 'Review & CRM Setup' && (
+        <SuitePanel serviceDeliveryId={serviceDelivery.id} />
+      )}
 
       {/* Stage content from stage_layout */}
       <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />

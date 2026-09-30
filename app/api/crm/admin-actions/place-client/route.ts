@@ -440,8 +440,8 @@ async function createLeaseForPlacement(
   const { createLease } = await import("@/lib/operations/lease")
   const result = await createLease({
     account_id: accountId,
-    // Only when staff typed one (an existing client's known suite); otherwise the lease uses the company's own suite.
-    ...(suiteNumber ? { suite_number: suiteNumber } : {}),
+    // Staff typed one (an existing client's known suite) → locked assign; otherwise the company's own suite (issued now if it has none — the lease action was chosen on purpose).
+    ...(suiteNumber ? { suite_number: suiteNumber } : { issue_suite_if_missing: true }), // ticking "lease" on Place Client is the deliberate choice to issue
     actor: "crm-admin:place-client",
     summary: `Created lease during Place Client flow${suiteNumber ? ` (Suite ${suiteNumber})` : ""}`,
   })

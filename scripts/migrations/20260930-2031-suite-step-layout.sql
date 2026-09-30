@@ -6,6 +6,9 @@
 -- stuck at this stage with the gate on and no card would have no button to press.
 -- (Client Onboarding has no stage_layout — its hand-built workspace carries the choice on the Confirm screen.)
 
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
 UPDATE public.pipeline_stages ps
 SET stage_layout = jsonb_set(
   ps.stage_layout, '{components}',
@@ -23,6 +26,20 @@ WHERE ps.service_type = 'Company Formation'
   AND NOT EXISTS (
     SELECT 1 FROM jsonb_array_elements(ps.stage_layout->'components') e WHERE e->>'type' = 'suite_panel'
   );
+
+-- The Formation gate is useless (and staff get stuck) if the card is not there: fail loudly, change nothing.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.pipeline_stages WHERE service_type = 'Company Formation' AND stage_name = 'Wizard Submitted')
+     AND NOT EXISTS (
+       SELECT 1 FROM public.pipeline_stages ps, jsonb_array_elements(
+         CASE WHEN jsonb_typeof(ps.stage_layout->'components') = 'array' THEN ps.stage_layout->'components' ELSE '[]'::jsonb END) e
+       WHERE ps.service_type = 'Company Formation' AND ps.stage_name = 'Wizard Submitted' AND e->>'type' = 'suite_panel') THEN
+    RAISE EXCEPTION 'The Wizard Submitted layout is not a list of components here — the suite card could not be added. Stop and check the layout.';
+  END IF;
+END $$;
+
+COMMIT;
 
 -- verify (expect suite_panel second):
 -- SELECT jsonb_path_query_array(stage_layout, '$.components[*].type') FROM pipeline_stages

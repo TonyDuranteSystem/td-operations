@@ -1,10 +1,14 @@
 -- Suite lock — ONE-TIME DATA REPAIR (Antonio's decisions, 2026-09-30).
 --
--- PRODUCTION ORDER:  1) 20260930-2000-suite-lock.sql   2) THIS file, straight away   3) deploy the code
---                    4) 20260930-2020-suite-lock-after-deploy.sql
--- (Running this right after step 1 keeps the OLD code working — it reads the company's suite first — and
---  nothing in here needs the new code. The new code also adopts a company's own lease suite, so a deploy
---  before this file is safe too; but do not leave the gap open.)
+-- PRODUCTION ORDER:
+--   1) 20260930-2000-suite-lock.sql        2) THIS file, straight away      3) deploy the code (right away — see below)
+--   4) 20260930-2030-suite-step.sql + 20260930-2031-suite-step-layout.sql + 20260930-2040-suite-release.sql
+--      (run them immediately BEFORE or right after the deploy finishes: the required-step rule needs the new buttons)
+--   5) 20260930-2020-suite-lock-after-deploy.sql  (only after the deploy is live)
+-- The gap between 1/2 and 3 must be SHORT: from step 1 on, the OLD code cannot create a lease for a company that has no
+-- suite, and cannot issue one. (Every company that exists today is loaded by this file, so only a company created
+-- inside the gap is affected.)
+-- ONE-TIME: never re-run this file after go-live — it would issue suites to companies created since and rewrite addresses.
 --
 -- Runs as ONE transaction: if any step fails, nothing is changed. Every step is also guarded by id AND
 -- name/status, so re-running it after a success changes nothing. It sends nothing to any client.
@@ -18,7 +22,8 @@
 --   Growthlane / Ad Astra: their draft leases carry an old / misspelled tenant name — the company keeps the
 --   suite on its draft and the tenant name is corrected to the company's current name.
 --   Every other ACTIVE client company gets the suite it already holds on its own lease loaded onto the company
---   (Degasper — suspended — and SupraEmerge — closed — are NOT loaded: their suites stay on their lease records).
+--   (Degasper — suspended — and SupraEmerge — closed — are NOT loaded: their suites stay on their lease records and are
+--    NOT reused: a number is released to the pool only from a company that holds it on its own record.)
 --   Every remaining ACTIVE client company (account type Client, no lease yet, ~108) is issued a suite now, oldest
 --   company first; one-time customers (e.g. Cleo Home LLC) and the two test accounts ("Test", "QA E2E Test LLC") are
 --   skipped; no address is written for them.
@@ -31,10 +36,20 @@
 --     (SELECT detail FROM suite_audit_log WHERE action='lease_deleted' AND old_suite='<suite>' ORDER BY id DESC LIMIT 1));
 --   and un-hide its document (documents.portal_visible = true). The company must still hold that suite.
 --
--- BEFORE RUNNING, save a copy of: lease_agreements (143 rows), the two documents rows below, the addresses
--- row 4706c595…, and  SELECT id, suite_number FROM accounts.
+-- BEFORE RUNNING, export (Supabase table editor → "Export to CSV", or the SELECTs below → "Download CSV") — do NOT copy
+-- them into a new table in the public schema (a copy would have no row security and could be read with the public key):
+--   SELECT * FROM lease_agreements;                                   (143 rows — holds the signing tokens)
+--   SELECT id, company_name, status, suite_number, physical_address FROM accounts;
+--   SELECT * FROM documents WHERE id IN ('b860f703-f51b-46d1-bc6c-28c106a55fe5','0ff122bb-baf8-4a12-aafa-c637dcc94440');
+--   SELECT * FROM addresses WHERE id = '4706c595-f96e-4031-b44e-b83d0fb80251';
+--   SELECT service_type, stage_name, stage_layout FROM pipeline_stages WHERE service_type='Company Formation' AND stage_name='Wizard Submitted';
+--   SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('lease_suite_active_unique','idx_lease_suite_active');
 
 BEGIN;
+SET LOCAL lock_timeout = '5s';
+-- opens the ONE-TIME door in the company lock (copy a suite the company already holds on its own lease). Transaction-local:
+-- it closes by itself at COMMIT/ROLLBACK, so nothing after this file can use it.
+SELECT set_config('app.suite_load', 'on', true);
 
 -- ─── 0. PRE-FLIGHT: refuse to run if the data is not what this script was written for ────────
 DO $$
@@ -136,12 +151,13 @@ FROM (
 ) l
 WHERE a.id = l.account_id AND a.suite_number IS NULL;
 
--- 5b. the address the Operating Agreement prints follows the suite (only where empty or already "10225 Ulmerton Rd…";
---     a hand-typed address is never touched)
+-- 5b. the address the Operating Agreement prints follows the suite — ONLY where the company's address is ALREADY a
+--     "10225 Ulmerton Rd…" address. An EMPTY address is left empty (writing Largo there would switch that company's
+--     documents, e.g. its EIN application, from whatever they use today to Largo). A hand-typed address is never touched.
 UPDATE accounts
 SET physical_address = '10225 Ulmerton Rd, Suite ' || suite_number || ', Largo, FL 33771'
 WHERE suite_number IS NOT NULL
-  AND (physical_address IS NULL OR btrim(physical_address) = '' OR physical_address ILIKE '10225 Ulmerton Rd%')
+  AND physical_address ILIKE '10225 Ulmerton Rd%'
   AND physical_address IS DISTINCT FROM '10225 Ulmerton Rd, Suite ' || suite_number || ', Largo, FL 33771';
 
 -- ─── 6. SEuforia + AWY: issue each a NEW suite (next free number) ────────────────────────────
@@ -155,7 +171,7 @@ UPDATE accounts
 SET physical_address = '10225 Ulmerton Rd, Suite ' || suite_number || ', Largo, FL 33771'
 WHERE id IN ('2809f939-5462-4d18-8f40-15a71283fa88', '39876d6f-82b2-44d5-aede-d9057d0c3a7e')
   AND suite_number IS NOT NULL
-  AND (physical_address IS NULL OR btrim(physical_address) = '' OR physical_address ILIKE '10225 Ulmerton Rd%');
+  AND physical_address ILIKE '10225 Ulmerton Rd%';
 
 -- ─── 6b. Every other ACTIVE client company gets a suite now (Antonio 2026-09-30: "now") ─────────
 -- These companies have no lease yet. Issued in order of when the company was created (oldest first), by the
@@ -183,7 +199,8 @@ COMMIT;
 -- SELECT count(*) FILTER (WHERE suite_number IS NOT NULL) AS with_suite,
 --        (SELECT count(*) FROM (SELECT suite_number FROM accounts WHERE suite_number IS NOT NULL GROUP BY 1 HAVING count(*) > 1) s) AS shared
 -- FROM accounts;
--- B) any lease whose suite is not its company's suite (expect only Uxio Test, which is left alone):
+-- B) any lease whose suite is not its company's suite (expect exactly 3 rows: Uxio Test — left alone — plus SupraEmerge
+--    (closed) and Degasper (suspended), which are deliberately not loaded):
 -- SELECT a.company_name, l.suite_number AS lease_suite, a.suite_number AS company_suite, l.status
 -- FROM lease_agreements l JOIN accounts a ON a.id = l.account_id
 -- WHERE l.suite_number IS DISTINCT FROM a.suite_number ORDER BY 1;

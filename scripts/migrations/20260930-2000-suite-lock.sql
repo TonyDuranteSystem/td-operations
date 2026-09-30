@@ -16,8 +16,10 @@
 --     the suite is waived). A number is handed out again only from the pool of RELEASED numbers —
 --     see 20260930-2040-suite-release.sql (closed / cancelled company with no lease in force).
 --
--- Run 20260930-1900-accounts-suite-number.sql first. Safe to re-run.
--- PRODUCTION ORDER (Antonio): run this file, THEN deploy code, THEN the data repair.
+-- Run 20260930-1900-accounts-suite-number.sql first.
+-- SAFE TO RE-RUN: every function/trigger in this file is the FINAL definition (later files only ADD objects — none of
+-- them redefines anything here), so running this file again never undoes a later file.
+-- PRODUCTION ORDER: see the header of 20260930-2010-suite-lock-data-repair.sql (2000 and 2010 back to back, then deploy).
 
 -- ─── 1. Tables ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.suite_reservations (
@@ -327,12 +329,17 @@ END $$;
 
 CREATE OR REPLACE FUNCTION public.admin_delete_lease(p_lease_id uuid, p_reason text, p_actor text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE v jsonb;
+DECLARE v jsonb; v_released text;
 BEGIN
   PERFORM set_config('app.suite_admin', 'on', true);
   v := public._admin_delete_lease_impl(p_lease_id, p_reason, p_actor);
+  -- deleting the last lease of a Closed / Cancelled company frees its number at once (function defined in 20260930-2040;
+  -- skipped until that file has run)
+  IF to_regprocedure('public._release_company_suite_impl(uuid,text,text)') IS NOT NULL THEN
+    v_released := public._release_company_suite_impl((v->>'account_id')::uuid, 'last lease deleted on a closed company', p_actor);
+  END IF;
   PERFORM set_config('app.suite_admin', '', true);
-  RETURN v;
+  RETURN v || jsonb_build_object('suite_released_to_pool', v_released);
 END $$;
 
 -- the working functions are reachable ONLY through the wrappers above (which turn admin mode on)
@@ -359,6 +366,7 @@ GRANT EXECUTE ON FUNCTION public.admin_delete_lease(uuid, text, text) TO service
 CREATE OR REPLACE FUNCTION public.trg_accounts_suite_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE v_admin boolean := COALESCE(current_setting('app.suite_admin', true), '') = 'on';
+        v_load  boolean := COALESCE(current_setting('app.suite_load', true), '') = 'on';
 BEGIN
   IF NEW.suite_number IS NULL THEN
     IF TG_OP = 'UPDATE' AND OLD.suite_number IS NOT NULL AND NOT v_admin THEN
@@ -375,14 +383,15 @@ BEGIN
     RAISE EXCEPTION 'Suite % is locked — it cannot be changed. Use the admin change.', OLD.suite_number
       USING ERRCODE = 'check_violation';
   END IF;
-  -- A suite may only APPEAR on a company if it came from the allocator / admin functions, or it is
-  -- a suite the company ALREADY holds on its own lease (the one-time load). A number invented by
-  -- hand, or one that belongs to another company, is refused.
+  -- A suite may only APPEAR on a company if it came from the allocator / admin functions. The ONE exception is the
+  -- one-time data load (20260930-2010 switches app.suite_load on inside its own transaction): copying a suite the
+  -- company ALREADY holds on its own lease. Otherwise a number invented by hand is refused.
   IF NOT v_admin AND (TG_OP = 'INSERT' OR OLD.suite_number IS DISTINCT FROM NEW.suite_number) THEN
-    IF EXISTS (SELECT 1 FROM public.suite_reservations WHERE suite_number = NEW.suite_number)
+    IF NOT v_load
+       OR EXISTS (SELECT 1 FROM public.suite_reservations WHERE suite_number = NEW.suite_number)
        OR EXISTS (SELECT 1 FROM public.lease_agreements WHERE suite_number = NEW.suite_number AND account_id <> NEW.id)
        OR NOT EXISTS (SELECT 1 FROM public.lease_agreements WHERE suite_number = NEW.suite_number AND account_id = NEW.id) THEN
-      RAISE EXCEPTION 'Suite % cannot be set by hand — suites are issued by the system (or copied from the company''s own lease).', NEW.suite_number
+      RAISE EXCEPTION 'Suite % cannot be set by hand — suites are issued by the system.', NEW.suite_number
         USING ERRCODE = 'check_violation';
     END IF;
   END IF;
@@ -408,11 +417,14 @@ BEGIN
     RAISE EXCEPTION 'A % lease cannot be set back to draft — it has already gone to the client.', OLD.status
       USING ERRCODE = 'check_violation';
   END IF;
+  -- also when a lease GOES TO / ADVANCES WITH the client: a draft written before its company's number was released (or a
+  -- sent link that lapsed) must not reach the client with a suite another company may now hold.
   IF TG_OP = 'INSERT' OR NEW.suite_number IS DISTINCT FROM OLD.suite_number
-     OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.tenant_company IS DISTINCT FROM OLD.tenant_company THEN
+     OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.tenant_company IS DISTINCT FROM OLD.tenant_company
+     OR (NEW.status IS DISTINCT FROM OLD.status AND NEW.status IN ('sent', 'viewed', 'signed')) THEN
     SELECT suite_number, company_name INTO v_acc_suite, v_acc_name FROM public.accounts WHERE id = NEW.account_id;
     IF NEW.suite_number IS NOT NULL AND v_acc_suite IS DISTINCT FROM NEW.suite_number THEN
-      RAISE EXCEPTION 'Lease suite % is not the company''s suite (%). A lease always uses the company''s own suite.',
+      RAISE EXCEPTION 'Lease suite % is not the company''s suite (%). A lease always uses the company''s own suite — issue the suite first, or recreate this lease.',
         NEW.suite_number, COALESCE(v_acc_suite, 'none assigned') USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.tenant_company IS NOT NULL AND v_acc_name IS NOT NULL
