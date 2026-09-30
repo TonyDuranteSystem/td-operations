@@ -896,6 +896,12 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // in the CRM. Per-member identification happens later in the portal flow.
         for (let unitIndex = 0; unitIndex < toCreate; unitIndex++) {
           const unitSuffix = quantity > 1 ? ` #${existingOfferCount + unitIndex + 1}` : ""
+          // The offer reference goes on the FIRST unit only: the per-offer unique
+          // indexes allow one active SD per type per offer, so stamping unit #2
+          // would fail (bug-hunter 2026-09-29). Company Closure stays unstamped
+          // here: the legacy emailed closure form adopts only a closure with no
+          // offer reference (closure-form-completed, dev job 77b66080).
+          const stampOffer = existingOfferCount + unitIndex === 0 && pipeline !== "Company Closure"
           const sdName = `${pipeline} - ${activation.client_name}${unitSuffix}`
 
           // Route through P1.6 operation layer (createSD).
@@ -915,7 +921,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage_order: -1,
                 status: "active",
                 notes: `Auto-created from offer ${activation.offer_token}`,
-                source_offer_token: activation.offer_token,
+                source_offer_token: stampOffer ? activation.offer_token : null,
               }
             } else {
               createParams = {
@@ -926,7 +932,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage: "1st Installment Paid",
                 status: taxPausedBundled ? "on_hold" : "active",
                 notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
-                source_offer_token: activation.offer_token,
+                source_offer_token: stampOffer ? activation.offer_token : null,
               }
             }
           } else if (pipeline === "ITIN") {
@@ -939,7 +945,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               account_id: null,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
-              source_offer_token: activation.offer_token,
+              source_offer_token: stampOffer ? activation.offer_token : null,
             }
           } else {
             // All other pipelines — createSD resolves the first stage
@@ -952,7 +958,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               notes: `Auto-created from offer ${activation.offer_token}`,
               // Stamped like every other path (S1 E2E ★8): traceability + the
               // per-offer unique indexes guard a retried activation.
-              source_offer_token: activation.offer_token,
+              source_offer_token: stampOffer ? activation.offer_token : null,
             }
           }
 

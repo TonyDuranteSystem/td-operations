@@ -36,6 +36,7 @@ import { createSD } from "@/lib/operations/service-delivery"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import type { Json } from "@/lib/database.types"
 import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
+import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 interface OnboardingPayload {
@@ -65,24 +66,28 @@ function step(name: string, status: "ok" | "error" | "skipped", detail?: string)
  * then the contact (an offer made on a lead links to the contact only through
  * leads.converted_to_contact_id). Newest signed/completed onboarding offer wins.
  */
-async function resolveOnboardingOfferId(p: { offer_id?: string | null; lead_id?: string | null }, contactId: string | null | undefined): Promise<string | null> {
+async function resolveOnboardingOfferId(p: { offer_id?: string | null; lead_id?: string | null }, contactId: string | null | undefined, accountId?: string | null): Promise<string | null> {
   if (p.offer_id) return p.offer_id
-  const pick = async (col: "lead_id" | "contact_id", ids: string[]) => {
-    if (ids.length === 0) return null
-    const { data } = await supabaseAdmin.from("offers").select("id")
-      .in(col, ids).eq("contract_type", "onboarding").in("status", ["signed", "completed"])
-      .order("created_at", { ascending: false }).limit(1).maybeSingle()
-    return data?.id ?? null
+  // Candidates from the job's lead, the contact, AND every lead converted into
+  // the contact — the NEWEST signed/completed onboarding offer across all of
+  // them wins (bug-hunter 2026-09-29: checking the contact group first could
+  // return an OLD finished onboarding and apply its add-ons / paid tax return
+  // to a new company). An offer already tied to ANOTHER company is never used.
+  const leadIds = new Set<string>()
+  if (p.lead_id) leadIds.add(p.lead_id)
+  if (contactId) {
+    const { data: leads } = await supabaseAdmin.from("leads").select("id").eq("converted_to_contact_id", contactId)
+    for (const l of leads ?? []) leadIds.add(l.id as string)
   }
-  if (p.lead_id) {
-    const byLead = await pick("lead_id", [p.lead_id])
-    if (byLead) return byLead
-  }
-  if (!contactId) return null
-  const byContact = await pick("contact_id", [contactId])
-  if (byContact) return byContact
-  const { data: leads } = await supabaseAdmin.from("leads").select("id").eq("converted_to_contact_id", contactId)
-  return pick("lead_id", (leads ?? []).map((l) => l.id as string))
+  const ors: string[] = []
+  if (leadIds.size) ors.push(`lead_id.in.(${Array.from(leadIds).join(",")})`)
+  if (contactId) ors.push(`contact_id.eq.${contactId}`)
+  if (ors.length === 0) return null
+  const { data } = await supabaseAdmin.from("offers").select("id, account_id")
+    .or(ors.join(",")).eq("contract_type", "onboarding").in("status", ["signed", "completed"])
+    .order("created_at", { ascending: false }).limit(10)
+  const pick = (data ?? []).find((o) => !o.account_id || !accountId || o.account_id === accountId)
+  return (pick?.id as string | undefined) ?? null
 }
 
 export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
@@ -1124,7 +1129,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     // throws — same helper the formation uses when it creates its company.
     try {
       let onbOfferToken: string | null = null
-      const onbOfferId = await resolveOnboardingOfferId(p, contact_id)
+      const onbOfferId = await resolveOnboardingOfferId(p, contact_id, account_id)
       if (onbOfferId) {
         const { data: o } = await supabaseAdmin.from("offers").select("token").eq("id", onbOfferId).maybeSingle()
         onbOfferToken = o?.token ?? null
@@ -1133,7 +1138,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         const { createCompanyServicesOnFormation } = await import("@/lib/operations/activation-start-services")
         const companySteps = await createCompanyServicesOnFormation({ offerToken: onbOfferToken, accountId: account_id, contactId: contact_id || null })
         for (const cs of companySteps) {
-          result.steps.push(step("company_services_on_onboarding", cs.status === "error" ? "error" : "ok", cs.detail ?? cs.status))
+          result.steps.push(step("company_services_on_onboarding", cs.status === "error" ? "error" : cs.status === "created" ? "ok" : "skipped", cs.detail ?? cs.status))
         }
       } else {
         result.steps.push(step("company_services_on_onboarding", "skipped", "no onboarding offer found — check by hand whether the client bought company services (e.g. a DBA) with this onboarding"))
@@ -1208,7 +1213,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     // Check if tax return is bundled (included) in the client's offer
     let taxReturnIncludedInOffer = false
-    const taxOfferId = await resolveOnboardingOfferId(p, contact_id)
+    const taxOfferId = await resolveOnboardingOfferId(p, contact_id, account_id)
     if (taxOfferId) {
       // The offer this onboarding came from (job offer → lead → contact).
       const { data: offer } = await supabaseAdmin.from("offers")
@@ -1243,6 +1248,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
 
     for (const tc of taxChecks) {
       const fieldValue = String(submitted[tc.field] || "").toLowerCase()
+      // A Tax Return was PAID on the offer (it covers the previous year) but the
+      // client did not answer "No" for that year ("Not sure" / "Yes"): never
+      // guess the year and never drop the payment silently — tell staff to
+      // decide (bug-hunter 2026-09-29).
+      if (fieldValue !== "no" && tc.year === previousYear && taxReturnIncludedInOffer) {
+        const detail = `A tax return was paid on the onboarding offer, but the client answered "${fieldValue || "no answer"}" for ${tc.year}. No tax return record was created — decide which year the paid return covers and add it by hand as paid.`
+        result.steps.push(step(`tax_return:${tc.year}`, "error", detail))
+        reportSystemError({ source: "server", route: "lib/jobs/handlers/onboarding-setup", message: `${detail} (${company_name})`, context: { account_id, company_name } }).catch(() => {})
+        continue
+      }
       if (fieldValue === "no") {
         try {
           const { data: existingTR } = await supabaseAdmin
@@ -1684,11 +1699,19 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   if (contact_id) {
     try {
       const { createItinDeliveriesFromWizard } = await import("@/lib/operations/itin-from-wizard")
+      // The onboarding OFFER's token (as formation does since 0d952af), not the
+      // wizard submission's; the submission token stays only as a fallback.
+      const itinOfferId = await resolveOnboardingOfferId(p, contact_id, account_id)
+      let itinOfferToken: string | null = null
+      if (itinOfferId) {
+        const { data: o } = await supabaseAdmin.from("offers").select("token").eq("id", itinOfferId).maybeSingle()
+        itinOfferToken = (o?.token as string | undefined) ?? null
+      }
       const itin = await createItinDeliveriesFromWizard({
         contactId: contact_id,
         leadId: p.lead_id,
         submitted,
-        offerToken: token,
+        offerToken: itinOfferToken ?? token,
       })
       if (itin.created === 0 && itin.skipped === 0) {
         result.steps.push(step("itin_deliveries", "skipped", "No one applied for ITIN"))
