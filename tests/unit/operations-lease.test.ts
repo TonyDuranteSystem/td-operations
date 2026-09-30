@@ -38,6 +38,14 @@ let lastSuiteLeases: Array<{ suite_number: string }> = []
 // created_at). Empty = brand-new account, so createLease falls through to the
 // global nextSuiteNumber().
 let priorAccountLeases: Array<{ suite_number: string }> = []
+// The suite staff ASSIGNED to the company (accounts.suite_number) — read by
+// createLease (getAssignedSuite) — and the list of every company suite that the
+// global counter must never re-issue (nextSuiteNumber's accounts read).
+let assignedSuite: string | null = null
+let accountSuiteRows: Array<{ suite_number: string }> = []
+// Simulated read errors for nextSuiteNumber's two suite reads.
+let leaseSuiteReadError: { message: string; code?: string } | null = null
+let accountSuiteReadError: { message: string; code?: string } | null = null
 let insertReturnsRow: { id: string; token: string; access_code: string; suite_number: string; contract_year: number; contact_id: string } | null = null
 let insertError: { message: string } | null = null
 
@@ -84,6 +92,8 @@ vi.mock("@/lib/supabase-admin", () => ({
           return chain
         }),
         not: vi.fn(() => chain),
+        is: vi.fn(() => chain),
+        range: vi.fn(() => chain),
         order: vi.fn((col: string, opts?: { ascending?: boolean }) => {
           orderCol = col
           orderAsc = opts?.ascending ?? true
@@ -113,6 +123,15 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
         // Read path
         if (table === "accounts") {
+          // nextSuiteNumber(): every assigned company suite (a list, no id filter).
+          if (selectCols === "suite_number" && filters.id === undefined) {
+            if (accountSuiteReadError) return { data: null, error: accountSuiteReadError }
+            return { data: accountSuiteRows, error: null }
+          }
+          // getAssignedSuite(): this one company's assigned suite.
+          if (selectCols === "suite_number") {
+            return { data: { suite_number: assignedSuite }, error: null }
+          }
           return { data: accountRow, error: null }
         }
         if (table === "members") {
@@ -144,6 +163,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         if (table === "lease_agreements") {
           // nextSuiteNumber(): global max suite, ordered suite_number DESC.
           if (orderCol === "suite_number" && !orderAsc) {
+            if (leaseSuiteReadError) return { data: null, error: leaseSuiteReadError }
             return { data: lastSuiteLeases, error: null }
           }
           // The reuse-the-suite lookup: this account's own prior lease, created_at ASC.
@@ -189,6 +209,10 @@ beforeEach(() => {
   extraContactsById = {}
   duplicateLeases = []
   priorAccountLeases = [] // default: brand-new account, no prior lease
+  assignedSuite = null // default: no suite assigned on the company yet
+  accountSuiteRows = []
+  leaseSuiteReadError = null
+  accountSuiteReadError = null
   lastSuiteLeases = [{ suite_number: "3D-150" }]
   insertReturnsRow = {
     id: "lease-1",
@@ -445,6 +469,37 @@ describe("createLease — happy path", () => {
     expect(insert.suite_number).toBe("3D-999")
   })
 
+  it("uses the suite ASSIGNED on the company before any prior lease or the counter", async () => {
+    // Staff typed 3D-330 into Company Info → Suite Assigned; the company has no lease yet.
+    assignedSuite = "3D-330"
+    priorAccountLeases = [{ suite_number: "3D-140" }]
+    lastSuiteLeases = [{ suite_number: "3D-150" }]
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-330")
+    const acctUpdate = updateCalls.find(u => u.table === "accounts")
+    expect((acctUpdate?.payload as Record<string, unknown>)?.physical_address).toContain("Suite 3D-330")
+  })
+
+  it("an explicit suite_number still wins over the company's assigned suite", async () => {
+    assignedSuite = "3D-330"
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1", suite_number: "3D-999" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-999")
+  })
+
+  it("records the suite on the company when it had none (best-effort second write)", async () => {
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1" })
+    const suiteWrite = updateCalls.find(
+      (c) => c.table === "accounts" && "suite_number" in (c.payload as Record<string, unknown>)
+    )
+    expect(suiteWrite).toBeDefined()
+    expect((suiteWrite!.payload as Record<string, unknown>).suite_number).toBe("3D-151")
+  })
+
   it("derives language='it' from contact.language", async () => {
     contactRow = {
       id: "contact-1",
@@ -553,5 +608,121 @@ describe("createLease — db error", () => {
     expect(result.success).toBe(false)
     expect(result.outcome).toBe("error")
     expect(result.error).toContain("duplicate key")
+  })
+})
+
+// ─── nextSuiteNumber — numeric max across leases AND assigned company suites ───
+
+describe("nextSuiteNumber", () => {
+  it("compares NUMERICALLY, not as strings (3D-1000 is above 3D-999)", async () => {
+    lastSuiteLeases = [{ suite_number: "3D-999" }, { suite_number: "3D-1000" }]
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await nextSuiteNumber()).toBe("3D-1001")
+  })
+
+  it("is not fooled by a hand-typed value that sorts first as a string", async () => {
+    // A stray "Suite 3D-318" / short "3D-5" used to sort above the real top and
+    // reset the counter (parseInt -> NaN -> 3D-101, an existing client's suite).
+    lastSuiteLeases = [{ suite_number: "Suite 3D-318" }, { suite_number: "3D-5" }, { suite_number: "3D-207" }]
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await nextSuiteNumber()).toBe("3D-208")
+  })
+
+  it("never re-issues a suite assigned on a company that has no lease yet", async () => {
+    lastSuiteLeases = [{ suite_number: "3D-150" }]
+    accountSuiteRows = [{ suite_number: "3D-340" }]
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await nextSuiteNumber()).toBe("3D-341")
+  })
+
+  it("starts at 3D-101 when nothing exists anywhere", async () => {
+    lastSuiteLeases = []
+    accountSuiteRows = []
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await nextSuiteNumber()).toBe("3D-101")
+  })
+})
+
+describe("nextSuiteNumber — read failures never look like an empty table", () => {
+  it("throws when the lease read fails (must not hand out 3D-101)", async () => {
+    leaseSuiteReadError = { message: "statement timeout" }
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    await expect(nextSuiteNumber()).rejects.toThrow("lease_agreements.suite_number")
+  })
+
+  it("tolerates a missing accounts.suite_number column (code 42703) — deploy ahead of the migration", async () => {
+    lastSuiteLeases = [{ suite_number: "3D-150" }]
+    accountSuiteReadError = { message: 'column accounts.suite_number does not exist', code: "42703" }
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await nextSuiteNumber()).toBe("3D-151")
+  })
+
+  it("throws on any OTHER accounts read error", async () => {
+    accountSuiteReadError = { message: "connection reset" }
+    const { nextSuiteNumber } = await import("@/lib/operations/lease")
+    await expect(nextSuiteNumber()).rejects.toThrow("accounts.suite_number")
+  })
+
+  it("createLease returns a clean error when the suite counter cannot be read", async () => {
+    leaseSuiteReadError = { message: "statement timeout" }
+    const { createLease } = await import("@/lib/operations/lease")
+    const result = await createLease({ account_id: "acct-1" })
+    expect(result.success).toBe(false)
+    expect(insertCalls.length).toBe(0)
+  })
+})
+
+describe("getAssignedSuite is validated (via createLease)", () => {
+  it("ignores a malformed suite stored on the company and falls through to the counter", async () => {
+    assignedSuite = "TBD"
+    lastSuiteLeases = [{ suite_number: "3D-150" }]
+    const { createLease } = await import("@/lib/operations/lease")
+    await createLease({ account_id: "acct-1" })
+    const insert = insertCalls[0].payload as Record<string, unknown>
+    expect(insert.suite_number).toBe("3D-151")
+  })
+})
+
+describe("suiteNumericPart", () => {
+  it("reads 3D-NNN and rejects everything else", async () => {
+    const { suiteNumericPart } = await import("@/lib/operations/lease")
+    expect(suiteNumericPart("3D-318")).toBe(318)
+    expect(suiteNumericPart(" 3d-1000 ")).toBe(1000)
+    expect(suiteNumericPart("Suite 3D-318")).toBeNull()
+    expect(suiteNumericPart("3D")).toBeNull()
+    expect(suiteNumericPart(null)).toBeNull()
+  })
+})
+
+describe("normalizeSuiteNumber", () => {
+  it("normalises what staff type into 3D-NNN", async () => {
+    const { normalizeSuiteNumber } = await import("@/lib/operations/lease")
+    expect(normalizeSuiteNumber("3D-318")).toBe("3D-318")
+    expect(normalizeSuiteNumber("3d318")).toBe("3D-318")
+    expect(normalizeSuiteNumber(" Suite 3D-318 ")).toBe("3D-318")
+    expect(normalizeSuiteNumber("3D 205")).toBe("3D-205")
+    expect(normalizeSuiteNumber("3D-0318")).toBe("3D-318") // leading zero stripped: same number, same string
+  })
+  it("rejects anything that is not a numbered TD suite", async () => {
+    const { normalizeSuiteNumber } = await import("@/lib/operations/lease")
+    expect(normalizeSuiteNumber("")).toBeNull()
+    expect(normalizeSuiteNumber("3D")).toBeNull()
+    expect(normalizeSuiteNumber("Suite 104-153")).toBeNull()
+    expect(normalizeSuiteNumber("3D-1")).toBeNull()
+    expect(normalizeSuiteNumber(null)).toBeNull()
+  })
+})
+
+describe("highestSuiteNumber", () => {
+  it("returns the numeric max across leases and assigned company suites", async () => {
+    lastSuiteLeases = [{ suite_number: "3D-207" }]
+    accountSuiteRows = [{ suite_number: "3D-340" }]
+    const { highestSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await highestSuiteNumber()).toBe(340)
+  })
+  it("is 100 when nothing exists (so the first suite is 3D-101)", async () => {
+    lastSuiteLeases = []
+    const { highestSuiteNumber } = await import("@/lib/operations/lease")
+    expect(await highestSuiteNumber()).toBe(100)
   })
 })
