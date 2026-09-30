@@ -21,6 +21,8 @@ import { APP_BASE_URL } from "@/lib/config"
 import { getConfiguredCardFeeRate } from "@/lib/payments/card-fee-config"
 import { getBankDetailsByPreference, type BankPreference } from "@/app/offer/[token]/contract/bank-defaults"
 import { accountIdForOffer } from "@/lib/operations/offer-scope"
+import { parseBillTo } from "@/lib/offers/bill-to"
+import { isFormationContractWithoutFormation } from "@/lib/operations/activation-start-services"
 import { normalizeFormationState } from "@/lib/formation/states"
 import { availableCreditForDisplay, unspentCreditByCurrency } from "@/lib/operations/credit-netting"
 import { resolveCreditSubject, subjectForDisplay, type CreditSubject } from "@/lib/operations/credit-subject"
@@ -231,6 +233,9 @@ export interface CreateOfferParams {
   // Linkage
   lead_id?: string | null
   account_id?: string | null
+  /** "Invoice to" (S1 2026-09-27) — see lib/offers/bill-to.ts. Null = the
+   *  offer's company if it has one, else the person. */
+  bill_to?: unknown
   deal_id?: string | null
   contact_id?: string | null
 
@@ -487,12 +492,54 @@ async function tryCreateWhopPlan(params: {
 
 // ─── Main ──────────────────────────────────────────────────────
 
+/** null when the "Invoice to" choice belongs to this client, else a staff-readable reason. */
+async function checkBillToOwnership(
+  billTo: ReturnType<typeof parseBillTo>["billTo"] | null,
+  offerAccountId: string | null,
+  contactId: string | null,
+): Promise<string | null> {
+  if (!billTo) return null
+  if (billTo.type === "company") {
+    if (billTo.account_id === offerAccountId) return null
+    if (!contactId) return "Invoice to: that company is not this client's — pick the person or type the payer's details."
+    const { data } = await supabaseAdmin
+      .from("account_contacts")
+      .select("account_id")
+      .eq("contact_id", contactId)
+      .eq("account_id", billTo.account_id)
+      .limit(1)
+    return (data ?? []).length > 0 ? null : "Invoice to: that company is not linked to this client."
+  }
+  if (billTo.type === "entity" && "billing_entity_id" in billTo) {
+    if (!contactId) return "Invoice to: that saved payer is not this client's — type the payer's details instead."
+    const { data } = await supabaseAdmin
+      .from("billing_entities")
+      .select("id")
+      .eq("id", billTo.billing_entity_id)
+      .eq("contact_id", contactId)
+      .limit(1)
+    return (data ?? []).length > 0 ? null : "Invoice to: that saved payer belongs to another client."
+  }
+  return null
+}
+
 export async function createOffer(params: CreateOfferParams): Promise<CreateOfferResult> {
   try {
     // 1. Validate JSONB fields
     const validationError = validateOfferJsonb(params as unknown as Record<string, unknown>)
     if (validationError) {
       return { success: false, outcome: "validation_error", error: validationError }
+    }
+    const billToParsed = parseBillTo(params.bill_to)
+    if (billToParsed.error) {
+      return { success: false, outcome: "validation_error", error: billToParsed.error }
+    }
+    // "Invoice to" must belong to THIS client: the company the offer is made
+    // under or one the person is linked to; a saved payer of this person.
+    // Never another client's company or payer (bug-hunter, S1 2026-09-27).
+    const billToOwnershipError = await checkBillToOwnership(billToParsed.billTo ?? null, params.account_id ?? null, params.contact_id ?? null)
+    if (billToOwnershipError) {
+      return { success: false, outcome: "validation_error", error: billToOwnershipError }
     }
 
     // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same
@@ -555,7 +602,16 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     // never carry an existing account_id. Server backstop mirroring
     // accountIdForWizardSubmission, so no caller (CRM dialog or MCP) can attach
     // a formation offer to an existing account. dev_task 262be11c.
-    const effectiveAccountId = accountIdForOffer(params.contract_type, params.account_id)
+    // A formation-TYPE offer that sells no formation (name change / closure —
+    // the dialog derives "formation" when no bought service has its own type)
+    // is about an EXISTING company: keep its account (workspace-only plan S1).
+    const formationNotBought = isFormationContractWithoutFormation({
+      contractType: params.contract_type || "formation",
+      services: params.services,
+      selectedServices: null,
+      bundledPipelines: params.bundled_pipelines,
+    })
+    const effectiveAccountId = accountIdForOffer(params.contract_type, params.account_id, formationNotBought)
     if (params.account_id && !effectiveAccountId) {
       console.warn(
         `[createOffer] Stripped account_id ${params.account_id} from a formation offer ` +
@@ -585,54 +641,31 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       }
     }
 
-    // 3b. Auto-anchor a NEW-company formation offer with a lead.
-    // Formations are lead-anchored — the portal "Complete Formation" CTA routes
-    // via the offer's lead (getInProgressFormations). An offer created for an
-    // EXISTING contact (the "New company" path in the create-offer dialog) has a
-    // contact but no lead, so the new company couldn't route correctly. Creating
-    // the lead here is SAFE for an existing active client: a lead row writes NO
-    // portal_tier (verified — no downgrade), and the offer keeps contact_id so
-    // the new company ties to the SAME person (not a duplicate contact). It also
-    // lets one client hold multiple in-flight new-company offers (each new
-    // company = its own lead), instead of the contact-level dedup blocking a
-    // second formation. dev_task 262be11c.
-    let effectiveLeadId = params.lead_id ?? null
-    if (!effectiveLeadId && (params.contract_type || "formation") === "formation" && params.contact_id) {
-      const { data: c } = await supabaseAdmin
-        .from("contacts")
-        .select("first_name, last_name, email")
-        .eq("id", params.contact_id)
-        .maybeSingle()
-      const nameParts = (params.client_name || "").trim().split(/\s+/)
-      const firstName = c?.first_name ?? (nameParts[0] || null)
-      const lastName = c?.last_name ?? (nameParts.slice(1).join(" ") || null)
-      const { data: newLead, error: leadErr } = await supabaseAdmin
-        .from("leads")
-        .insert({
-          // full_name is NOT NULL on leads; client_name is always present (validated above).
-          full_name: [firstName, lastName].filter(Boolean).join(" ") || params.client_name,
-          first_name: firstName,
-          last_name: lastName,
-          email: params.client_email || c?.email || null,
-          status: "New",
-          source: "Existing client — new company",
-        } as never)
-        .select("id")
-        .single()
-      if (!leadErr && newLead) {
-        effectiveLeadId = (newLead as { id: string }).id
-        console.warn(`[createOffer] Auto-created anchor lead ${effectiveLeadId} for a new-company formation offer (existing contact ${params.contact_id}).`)
-      } else if (leadErr) {
-        console.error(`[createOffer] Failed to auto-create anchor lead: ${leadErr.message}`)
-      }
-    }
+    // 3b. No automatic "anchor lead" (workspace-only plan S1, dev job 9d34e750,
+    // Antonio 2026-09-27): the offer lives where it was created. An existing
+    // client buying a NEW company from their contact page keeps contact_id and
+    // no lead; the formation is anchored on the OFFER itself (offers.id / token
+    // → the contact-scoped Company Formation SD's source_offer_token), exactly
+    // like a returning client's onboarding (dev job bc2a8f7f). The block that
+    // used to insert a lead here (dev_task 262be11c) was removed.
+    const effectiveLeadId = params.lead_id ?? null
+    // A NEW-company formation offer on an existing contact (no lead, no
+    // account). Each one is its own new company, so the contact-level duplicate
+    // block below must not stop a second one — the removed anchor lead used to
+    // give each its own lead, which is what let them coexist.
+    const isContactScopedNewCompanyFormation =
+      !effectiveLeadId &&
+      !effectiveAccountId &&
+      !!params.contact_id &&
+      !formationNotBought &&
+      (params.contract_type || "formation") === "formation"
 
     // 4. Duplicate check — block active non-renewal offers (not expired/completed/renewal)
     // renewal offers are pre-migration artifacts; annual renewals now live in annual_agreements
     // Precedence: lead_id > account_id > contact_id. Contact-only path also
     // filters by contract_type so a contact can have separate active offers
     // for different individual services (ITIN vs Banking Physical).
-    if (effectiveLeadId || effectiveAccountId || params.contact_id) {
+    if ((effectiveLeadId || effectiveAccountId || params.contact_id) && !isContactScopedNewCompanyFormation) {
       const dupQuery = supabaseAdmin
         .from("offers")
         .select("token, status, contract_type")
@@ -860,6 +893,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         required_documents: (params.required_documents ?? null) as Json,
         installment_currency: params.installment_currency ?? null,
         bundled_pipelines: params.bundled_pipelines ?? [],
+        bill_to: (billToParsed.billTo ?? null) as unknown as Json,
         entity_type: normalizeEntityType(params.entity_type),
         formation_state: normalizeFormationState(params.formation_state),
         bank_details: bank_details as unknown as Json,

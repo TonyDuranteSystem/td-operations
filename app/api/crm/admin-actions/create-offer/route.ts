@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
       lead_id: body.lead_id ?? null,
       account_id: body.account_id ?? null,
       contact_id: body.contact_id ?? null,
+      bill_to: body.bill_to ?? null,
       contract_type: body.contract_type,
       entity_type: body.entity_type ?? null,
       formation_state: body.formation_state ?? null,

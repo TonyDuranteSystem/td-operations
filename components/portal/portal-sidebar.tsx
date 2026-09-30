@@ -516,7 +516,11 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       // found live 2026-09-22 testing against a fixture with both an
       // in-progress formation and a stale contact-scoped ITIN service.
       const selected = inProgress.find(f => f.id === selectedFormationId)
+      // A first-time client's real lead keeps its proven path; an existing
+      // client's new company has no lead, so it is anchored on its offer
+      // (workspace-only plan S1, dev job 9d34e750).
       if (selected?.leadId) navHref = `/portal/wizard?type=formation&lead=${encodeURIComponent(selected.leadId)}`
+      else if (selected?.offerId) navHref = `/portal/wizard?type=formation&offer=${encodeURIComponent(selected.offerId)}`
     }
 
     // NavItemHint renders a real <button> (for its "i" popover) — nesting a

@@ -154,6 +154,13 @@ describe("confirmPortalWizardOnboarding", () => {
     expect(enqueueArgs.payload.source).toBeUndefined()
   })
 
+  it("passes the OFFER the client bought to the setup job — a lead-less onboarding still finds its 'included' tax return (S1 QA 2026-09-27)", async () => {
+    submissionRow = { ...makeSubmission(), offer_id: "offer-9" } as SubRow
+    await confirmPortalWizardOnboarding("sub-1", "antonio.durante@tonydurante.us")
+    const [enqueueArgs] = enqueueJobMock.mock.calls[0] as unknown as [{ payload: { offer_id?: string | null } }]
+    expect(enqueueArgs.payload.offer_id).toBe("offer-9")
+  })
+
   it("reports pending=false when the account already exists on the submission", async () => {
     submissionRow = makeSubmission({ account_id: "acc-already-there" })
     const result = await confirmPortalWizardOnboarding("sub-1", "antonio.durante@tonydurante.us")

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractOfferTokenFromNotes } from '@/lib/portal/queries'
+import { extractOfferTokenFromNotes, resolveFormationOfferId } from '@/lib/portal/queries'
 
 describe('extractOfferTokenFromNotes', () => {
   it('extracts the token from the activate-service auto-created note', () => {
@@ -48,5 +48,32 @@ describe('handler-created SD notes do NOT match the offer-notes pattern (dev job
         'Created by formation_setup job 1fd98839-3187-44e9-962d-088be96463d8 from submission 27fb5ed8-ae7a-4a75-a794-23a3029c0c55.',
       ),
     ).toBeNull()
+  })
+})
+
+// Workspace-only plan S1 (dev job 9d34e750) — the formation OFFER is the
+// preferred anchor (an existing client's new company has no lead any more).
+describe('resolveFormationOfferId', () => {
+  const map = new Map([['tok-a', 'OFFER-A'], ['tok-b', 'OFFER-B']])
+
+  it('uses the stamped source_offer_token first', () => {
+    expect(resolveFormationOfferId('tok-b', 'Auto-created from offer tok-a', map, 2, ['OFFER-A', 'OFFER-B'])).toBe('OFFER-B')
+  })
+
+  it('falls back to the token in the notes', () => {
+    expect(resolveFormationOfferId(null, 'Auto-created from offer tok-a', map, 2, ['OFFER-A', 'OFFER-B'])).toBe('OFFER-A')
+  })
+
+  it('falls back to the sole offer only when there is exactly one SD and one offer', () => {
+    expect(resolveFormationOfferId(null, null, new Map(), 1, ['OFFER-A'])).toBe('OFFER-A')
+  })
+
+  it('never guesses between several offers or several SDs', () => {
+    expect(resolveFormationOfferId(null, null, map, 1, ['OFFER-A', 'OFFER-B'])).toBeNull()
+    expect(resolveFormationOfferId(null, null, new Map(), 2, ['OFFER-A'])).toBeNull()
+  })
+
+  it('an unknown stamped token does not match', () => {
+    expect(resolveFormationOfferId('tok-zzz', null, map, 2, ['OFFER-A', 'OFFER-B'])).toBeNull()
   })
 })

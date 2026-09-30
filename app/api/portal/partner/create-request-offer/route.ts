@@ -38,10 +38,12 @@ const SLUG_DEFAULTS: Record<ServiceSlug, { contract_type: ContractType; bundled_
   itin:          { contract_type: "itin",        bundled_pipelines: ["ITIN"] },
   ein:           { contract_type: "formation",   bundled_pipelines: ["EIN"] },
   banking:       { contract_type: "formation",   bundled_pipelines: ["Banking Fintech"] },
-  shipping:      { contract_type: "formation",   bundled_pipelines: [] },
-  notary:        { contract_type: "formation",   bundled_pipelines: [] },
+  // Tracked services since 2026-09-27 (S1) — with no pipeline these requests
+  // turned into a fake company formation at payment.
+  shipping:      { contract_type: "formation",   bundled_pipelines: ["Shipping"] },
+  notary:        { contract_type: "formation",   bundled_pipelines: ["Public Notary"] },
   closure:       { contract_type: "closure",     bundled_pipelines: ["Company Closure"] },
-  consulting:    { contract_type: "formation",   bundled_pipelines: [] },
+  consulting:    { contract_type: "formation",   bundled_pipelines: ["Consulting Call"] },
 }
 
 interface Body {

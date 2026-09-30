@@ -13,11 +13,12 @@ import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import type { Json } from "@/lib/database.types"
 import { createSD } from "@/lib/operations/service-delivery"
-import { selectStartAtActivationPipelines, createStartAtActivationSDs } from "@/lib/operations/activation-start-services"
-import { getStartAtActivationServiceTypes, getServiceBySlugStatic } from "@/lib/services"
+import { selectStartAtActivationPipelines, isFormationContractWithoutFormation, createBoughtStartAtActivationServices } from "@/lib/operations/activation-start-services"
+import { getServiceBySlugStatic, getPerPersonServiceTypes, getRepeatableServiceTypes } from "@/lib/services"
 import { reportSystemError } from "@/lib/system-errors"
 import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
-import { ensureMinimalAccount, autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
+import { invoiceTargetForOffer, offerBillTo } from "@/lib/offers/bill-to-server"
+import { autoCreatePortalUser, sendPortalWelcomeEmail, tierForContract } from "@/lib/portal/auto-create"
 import { getEntityTypeFromContract } from "@/lib/portal/entity-type-from-contract"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { createPortalNotification } from "@/lib/portal/notifications"
@@ -30,6 +31,7 @@ import { findTaxReturnService } from "@/lib/tax-return-context"
 import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
+import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -66,6 +68,11 @@ const BUSINESS_SERVICE_TYPES = new Set([
 const INDIVIDUAL_SERVICE_TYPES = new Set([
   'ITIN', 'ITIN Renewal',
 ])
+// Tracked add-ons (S1, 2026-09-27) say nothing about business vs personal —
+// they must never tip a personal Tax Return into the business path.
+const CONTEXT_NEUTRAL_SERVICE_TYPES = new Set([
+  'Shipping', 'Public Notary', 'Consulting Call', 'Certificate of Incumbency',
+])
 
 /**
  * Resolve service_context for each pipeline in the offer.
@@ -81,6 +88,7 @@ function hasBusinessContextPipeline(
   for (const pipeline of pipelines) {
     if (BUSINESS_SERVICE_TYPES.has(pipeline)) return true
     if (INDIVIDUAL_SERVICE_TYPES.has(pipeline)) continue
+    if (CONTEXT_NEUTRAL_SERVICE_TYPES.has(pipeline)) continue
 
     // Ambiguous type (Tax Return) — use shared helper to find service entry
     if (pipeline === 'Tax Return') {
@@ -216,11 +224,24 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // Get the offer to determine contract_type and bundled_pipelines
   const { data: offer } = await supabase
     .from("offers")
-    .select("id, contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout, lead_id")
+    .select("id, contract_type, bundled_pipelines, account_id, selected_services, services, client_name, cost_summary, referrer_name, referrer_type, referrer_email, referrer_commission_type, referrer_commission_pct, referrer_agreed_price, referrer_account_id, referrer_contact_id, partner_id, partner_payout_model, partner_payout_rate, partner_invoice_target, partner_renewal_payout, lead_id, contact_id")
     .eq("token", activation.offer_token)
     .single()
 
   const contractType = offer?.contract_type || "formation"
+  // A "formation" contract that clearly sells something else (DF Commerce: a
+  // name change; SupraEmerge: a closure) gets NONE of the formation experience
+  // — no formation SD, tier, wizard, welcome or label (workspace-only plan S1,
+  // dev job 9d34e750). It keeps the formation branch for everything else
+  // (account deferred, start-at-payment services), exactly as before.
+  const formationNotBought = isFormationContractWithoutFormation({
+    contractType,
+    services: offer?.services,
+    selectedServices: offer?.selected_services,
+    bundledPipelines: offer?.bundled_pipelines,
+  })
+  /** Contract type for the formation-only experience (tier, wizard, welcome, labels). */
+  const experienceType = formationNotBought ? "service" : contractType
 
   // Defense-in-depth: refuse renewals.
   //
@@ -264,6 +285,21 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 1: Lead → Contact (AUTOMATIC) ─────────────────
   let contactId: string | null = null
   let leadId = activation.lead_id
+
+  // An offer created on an existing client's contact page carries contact_id
+  // and NO lead (workspace-only plan S1, dev job 9d34e750 — the automatic
+  // anchor lead was removed). Resolve the contact from the offer FIRST, before
+  // any email lookup, so the purchase lands on the right person even when the
+  // email matches a different/old lead or contact.
+  let offerContactId: string | null = null
+  if (!leadId && offer?.contact_id) {
+    const { data: offerContact } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("id", offer.contact_id)
+      .maybeSingle()
+    offerContactId = offerContact?.id ?? null
+  }
 
   if (leadId) {
     const { data: lead } = await supabase
@@ -322,6 +358,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         }
       }
     }
+  } else if (offerContactId) {
+    contactId = offerContactId
+    steps.push({ step: "lead_to_contact", status: "existing", detail: `Contact from offer: ${contactId}` })
   } else if (activation.client_email) {
     // Try to find lead by email
     const { data: leads } = await supabase
@@ -391,7 +430,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 1.5: Ensure Minimal Account (AUTO) ──
-  let autoAccountId: string | null = offer?.account_id || null
+  const autoAccountId: string | null = offer?.account_id || null
   let isStandaloneBusinessTR = false
 
   // Formation excluded (Antonio's architectural model, 2026-05-03/04): when an
@@ -444,8 +483,22 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       }
     }
 
+    // A Tax Return contract is business or personal by ITS OWN line only —
+    // another bundled business service (e.g. EIN) must not turn a personal
+    // 1040-NR into a company return.
+    const taxLine = contractType === "tax_return" ? findTaxReturnService(offerServices) : null
+    const taxLineIsBusiness = taxLine?.status === "found" && taxLine.service_context === "business"
+    // Never guess business vs personal from the ORDER of the offer's lines: a
+    // Tax Return line without its own choice, or two Tax Return lines, block
+    // activation even when another business line came first (bug-hunter, S1).
+    if (taxLine?.status === "multiple_matches") {
+      return { ok: false, error: "Tax Return activation blocked — offer has multiple Tax Return service entries. Update the offer to have exactly one.", steps, status: 400 }
+    }
+    if (taxLine?.status === "found" && taxLine.service_context !== "business" && taxLine.service_context !== "individual") {
+      return { ok: false, error: "Tax Return activation requires explicit service_context (business or individual) on the offer. Update the offer's services[] before retrying activation.", steps, status: 400 }
+    }
     if (businessContextResult === true) {
-      if (contractType === "tax_return") {
+      if (contractType === "tax_return" && (taxLine?.status !== "found" || taxLineIsBusiness)) {
         // Standalone BUSINESS Tax Return: defer account creation to company_info intake.
         // No placeholder account — SD created with contact_id only, account_id=null.
         isStandaloneBusinessTR = true
@@ -455,31 +508,28 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           detail: "Business Tax Return — account deferred to company_info intake",
         })
       } else {
-        // Other standalone business services (EIN, banking, closure, etc.)
-        // The LLC exists in the real world but not in our system — create a One-Time account
-        const accountResult = await ensureMinimalAccount({
-          contactId,
-          clientName: activation.client_name,
-          contractType,
-          offerToken: activation.offer_token,
-          leadId: leadId || undefined,
-          isStandaloneBusiness: true,
+        // Other standalone business services sold on a LEAD or CONTACT page.
+        // The offer lives where it was created (Antonio 2026-09-27): it belongs
+        // to the person, so the services stay on the person — the system no
+        // longer guesses the client's "first" company or invents a One-Time
+        // "Pending Company" (which also swept the person's other invoices onto
+        // it). A company-page offer carries its company and never reaches here.
+        steps.push({
+          step: "ensure_account",
+          status: "skipped",
+          detail: "offer made on a lead/contact page — services stay on the person (no company assumed)",
         })
-        if (accountResult.accountId) {
-          autoAccountId = accountResult.accountId
-          steps.push({
-            step: "ensure_account",
-            status: accountResult.created ? "created" : "existing",
-            detail: `Account ${accountResult.accountId.slice(0, 8)} (${accountResult.created ? "auto-created One-Time" : "already linked"})`,
-          })
-        } else {
-          steps.push({ step: "ensure_account", status: "error", detail: accountResult.error })
-        }
       }
-    } else if (leadId) {
-      // Individual-context service — try to resolve from lead (legacy fallback)
-      const { data: lead } = await supabase.from("leads").select("converted_to_account_id").eq("id", leadId).maybeSingle()
-      autoAccountId = lead?.converted_to_account_id || null
+    } else {
+      // Personal services (ITIN, a personal Tax Return…) on a lead/contact page
+      // stay on the person. The old fallback put them on the lead's converted
+      // company — a personal 1040-NR would have landed on a company
+      // (Antonio 2026-09-27: the offer lives where it was created).
+      steps.push({
+        step: "ensure_account",
+        status: "skipped",
+        detail: "personal services on a lead/contact page — they stay on the person",
+      })
     }
   }
 
@@ -590,7 +640,18 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // formation)" — required for returning active clients whose contact tier
     // stays at 'active' (the tier-based wizard fallback in wizard-visibility.ts
     // cannot fire for them). formation-setup.ts dedupes at wizard submit.
-    if (contactId) {
+    //
+    // ONLY when the contract actually bought a formation (workspace-only plan
+    // S1, dev job 9d34e750): formation-type contracts have been used to sell
+    // just a name change (DF Commerce), a closure (SupraEmerge) or banking —
+    // each would otherwise get a fake "company in formation".
+    if (formationNotBought) {
+      steps.push({
+        step: "service_deliveries",
+        status: "skipped",
+        detail: "formation-type contract without a Company Formation line — no formation SD created",
+      })
+    } else if (contactId) {
       // Dedup key = the originating offer token, now a first-class column.
       // The partial unique index uq_formation_sd_active_per_offer is the REAL
       // guard against the concurrent/retried-activation race (Michele Cotti got
@@ -670,52 +731,42 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     }
 
     // Bundled services that START AT PAYMENT (catalog tag start_at_activation —
-    // today Company Closure). Without this, a paid "Formation + Closure"
-    // contract silently never got its closure (dev job 77b66080). Never throws;
-    // every skip/error is also reported — see lib/operations/activation-start-services.ts.
-    try {
-      let startTypes: string[] = []
-      try {
-        startTypes = await getStartAtActivationServiceTypes()
-      } catch (tagErr) {
-        steps.push({ step: "start_at_activation", status: "error", detail: `catalog lookup failed: ${tagErr instanceof Error ? tagErr.message : String(tagErr)}` })
-        reportSystemError({
-          source: "server",
-          route: "lib/operations/activate-service",
-          message: `start-at-payment services NOT checked for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): catalog lookup failed`,
-          context: { offerToken: activation.offer_token },
-        }).catch(() => {})
-      }
-      if (startTypes.length > 0) {
-        const selection = selectStartAtActivationPipelines({
-          services: offer?.services,
-          selectedServices: offer?.selected_services,
-          bundledPipelines: offer?.bundled_pipelines,
-          startAtActivationTypes: startTypes,
-        })
-        steps.push(...await createStartAtActivationSDs({
-          offerToken: activation.offer_token,
-          clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
-          contactId,
-          selection,
-        }))
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      steps.push({ step: "start_at_activation", status: "error", detail: msg })
-      reportSystemError({
-        source: "server",
-        route: "lib/operations/activate-service",
-        message: `start-at-payment services failed for ${activation.client_name || offer?.client_name || "unknown client"} (offer ${activation.offer_token}): ${msg} — check the contract's bundled services by hand`,
-        context: { offerToken: activation.offer_token },
-      }).catch(() => {})
-    }
+    // Company Closure, Company Change Name). Without this, a paid "Formation +
+    // Closure" contract silently never got its closure (dev job 77b66080).
+    // Never throws; every skip/error is also reported — see
+    // lib/operations/activation-start-services.ts.
+    steps.push(...await createBoughtStartAtActivationServices({
+      offer,
+      offerToken: activation.offer_token,
+      clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
+      contactId,
+      mustCreateSomething: formationNotBought,
+      newCompanyContract: !formationNotBought,
+      createAllBought: formationNotBought,
+      // A real formation: company-level add-ons (DBA, Incumbency…) wait for the
+      // new company and are created on it by formation-materialize (step 10f).
+      waitForNewCompany: !formationNotBought,
+    }))
   } else if (contractType === "onboarding") {
     steps.push({
       step: "service_deliveries",
       status: "skipped",
       detail: "onboarding — SDs created by wizard submit / closing per SOP v7.2",
     })
+    // Start-at-payment services still start now (workspace-only plan S1): a
+    // bundled Company Closure of an OLD company doesn't wait for the new one,
+    // and onboarding never created it at all before.
+    steps.push(...await createBoughtStartAtActivationServices({
+      offer,
+      offerToken: activation.offer_token,
+      clientName: (activation.client_name as string | null) || (offer?.client_name as string | null) || null,
+      contactId,
+      newCompanyContract: true,
+      // Company add-ons wait for the onboarded company to be in the CRM (created
+      // at staff Confirm by onboarding-setup, which then creates them on it) —
+      // unless the offer already names that company.
+      waitForNewCompany: !(offer as { account_id?: string | null } | null)?.account_id,
+    }))
   } else if (pipelines.length > 0) {
     // Get first pipeline stage for each type (including auto_tasks for task creation)
     const { data: allStages } = await supabase
@@ -742,9 +793,28 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     // Use autoAccountId (may have been created in Step 1.5)
     const accountId = autoAccountId
 
+    // Per-person services (ITIN): a person holds only one, and the offer does
+    // not say WHO the extra units are for (ITIN ×2 = the buyer + someone else).
+    // Create the buyer's one and tell staff about the rest — never N copies on
+    // the buyer, never a silent unique-index failure (S1 QA, 2026-09-27).
+    const who = `${activation.client_name || "unknown client"} (offer ${activation.offer_token})`
+    const tellStaff = (message: string, context: Record<string, unknown>) => {
+      reportSystemError({ source: "server", route: "lib/operations/activate-service", message, context }).catch(() => {})
+    }
+    let perPersonTypes: string[] = []
+    let repeatableTypes: string[] = []
+    try {
+      perPersonTypes = await getPerPersonServiceTypes()
+      repeatableTypes = await getRepeatableServiceTypes()
+    } catch (tagErr) {
+      tellStaff(`service catalog lookup failed while creating services for ${who}: ${tagErr instanceof Error ? tagErr.message : String(tagErr)} — check the created services by hand`, { offerToken: activation.offer_token })
+    }
+
     for (const pipeline of pipelines) {
       try {
-        const quantity = pipelineQuantity.get(pipeline) ?? 1
+        const isPerPerson = perPersonTypes.includes(pipeline)
+        const boughtUnits = pipelineQuantity.get(pipeline) ?? 1
+        const quantity = isPerPerson ? 1 : boughtUnits
 
         // Guard 1: count SDs already created for this exact offer + pipeline
         // (tied by offer_token in notes — the canonical link).
@@ -760,10 +830,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           sdResults.push({ pipeline, status: "existing", id: existingByOffer![0]?.id })
           continue
         }
+        if (isPerPerson && boughtUnits > 1) {
+          const detail = `${pipeline} ×${boughtUnits} bought by ${who}: one is created for the buyer; ${boughtUnits - 1 === 1 ? "the other one is for another person — add it on that person" : `the other ${boughtUnits - 1} are for other people — add each one on that person`}`
+          steps.push({ step: "service_deliveries", status: "skipped", detail })
+          tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, units: boughtUnits })
+        }
 
         // Guard 2: same service_type already active on this account via another path.
         // For quantity > 1, allow up to `quantity` active SDs of this type.
-        if (accountId) {
+        // Repeatable services (shipping, notary…) skip it: each purchase is a new job.
+        if (accountId && !repeatableTypes.includes(pipeline)) {
           const { data: activeSds } = await supabase
             .from("service_deliveries")
             .select("id")
@@ -771,13 +847,43 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
             .eq("account_id", accountId)
             .eq("status", "active")
           if ((activeSds?.length ?? 0) >= quantity) {
-            sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
-            continue
+            if (pipeline === "Tax Return") {
+              // A Tax Return bought for a company that already has one open is
+              // another YEAR (a retry of this same offer is caught by Guard 1).
+              // Create it and tell staff to check the year — never a silent skip
+              // (S1 QA, 2026-09-27).
+              const detail = `Tax Return created for ${who} although this company already has an open one (${activeSds![0]?.id}) — check it is for a different tax year`
+              steps.push({ step: "service_deliveries", status: "warning", detail })
+              tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: activeSds![0]?.id })
+            } else {
+              const detail = `${pipeline} NOT created for ${who}: this company already has an open one (${activeSds![0]?.id}) — if this purchase is a separate job, add it by hand`
+              steps.push({ step: "service_deliveries", status: "skipped", detail })
+              tellStaff(`[info] ${detail}`, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: activeSds![0]?.id })
+              sdResults.push({ pipeline, status: "existing", id: activeSds![0]?.id })
+              continue
+            }
           }
         }
 
         // How many more SDs to create (quantity minus what already exists for this offer)
         const toCreate = quantity - existingOfferCount
+
+        if (isPerPerson && contactId && toCreate > 0) {
+          const { data: ownOpen } = await supabase
+            .from("service_deliveries")
+            .select("id")
+            .eq("service_type", pipeline)
+            .eq("contact_id", contactId)
+            .in("status", ["active", "on_hold"])
+            .limit(1)
+          if (ownOpen && ownOpen.length > 0) {
+            const detail = `${pipeline} NOT created for ${who}: the buyer already has an open one (${ownOpen[0].id}). If this one is for another person, add it on that person`
+            sdResults.push({ pipeline, status: "existing", id: ownOpen[0].id })
+            steps.push({ step: "service_deliveries", status: "skipped", detail })
+            tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline, existingSdId: ownOpen[0].id })
+            continue
+          }
+        }
 
         // Tax season pause computed once before the quantity loop (same result for all N SDs)
         const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
@@ -790,6 +896,12 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // in the CRM. Per-member identification happens later in the portal flow.
         for (let unitIndex = 0; unitIndex < toCreate; unitIndex++) {
           const unitSuffix = quantity > 1 ? ` #${existingOfferCount + unitIndex + 1}` : ""
+          // The offer reference goes on the FIRST unit only: the per-offer unique
+          // indexes allow one active SD per type per offer, so stamping unit #2
+          // would fail (bug-hunter 2026-09-29). Company Closure stays unstamped
+          // here: the legacy emailed closure form adopts only a closure with no
+          // offer reference (closure-form-completed, dev job 77b66080).
+          const stampOffer = existingOfferCount + unitIndex === 0 && pipeline !== "Company Closure"
           const sdName = `${pipeline} - ${activation.client_name}${unitSuffix}`
 
           // Route through P1.6 operation layer (createSD).
@@ -809,6 +921,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage_order: -1,
                 status: "active",
                 notes: `Auto-created from offer ${activation.offer_token}`,
+                source_offer_token: stampOffer ? activation.offer_token : null,
               }
             } else {
               createParams = {
@@ -819,6 +932,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage: "1st Installment Paid",
                 status: taxPausedBundled ? "on_hold" : "active",
                 notes: `Auto-created from offer ${activation.offer_token}${taxPauseNote}`,
+                source_offer_token: stampOffer ? activation.offer_token : null,
               }
             }
           } else if (pipeline === "ITIN") {
@@ -831,6 +945,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               account_id: null,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
+              source_offer_token: stampOffer ? activation.offer_token : null,
             }
           } else {
             // All other pipelines — createSD resolves the first stage
@@ -841,6 +956,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               account_id: accountId,
               contact_id: contactId,
               notes: `Auto-created from offer ${activation.offer_token}`,
+              // Stamped like every other path (S1 E2E ★8): traceability + the
+              // per-offer unique indexes guard a retried activation.
+              source_offer_token: stampOffer ? activation.offer_token : null,
             }
           }
 
@@ -875,7 +993,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           }
         }
       } catch (e) {
-        sdResults.push({ pipeline, status: "error", id: e instanceof Error ? e.message : String(e) })
+        const msg = e instanceof Error ? e.message : String(e)
+        sdResults.push({ pipeline, status: "error", id: msg })
+        const detail = `${pipeline} could NOT be created for ${who}: ${msg} — add it by hand`
+        steps.push({ step: "service_deliveries", status: "error", detail })
+        tellStaff(detail, { offerToken: activation.offer_token, serviceType: pipeline })
       }
     }
 
@@ -891,17 +1013,13 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 2a: Mark included Tax Return as paid (AUTO) ─────
-  // If Tax Return SD was created and the offer has Tax Return with price "Inclusa"/"Included",
-  // update the tax_returns record to paid=true so Stage 1 task knows to skip invoicing.
+  // If a Tax Return SD was created from this paid offer, the tax return was paid
+  // with it (own price in the total, or $0 = included) — mark the tax_returns
+  // record paid so Stage 1 knows not to invoice it again.
   const taxReturnSd = sdResults.find(r => r.pipeline === "Tax Return" && r.status === "created")
   if (taxReturnSd?.id && offer?.services && autoAccountId) {
-    const services = Array.isArray(offer.services) ? offer.services : []
-    const includedTaxReturn = services.find((s: { pipeline_type?: string; price?: string }) =>
-      s.pipeline_type === "Tax Return" &&
-      s.price &&
-      /inclus[ao]|included|€?\s*0/i.test(s.price)
-    )
-    if (includedTaxReturn) {
+    // Sold on this paid offer = paid, whatever its price (Antonio 2026-09-27).
+    if (offerSellsTaxReturn(offer.services, (offer as { selected_services?: unknown }).selected_services)) {
       const today = new Date().toISOString().split("T")[0]
       // Check if tax_returns record exists for this account + current year
       const currentYear = new Date().getFullYear()
@@ -930,7 +1048,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   // ─── STEP 2b: Portal tier upgrade (AUTO) ─────────────────
   // Upgrade portal tier from lead → tierForContract(contractType) after payment.
   // formation → formation, onboarding → onboarding, everything else → active.
-  const targetTier: PortalTier = tierForContract(contractType)
+  const targetTier: PortalTier = tierForContract(experienceType)
   if (autoAccountId) {
     // Business-context: upgrade via account (syncs account + all linked contacts + auth users)
     const { syncTier } = await import("@/lib/operations/sync-tier")
@@ -1057,9 +1175,16 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         // across all pipelines. Falls back to contractType when pipelines is
         // empty (e.g. onboarding/formation where the SD is created later by
         // the wizard, not at payment).
+        // Banking bought inside a formation/onboarding-type contract creates no
+        // service (formation ends at the EIN; banking is self-service until the
+        // bank workspace, plan S8) — so it must not pick a banking welcome that
+        // promises an application in progress (S1 QA, 2026-09-27).
+        const welcomePipelines = contractType === "formation" || contractType === "onboarding"
+          ? pipelines.filter((p) => p !== "Banking Fintech" && p !== "Banking Physical")
+          : pipelines
         const template = await getWelcomeMessage({
-          contractType,
-          pipelines,
+          contractType: experienceType,
+          pipelines: welcomePipelines,
           language,
         })
 
@@ -1085,10 +1210,18 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           // original, DIFFERENT fallbacks — "/portal/wizard" for the text,
           // "/portal" for the link — so they never disagree once an offer
           // id is added, but neither regresses for a non-onboarding offer).
+          // Formation carries its offer too (workspace-only plan S1, dev job
+          // 9d34e750): an existing client's new company has no lead any
+          // more, so the offer is the anchor. type=formation is added only
+          // when the template path doesn't already name a type.
           const appendOffer = (url: string): string => {
-            if (contractType !== "onboarding" || !offer?.id) return url
+            if ((contractType !== "onboarding" && contractType !== "formation") || !offer?.id) return url
+            // A first-time client's formation keeps its proven LEAD path — the
+            // offer anchor is only for an existing client's new company (no lead).
+            if (contractType === "formation" && leadId) return url
             const sep = url.includes("?") ? "&" : "?"
-            return `${url}${sep}offer=${encodeURIComponent(offer.id)}`
+            const typePart = contractType === "formation" && !/[?&]type=/.test(url) ? "type=formation&" : ""
+            return `${url}${sep}${typePart}offer=${encodeURIComponent(offer.id)}`
           }
 
           const vars = {
@@ -1309,15 +1442,22 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     try {
       const today = new Date().toISOString().split("T")[0]
       const amount = Number(activation.amount)
-      const serviceLabel = contractType === "formation" ? "LLC Formation"
-        : contractType === "onboarding" ? "LLC Onboarding"
-        : contractType === "tax_return" ? "Tax Return"
-        : contractType === "itin" ? "ITIN Application"
-        : "Service"
+      const serviceLabel = experienceType === "formation" ? "LLC Formation"
+        : experienceType === "onboarding" ? "LLC Onboarding"
+        : experienceType === "tax_return" ? "Tax Return"
+        : experienceType === "itin" ? "ITIN Application"
+        : pipelines.length ? pipelines.join(", ") : "Service"
 
+      // "Invoice to" (S1 2026-09-27) — same rule as signing / Confirm Payment.
+      const fallbackTarget = await invoiceTargetForOffer({
+        billTo: await offerBillTo(activation.offer_token),
+        offerAccountId: autoAccountId,
+        contactId,
+      })
       const invoiceResult = await createTDInvoice({
-        account_id: autoAccountId || undefined,
+        account_id: fallbackTarget.account_id || undefined,
         contact_id: contactId || undefined,
+        billing_entity_id: fallbackTarget.billing_entity_id,
         line_items: [{
           description: `${serviceLabel} Package - ${activation.client_name}`,
           unit_price: amount,
@@ -1803,7 +1943,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   }
 
   // ─── STEP 4: Data Collection Form (SUPERVISED) ──────────
-  const formConfig = FORM_CONFIG[contractType]
+  // No formation wizard for a formation-type contract that sold no formation.
+  const formConfig = formationNotBought ? undefined : FORM_CONFIG[contractType]
   if (formConfig && leadId) {
     const { data: lead } = await supabase
       .from("leads")
@@ -1873,7 +2014,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       }
     }
   } else if (!formConfig) {
-    steps.push({ step: "data_form", status: "skipped", detail: `No form config for contract_type: ${contractType}` })
+    steps.push({ step: "data_form", status: "skipped", detail: formationNotBought ? "formation-type contract without a Company Formation line — no formation form" : `No form config for contract_type: ${contractType}` })
   } else {
     steps.push({ step: "data_form", status: "skipped", detail: "No lead_id available" })
   }
@@ -1982,11 +2123,11 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       : ""
 
     const paidDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
-    const serviceLabel = contractType === "formation" ? "LLC Formation"
-      : contractType === "onboarding" ? "LLC Onboarding"
-      : contractType === "tax_return" ? "Tax Return"
-      : contractType === "itin" ? "ITIN Application"
-      : contractType
+    const serviceLabel = experienceType === "formation" ? "LLC Formation"
+      : experienceType === "onboarding" ? "LLC Onboarding"
+      : experienceType === "tax_return" ? "Tax Return"
+      : experienceType === "itin" ? "ITIN Application"
+      : pipelines.length ? pipelines.join(", ") : contractType
 
     const paymentSection = section("Payment", [
       row("Client", activation.client_name),

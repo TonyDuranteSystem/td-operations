@@ -12,7 +12,7 @@ import { isClient } from '@/lib/auth'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
-import { formationLeadOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, formationOfferOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
 
 /**
@@ -46,12 +46,15 @@ async function ownsLeadScopedRow(
 /**
  * Same re-proof as ownsLeadScopedRow, for the onboarding-for-a-returning-client
  * case: no lead exists, so the offer itself (offers.id) is the scope. Mirrors
- * the wizard-submit 0b2 check.
+ * the wizard-submit 0b2 check. Also accepts a FORMATION offer since
+ * workspace-only plan S1 (dev job 9d34e750): an existing client's new company
+ * has no lead either (wizard-submit 0b3).
  */
 async function ownsOfferScopedRow(
   identity: Awaited<ReturnType<typeof resolvePortalIdentity>>,
   user: { email?: string | null },
   offerId: string,
+  wizardType: string,
 ): Promise<boolean> {
   const ctcId = identity.kind === 'contact' ? identity.contactId : null
   const ownerEmails = new Set<string>()
@@ -65,7 +68,9 @@ async function ownsOfferScopedRow(
     .select('client_email, contract_type, contact_id')
     .eq('id', offerId)
     .maybeSingle()
-  return onboardingOfferOwned(theOffer, ctcId, ownerEmails)
+  return wizardType === 'formation'
+    ? formationOfferOwned(theOffer, ctcId, ownerEmails)
+    : onboardingOfferOwned(theOffer, ctcId, ownerEmails)
 }
 
 export async function POST(req: NextRequest) {
@@ -120,8 +125,8 @@ export async function POST(req: NextRequest) {
         // Lead-scoped formation row → re-prove lead ownership.
         allowed = await ownsLeadScopedRow(identity, user, rowLeadId)
       } else if (rowOfferId) {
-        // Offer-scoped onboarding row (returning client, no lead) → re-prove offer ownership.
-        allowed = await ownsOfferScopedRow(identity, user, rowOfferId)
+        // Offer-scoped onboarding / lead-less formation row → re-prove offer ownership.
+        allowed = await ownsOfferScopedRow(identity, user, rowOfferId, wizard_type)
       }
       // No scope at all (orphan row) → deny.
 
@@ -152,8 +157,8 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 })
         }
       }
-      if (offer_id && wizard_type === 'onboarding') {
-        if (!(await ownsOfferScopedRow(identity, user, offer_id))) {
+      if (offer_id && (wizard_type === 'onboarding' || wizard_type === 'formation')) {
+        if (!(await ownsOfferScopedRow(identity, user, offer_id, wizard_type))) {
           return NextResponse.json({ error: 'Access denied' }, { status: 403 })
         }
         // Same hijack backstop as wizard-submit (THW Global, dev_task

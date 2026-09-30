@@ -25,6 +25,10 @@ import { getOfficeDateString } from '@/lib/portal/office-hours'
 export interface TDInvoiceInput {
   account_id?: string
   contact_id?: string
+  /** Who the invoice is addressed to when it is neither the company nor the
+   *  person's own name — one of the contact's billing entities ("Invoice to"
+   *  chosen on the offer, S1 2026-09-27). Printed as the invoice's Bill To. */
+  billing_entity_id?: string | null
   line_items: Array<{
     description: string
     unit_price: number
@@ -126,6 +130,13 @@ export interface TDInvoiceInput {
    */
   skip_credit_netting?: boolean
   /**
+   * Which credit pool nets this bill. Default: the account when there is one,
+   * else the person. 'contact' forces the PERSON's pool even when the invoice
+   * is addressed to a company — the signing invoice uses it because the offer
+   * displayed the person's paid-call credit (S1 2026-09-27, "Invoice to").
+   */
+  credit_scope?: 'contact'
+  /**
    * WS-C lineage: which offer's payment plan this invoice is one part of, and which part.
    *
    * Both or neither — the database enforces the pair. Without them a later part is an orphan:
@@ -204,10 +215,25 @@ export interface TDInvoiceResult {
 
 // ─── Create TD Invoice ─────────────────────────────
 
+/**
+ * Which ONE credit pool nets a bill (pools stay isolated). Account by default;
+ * the person when there is no account, or when the caller forces 'contact'.
+ * Pure — unit-tested in tests/unit/td-invoice-credit-scope.test.ts.
+ */
+export function creditScopeFor(
+  accountId: string | null | undefined,
+  contactId: string | null | undefined,
+  creditScope?: 'contact',
+): { accountId: string } | { contactId: string } {
+  if (contactId && (!accountId || creditScope === 'contact')) return { contactId }
+  return { accountId: accountId as string }
+}
+
 export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceResult> {
   const {
     account_id,
     contact_id,
+    billing_entity_id,
     line_items,
     currency = 'USD',
     due_date,
@@ -226,6 +252,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
     payment_category,
     year,
     skip_credit_netting = false,
+    credit_scope,
     card_fee_rate,
     tranche_offer_token,
     tranche_seq,
@@ -366,7 +393,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // credit could never reach it before. Exactly ONE scope is passed, so account
   // and contact credit pools stay isolated (regression tests T4/T5).
   if (grossTotal > 0 && !mark_as_paid && (account_id || contact_id) && !skip_credit_netting) {
-    const scope = account_id ? { accountId: account_id } : { contactId: contact_id as string }
+    const scope = creditScopeFor(account_id, contact_id, credit_scope)
     // SELF-HEAL FIRST. A claim abandoned by a process that died mid-invoice
     // leaves the credit locked with a balance on it — invisible to every netting
     // read, so the client is quietly billed full price for money they own.
@@ -513,6 +540,7 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
       .insert({
         account_id: account_id || null,
         contact_id: contact_id || null,
+        billing_entity_id: billing_entity_id || null,
         invoice_number: invoiceNumber,
         idempotency_key: idempotency_key || null,
         installment: installment || null,

@@ -28,4 +28,12 @@ describe('accountIdForOffer', () => {
     expect(accountIdForOffer('renewal', null)).toBeNull()
     expect(accountIdForOffer('renewal', undefined)).toBeNull()
   })
+
+  it('keeps account_id for a formation-TYPE offer that sells no formation (name change / closure — S1)', () => {
+    expect(accountIdForOffer('formation', ACCT, true)).toBe(ACCT)
+    expect(accountIdForOffer(undefined, ACCT, true)).toBe(ACCT)
+    expect(accountIdForOffer('formation', null, true)).toBeNull()
+    // explicit false = a real formation → still stripped
+    expect(accountIdForOffer('formation', ACCT, false)).toBeNull()
+  })
 })

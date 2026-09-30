@@ -91,6 +91,24 @@ export function parsePriceQuirk(raw: unknown): number {
 
 const RECURRING_RE = /\/(year|anno|month|mese)/i
 const INCLUDED_RE = /includ|inclus/i
+
+/**
+ * Does this paid offer sell a Tax Return? Antonio 2026-09-27: onboarding and
+ * tax return always sit on the SAME invoice — with its own price the tax
+ * return is part of the total, at $0 it is included in the onboarding price.
+ * Either way, once the offer is paid the tax return is paid: the PRICE never
+ * decides it. (The old check looked at the price and marked "$750" unpaid.)
+ * A deselected optional line was not bought.
+ */
+export function offerSellsTaxReturn(services: unknown, selectedServices?: unknown): boolean {
+  if (!Array.isArray(services)) return false
+  const selected = Array.isArray(selectedServices) ? (selectedServices as unknown[]).map(String) : []
+  return (services as Array<Record<string, unknown> | null>).some((l) =>
+    !!l && typeof l === "object" &&
+    String(l.pipeline_type ?? "").toLowerCase() === "tax return" &&
+    (!l.optional || selected.includes(String(l.name ?? ""))),
+  )
+}
 const PRECONDITION_RE = /pre.?condition/i
 
 interface SummaryGroup {

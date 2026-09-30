@@ -25,8 +25,16 @@
 export function accountIdForOffer(
   contractType: string | null | undefined,
   accountId: string | null | undefined,
+  /** The offer is formation-TYPE but sells no formation (a name change or a
+   *  closure: the offer builder derives "formation" whenever no bought service
+   *  carries its own contract type). Such an offer is about an EXISTING
+   *  company, so it keeps its account — otherwise a Company Change Name sold
+   *  from the company's page arrives at payment with no company and can't be
+   *  created (workspace-only plan S1, dev job 9d34e750; the DF Commerce shape).
+   *  Callers compute this with isFormationContractWithoutFormation. */
+  formationNotBought = false,
 ): string | null {
   const effectiveType = contractType || 'formation'
-  if (effectiveType === 'formation') return null
+  if (effectiveType === 'formation' && !formationNotBought) return null
   return accountId ?? null
 }

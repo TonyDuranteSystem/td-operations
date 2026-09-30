@@ -51,7 +51,7 @@ vi.mock('@/lib/operations/itin-from-wizard', () => ({
   createItinDeliveriesFromWizard: vi.fn(async () => ({ created: 0, skipped: 0, people: [] })),
 }))
 
-import { handleFormationSetup, buildIdentityDetail } from '@/lib/jobs/handlers/formation-setup'
+import { handleFormationSetup, buildIdentityDetail, resolveOfferToken } from '@/lib/jobs/handlers/formation-setup'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { createSD } from '@/lib/operations/service-delivery'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
@@ -684,5 +684,44 @@ describe('build identity — the job states which code produced its result', () 
     // A constant that a stale bundle cannot fake: if the deployed job reports
     // an older revision than the source, the deployment is stale.
     expect(buildIdentityDetail({})).toMatch(/handler=ca788354-resubmit-gate-v\d+/)
+  })
+})
+
+// Workspace-only plan S1 (dev job 9d34e750): a lead-less formation (an
+// existing client's new company) resolves its offer token from the offer id.
+describe('resolveOfferToken — lead first, then offer id', () => {
+  function offersMock(rowsByKey: Record<string, string | null>) {
+    const calls: Array<[string, string]> = []
+    vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
+      let key = ''
+      const chain: Record<string, unknown> = {
+        select: () => chain,
+        eq: (col: string, val: string) => { calls.push([col, val]); key = `${col}:${val}`; return chain },
+        order: () => chain,
+        limit: () => chain,
+        maybeSingle: () => Promise.resolve({ data: table === 'offers' && rowsByKey[key] ? { token: rowsByKey[key] } : null, error: null }),
+      }
+      return chain
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any)
+    return calls
+  }
+
+  it('uses the lead when present (first-time client, unchanged)', async () => {
+    const calls = offersMock({ 'lead_id:L1': 'tok-lead', 'id:O1': 'tok-offer' })
+    expect(await resolveOfferToken('L1', 'O1')).toBe('tok-lead')
+    expect(calls).toEqual([['lead_id', 'L1']])
+  })
+
+  it('falls back to the offer id when there is no lead', async () => {
+    const calls = offersMock({ 'id:O1': 'tok-offer' })
+    expect(await resolveOfferToken(null, 'O1')).toBe('tok-offer')
+    expect(calls).toEqual([['id', 'O1']])
+  })
+
+  it('returns null with neither — never a fabricated value', async () => {
+    offersMock({})
+    expect(await resolveOfferToken(null, null)).toBeNull()
+    expect(await resolveOfferToken(null, 'missing')).toBeNull()
   })
 })

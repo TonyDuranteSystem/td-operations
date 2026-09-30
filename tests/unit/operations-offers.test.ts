@@ -28,6 +28,7 @@ let insertSucceeds = true
 
 const offerInserts: Array<Record<string, unknown>> = []
 const leadInserts: Array<Record<string, unknown>> = []
+let ownedBillTo = false
 const leadUpdates: Array<Record<string, unknown>> = []
 const actionLogCalls: Array<Record<string, unknown>> = []
 const whopCalls: Array<Record<string, unknown>> = []
@@ -68,6 +69,15 @@ vi.mock("@/lib/supabase-admin", () => ({
             return Promise.resolve({ data: leadFixture, error: null })
           }),
           then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
+        })
+        return chain
+      }
+      if (table === "account_contacts" || table === "billing_entities") {
+        const chain: Record<string, unknown> = {}
+        Object.assign(chain, {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          limit: vi.fn(() => Promise.resolve({ data: ownedBillTo ? [{ id: "x" }] : [], error: null })),
         })
         return chain
       }
@@ -302,6 +312,44 @@ describe("createOffer — formation account guard (dev_task 262be11c)", () => {
     expect(insert?.contact_id).toBe("contact-1")
   })
 
+  it("S1: keeps account_id on a formation-TYPE offer that only sells a name change (DF Commerce shape)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Existing Co LLC",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Change Name", price: "$350", pipeline_type: "Company Change Name" }],
+      bundled_pipelines: ["Company Change Name"],
+      cost_summary: [{ label: "Total", total: "$350" }],
+      token: "test-change-name-keep",
+      account_id: "existing-account-123",
+      contact_id: "contact-1",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-change-name-keep")
+    expect(insert?.account_id).toBe("existing-account-123")
+  })
+
+  it("S1: a formation offer with a typed formation line + closure still strips the account (real new company)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "New Co Owner 2",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "$500", pipeline_type: "Company Formation" }, { name: "Company Closure", price: "$100", pipeline_type: "Company Closure" }],
+      bundled_pipelines: ["Company Formation", "Company Closure"],
+      cost_summary: [{ label: "Total", total: "$600" }],
+      token: "test-formation-closure-strip",
+      account_id: "existing-account-123",
+      contact_id: "contact-1",
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-formation-closure-strip")
+    expect(insert?.account_id).toBeNull()
+  })
+
   it("keeps account_id for a non-formation (renewal) offer", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")
@@ -320,8 +368,11 @@ describe("createOffer — formation account guard (dev_task 262be11c)", () => {
   })
 })
 
-describe("createOffer — auto-anchor lead for new-company formation (dev_task 262be11c)", () => {
-  it("auto-creates a lead and attaches it when a formation offer has a contact but no lead", async () => {
+// Workspace-only plan S1 (dev job 9d34e750, Antonio 2026-09-27): the automatic
+// anchor lead (dev_task 262be11c) is gone — the offer lives where it was
+// created and the formation is anchored on the offer itself.
+describe("createOffer — no automatic anchor lead (workspace-only plan S1)", () => {
+  it("does NOT auto-create a lead when a formation offer has a contact but no lead; the offer keeps contact_id, lead_id null", async () => {
     accountExists = true
     const { createOffer } = await import("@/lib/operations/offers")
     await createOffer({
@@ -335,14 +386,109 @@ describe("createOffer — auto-anchor lead for new-company formation (dev_task 2
       token: "test-autolead",
       contact_id: "existing-contact-1",
     })
-    // A lead row was inserted, tagged as an existing-client new company
-    expect(leadInserts).toHaveLength(1)
-    expect(leadInserts[0].source).toBe("Existing client — new company")
-    // The offer carries the new lead AND the existing contact, no account
+    expect(leadInserts).toHaveLength(0)
+    // The offer carries the existing contact, no lead, no account
     const insert = offerInserts.find((o) => !o.__update && o.token === "test-autolead")
-    expect(insert?.lead_id).toBe("auto-lead-1")
+    expect(insert?.lead_id ?? null).toBeNull()
     expect(insert?.contact_id).toBe("existing-contact-1")
     expect(insert?.account_id).toBeNull()
+  })
+
+  it("a contact may hold a SECOND in-flight new-company formation offer (not duplicate-blocked)", async () => {
+    accountExists = true
+    // An active formation offer already exists on this contact — it must not block a second new company.
+    duplicateOffer = { token: "first-new-company-2026", status: "sent", contract_type: "formation" }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Michele Cotti",
+      language: "it",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Formation", price: "€2300" }],
+      cost_summary: [{ label: "Total", total: "€2300" }],
+      token: "test-second-new-company",
+      contact_id: "existing-contact-1",
+    })
+    expect(result.outcome).not.toBe("duplicate_blocked")
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-second-new-company")
+    expect(insert?.contact_id).toBe("existing-contact-1")
+  })
+
+  it("the contact-level duplicate block still applies to other contact-only offers (e.g. ITIN)", async () => {
+    accountExists = true
+    duplicateOffer = { token: "existing-itin-2026", status: "sent", contract_type: "itin" }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Solo Person",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "itin",
+      services: [{ name: "ITIN Application", price: "$300" }],
+      cost_summary: [{ label: "Total", total: "$300" }],
+      token: "test-itin-dup",
+      contact_id: "existing-contact-2",
+    })
+    expect(result.outcome).toBe("duplicate_blocked")
+  })
+
+  it("S1: does NOT auto-create a lead for a name change / closure offer (formation-type, no formation sold)", async () => {
+    accountExists = true
+    leadInserts.length = 0
+    const { createOffer } = await import("@/lib/operations/offers")
+    await createOffer({
+      client_name: "Existing Co LLC",
+      language: "en",
+      payment_type: "bank_transfer",
+      contract_type: "formation",
+      services: [{ name: "Company Change Name", price: "$350", pipeline_type: "Company Change Name" }],
+      bundled_pipelines: ["Company Change Name"],
+      cost_summary: [{ label: "Total", total: "$350" }],
+      token: "test-cn-no-lead",
+      contact_id: "existing-contact-1",
+    })
+    expect(leadInserts).toHaveLength(0)
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-cn-no-lead")
+    expect(insert?.lead_id ?? null).toBeNull()
+    expect(insert?.contact_id).toBe("existing-contact-1")
+  })
+
+  it("S1: 'Invoice to' is validated and saved on the offer", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    const bad = await createOffer({
+      client_name: "X", language: "en", payment_type: "bank_transfer", contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-billto-bad", account_id: "existing-account-123", bill_to: { type: "entity", entity: { name: " " } },
+    })
+    expect(bad.outcome).toBe("validation_error")
+    await createOffer({
+      client_name: "X", language: "en", payment_type: "bank_transfer", contract_type: "renewal",
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      token: "test-billto-ok", account_id: "existing-account-123", bill_to: { type: "entity", entity: { name: "Rossi Srl" } },
+    })
+    const insert = offerInserts.find((o) => !o.__update && o.token === "test-billto-ok")
+    expect(insert?.bill_to).toMatchObject({ type: "entity", entity: { name: "Rossi Srl" } })
+  })
+
+  it("S1: 'Invoice to' must belong to this client (company / saved payer)", async () => {
+    accountExists = true
+    const { createOffer } = await import("@/lib/operations/offers")
+    const base = {
+      client_name: "X", language: "en", payment_type: "bank_transfer" as const, contract_type: "renewal" as const,
+      services: [{ name: "Annual Renewal", price: "$500" }], cost_summary: [{ label: "Total", total: "$500" }],
+      contact_id: "contact-1",
+    }
+    const OTHER = "1e23b37f-6a09-4ebf-bcf6-328176121c50"
+    ownedBillTo = false
+    const foreignCo = await createOffer({ ...base, token: "t-own-1", bill_to: { type: "company", account_id: OTHER } })
+    expect(foreignCo.outcome).toBe("validation_error")
+    const foreignEntity = await createOffer({ ...base, token: "t-own-2", bill_to: { type: "entity", billing_entity_id: OTHER } })
+    expect(foreignEntity.outcome).toBe("validation_error")
+    ownedBillTo = true
+    const linked = await createOffer({ ...base, token: "t-own-3", bill_to: { type: "company", account_id: OTHER } })
+    expect(linked.outcome).not.toBe("validation_error")
+    ownedBillTo = false
   })
 
   it("does NOT auto-create a lead for a non-formation contact-only offer (e.g. ITIN)", async () => {

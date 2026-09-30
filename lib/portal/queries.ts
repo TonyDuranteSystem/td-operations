@@ -331,6 +331,39 @@ export interface InProgressFormation {
    * only when the offer/lead linkage can't be resolved.
    */
   leadId: string | null
+  /**
+   * The formation OFFER this new company is anchored on — the preferred anchor
+   * since workspace-only plan S1 (dev job 9d34e750, 2026-09-27): an existing
+   * client buying a new company from their contact page has NO lead any more,
+   * so (like InProgressOnboarding.offerId) the wizard is scoped by
+   * ?type=formation&offer=<offerId>. Resolved from the SD's
+   * source_offer_token (or the token in its notes); null when it can't be
+   * resolved unambiguously — callers then fall back to leadId.
+   */
+  offerId: string | null
+}
+
+/**
+ * Resolve which formation offer a Company Formation SD belongs to. The SD's
+ * stamped source_offer_token is authoritative, then the token parsed from its
+ * notes; otherwise only when the contact has exactly ONE in-progress formation
+ * AND exactly one formation offer (never guess between several — a wrong offer
+ * would scope the wizard to another company). Pure — unit-tested.
+ * Workspace-only plan S1 (dev job 9d34e750).
+ */
+export function resolveFormationOfferId(
+  sourceOfferToken: string | null,
+  notes: string | null,
+  tokenToOfferId: ReadonlyMap<string, string>,
+  sdCount: number,
+  allFormationOfferIds: readonly string[],
+): string | null {
+  if (sourceOfferToken && tokenToOfferId.has(sourceOfferToken)) {
+    return tokenToOfferId.get(sourceOfferToken) ?? null
+  }
+  const token = extractOfferTokenFromNotes(notes)
+  if (token && tokenToOfferId.has(token)) return tokenToOfferId.get(token) ?? null
+  return sdCount === 1 && allFormationOfferIds.length === 1 ? allFormationOfferIds[0] : null
 }
 
 /**
@@ -391,15 +424,18 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
   if (convertedLeadIds.length > 0) offerOr.push(`lead_id.in.(${convertedLeadIds.join(',')})`)
   const { data: formationOffers } = await supabaseAdmin
     .from('offers')
-    .select('token, lead_id, created_at')
+    .select('id, token, lead_id, created_at')
     .eq('contract_type', 'formation')
     .or(offerOr.join(','))
     .order('created_at', { ascending: false })
 
   const tokenToLead = new Map<string, string>()
+  const tokenToOfferId = new Map<string, string>()
   for (const o of formationOffers ?? []) {
     if (o.token && o.lead_id) tokenToLead.set(o.token, o.lead_id)
+    if (o.token && o.id) tokenToOfferId.set(o.token, o.id)
   }
+  const allFormationOfferIds = (formationOffers ?? []).map(o => o.id).filter((id): id is string => !!id)
   const soleFormationLeadId =
     (formationOffers ?? []).filter(o => o.lead_id).length > 0
       ? ((formationOffers ?? []).find(o => o.lead_id)?.lead_id ?? null)
@@ -415,8 +451,14 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
     if (sourceOfferToken && tokenToLead.has(sourceOfferToken)) {
       return tokenToLead.get(sourceOfferToken) ?? null
     }
+    // S1 (2026-09-27): the SD's offer is known and has NO lead — an existing
+    // client's new company, anchored on the offer. Never borrow the lead of
+    // their FIRST company here: that sent the new company's wizard to the old
+    // company's lead (bug-hunter blocker).
+    if (sourceOfferToken && tokenToOfferId.has(sourceOfferToken)) return null
     const token = extractOfferTokenFromNotes(notes)
     if (token && tokenToLead.has(token)) return tokenToLead.get(token) ?? null
+    if (token && tokenToOfferId.has(token)) return null
     // Fallback only when there is exactly one in-progress formation, so we
     // never misattribute a lead to the wrong company.
     return sds.length === 1 ? soleFormationLeadId : null
@@ -458,6 +500,13 @@ export async function getInProgressFormations(contactId: string): Promise<InProg
       'New company (in formation)',
     stage: 'formation' as const,
     leadId: resolveLeadId((sd as { source_offer_token?: string | null }).source_offer_token ?? null, sd.notes as string | null),
+    offerId: resolveFormationOfferId(
+      (sd as { source_offer_token?: string | null }).source_offer_token ?? null,
+      sd.notes as string | null,
+      tokenToOfferId,
+      sds.length,
+      allFormationOfferIds,
+    ),
   }))
 }
 

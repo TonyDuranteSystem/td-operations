@@ -37,6 +37,16 @@ const MAXIMAL_INPUT: SubmissionRecordInput = {
   tax_year: 2026,
 }
 
+// Columns that exist in SANDBOX (migration applied) but not yet in PRODUCTION,
+// so the generated types (which are built from production) don't know them
+// yet. Each entry names its migration; REMOVE it once that migration is
+// applied to production and lib/database.types.ts is regenerated.
+//   formation_submissions.offer_id — 20260927-2000-formation-offer-id-anchor.sql
+//   (workspace-only plan S1, dev job 9d34e750)
+const PENDING_PROD_MIGRATION_COLUMNS: Record<string, string[]> = {
+  formation_submissions: ["offer_id"],
+}
+
 // Distinct submission tables the route actually writes to.
 const SUBMISSION_TABLE_NAMES = [...new Set(Object.values(SUBMISSION_TABLES))]
 
@@ -53,7 +63,8 @@ describe("buildSubmissionRecord — column set never exceeds the real table sche
       expect(actualColumns, `${table} not found in lib/database.types.ts`).toBeTruthy()
 
       const record = buildSubmissionRecord(table, MAXIMAL_INPUT)
-      const ghostColumns = Object.keys(record).filter((c) => !actualColumns!.has(c))
+      const pending = new Set(PENDING_PROD_MIGRATION_COLUMNS[table] ?? [])
+      const ghostColumns = Object.keys(record).filter((c) => !actualColumns!.has(c) && !pending.has(c))
       expect(
         ghostColumns,
         `${table}: builder emits column(s) the table does not have: ${ghostColumns.join(", ")}`,
@@ -87,6 +98,19 @@ describe("buildSubmissionRecord — per-table column rules", () => {
     expect(r).toHaveProperty("lead_id")
     expect(r).toHaveProperty("entity_type")
     expect(r).not.toHaveProperty("tax_year")
+  })
+
+  it("formation: carries offer_id — the new-company anchor (workspace-only plan S1)", () => {
+    const r = buildSubmissionRecord("formation_submissions", MAXIMAL_INPUT)
+    expect(r.offer_id).toBe(MAXIMAL_INPUT.offer_id)
+    const noOffer = buildSubmissionRecord("formation_submissions", { ...MAXIMAL_INPUT, offer_id: undefined })
+    expect(noOffer.offer_id).toBeNull()
+  })
+
+  it("tax_return / itin / closure never carry offer_id", () => {
+    for (const t of ["tax_return_submissions", "itin_submissions", "closure_submissions"]) {
+      expect(buildSubmissionRecord(t, MAXIMAL_INPUT)).not.toHaveProperty("offer_id")
+    }
   })
 
   it("tax_return: omits lead_id, keeps account_id, entity_type and tax_year", () => {

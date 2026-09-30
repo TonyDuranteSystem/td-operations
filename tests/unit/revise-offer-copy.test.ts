@@ -188,3 +188,13 @@ describe("payment_choice_made_at travels WITH payment_plan, never alone (bug-hun
     expect("payment_choice_made_at" in out).toBe(true)
   })
 })
+
+describe("buildRevisedOfferInsert — Invoice to (S1 2026-09-27)", () => {
+  it("carries bill_to to v2 (who pays is a fact of the deal)", () => {
+    const billTo = { type: "entity", entity: { name: "Rossi Srl", vat_number: "IT1" } }
+    expect(buildRevisedOfferInsert({ ...fullOriginal(), bill_to: billTo }, seed).bill_to).toEqual(billTo)
+  })
+  it("a pre-S1 original with no bill_to revises to null, not a default", () => {
+    expect(buildRevisedOfferInsert(fullOriginal(), seed).bill_to).toBeNull()
+  })
+})

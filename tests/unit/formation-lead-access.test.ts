@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formationLeadOwned, onboardingLeadOwned, type LeadOwnershipOffer } from '@/lib/portal/formation-lead-access'
+import { formationLeadOwned, formationOfferOwned, onboardingLeadOwned, onboardingOfferOwned, type LeadOwnershipOffer } from '@/lib/portal/formation-lead-access'
 
 const offer = (o: Partial<LeadOwnershipOffer>): LeadOwnershipOffer => ({
   client_email: null,
@@ -89,5 +89,36 @@ describe('onboardingLeadOwned', () => {
 
   it('BLOCKS when no offer exists for the lead', () => {
     expect(onboardingLeadOwned(null, 'C1', emails('me@x.com'))).toBe(false)
+  })
+})
+
+// Workspace-only plan S1 (dev job 9d34e750, 2026-09-27) — an existing client's
+// NEW company formation has no lead; the offer itself is the anchor, exactly
+// like onboardingOfferOwned for a returning client's second+ onboarding.
+describe('formationOfferOwned', () => {
+  it('owns via contact_id match (offer created on the contact page, no lead)', () => {
+    expect(formationOfferOwned(offer({ contact_id: 'C1' }), 'C1', emails())).toBe(true)
+  })
+
+  it('owns via client_email match', () => {
+    expect(
+      formationOfferOwned(offer({ client_email: 'Me@X.com' }), 'C1', emails('me@x.com')),
+    ).toBe(true)
+  })
+
+  it('BLOCKS a tampered offer id belonging to someone else', () => {
+    expect(
+      formationOfferOwned(offer({ contact_id: 'C2', client_email: 'someone@else.com' }), 'C1', emails('me@x.com')),
+    ).toBe(false)
+  })
+
+  it('BLOCKS an onboarding offer (no cross-type confusion)', () => {
+    const onb = offer({ contract_type: 'onboarding', contact_id: 'C1' })
+    expect(formationOfferOwned(onb, 'C1', emails())).toBe(false)
+    expect(onboardingOfferOwned(onb, 'C1', emails())).toBe(true)
+  })
+
+  it('BLOCKS when the offer does not exist', () => {
+    expect(formationOfferOwned(null, 'C1', emails('me@x.com'))).toBe(false)
   })
 })

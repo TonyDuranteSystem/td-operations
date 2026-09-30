@@ -461,6 +461,10 @@ export async function applyOnboardingReview(
           account_id: accountId,
           contact_id: contactId,
           lead_id: sub.lead_id,
+          // The offer the client bought — without it a lead-less onboarding
+          // (offer made on a contact/company page) never read its offer, so an
+          // "included" tax return was not marked paid (S1 QA, 2026-09-27).
+          offer_id: (sub as { offer_id?: string | null }).offer_id ?? null,
           company_name: companyName,
           state_of_formation: stateOfFormation,
           entity_type: sub.entity_type,
@@ -633,6 +637,7 @@ export async function confirmPortalWizardOnboarding(
         account_id: sub.account_id,
         contact_id: sub.contact_id,
         lead_id: sub.lead_id,
+        offer_id: (sub as { offer_id?: string | null }).offer_id ?? null,
         company_name: companyName,
         state_of_formation: stateOfFormation,
         entity_type: sub.entity_type,

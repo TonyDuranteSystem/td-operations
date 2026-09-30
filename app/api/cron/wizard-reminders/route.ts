@@ -214,12 +214,17 @@ export async function GET(req: NextRequest) {
     // corrected 2026-09-21: a returning client's second+ onboarding has NO
     // lead at all, confirmed live and directly by Antonio. Omitted when
     // absent, same as today.
+    // Formation: a first-time client's lead keeps its link; an existing
+    // client's new company has no lead, so its draft is keyed on offer_id
+    // (workspace-only plan S1, dev job 9d34e750).
     const wizardLink =
       w.wizard_type === "onboarding" && w.offer_id
         ? `/portal/wizard?offer=${encodeURIComponent(w.offer_id)}`
         : w.lead_id
           ? `/portal/wizard?lead=${encodeURIComponent(w.lead_id)}`
-          : "/portal/wizard"
+          : w.wizard_type === "formation" && w.offer_id
+            ? `/portal/wizard?type=formation&offer=${encodeURIComponent(w.offer_id)}`
+            : "/portal/wizard"
 
     // Don't remind someone to fill out a form for something that's already done.
     // The wizard may have been bypassed via another code path (admin entry, CRM action, etc.).
