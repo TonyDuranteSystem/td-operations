@@ -41,6 +41,7 @@ import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import type { InboxConversation, InboxChannel, InboxMessage } from '@/lib/types'
 import { openMarkReadSettled } from '@/lib/inbox/pending-mark-read'
+import { openedConversation } from '@/lib/inbox/opened-conversation'
 import { insertLineBreaksForBlockTags } from '@/lib/inbox/email-html'
 import { pickNewestNonOwnMessage } from '@/lib/inbox/default-reply-target'
 
@@ -1169,7 +1170,9 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   })
 
   const handleSelect = (conversation: InboxConversation) => {
-    setSelected(conversation)
+    // Opening marks it read — recorded HERE, not left to Gmail/our index copy to
+    // catch up, so the header pill's fallback never reads a stale "unread".
+    setSelected(openedConversation(conversation))
     setSelectedOrigin(originViewKey) // the list this row was picked from
     setWorkerOpen(false) // worker chat is per email thread
     if (conversation.unread > 0) {
@@ -1435,7 +1438,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   channel: 'gmail',
                   name: sug.sender || sug.senderEmail,
                   preview: '',
-                  unread: sug.unread ? 1 : 0,
+                  unread: 0, // opening marks it read (see openedConversation)
                   lastMessageAt: sug.date ?? '',
                   subject: sug.subject,
                 })
