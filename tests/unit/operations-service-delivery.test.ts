@@ -12,6 +12,14 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }))
 
+// The suite allocator is the database's job (covered in operations-suite.test.ts + the sandbox DB
+// tests); here it is a double so createSD's hook can be observed.
+const { allocateCompanySuite, syncPhysicalAddressToSuite } = vi.hoisted(() => ({
+  allocateCompanySuite: vi.fn(),
+  syncPhysicalAddressToSuite: vi.fn(),
+}))
+vi.mock("@/lib/operations/suite", () => ({ allocateCompanySuite, syncPhysicalAddressToSuite }))
+
 // Catalog lookup is mocked so createSD's FK resolution is isolated from the
 // catalog framework's DB layer (covered separately in catalog-framework.test).
 const { catalogLookup } = vi.hoisted(() => ({
@@ -201,6 +209,9 @@ beforeEach(() => {
   }
   catalogLookup.mockReset()
   catalogLookup.mockResolvedValue(null)
+  allocateCompanySuite.mockReset()
+  allocateCompanySuite.mockResolvedValue("3D-321")
+  syncPhysicalAddressToSuite.mockReset()
 })
 
 // ─── createSD ──────────────────────────────────────────
@@ -971,5 +982,36 @@ describe("createSD — non-ITIN person-link hygiene", () => {
       account_id: null,
       contact_id: "solo-contact",
     })
+  })
+})
+
+// ─── createSD never issues a suite (the workspace's required Suite step does) ─────────
+
+describe("createSD — never issues a suite by itself", () => {
+  function sdReturning(service_type: string, account_id: string | null) {
+    pipelineFixture = { [service_type]: [{ stage_name: "First", stage_order: 1 }] }
+    insertResponse = {
+      data: { id: "sd-77", service_type, service_name: service_type, stage: "First", stage_order: 1, account_id, contact_id: "c1" },
+      error: null,
+    }
+  }
+
+  it("a Company Formation delivery does not reserve a suite — staff press Issue suite (or waive) in the workspace", async () => {
+    sdReturning("Company Formation", null)
+    await createSD({ service_type: "Company Formation", contact_id: "c1" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
+  })
+
+  it("a Client Onboarding delivery does not issue one either, and never touches the company's address", async () => {
+    sdReturning("Client Onboarding", "acct-9")
+    await createSD({ service_type: "Client Onboarding", account_id: "acct-9" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
+    expect(syncPhysicalAddressToSuite).not.toHaveBeenCalled()
+  })
+
+  it("no other service issues one", async () => {
+    sdReturning("EIN", "acct-9")
+    await createSD({ service_type: "EIN", account_id: "acct-9" })
+    expect(allocateCompanySuite).not.toHaveBeenCalled()
   })
 })

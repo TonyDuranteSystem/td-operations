@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { MapPin, ShieldCheck, Mail, FileText, Package } from 'lucide-react'
+import { MapPin, ShieldCheck, FileText, Package } from 'lucide-react'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow } from '@/lib/addresses'
+import { type MailingAddressRow, withCompanyCmra } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -20,20 +20,18 @@ type AddrRow = MailingAddressRow & {
 }
 
 /**
- * Portal Addresses — the client's key addresses in one place, exactly four,
- * all set per-account in the CRM (Antonio, dev job 254834cc, 2026-09-17) —
- * nothing here is hardcoded:
+ * Portal Addresses — the client's key addresses in one place, exactly THREE
+ * (Antonio, 2026-10-01: "there will be only three addresses"):
  *   1. Registered Agent address (registered_agent_address/_provider).
- *   2. Principal office address (business_legal_address_id — the DB kind keeps
- *      its old name; only the label changed) — as filed in the Articles of
- *      Organization.
- *   3. CMRA Office address (business_mailing_address_id) — normally Tony
- *      Durante's own Largo office, but a per-account link set in the CRM
- *      like every other field here, not a code-level constant.
- *   4. Mailing/Shipping address (shipping_address_id) — normally Tony
- *      Durante's Seminole office; also where clients mail original
- *      documents to TD (folds in what used to be a separate "Tony Durante
- *      Mailing Address" card — same address, same purpose, one section).
+ *   2. Principal Office — ALWAYS Tony Durante's Largo office plus the company's
+ *      own suite (accounts.suite_number), computed: the address on the lease,
+ *      the EIN application, the Operating Agreement and the invoices. A company
+ *      with no suite yet shows its saved Principal Office link, else "not on
+ *      file". (The address on the Articles of Organization is kept inside the
+ *      CRM and checked at each annual report — it is not shown here.) There is
+ *      no CMRA card any more.
+ *   3. Mailing address (shipping_address_id) — normally Tony Durante's Seminole
+ *      office; also where clients mail original documents to TD.
  *
  * None of these fall back to the account's legacy free-text `physical_address`
  * column. If a link isn't set in the CRM yet, the card says so — showing a
@@ -75,14 +73,14 @@ export default async function PortalAddressesPage() {
   let raLegacyAddress: string | null = null
   let raProvider: string | null = null
   let legal: AddrRow | null = null
-  let cmra: AddrRow | null = null
   let shipping: AddrRow | null = null
   let companyName: string | null = null
+  let companySuiteForCard: string | null = null
   if (selectedAccountId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, suite_number, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
@@ -93,8 +91,13 @@ export default async function PortalAddressesPage() {
     raRow = (acct?.registered_agent as AddrRow | null) ?? null
     raLegacyAddress = raRow?.address_line1 ? null : ((acct?.registered_agent_address as string | null) ?? null)
     raProvider = (raRow?.provider as string | null) ?? (acct?.registered_agent_provider as string | null) ?? null
-    legal = (acct?.legal as AddrRow | null) ?? null
-    cmra = (acct?.mailing as AddrRow | null) ?? null
+    // The principal office shows the company's suite only if it is a Largo office row; the CMRA address is ALWAYS Largo + the
+    // company's own suite (no saved CMRA link is read when the company has one).
+    const companySuite = (acct?.suite_number as string | null) ?? null
+    companySuiteForCard = companySuite
+    legal = companySuite
+      ? ((withCompanyCmra((acct?.legal as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null)
+      : ((acct?.legal as AddrRow | null) ?? (acct?.mailing as AddrRow | null) ?? null) // no suite yet: saved Principal Office, else the saved office link
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }
@@ -130,27 +133,12 @@ export default async function PortalAddressesPage() {
         icon={FileText}
         accent="amber"
         title={t('addresses.principalTitle', locale, translations)}
-        subtitle={t('addresses.principalSubtitle', locale, translations)}
+        subtitle={t(companySuiteForCard ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations)}
         name={(legal?.name as string | null) ?? companyName}
         addr={legal}
         legacyText={null}
         country={(legal?.country as string | null) ?? null}
         empty={t('addresses.principalEmpty', locale, translations)}
-        locale={locale}
-        translations={translations}
-      />
-
-      {/* Mailing / CMRA address */}
-      <AddressCard
-        icon={Mail}
-        accent="violet"
-        title={t('addresses.cmraTitle', locale, translations)}
-        subtitle={t('addresses.cmraSubtitle', locale, translations)}
-        name={(cmra?.name as string | null) ?? companyName}
-        addr={cmra}
-        legacyText={null}
-        country={(cmra?.country as string | null) ?? null}
-        empty={t('addresses.cmraEmpty', locale, translations)}
         locale={locale}
         translations={translations}
       />

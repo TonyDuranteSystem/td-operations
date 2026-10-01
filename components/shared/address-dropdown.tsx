@@ -5,7 +5,7 @@ import { ChevronDown, MapPin, X, Search, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
-import type { AddressKind, AddressRow } from '@/lib/addresses'
+import { withCompanySuite, type AddressKind, type AddressRow } from '@/lib/addresses'
 
 export type { AddressRow }
 
@@ -16,6 +16,9 @@ interface AddressDropdownProps {
   placeholder?: string
   className?: string
   disabled?: boolean
+  /** The company's own suite (accounts.suite_number). A Largo office row then shows THIS company's suite — what the
+   *  client gets when this address is picked. Other addresses are shown as stored. */
+  companySuite?: string | null
 }
 
 function subtitleLine(row: AddressRow): string {
@@ -23,7 +26,8 @@ function subtitleLine(row: AddressRow): string {
 }
 
 /** The whole address, one field per line: street, suite/unit, then city state ZIP. */
-function AddressLines({ row, emphasise = false }: { row: AddressRow; emphasise?: boolean }) {
+function AddressLines({ row: rawRow, emphasise = false, companySuite }: { row: AddressRow; emphasise?: boolean; companySuite?: string | null }) {
+  const row = withCompanySuite(rawRow, companySuite) ?? rawRow
   return (
     <span className="block text-xs text-zinc-600 leading-snug whitespace-normal break-words">
       <span className="block">{row.address_line1}</span>
@@ -55,6 +59,7 @@ export function AddressDropdown({
   placeholder = 'Select address...',
   className,
   disabled = false,
+  companySuite = null,
 }: AddressDropdownProps) {
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<AddressRow[]>([])
@@ -143,7 +148,7 @@ export function AddressDropdown({
               <span className="block font-medium text-zinc-900 text-sm whitespace-normal break-words">
                 {selectedRow.name}
               </span>
-              <AddressLines row={selectedRow} emphasise />
+              <AddressLines row={selectedRow} emphasise companySuite={companySuite} />
             </div>
           ) : (
             <span className="text-sm">{placeholder}</span>
@@ -221,7 +226,7 @@ export function AddressDropdown({
                     >
                       {row.name}
                     </span>
-                    <AddressLines row={row} emphasise />
+                    <AddressLines row={row} emphasise companySuite={companySuite} />
                     {row.county && (
                       <span className="block text-xs text-muted-foreground">{row.county} County</span>
                     )}

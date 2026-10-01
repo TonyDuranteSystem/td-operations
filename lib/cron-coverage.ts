@@ -89,6 +89,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // automatically once confirmed. Daily, same time-of-day as the weekly ITIN
   // reminder above for a coherent ITIN-cron schedule.
   "/api/cron/irs-tracking-check": "0 9 * * *",
+  // Suite release — a Closed/Cancelled company whose last lease has ended gives its suite back to the pool (daily sweep).
+  "/api/cron/release-ended-suites": "30 8 * * *",
   "/api/cron/workflow-sla-check": "0 * * * *",
   // Team-chat @claude rescue scan (ccf1a0ec) — self-auths via CRON_SECRET.
   "/api/team/claude/process": "*/2 * * * *",

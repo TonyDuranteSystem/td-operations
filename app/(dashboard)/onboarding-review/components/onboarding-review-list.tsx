@@ -215,6 +215,9 @@ export function OnboardingReviewDetail({ entry }: { entry: OnboardingReviewEntry
 export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
   const router = useRouter()
   const [acknowledged, setAcknowledged] = useState(false)
+  // REQUIRED choice (Antonio 2026-09-30): issue the company's suite, or explicitly "No suite for this client" + reason.
+  const [suiteChoice, setSuiteChoice] = useState<'issue' | 'waive' | null>(null)
+  const [suiteReason, setSuiteReason] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorLines, setErrorLines] = useState<string[] | null>(null)
@@ -238,7 +241,11 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
     setError(null)
     setErrorLines(null)
     try {
-      const res = await fetch(`/api/onboarding-review/${entry.id}/confirm`, { method: 'POST' })
+      const res = await fetch(`/api/onboarding-review/${entry.id}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suite_choice: suiteChoice, suite_reason: suiteChoice === 'waive' ? suiteReason : undefined }),
+      })
       const data = await res.json()
       if (!res.ok || !data.success) {
         // Surface the real per-step detail, not just the one-line summary —
@@ -315,10 +322,29 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
         />
         <span>I checked the submitted information and every uploaded document, and it looks correct.</span>
       </label>
+      <fieldset className="rounded border p-2.5 space-y-1.5" disabled={confirming}>
+        <legend className="px-1 text-xs font-medium text-zinc-600">Suite (required)</legend>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="radio" name={`suite-${entry.id}`} checked={suiteChoice === 'issue'} onChange={() => setSuiteChoice('issue')} />
+          <span>Issue a suite for this company</span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="radio" name={`suite-${entry.id}`} checked={suiteChoice === 'waive'} onChange={() => setSuiteChoice('waive')} />
+          <span>No suite for this client</span>
+        </label>
+        {suiteChoice === 'waive' && (
+          <input
+            value={suiteReason}
+            onChange={(e) => setSuiteReason(e.target.value)}
+            placeholder="Reason (required) — e.g. one-time customer, no lease"
+            className="w-full rounded-md border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        )}
+      </fieldset>
       <button
         type="button"
         onClick={handleConfirm}
-        disabled={!acknowledged || confirming}
+        disabled={!acknowledged || confirming || !suiteChoice || (suiteChoice === 'waive' && suiteReason.trim() === '')}
         className="inline-flex items-center gap-2 bg-zinc-900 text-white text-sm px-3 py-1.5 rounded disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800"
       >
         {confirming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

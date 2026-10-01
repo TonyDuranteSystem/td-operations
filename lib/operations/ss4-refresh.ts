@@ -38,7 +38,7 @@
 import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { formatCountyAndState } from "@/lib/addresses"
+import { formatCountyAndState, withCompanyCmra } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
@@ -92,6 +92,8 @@ export interface Ss4AccountSnapshot {
   state_of_formation: string | null
   formation_date: string | null
   physical_address: string | null
+  /** The company's own suite (accounts.suite_number) — a Largo office row prints this, never the shared row's text. */
+  suite_number?: string | null
   /** Joined addresses row via business_mailing_address_id (nullable). */
   mailing_address: {
     address_line1: string | null
@@ -126,7 +128,7 @@ export function resolveStateCode(raw: string | null | undefined): string {
 }
 
 export function resolveMailing(account: Ss4AccountSnapshot): { street: string; cityStateZip: string } {
-  const ma = account.mailing_address
+  const ma = withCompanyCmra(account.mailing_address, account.suite_number ?? null) ?? null
   if (ma && (ma.address_line1 || ma.city)) {
     return {
       street: [ma.address_line1, ma.address_line2].filter(Boolean).join(", "),
@@ -378,7 +380,7 @@ export async function refreshSS4(args: {
     const { data: account } = await (supabaseAdmin as any)
       .from("accounts")
       .select(
-        "id, company_name, entity_type, state_of_formation, formation_date, physical_address, registered_agent_id, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)",
+        "id, company_name, entity_type, state_of_formation, formation_date, physical_address, suite_number, registered_agent_id, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)",
       )
       .eq("id", account_id)
       .single()

@@ -456,6 +456,10 @@ export async function createSD(
     }
   }
 
+  // NOTE (Antonio 2026-09-30): a company's suite is NOT issued automatically here. Issuing it is an explicit,
+  // REQUIRED step in the Formation / Onboarding workspace ("Issue suite", or "No suite for this client") — see
+  // lib/operations/suite.ts (issueSuiteForDelivery / waiveSuiteForDelivery) and the guard on service_deliveries.
+
   return {
     id: row.id,
     service_type: row.service_type,
@@ -1013,6 +1017,16 @@ export async function deactivateSD(
       delivery_id: params.delivery_id,
       service_type: sd.service_type,
       error: "This service was modified concurrently. Refresh and try again.",
+    }
+  }
+
+  // A formation that never produced a company: free its reserved suite (back to the pool).
+  if (!sd.account_id) {
+    try {
+      const { releaseSuiteReservation } = await import("@/lib/operations/suite")
+      await releaseSuiteReservation(sd.id, actor)
+    } catch (err) {
+      console.error(`[deactivateSD] could not release the reserved suite for SD ${sd.id}:`, err instanceof Error ? err.message : err)
     }
   }
 

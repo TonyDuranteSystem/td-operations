@@ -34,7 +34,7 @@ const EMPTY_FORM: AddressForm = {
 
 const TABS: { kind: TabKind; label: string }[] = [
   { kind: 'registered_agent', label: 'Registered Agents' },
-  { kind: 'business_legal', label: 'Principal Offices' },
+  { kind: 'business_legal', label: 'Articles Addresses' },
   { kind: 'business_mailing', label: 'CMRA Addresses' },
   { kind: 'shipping', label: 'Mailing Addresses' },
 ]
@@ -447,7 +447,7 @@ export default function AddressesPage() {
             <MapPin className="h-5 w-5 text-zinc-400" />
             <div>
               <h1 className="text-lg font-semibold">Address Registry</h1>
-              <p className="text-xs text-muted-foreground">Shared address records for principal office, CMRA, mailing, and registered agent addresses</p>
+              <p className="text-xs text-muted-foreground">Shared address records for the address on the Articles, mailing, and registered agent (the Principal Office clients see — Largo plus their own suite — is worked out from the suite, not saved here)</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

@@ -63,7 +63,7 @@ export async function GET(
     payment.account_id
       ? (supabaseAdmin as any)
           .from('accounts')
-          .select('company_name, physical_address, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+          .select('company_name, physical_address, suite_number, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
           .eq('id', payment.account_id)
           .single()
       : Promise.resolve({ data: null }),
@@ -109,7 +109,7 @@ export async function GET(
       : {
           name: account?.company_name ?? (contact ? `${contact.first_name} ${contact.last_name}`.trim() : null) ?? 'Client',
           email: contact?.email ?? null,
-          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+          address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
         },
 
     items: itemsResult.data ?? [],

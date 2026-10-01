@@ -5,6 +5,8 @@ import { X, Loader2, Upload, ExternalLink, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import type { RenewalRow } from '@/app/(dashboard)/calendar/page'
+import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
+import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
 
 const STATE_PORTALS: Record<string, { name: string; fee: string }> = {
   Wyoming: { name: 'sos.wyo.gov', fee: '$60' },
@@ -35,6 +37,7 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   const [note, setNote] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [principalOffice, setPrincipalOffice] = useState<PrincipalOfficeDraft>(EMPTY_PRINCIPAL_OFFICE_DRAFT)
 
   const isRA = row.kind === 'ra'
   const portal = !isRA && row.state_of_formation ? STATE_PORTALS[row.state_of_formation] : null
@@ -55,7 +58,9 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
   })()
 
   const isBlocked = row.status === 'blocked'
-  const canSubmit = !!file && !!filedDate && !submitting && (!isBlocked || !!note.trim())
+  // An Annual Report needs the principal-address answer (unchanged, or the new address) before it can be marked filed.
+  const principalAnswer = isRA ? null : principalOfficeAnswer(principalOffice)
+  const canSubmit = !!file && !!filedDate && !submitting && (!isBlocked || !!note.trim()) && (isRA || !!principalAnswer)
 
   function acceptFile(f: File | null | undefined) {
     if (!f) return
@@ -100,6 +105,7 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
       if (note.trim()) fd.append('note', note.trim())
       if (isBlocked) fd.append('override_unpaid', 'true')
       if (row.delivery_id) fd.append('delivery_id', row.delivery_id)
+      if (!isRA && principalAnswer) fd.append('principal_office', JSON.stringify(principalAnswer))
       fd.append('receipt', file)
 
       const res = await fetch('/api/calendar/file-renewal', { method: 'POST', body: fd })
@@ -108,6 +114,8 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
         throw new Error(data.error || 'Failed to file renewal — please try again.')
       }
       toast.success(`${isRA ? 'RA Renewal' : 'Annual Report'} ${year} filed for ${row.company_name}.`)
+      // The filing is done, but saving the principal-address answer failed — staff must fix the address by hand (never silent)
+      if (data.principal_office_warning) toast.warning(String(data.principal_office_warning), { duration: 30000 })
       onFiled()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to file renewal.')
@@ -246,6 +254,10 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
                 The compliance year this filing satisfies. The next due date becomes this year + 1.
               </p>
             </div>
+
+            {!isRA && (
+              <PrincipalOfficeCheck accountId={row.account_id} value={principalOffice} onChange={setPrincipalOffice} disabled={submitting} />
+            )}
 
             <div>
               <label htmlFor="filing-note" className="block text-xs font-medium text-zinc-600 mb-1">

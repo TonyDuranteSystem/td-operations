@@ -29,7 +29,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { applyOnboardingReview, confirmPortalWizardOnboarding } from '@/lib/operations/onboarding-review'
+import { applyOnboardingReview, confirmPortalWizardOnboarding, type SuiteConfirmChoice } from '@/lib/operations/onboarding-review'
 
 async function currentUserEmail(): Promise<string> {
   const supabase = createClient()
@@ -37,11 +37,26 @@ async function currentUserEmail(): Promise<string> {
   return user?.email || 'dashboard-staff'
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await requireStaffRoute()
   if (denied) return denied
   try {
     const actor = await currentUserEmail()
+
+    // The suite decision is REQUIRED (Antonio 2026-09-30): issue the company's suite, or explicitly "No suite for this
+    // client" with a reason. Refuse a Confirm that carries neither — no silent default either way.
+    const body = (await req.json().catch(() => ({}))) as { suite_choice?: string; suite_reason?: string }
+    let suite: SuiteConfirmChoice
+    if (body.suite_choice === 'issue') {
+      suite = { choice: 'issue' }
+    } else if (body.suite_choice === 'waive' && body.suite_reason?.trim()) {
+      suite = { choice: 'waive', reason: body.suite_reason.trim() }
+    } else {
+      return NextResponse.json(
+        { success: false, error: 'Choose what to do about the suite first: Issue a suite, or No suite for this client (with a reason).' },
+        { status: 400 },
+      )
+    }
 
     const { data: sub, error: subErr } = await supabaseAdmin
       .from('onboarding_submissions')
@@ -53,8 +68,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     }
 
     const result = sub.source === 'portal_wizard'
-      ? await confirmPortalWizardOnboarding(params.id, actor)
-      : await applyOnboardingReview(params.id, actor)
+      ? await confirmPortalWizardOnboarding(params.id, actor, suite)
+      : await applyOnboardingReview(params.id, actor, suite)
 
     if (!result.ok) {
       return NextResponse.json({ success: false, error: result.error, lines: result.lines }, { status: 400 })

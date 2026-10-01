@@ -75,6 +75,14 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
     because: "the second-installment invoice is only offered to a client sitting on it",
   },
   {
+    name: "Wizard Submitted",
+    because: "a formation cannot move past it until the company's suite is issued or explicitly waived (the Suite step gate)",
+  },
+  {
+    name: "Review & CRM Setup",
+    because: "an onboarding cannot move past it until the company's suite is issued or explicitly waived (the Suite step gate)",
+  },
+  {
     name: "Submitted to IRS",
     because: "advancing off it is refused if there is no IRS mailing tracking number on file",
   },

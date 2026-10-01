@@ -16,11 +16,13 @@ import { APP_BASE_URL } from "@/lib/config"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { createClient } from "@/lib/supabase/server"
 import { canPerform } from "@/lib/permissions"
+import { isOwnerOnly } from "@/lib/auth"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -276,7 +278,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       fiscal_year_end: "December 31",
       accounting_method: "Cash",
       duration: "Perpetual",
-      principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+      principal_address: await companyCmraAddressLine(accountId, "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
       language: "en",
       status: "draft",
       // Load-bearing: the whole system decides "multi-member" from entity_type
@@ -352,7 +354,6 @@ async function generateLease(accountId: string, params: Record<string, unknown>)
       : undefined) ?? (params.contract_year as number | undefined)
   const result = await createLease({
     account_id: accountId,
-    suite_number: params.suite_number as string | undefined,
     contract_year: contractYear,
     effective_date: params.effective_date as string | undefined,
     term_start_date: termStartDate,
@@ -782,6 +783,20 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, message: result.message })
       }
 
+      case "admin_delete_lease": {
+        // OWNER ONLY — deletes a sent/viewed/signed lease (logged, reason required, the company keeps its suite).
+        if (!isOwnerOnly(user)) return NextResponse.json({ error: "Only the owner can delete a lease that has gone to the client." }, { status: 403 })
+        if (!params.token) return NextResponse.json({ error: "Missing token" }, { status: 400 })
+        const { deleteLeaseAsAdmin } = await import("@/lib/operations/lease")
+        const result = await deleteLeaseAsAdmin({
+          token: params.token,
+          reason: String(params.reason ?? ""),
+          actor: `dashboard:${user?.email?.split("@")[0] ?? "owner"}`,
+        })
+        if (!result.success) return NextResponse.json({ error: result.error }, { status: 400 })
+        return NextResponse.json({ success: true, message: result.message })
+      }
+
       case "fetch_statuses": {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
         const statuses = await fetchDocumentStatuses(account_id)
@@ -790,8 +805,6 @@ export async function POST(request: Request) {
 
       case "generate_welcome_package": {
         if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
-        const suiteNumber = params.suite_number as string
-
         const results: Record<string, unknown> = {}
         const errors: string[] = []
 
@@ -801,15 +814,11 @@ export async function POST(request: Request) {
         else if ("exists" in oaResult) results.oa = { skipped: true, token: oaResult.token, status: oaResult.status }
         else results.oa = oaResult
 
-        // Generate Lease if missing (need suite number)
-        if (suiteNumber) {
-          const leaseResult = await generateLease(account_id, { suite_number: suiteNumber })
-          if ("error" in leaseResult) errors.push(`Lease: ${leaseResult.error}`)
-          else if ("exists" in leaseResult) results.lease = { skipped: true, token: leaseResult.token, status: leaseResult.status }
-          else results.lease = leaseResult
-        } else {
-          errors.push("Lease: Suite number required")
-        }
+        // Generate Lease if missing — it uses the company's own suite (issued if the company has none)
+        const leaseResult = await generateLease(account_id, {})
+        if ("error" in leaseResult) errors.push(`Lease: ${leaseResult.error}`)
+        else if ("exists" in leaseResult) results.lease = { skipped: true, token: leaseResult.token, status: leaseResult.status }
+        else results.lease = leaseResult
 
         // Generate SS-4 if missing
         const ss4Result = await generateSS4(account_id)

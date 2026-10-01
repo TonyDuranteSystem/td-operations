@@ -68,13 +68,13 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('company_name, invoice_logo_url, physical_address, suite_number, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', invoice.account_id)
     .single()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const acct = account as any
-  const sellerAddress = resolveMailingAddress(acct?.mailing_address ?? null, acct?.physical_address ?? null)
+  const sellerAddress = resolveMailingAddress(acct?.mailing_address ?? null, acct?.physical_address ?? null, (acct as any)?.suite_number ?? null)
 
   const seller = acct ? {
     company_name: acct.company_name ?? null,

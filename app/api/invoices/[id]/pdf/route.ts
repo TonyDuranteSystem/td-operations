@@ -40,7 +40,7 @@ export async function GET(
 
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, physical_address, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('company_name, physical_address, suite_number, ein_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', payment.account_id)
     .single()
 
@@ -112,7 +112,7 @@ export async function GET(
     billTo: {
       name: billToName,
       email: contact?.email ?? null,
-      address: entityBillTo ? entityBillTo.address : resolveMailingAddress((account as any)?.mailing_address, account?.physical_address),
+      address: entityBillTo ? entityBillTo.address : resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
       ...(entityBillTo?.vatNumber ? { vatNumber: entityBillTo.vatNumber } : {}),
     },
 

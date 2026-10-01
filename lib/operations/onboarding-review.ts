@@ -21,6 +21,14 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
+/**
+ * Staff's required choice on the Confirm screen (Antonio 2026-09-30): issue the company's suite, or explicitly
+ * "No suite for this client" with a reason. Carried into the onboarding_setup job, which applies it right after the
+ * company exists — before any lease step. A caller that passes nothing (the MCP chat command) decides nothing here;
+ * the workspace's Suite step then asks before onboarding can move past "Review & CRM Setup".
+ */
+export type SuiteConfirmChoice = { choice: "issue" } | { choice: "waive"; reason: string }
+
 export interface ApplyOnboardingReviewResult {
   ok: boolean
   alreadyApplied: boolean
@@ -38,6 +46,7 @@ export interface ApplyOnboardingReviewResult {
 export async function applyOnboardingReview(
   submission_id: string,
   actor: string,
+  suite?: SuiteConfirmChoice,
 ): Promise<ApplyOnboardingReviewResult> {
   const lines: string[] = []
 
@@ -470,6 +479,7 @@ export async function applyOnboardingReview(
           entity_type: sub.entity_type,
           submitted_data: submitted,
           upload_paths: sub.upload_paths,
+          ...(suite ? { suite_choice: suite.choice, suite_waive_reason: suite.choice === "waive" ? suite.reason : null } : {}),
         },
         priority: 1,  // Highest priority
         account_id: accountId,
@@ -566,6 +576,7 @@ export async function applyOnboardingReview(
 export async function confirmPortalWizardOnboarding(
   submission_id: string,
   actor: string,
+  suite?: SuiteConfirmChoice,
 ): Promise<ApplyOnboardingReviewResult> {
   const lines: string[] = []
 
@@ -643,6 +654,7 @@ export async function confirmPortalWizardOnboarding(
         entity_type: sub.entity_type,
         submitted_data: submitted,
         upload_paths: sub.upload_paths,
+        ...(suite ? { suite_choice: suite.choice, suite_waive_reason: suite.choice === "waive" ? suite.reason : null } : {}),
         // source intentionally omitted — this run must pass the staff
         // review gate now that reviewed_at is set above.
       },
