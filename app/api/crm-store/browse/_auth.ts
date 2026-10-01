@@ -15,6 +15,21 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
 export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null; folderId?: string | null; ownerId?: string | null } = {}): Promise<NextResponse | null> {
   const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
   if (pilotEnvironmentAllowed()) return null
+  // The firm's OWN areas (Business, a staff member's My files) are a normal storage everywhere (Antonio 2026-10-01): no client, no
+  // CRM row, never shown to anyone outside the firm — so they need no "study copy" mode. Client storage stays strict, below.
+  if (opts.fileId || opts.folderId || opts.ownerId) {
+    try {
+      const { ownerOfFile, ownerOfFolder } = await import("@/lib/crm-store/structure")
+      const oid = opts.ownerId ?? (opts.folderId ? await ownerOfFolder(opts.folderId) : opts.fileId ? await ownerOfFile(opts.fileId) : null)
+      if (oid) {
+        const { supabaseAdmin } = await import("@/lib/supabase-admin")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
+        const { data: o } = await (supabaseAdmin as any).from("store_owners").select("kind").eq("id", oid).maybeSingle()
+        const { isInternalOwnerKind } = await import("@/lib/crm-store/plain-drop")
+        if (isInternalOwnerKind(o?.kind)) return null
+      }
+    } catch { /* an unreadable owner is never treated as internal — fall through to the strict rules */ }
+  }
   if (opts.study) {
     const { studyCopyAllowed } = await import("@/lib/crm-store/drive-import")
     if (studyCopyAllowed()) {

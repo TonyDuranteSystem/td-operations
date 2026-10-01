@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../_auth"
 
 export async function POST(req: NextRequest) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
+  const denied = await denyUnlessStoreStaff()      // the environment check below carries the owner (the firm's own areas work everywhere)
   if (denied) return denied
   const body = await req.json().catch(() => ({})) as { batchId?: unknown; targetFolderId?: unknown }
   if (typeof body.batchId !== "string") return NextResponse.json({ error: "Choose what to restore." }, { status: 400 })

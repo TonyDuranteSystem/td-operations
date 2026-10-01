@@ -1519,3 +1519,48 @@ export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
   if (!res.ok) throw new Error(`Drive download ${res.status}: ${res.statusText}`)
   return Buffer.from(await res.arrayBuffer())
 }
+
+// ─── The owner's own Google Drive, for the "My Google Drive" copy into My files / Business ───
+// Owner-only by construction: every call runs as the owner's own Google identity (never support@), and the routes that use these
+// are gated on the requester being an owner. Nothing here writes to Drive.
+
+export interface OwnerDriveEntry { id: string; name: string; mimeType: string; size: number | null; modifiedTime: string | null }
+
+/** One page (up to 1000) of what is directly inside a folder of the owner's own Drive. `folderId` "root" = the top of My Drive. */
+export async function listOwnerDriveFolder(folderId: string, pageToken?: string | null): Promise<{ entries: OwnerDriveEntry[]; nextPageToken: string | null }> {
+  const parent = folderId === "root" ? "root" : folderId
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(parent)) throw new Error("Not a Drive folder id.")
+  const r = (await ownerDriveGet("/files", {
+    q: `'${parent}' in parents and trashed = false`,
+    fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime)",
+    pageSize: "1000",
+    orderBy: "folder,name",
+    ...(pageToken ? { pageToken } : {}),
+  })) as { files?: Array<{ id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }>; nextPageToken?: string }
+  return {
+    entries: (r.files ?? []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size != null ? Number(f.size) : null, modifiedTime: f.modifiedTime ?? null })),
+    nextPageToken: r.nextPageToken ?? null,
+  }
+}
+
+/** Metadata of one file of the owner's own Drive. */
+export async function getOwnerDriveFile(fileId: string): Promise<OwnerDriveEntry> {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(fileId)) throw new Error("Not a Drive file id.")
+  const f = (await ownerDriveGet(`/files/${fileId}`, { fields: "id,name,mimeType,size,modifiedTime" })) as { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }
+  return { id: f.id, name: f.name, mimeType: f.mimeType, size: f.size != null ? Number(f.size) : null, modifiedTime: f.modifiedTime ?? null }
+}
+
+/** The bytes of one file of the owner's own Drive; a Google-native document is exported (`exportMime`) instead. */
+export async function downloadOwnerDriveFile(fileId: string, exportMime?: string): Promise<Buffer> {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(fileId)) throw new Error("Not a Drive file id.")
+  const token = await getAccessToken(OWNER_IMPERSONATE_EMAIL())
+  const url = exportMime
+    ? `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`
+    : `${DRIVE_API}/files/${fileId}?alt=media`
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(`Drive ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
+  }
+  return Buffer.from(await res.arrayBuffer())
+}

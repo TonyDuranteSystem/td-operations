@@ -464,7 +464,7 @@ export function categoryForKind(kind: string): { num: number; name: string } {
 export const STAFF_STORE_UPLOAD_PREFIX = "crm-uploads/store-staging/"
 
 export async function staffUploadToStore(p: {
-  ownerId: string; folderId: string; storagePath: string; fileName: string; mimeType: string | null; documentType: string; actorId: string | null
+  ownerId: string; folderId: string; storagePath: string; fileName: string; mimeType: string | null; documentType: string | null; actorId: string | null
   /** uploading from a company's "2. Contacts": whose document it is (saved in that person's own storage) */
   personContactId?: string | null
   /** optional display name (today's "Display name"); the original extension is kept */
@@ -488,9 +488,12 @@ export async function staffUploadToStore(p: {
   if (!folder || folder.owner_id !== p.ownerId || folder.trashed_at) throw new Error("Upload into a live folder of this company or person only.")
   if (!p.storagePath.startsWith(STAFF_STORE_UPLOAD_PREFIX) || p.storagePath.includes("..")) throw new Error("Upload the file through the storage screen.")
   if (folder.kind === "root") throw new Error("Open one of the folders first — files go inside a folder, not at the top.")
-  const { data: types } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
-  if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
-  const typeRow = types[0] as { slug: string; display_name: string; metadata: { personal?: boolean; staff_only?: boolean; draft_never_visible?: boolean } | null }
+  let typeRow: { slug: string; display_name: string; metadata: { personal?: boolean; staff_only?: boolean; draft_never_visible?: boolean } | null } | null = null
+  if (p.documentType) {
+    const { data: types } = await db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types").eq("slug", p.documentType).eq("status", "active")
+    if (!types || types.length === 0) throw new Error("Choose a document type from the list.")
+    typeRow = types[0] as NonNullable<typeof typeRow>
+  }
   let fileName = p.fileName
   if (p.displayName && p.displayName.trim()) {
     const { cleanNewFileName } = await import("./file-actions")
@@ -502,11 +505,13 @@ export async function staffUploadToStore(p: {
   // The firm's own "Business" folders and a staff member's private "My files": no client, so no CRM
   // documents row and never shown to anyone outside the firm. Same versioning rule as everywhere else.
   if (owner.kind === "business" || owner.kind === "private") {
-    if (typeRow.metadata?.personal === true && owner.kind === "business") {
+    if (typeRow?.metadata?.personal === true && owner.kind === "business") {
       throw new Error("This is a personal document — it belongs in the person's own storage, not in the Business folders.")
     }
-    return saveInternalAreaFile(p, fileName, typeRow.slug)
+    return saveInternalAreaFile(p, fileName, typeRow?.slug ?? null)       // no type is needed in the firm's own areas
   }
+  // client storage (companies, people) always needs a type
+  if (!typeRow) throw new Error("Choose a document type from the list.")
   // Uploading from a company's "2. Contacts" (how staff work today): the document belongs to ONE of the
   // company's people and is saved in that person's own storage (#28), so it shows in "2. Contacts" of every
   // company they are in. Only personal documents go there — company papers go in the company's folders.
@@ -675,7 +680,7 @@ export function saveRefusalMessage(status: string): string {
 }
 
 /** A file in the Business area or a private "My files" area: saved in the store only (no CRM row, never shown). */
-async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null; needsReview?: string | null }, fileName: string, documentType: string): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
+async function saveInternalAreaFile(p: { ownerId: string; folderId: string; storagePath: string; mimeType: string | null; actorId: string | null; needsReview?: string | null }, fileName: string, documentType: string | null): Promise<{ fileId: string; write: string; name: string; visible: boolean; identity?: string | null }> {
   const { saveBytesToStore } = await import("./writer")
   const { storeNameKey } = await import("./rules")
   const { data: same, error: sameErr } = await db().from("store_files").select("id, caller_key, state")

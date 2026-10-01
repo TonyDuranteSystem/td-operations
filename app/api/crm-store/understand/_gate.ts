@@ -18,5 +18,11 @@ export async function gateAiCheck(ref: { fileId?: string | null; ownerId?: strin
   if (noAccess) return noAccess
   const { data: { user } } = await createClient().auth.getUser()
   if (!user) return NextResponse.json({ error: "Sign in first." }, { status: 401 })
+  // outside the sandbox pilot the AI check is for OWNERS only, even in the firm's own areas (which any staff may now use for plain storage)
+  const { pilotEnvironmentAllowed } = await import("@/lib/crm-store/formation-pilot")
+  if (!pilotEnvironmentAllowed()) {
+    const { isOwnerOnly } = await import("@/lib/auth")
+    if (!isOwnerOnly(user)) return NextResponse.json({ error: "Owners only while the new storage is a study copy." }, { status: 403 })
+  }
   return { actor: user.id }
 }
