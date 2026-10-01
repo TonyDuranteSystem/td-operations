@@ -184,18 +184,24 @@ type SortMode = 'name' | 'date'
 const DROP_MAX_FILES = 500
 type FsEntry = { isFile: boolean; isDirectory: boolean; name: string; file?: (ok: (f: File) => void, bad: (e: unknown) => void) => void; createReader?: () => { readEntries: (ok: (list: FsEntry[]) => void, bad: (e: unknown) => void) => void } }
 /** every file inside what was dropped (files and folders, all levels), with its sub-folder path */
-async function readDropped(items: DataTransferItemList | null, files: FileList | null, max: number = DROP_MAX_FILES): Promise<{ file: File; path: string[] }[]> {
+async function readDropped(items: DataTransferItemList | null, files: FileList | null, max: number = DROP_MAX_FILES, unreadable?: Array<{ name: string; why: string }>): Promise<{ file: File; path: string[] }[]> {
   const entries = Array.from(items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.() ?? null)
   if (!entries.some((x) => x?.isDirectory)) return Array.from(files ?? []).filter((f) => !f.name.startsWith('.')).map((file) => ({ file, path: [] }))
   const out: { file: File; path: string[] }[] = []
   const walk = async (e: FsEntry, path: string[]): Promise<void> => {
     if (out.length > max) return // one past the limit is enough to say "too many"
     if (e.name.startsWith('.')) return // hidden system files and folders (.DS_Store, ._x, .git …) are never uploaded
-    if (e.isFile && e.file) { const f = await new Promise<File>((ok, bad) => e.file!(ok, bad)); out.push({ file: f, path }); return }
+    // with `unreadable` given (Business / My files) one locked, cloud-only or broken-alias item is reported and skipped — it never kills the whole drop
+    const skipBad = (what: string): boolean => { if (!unreadable) return false; unreadable.push({ name: [...path, what].join(' › '), why: 'It could not be read — a cloud-only file that is not downloaded yet, a locked file or a broken alias.' }); return true }
+    if (e.isFile && e.file) {
+      try { const f = await new Promise<File>((ok, bad) => e.file!(ok, bad)); out.push({ file: f, path }) } catch (err) { if (!skipBad(e.name)) throw err }
+      return
+    }
     if (e.isDirectory && e.createReader) {
       const reader = e.createReader()
       for (;;) { // readEntries answers in batches until it returns nothing
-        const batch = await new Promise<FsEntry[]>((ok, bad) => reader.readEntries(ok, bad))
+        let batch: FsEntry[]
+        try { batch = await new Promise<FsEntry[]>((ok, bad) => reader.readEntries(ok, bad)) } catch (err) { if (!skipBad(e.name)) throw err; break }
         if (!batch.length) break
         for (const c of batch) await walk(c, [...path, e.name])
       }
@@ -812,18 +818,43 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     }
   }
 
+  /** a folder or files dropped straight on the "My files" / "Business" row of the left tree: open it, then upload into its top */
+  const onDropOnOwner = async (e: React.DragEvent, oid: string) => {
+    e.preventDefault(); e.stopPropagation(); setDropOn(null)
+    if (uploading || dropRunning || !!drop || plain) { toast.error('Wait for the upload in progress to finish, then drop again.'); return }
+    const unreadable: Array<{ name: string; why: string }> = []
+    const reading = readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable)   // started now: the dropped items are only readable during the drop
+    const tid = toast.loading('Reading what you dropped…')
+    try {
+      await openOwner(oid)
+      const c = await fetchInto(oid, null)
+      if (!c.folder) { toast.error('This storage has no folder to drop into yet.'); return }
+      folderOwner.current.set(c.folder.id, oid)
+      const { items, skipped } = filterPlainDrop(await reading)
+      skipped.push(...unreadable)
+      if (!items.length && !skipped.length) { toast.message('Nothing to upload in what was dropped.'); return }
+      plainFolders.current = new Map()
+      setPlain({ folder: c.folder, items, skipped })
+    } catch (err) { toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.')) }
+    finally { toast.dismiss(tid) }
+  }
+
   const onComputerDrop = async (e: React.DragEvent, folder: Fold) => {
     e.preventDefault(); e.stopPropagation(); setDropOn(null)
     if (uploading || dropRunning || !!drop) { toast.error('Wait for the upload in progress to finish, then drop again.'); return }
     if (folder.trashed || folder.kind === 'root') { toast.error('Drop the files on one of the folders.'); return }
     if (isInternalOwnerKind(ownerKind)) {                                  // Business / My files: a normal storage — no type, no limit
+      const tid = toast.loading('Reading what you dropped…')
       try {
-        const got = await readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY)
+        const unreadable: Array<{ name: string; why: string }> = []
+        const got = await readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable)
         const { items, skipped } = filterPlainDrop(got)
+        skipped.push(...unreadable)
         if (!items.length && !skipped.length) { toast.message('Nothing to upload in what was dropped.'); return }
         plainFolders.current = new Map()
         setPlain({ folder, items, skipped })
       } catch (err) { toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.')) }
+      finally { toast.dismiss(tid) }
       return
     }
     let found: { file: File; path: string[] }[]
@@ -1842,7 +1873,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {!sharedView && !root && !error && <p className="text-sm text-zinc-500">{scopedOwnerId || ownerId ? 'Loading…' : 'Pick a client, Business or My files on the left.'}</p>}
       {!sharedView && root && !root.folder && <p className="text-sm text-zinc-500">No folders yet.</p>}
       {!sharedView && root?.folder && (
-        <>
+        <div className="min-h-[60vh]"
+          onDragOver={(e) => { if (viewFolder && isComputerDrag(e) && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts') { e.preventDefault(); setDropOn(`view:${viewFolder.id}`) } }}
+          onDragLeave={() => setDropOn((d) => (d?.startsWith('view:') ? null : d))}
+          onDrop={(e) => { if (viewFolder && isComputerDrag(e) && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts') void onComputerDrop(e, viewFolder) }}>
           <nav aria-label="Path" className="mb-2 flex flex-wrap items-center gap-1 text-xs text-zinc-500">
             {crumbs.map((c, i) => (
               <span key={`${c.label}-${i}`} className="inline-flex items-center gap-1">
@@ -2021,7 +2055,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             )}
           </ul>
           <p className="mt-2 text-xs text-zinc-400">Drag a file onto a folder to move it. Drag files from your computer onto a folder to upload them — they arrive hidden from the client.</p>
-        </>
+        </div>
       )}
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
       {myDriveFor && (
@@ -2328,7 +2362,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     const Icon = ownerIcon(o.kind)
     return (
       <li key={o.id}>
-        <div className={`group flex items-center gap-1 rounded-md py-1 pr-1 text-sm hover:bg-zinc-50 ${ownerId === o.id && !focus ? 'bg-blue-50' : ''}`} style={{ paddingLeft: `${depth * 14}px` }}>
+        <div className={`group flex items-center gap-1 rounded-md py-1 pr-1 text-sm hover:bg-zinc-50 ${ownerId === o.id && !focus ? 'bg-blue-50' : ''} ${dropOn === key ? 'ring-1 ring-blue-300 bg-blue-50' : ''}`} style={{ paddingLeft: `${depth * 14}px` }}
+          onDragOver={(e) => { if (isInternalOwnerKind(o.kind) && isComputerDrag(e)) { e.preventDefault(); e.stopPropagation(); setDropOn(key) } }}
+          onDragLeave={() => setDropOn((d) => (d === key ? null : d))}
+          onDrop={(e) => { if (isInternalOwnerKind(o.kind) && isComputerDrag(e)) void onDropOnOwner(e, o.id) }}>
           {treeArrow(key, open)}
           <button type="button" onClick={() => openOwner(o.id)} className={`flex min-w-0 flex-1 items-center gap-2 text-left ${label ? 'font-medium' : ''}`}>
             <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
