@@ -137,7 +137,8 @@ export function resolveMailing(account: Ss4AccountSnapshot): { street: string; c
       cityStateZip: [ma.city, ma.state, ma.zip].filter(Boolean).join(", "),
     }
   }
-  if (account.physical_address) {
+  // same rule for the saved free-text address: a Largo office line with no suite issued is only a bare "3D"
+  if (account.physical_address && !(!account.suite_number && isTdLargoAddressRow({ address_line1: account.physical_address }))) {
     const raw = account.physical_address
     const commaIdx = raw.indexOf(",")
     if (commaIdx > -1) {

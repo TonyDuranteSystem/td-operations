@@ -24,6 +24,13 @@ describe('SS-4 mailing address (Largo + the company\'s own suite)', () => {
     expect(m.street).not.toContain('3D')
     expect(m.street).toContain('Park Blvd')
   })
+  it('a company with NO suite whose saved text address is the Largo office with a bare "3D" falls back to the Seminole mailbox', () => {
+    const m = resolveMailing({
+      physical_address: '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771', suite_number: null, mailing_address: null,
+    } as Parameters<typeof resolveMailing>[0])
+    expect(m.street).not.toContain('3D')
+    expect(m.street).toContain('Park Blvd')
+  })
   it('a company with no suite and a real saved row keeps it', () => {
     const m = resolveMailing({
       physical_address: null, suite_number: null,
