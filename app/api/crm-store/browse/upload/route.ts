@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../_auth"
 
 export async function POST(req: NextRequest) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv())
+  const denied = await denyUnlessStoreStaff()
   if (denied) return denied
   const body = await req.json().catch(() => ({}))
   const { ownerId, folderId, storagePath, fileName, mimeType, documentType, personContactId, displayName, viaCompanyOwnerId } = body as Record<string, string | undefined>
@@ -31,6 +31,8 @@ export async function POST(req: NextRequest) {
     const { isInternalOwnerKind } = await import("@/lib/crm-store/plain-drop")
     if (!isInternalOwnerKind(o?.kind)) return NextResponse.json({ error: "Choose a folder, a file and its document type." }, { status: 400 })
   }
+  const noEnv = await denyUnlessStorePilotEnv({ ownerId, folderId })        // the pilot, or the firm's own areas anywhere
+  if (noEnv) return noEnv
   const noAccess = (await denyUnlessAreaAccess({ ownerId, folderId })) ?? (viaCompanyOwnerId ? await denyUnlessAreaAccess({ ownerId: viaCompanyOwnerId }) : null)
   if (noAccess) return noAccess
   const { data: { user } } = await createClient().auth.getUser()

@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/server"
 import { denyUnlessStoreStaff, denyUnlessStorePilotEnv, denyUnlessAreaAccess } from "../../_auth"
 
 export async function POST(req: NextRequest) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
+  const denied = await denyUnlessStoreStaff()      // the environment check below carries the parent folder (the firm's own areas work everywhere)
   if (denied) return denied
   const body = (req.method === "POST" ? await req.json().catch(() => ({})) : {}) as Record<string, unknown>
   const { data: { user } } = await createClient().auth.getUser()
