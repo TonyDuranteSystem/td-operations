@@ -14,11 +14,27 @@
 
 const digits = (s: string) => s.replace(/\D/g, "")
 
-/** A "name" that is really no name: empty, "Unknown", or just the phone number. */
+/**
+ * The line's OWN registered WhatsApp Business display name — confirmed live (2026-10-01) via GOWA's own
+ * `/app/devices`, which reports `"name": "Tony Durante LLC"` for this line. GOWA was found, the same day,
+ * reporting this exact string as the "name" of several unrelated 1:1 client chats (via `/chats`) — our own
+ * business identity leaking onto other people's conversations, upstream of anything this codebase controls.
+ * Treated as junk wherever a chat's name is decided or saved, the same way an empty/"Unknown"/digits-only
+ * name already is — never shown or stored as if it were a real client's name. Kept here as the single
+ * place this repo defines it; `wabridge_apply_names` (the database function doing the actual write from the
+ * phone-names sync) carries the identical literal — SQL can't import this file, so the two must be kept in
+ * sync by hand, the same documented trade-off already made for the mime→extension tables elsewhere in
+ * messaging. If the line's registered business name is ever deliberately changed, this constant needs
+ * updating too.
+ */
+export const OWN_BUSINESS_NAME = "Tony Durante LLC"
+
+/** A "name" that is really no name: empty, "Unknown", just the phone number, or our own business identity. */
 export function isJunkChatName(name: string | null | undefined, externalGroupId?: string | null): boolean {
   const n = (name ?? "").trim()
   if (!n) return true
   if (n.toLowerCase() === "unknown") return true
+  if (n.toLowerCase() === OWN_BUSINESS_NAME.toLowerCase()) return true
   const nd = digits(n)
   // digits-only (or a phone-looking string) — e.g. WhatsApp echoing the number back as the "name"
   if (nd.length >= 6 && nd.length >= n.replace(/[\s+()\-.]/g, "").length) return true

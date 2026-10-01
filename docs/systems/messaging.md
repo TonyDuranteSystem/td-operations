@@ -1,5 +1,25 @@
 # Messaging (WhatsApp / Telegram)
-_Last verified against code: 2026-09-28 — Claude (**TWO GAPS ANTONIO HIT LIVE, BOTH FIXED — sandbox, NOT yet in
+_Last verified against code: 2026-10-01 — Claude (**OUR OWN BUSINESS NAME WAS LEAKING ONTO CLIENT CHATS.**
+Antonio: "all messages are marked as Tony Durante LLC instead of with the name of the client." Confirmed live
+against the real connection: the phone-linking program (GOWA) is reporting this line's own registered
+WhatsApp Business display name ("Tony Durante LLC", confirmed via its own `/app/devices`) as the "name" of
+several unrelated 1:1 CLIENT chats via its `/chats` endpoint — upstream of anything this codebase controls,
+not something we caused. A chat already linked to a real CRM contact/lead/account is unaffected regardless
+(that link always wins over any phone-reported name) — only UNLINKED chats were showing the wrong name.
+Fixed defensively at every point a chat's name gets written or shown, not just one: (1) `wabridge_apply_names`
+— the database function the phone's periodic names-sync job calls — now refuses this exact value the same way
+it already refuses a "name" that's really just the phone number in disguise (migration
+`20261001-1700-wabridge-own-name-guard.sql`); (2) `findOrCreateWhatsAppGroup` (`lib/messaging/groups.ts`) now
+refuses it too for a BRAND-NEW chat's very first name, which comes from WhatsApp's own self-reported sender
+name at the moment the first message arrives — the same self-reported data source, a second real entry point,
+not just the sync job; (3) `isJunkChatName`/`OWN_BUSINESS_NAME` (`lib/messaging/chat-name.ts`) — the existing
+"never show Unknown" display-layer function — now treats this value as junk too, so even a future write path
+that reintroduces it would never be shown as a client's name. The literal business name is duplicated by hand
+across the TS constant and the SQL function (SQL can't import TS) — the same documented trade-off already made
+for the mime→extension tables elsewhere in this file; if the line's registered business name is ever
+deliberately changed, both need updating together. Verified: the SQL guard tested live in a rolled-back
+sandbox transaction (own name refused, case-insensitive variant refused, a real name still saves correctly).
+Full unit suite green.) Prior 2026-09-28 — Claude (**TWO GAPS ANTONIO HIT LIVE, BOTH FIXED — sandbox, NOT yet in
 production.** (1) **A voice note YOU send never got a duration or transcript.** Root cause: `wabridge_finish_send`
 pre-inserted the note's `message_media` row as `status='ready'` the instant the send succeeded — 'ready' is
 terminal, so `wabridge_media_claim` (which only ever picks up a message with no row yet, or one at 'waiting')
