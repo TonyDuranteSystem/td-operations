@@ -1476,7 +1476,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             onBlur={() => doRenameFile(f, renaming.value)}
             className="min-w-0 flex-1 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
         ) : (
-          <button type="button" onClick={() => setPreview(f)} className="min-w-0 flex-1 truncate text-left hover:underline">{f.name}</button>
+          <button type="button" onClick={() => setPreview(f)} className="min-w-[12rem] flex-1 truncate text-left hover:underline">{f.name}</button>
         )}
         {f.needsReview && (
           <FastTooltip label={f.needsReview}><span><Badge tone="red"><AlertTriangle className="h-3 w-3" />Needs review</Badge></span></FastTooltip>

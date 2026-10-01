@@ -6,7 +6,7 @@
  * this box shows the question — nothing changed until it is answered.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Loader2, X } from 'lucide-react'
 
@@ -45,6 +45,10 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
   // every answer given so far (a type can need two: whose passport, then "is it the filed copy?")
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const qc = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [addBusy, setAddBusy] = useState(false)
   useEffect(() => { setQuestion(null); setChoice(''); setAnswers({}) }, [slug])
 
   const shown = useMemo(() => {
@@ -52,6 +56,24 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
     return (types ?? []).filter((t) => !f || t.name.toLowerCase().includes(f))
   }, [types, filter])
   const current = (types ?? []).find((t) => t.slug === file.documentType)
+
+  /** "Not in the list? Add a new type": added once through the catalog (who added it is logged), then listed for everyone */
+  const addType = async () => {
+    const name = newName.trim()
+    if (!name) return
+    setAddBusy(true)
+    try {
+      const r = await fetch('/api/crm-store/browse/types', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, fileId: file.id }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error((j as { error?: string }).error || 'The type could not be added.')
+      const res = j as { slug: string; name: string; created: boolean }
+      await qc.invalidateQueries({ queryKey: ['crm-store-doc-types'] })
+      setSlug(res.slug); setFilter(''); setNewName(''); setAdding(false)
+      toast.success(res.created ? `New document type "${res.name}" added — now press Save type` : `"${res.name}" already exists — selected`)
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'The type could not be added.')
+    } finally { setAddBusy(false) }
+  }
 
   const submit = async () => {
     if (!slug) return
@@ -108,6 +130,20 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
               className="w-full rounded-md border border-zinc-300 px-1 py-1 text-sm">
               {shown.map((t) => <option key={t.slug} value={t.slug}>{t.name}{t.personal ? ' (personal)' : ''}{t.staffOnly ? ' (staff only)' : ''}</option>)}
             </select>
+            {!adding ? (
+              <button type="button" onClick={() => setAdding(true)} className="mt-1.5 text-xs text-blue-700 hover:underline" data-testid="add-type-link">Not in the list? Add a new type…</button>
+            ) : (
+              <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-2" data-testid="add-type-box">
+                <label htmlFor="new-type-name" className="text-xs font-medium text-zinc-600">Name of the new document type</label>
+                <div className="mt-1 flex gap-1.5">
+                  <input id="new-type-name" autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void addType() }}
+                    placeholder="e.g. Lease Amendment" className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1 text-sm" />
+                  <button type="button" disabled={addBusy || newName.trim().length < 2} onClick={() => void addType()} className="rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm hover:bg-zinc-50 disabled:opacity-50">{addBusy ? 'Adding…' : 'Add'}</button>
+                  <button type="button" onClick={() => { setAdding(false); setNewName('') }} className="rounded-md px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100">Cancel</button>
+                </div>
+                <p className="mt-1 text-[11px] text-zinc-500">It is added once and then listed for everyone. It is never shown to a client until you share a file.</p>
+              </div>
+            )}
           </>
         )}
         {question && (

@@ -178,10 +178,11 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
   const [showTwin, setShowTwin] = useState(false)
   const [confirmTrash, setConfirmTrash] = useState(false)
   const [sendOk, setSendOk] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
 
   const load = useCallback(async () => {
     setErr(null)
-    try { const j = await jsonOrThrow(await fetch(`/api/crm-store/understand/report?fileId=${encodeURIComponent(fileId)}`, { cache: 'no-store' }), 'Could not read the check.'); setRep(j.report as Report) }
+    try { const j = await jsonOrThrow(await fetch(`/api/crm-store/understand/report?fileId=${encodeURIComponent(fileId)}`, { cache: 'no-store' }), 'Could not read the check.'); const r = j.report as Report; setRep(r); setNameDraft(r.aiName ?? r.name.replace(/\.[A-Za-z0-9]{1,5}$/, '')) }
     catch (e) { setErr(e instanceof Error ? e.message : 'Could not read the check.') }
   }, [fileId])
   useEffect(() => { setRep(null); setShowTwin(false); setConfirmTrash(false); setSendOk(false); void load() }, [load])
@@ -201,10 +202,13 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
     if (j.state !== 'checked') toast.warning(j.message ?? 'The file could not be checked.')
     await load(); onChanged()
   })
-  const renameToSuggestion = () => act('name', async () => {
-    if (!rep?.aiName) return
-    const ext = /\.[A-Za-z0-9]{1,5}$/.exec(rep.name)?.[0] ?? ''
-    await post(`/api/crm-store/browse/file/${rep.fileId}/rename`, { name: rep.aiName + ext }, 'The file could not be renamed.')
+  const ext = rep ? (/\.[A-Za-z0-9]{1,5}$/.exec(rep.name)?.[0] ?? '') : ''
+  const baseName = rep ? rep.name.replace(/\.[A-Za-z0-9]{1,5}$/, '') : ''
+  const saveName = () => act('name', async () => {
+    if (!rep) return
+    const v = nameDraft.trim()
+    if (!v) return
+    await post(`/api/crm-store/browse/file/${rep.fileId}/rename`, { name: v + ext }, 'The file could not be renamed.')
     toast.success('Renamed'); await load(); onChanged()
   })
   const yes = () => act('yes', async () => { await record('applied'); toast.success('Thanks — noted'); onChanged(); await load() })
@@ -245,6 +249,20 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
             <div className="min-h-0 space-y-3 overflow-y-auto p-4 text-sm text-zinc-700">
               <p>Filed as <strong>{rep.currentType ?? 'no type yet'}</strong>{rep.folder ? <span className="text-zinc-400"> · in {rep.folder}</span> : null}</p>
 
+              <div data-testid="ai-name-box">
+                <label className="text-xs font-medium text-zinc-600" htmlFor="ai-name-input">File name</label>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <input id="ai-name-input" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void saveName() }}
+                    className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1 text-sm" />
+                  {ext && <span className="text-xs text-zinc-400">{ext}</span>}
+                  <button type="button" disabled={!!busy || !nameDraft.trim() || nameDraft.trim() === baseName} onClick={() => void saveName()}
+                    className="rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-50 disabled:opacity-50">{busy === 'name' ? 'Saving…' : 'Save name'}</button>
+                </div>
+                {rep.aiName && rep.aiName !== baseName && (
+                  <p className="mt-0.5 text-xs text-zinc-500">The AI suggests “{rep.aiName}”. Type your own name above if you prefer, then press Save name.</p>
+                )}
+              </div>
+
               {!checked && (
                 <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
                   <p className="text-zinc-700">This file has not been checked.</p>
@@ -276,7 +294,6 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
                   <div className="flex flex-wrap gap-2">
                     {rep.aiTypeSlug && !same && <button type="button" disabled={!!busy} onClick={() => setTypeFor(true)} className="rounded-md bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700 disabled:opacity-60" data-testid="ai-change-type">Change type to {rep.aiType}</button>}
                     {same && rep.mark.analysisId && <button type="button" disabled={!!busy} onClick={() => void yes()} className="rounded-md border border-emerald-300 px-3 py-1.5 text-emerald-800 hover:bg-emerald-50 disabled:opacity-60">Yes, correct</button>}
-                    {rep.aiName && !rep.name.toLowerCase().startsWith(rep.aiName.toLowerCase()) && <button type="button" disabled={!!busy} onClick={() => void renameToSuggestion()} className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-50 disabled:opacity-60">Rename it “{rep.aiName}”</button>}
                     <button type="button" disabled={!!busy} onClick={() => void notNow()} className="rounded-md border border-zinc-200 px-3 py-1.5 text-zinc-500 hover:bg-zinc-50 disabled:opacity-60">Not now</button>
                   </div>
                 </>
