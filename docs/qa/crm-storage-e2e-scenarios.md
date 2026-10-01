@@ -232,4 +232,8 @@ _Created 2026-09-28 (extended the same day after the browser run) at Antonio's r
 | P10 | Click Check twice quickly (or two staff) | Only one paid call; the other says it is already being checked |
 | P11 | Today's AI budget used up | "Today's AI budget is used up" — files are NOT marked bad; they stay not checked |
 | P12 | Replace a file with a newer version, then press Confirm on the old answer | Refused: "replaced by a newer version since it was checked — check it again" |
+| P13 | In the side panel, type your own name in the File name box and press Save name | The file is renamed (extension kept); the box keeps the name you saved |
+| P14 | In Change type press "Not in the list? Add a new type…", type a name, Add | The type is created for that file's folder kind, appears selected in the list; press Save type to apply it |
+| P15 | Open "Import from Google Drive" for a copied company | Only Open and Remove copy — no "Check contents" button |
+| P16 | A row with many labels | The file name keeps room (at least about 12 characters wide); the labels wrap to a second line |
 
