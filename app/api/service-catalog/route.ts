@@ -1,6 +1,21 @@
 import { createClient } from '@/lib/supabase/server'
+import { isStaffUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
+
+/**
+ * Writes (create / edit / deactivate) are TD staff only. This route writes with
+ * the service key, and middleware lets any signed-in user reach /api — so until
+ * N1a P0 a portal client could rename, re-price or switch off a service. Clients
+ * and partners are refused here; reads stay open to the dashboard and offer pages.
+ */
+async function refuseNonStaff(): Promise<NextResponse | null> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!isStaffUser(user)) return NextResponse.json({ error: 'Only TD staff can change the service catalog.' }, { status: 403 })
+  return null
+}
 
 /**
  * GET /api/service-catalog
@@ -65,9 +80,8 @@ export async function GET(request: NextRequest) {
  * Create a new service. Body: { name, default_price?, default_currency? }
  */
 export async function POST(request: NextRequest) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const denied = await refuseNonStaff()
+  if (denied) return denied
 
   const body = await request.json()
   const { name, default_price, default_currency } = body
@@ -105,9 +119,8 @@ export async function POST(request: NextRequest) {
  * Update a service. Body: { id, name?, default_price?, default_currency?, active? }
  */
 export async function PUT(request: NextRequest) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const denied = await refuseNonStaff()
+  if (denied) return denied
 
   const body = await request.json()
   const { id, ...updates } = body
@@ -146,9 +159,8 @@ export async function PUT(request: NextRequest) {
  *   - reactivate is a 1-click PUT { id, active: true } via the same UI
  */
 export async function DELETE(request: NextRequest) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const denied = await refuseNonStaff()
+  if (denied) return denied
 
   const body = await request.json()
   const { id } = body

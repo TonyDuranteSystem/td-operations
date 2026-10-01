@@ -221,5 +221,5 @@ _Regenerated 2026-10-01. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-30)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-29)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-30)_
 <!-- /GENERATED:deep-docs -->
