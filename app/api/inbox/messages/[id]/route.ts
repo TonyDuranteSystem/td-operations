@@ -196,45 +196,15 @@ export async function GET(
 
     if (error) throw error
 
-    // Build phone-to-name map for resolving sender names
-    const phoneNames: Record<string, string> = {
-      "17274234285": "Antonio Durante",
-      "17272535199": "Tony Durante LLC",
-      "17274521093": "Tony Durante LLC",
-    }
-
-    // Get unique phone-like sender_names to resolve from CRM contacts
-    const phoneSenders = Array.from(new Set(
-      (msgs || [])
-        .map(m => m.sender_name || m.sender_phone)
-        .filter((s): s is string => !!s && /^\d{8,}$/.test(s) && !phoneNames[s])
-    ))
-
-    if (phoneSenders.length > 0) {
-      // Search CRM contacts by phone number
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("full_name, phone")
-        .not("phone", "is", null)
-
-      if (contacts) {
-        for (const contact of contacts) {
-          if (!contact.phone || !contact.full_name) continue
-          // Normalize phone: strip +, spaces, dashes
-          const normalized = contact.phone.replace(/[\s\-\+\(\)]/g, "")
-          // Match against sender numbers (which may or may not have country code)
-          for (const sender of phoneSenders) {
-            if (normalized.endsWith(sender) || sender.endsWith(normalized) || normalized === sender) {
-              phoneNames[sender] = contact.full_name
-            }
-          }
-        }
-      }
-    }
-
     const messages: InboxMessage[] = (msgs || []).map((m) => {
-      const rawSender = m.sender_name || m.sender_phone || "Unknown"
-      const resolvedName = phoneNames[rawSender] || rawSender
+      // A hardcoded phone→name table (including the business's own number) and a loose,
+      // suffix-matching CRM lookup used to live here — the exact "self-reported/guessed name
+      // shown without a check" pattern that leaked the business's own identity onto client
+      // WhatsApp chats elsewhere in this app (2026-10-01). This route is Gmail/Telegram-only in
+      // the current UI (WhatsApp has its own dedicated thread + route), so there is no live path
+      // that needs name resolution here beyond what's already stored — removed rather than
+      // carried forward as a landmine for whatever channel reaches this branch next.
+      const resolvedName = m.sender_name || m.sender_phone || "Unknown"
       return {
         id: m.id,
         direction: m.direction as "inbound" | "outbound",

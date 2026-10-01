@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
+import { isJunkChatName } from '@/lib/messaging/chat-name'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 import { guessMessageLocale } from '@/lib/messaging/lang-detect'
@@ -910,7 +911,10 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                     </div>
                   )}
                   <p className="text-[10px] text-zinc-400 mt-1 text-right">
-                    {msg.sender_name ?? msg.sender_phone ?? (isOutbound ? OUTBOX_TEAM_LABEL : 'Contact')}
+                    {/* A handful of old messages (before the 2026-10-01 fix) still have the business's
+                        own name stored as sender_name — this backstop hides it the same way a junk
+                        chat name is already hidden, without needing to touch the stored history. */}
+                    {(msg.sender_name && !isJunkChatName(msg.sender_name) ? msg.sender_name : null) ?? msg.sender_phone ?? (isOutbound ? OUTBOX_TEAM_LABEL : 'Contact')}
                     {' · '}
                     {formatTimestamp(msg.created_at)}
                   </p>
