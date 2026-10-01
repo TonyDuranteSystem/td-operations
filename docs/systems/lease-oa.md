@@ -58,7 +58,7 @@ Both follow the same pattern: create a record → send a tokenized link via Gmai
 ## Lease
 - Tools (`lib/mcp/tools/lease.ts`): `lease_create`, `lease_get`, `lease_list`, `lease_update`, `lease_send`, `lease_agreements`.
 - **Status lifecycle:** `draft → sent → viewed → signed → active → expired`.
-- `lease_send` **approves + sends immediately** (not a draft) via Gmail with open tracking, sets status `sent`, requires `tenant_email`. Use `gmail_track_status` to confirm the client opened it. Uses `safeSend` (R037).
+- Clients receive the lease in the **portal** (CRM Send Lease → `sendLeaseToPortal`, no email). `lease_send` is a **manual exception**: it emails the bare link immediately (not a draft) via Gmail with open tracking, sets status `sent`, requires `tenant_email`; use only when Antonio explicitly asks. Uses `safeSend` (R037).
 - Link: `${APP_BASE_URL}/lease/{token}/{access_code}`. Signed webhook: `app/api/lease-signed/route.ts`. PDF (re)generation: `app/api/lease-regen-drive`, `app/api/crm/admin-actions/regen-lease-pdf`.
 - `leases` columns: `token`, `access_code`, `tenant_company`, `suite_number`, `status`, `contract_year`, `term_start_date`/`term_end_date`, `monthly_rent`/`yearly_rent`, `view_count`, `signed_at`, `tenant_email`.
 - **Tenant/signer resolution (2026-08-18):** `createLease` (`lib/operations/lease.ts`) resolves who gets named on the lease via `lib/members/resolve-signer.ts::resolveAccountSigner` whenever the caller doesn't pass an explicit `contact_id` — the SAME rule SS-4 uses (`members.is_signer` flag, company member via representative, SMLLC/no-members falls back to the role-aware `account_contacts` default). An explicit `contact_id` always wins. Every caller of `createLease` that wants the correct signer should simply OMIT `contact_id` rather than pre-resolving its own contact.
@@ -161,7 +161,7 @@ A client can complete an Operating Agreement three ways from the signing page (a
 **Design note for the next session:** the on-screen SIGNED render still uses the browser html2pdf capture (pre-existing), so the executed PDF and this server draft are still two renderers — the draft download deliberately sidesteps that by refusing signed agreements rather than re-rendering them. Retiring the browser capture (have the sign POST call `generateOperatingAgreementPDF` server-side) is the follow-up that makes it one renderer; see `lib/operations/esign.ts` `flattenEnvelopeToSignedPdf` for the pattern.
 
 ## Gotchas, invariants & past bugs
-- **`lease_send` sends a real email immediately** (not a Gmail draft) — don't call it to "preview." Use `?preview=td` for review.
+- **`lease_send` sends a real email immediately** (not a Gmail draft) and is NOT how clients get a lease (they sign in the portal) — never call it to "preview." Use `?preview=td` for review.
 - **OA generation is state-gated** — if the company's state isn't in `OA_SUPPORTED_STATES`, there's no template; add the template before generating.
 - **Use `safeSend`** for any new lease/OA send path (R037) — mark "sent" only AFTER the send succeeds, with idempotency first.
 - Lease is annual (`contract_year`) — a new year is a new lease record, not an edit of the old one.

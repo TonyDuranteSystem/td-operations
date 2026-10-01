@@ -34,11 +34,11 @@ Defaults: premises=10225 Ulmerton Rd, Largo FL 33771, monthly_rent=$100, deposit
 
 The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, this issues it. It is locked: one company = one suite, one suite = one company.
 
-The lease is created as 'draft'. Use lease_send to approve and create the Gmail draft.
+The lease is created as 'draft'. Clients sign in their PORTAL, not by email: staff press Send Lease on the account in the CRM, which puts the lease in the client's portal and emails nobody. (lease_send is a manual email of the bare link — an exception, only when Antonio explicitly asks.)
 
-Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path segment) to bypass the email gate. Example: ${APP_BASE_URL}/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before sending.
+Admin preview: append ?preview=td to the lease URL (WITHOUT the access code path segment) to skip the email box. Example: ${APP_BASE_URL}/lease/{token}?preview=td. ALWAYS provide the admin preview link after creating a lease so Antonio can review it before it goes to the client.
 
-Workflow: lease_create → lease_get (review with admin preview link) → lease_send → client views → signs → PDF saved.`,
+Workflow: lease_create → lease_get (review with admin preview link) → CRM Send Lease (appears in the client's portal) → client signs in the portal → PDF saved.`,
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
@@ -101,7 +101,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
           `👁️ Admin Preview: ${adminPreviewUrl}`,
           `🔗 Client URL: ${leaseUrl}`,
           ``,
-          `⚠️ Review the admin preview FIRST, then use **lease_send** to send to the client.`,
+          `⚠️ Review the admin preview FIRST, then press Send Lease in the CRM (the lease appears in the client's portal; nobody is emailed).`,
         ]
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -296,7 +296,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → lease_
   // ───────────────────────────────────────────────────────────
   server.tool(
     "lease_send",
-    `Approve a lease agreement and send the link to the tenant via Gmail with open tracking. Sets status to 'sent'. Email is sent immediately (NOT a draft). Requires tenant_email to be set on the lease. Use gmail_track_status to check if the client opened the email.`,
+    `MANUAL EXCEPTION — clients normally get their lease in the portal (CRM Send Lease), not by email. This tool emails the bare lease link to the tenant via Gmail with open tracking, immediately (NOT a draft), sets status to 'sent', and needs tenant_email. Use only when Antonio explicitly asks for an email. Use gmail_track_status to check if the client opened it.`,
     {
       token: z.string().describe("Lease token to send"),
     },
