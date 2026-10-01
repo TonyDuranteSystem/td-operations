@@ -16,6 +16,8 @@ type ContactRow = {
   full_name: string
   phone: string | null
   phone_2: string | null
+  phone_3?: string | null
+  phone_4?: string | null
   account_contacts: Array<{ accounts: { company_name: string } }>
 }
 
@@ -119,5 +121,25 @@ describe("findContactByPhone", () => {
     contactRows = [{ id: "contact-4", full_name: "Second Number", phone: "+15550001111", phone_2: "+17274521093", account_contacts: [] }]
     const result = await findContactByPhone("+17274521093")
     expect(result?.id).toBe("contact-4")
+  })
+
+  it("matches via phone_3 or phone_4 when the first two numbers differ (Claudia Taffarello / Snowfy LLC, 2026-10-01: US number on file, Italian WhatsApp number had nowhere to go)", async () => {
+    contactRows = [{
+      id: "contact-5",
+      full_name: "Claudia Taffarello",
+      phone: "+17272398495",
+      phone_2: null,
+      phone_3: "+393488593759",
+      phone_4: null,
+      account_contacts: [{ accounts: { company_name: "Snowfy LLC" } }],
+    }]
+    const result = await findContactByPhone("+393488593759")
+    expect(result).toEqual({ type: "contact", id: "contact-5", name: "Claudia Taffarello", accountName: "Snowfy LLC" })
+  })
+
+  it("does not match on phone_3/phone_4 when both are null", async () => {
+    contactRows = [{ id: "contact-6", full_name: "No Extra Numbers", phone: "+15550002222", phone_2: null, phone_3: null, phone_4: null, account_contacts: [] }]
+    const result = await findContactByPhone("+393488593759")
+    expect(result).toBeNull()
   })
 })

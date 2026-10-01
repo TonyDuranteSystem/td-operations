@@ -131,6 +131,8 @@ interface ContactRecord {
   email_2: string | null
   phone: string | null
   phone_2: string | null
+  phone_3: string | null
+  phone_4: string | null
   language: string | null
   preferred_channel: string | null
   citizenship: string | null
@@ -382,7 +384,7 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
-          {(contact.phone || contact.phone_2) && (
+          {(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) && (
             <button
               onClick={() => setShowWhatsApp(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition-colors"
@@ -555,13 +557,13 @@ export function ContactDetail({
         contactName={contact.full_name}
       />
 
-      {(contact.phone || contact.phone_2) && (
+      {(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) && (
         <NewWhatsAppConversationDialog
           open={showWhatsApp}
           onClose={() => setShowWhatsApp(false)}
           contactId={contact.id}
           name={contact.full_name || contact.email || 'this contact'}
-          phone={(contact.phone || contact.phone_2) as string}
+          phone={(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) as string}
         />
       )}
 
@@ -643,6 +645,8 @@ function OverviewTab({
         <EditableField icon={Mail} label="Email 2" value={contact.email_2 ?? ''} onSave={makeContactSaver('email_2')} />
         <EditableField icon={Phone} label="Phone" value={contact.phone ?? ''} onSave={makeContactSaver('phone')} />
         <EditableField icon={Phone} label="Phone 2" value={contact.phone_2 ?? ''} onSave={makeContactSaver('phone_2')} />
+        <EditableField icon={Phone} label="Phone 3" value={contact.phone_3 ?? ''} onSave={makeContactSaver('phone_3')} />
+        <EditableField icon={Phone} label="Phone 4" value={contact.phone_4 ?? ''} onSave={makeContactSaver('phone_4')} />
         <EditableField icon={Globe} label="Language" value={contact.language ?? ''} type="select" options={LANGUAGE_OPTIONS} onSave={makeContactSaver('language')} />
         <EditableField icon={Globe} label="Citizenship" value={contact.citizenship ?? ''} onSave={makeContactSaver('citizenship')} />
         <EditableField icon={MapPin} label="Address" value={contact.address_line1 ?? ''} onSave={makeContactSaver('address_line1')} />
