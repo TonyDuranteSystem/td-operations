@@ -42,6 +42,7 @@ import { reportSystemError } from '@/lib/system-errors'
 import { resolveSigningSet, describeSigningBlock, signerDisplayName, type ResolvedSigner } from '@/lib/members/signing-set'
 import { signerLinkExpiryISO } from '@/lib/oa/public-view'
 import { formatMemberAddress } from '@/lib/members/member-address'
+import { companyCmraAddressLine } from '@/lib/operations/suite'
 
 export async function POST(request: NextRequest) {
   const supabase = createClient()
@@ -426,7 +427,7 @@ export async function POST(request: NextRequest) {
       duration: 'Perpetual',
       registered_agent_name: account.registered_agent_provider ?? null,
       registered_agent_address: account.registered_agent_address ?? null,
-      principal_address: account.physical_address ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771',
+      principal_address: await companyCmraAddressLine(account.id, account.physical_address ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771'), // always Largo + the company's own suite
       language: 'en',
       // 'sent', NOT 'draft' — this route chats the signing link to every member
       // in the SAME request (see the portal-message sends below), so the OA has

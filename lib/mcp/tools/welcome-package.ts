@@ -20,6 +20,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 const BASE_URL = APP_BASE_URL
 
@@ -179,7 +180,7 @@ Prerequisites:
                 duration: "Perpetual",
                 registered_agent_name: account.registered_agent_provider || null,
                 registered_agent_address: account.registered_agent_address || null,
-                principal_address: account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+                principal_address: await companyCmraAddressLine(account_id, account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
                 language: "en",
                 status: "draft",
               })

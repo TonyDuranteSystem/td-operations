@@ -72,14 +72,37 @@ export function withCompanySuite<T extends { address_line1?: string | null; addr
   return { ...row, address_line2: `Suite ${companySuite}` }
 }
 
-// Prefer the FK-joined address row; fall back to the legacy physical_address text column.
-// Pass the company's suite so a Largo office row prints THIS company's suite.
+// Our Largo office (the CMRA building). No saved CMRA field exists any more (Antonio 2026-10-01): a company's CMRA address
+// is ALWAYS this office plus the company's own suite — "10225 Ulmerton Rd, Suite 3D-212, Largo, FL 33771" — on the EIN
+// application, the lease, the Operating Agreement, invoices and the portal.
+export const TD_LARGO_OFFICE = {
+  address_line1: '10225 Ulmerton Rd',
+  city: 'Largo',
+  state: 'FL',
+  zip: '33771',
+  country: 'US',
+} as const
+
+/**
+ * The company's CMRA address. A company WITH a suite always gets Largo + its suite (whatever address row is saved —
+ * the saved CMRA link is no longer used). A company with no suite yet keeps the saved row untouched (today's behaviour).
+ */
+export function withCompanyCmra<T extends MailingAddressRow>(
+  row: T | null | undefined,
+  companySuite: string | null | undefined,
+): T | MailingAddressRow | null | undefined {
+  if (!companySuite) return row
+  return { ...(row ?? {}), ...TD_LARGO_OFFICE, address_line2: `Suite ${companySuite}` }
+}
+
+// The company's CMRA address as one line: Largo + its suite when it has one, else the saved FK row, else the legacy
+// physical_address text column.
 export function resolveMailingAddress(
   mailingRow: MailingAddressRow | null | undefined,
   legacyPhysical: string | null | undefined,
   companySuite?: string | null,
 ): string | null {
-  const formatted = formatAddressString(withCompanySuite(mailingRow, companySuite))
+  const formatted = formatAddressString(withCompanyCmra(mailingRow, companySuite))
   return formatted ?? legacyPhysical ?? null
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, isTdLargoAddressRow } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, withCompanyCmra, isTdLargoAddressRow } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -244,10 +244,30 @@ describe('withCompanySuite / isTdLargoAddressRow', () => {
     expect(withCompanySuite(null, '3D-318')).toBeNull()
   })
 
-  it('resolveMailingAddress prints the company suite for a Largo row, and the row as-is for Seminole', () => {
+  it('resolveMailingAddress: a company WITH a suite always gets Largo + its suite, whatever row is saved', () => {
     expect(resolveMailingAddress(largo, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
-    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
-    // no suite argument → unchanged (existing behavior)
+    // a wrongly linked Seminole row (or no row at all) no longer matters
+    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+    expect(resolveMailingAddress(null, '99 Some St, Town', '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+  })
+
+  it('resolveMailingAddress: a company with NO suite keeps today\'s behaviour (saved row, then legacy text)', () => {
     expect(resolveMailingAddress(largo, null)).toBe('10225 Ulmerton Rd, Suite 3D-205, Largo FL 33771')
+    expect(resolveMailingAddress(seminole, null, null)).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
+    expect(resolveMailingAddress(null, '99 Some St, Town', null)).toBe('99 Some St, Town')
+    expect(resolveMailingAddress(null, null, null)).toBeNull()
+  })
+})
+
+describe('withCompanyCmra — the CMRA address is always Largo + the company\'s own suite', () => {
+  const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
+  it('replaces ANY saved row (even a client\'s own address) with Largo + the suite when the company has a suite', () => {
+    const out = withCompanyCmra(seminole, '3D-212')
+    expect(out).toMatchObject({ address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-212', city: 'Largo', state: 'FL', zip: '33771' })
+    expect(withCompanyCmra(null, '3D-212')).toMatchObject({ address_line2: 'Suite 3D-212', city: 'Largo' })
+  })
+  it('a company with no suite keeps the saved row untouched', () => {
+    expect(withCompanyCmra(seminole, null)).toBe(seminole)
+    expect(withCompanyCmra(null, undefined)).toBeNull()
   })
 })

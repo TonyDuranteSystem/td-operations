@@ -24,6 +24,7 @@ import { reportSystemError } from "@/lib/system-errors"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -325,7 +326,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           duration: "Perpetual",
           registered_agent_name: account.registered_agent_provider || null,
           registered_agent_address: account.registered_agent_address || null,
-          principal_address: account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+          principal_address: await companyCmraAddressLine(p.account_id, account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
           language: "en",
           status: "draft",
         })

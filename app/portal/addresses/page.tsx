@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow, withCompanySuite } from '@/lib/addresses'
+import { type MailingAddressRow, withCompanySuite, withCompanyCmra } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -27,9 +27,10 @@ type AddrRow = MailingAddressRow & {
  *   2. Principal office address (business_legal_address_id — the DB kind keeps
  *      its old name; only the label changed) — as filed in the Articles of
  *      Organization.
- *   3. CMRA Office address (business_mailing_address_id) — normally Tony
- *      Durante's own Largo office, but a per-account link set in the CRM
- *      like every other field here, not a code-level constant.
+ *   3. CMRA Office address — ALWAYS Tony Durante's Largo office plus the
+ *      company's own suite (accounts.suite_number), computed — there is no
+ *      saved CMRA field in the CRM any more (Antonio 2026-10-01). A company
+ *      with no suite yet shows its old saved link, else "not on file".
  *   4. Mailing/Shipping address (shipping_address_id) — normally Tony
  *      Durante's Seminole office; also where clients mail original
  *      documents to TD (folds in what used to be a separate "Tony Durante
@@ -93,10 +94,11 @@ export default async function PortalAddressesPage() {
     raRow = (acct?.registered_agent as AddrRow | null) ?? null
     raLegacyAddress = raRow?.address_line1 ? null : ((acct?.registered_agent_address as string | null) ?? null)
     raProvider = (raRow?.provider as string | null) ?? (acct?.registered_agent_provider as string | null) ?? null
-    // A Largo office row shows THIS company's own suite, never the shared row's text.
+    // The principal office shows the company's suite only if it is a Largo office row; the CMRA address is ALWAYS Largo + the
+    // company's own suite (no saved CMRA link is read when the company has one).
     const companySuite = (acct?.suite_number as string | null) ?? null
     legal = withCompanySuite((acct?.legal as AddrRow | null) ?? null, companySuite) ?? null
-    cmra = withCompanySuite((acct?.mailing as AddrRow | null) ?? null, companySuite) ?? null
+    cmra = (withCompanyCmra((acct?.mailing as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }

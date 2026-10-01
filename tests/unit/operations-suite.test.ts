@@ -44,6 +44,7 @@ import {
   suiteNumericPart,
   largoAddressForSuite,
   getCompanySuite,
+  companyCmraAddressLine,
   allocateCompanySuite,
   releaseSuiteReservation,
   assignSpecificCompanySuite,
@@ -105,6 +106,22 @@ describe("getCompanySuite", () => {
   it("throws on a read error — a failed read is never 'no suite'", async () => {
     accountReadError = { message: "timeout" }
     await expect(getCompanySuite("a1")).rejects.toThrow("Could not read the company's suite")
+  })
+})
+
+describe("companyCmraAddressLine — what the Operating Agreement prints", () => {
+  const FALLBACK = "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"
+  it("is ALWAYS Largo + the company's own suite when it has one", async () => {
+    accountRow = { suite_number: "3D-318" }
+    expect(await companyCmraAddressLine("a1", "99 Old St, Town")).toBe("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771")
+  })
+  it("uses the caller's fallback when the company has no suite yet", async () => {
+    accountRow = { suite_number: null }
+    expect(await companyCmraAddressLine("a1", FALLBACK)).toBe(FALLBACK)
+  })
+  it("a failed read never blocks the document — it falls back", async () => {
+    accountReadError = { message: "timeout" }
+    expect(await companyCmraAddressLine("a1", FALLBACK)).toBe(FALLBACK)
   })
 })
 

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString, withCompanySuite } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, withCompanySuite, withCompanyCmra } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -609,10 +609,11 @@ export async function getPortalAccountDetail(accountId: string) {
     .single()
 
   if (!data) return data
-  // A Largo office row shows THIS company's own suite (accounts.suite_number), never the shared
-  // row's text. Other addresses (Seminole, registered agent…) are untouched.
+  // The CMRA address is ALWAYS Largo + THIS company's own suite (no saved CMRA link is read when the company has a
+  // suite). The principal office row shows the company's suite only when it IS a Largo office row; other addresses
+  // (registered agent…) are untouched.
   const suite = (data.suite_number as string | null) ?? null
-  data.mailing_address = withCompanySuite(data.mailing_address, suite) ?? data.mailing_address
+  data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address
   data.legal_address = withCompanySuite(data.legal_address, suite) ?? data.legal_address
   return {
     ...data,

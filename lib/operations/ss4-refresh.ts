@@ -38,7 +38,7 @@
 import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { formatCountyAndState, withCompanySuite } from "@/lib/addresses"
+import { formatCountyAndState, withCompanyCmra } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
@@ -128,7 +128,7 @@ export function resolveStateCode(raw: string | null | undefined): string {
 }
 
 export function resolveMailing(account: Ss4AccountSnapshot): { street: string; cityStateZip: string } {
-  const ma = withCompanySuite(account.mailing_address, account.suite_number ?? null) ?? null
+  const ma = withCompanyCmra(account.mailing_address, account.suite_number ?? null) ?? null
   if (ma && (ma.address_line1 || ma.city)) {
     return {
       street: [ma.address_line1, ma.address_line2].filter(Boolean).join(", "),

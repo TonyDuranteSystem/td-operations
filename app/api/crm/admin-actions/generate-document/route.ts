@@ -22,6 +22,7 @@ import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type 
 import { refreshSS4 } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -277,7 +278,7 @@ async function generateOA(accountId: string, params: Record<string, unknown>) {
       fiscal_year_end: "December 31",
       accounting_method: "Cash",
       duration: "Perpetual",
-      principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+      principal_address: await companyCmraAddressLine(accountId, "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
       language: "en",
       status: "draft",
       // Load-bearing: the whole system decides "multi-member" from entity_type

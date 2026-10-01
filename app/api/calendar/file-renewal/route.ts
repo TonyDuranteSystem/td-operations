@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { fileRenewal, type RenewalKind } from '@/lib/operations/file-renewal'
+import { parsePrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +90,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // An Annual Report needs the principal-address answer (JSON: {changed:false} or {changed:true, address…}).
+    let principal_office: PrincipalOfficeDecision | undefined
+    if (kind === 'ar') {
+      const raw = fd.get('principal_office')
+      let parsedRaw: unknown = null
+      try { parsedRaw = typeof raw === 'string' ? JSON.parse(raw) : null } catch { parsedRaw = null }
+      const parsed = parsePrincipalOfficeDecision(parsedRaw)
+      if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
+      principal_office = parsed.decision
+    }
+
     const buffer = Buffer.from(await receipt.arrayBuffer())
 
     const result = await fileRenewal({
@@ -99,6 +111,7 @@ export async function POST(req: NextRequest) {
       filing_for_year,
       note,
       override_unpaid,
+      principal_office,
       receipt: {
         file_name: receipt.name || 'receipt.pdf',
         mime_type: receipt.type || 'application/pdf',

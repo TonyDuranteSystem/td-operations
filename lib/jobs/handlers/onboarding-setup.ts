@@ -38,6 +38,7 @@ import type { Json } from "@/lib/database.types"
 import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 interface OnboardingPayload {
   token: string
@@ -1036,7 +1037,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 duration: "Perpetual",
                 registered_agent_name: oaAccount.registered_agent_provider || null,
                 registered_agent_address: oaAccount.registered_agent_address || null,
-                principal_address: oaAccount.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+                principal_address: await companyCmraAddressLine(account_id, oaAccount.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
                 language: "en",
                 status: "draft",
               })

@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { fileRenewal, type RenewalKind } from "@/lib/operations/file-renewal"
+import { parsePrincipalOfficeDecision, type PrincipalOfficeDecision } from "@/lib/operations/principal-office"
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
     delivery_id?: string | null
     kind?: string
     filed_date?: string
+    principal_office?: unknown
     receipt?: { file_name?: string; mime_type?: string; data_base64?: string }
   }
   try {
@@ -39,6 +41,13 @@ export async function POST(req: NextRequest) {
   if (kind !== "ra" && kind !== "ar") return NextResponse.json({ error: "kind must be 'ra' or 'ar'" }, { status: 400 })
   if (!filed_date || !/^\d{4}-\d{2}-\d{2}$/.test(filed_date)) {
     return NextResponse.json({ error: "filed_date (YYYY-MM-DD) required" }, { status: 400 })
+  }
+  // An Annual Report needs the principal-address answer.
+  let principal_office: PrincipalOfficeDecision | undefined
+  if (kind === "ar") {
+    const parsed = parsePrincipalOfficeDecision(body.principal_office)
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 })
+    principal_office = parsed.decision
   }
   if (!receipt?.data_base64) {
     return NextResponse.json({ error: "A receipt file is required to mark this done." }, { status: 400 })
@@ -58,6 +67,7 @@ export async function POST(req: NextRequest) {
       delivery_id: delivery_id ?? null,
       kind: kind as RenewalKind,
       filed_date,
+      principal_office,
       receipt: {
         file_name: receipt.file_name || "receipt.pdf",
         mime_type: receipt.mime_type || "application/pdf",

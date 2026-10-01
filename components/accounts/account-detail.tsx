@@ -2488,18 +2488,6 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">CMRA Address</p>
-              <AddressPicker
-                accountId={account.id}
-                accountUpdatedAt={account.updated_at}
-                kind="business_mailing"
-                value={account.business_mailing_address_id ?? null}
-                verified={account.mailing_link_verified ?? false}
-                onChange={() => router.refresh()}
-                companySuite={account.suite_number ?? null}
-              />
-            </div>
-            <div>
               <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
               <AddressPicker
                 accountId={account.id}

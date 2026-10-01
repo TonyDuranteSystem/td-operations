@@ -22,6 +22,8 @@ import { NewCardDialog } from './action-board-new-card-dialog'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
+import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
 
 interface Column {
   slug: string
@@ -245,10 +247,14 @@ function TaxRenewalActions({ sourceRef, accountId, onResolve }: {
   const [file, setFile] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [principalOffice, setPrincipalOffice] = useState<PrincipalOfficeDraft>(EMPTY_PRINCIPAL_OFFICE_DRAFT)
+  // An Annual Report needs the principal-address answer (unchanged, or the new address) before it can be filed.
+  const principalAnswer = isRa ? null : principalOfficeAnswer(principalOffice)
 
   async function submit() {
     if (!accountId) { setErr('No account on this card'); return }
     if (!file) { setErr('A receipt file is required.'); return }
+    if (!isRa && !principalAnswer) { setErr('Say whether the principal address changed on the filed annual report.'); return }
     setSaving(true); setErr(null)
     try {
       const data_base64 = await new Promise<string>((resolve, reject) => {
@@ -265,6 +271,7 @@ function TaxRenewalActions({ sourceRef, accountId, onResolve }: {
           delivery_id: sdId,
           kind,
           filed_date: filedDate,
+          ...(principalAnswer ? { principal_office: principalAnswer } : {}),
           receipt: { file_name: file.name, mime_type: file.type || 'application/pdf', data_base64 },
         }),
       })
@@ -319,9 +326,12 @@ function TaxRenewalActions({ sourceRef, accountId, onResolve }: {
               className="text-[11px] border rounded px-1 py-0.5"
             />
           </div>
+          {!isRa && accountId && (
+            <PrincipalOfficeCheck accountId={accountId} value={principalOffice} onChange={setPrincipalOffice} disabled={saving} />
+          )}
           <div className="flex gap-1">
             <button
-              disabled={saving || !file}
+              disabled={saving || !file || (!isRa && !principalAnswer)}
               onClick={submit}
               className="flex-1 text-[11px] text-white bg-emerald-600 hover:bg-emerald-700 rounded px-2 py-1 disabled:opacity-40"
             >

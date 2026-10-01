@@ -26,6 +26,7 @@ import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 // ─── Types ───
 
@@ -376,7 +377,7 @@ async function createOA(
         fiscal_year_end: "December 31",
         accounting_method: "Cash",
         duration: "Perpetual",
-        principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+        principal_address: await companyCmraAddressLine(accountId, "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
         language: "en",
         status: "draft",
         // Load-bearing: the whole system decides "multi-member" from

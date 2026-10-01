@@ -65,6 +65,20 @@ export async function getCompanySuite(accountId: string): Promise<string | null>
 }
 
 /**
+ * The CMRA address the Operating Agreement prints: ALWAYS Largo + the company's own suite
+ * ("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771"); with no suite yet, the caller's fallback.
+ * A failed read never blocks a document — it just uses the fallback.
+ */
+export async function companyCmraAddressLine(accountId: string, fallback: string | null): Promise<string | null> {
+  try {
+    const suite = await getCompanySuite(accountId)
+    return suite ? largoAddressForSuite(suite) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * Issue (or return) the company's suite. Idempotent: a company that already has one gets it back.
  * With only a deliveryId (a formation with no company row yet) the suite is RESERVED on the
  * delivery and moved onto the company when it is created. Throws on any failure — a failed
