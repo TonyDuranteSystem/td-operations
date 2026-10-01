@@ -366,12 +366,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let principalOfficeWarning: string | null = null
     if (principalOffice && accountId) {
       try {
-        const dueYear = typeof sd.due_date === 'string' && /^\d{4}/.test(sd.due_date) ? Number(sd.due_date.slice(0, 4)) : new Date().getFullYear()
+        // the cycle this report belongs to: the company's stored annual-report date first (the same precedence fileRenewal uses),
+        // then the case's own due date, then this year. The date is New York's today (UTC is "tomorrow" after 8pm ET).
+        const { data: cycle } = await supabaseAdmin.from('accounts').select('annual_report_due_date').eq('id', accountId).maybeSingle()
+        const cycleSource = ((cycle as { annual_report_due_date?: string | null } | null)?.annual_report_due_date ?? (sd.due_date as string | null)) ?? null
+        const dueYear = typeof cycleSource === 'string' && /^\d{4}/.test(cycleSource) ? Number(cycleSource.slice(0, 4)) : new Date().getFullYear()
         await applyPrincipalOfficeDecision({
           accountId,
           decision: principalOffice,
           actor: 'crm-admin:annual-report',
-          filedDate: new Date().toISOString().slice(0, 10),
+          filedDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
           year: dueYear,
         })
       } catch (poErr) {

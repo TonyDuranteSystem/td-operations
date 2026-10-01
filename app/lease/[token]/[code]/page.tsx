@@ -190,6 +190,9 @@ export default function LeasePageWithCode() {
     }
 
     setSigning(true)
+    // kept so a failed signing can put the page back exactly as it was (the PDF snapshot freezes the canvas into an image)
+    let frozenCanvas: HTMLCanvasElement | null = null
+    let frozenImg: HTMLImageElement | null = null
     try {
       // 1. Get signature as image
       const sigDataUrl = sigPadRef.current.toDataURL('image/png')
@@ -202,6 +205,8 @@ export default function LeasePageWithCode() {
         img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
         img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
         canvas.parentNode?.replaceChild(img, canvas)
+        frozenCanvas = canvas
+        frozenImg = img
       }
 
       // 3. Hide action bar + clear button from PDF snapshot
@@ -273,7 +278,13 @@ export default function LeasePageWithCode() {
       }
     } catch (err) {
       console.error('Signing failed:', err)
-      alert('An error occurred while signing. Please try again.')
+      // Put the page back so the client can try again (before this the canvas stayed a dead image and the Sign button stayed hidden)
+      if (frozenImg && frozenCanvas && frozenImg.parentNode) frozenImg.parentNode.replaceChild(frozenCanvas, frozenImg)
+      const bar = document.getElementById('lease-action-bar')
+      if (bar) bar.style.display = ''
+      if (sigClearRef.current) sigClearRef.current.style.display = ''
+      // show the server's real reason (R099) — e.g. "This lease is no longer valid — please contact Tony Durante LLC"
+      alert(err instanceof Error && err.message ? err.message : 'An error occurred while signing. Please try again.')
     } finally {
       setSigning(false)
     }

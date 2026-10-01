@@ -23,15 +23,14 @@ describe('Principal Office card (client view)', () => {
 })
 
 describe('Mailing card (client view) — our Seminole mailbox for everyone', () => {
-  it('no saved mailing row -> Tony Durante LLC, Seminole (was "not on file" for 236 of 248 active clients)', () => {
-    const r = mailingForClient(null)
-    expect(r).toBe(TD_MAILING_ROW)
+  it('is Tony Durante LLC, Seminole — the same for every client (was "not on file" for 236 of 248 active clients)', () => {
+    expect(mailingForClient()).toBe(TD_MAILING_ROW)
     expect(TD_MAILING_ROW).toMatchObject({ name: 'Tony Durante LLC', address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' })
   })
-  it('a client who has their own saved mailing row keeps it', () => {
-    expect(mailingForClient(WYOMING)).toEqual(WYOMING)
-  })
-  it('an empty saved row (no street) counts as nothing saved', () => {
-    expect(mailingForClient({ address_line1: '', address_line2: null, city: null, state: null, zip: null } as never)).toBe(TD_MAILING_ROW)
+})
+
+describe('Principal Office picks the first usable saved row', () => {
+  it('a shared-Largo legal row does not hide a real saved mailing row', () => {
+    expect(principalOfficeForClient(LARGO_SHARED, WYOMING, null)).toEqual(WYOMING)
   })
 })

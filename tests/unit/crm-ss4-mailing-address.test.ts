@@ -16,4 +16,19 @@ describe('SS-4 mailing address (Largo + the company\'s own suite)', () => {
     expect(insert).toContain('mailing_street: mailing.street')
     expect(insert).toContain('mailing_city_state_zip: mailing.cityStateZip')
   })
+  it('a company with NO suite whose saved row is the shared Largo office never prints a bare "3D" — falls back to the Seminole mailbox', () => {
+    const m = resolveMailing({
+      physical_address: null, suite_number: null,
+      mailing_address: { address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' },
+    } as Parameters<typeof resolveMailing>[0])
+    expect(m.street).not.toContain('3D')
+    expect(m.street).toContain('Park Blvd')
+  })
+  it('a company with no suite and a real saved row keeps it', () => {
+    const m = resolveMailing({
+      physical_address: null, suite_number: null,
+      mailing_address: { address_line1: '30 N Gould St', address_line2: 'Ste R', city: 'Sheridan', state: 'WY', zip: '82801' },
+    } as Parameters<typeof resolveMailing>[0])
+    expect(m.street).toBe('30 N Gould St, Ste R')
+  })
 })

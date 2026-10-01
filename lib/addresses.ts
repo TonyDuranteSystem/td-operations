@@ -108,14 +108,14 @@ export function principalOfficeForClient<T extends MailingAddressRow>(
   companySuite: string | null | undefined,
 ): T | MailingAddressRow | null {
   if (companySuite) return withCompanyCmra(legal, companySuite) ?? null
-  const saved = legal ?? mailing ?? null
-  return saved && isTdLargoAddressRow(saved) ? null : saved
+  // no suite yet: the first saved row that is NOT the shared Largo office (it has no suite on it)
+  return [legal, mailing].find(r => !!r?.address_line1 && !isTdLargoAddressRow(r)) ?? null
 }
 
 /**
  * The Mailing Address card a CLIENT sees: where they post documents to us — our Seminole mailbox, the same for everyone
- * (Antonio 2026-10-01: "Mailing address in Seminole"). A client with their own saved mailing row keeps it; the other 236 of 248
- * active clients had no saved row and saw "not on file".
+ * (Antonio 2026-10-01: "Mailing address in Seminole"). It read "not on file" for 236 of 248 active clients; the other 12 had a
+ * saved row and every one of them is the same Seminole box, so no client keeps a row of their own.
  */
 export const TD_MAILING_ROW: MailingAddressRow & { name: string; country: string } = {
   name: TD_OFFICE.company,
@@ -127,8 +127,8 @@ export const TD_MAILING_ROW: MailingAddressRow & { name: string; country: string
   country: 'US',
 }
 
-export function mailingForClient<T extends MailingAddressRow>(saved: T | null | undefined): T | typeof TD_MAILING_ROW {
-  return saved?.address_line1 ? saved : TD_MAILING_ROW
+export function mailingForClient(): typeof TD_MAILING_ROW {
+  return TD_MAILING_ROW
 }
 
 // The company's CMRA address as one line: Largo + its suite when it has one, else the saved FK row, else the legacy

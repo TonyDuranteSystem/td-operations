@@ -97,8 +97,8 @@ export default async function PortalAddressesPage() {
     companySuiteForCard = companySuite
     // with a suite: Largo + the company's own suite; no suite yet: the saved Principal Office (never the shared Largo row, which has no suite)
     legal = principalOfficeForClient((acct?.legal as AddrRow | null) ?? null, (acct?.mailing as AddrRow | null) ?? null, companySuite) as AddrRow | null
-    // the Mailing card is our Seminole mailbox for everyone unless the client has their own saved row
-    shipping = mailingForClient((acct?.shipping as AddrRow | null) ?? null) as AddrRow
+    // the Mailing card is our Seminole mailbox for everyone
+    shipping = mailingForClient() as AddrRow
     companyName = (acct?.company_name as string | null) ?? null
   }
 

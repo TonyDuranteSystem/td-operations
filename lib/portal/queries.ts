@@ -617,8 +617,8 @@ export async function getPortalAccountDetail(accountId: string) {
   data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
   // No suite yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
   data.legal_address = principalOfficeForClient(data.legal_address, data.mailing_address, suite)
-  // The Mailing card: our Seminole mailbox for everyone unless the client has their own saved mailing row (was blank for 236 of 248)
-  data.shipping_address = mailingForClient(data.shipping_address)
+  // The Mailing card: our Seminole mailbox for everyone (was blank for 236 of 248)
+  data.shipping_address = mailingForClient()
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers

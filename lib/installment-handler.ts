@@ -5,7 +5,7 @@
  *
  * 1st Installment Paid:
  * - Create 4 recurring SDs for the year: CMRA, RA Renewal, Annual Report, Tax Return
- * - Create new lease agreement (CMRA)
+ * - (the renewal lease is NOT created automatically any more — see step 6 below)
  * - Email team with confirmation
  *
  * 2nd Installment Paid:
