@@ -233,6 +233,7 @@ interface OfferRecord {
   packages: OfferPackageOption[] | null
   selected_package_key: string | null
   package_locked_at: string | null
+  contract_version?: string | null
 }
 
 interface PendingActivationRecord {

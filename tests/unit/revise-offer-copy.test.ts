@@ -89,6 +89,7 @@ describe("buildRevisedOfferInsert — WS-B copy-list triage (dev job c0a61e44)",
     expect(out).not.toHaveProperty("expires_at")
     expect(out).not.toHaveProperty("viewed_at")
     expect(out).not.toHaveProperty("access_code")
+    expect(out).not.toHaveProperty("contract_version")
     expect(out).not.toHaveProperty("superseded_by")
     expect(out).not.toHaveProperty("partner_id")
     expect(out).not.toHaveProperty("referrer_commission_pct")

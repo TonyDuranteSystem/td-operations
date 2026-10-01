@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { isClientFacingError } from '@/lib/public-forms/signing-failures'
 import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/lib/offers/offer-api-client'
 import type { Offer } from '@/lib/types/offer'
+import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 
 function today() {
@@ -549,6 +550,9 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         <div className="contract-text-center" style={{ marginTop: 36, paddingTop: 20, borderTop: '1px solid var(--c-border)' }}>
           <p className="contract-text-muted contract-text-small">Tony Durante LLC &bull; 10225 Ulmerton Road, Suite 3D &bull; Largo, FL 33771</p>
           <p className="contract-text-muted contract-text-small">support@tonydurante.us &bull; www.tonydurante.us</p>
+          {contractVersionLabel((offer as { contract_version?: string | null }).contract_version) && (
+            <p className="contract-text-muted contract-text-small">{contractVersionLabel((offer as { contract_version?: string | null }).contract_version)}</p>
+          )}
         </div>
       </div>
 

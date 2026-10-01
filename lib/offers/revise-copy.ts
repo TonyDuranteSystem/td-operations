@@ -45,6 +45,7 @@ export interface RevisedOfferSeed {
  *   view_count/viewed_at — reset by design (v2 starts unviewed)
  *   status              — always 'draft'
  *   access_code/token   — new identity for the new version
+ *   contract_version    — the database default stamps today's contract version (N0b)
  *   partner_* + referrer_commission_* — changing partner economics on a
  *     revision needs its own reviewed pass; flagged, out of WS-B scope
  */
