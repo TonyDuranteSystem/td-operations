@@ -1726,7 +1726,12 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
                 <div className="min-w-0 flex-1 basis-44">
                   <p className="text-sm font-semibold text-zinc-900 truncate">
-                    {selected.name}
+                    {/* `selected` is a snapshot taken at click time from the conversation list (never
+                        refreshed — same staleness class as the read/unread bug fixed 2026-09-30, see
+                        docs/systems/inbox.md). For WhatsApp, the thread itself re-fetches the CRM-linked
+                        name live on open and already hands it up via onChatInfo — prefer that fresh name
+                        over the stale snapshot whenever it resolved to something real. */}
+                    {(selected.channel === 'whatsapp' && waChatInfo?.name) || selected.name}
                     {selected.channel === 'whatsapp' && waChatInfo?.phone && (
                       <span className="ml-1.5 text-xs font-normal text-zinc-400">{waChatInfo.phone}</span>
                     )}

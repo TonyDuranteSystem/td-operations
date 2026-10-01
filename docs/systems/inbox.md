@@ -1,6 +1,18 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-10-01 — Claude (Contacts gained two more phone slots
+_Last verified against code: 2026-10-01 — Claude (**AN OPEN WHATSAPP CHAT'S HEADER COULD SHOW THE
+BARE NUMBER EVEN WHEN THE CHAT WAS ALREADY CORRECTLY LINKED TO A REAL CLIENT.** Antonio, from a
+screenshot of a correctly-linked client's open chat still showing just her number. Root cause: the
+header's bold title (`inbox-shell.tsx`) reads `selected.name` — a snapshot of the conversation-list
+row frozen at the moment it was clicked, same staleness pattern already fixed for Mark Read/Unread
+2026-09-30 (`openedConversation()`). `WhatsappThread` already fetches the correct, live, CRM-linked
+name the instant a chat opens and hands it up via `onChatInfo` (reset to null on every chat switch
+so the header never flashes the wrong chat's data, confirmed already in place) — but the header only
+ever read `.phone` off that live object, never `.name`, so the fresh correct name was computed and
+then thrown away. Fix: the header now prefers the live name over the stale snapshot whenever it
+resolved to something real, falling back to the snapshot only while the live fetch is still loading.
+One file, no backend/schema change. Verified: typecheck and lint clean on the touched file, full
+unit suite green (916 files, 12,717 tests).) Prior 2026-10-01 — Claude (Contacts gained two more phone slots
 (`phone_3`/`phone_4`) so a client with more than one real number in use (e.g. a US number on file
 plus an Italian WhatsApp number — Snowfy LLC's Claudia Taffarello) can actually be found by either.
 Two Inbox routes under this doc's own path glob were touched purely to check the two new slots
