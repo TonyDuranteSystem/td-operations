@@ -90,7 +90,7 @@ Company: ${d.companyName ?? NOT_ON_FILE}${d.entityType ? ` (${d.entityType}` + (
 Primary contact: ${contactBits}
 ADDRESSES — these are DIFFERENT things and NEVER interchangeable:
 ${line("Registered Agent address (state service-of-process ONLY — never a business, mailing, or bank/broker address)", d.registeredAgentAddress && d.registeredAgentProvider ? `${d.registeredAgentAddress} (provider: ${d.registeredAgentProvider})` : d.registeredAgentAddress)}
-${line("Business mailing address (CMRA / TD office — the one clients use with banks and brokers, with their lease suite)", d.mailingAddress)}
+${line("Principal Office (our Largo office with the client's OWN suite — the address on their lease, EIN application, Operating Agreement and invoices)", d.mailingAddress)}
 ${line("Client residential address (CRM record — flag it if another source shows a different one)", d.contactAddress)}
 Active services: ${services}
 Lease: ${lease}

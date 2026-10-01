@@ -92,7 +92,8 @@ export function withCompanyCmra<T extends MailingAddressRow>(
   companySuite: string | null | undefined,
 ): T | MailingAddressRow | null | undefined {
   if (!companySuite) return row
-  return { ...(row ?? {}), ...TD_LARGO_OFFICE, address_line2: `Suite ${companySuite}` }
+  // Only the Largo address + the suite: nothing of the saved row (its name, provider, agent) may leak onto it.
+  return { ...TD_LARGO_OFFICE, address_line2: `Suite ${companySuite}` }
 }
 
 // The company's CMRA address as one line: Largo + its suite when it has one, else the saved FK row, else the legacy

@@ -2476,7 +2476,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <div className="border-t pt-3 mt-1 space-y-3">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Address Registry</p>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">Principal Office</p>
+              <p className="text-xs text-zinc-500 mb-1">Address on the Articles</p>
               <AddressPicker
                 accountId={account.id}
                 accountUpdatedAt={account.updated_at}

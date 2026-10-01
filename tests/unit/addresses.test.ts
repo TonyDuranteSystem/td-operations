@@ -266,6 +266,14 @@ describe('withCompanyCmra — the CMRA address is always Largo + the company\'s 
     expect(out).toMatchObject({ address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-212', city: 'Largo', state: 'FL', zip: '33771' })
     expect(withCompanyCmra(null, '3D-212')).toMatchObject({ address_line2: 'Suite 3D-212', city: 'Largo' })
   })
+  it('carries nothing of the saved row onto the Largo address (no name, provider or agent leaks)', () => {
+    const saved = { ...seminole, name: 'Northwest Registered Agent', provider: 'NWRA', agent_name: 'Some Agent', is_td_provided: false }
+    const out = withCompanyCmra(saved, '3D-212') as Record<string, unknown>
+    expect(out.name).toBeUndefined()
+    expect(out.provider).toBeUndefined()
+    expect(out.agent_name).toBeUndefined()
+    expect(out.address_line1).toBe('10225 Ulmerton Rd')
+  })
   it('a company with no suite keeps the saved row untouched', () => {
     expect(withCompanyCmra(seminole, null)).toBe(seminole)
     expect(withCompanyCmra(null, undefined)).toBeNull()

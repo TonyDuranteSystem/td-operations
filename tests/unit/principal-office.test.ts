@@ -84,7 +84,7 @@ describe('applyPrincipalOfficeDecision', () => {
     const upd = ops.filter(o => o.table === 'accounts' && o.op === 'update')
     expect(upd).toHaveLength(1)
     expect(upd[0].row.notes).toContain('old note')
-    expect(upd[0].row.notes).toContain('principal office confirmed unchanged')
+    expect(upd[0].row.notes).toContain('address on the Articles confirmed unchanged')
     expect(upd[0].row.business_legal_address_id).toBeUndefined()
   })
 
@@ -100,7 +100,7 @@ describe('applyPrincipalOfficeDecision', () => {
     const link = ops.find(o => o.table === 'accounts' && o.row.business_legal_address_id)!
     expect(link.row).toMatchObject({ business_legal_address_id: 'new-addr', legal_link_verified: true })
     const note = ops.filter(o => o.table === 'accounts' && o.row.notes).pop()!
-    expect(String(note.row.notes)).toContain('principal office CHANGED: 30 N Gould St, Sheridan WY 82801 → 16192 Coastal Hwy, Lewes DE 19958')
+    expect(String(note.row.notes)).toContain('address on the Articles CHANGED: 30 N Gould St, Sheridan WY 82801 → 16192 Coastal Hwy, Lewes DE 19958')
   })
 
   it('changed to an address that is already saved: reuses it, creates no duplicate', async () => {

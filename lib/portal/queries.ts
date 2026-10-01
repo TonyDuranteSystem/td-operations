@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString, withCompanySuite, withCompanyCmra } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, withCompanyCmra } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -609,12 +609,13 @@ export async function getPortalAccountDetail(accountId: string) {
     .single()
 
   if (!data) return data
-  // The CMRA address is ALWAYS Largo + THIS company's own suite (no saved CMRA link is read when the company has a
-  // suite). The principal office row shows the company's suite only when it IS a Largo office row; other addresses
-  // (registered agent…) are untouched.
+  // The client sees THREE addresses (Antonio 2026-10-01): Principal Office, Mailing Address (Seminole) and Registered
+  // Agent. The Principal Office is ALWAYS our Largo office + THIS company's own suite (the address on the lease, the EIN
+  // application, the Operating Agreement and the invoices) — whatever address row is saved. A company with no suite yet
+  // keeps its saved row. The address on the Articles of Organization stays inside the CRM (checked at each annual report).
   const suite = (data.suite_number as string | null) ?? null
-  data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address
-  data.legal_address = withCompanySuite(data.legal_address, suite) ?? data.legal_address
+  data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
+  data.legal_address = withCompanyCmra(data.legal_address, suite) ?? data.legal_address
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers

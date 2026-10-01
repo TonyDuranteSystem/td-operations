@@ -45,10 +45,10 @@ export function PrincipalOfficeCheck({ accountId, value, onChange, disabled }: P
   return (
     <div className="rounded-md border border-purple-200 bg-purple-50/40 p-3 space-y-2">
       <p className="text-xs font-medium text-zinc-700">
-        Principal address on the filed annual report <span className="text-red-500">*</span>
+        Address on the filed annual report <span className="text-red-500">*</span>
       </p>
       <p className="text-[11px] text-zinc-600">
-        Saved Principal Office:{' '}
+        Saved address on the Articles:{' '}
         {!loaded ? (
           <Loader2 className="inline h-3 w-3 animate-spin" />
         ) : loadError ? (

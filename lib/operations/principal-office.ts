@@ -102,7 +102,7 @@ export async function applyPrincipalOfficeDecision(opts: {
   }
 
   if (!decision.changed) {
-    await appendNote(`${filedDate}: Annual Report ${year} — principal office confirmed unchanged (${actor})`)
+    await appendNote(`${filedDate}: Annual Report ${year} — address on the Articles confirmed unchanged (${actor})`)
     return { changed: false, address: await getPrincipalOfficeText(accountId), address_id: null }
   }
 
@@ -153,6 +153,6 @@ export async function applyPrincipalOfficeDecision(opts: {
     address_line1: decision.address_line1, address_line2: decision.address_line2,
     city: decision.city, state: decision.state, zip: decision.zip,
   })
-  await appendNote(`${filedDate}: Annual Report ${year} — principal office CHANGED: ${before ?? "(none on file)"} → ${after} (${actor})`)
+  await appendNote(`${filedDate}: Annual Report ${year} — address on the Articles CHANGED: ${before ?? "(none on file)"} → ${after} (${actor})`)
   return { changed: true, address: after, address_id: addressId }
 }

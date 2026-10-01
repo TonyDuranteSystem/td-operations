@@ -37,7 +37,7 @@ const VERIFIED_FIELD: Record<LegalMailingKind, string> = {
 
 // Human-readable label used in dialog titles and toasts.
 const KIND_LABEL: Record<LegalMailingKind, string> = {
-  business_legal: 'principal office',
+  business_legal: 'address on the Articles',
   business_mailing: 'CMRA address',
   shipping: 'mailing address',
 }

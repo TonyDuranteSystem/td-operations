@@ -455,7 +455,7 @@ describe("client card rendering", () => {
     expect(card).toContain("Registered Agent address")
     expect(card).toContain("service-of-process ONLY")
     expect(card).toContain("Harbor Compliance")
-    expect(card).toContain("Business mailing address (CMRA / TD office")
+    expect(card).toContain("Principal Office (our Largo office with the client's OWN suite")
     expect(card).toContain("not on file")
     expect(card).toContain("language on file: Italian")
     expect(card).toContain("PDF NOT generated yet")

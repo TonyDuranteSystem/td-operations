@@ -979,6 +979,8 @@ const translations: Record<Locale, Record<string, string>> = {
     'addresses.raEmpty': 'No registered agent on file.',
     'addresses.principalTitle': 'Principal Office',
     'addresses.principalSubtitle': "The principal office address on file for your company's state filings.",
+    // 2026-10-01: the client's Principal Office is our Largo office + their own suite (new key — stored translations of the old key never update)
+    'addresses.principalSubtitleV2': "Our Largo office, with your own suite number. This is the address on your lease agreement.",
     'addresses.principalEmpty': 'No principal office address on file.',
     'addresses.cmraTitle': 'CMRA Office Address',
     'addresses.cmraSubtitle': "Your company's registered office, included in your annual service. Use it as your business address for banking and everyday business.",
@@ -2346,6 +2348,7 @@ const translations: Record<Locale, Record<string, string>> = {
     'addresses.raEmpty': 'Nessun agente registrato in archivio.',
     'addresses.principalTitle': 'Sede Principale',
     'addresses.principalSubtitle': "L'indirizzo della sede principale in archivio per gli atti depositati presso lo Stato.",
+    'addresses.principalSubtitleV2': "Il nostro ufficio di Largo, con il tuo numero di suite. È l'indirizzo indicato nel tuo Lease Agreement.",
     'addresses.principalEmpty': 'Nessun indirizzo della sede principale in archivio.',
     'addresses.cmraTitle': 'Indirizzo Ufficio CMRA',
     'addresses.cmraSubtitle': "L'ufficio registrato della tua azienda, incluso nel tuo servizio annuale. Usalo come indirizzo aziendale per operazioni bancarie e attività quotidiane.",
