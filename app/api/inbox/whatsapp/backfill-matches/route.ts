@@ -54,7 +54,7 @@ export async function POST() {
   // no phone or a too-short one, and this route runs on demand, not on a hot path.
   const [{ data: leadRows, error: leadErr }, { data: contactRows, error: contactErr }] = await Promise.all([
     supabaseAdmin.from("leads").select("id, full_name, phone"),
-    supabaseAdmin.from("contacts").select("id, full_name, phone, phone_2"),
+    supabaseAdmin.from("contacts").select("id, full_name, phone, phone_2, phone_3, phone_4"),
   ])
   if (leadErr) return NextResponse.json({ error: leadErr.message }, { status: 500 })
   if (contactErr) return NextResponse.json({ error: contactErr.message }, { status: 500 })
@@ -64,9 +64,15 @@ export async function POST() {
     ...(contactRows ?? []).flatMap((c) => {
       const rows: MatchCandidate[] = []
       if (c.phone) rows.push({ type: "contact", id: c.id as string, name: c.full_name as string, phone: c.phone as string })
-      // A second number on the same contact is still "this contact" — dedupe by id downstream isn't needed since
-      // classifyGroups groups by DIGITS, and the two numbers are (by construction) different digit strings.
-      if (c.phone_2 && c.phone_2 !== c.phone) rows.push({ type: "contact", id: c.id as string, name: c.full_name as string, phone: c.phone_2 as string })
+      // Every other number on the same contact is still "this contact" — dedupe by id downstream isn't needed since
+      // classifyGroups groups by DIGITS, and the numbers are (by construction) different digit strings.
+      const seen = new Set(rows.map((r) => r.phone))
+      for (const extra of [c.phone_2, c.phone_3, c.phone_4]) {
+        if (extra && !seen.has(extra)) {
+          rows.push({ type: "contact", id: c.id as string, name: c.full_name as string, phone: extra as string })
+          seen.add(extra)
+        }
+      }
       return rows
     }),
   ]

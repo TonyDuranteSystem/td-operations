@@ -1,5 +1,23 @@
 # Messaging (WhatsApp / Telegram)
-_Last verified against code: 2026-10-01 — Claude (**OUR OWN BUSINESS NAME WAS LEAKING ONTO CLIENT CHATS.**
+_Last verified against code: 2026-10-01 — Claude (**CONTACTS GET TWO MORE PHONE SLOTS (`phone_3`/`phone_4`) SO THE WHATSAPP MATCHER CAN SEE A CLIENT'S OTHER NUMBERS.**
+Root cause surfaced live: Claudia Taffarello (Snowfy LLC) has a US number on file (`phone`) but was messaging from
+an Italian number — her CRM record had nowhere to put it, so `wabridge_link_chat` (the automatic WhatsApp-to-client
+matcher) and the single-chat match banner could never see the connection, no matter how exact a match it was.
+Antonio: "in the crm we have the american number. it's better to add two more fields for phone so we can add more
+phone number." Migration `20261001-1900-contacts-extra-phones.sql` adds `contacts.phone_3`/`phone_4` (contacts only
+— leads deliberately keep their single `phone` field, consistent with leads being pre-conversion/simpler records).
+Every real phone-matching call site updated to check all four slots, not just the first two: `wabridge_link_chat`
+(SQL, the automatic matcher), `findContactByPhone` (`lib/messaging/contact-match.ts`, backs the single-chat match
+banner and the new-conversation search), `/api/inbox/whatsapp-new/search-recipient` (the "start a new WhatsApp
+conversation" picker), and `/api/inbox/whatsapp/backfill-matches` (the staff-triggered bulk sweep). The contact
+detail page gets two new editable "Phone 3"/"Phone 4" fields next to the existing "Phone 2". A client is capped at
+4 numbers by design — matches the existing `phone`/`phone_2` precedent and avoids a much wider refactor (a proper
+one-to-many phone-numbers table) for a case that doesn't need unlimited numbers at TD's scale. Verified: the exact
+new matching expression tested directly against representative sandbox data (confirms a `phone_3` match), the
+deployed `wabridge_link_chat` function body confirmed to contain the new checks via `pg_get_functiondef`. New
+tests in `tests/unit/messaging-contact-match.test.ts` (matches via `phone_3`/`phone_4`; does not match when both are
+null). Full unit suite green (904 files, 12,619 tests), typecheck clean on every touched file. Sandbox only as of
+this entry — NOT yet in production.) Prior 2026-10-01 — Claude (**OUR OWN BUSINESS NAME WAS LEAKING ONTO CLIENT CHATS.**
 Antonio: "all messages are marked as Tony Durante LLC instead of with the name of the client." Confirmed live
 against the real connection: the phone-linking program (GOWA) is reporting this line's own registered
 WhatsApp Business display name ("Tony Durante LLC", confirmed via its own `/app/devices`) as the "name" of

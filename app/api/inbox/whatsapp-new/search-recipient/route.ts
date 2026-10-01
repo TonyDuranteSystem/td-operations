@@ -32,8 +32,10 @@ export async function GET(request: NextRequest) {
       .limit(10),
     supabaseAdmin
       .from('contacts')
-      .select('id, full_name, phone, phone_2')
-      .or(`full_name.ilike.${pattern},phone.ilike.${pattern},phone_2.ilike.${pattern}`)
+      .select('id, full_name, phone, phone_2, phone_3, phone_4')
+      .or(
+        `full_name.ilike.${pattern},phone.ilike.${pattern},phone_2.ilike.${pattern},phone_3.ilike.${pattern},phone_4.ilike.${pattern}`
+      )
       .order('full_name')
       .limit(10),
   ])
@@ -49,12 +51,12 @@ export async function GET(request: NextRequest) {
         accountId: null as string | null,
       })),
     ...(contacts ?? [])
-      .filter((c) => c.phone || c.phone_2)
+      .filter((c) => c.phone || c.phone_2 || c.phone_3 || c.phone_4)
       .map((c) => ({
         type: 'contact' as const,
         id: c.id,
-        name: c.full_name ?? (c.phone || c.phone_2),
-        phone: (c.phone || c.phone_2) as string,
+        name: c.full_name ?? (c.phone || c.phone_2 || c.phone_3 || c.phone_4),
+        phone: (c.phone || c.phone_2 || c.phone_3 || c.phone_4) as string,
         // contacts has no direct account_id (it's a many-to-many via
         // account_contacts) — matches the existing lead/contact-page dialog,
         // which never passes accountId for a contact either.

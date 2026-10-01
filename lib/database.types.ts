@@ -4403,6 +4403,8 @@ export type Database = {
           passport_on_file: boolean | null
           phone: string | null
           phone_2: string | null
+          phone_3: string | null
+          phone_4: string | null
           portal_email_sent_at: string | null
           portal_email_template: string | null
           portal_role: string | null
@@ -4458,6 +4460,8 @@ export type Database = {
           passport_on_file?: boolean | null
           phone?: string | null
           phone_2?: string | null
+          phone_3?: string | null
+          phone_4?: string | null
           portal_email_sent_at?: string | null
           portal_email_template?: string | null
           portal_role?: string | null
@@ -4513,6 +4517,8 @@ export type Database = {
           passport_on_file?: boolean | null
           phone?: string | null
           phone_2?: string | null
+          phone_3?: string | null
+          phone_4?: string | null
           portal_email_sent_at?: string | null
           portal_email_template?: string | null
           portal_role?: string | null

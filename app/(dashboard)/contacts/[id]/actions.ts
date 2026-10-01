@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
 
 const ALLOWED_FIELDS = [
-  'full_name', 'email', 'email_2', 'phone', 'phone_2',
+  'full_name', 'email', 'email_2', 'phone', 'phone_2', 'phone_3', 'phone_4',
   'language', 'citizenship', 'residency',
   'address_line1', 'address_city', 'address_state', 'address_zip', 'address_country',
   'date_of_birth', 'passport_number', 'passport_expiry_date',

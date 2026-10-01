@@ -49,11 +49,15 @@ export async function findContactByPhone(phone: string): Promise<WhatsAppContact
 
   const { data: contacts } = await supabaseAdmin
     .from("contacts")
-    .select("id, full_name, phone, phone_2, account_contacts(accounts(company_name))")
-    .or(`phone.ilike.${pattern},phone_2.ilike.${pattern}`)
+    .select("id, full_name, phone, phone_2, phone_3, phone_4, account_contacts(accounts(company_name))")
+    .or(`phone.ilike.${pattern},phone_2.ilike.${pattern},phone_3.ilike.${pattern},phone_4.ilike.${pattern}`)
     .limit(10)
   const contact = (contacts ?? []).find(
-    (c) => digitsOnly(c.phone ?? "") === target || digitsOnly(c.phone_2 ?? "") === target
+    (c) =>
+      digitsOnly(c.phone ?? "") === target ||
+      digitsOnly(c.phone_2 ?? "") === target ||
+      digitsOnly(c.phone_3 ?? "") === target ||
+      digitsOnly(c.phone_4 ?? "") === target
   )
   if (contact) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
