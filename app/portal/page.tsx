@@ -1153,7 +1153,7 @@ export default async function PortalDashboardPage() {
               icon={FileText}
               accent="amber"
               label={t('dashboard.principalOffice', locale, translations)}
-              description={t('addresses.principalSubtitleV2', locale, translations)}
+              description={t(account.suite_number ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations)}
               parts={account.legal_address_parts}
               legacyValue={account.legal_address}
               emptyText={t('dashboard.addressNotOnFile', locale, translations)}

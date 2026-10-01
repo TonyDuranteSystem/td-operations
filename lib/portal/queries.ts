@@ -615,7 +615,8 @@ export async function getPortalAccountDetail(accountId: string) {
   // keeps its saved row. The address on the Articles of Organization stays inside the CRM (checked at each annual report).
   const suite = (data.suite_number as string | null) ?? null
   data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
-  data.legal_address = withCompanyCmra(data.legal_address, suite) ?? data.legal_address
+  // No suite yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
+  data.legal_address = suite ? withCompanyCmra(data.legal_address, suite) : (data.legal_address ?? data.mailing_address)
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers

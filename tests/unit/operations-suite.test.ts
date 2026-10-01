@@ -119,9 +119,9 @@ describe("companyCmraAddressLine — what the Operating Agreement prints", () =>
     accountRow = { suite_number: null }
     expect(await companyCmraAddressLine("a1", FALLBACK)).toBe(FALLBACK)
   })
-  it("a failed read never blocks the document — it falls back", async () => {
+  it("a failed read THROWS — a saved agreement must never print a bare 'Suite 3D' because of a transient error", async () => {
     accountReadError = { message: "timeout" }
-    expect(await companyCmraAddressLine("a1", FALLBACK)).toBe(FALLBACK)
+    await expect(companyCmraAddressLine("a1", FALLBACK)).rejects.toThrow("Could not read the company's suite")
   })
 })
 

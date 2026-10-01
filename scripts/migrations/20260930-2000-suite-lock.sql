@@ -21,6 +21,9 @@
 -- them redefines anything here), so running this file again never undoes a later file.
 -- PRODUCTION ORDER: see the header of 20260930-2010-suite-lock-data-repair.sql (2000 and 2010 back to back, then deploy).
 
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
 -- ─── 1. Tables ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.suite_reservations (
   suite_number text PRIMARY KEY CHECK (suite_number ~ '^3D-[0-9]{3,4}$'),
@@ -68,7 +71,7 @@ LANGUAGE sql IMMUTABLE AS $$ SELECT NULLIF(substring(p from '^3D-([0-9]{1,9})$')
 -- reservations, audit log), floor 100. Caller must hold the allocator lock.
 CREATE OR REPLACE FUNCTION public.td_next_suite() RETURNS text
 LANGUAGE sql AS $$
-  SELECT '3D-' || lpad((GREATEST(100, COALESCE(max(n), 0)) + 1)::text, 3, '0')
+  SELECT '3D-' || CASE WHEN GREATEST(100, COALESCE(max(n), 0)) + 1 < 1000 THEN lpad((GREATEST(100, COALESCE(max(n), 0)) + 1)::text, 3, '0') ELSE (GREATEST(100, COALESCE(max(n), 0)) + 1)::text END
   FROM (
     SELECT td_suite_num(suite_number) AS n FROM public.accounts
     UNION ALL SELECT td_suite_num(suite_number) FROM public.lease_agreements
@@ -463,3 +466,5 @@ CREATE TRIGGER trg_lease_delete_guard
 -- renewal that correctly re-uses the company's own suite.
 DROP INDEX IF EXISTS public.lease_suite_active_unique;
 DROP INDEX IF EXISTS public.idx_lease_suite_active;
+
+COMMIT;

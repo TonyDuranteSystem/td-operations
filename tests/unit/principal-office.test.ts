@@ -103,14 +103,38 @@ describe('applyPrincipalOfficeDecision', () => {
     expect(String(note.row.notes)).toContain('address on the Articles CHANGED: 30 N Gould St, Sheridan WY 82801 → 16192 Coastal Hwy, Lewes DE 19958')
   })
 
-  it('changed to an address that is already saved: reuses it, creates no duplicate', async () => {
-    existingMatches = [{ id: 'addr-existing' }]
+  const savedRow = (over: Record<string, unknown> = {}) => ({
+    id: 'addr-existing', address_line1: '16192 Coastal Hwy', address_line2: null, city: 'Lewes', state: 'DE', zip: '19958',
+    created_at: '2026-01-01T00:00:00Z', ...over,
+  })
+
+  it('changed to an address that is already saved (same street, unit, city, state, ZIP): reuses it, creates no duplicate', async () => {
+    existingMatches = [savedRow()]
     await applyPrincipalOfficeDecision({
       ...base,
       decision: { changed: true, address_line1: '16192 Coastal Hwy', address_line2: null, city: 'Lewes', state: 'DE', zip: '19958' },
     })
     expect(ops.filter(o => o.table === 'addresses' && o.op === 'insert')).toHaveLength(0)
     expect(ops.find(o => o.table === 'accounts' && o.row.business_legal_address_id)!.row.business_legal_address_id).toBe('addr-existing')
+  })
+
+  it('a saved address with a DIFFERENT suite/unit line is NOT reused — the company gets its own new row', async () => {
+    existingMatches = [savedRow({ address_line2: 'Suite 100' })]
+    await applyPrincipalOfficeDecision({
+      ...base,
+      decision: { changed: true, address_line1: '16192 Coastal Hwy', address_line2: 'Suite 200', city: 'Lewes', state: 'DE', zip: '19958' },
+    })
+    expect(ops.filter(o => o.table === 'addresses' && o.op === 'insert')).toHaveLength(1)
+    expect(ops.find(o => o.table === 'accounts' && o.row.business_legal_address_id)!.row.business_legal_address_id).toBe('new-addr')
+  })
+
+  it('reuse compares case and spacing the same way and picks the oldest identical row', async () => {
+    existingMatches = [savedRow({ id: 'newer', created_at: '2026-06-01T00:00:00Z', address_line1: ' 16192 COASTAL HWY ' }), savedRow({ id: 'oldest' })]
+    await applyPrincipalOfficeDecision({
+      ...base,
+      decision: { changed: true, address_line1: '16192 Coastal Hwy', address_line2: null, city: 'Lewes', state: 'DE', zip: '19958' },
+    })
+    expect(ops.find(o => o.table === 'accounts' && o.row.business_legal_address_id)!.row.business_legal_address_id).toBe('oldest')
   })
 })
 

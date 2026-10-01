@@ -107,18 +107,21 @@ export async function applyPrincipalOfficeDecision(opts: {
   }
 
   const before = await getPrincipalOfficeText(accountId)
-  // reuse an identical saved principal-office address instead of duplicating it
-  const { data: existing } = await supabaseAdmin
+  // reuse an IDENTICAL saved principal-office address (same street, suite/unit line, city, state and ZIP — compared exactly, in the
+  // same lower-case form, with no wildcard matching) instead of duplicating it. Anything that differs, even only the suite, is a new row.
+  const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase()
+  const { data: candidates } = await supabaseAdmin
     .from("addresses")
-    .select("id")
+    .select("id, address_line1, address_line2, city, state, zip, created_at")
     .eq("kind", "business_legal")
     .eq("active", true)
-    .ilike("address_line1", decision.address_line1)
-    .ilike("city", decision.city)
-    .ilike("state", decision.state)
-    .ilike("zip", decision.zip)
-    .limit(1)
-  let addressId = (existing as Array<{ id: string }> | null)?.[0]?.id ?? null
+    .ilike("address_line1", decision.address_line1.replace(/[\\%_]/g, (c) => "\\" + c))
+    .limit(50)
+  const same = ((candidates as Array<{ id: string; address_line1: string; address_line2: string | null; city: string; state: string; zip: string; created_at: string }> | null) ?? [])
+    .filter(r => norm(r.address_line1) === norm(decision.address_line1) && norm(r.address_line2) === norm(decision.address_line2)
+      && norm(r.city) === norm(decision.city) && norm(r.state) === norm(decision.state) && norm(r.zip) === norm(decision.zip))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+  let addressId = same[0]?.id ?? null
   if (!addressId) {
     const { data: created, error: insErr } = await supabaseAdmin
       .from("addresses")

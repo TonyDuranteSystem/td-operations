@@ -50,6 +50,13 @@ describe('getPortalAccountDetail — the Principal Office card', () => {
     expect(d.shipping_address).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
   })
 
+  it('no suite and no saved Principal Office: the saved office (CMRA) link is shown instead of an empty card', async () => {
+    account.suite_number = null
+    account.legal_address = null
+    const d = await getPortalAccountDetail('a1')
+    expect(d.legal_address).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
+  })
+
   it('a company with no suite yet keeps its saved Principal Office row', async () => {
     account.suite_number = null
     const d = await getPortalAccountDetail('a1')

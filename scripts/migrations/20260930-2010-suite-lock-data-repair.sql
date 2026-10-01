@@ -1,10 +1,11 @@
 -- Suite lock — ONE-TIME DATA REPAIR (Antonio's decisions, 2026-09-30).
 --
--- PRODUCTION ORDER:
---   1) 20260930-2000-suite-lock.sql        2) THIS file, straight away      3) deploy the code (right away — see below)
---   4) 20260930-2030-suite-step.sql + 20260930-2031-suite-step-layout.sql + 20260930-2040-suite-release.sql
---      (run them immediately BEFORE or right after the deploy finishes: the required-step rule needs the new buttons)
---   5) 20260930-2020-suite-lock-after-deploy.sql  (only after the deploy is live)
+-- PRODUCTION ORDER (decided after the final council review — run 1 to 5 in ONE sitting, back to back, then merge):
+--   0) export the backups below; (optional) the rolled-back dry run
+--   1) 20260930-2000-suite-lock.sql        2) THIS file, straight away
+--   3) 20260930-2030-suite-step.sql        4) 20260930-2031-suite-step-layout.sql      5) 20260930-2040-suite-release.sql
+--   6) merge the code (the new code CALLS the functions these files create, so the database always goes FIRST)
+--   7) 20260930-2020-suite-lock-after-deploy.sql  (only after the deploy is verified live)
 -- The gap between 1/2 and 3 must be SHORT: from step 1 on, the OLD code cannot create a lease for a company that has no
 -- suite, and cannot issue one. (Every company that exists today is loaded by this file, so only a company created
 -- inside the gap is affected.)

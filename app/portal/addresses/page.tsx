@@ -75,11 +75,12 @@ export default async function PortalAddressesPage() {
   let legal: AddrRow | null = null
   let shipping: AddrRow | null = null
   let companyName: string | null = null
+  let companySuiteForCard: string | null = null
   if (selectedAccountId) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acct } = await (supabaseAdmin as any)
       .from('accounts')
-      .select('company_name, suite_number, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
+      .select('company_name, suite_number, registered_agent_address, registered_agent_provider, registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), legal:addresses!business_legal_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), mailing:addresses!business_mailing_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country), shipping:addresses!shipping_address_id(name, agent_name, provider, address_line1, address_line2, city, state, zip, country)')
       .eq('id', selectedAccountId)
       .maybeSingle()
     // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
@@ -93,7 +94,10 @@ export default async function PortalAddressesPage() {
     // The principal office shows the company's suite only if it is a Largo office row; the CMRA address is ALWAYS Largo + the
     // company's own suite (no saved CMRA link is read when the company has one).
     const companySuite = (acct?.suite_number as string | null) ?? null
-    legal = (withCompanyCmra((acct?.legal as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null
+    companySuiteForCard = companySuite
+    legal = companySuite
+      ? ((withCompanyCmra((acct?.legal as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null)
+      : ((acct?.legal as AddrRow | null) ?? (acct?.mailing as AddrRow | null) ?? null) // no suite yet: saved Principal Office, else the saved office link
     shipping = (acct?.shipping as AddrRow | null) ?? null
     companyName = (acct?.company_name as string | null) ?? null
   }
@@ -129,7 +133,7 @@ export default async function PortalAddressesPage() {
         icon={FileText}
         accent="amber"
         title={t('addresses.principalTitle', locale, translations)}
-        subtitle={t('addresses.principalSubtitleV2', locale, translations)}
+        subtitle={t(companySuiteForCard ? 'addresses.principalSubtitleV2' : 'addresses.principalSubtitle', locale, translations)}
         name={(legal?.name as string | null) ?? companyName}
         addr={legal}
         legacyText={null}

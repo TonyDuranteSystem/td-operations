@@ -74,7 +74,11 @@ export async function POST(req: NextRequest) {
         data,
       },
     })
-    return NextResponse.json({ ok: true, ...result })
+    // fileRenewal reports failures as { success: false, error } instead of throwing — never answer 200 for a filing that did not happen
+    if (!result.success) {
+      return NextResponse.json({ error: result.error ?? "Filing failed" }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, ...result.data })
   } catch (err) {
     const message = err instanceof Error && err.message ? err.message : "Filing failed"
     return NextResponse.json({ error: message }, { status: 500 })

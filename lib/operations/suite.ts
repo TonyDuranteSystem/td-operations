@@ -67,15 +67,12 @@ export async function getCompanySuite(accountId: string): Promise<string | null>
 /**
  * The CMRA address the Operating Agreement prints: ALWAYS Largo + the company's own suite
  * ("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771"); with no suite yet, the caller's fallback.
- * A failed read never blocks a document — it just uses the fallback.
+ * A failed READ throws: a saved Operating Agreement must never print a bare "Suite 3D" because of a transient error.
+ * The fallback is used only when the read succeeded and the company has no suite.
  */
 export async function companyCmraAddressLine(accountId: string, fallback: string | null): Promise<string | null> {
-  try {
-    const suite = await getCompanySuite(accountId)
-    return suite ? largoAddressForSuite(suite) : fallback
-  } catch {
-    return fallback
-  }
+  const suite = await getCompanySuite(accountId)
+  return suite ? largoAddressForSuite(suite) : fallback
 }
 
 /**

@@ -114,6 +114,8 @@ export function MarkFiledDialog({ row, onClose, onFiled }: Props) {
         throw new Error(data.error || 'Failed to file renewal — please try again.')
       }
       toast.success(`${isRA ? 'RA Renewal' : 'Annual Report'} ${year} filed for ${row.company_name}.`)
+      // The filing is done, but saving the principal-address answer failed — staff must fix the address by hand (never silent)
+      if (data.principal_office_warning) toast.warning(String(data.principal_office_warning), { duration: 30000 })
       onFiled()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to file renewal.')

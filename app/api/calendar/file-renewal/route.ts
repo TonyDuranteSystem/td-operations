@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { isDashboardUser } from '@/lib/auth'
 import { fileRenewal, type RenewalKind } from '@/lib/operations/file-renewal'
 import { parsePrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
@@ -24,6 +25,10 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    // Staff only — a portal client is also a logged-in user and must never be able to file a renewal for any company
+    if (!isDashboardUser(user)) {
+      return NextResponse.json({ error: 'Staff only' }, { status: 403 })
     }
 
     const fd = await req.formData()

@@ -24,6 +24,7 @@ import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
 import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
+import { toast } from 'sonner'
 
 interface Column {
   slug: string
@@ -275,10 +276,12 @@ function TaxRenewalActions({ sourceRef, accountId, onResolve }: {
           receipt: { file_name: file.name, mime_type: file.type || 'application/pdf', data_base64 },
         }),
       })
+      const d = await res.json().catch(() => ({})) as { error?: string; principal_office_warning?: string }
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error((d as { error?: string }).error || 'Filing failed')
+        throw new Error(d.error || 'Filing failed')
       }
+      // The filing is done, but saving the principal-address answer failed — staff must fix the address by hand (never silent)
+      if (d.principal_office_warning) toast.warning(d.principal_office_warning, { duration: 30000 })
       await onResolve()
     } catch (e) {
       setErr(e instanceof Error && e.message ? e.message : 'Filing failed')
