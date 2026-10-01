@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
+import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
 import { filterPlainDrop, isInternalOwnerKind, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -270,6 +271,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     queryFn: async () => { const r = await fetch('/api/crm-store/drive-folders?probe=1'); return r.ok ? r.json() : { allowed: false } },
     staleTime: 300_000,
     enabled: !scopedOwnerId,
+  })
+  // "My Google Drive" → Business / My files (owners only — the server says)
+  const [myDriveFor, setMyDriveFor] = useState<Fold | null>(null)
+  const { data: myDriveProbe } = useQuery<{ allowed: boolean }>({
+    queryKey: ['crm-store-mydrive-probe'],
+    queryFn: async () => { const r = await fetch('/api/crm-store/mydrive/list?probe=1'); return r.ok ? r.json() : { allowed: false } },
+    staleTime: 300_000,
   })
   const { data: docTypes } = useStoreDocTypes()
   const typeNameOf = (slug: string | null) => (slug ? docTypes?.find((t) => t.slug === slug)?.name ?? slug : null)
@@ -785,6 +793,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           plainFolders.current.set(key, made)
         }
         into = made
+      }
+      if (item.driveId) {          // copied from the owner's own Google Drive — the server fetches it, nothing comes through this browser
+        const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id }, 'The file could not be copied.')
+        return r.outcome === 'saved' ? { outcome: 'saved' } : r.outcome === 'unchanged' ? { outcome: 'unchanged' } : { outcome: 'failed', message: r.message ?? 'The file could not be copied.' }
       }
       const file = item.file
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
@@ -1938,6 +1950,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- webkitdirectory is not in React's input typings */}
                 <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped }); setUploadOpen(false) }} />
               </label>
+              {myDriveProbe?.allowed && <button type="button" onClick={() => { setMyDriveFor(viewFolder); setUploadOpen(false) }} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="my-drive-open">From my Google Drive</button>}
               <button type="button" onClick={() => setUploadOpen(false)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
               <span className="text-xs text-zinc-400">Any kind of file. The same name replaces the file; the old copy is kept under Versions.</span>
             </div>
@@ -2011,6 +2024,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         </>
       )}
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
+      {myDriveFor && (
+        <MyDriveDialog targetName={myDriveFor.name} onClose={() => setMyDriveFor(null)}
+          onChosen={(items, skipped) => { plainFolders.current = new Map(); setPlain({ folder: myDriveFor, items, skipped }); setMyDriveFor(null) }} />
+      )}
       {plain && (
         <PlainDropPanel folderName={plain.folder.name} items={plain.items} skipped={plain.skipped} run={runPlainItem}
           onClose={() => setPlain(null)} onFinished={() => { void refreshAll([plain.folder.id]) }} />
