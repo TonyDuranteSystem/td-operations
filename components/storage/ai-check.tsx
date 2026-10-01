@@ -209,7 +209,7 @@ export function AiReviewPanel({ fileId, queue, onClose, onChanged, onOpenFile }:
     const v = nameDraft.trim()
     if (!v) return
     await post(`/api/crm-store/browse/file/${rep.fileId}/rename`, { name: v + ext }, 'The file could not be renamed.')
-    toast.success('Renamed'); await load(); onChanged()
+    toast.success('Renamed'); await load(); setNameDraft(v); onChanged()      // keep showing the name just saved, not the AI's suggestion again
   })
   const yes = () => act('yes', async () => { await record('applied'); toast.success('Thanks — noted'); onChanged(); await load() })
   const notNow = () => act('later', async () => { await record('dismissed'); onChanged(); if (queue[idx + 1]) go(1); else onClose() })
