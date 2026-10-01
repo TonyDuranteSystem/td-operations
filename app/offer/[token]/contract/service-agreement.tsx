@@ -7,6 +7,7 @@ import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
 import type { Offer } from '@/lib/types/offer'
+import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 
@@ -853,6 +854,9 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
         <div className="contract-text-center" style={{ marginTop: 36, paddingTop: 20, borderTop: '1px solid var(--c-border)' }}>
           <p className="contract-text-muted contract-text-small">Tony Durante LLC &bull; 10225 Ulmerton Road, Suite 3D &bull; Largo, FL 33771</p>
           <p className="contract-text-muted contract-text-small">support@tonydurante.us &bull; www.tonydurante.us</p>
+          {contractVersionLabel((offer as { contract_version?: string | null }).contract_version) && (
+            <p className="contract-text-muted contract-text-small">{contractVersionLabel((offer as { contract_version?: string | null }).contract_version)}</p>
+          )}
         </div>
       </div>
 

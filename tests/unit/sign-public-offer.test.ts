@@ -68,6 +68,14 @@ describe('signing an offer on the server', () => {
     expect(r.bankAmount).toBe('€2,500')
   })
 
+  it('records the contract version the client signed on the contracts row', async () => {
+    const w = world()
+    let row: Record<string, unknown> | null = null
+    const deps = { ...w.deps, insertContract: async (r: Record<string, unknown>) => { row = r; return { id: 'c1', error: null } } }
+    await signPublicOffer({ offer: w.offer, fields: {}, pdfPath: PDF }, deps)
+    expect(row).toMatchObject({ contract_version: '2026-09-30', status: 'signed' })
+  })
+
   it('an onboarding / standalone contract only flips the status', async () => {
     for (const ct of ['onboarding', 'tax_return', 'itin', 'closure']) {
       const w = world({ contractType: ct })

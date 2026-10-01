@@ -15,6 +15,8 @@
  * without being classified.
  */
 
+import { CURRENT_CONTRACT_VERSION, PRE_VERSIONING } from '@/lib/offers/contract-version'
+
 export const OFFER_PRIVATE_FIELDS = [
   'access_code',
   'lead_id',
@@ -76,8 +78,11 @@ export const RENEWAL_PUBLIC_FIELDS = [
 export function toPublicRenewalView(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of RENEWAL_PUBLIC_FIELDS) out[k] = row[k] ?? null
+  // Renewal agreements have no stored version: an unsigned one is signed against today's text.
+  const signed = row.status === 'signed' || row.status === 'completed'
   return {
     ...out,
+    contract_version: signed ? PRE_VERSIONING : CURRENT_CONTRACT_VERSION,
     contract_type: 'renewal',
     installment_currency: 'USD',
     currency: 'USD',

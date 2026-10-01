@@ -40,6 +40,8 @@ export interface OfferData {
   viewed_at: string | null
   created_at: string
   required_documents: Array<{ id: string; name: string }> | null
+  /** Version of the contract text the offer was sent with (N0b); 'pre-versioning' before 2026-09-30. */
+  contract_version?: string | null
   /** Multi-option offers (dev job 3c1bb5fa). Absent/empty on an ordinary
    *  single-price offer — nothing below reads these unless populated. */
   packages?: OfferPackageOption[] | null
@@ -338,6 +340,11 @@ function OfferCard({
           {offer.contract_type && (
             <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-700">
               {offer.contract_type}
+            </span>
+          )}
+          {offer.contract_version && (
+            <span className="text-xs text-zinc-500" title="Version of the contract text this offer was sent with">
+              {offer.contract_version === 'pre-versioning' ? 'Contract: before versioning' : `Contract v${offer.contract_version}`}
             </span>
           )}
           {offer.view_count > 0 && (

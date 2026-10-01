@@ -31,6 +31,7 @@ import {
   isOwnSignedPdfPath,
   SIGNABLE_OFFER_STATUSES,
 } from '@/lib/offers/public-signing'
+import { CURRENT_CONTRACT_VERSION } from '@/lib/offers/contract-version'
 
 export interface SignDeps {
   storageObjectExists: (bucket: string, path: string) => Promise<boolean>
@@ -152,6 +153,8 @@ function buildRow(
     signed_at: now.toISOString(),
     pdf_path: pdfPath,
     status: 'signed',
+    // N0b: the version of the text the client signed — the page renders today's text.
+    contract_version: CURRENT_CONTRACT_VERSION,
   }
 }
 

@@ -72,7 +72,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     supabase
       .from('offers')
       // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
-      .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, view_count, required_documents, created_at, viewed_at, expires_at, packages, selected_package_key, package_locked_at' as never)
+      .select('id, token, client_email, status, contract_type, services, bundled_pipelines, selected_services, cost_summary, view_count, required_documents, created_at, viewed_at, expires_at, packages, selected_package_key, package_locked_at, contract_version' as never)
       .or(`contact_id.eq.${params.id},client_email.eq.${contact.email ?? '__no_match__'}`)
       .order('created_at', { ascending: false }),
     // Pending activations placeholder — fetched below, by the offer tokens
@@ -173,6 +173,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     cost_summary: unknown; view_count: number; required_documents: unknown
     created_at: string; viewed_at: string | null; expires_at: string | null
     packages: OfferPackageOption[] | null; selected_package_key: string | null; package_locked_at: string | null
+    contract_version?: string | null
   }>
   // Pending activations for exactly the offers resolved above — never a
   // second, independent client_email lookup that could disagree with which

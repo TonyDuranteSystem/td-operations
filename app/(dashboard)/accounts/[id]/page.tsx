@@ -217,7 +217,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   const { data: offersRaw } = await supabaseAdmin
     .from('offers')
     // eslint-disable-next-line no-restricted-syntax -- packages/selected_package_key/package_locked_at postdate generated types (migration 20260826-1800)
-    .select('id, token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents, packages, selected_package_key, package_locked_at' as never)
+    .select('id, token, status, contract_type, cost_summary, bundled_pipelines, view_count, viewed_at, created_at, required_documents, packages, selected_package_key, package_locked_at, contract_version' as never)
     .or(offerOrFilter)
     .order('created_at', { ascending: false })
   const offers = (offersRaw ?? []) as unknown as AccountOfferRow[]
