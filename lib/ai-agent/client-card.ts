@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { formatAddressString, type MailingAddressRow } from "@/lib/addresses"
+import { formatAddressString, withCompanyCmra, type MailingAddressRow } from "@/lib/addresses"
 
 /** Cap + flatten a client-typed value so it can't inject structure or rules. */
 export function sanitizeCardValue(v: string | null | undefined, max = 140): string | null {
@@ -90,7 +90,7 @@ Company: ${d.companyName ?? NOT_ON_FILE}${d.entityType ? ` (${d.entityType}` + (
 Primary contact: ${contactBits}
 ADDRESSES — these are DIFFERENT things and NEVER interchangeable:
 ${line("Registered Agent address (state service-of-process ONLY — never a business, mailing, or bank/broker address)", d.registeredAgentAddress && d.registeredAgentProvider ? `${d.registeredAgentAddress} (provider: ${d.registeredAgentProvider})` : d.registeredAgentAddress)}
-${line("Business mailing address (CMRA / TD office — the one clients use with banks and brokers, with their lease suite)", d.mailingAddress)}
+${line("Principal Office (our Largo office with the client's OWN suite — the address on their lease, EIN application, Operating Agreement and invoices)", d.mailingAddress)}
 ${line("Client residential address (CRM record — flag it if another source shows a different one)", d.contactAddress)}
 Active services: ${services}
 Lease: ${lease}
@@ -170,7 +170,7 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       const { data: acct } = await db
         .from("accounts")
         .select(
-          "company_name, entity_type, state_of_formation, status, registered_agent_address, registered_agent_provider, physical_address, business_mailing_address_id"
+          "company_name, entity_type, state_of_formation, status, registered_agent_address, registered_agent_provider, physical_address, business_mailing_address_id, suite_number"
         )
         .eq("id", accountId)
         .maybeSingle()
@@ -183,7 +183,10 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       d.registeredAgentProvider = sanitizeCardValue(acct.registered_agent_provider)
       // Prefer the structured, labeled addresses row; fall back to the legacy
       // free-text physical_address column.
-      if (acct.business_mailing_address_id) {
+      // A company with a suite: the CMRA address is ALWAYS Largo + its suite (no saved CMRA link is read).
+      if (acct.suite_number) {
+        d.mailingAddress = sanitizeCardValue(formatAddressString(withCompanyCmra(null, acct.suite_number) as MailingAddressRow))
+      } else if (acct.business_mailing_address_id) {
         const { data: addr } = await db
           .from("addresses")
           .select("address_line1, address_line2, city, state, zip")

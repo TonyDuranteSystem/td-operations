@@ -177,6 +177,36 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
     }
   }
 
+  // Owner-only: delete a lease that has already gone to the client (sent / viewed / signed) — logged, a reason
+  // is required, the company keeps its suite so a corrected lease can be created straight away. The server
+  // refuses anyone but the owner.
+  const handleAdminDeleteLease = async (token: string, status: string) => {
+    const reason = window.prompt(
+      `Delete this ${status} lease? The client already has it. A copy is kept in the audit log and its signed PDF is hidden from the client's portal; the company keeps its suite.\n\nReason (required):`,
+    )
+    if (!reason || !reason.trim()) return
+    setCancellingDoc('lease')
+    try {
+      const res = await fetch('/api/crm/admin-actions/generate-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'admin_delete_lease', token, reason: reason.trim() }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Could not delete the lease')
+        return
+      }
+      toast.success(data.message || 'Lease deleted')
+      fetchStatuses()
+      router.refresh()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Error deleting the lease')
+    } finally {
+      setCancellingDoc(null)
+    }
+  }
+
   if (!isAdmin) return null
 
   if (loading) {
@@ -323,6 +353,21 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                         >
                           {cancellingDoc === doc.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                           Cancel draft
+                        </button>
+                      </FastTooltip>
+                    )}
+
+                    {/* Owner-only delete for a lease that already went to the client (the server refuses anyone else). */}
+                    {doc.key === 'lease' && status && status !== 'draft' && doc.data?.token && (
+                      <FastTooltip label="Owner only: delete this lease (logged, reason required)">
+                        <button
+                          onClick={() => handleAdminDeleteLease(doc.data!.token, status)}
+                          disabled={cancellingDoc === doc.key}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                          aria-label="Owner only: delete this lease (logged, reason required)"
+                        >
+                          {cancellingDoc === doc.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          Delete lease
                         </button>
                       </FastTooltip>
                     )}

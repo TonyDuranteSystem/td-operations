@@ -87,7 +87,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     .neq("status", "signed")
     .select("id")
     .maybeSingle()
-  if (error) return NextResponse.json({ error: "Failed to record signature" }, { status: 500 })
+  if (error) {
+    // the database refuses a lease whose suite is no longer its company's (e.g. the company was closed and the number was reused)
+    if (error.code === "23514") {
+      return NextResponse.json({ error: "This lease is no longer valid — please contact Tony Durante LLC for a new one." }, { status: 409 })
+    }
+    return NextResponse.json({ error: "Failed to record signature" }, { status: 500 })
+  }
   if (!updated) return NextResponse.json({ error: "Already signed" }, { status: 409 })
 
   return NextResponse.json({ ok: true })

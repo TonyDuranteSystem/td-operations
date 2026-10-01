@@ -147,7 +147,7 @@ export async function advanceFormationToStage(
     : [historyEntry]
 
   // eslint-disable-next-line no-restricted-syntax
-  await supabaseAdmin
+  const { error: moveErr } = await supabaseAdmin
     .from('service_deliveries')
     .update({
       stage: targetStage.stage_name,
@@ -157,6 +157,11 @@ export async function advanceFormationToStage(
       updated_at: new Date().toISOString(),
     })
     .eq('id', delivery.id)
+
+  // the database can refuse a move (e.g. the required Suite step is not done) — say so, never report a move that did not happen
+  if (moveErr) {
+    return { advanced: false, detail: moveErr.message, sideEffects }
+  }
 
   sideEffects.push(`Stage: ${delivery.stage} -> ${targetStage.stage_name}`)
 

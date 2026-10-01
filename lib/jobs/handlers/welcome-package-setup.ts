@@ -24,6 +24,7 @@ import { reportSystemError } from "@/lib/system-errors"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -325,7 +326,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
           duration: "Perpetual",
           registered_agent_name: account.registered_agent_provider || null,
           registered_agent_address: account.registered_agent_address || null,
-          principal_address: account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+          principal_address: await companyCmraAddressLine(p.account_id, account.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
           language: "en",
           status: "draft",
         })
@@ -401,17 +402,22 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     // (the generic first-linked-contact fetched above for OA/banking/portal
     // purposes, which is the wrong source for a Multi-Member LLC's signer).
     const { createLease } = await import("@/lib/operations/lease")
-    const leaseResult = await createLease({
+    const { getCompanySuite } = await import("@/lib/operations/suite")
+    // No suite = either the client was waived ("No suite for this client") or it was never issued: there is nothing to
+    // lease, and that is a decision, not a failure (it must not mark the whole package "prepared_with_errors").
+    const hasSuite = await getCompanySuite(p.account_id)
+    const leaseResult = hasSuite ? await createLease({
       account_id: p.account_id,
-      suite_number: p.suite_number,
       effective_date: today,
       term_start_date: today,
       language: lang as "en" | "it",
       actor: "system:welcome-package-setup",
       summary: `Auto-created lease during welcome package setup for ${account.company_name}`,
-    })
+    }) : null
 
-    if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
+    if (!leaseResult) {
+      result.steps.push(step("lease", "skipped", "This company has no suite — no lease. (Issue the suite from the account page first if one is needed.)"))
+    } else if (leaseResult.outcome === "duplicate" && leaseResult.existing) {
       result.steps.push(step("lease", "skipped", `Already exists: ${leaseResult.existing.token}`))
     } else if (leaseResult.success && leaseResult.lease) {
       result.steps.push(step("lease", "ok", `${leaseResult.lease.token} (suite ${leaseResult.lease.suite_number})`))

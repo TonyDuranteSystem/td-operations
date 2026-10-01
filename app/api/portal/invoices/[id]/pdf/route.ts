@@ -48,7 +48,7 @@ export async function GET(
 
   const { data: account } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('company_name, invoice_logo_url, physical_address, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('company_name, invoice_logo_url, physical_address, suite_number, ein_number, state_of_formation, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .eq('id', invoice.account_id)
     .single()
 
@@ -123,7 +123,7 @@ export async function GET(
 
   // Company details under company name
   let detailY = y - 16
-  const resolvedAddress = resolveMailingAddress((account as any)?.mailing_address, account?.physical_address)
+  const resolvedAddress = resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number)
   if (resolvedAddress) {
     page.drawText(sanitizePdfLine(resolvedAddress), { x: companyNameX, y: detailY, size: 8, font: helvetica, color: gray })
     detailY -= 11

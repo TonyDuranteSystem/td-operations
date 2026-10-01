@@ -26,6 +26,7 @@ import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 // ─── Types ───
 
@@ -376,7 +377,7 @@ async function createOA(
         fiscal_year_end: "December 31",
         accounting_method: "Cash",
         duration: "Perpetual",
-        principal_address: "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+        principal_address: await companyCmraAddressLine(accountId, "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
         language: "en",
         status: "draft",
         // Load-bearing: the whole system decides "multi-member" from
@@ -431,7 +432,7 @@ async function createOA(
 
 async function createLeaseForPlacement(
   accountId: string,
-  suiteNumber: string,
+  suiteNumber?: string,
 ): Promise<StepResult> {
   // No explicit contact_id — createLease resolves the tenant/signer itself
   // from the account's members table (is_signer flag), not from the generic
@@ -440,9 +441,10 @@ async function createLeaseForPlacement(
   const { createLease } = await import("@/lib/operations/lease")
   const result = await createLease({
     account_id: accountId,
-    suite_number: suiteNumber,
+    // Staff typed one (an existing client's known suite) → locked assign; otherwise the company's own suite (issued now if it has none — the lease action was chosen on purpose).
+    ...(suiteNumber ? { suite_number: suiteNumber } : { issue_suite_if_missing: true }), // ticking "lease" on Place Client is the deliberate choice to issue
     actor: "crm-admin:place-client",
-    summary: `Created lease during Place Client flow (Suite ${suiteNumber})`,
+    summary: `Created lease during Place Client flow${suiteNumber ? ` (Suite ${suiteNumber})` : ""}`,
   })
 
   if (result.outcome === "duplicate" && result.existing) {
@@ -695,10 +697,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Primary contact not found: ${ctErr?.message || "no data"}` }, { status: 400 })
     }
 
-    // Validate suite_number if lease is requested
-    if (actions.lease && !suite_number) {
-      return NextResponse.json({ error: "Suite number is required for lease creation" }, { status: 400 })
-    }
+    // suite_number is OPTIONAL: blank = the lease uses the company's own suite (issued if it has none).
+    // Typing one is only for an existing client whose known suite is being placed — the database refuses
+    // a suite that belongs to another company or contradicts the company's own.
 
     // ─── Execute steps ───
     const results: StepResult[] = []
@@ -730,8 +731,8 @@ export async function POST(request: Request) {
     }
 
     // 4. Lease
-    if (actions.lease && suite_number) {
-      const r = await createLeaseForPlacement(account_id, suite_number)
+    if (actions.lease) {
+      const r = await createLeaseForPlacement(account_id, suite_number?.trim() || undefined)
       results.push(r)
     }
 

@@ -26,6 +26,11 @@ import { anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
+import {
+  applyPrincipalOfficeDecision,
+  type ApplyPrincipalOfficeResult,
+  type PrincipalOfficeDecision,
+} from "@/lib/operations/principal-office"
 
 export type RenewalKind = "ra" | "ar"
 
@@ -48,6 +53,11 @@ export interface FileRenewalParams {
    *  must be able to file anyway, with a note) — changes the audit wording
    *  only; the hold was always advisory at this layer. */
   override_unpaid?: boolean
+  /**
+   * REQUIRED for an Annual Report (kind "ar"): did the principal address change on the filed report? Unchanged, or the
+   * new address (it replaces the company's saved Principal Office). Antonio 2026-10-01.
+   */
+  principal_office?: PrincipalOfficeDecision
   receipt: {
     /** Original upload name — used only for audit; written file uses SOP filename. */
     file_name: string
@@ -61,6 +71,10 @@ export interface FileRenewalResult {
   drive_file_id: string
   drive_link: string
   document_id: string
+  /** Annual Report only: what was recorded about the principal office. */
+  principal_office?: ApplyPrincipalOfficeResult
+  /** Set when the filing succeeded but recording the principal-office decision failed — staff must fix it by hand. */
+  principal_office_warning?: string
 }
 
 const SERVICE_TYPE_BY_KIND: Record<RenewalKind, "State RA Renewal" | "State Annual Report"> = {
@@ -155,6 +169,13 @@ export async function fileRenewal(
 ): Promise<ActionResult<FileRenewalResult>> {
   return safeAction<FileRenewalResult>(
     async () => {
+      // 0. An annual report cannot be filed without the principal-address answer (checked BEFORE anything is written).
+      if (params.kind === "ar" && !params.principal_office) {
+        throw new Error(
+          "Say whether the principal address changed on the filed annual report (unchanged, or enter the new address).",
+        )
+      }
+
       // 1. Load account
       const { data: account, error: acctErr } = await supabaseAdmin
         .from("accounts")
@@ -348,6 +369,24 @@ export async function fileRenewal(
         .update({ notes: newNotes, updated_at: new Date().toISOString() })
         .eq("id", account.id)
 
+      // 7b. Annual Report: record the principal-address answer (unchanged → dated note; changed → the new address
+      // becomes the company's Principal Office). The filing is already done, so a failure here is reported, not thrown.
+      let principalOffice: ApplyPrincipalOfficeResult | undefined
+      let principalOfficeWarning: string | undefined
+      if (params.kind === "ar" && params.principal_office) {
+        try {
+          principalOffice = await applyPrincipalOfficeDecision({
+            accountId: account.id,
+            decision: params.principal_office,
+            actor: "crm-admin:annual-report",
+            filedDate: params.filed_date,
+            year,
+          })
+        } catch (e) {
+          principalOfficeWarning = `The annual report was filed, but the principal-address answer could not be saved: ${e instanceof Error ? e.message : String(e)}. Update the Principal Office on the account page by hand.`
+        }
+      }
+
       // 8. Portal notification per SOP — only for portal-active clients
       if (account.portal_tier === "active") {
         const { data: links } = await supabaseAdmin
@@ -389,6 +428,8 @@ export async function fileRenewal(
         drive_file_id: upload.id,
         drive_link: driveLink,
         document_id: docRowId as string,
+        ...(principalOffice ? { principal_office: principalOffice } : {}),
+        ...(principalOfficeWarning ? { principal_office_warning: principalOfficeWarning } : {}),
       }
     },
     {

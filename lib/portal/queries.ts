@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, withCompanyCmra } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -157,7 +157,7 @@ export async function getFormationAccount(contactId: string) {
   const accountIds = links.map(l => l.account_id)
   const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, filing_id, status, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, filing_id, status, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
     .in('id', accountIds)
     .eq('status', 'Pending Formation')
     .order('created_at', { ascending: false })
@@ -165,7 +165,7 @@ export async function getFormationAccount(contactId: string) {
     .maybeSingle()
 
   if (!data) return data
-  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address) }
+  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address, data.suite_number) }
 }
 
 /**
@@ -604,11 +604,19 @@ export async function getInProgressOnboardings(contactId: string): Promise<InPro
 export async function getPortalAccountDetail(accountId: string) {
   const { data } = await (supabaseAdmin as any)
     .from('accounts')
-    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip)')
+    .select('id, company_name, entity_type, state_of_formation, ein_number, formation_date, status, physical_address, registered_agent_provider, registered_agent_address, ra_renewal_date, filing_id, invoice_logo_url, bank_details, payment_gateway, payment_link, member_count, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), legal_address:addresses!business_legal_address_id(address_line1, address_line2, city, state, zip), shipping_address:addresses!shipping_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(name, agent_name, provider, address_line1, address_line2, city, state, zip)')
     .eq('id', accountId)
     .single()
 
   if (!data) return data
+  // The client sees THREE addresses (Antonio 2026-10-01): Principal Office, Mailing Address (Seminole) and Registered
+  // Agent. The Principal Office is ALWAYS our Largo office + THIS company's own suite (the address on the lease, the EIN
+  // application, the Operating Agreement and the invoices) — whatever address row is saved. A company with no suite yet
+  // keeps its saved row. The address on the Articles of Organization stays inside the CRM (checked at each annual report).
+  const suite = (data.suite_number as string | null) ?? null
+  data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
+  // No suite yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
+  data.legal_address = suite ? withCompanyCmra(data.legal_address, suite) : (data.legal_address ?? data.mailing_address)
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers

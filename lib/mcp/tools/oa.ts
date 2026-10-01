@@ -17,6 +17,7 @@ import { OA_SUPPORTED_STATES } from "@/lib/types/oa-templates"
 import { APP_BASE_URL } from "@/lib/config"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { signerLinkExpiryISO } from "@/lib/oa/public-view"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 
@@ -241,7 +242,7 @@ Workflow: oa_create → oa_get (review via admin preview) → oa_send → client
             duration: params.duration || "Perpetual",
             registered_agent_name: params.registered_agent_name || null,
             registered_agent_address: params.registered_agent_address || null,
-            principal_address: params.principal_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+            principal_address: params.principal_address || await companyCmraAddressLine(params.account_id, "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // default: Largo + the company's own suite
             language: params.language || "en",
             status: "draft",
             total_signers: totalSigners,

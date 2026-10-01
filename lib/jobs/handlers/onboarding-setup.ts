@@ -38,6 +38,7 @@ import type { Json } from "@/lib/database.types"
 import { offerCountsAsPaid } from "@/lib/offers/offer-paid"
 import { reportSystemError } from "@/lib/system-errors"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
+import { companyCmraAddressLine } from "@/lib/operations/suite"
 
 interface OnboardingPayload {
   token: string
@@ -52,6 +53,9 @@ interface OnboardingPayload {
   submitted_data: Record<string, unknown>
   upload_paths: string[] | null
   source?: "portal_wizard" | string  // Where this job was triggered from
+  /** Staff's required choice on the Confirm screen: issue the company's suite, or "No suite for this client". */
+  suite_choice?: "issue" | "waive"
+  suite_waive_reason?: string | null
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -404,6 +408,22 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       }
     } catch (e) {
       result.steps.push(step("account_update", "error", e instanceof Error ? e.message : String(e)))
+    }
+    await updateJobProgress(job.id, result)
+  }
+
+  // ─── 0d. SUITE DECISION (staff's required choice on the Confirm screen) ───
+  // "issue" → the company gets its suite now (before any lease step); "waive" is recorded on the onboarding delivery
+  // once it exists (step 3). No choice in the payload (an older queued job) → nothing decided here; the workspace's
+  // Suite step then asks staff before onboarding can move past "Review & CRM Setup".
+  if (account_id && p.suite_choice === "issue") {
+    try {
+      const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import("@/lib/operations/suite")
+      const suite = await allocateCompanySuite({ accountId: account_id, actor: "system:onboarding-setup" })
+      await syncPhysicalAddressToSuite(account_id, suite)
+      result.steps.push(step("suite", "ok", `${suite} issued (staff chose "Issue suite" on Confirm)`))
+    } catch (e) {
+      result.steps.push(step("suite", "error", e instanceof Error ? e.message : String(e)))
     }
     await updateJobProgress(job.id, result)
   }
@@ -897,6 +917,9 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   // 9ad76300-6181-4250-a1de-c77f37933f82 / 9ad76300-6181-4250-a1de-c77f37933f82.
   if (!autoDocumentCreationEnabled()) {
     result.steps.push(step("lease", "skipped", "Automatic lease creation is off — create it manually from the account page."))
+  } else if (p.suite_choice === "waive") {
+    // staff ticked "No suite for this client" on Confirm — there is nothing to lease (not an error)
+    result.steps.push(step("lease", "skipped", "No suite for this client — no lease."))
   } else if (account_id && company_name) {
     try {
       const { createLease } = await import("@/lib/operations/lease")
@@ -904,6 +927,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         account_id,
         effective_date: today,
         term_start_date: today,
+        issue_suite_if_missing: false, // automatic job: never issues a suite (required workspace step)
         actor: "system:onboarding-setup",
         summary: `Auto-created lease during onboarding setup for ${company_name}`,
       })
@@ -1013,7 +1037,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 duration: "Perpetual",
                 registered_agent_name: oaAccount.registered_agent_provider || null,
                 registered_agent_address: oaAccount.registered_agent_address || null,
-                principal_address: oaAccount.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771",
+                principal_address: await companyCmraAddressLine(account_id, oaAccount.physical_address || "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"), // always Largo + the company's own suite
                 language: "en",
                 status: "draft",
               })
@@ -1115,6 +1139,16 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           result.steps.push(step("service_delivery", "ok", `Created: ${newSD.id} (stage: ${stageName})`))
         } catch (e) {
           result.steps.push(step("service_delivery", "error", e instanceof Error ? e.message : String(e)))
+        }
+      }
+      // Record staff's "No suite for this client" choice (made on Confirm) on the onboarding delivery.
+      if (onboardingDeliveryId && p.suite_choice === "waive" && p.suite_waive_reason?.trim()) {
+        try {
+          const { waiveSuiteForDelivery } = await import("@/lib/operations/suite")
+          await waiveSuiteForDelivery(onboardingDeliveryId, p.suite_waive_reason, "system:onboarding-setup")
+          result.steps.push(step("suite", "ok", `No suite for this client — ${p.suite_waive_reason.trim()}`))
+        } catch (e) {
+          result.steps.push(step("suite", "error", e instanceof Error ? e.message : String(e)))
         }
       }
       await updateJobProgress(job.id, result)

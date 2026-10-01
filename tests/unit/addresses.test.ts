@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, withCompanyCmra, isTdLargoAddressRow } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -214,5 +214,68 @@ describe('resolveMailingAddress', () => {
   it('returns null when both are absent', () => {
     expect(resolveMailingAddress(null, null)).toBeNull()
     expect(resolveMailingAddress(undefined, undefined)).toBeNull()
+  })
+})
+
+// ── withCompanySuite — a Largo office row shows THIS company's own suite ──────
+
+describe('withCompanySuite / isTdLargoAddressRow', () => {
+  const largo = { address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-205', city: 'Largo', state: 'FL', zip: '33771' }
+  const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
+
+  it('recognises our Largo office row (and only it)', () => {
+    expect(isTdLargoAddressRow(largo)).toBe(true)
+    expect(isTdLargoAddressRow({ address_line1: '10225 Ulmerton Road' })).toBe(true)
+    expect(isTdLargoAddressRow(seminole)).toBe(false)
+    expect(isTdLargoAddressRow(null)).toBe(false)
+  })
+
+  it("replaces the shared row's suite text with the company's own suite", () => {
+    expect(withCompanySuite(largo, '3D-318')).toEqual({ ...largo, address_line2: 'Suite 3D-318' })
+  })
+
+  it('leaves every other address (Seminole UPS box, registered agent) untouched', () => {
+    expect(withCompanySuite(seminole, '3D-318')).toBe(seminole)
+  })
+
+  it('a company with no suite keeps whatever the row says', () => {
+    expect(withCompanySuite(largo, null)).toBe(largo)
+    expect(withCompanySuite(largo, undefined)).toBe(largo)
+    expect(withCompanySuite(null, '3D-318')).toBeNull()
+  })
+
+  it('resolveMailingAddress: a company WITH a suite always gets Largo + its suite, whatever row is saved', () => {
+    expect(resolveMailingAddress(largo, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+    // a wrongly linked Seminole row (or no row at all) no longer matters
+    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+    expect(resolveMailingAddress(null, '99 Some St, Town', '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+  })
+
+  it('resolveMailingAddress: a company with NO suite keeps today\'s behaviour (saved row, then legacy text)', () => {
+    expect(resolveMailingAddress(largo, null)).toBe('10225 Ulmerton Rd, Suite 3D-205, Largo FL 33771')
+    expect(resolveMailingAddress(seminole, null, null)).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
+    expect(resolveMailingAddress(null, '99 Some St, Town', null)).toBe('99 Some St, Town')
+    expect(resolveMailingAddress(null, null, null)).toBeNull()
+  })
+})
+
+describe('withCompanyCmra — the CMRA address is always Largo + the company\'s own suite', () => {
+  const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
+  it('replaces ANY saved row (even a client\'s own address) with Largo + the suite when the company has a suite', () => {
+    const out = withCompanyCmra(seminole, '3D-212')
+    expect(out).toMatchObject({ address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-212', city: 'Largo', state: 'FL', zip: '33771' })
+    expect(withCompanyCmra(null, '3D-212')).toMatchObject({ address_line2: 'Suite 3D-212', city: 'Largo' })
+  })
+  it('carries nothing of the saved row onto the Largo address (no name, provider or agent leaks)', () => {
+    const saved = { ...seminole, name: 'Northwest Registered Agent', provider: 'NWRA', agent_name: 'Some Agent', is_td_provided: false }
+    const out = withCompanyCmra(saved, '3D-212') as Record<string, unknown>
+    expect(out.name).toBeUndefined()
+    expect(out.provider).toBeUndefined()
+    expect(out.agent_name).toBeUndefined()
+    expect(out.address_line1).toBe('10225 Ulmerton Rd')
+  })
+  it('a company with no suite keeps the saved row untouched', () => {
+    expect(withCompanyCmra(seminole, null)).toBe(seminole)
+    expect(withCompanyCmra(null, undefined)).toBeNull()
   })
 })

@@ -5,9 +5,11 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { FORMATION_STATE_NAMES, formationStateFromWizardData, resolveFormationStateCode } from '@/lib/formation/states'
 import { formationStateForClient } from '@/lib/formation/state-lookup'
 import { parseStageLayout } from '@/lib/flows/stage-layout'
+import { resolveMailingAddress } from '@/lib/addresses'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
+import { SuitePanel } from '@/components/flows/suite-panel'
 import { GoBackButton } from '@/components/flows/go-back-button'
 import { ItinOriginCard, type ItinOrigin } from '@/components/flows/itin-origin-card'
 import { NoteQuickCreate } from '@/components/dashboard/note-quick-create'
@@ -63,7 +65,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       ? supabaseAdmin
           .from('accounts')
           .select(
-            'id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
+            'id, company_name, state_of_formation, annual_report_due_date, ra_renewal_date, ein_number, registered_agent_address, physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)',
           )
           .eq('id', sd.account_id)
           .single()
@@ -146,16 +148,11 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     contactName = (contact?.full_name as string | null) ?? null
   }
 
-  // Resolve a single mailing-address string: prefer the structured addresses FK
-  // (business_mailing_address_id), fall back to the account's free-text
-  // physical_address. Mirrors resolveMailingAddress in lib/portal/queries.ts.
+  // The company's CMRA address: Largo + its own suite when it has one (no saved CMRA link is read then); otherwise the
+  // saved addresses FK, then the account's free-text physical_address.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- addresses join + new columns not in generated types
   const acctAny = accountRow as any
-  const ma = acctAny?.mailing_address ?? null
-  const structuredMailing = ma
-    ? [ma.address_line1, ma.address_line2, ma.city, ma.state, ma.zip].filter(Boolean).join(', ')
-    : ''
-  const mailingAddress = structuredMailing || (acctAny?.physical_address as string | null) || null
+  const mailingAddress = resolveMailingAddress(acctAny?.mailing_address ?? null, (acctAny?.physical_address as string | null) ?? null, (acctAny?.suite_number as string | null) ?? null)
 
   const account: WorkspaceAccount = {
     id: (accountRow?.id as string) ?? sd.account_id ?? '',
@@ -339,6 +336,13 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
           serviceDeliveryId={serviceDelivery.id}
         />
       </div>
+
+      {/* Client Onboarding has no stage_layout (its hand-built workspace carries the suite choice on Confirm), but a case placed
+          by "Place Client" sits at "Review & CRM Setup" with no Confirm screen — it needs the same required Suite step here,
+          or staff would have no way to waive the suite. Formation gets its card from the stage layout. */}
+      {serviceDelivery.service_type === 'Client Onboarding' && serviceDelivery.stage === 'Review & CRM Setup' && (
+        <SuitePanel serviceDeliveryId={serviceDelivery.id} />
+      )}
 
       {/* Stage content from stage_layout */}
       <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />

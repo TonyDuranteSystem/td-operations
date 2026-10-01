@@ -17,6 +17,12 @@ vi.mock("@/lib/services", () => ({
   isPerPersonServiceType: vi.fn(async () => false),
 }))
 vi.mock("@/lib/tasks/default-assignee", () => ({ defaultTaskAssignee: () => "Luca" }))
+const releaseSuiteReservation = vi.fn()
+vi.mock("@/lib/operations/suite", () => ({
+  releaseSuiteReservation: (...a: unknown[]) => releaseSuiteReservation(...a),
+  allocateCompanySuite: vi.fn(),
+  syncPhysicalAddressToSuite: vi.fn(),
+}))
 
 // ─── Collaborator mocks ────────────────────────────────
 
@@ -172,6 +178,39 @@ describe("deactivateSD", () => {
     )
     expect(updateAccount).not.toHaveBeenCalled()
     expect(logAction).toHaveBeenCalled()
+  })
+
+  it("a formation that never produced a company frees its reserved suite when cancelled", async () => {
+    sdRow = {
+      id: "sd-1",
+      service_type: "Company Formation",
+      service_name: "Company Formation - Acme",
+      status: "active",
+      account_id: null,
+      contact_id: "c1",
+      updated_at: "2026-05-26T00:00:00Z",
+      notes: null,
+    }
+    updateTasksBulk.mockResolvedValue({ success: true, outcome: "updated", count: 0 })
+    const res = await deactivateSD({ delivery_id: "sd-1", actor: "tester" })
+    expect(res.success).toBe(true)
+    expect(releaseSuiteReservation).toHaveBeenCalledWith("sd-1", "tester")
+  })
+
+  it("a service that belongs to a company never touches suites when cancelled", async () => {
+    sdRow = {
+      id: "sd-1",
+      service_type: "CMRA Mailing Address",
+      service_name: "CMRA",
+      status: "active",
+      account_id: "acct-1",
+      contact_id: null,
+      updated_at: "2026-05-26T00:00:00Z",
+      notes: null,
+    }
+    updateTasksBulk.mockResolvedValue({ success: true, outcome: "updated", count: 0 })
+    await deactivateSD({ delivery_id: "sd-1" })
+    expect(releaseSuiteReservation).not.toHaveBeenCalled()
   })
 
   it("clears the account renewal date for State RA Renewal when clear_renewal_date=true", async () => {
