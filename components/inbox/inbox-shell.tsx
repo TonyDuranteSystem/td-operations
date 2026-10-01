@@ -1654,15 +1654,20 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         )}
 
         {/* ─── Conversation List ─────────────── */}
-        {/* Gmail-style full-width reading (Antonio 2026-07-28): when an email
-            is open the list HIDES at every width, not just mobile. CSS-hide
-            only — the list must STAY MOUNTED because it owns the reconcile /
-            override machinery (delete/undo/restore); unmounting it here would
-            drop pending hides. The back arrow in the thread header returns. */}
+        {/* Gmail-style full-width reading (Antonio 2026-07-28): when an email is open the list
+            HIDES at every width, not just mobile. WhatsApp is the deliberate exception (Antonio,
+            2026-10-01: "I want the chats always visible on desktop and the single clicked chat
+            will open in the right space") — on a real desktop width the list stays put next to
+            the open chat, same two-pane shape already used for the "nothing selected" state below;
+            on mobile there's no room for both, so it still hides there. CSS-hide only in every
+            case — the list must STAY MOUNTED because it owns the reconcile / override machinery
+            (delete/undo/restore); unmounting it here would drop pending hides. The back arrow in
+            the thread header returns (desktop WhatsApp has no need of it — the list is already
+            visible — but it's harmless to leave mounted). */}
         <div
           className={cn(
             'w-full lg:w-[350px] lg:shrink-0 flex-col border-r',
-            selected ? 'hidden' : 'flex'
+            selected ? (isWhatsApp ? 'hidden lg:flex' : 'hidden') : 'flex'
           )}
         >
           <ConversationList
@@ -1775,6 +1780,22 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
                       <div className="w-px h-4 bg-zinc-200 mx-0.5" />
                     </>
+                  )}
+
+                  {selected.channel === 'whatsapp' && whatsappGroupId && (
+                    <HoverHint label="Copy a link to this conversation — opens straight to it for any staff member signed in">
+                      <button
+                        onClick={() => {
+                          const url = `${window.location.origin}/inbox?thread=whatsapp:${whatsappGroupId}`
+                          navigator.clipboard.writeText(url)
+                            .then(() => toast.success('Conversation link copied'))
+                            .catch(() => toast.error('Could not copy the link.'))
+                        }}
+                        className="p-1.5 rounded hover:bg-zinc-100 text-zinc-500 hover:text-blue-500 transition-colors"
+                      >
+                        <Link2 className="h-4 w-4" />
+                      </button>
+                    </HoverHint>
                   )}
 
                   <HoverHint label="Write a reply">
