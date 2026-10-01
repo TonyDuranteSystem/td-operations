@@ -1,6 +1,16 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-10-01 — Claude (**AN OPEN WHATSAPP CHAT'S HEADER COULD SHOW THE
+_Last verified against code: 2026-10-01 — Claude (A legacy name-resolution path in
+`app/api/inbox/messages/[id]/route.ts` (the generic Gmail/Telegram message-thread route, under this
+doc's own path glob) carried a hardcoded phone→name lookup — including the business's own number
+mapped to its own name — plus a loose suffix-matching CRM lookup, the same weak pattern behind the
+2026-10-01 business-name-leak incident. Removed outright (dead for WhatsApp today, which has its own
+dedicated thread/route) rather than left as a landmine; a follow-up adversarial pass then found the
+plain fallback that replaced it had no name filter at all and the route has no provider check, so the
+same junk-name guard already used elsewhere (`isJunkChatName`) was added to it too. Full detail and
+the sibling per-message fix this was found alongside: `docs/systems/messaging.md` (2026-10-01), the
+doc that owns WhatsApp message handling — noted here only because this doc's path glob also matches
+this one file.) Prior 2026-10-01 — Claude (**AN OPEN WHATSAPP CHAT'S HEADER COULD SHOW THE
 BARE NUMBER EVEN WHEN THE CHAT WAS ALREADY CORRECTLY LINKED TO A REAL CLIENT.** Antonio, from a
 screenshot of a correctly-linked client's open chat still showing just her number. Root cause: the
 header's bold title (`inbox-shell.tsx`) reads `selected.name` — a snapshot of the conversation-list
