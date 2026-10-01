@@ -179,6 +179,41 @@ describe("findOrCreateWhatsAppGroup", () => {
     expect(maybeSingle).toHaveBeenCalledTimes(1) // no second lookup needed
   })
 
+  it("never creates a brand-new chat carrying OUR OWN business name as if it were the sender's (2026-10-01: GOWA reported it that way for real client chats)", async () => {
+    const { single, upsert } = mockLookup(null)
+    const created = { id: "g3", channel_id: "ch1", external_group_id: "393407747259@c.us", group_name: null }
+    single.mockResolvedValue({ data: created, error: null })
+
+    const result = await findOrCreateWhatsAppGroup({
+      channelId: "ch1",
+      remoteIdentifier: "393407747259",
+      groupName: "Tony Durante LLC",
+    })
+
+    expect("group" in result).toBe(true)
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ group_name: null }),
+      { onConflict: "channel_id,external_group_id" }
+    )
+  })
+
+  it("a real sender name is unaffected by the own-name guard", async () => {
+    const { single, upsert } = mockLookup(null)
+    const created = { id: "g4", channel_id: "ch1", external_group_id: "17274521093@c.us", group_name: "Real Person" }
+    single.mockResolvedValue({ data: created, error: null })
+
+    await findOrCreateWhatsAppGroup({
+      channelId: "ch1",
+      remoteIdentifier: "17274521093",
+      groupName: "Real Person",
+    })
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ group_name: "Real Person" }),
+      { onConflict: "channel_id,external_group_id" }
+    )
+  })
+
   it("returns an error when the LEGACY-key lookup fails (never falls through to create a duplicate)", async () => {
     const maybeSingle = vi.fn().mockResolvedValueOnce({ data: null, error: null }).mockResolvedValueOnce({ data: null, error: { message: "legacy lookup down" } })
     const eq2 = vi.fn(() => ({ maybeSingle }))

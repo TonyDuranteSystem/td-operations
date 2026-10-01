@@ -11,6 +11,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { digitsOnly, toWhatsAppJid } from "@/lib/messaging/phone"
+import { OWN_BUSINESS_NAME } from "@/lib/messaging/chat-name"
 
 export interface FindOrCreateGroupParams {
   channelId: string
@@ -101,13 +102,22 @@ export async function findOrCreateWhatsAppGroup(
     return { group: patchError || !patched ? row : (patched as MessagingGroupRow) }
   }
 
+  // A brand-new chat's initial name comes straight from WhatsApp's own self-reported sender name (the live
+  // webhook payload) — the same self-reported data source that was found (2026-10-01) leaking our OWN
+  // registered business name onto other people's chats. Guarded here too, not just at display time, so a
+  // chat never gets CREATED already carrying a name that isn't really its own.
+  const initialGroupName =
+    params.groupName && params.groupName.trim().toLowerCase() === OWN_BUSINESS_NAME.toLowerCase()
+      ? null
+      : (params.groupName ?? null)
+
   const { data: created, error: upsertError } = await supabaseAdmin
     .from("messaging_groups")
     .upsert(
       {
         channel_id: params.channelId,
         external_group_id: externalGroupId,
-        group_name: params.groupName ?? null,
+        group_name: initialGroupName,
         group_type: params.groupType ?? "lead_chat",
         account_id: params.accountId ?? null,
         contact_id: params.contactId ?? null,
