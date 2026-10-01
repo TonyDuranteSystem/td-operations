@@ -182,32 +182,32 @@ _Regenerated 2026-10-01. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-09-30)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-09-29)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
-- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-27)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-09-30)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-08-27)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-09-18)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-01)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-01)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-09-30)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-29)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-09-30)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-09-29)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-01)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-10-01)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-29)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-09-30)_
-- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-09-30)_
+- [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-01)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-09-15)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-01)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-30)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-09-29)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-01)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-09-29)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-09-30)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
-- [portal.md](portal.md) — Client Portal _(verified 2026-09-30)_
+- [portal.md](portal.md) — Client Portal _(verified 2026-10-01)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-09-29)_
 - [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-09-18)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
@@ -219,7 +219,7 @@ _Regenerated 2026-10-01. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-09-24)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-30)_
-- [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-09-27)_
+- [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
 - [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-29)_
 <!-- /GENERATED:deep-docs -->
