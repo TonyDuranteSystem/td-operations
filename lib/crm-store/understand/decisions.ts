@@ -16,8 +16,10 @@ export async function recordDecision(p: { analysisId: string; action: DecisionAc
   if (!p.actor) throw new Error("Only a named staff member can record a decision.")
   const { data: a, error } = await db().from("store_file_analysis").select("id, file_id, version_id, ai_type, ai_name").eq("id", p.analysisId).maybeSingle()
   if (error || !a) throw new Error("That reading no longer exists.")
-  const { data: f } = await db().from("store_files").select("id, name, document_type, folder_id, state, owner_id").eq("id", a.file_id).maybeSingle()
+  const { data: f } = await db().from("store_files").select("id, name, document_type, folder_id, state, owner_id, current_version_id").eq("id", a.file_id).maybeSingle()
   if (!f || f.state !== "live") throw new Error("The file is no longer available.")
+  // a decision belongs to the VERSION that was checked: a newer upload means the answer on screen is about an older file
+  if (f.current_version_id && a.version_id !== f.current_version_id) throw new Error("This file was replaced by a newer version since it was checked — check it again.")
 
   let action: DecisionAction = p.action
   let taught = false

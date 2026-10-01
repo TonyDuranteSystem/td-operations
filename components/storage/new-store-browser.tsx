@@ -13,7 +13,7 @@
  * When the system can't work something out it ASKS (Part 16): one question, the evidence, real choices.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { toast } from 'sonner'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -21,6 +21,7 @@ import {
   Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, AlertTriangle, Check, Search, Tag, HardDriveDownload,
 } from 'lucide-react'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
+import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
@@ -255,6 +256,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const fileInput = useRef<HTMLInputElement | null>(null)
   // row menus / inline rename / new folder / drag and drop
   const [menuFor, setMenuFor] = useState<string | null>(null)
+  // the AI check inside the storage (job 685467b5): marks of the files on screen, and the side panel that shows the document next to what the AI found
+  const visibleFileIds = useMemo(() => Object.values(loaded).flatMap((c) => c.files.filter((f) => f.state === 'live').map((f) => f.id)), [loaded])
+  const ai = useAiMarks(ownerId, visibleFileIds)
+  const [aiFile, setAiFile] = useState<string | null>(null)
   const [typing, setTyping] = useState<File_ | null>(null)
   // "Import from Google Drive" (owners, where copying is switched on — the server says)
   const [importOpen, setImportOpen] = useState(false)
@@ -1516,6 +1521,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </button>
           </FastTooltip>
         )}
+        {ai.available && <AiMarkChip m={ai.marks[f.id]} onClick={() => setAiFile(f.id)} />}
         {!f.listed && !internal && <Badge tone="amber">Not linked — client can&apos;t see it</Badge>}
         {f.versions > 1 && (
           <div className="relative">
@@ -1555,6 +1561,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
           {menuFor === f.id && (
             <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
               <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(f) }} />
+              {ai.available && f.state === 'live' && <MenuItem icon={ScanText} label="Check this file" onClick={() => { setMenuFor(null); setAiFile(f.id) }} />}
               <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(f.id) }} />
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
               <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
@@ -1807,6 +1814,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             </FastTooltip>
+            {ai.available && ownerId && <AiCheckFilesButton ownerId={ownerId} folderId={viewFolder && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts' ? viewFolder.id : null} scopeLabel={viewFolder && viewFolder.kind !== 'root' ? viewFolder.name : (root.owner.label || 'this storage')} onMark={ai.setOne} onFinished={() => { void ai.reload(visibleFileIds) }} />}
             <button type="button" onClick={(e) => { e.stopPropagation(); void openTrash() }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <Trash2 className="h-3.5 w-3.5" />Trash
@@ -1944,6 +1952,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
         </>
       )}
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
+      {aiFile && ownerId && (
+        <AiReviewPanel fileId={aiFile} onClose={() => setAiFile(null)}
+          queue={Array.from(new Set([aiFile, ...visibleFileIds.filter((id) => ai.marks[id] && (ai.marks[id].mark === 'look' || ai.marks[id].mark === 'conflict'))]))}
+          onChanged={() => { void refreshAll(); void ai.reload(visibleFileIds) }} onOpenFile={setAiFile} />
+      )}
       {previewVersion && <PreviewPanel file={previewVersion.file} src={previewVersion.src} title={previewVersion.title} onClose={() => setPreviewVersion(null)} />}
       <OcrViewerModal documentId={ocrDocId} onClose={() => setOcrDocId(null)} />
       {asking && (

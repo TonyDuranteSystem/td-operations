@@ -9,7 +9,7 @@ import { ANALYZER_VERSION, LIMITS } from "./vocab"
 import { extractContent, type Extracted } from "./extract"
 import { assessPair, normHash, type PairVerdict } from "./duplicates"
 import { computeVerdict } from "./verdict"
-import { classifyFile, AiDisabledError, AiCapError, looksLikeInjection, type TypeChoice, type ClassifyOutput } from "./judge"
+import { classifyFile, AiDisabledError, AiCapError, AiBusyError, looksLikeInjection, type TypeChoice, type ClassifyOutput } from "./judge"
 import { listExamples, exampleCheck } from "./examples"
 import { maskIds, textNamesOwner } from "./privacy"
 
@@ -217,8 +217,10 @@ export async function analyzeVersion(versionId: string, opts: { actor?: string |
         examples: examples.map((x) => ({ typeSlug: x.type_slug, namePattern: x.name_pattern, folderKind: x.folder_kind })), visual: e.visual,
       }, { analysisId, versionId })
     } catch (err) {
+      // a second check of the same version, or the day's cap, is NOT "the AI failed": say so instead of saving a false red
+      if (err instanceof AiBusyError || err instanceof AiCapError) throw err
       aiFailed = true
-      if (!(err instanceof AiDisabledError) && !(err instanceof AiCapError)) console.error("[understand] AI call failed:", err instanceof Error ? err.message : err)
+      if (!(err instanceof AiDisabledError)) console.error("[understand] AI call failed:", err instanceof Error ? err.message : err)
     }
   }
 
