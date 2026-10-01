@@ -1,5 +1,35 @@
 # Messaging (WhatsApp / Telegram)
-_Last verified against code: 2026-10-01 — Claude (**CONTACTS GET TWO MORE PHONE SLOTS (`phone_3`/`phone_4`) SO THE WHATSAPP MATCHER CAN SEE A CLIENT'S OTHER NUMBERS.**
+_Last verified against code: 2026-10-01 — Claude (**THE BUSINESS-NAME LEAK HAD ONE MORE DOORWAY —
+THE PER-MESSAGE SENDER CAPTION.** Antonio, after a Bug-Hunter sweep of the whole WhatsApp system he
+asked for ("why patch???? i don't want a system patched. I wan t a fucking solid system"): the
+earlier same-day fix protected a chat's own name, but a sibling field — the small label under each
+individual message showing who sent it — was never covered, and could carry the exact same leaked
+value. Confirmed live: 123 historical messages already carried `sender_name = 'Tony Durante LLC'`,
+all from before 2026-09-01 (dormant, not an active leak at the time this was found) — but the write
+path that could reproduce it today had zero guard. Verified there is exactly ONE live caller of
+`wabridge_ingest_message` for WhatsApp traffic (`app/api/wa-bridge/[channelId]/route.ts`) — unlike
+`group_name`, which had two independent write paths, `sender_name` only ever enters through this one
+doorway, so a single fix there (migration `20261001-2100-wabridge-message-sender-name-guard.sql`)
+is the only doorway untrusted, GOWA-self-reported sender data can enter through for WhatsApp — every
+current and future reader (the Inbox thread, the MCP tools, the AI worker context) is automatically
+protected with nothing to remember or duplicate at each reader. (`wabridge_finish_send`'s own two
+outbound write paths also touch `messages.sender_name`, but always with the hardcoded literal `'TD
+Team'`, never GOWA-derived — a second write path, correctly noted by a follow-up Bug-Hunter pass, but
+not a second doorway for THIS specific leak since nothing external ever reaches it.) A display-layer
+backstop was also added (`components/inbox/whatsapp-thread.tsx`, reusing `isJunkChatName`) so the 123
+already-poisoned historical messages hide cleanly without needing a data rewrite. Also removed, not
+patched around: a separate legacy code path (`app/api/inbox/messages/[id]/route.ts`) that carried a
+hardcoded phone→name table (including the business's own number, by name) plus a loose
+suffix-matching CRM lookup — the current WhatsApp UI never reaches it (its own dedicated thread/route
+handles that), but a follow-up Bug-Hunter pass on this exact fix correctly caught that the route
+itself has no provider check and was still directly callable with zero name filtering; the same
+`isJunkChatName` guard was added to its fallback too rather than leaving a reachable, unfiltered gap.
+Confirmed, per the same pass's "needs-repro" flag: exactly one account is named literally "Tony
+Durante LLC" in the CRM — it's the business's own internal placeholder record (`id`
+`00000000-0000-0000-0000-000000000001`), linked to zero WhatsApp chats, so no real client's name
+collides with the guard. Verified: the guard tested directly against sandbox (a poisoned name is
+nulled at insert time, a real name passes through untouched, scratch rows cleaned up after).
+Typecheck and lint clean on every touched file.) Prior 2026-10-01 — Claude (**CONTACTS GET TWO MORE PHONE SLOTS (`phone_3`/`phone_4`) SO THE WHATSAPP MATCHER CAN SEE A CLIENT'S OTHER NUMBERS.**
 Root cause surfaced live: Claudia Taffarello (Snowfy LLC) has a US number on file (`phone`) but was messaging from
 an Italian number — her CRM record had nowhere to put it, so `wabridge_link_chat` (the automatic WhatsApp-to-client
 matcher) and the single-chat match banner could never see the connection, no matter how exact a match it was.
