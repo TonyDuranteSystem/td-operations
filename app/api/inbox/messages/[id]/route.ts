@@ -14,6 +14,7 @@ import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { loadStoredThread } from "@/lib/email-store/read"
 import type { InboxMessage } from "@/lib/types"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { isJunkChatName } from "@/lib/messaging/chat-name"
 
 export const dynamic = "force-dynamic"
 
@@ -204,7 +205,13 @@ export async function GET(
       // the current UI (WhatsApp has its own dedicated thread + route), so there is no live path
       // that needs name resolution here beyond what's already stored — removed rather than
       // carried forward as a landmine for whatever channel reaches this branch next.
-      const resolvedName = m.sender_name || m.sender_phone || "Unknown"
+      // This route loads a messaging_groups row by raw id with no provider/channel check — it's not
+      // reached by the current WhatsApp UI (which has its own dedicated thread + route), but it IS
+      // reachable by a direct API call on any group, wabridge-backed ones included. Same display
+      // guard as the dedicated WhatsApp thread, so a direct call here can't surface what the UI
+      // already hides — including the 123 historical rows the 2026-10-01 fix found, not backfilled.
+      const rawSender = m.sender_name || m.sender_phone || "Unknown"
+      const resolvedName = isJunkChatName(rawSender) ? (m.sender_phone || "Unknown") : rawSender
       return {
         id: m.id,
         direction: m.direction as "inbound" | "outbound",
