@@ -3,7 +3,7 @@ import { leasePageView } from '@/lib/lease/page-state'
 
 const base = { loading: false, error: '', hasLease: false, verified: false, isAdminPreview: false, isPortal: false }
 
-describe('leasePageView — the emailed lease link must never be a blank page', () => {
+describe('leasePageView — the bare lease link (outside the portal) must never be a blank page', () => {
   it('first-time visitor: the server sent no lease, only "ask for the email" -> show the email box (the 2026-10-01 blank-page bug)', () => {
     expect(leasePageView({ ...base })).toBe('email_gate')
   })

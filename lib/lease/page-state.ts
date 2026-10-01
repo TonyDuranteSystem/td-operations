@@ -3,7 +3,7 @@
  *
  * Bug fixed 2026-10-01 (found by the production end-to-end QA): the server answers a first-time visitor with
  * `{ requiresEmail: true }` and NO lease. The page used to bail out with `if (!lease) return null` BEFORE it
- * reached the email box, so a client opening the emailed lease link saw a completely blank page. The email gate
+ * reached the email box, so anyone opening the bare lease link (outside the portal) saw a completely blank page. The email gate
  * must be decided first — it does not need the lease.
  */
 export type LeasePageView = 'loading' | 'error' | 'email_gate' | 'empty' | 'lease'
