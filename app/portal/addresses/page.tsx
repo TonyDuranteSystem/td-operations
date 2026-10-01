@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow, withCompanyCmra } from '@/lib/addresses'
+import { type MailingAddressRow, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -95,10 +95,10 @@ export default async function PortalAddressesPage() {
     // company's own suite (no saved CMRA link is read when the company has one).
     const companySuite = (acct?.suite_number as string | null) ?? null
     companySuiteForCard = companySuite
-    legal = companySuite
-      ? ((withCompanyCmra((acct?.legal as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null)
-      : ((acct?.legal as AddrRow | null) ?? (acct?.mailing as AddrRow | null) ?? null) // no suite yet: saved Principal Office, else the saved office link
-    shipping = (acct?.shipping as AddrRow | null) ?? null
+    // with a suite: Largo + the company's own suite; no suite yet: the saved Principal Office (never the shared Largo row, which has no suite)
+    legal = principalOfficeForClient((acct?.legal as AddrRow | null) ?? null, (acct?.mailing as AddrRow | null) ?? null, companySuite) as AddrRow | null
+    // the Mailing card is our Seminole mailbox for everyone unless the client has their own saved row
+    shipping = mailingForClient((acct?.shipping as AddrRow | null) ?? null) as AddrRow
     companyName = (acct?.company_name as string | null) ?? null
   }
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
+import { leasePageView } from '@/lib/lease/page-state'
 import { LOGO_URL } from '@/lib/supabase/public-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -353,7 +354,10 @@ export default function LeasePageWithCode() {
 
   // ─── RENDER ───
 
-  if (loading) {
+  const isAdminPreview = searchParams.get('preview') === 'td'
+  const view = leasePageView({ loading, error, hasLease: !!lease, verified, isAdminPreview, isPortal: isPortal })
+
+  if (view === 'loading') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif' }}>
         <p style={{ color: '#666', fontSize: 18 }}>Loading lease agreement...</p>
@@ -361,7 +365,7 @@ export default function LeasePageWithCode() {
     )
   }
 
-  if (error) {
+  if (view === 'error') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif' }}>
         <div style={{ textAlign: 'center' }}>
@@ -372,11 +376,8 @@ export default function LeasePageWithCode() {
     )
   }
 
-  if (!lease) return null
-
   // Email gate (admin preview and portal mode bypass synchronously)
-  const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview && !isPortal) {
+  if (view === 'email_gate') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
@@ -404,6 +405,9 @@ export default function LeasePageWithCode() {
       </div>
     )
   }
+
+  // the gate above does not need the lease; from here on it does
+  if (view === 'empty' || !lease) return null
 
   // Full address with suite
   const fullAddress = `${lease.premises_address.replace(/,?\s*(Largo|FL|33771).*/i, '')}, Suite ${lease.suite_number}, Largo, FL 33771`

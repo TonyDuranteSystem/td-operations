@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString, withCompanyCmra } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, withCompanyCmra, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -616,7 +616,9 @@ export async function getPortalAccountDetail(accountId: string) {
   const suite = (data.suite_number as string | null) ?? null
   data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
   // No suite yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
-  data.legal_address = suite ? withCompanyCmra(data.legal_address, suite) : (data.legal_address ?? data.mailing_address)
+  data.legal_address = principalOfficeForClient(data.legal_address, data.mailing_address, suite)
+  // The Mailing card: our Seminole mailbox for everyone unless the client has their own saved mailing row (was blank for 236 of 248)
+  data.shipping_address = mailingForClient(data.shipping_address)
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers

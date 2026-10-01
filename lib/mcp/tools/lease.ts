@@ -448,7 +448,7 @@ support@tonydurante.us`
                     `Sent at: ${existing[0].created_at}`,
                     ``,
                     `Use gmail_track_status to check if the client opened it.`,
-                    `To resend, first use lease_update to set status back to "draft".`,
+                    `A sent lease cannot be set back to draft. To resend, send the same link again by email (gmail_send) — the lease itself stays "sent".`,
                   ].join("\n"),
                 }
               }

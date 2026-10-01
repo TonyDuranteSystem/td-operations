@@ -19,7 +19,7 @@ import { canPerform } from "@/lib/permissions"
 import { isOwnerOnly } from "@/lib/auth"
 import { formatCountyAndState } from "@/lib/addresses"
 import { decideSs4Signer, ss4SignerAlertMessage, pickDefaultSs4SignerLink, type Ss4SignerMember } from "@/lib/operations/ss4-signer"
-import { refreshSS4 } from "@/lib/operations/ss4-refresh"
+import { refreshSS4, resolveMailing } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
@@ -551,6 +551,21 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
   }
   const resolvedCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
 
+  // The SS-4 mailing address (lines 4a/4b): Largo + THIS company's own suite when it has one — same rule as createSS4 and the
+  // refresh. This path used to insert NO address, so the PDF fell back to the Seminole box (found by the 2026-10-01 production QA).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: mailingInputs, error: mailingErr } = await (supabaseAdmin as any)
+    .from("accounts")
+    .select("physical_address, suite_number, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)")
+    .eq("id", accountId)
+    .maybeSingle()
+  if (mailingErr) return { error: `Could not read the company's address for the SS-4: ${mailingErr.message}` }
+  const mailing = resolveMailing({
+    physical_address: mailingInputs?.physical_address ?? null,
+    suite_number: mailingInputs?.suite_number ?? null,
+    mailing_address: mailingInputs?.mailing_address ?? null,
+  } as Parameters<typeof resolveMailing>[0])
+
   const slug = slugify(account.company_name)
   const token = `ss4-${slug}-${new Date().getFullYear()}`
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
@@ -572,6 +587,8 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
       responsible_party_title: title,
       language: responsibleContact.language === "Italian" ? "it" : "en",
       county_and_state: resolvedCountyAndState, // null if RA address unknown — admin must fix RA + ss4_update before signing
+      mailing_street: mailing.street,
+      mailing_city_state_zip: mailing.cityStateZip,
       status: "draft",
     })
     .select("id, token, access_code, status")

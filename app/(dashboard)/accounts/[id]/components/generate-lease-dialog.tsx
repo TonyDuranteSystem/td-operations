@@ -79,7 +79,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
           body: JSON.stringify({
             action: 'generate_lease',
             account_id: accountId,
-            // suite_number omitted — auto-assigned by backend
+            // suite_number omitted — the lease takes the company's own suite (it must already be issued)
             // Number.isFinite preserves an intentional 0 (|| would rewrite it).
             monthly_rent: Number.isFinite(parseInt(monthlyRent)) ? parseInt(monthlyRent) : 100,
             security_deposit: Number.isFinite(parseInt(securityDeposit)) ? parseInt(securityDeposit) : 150,
@@ -136,7 +136,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
 
               <div className="space-y-3">
                 <div className="text-xs text-muted-foreground bg-blue-50 rounded-lg p-3">
-                  Suite number will be auto-assigned (next available 3D-XXX)
+                  The lease uses this company&apos;s own suite. It must already be issued (the workspace Suite step, or the “Issue suite” button on the account page).
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
