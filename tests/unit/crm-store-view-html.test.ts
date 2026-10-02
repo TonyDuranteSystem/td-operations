@@ -50,3 +50,23 @@ describe("cellText", () => {
     expect(cellText(new Date("2026-10-02T00:00:00Z"))).toBe("2026-10-02")
   })
 })
+
+describe("xlsxToViewHtml — a real workbook", () => {
+  it("shows every sheet as a table, escapes cells, reads formulas and cuts very long sheets", async () => {
+    const ExcelJS = (await import("exceljs")).default
+    const { xlsxToViewHtml, VIEW_MAX_ROWS } = await import("@/lib/crm-store/view-html")
+    const wb = new ExcelJS.Workbook()
+    const a = wb.addWorksheet("Budget <2026>")
+    a.addRow(["Item", "Cost"]); a.addRow(["<script>alert(1)</script>", 10]); a.addRow(["Total", { formula: "SUM(B2:B2)", result: 10 }])
+    const b = wb.addWorksheet("Long")
+    for (let i = 0; i < VIEW_MAX_ROWS + 50; i++) b.addRow([`row ${i}`])
+    const buf = Buffer.from(await wb.xlsx.writeBuffer())
+    const html = await xlsxToViewHtml("book.xlsx", buf)
+    expect(html).toContain("<h3>Budget &lt;2026&gt;</h3>")
+    expect(html).toContain("<th>Item</th>")
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+    expect(html).not.toContain("<script>")
+    expect(html).toContain("<td>10</td>")
+    expect(html).toContain(`first ${VIEW_MAX_ROWS} of ${VIEW_MAX_ROWS + 50} rows`)
+  })
+})
