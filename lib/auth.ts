@@ -17,6 +17,11 @@ function ownerEmails(): string[] {
   return [PRIMARY_OWNER, ...extra]
 }
 
+/** True when this email is one of the owners (Antonio, plus any NEXT_PUBLIC_EXTRA_OWNER_EMAILS). */
+export function isOwnerEmail(email: string | null | undefined): boolean {
+  return ownerEmails().includes((email ?? "").trim().toLowerCase())
+}
+
 /** The primary owner's email — the owners' shared "My files" storage area belongs to this login. */
 export const PRIMARY_OWNER_EMAIL = PRIMARY_OWNER
 

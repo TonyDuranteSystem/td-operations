@@ -15,6 +15,9 @@ import {
   Clock,
   Trash2,
   Bot,
+  KeyRound,
+  Smartphone,
+  Copy,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -36,6 +39,13 @@ export default function TeamManagementPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editRole, setEditRole] = useState<'admin' | 'team'>('team')
+  const [resettingId, setResettingId] = useState<string | null>(null)
+  const [resetResult, setResetResult] = useState<{
+    name: string
+    email: string
+    tempPassword: string
+    emailSent: boolean
+  } | null>(null)
 
   // AI Agent settings
   const [aiEnabledForTeam, setAiEnabledForTeam] = useState(false)
@@ -103,7 +113,12 @@ export default function TeamManagementPage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      toast.success(data.message)
+      if (data.emailSent === false) {
+        // The email did not go out — the admin must hand the password over.
+        setResetResult({ name: newName, email: newEmail, tempPassword: data.tempPassword, emailSent: false })
+      } else {
+        toast.success(data.message)
+      }
       setShowCreateForm(false)
       setNewEmail('')
       setNewName('')
@@ -129,6 +144,35 @@ export default function TeamManagementPage() {
       toast.success(`MFA reset for ${name} — they'll re-enroll at next login`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Reset failed')
+    }
+  }
+
+  const handleResetPassword = async (userId: string, name: string) => {
+    if (!confirm(`Reset the password for ${name}? A new temporary password replaces the old one immediately and is emailed to them.`)) return
+    setResettingId(userId)
+    try {
+      const res = await fetch('/api/team-management/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Password reset failed — please try again.')
+      setResetResult({ name, email: data.email, tempPassword: data.tempPassword, emailSent: data.emailSent === true })
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Password reset failed — please try again.')
+    } finally {
+      setResettingId(null)
+    }
+  }
+
+  const copyTempPassword = async () => {
+    if (!resetResult) return
+    try {
+      await navigator.clipboard.writeText(resetResult.tempPassword)
+      toast.success('Password copied')
+    } catch {
+      toast.error('Could not copy — select the password and copy it by hand.')
     }
   }
 
@@ -382,17 +426,30 @@ export default function TeamManagementPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {/* Reset password: new temporary password, emailed and shown once. */}
+                      <FastTooltip label="Reset password (new temporary password)">
+                        <button
+                          onClick={() => handleResetPassword(u.id, u.full_name)}
+                          disabled={resettingId === u.id}
+                          className="p-1.5 text-zinc-500 hover:text-blue-600 hover:bg-blue-50 rounded-md disabled:opacity-50"
+                          aria-label="Reset password (new temporary password)"
+                        >
+                          {resettingId === u.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+                        </button>
+                      </FastTooltip>
                       {/* MFA reset (dev job de4564ee): deletes the member's
                           authenticator + backup codes and revokes trusted
                           devices — they re-enroll at next login. The server
-                          route refuses to target protected admin accounts. */}
+                          route refuses to target protected admin accounts.
+                          Phone icon (not a shield) so it can't be mistaken
+                          for the red Disable-access shield further right. */}
                       <FastTooltip label="Reset MFA (forces re-enrollment)">
                         <button
                           onClick={() => handleResetMfa(u.id, u.full_name)}
                           className="p-1.5 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-md"
                           aria-label="Reset MFA (forces re-enrollment)"
                         >
-                          <ShieldOff className="h-3.5 w-3.5" />
+                          <Smartphone className="h-3.5 w-3.5" />
                         </button>
                       </FastTooltip>
                       {/* Can't edit own account */}
@@ -439,6 +496,45 @@ export default function TeamManagementPage() {
           </table>
         )}
       </div>
+
+      {/* Temporary password — shown once, never stored */}
+      {resetResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Temporary password">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-semibold text-zinc-900 flex items-center gap-2">
+              <KeyRound className="h-5 w-5" />
+              Temporary password for {resetResult.name}
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500">{resetResult.email}</p>
+            <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <code className="flex-1 select-all text-lg font-bold text-amber-900">{resetResult.tempPassword}</code>
+              <button
+                onClick={copyTempPassword}
+                className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs hover:bg-zinc-50"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </button>
+            </div>
+            {resetResult.emailSent ? (
+              <p className="mt-3 text-sm text-emerald-700">Emailed to {resetResult.email}.</p>
+            ) : (
+              <p className="mt-3 text-sm font-medium text-red-700">
+                The email could NOT be sent. Give them this password yourself.
+              </p>
+            )}
+            <p className="mt-2 text-xs text-zinc-500">
+              This is the only time it is shown — it is not stored anywhere. After logging in, they should change it with the key icon at the bottom of the left menu.
+            </p>
+            <button
+              onClick={() => setResetResult(null)}
+              className="mt-4 w-full rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Disabled users note */}
       {disabledCount > 0 && (
