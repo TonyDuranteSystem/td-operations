@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail, listAllAuthUsers } from '@/lib/auth-admin-helpers'
 import { isAdmin } from '@/lib/auth'
-import { CRM_BASE_URL } from '@/lib/config'
+import { generateTempPassword, sendStaffCredentialsEmail } from '@/lib/auth/staff-credentials'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Generate temp password
-  const tempPassword = `TD${Math.random().toString(36).slice(2, 10)}!`
+  const tempPassword = generateTempPassword()
 
   // Create auth user
   const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
@@ -81,58 +81,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: createError.message }, { status: 500 })
   }
 
-  // Send welcome email with temp password
-  try {
-    const { gmailPost } = await import('@/lib/gmail')
-    const loginUrl = `${CRM_BASE_URL}/login`
-    const welcomeHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <div style="background: #18181b; padding: 20px; border-radius: 12px 12px 0 0;">
-          <h1 style="color: white; margin: 0; font-size: 18px;">Tony Durante — Team Access</h1>
-        </div>
-        <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-          <p>Hi ${full_name},</p>
-          <p>Your CRM dashboard account has been created. Here are your login credentials:</p>
-          <div style="background: #18181b; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="margin: 0 0 8px; color: #ffffff; font-size: 15px;"><strong>Email:</strong> ${email}</p>
-            <p style="margin: 0; color: #ffffff; font-size: 15px;"><strong>Temporary Password:</strong> <code style="background: #fef3c7; padding: 4px 8px; border-radius: 4px; font-size: 16px; font-weight: bold; color: #92400e;">${tempPassword}</code></p>
-          </div>
-          <p>You will be asked to change your password on first login.</p>
-          <a href="${loginUrl}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 8px;">
-            Login to CRM
-          </a>
-          <p style="color: #71717a; font-size: 12px; margin-top: 16px;">Role: ${role === 'admin' ? 'Administrator' : 'Team Member'}</p>
-        </div>
-      </div>
-    `
-    const subject = 'Your Tony Durante CRM Account'
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const boundary = `boundary_${Date.now()}`
-    const rawEmail = [
-      `From: Tony Durante <support@tonydurante.us>`,
-      `To: ${email}`,
-      `Subject: ${encodedSubject}`,
-      `MIME-Version: 1.0`,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      Buffer.from(welcomeHtml).toString('base64'),
-      `--${boundary}--`,
-    ].join('\r\n')
-    await gmailPost('/messages/send', { raw: Buffer.from(rawEmail).toString('base64url') })
-  } catch (emailErr) {
-    console.error('Welcome email failed:', emailErr)
-  }
+  // Send welcome email with temp password. If the send fails the admin is told
+  // and gets the password back once — the old code only console.error'd a
+  // failed send and still reported success.
+  const emailSent = await sendStaffCredentialsEmail({ kind: 'created', fullName: full_name, email, tempPassword, role })
 
-  return NextResponse.json({
-    success: true,
-    user_id: newUser.user.id,
-    email,
-    message: `Dashboard account created for ${full_name}. Login credentials sent via email.`,
-  })
+  return NextResponse.json(
+    {
+      success: true,
+      user_id: newUser.user.id,
+      email,
+      emailSent,
+      ...(emailSent ? {} : { tempPassword }),
+      message: emailSent
+        ? `Dashboard account created for ${full_name}. Login credentials sent via email.`
+        : `Dashboard account created for ${full_name}, but the email could NOT be sent. Temporary password: ${tempPassword}`,
+    },
+    { headers: { 'Cache-Control': 'no-store' } },
+  )
 }
 
 /**

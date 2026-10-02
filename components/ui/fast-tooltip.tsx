@@ -1,7 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
+import { tooltipPosition, type TooltipPosition } from '@/lib/ui/tooltip-position'
 
 /**
  * Instant-appearing hover label — the browser's native `title` attribute has
@@ -18,7 +20,20 @@ import { cn } from '@/lib/utils'
  * pointer type. The label is purely a sighted-mouse convenience; the
  * accessible name for assistive tech comes from the wrapped element's own
  * `aria-label`, untouched by this component either way.
+ *
+ * The label is rendered in a body-level portal with `position: fixed` — NOT
+ * inside the wrapper. Inside a clipped/scrolling box (a table in
+ * `overflow-x-auto`) a label under the bottom row used to spill past the box,
+ * add a scrollbar, shift the layout off the cursor, hide itself, and repeat —
+ * an endless flicker. A fixed label takes no part in any container's layout.
+ * It hides on scroll/resize so it can never be left floating in the wrong place.
  */
+/** Above every overlay in the app (the highest existing layer is 10000): the
+ * label now lives at body level, so a modal at z-70/80/100 would otherwise
+ * cover the label of its own buttons. It is pointer-events:none, so sitting on
+ * top of everything can never block a click. */
+const TOOLTIP_Z_INDEX = 10001
+
 export function FastTooltip({
   label,
   children,
@@ -43,6 +58,14 @@ export function FastTooltip({
 }) {
   const [show, setShow] = useState(false)
   const [canHover, setCanHover] = useState(false)
+  const [pos, setPos] = useState<TooltipPosition | null>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  const open = () => {
+    const r = wrapperRef.current?.getBoundingClientRect()
+    if (r) setPos(tooltipPosition(r, align, window.innerHeight))
+    setShow(true)
+  }
 
   useEffect(() => {
     const mq = window.matchMedia('(hover: hover) and (pointer: fine)')
@@ -52,28 +75,39 @@ export function FastTooltip({
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
+  useEffect(() => {
+    if (!show) return
+    const hide = () => setShow(false)
+    window.addEventListener('scroll', hide, true)
+    window.addEventListener('resize', hide)
+    return () => {
+      window.removeEventListener('scroll', hide, true)
+      window.removeEventListener('resize', hide)
+    }
+  }, [show])
+
   return (
     <div
+      ref={wrapperRef}
       className={cn('relative inline-flex', className)}
-      onMouseEnter={() => canHover && setShow(true)}
+      onMouseEnter={() => canHover && open()}
       onMouseLeave={() => setShow(false)}
-      onFocus={() => setShow(true)}
+      onFocus={open}
       onBlur={() => setShow(false)}
       onClick={() => setShow(false)}
     >
       {children}
-      {show && label && (
-        <span
-          className={cn(
-            'pointer-events-none absolute top-full z-20 mt-1 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-xs text-white',
-            align === 'left' && 'left-0',
-            align === 'right' && 'right-0',
-            align === 'center' && 'left-1/2 -translate-x-1/2'
-          )}
-        >
-          {label}
-        </span>
-      )}
+      {show && label && pos && typeof document !== 'undefined' &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{ position: 'fixed', top: pos.top, left: pos.left, transform: `translate(${pos.translateX}, ${pos.translateY})`, zIndex: TOOLTIP_Z_INDEX }}
+            className="pointer-events-none whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-xs text-white"
+          >
+            {label}
+          </span>,
+          document.body
+        )}
     </div>
   )
 }
