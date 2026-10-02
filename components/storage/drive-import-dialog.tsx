@@ -25,7 +25,7 @@ async function send<T>(url: string, body: unknown, fallback: string): Promise<T>
   return j as T
 }
 
-export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => void; onOpenStorage: (ownerId: string) => void }) {
+export function DriveImportDialog({ onClose, onOpenStorage, onMyDrive }: { onClose: () => void; onOpenStorage: (ownerId: string) => void; onMyDrive?: (target: 'private' | 'business') => void }) {
   const [path, setPath] = useState<Array<{ id: string | null; name: string }>>([{ id: null, name: 'Google Drive' }])
   const [listing, setListing] = useState<Listing | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -131,6 +131,13 @@ export function DriveImportDialog({ onClose, onOpenStorage }: { onClose: () => v
           <button type="button" aria-label="Close" disabled={!!running} onClick={onClose} className="rounded p-1 text-zinc-500 hover:bg-zinc-100 disabled:opacity-40"><X className="h-4 w-4" /></button>
         </div>
 
+        {onMyDrive && !running && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700" data-testid="import-my-drive">
+            <span className="font-medium">Your own Google Drive instead?</span>
+            <button type="button" onClick={() => onMyDrive('private')} className="rounded-md border border-zinc-300 bg-white px-2 py-1 hover:bg-zinc-100">Copy from my Google Drive into My files</button>
+            <button type="button" onClick={() => onMyDrive('business')} className="rounded-md border border-zinc-300 bg-white px-2 py-1 hover:bg-zinc-100">…into Business</button>
+          </div>
+        )}
         <nav className="mb-2 flex flex-wrap items-center gap-1 text-xs text-zinc-600" aria-label="Drive path">
           {path.map((p, i) => (
             <span key={`${p.id}-${i}`} className="inline-flex items-center gap-1">
