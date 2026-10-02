@@ -77,6 +77,7 @@
     "puppeteer-core": "^25.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-joyride": "2.9.3",
     "react-markdown": "^10.1.0",
     "react-plaid-link": "^4.1.1",
     "recharts": "^3.8.1",

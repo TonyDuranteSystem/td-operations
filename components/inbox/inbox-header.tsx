@@ -28,6 +28,7 @@ export function InboxHeader({ activeChannel, onChannelChange }: InboxHeaderProps
         return (
           <button
             key={ch.key ?? 'all'}
+            data-tour={ch.key === 'whatsapp' ? 'wa-tab' : undefined}
             onClick={() => onChannelChange(ch.key)}
             className={`
               flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors

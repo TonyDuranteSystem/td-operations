@@ -179,7 +179,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   if (data?.match) {
     const { type, name: matchName, accountName } = data.match
     return (
-      <div className="px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-800">
+      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-800">
         Matches an existing {type === 'lead' ? 'lead' : 'contact'}: <span className="font-medium">{matchName}</span>
         {accountName && <> · {accountName}</>}
       </div>
@@ -188,7 +188,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
 
   if (!recordType) {
     return (
-      <div className="px-4 py-1.5 bg-zinc-50 border-b flex items-center justify-between gap-2">
+      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-zinc-50 border-b flex items-center justify-between gap-2">
         <span className="text-xs text-zinc-500">No matching lead or client for this number.</span>
         <button
           onClick={() => setRecordType('lead')}

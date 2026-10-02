@@ -34,6 +34,10 @@ interface ConversationListProps {
   activeChannel: InboxChannel | null
   selectedId: string | null
   onSelect: (conversation: InboxConversation) => void
+  /** Reports the first row currently visible, whenever it changes — the guided tour uses this
+   *  to open a real conversation itself (same as the user clicking it) without this component
+   *  needing to know anything about tours. */
+  onFirstRow?: (conversation: InboxConversation | null) => void
   /** `action` tells the parent HOW the row went away: 'trash' (recoverable),
    *  'archive' (out of the Inbox only), or 'erase' (delete forever — gone from
    *  every view). Defaults to 'trash'. The parent's hide machinery decides
@@ -118,7 +122,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, searchScope, onWidenScope, onSelectMany, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onFirstRow, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, searchScope, onWidenScope, onSelectMany, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
   const queryClient = useQueryClient()
 
   // Which row's quick-action popover (color palette / folder list / snooze
@@ -640,6 +644,11 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onDelete
     return computeVisibleList({ payload, origin: data.origin, overrides: ov, unread: un, prev: prevRef.current, now: Date.now() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, ov, un])
+
+  useEffect(() => {
+    onFirstRow?.(visibleRows[0] ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows])
 
   // Remember the shown ENRICHED rows for next round's carry-forward (in an
   // effect, never mutating the ref during render). ALSO retain the last-known
