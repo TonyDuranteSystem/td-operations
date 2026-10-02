@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronRight, Folder, File as FileIcon, Loader2, X } from 'lucide-react'
-import { formatBytes, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
+import { allFolderPaths, formatBytes, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { planDriveEntry } from '@/lib/crm-store/my-drive'
 
 interface Entry { id: string; name: string; mimeType: string; size: number | null }
@@ -27,14 +27,16 @@ async function listAll(folder: string): Promise<Entry[]> {
 }
 
 /** every file under the chosen entries, with its folder path (folders are walked all the way down) */
-export async function collectDriveItems(roots: Array<{ entry: Entry; path: string[] }>, onProgress?: (n: number) => void): Promise<{ items: PlainItem[]; skipped: PlainSkipped[] }> {
+export async function collectDriveItems(roots: Array<{ entry: Entry; path: string[] }>, onProgress?: (n: number) => void): Promise<{ items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] }> {
   const items: PlainItem[] = []
   const skipped: PlainSkipped[] = []
+  const dirs: string[][] = []
   const queue = [...roots]
   while (queue.length) {
     const { entry, path } = queue.shift()!
     const plan = planDriveEntry(entry.mimeType, entry.name)
     if (plan.kind === 'folder') {
+      dirs.push([...path, entry.name])                      // kept even if nothing inside can be copied
       const kids = await listAll(entry.id)
       for (const k of kids) queue.push({ entry: k, path: [...path, entry.name] })
     } else if (plan.kind === 'skip') {
@@ -46,13 +48,13 @@ export async function collectDriveItems(roots: Array<{ entry: Entry; path: strin
       onProgress?.(items.length)
     }
   }
-  return { items, skipped }
+  return { items, skipped, folders: allFolderPaths([], dirs) }
 }
 
 export function MyDriveDialog({ targetName, onClose, onChosen }: {
   targetName: string
   onClose: () => void
-  onChosen: (items: PlainItem[], skipped: PlainSkipped[]) => void
+  onChosen: (items: PlainItem[], skipped: PlainSkipped[], folders: string[][]) => void
 }) {
   const [crumbs, setCrumbs] = useState<Array<{ id: string; name: string }>>([{ id: 'root', name: 'My Drive' }])
   const [entries, setEntries] = useState<Entry[] | null>(null)
@@ -79,8 +81,8 @@ export function MyDriveDialog({ targetName, onClose, onChosen }: {
     setBusy('Reading the folders…'); setError(null)
     try {
       const r = await collectDriveItems(roots, (n) => setBusy(`Reading the folders… ${n} files found`))
-      if (!r.items.length && !r.skipped.length) { setError('There is nothing to copy there.'); setBusy(null); return }
-      onChosen(r.items, r.skipped)
+      if (!r.items.length && !r.skipped.length && !r.folders.length) { setError('There is nothing to copy there.'); setBusy(null); return }
+      onChosen(r.items, r.skipped, r.folders)
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not read your Google Drive.'); setBusy(null) }
   }
 

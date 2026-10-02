@@ -11,10 +11,13 @@ import { PLAIN_CONCURRENCY, folderCount, formatBytes, type PlainItem, type Plain
 
 export type PlainOutcome = { outcome: 'saved' | 'unchanged' | 'failed'; message?: string }
 
-export function PlainDropPanel({ folderName, items, skipped, run, onClose, onFinished }: {
+export function PlainDropPanel({ folderName, items, skipped, folders, makeFolder, run, onClose, onFinished }: {
   folderName: string
   items: PlainItem[]
   skipped: PlainSkipped[]
+  /** every folder of what was chosen, including ones with nothing to upload in them */
+  folders: string[][]
+  makeFolder: (path: string[]) => Promise<void>
   run: (item: PlainItem) => Promise<PlainOutcome>
   onClose: () => void
   onFinished: () => void
@@ -27,7 +30,7 @@ export function PlainDropPanel({ folderName, items, skipped, run, onClose, onFin
   const stop = useRef(false)
   const total = items.length
   const bytes = items.reduce((n, i) => n + i.file.size, 0)
-  const folders = folderCount(items)
+  const folderTotal = Math.max(folderCount(items), folders.length)
 
   useEffect(() => {
     if (phase !== 'running') return
@@ -39,6 +42,11 @@ export function PlainDropPanel({ folderName, items, skipped, run, onClose, onFin
   const start = async () => {
     stop.current = false
     setPhase('running'); setDone(0); setSaved(0); setSame(0); setFailures([])
+    // the folders first (parents before children), so an empty folder — or one holding only Google Docs shortcuts — still appears
+    for (const path of folders) {
+      if (stop.current) break
+      try { await makeFolder(path) } catch (e) { setFailures((f) => (f.length < 50 ? [...f, { name: path.join(' › '), message: e instanceof Error ? e.message : 'The folder could not be created.' }] : f)) }
+    }
     let next = 0
     const worker = async () => {
       for (;;) {
@@ -67,7 +75,7 @@ export function PlainDropPanel({ folderName, items, skipped, run, onClose, onFin
           <h3 className="min-w-0 flex-1 text-base font-semibold text-zinc-900">Upload {total} file{total === 1 ? '' : 's'} into “{folderName}”</h3>
           {phase !== 'running' && <button type="button" aria-label="Close" onClick={onClose} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>}
         </div>
-        <p className="mt-1 text-zinc-600">{total} file{total === 1 ? '' : 's'}{folders ? ` in ${folders} folder${folders === 1 ? '' : 's'}` : ''} · {formatBytes(bytes)}. The folders are kept as they are. Nothing here is ever shown to a client.</p>
+        <p className="mt-1 text-zinc-600">{total} file{total === 1 ? '' : 's'}{folderTotal ? ` in ${folderTotal} folder${folderTotal === 1 ? '' : 's'}` : ''} · {formatBytes(bytes)}. The folders are kept as they are. Nothing here is ever shown to a client.</p>
 
         {skipped.length > 0 && (
           <details className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
@@ -103,7 +111,7 @@ export function PlainDropPanel({ folderName, items, skipped, run, onClose, onFin
           {phase === 'ready' && (
             <>
               <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-50">Cancel</button>
-              <button type="button" disabled={total === 0} onClick={() => void start()} className="rounded-md bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700 disabled:opacity-50" data-testid="plain-drop-start">Upload</button>
+              <button type="button" disabled={total === 0 && folders.length === 0} onClick={() => void start()} className="rounded-md bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700 disabled:opacity-50" data-testid="plain-drop-start">Upload</button>
             </>
           )}
           {phase === 'running' && (

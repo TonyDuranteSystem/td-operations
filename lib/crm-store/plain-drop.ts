@@ -17,16 +17,18 @@ export interface PlainItem { file: File; path: string[]; /** set when the file i
 export interface PlainSkipped { name: string; why: string }
 
 /** What a plain drop will upload, and what it leaves out (said plainly, never silently). */
-export function filterPlainDrop(found: PlainItem[]): { items: PlainItem[]; skipped: PlainSkipped[] } {
+export function filterPlainDrop(found: PlainItem[]): { items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] } {
   const items: PlainItem[] = []
   const skipped: PlainSkipped[] = []
+  // every folder the dropped files sit in is kept — even when all that is inside it was left out (a folder of Google Docs shortcuts)
+  const folders = allFolderPaths(found.map((f) => f.path))
   for (const it of found) {
     const name = it.file.name
-    if (GOOGLE_POINTER.test(name)) skipped.push({ name: [...it.path, name].join(" › "), why: "A Google Docs shortcut — it only points to the document on Google Drive, it is not the document itself." })
+    if (GOOGLE_POINTER.test(name)) skipped.push({ name: [...it.path, name].join(" › "), why: "A Google Docs shortcut — it only points to the document on Google Drive, it is not the document itself. To copy the real document use “From my Google Drive”." })
     else if (SYSTEM_JUNK.test(name) || name.startsWith("._")) { /* system junk: dropped without a word */ }
     else items.push(it)
   }
-  return { items, skipped }
+  return { items, skipped, folders }
 }
 
 /** The distinct folders a drop will make (every level), for the summary line. */
@@ -52,4 +54,11 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+/** Every distinct folder path (all levels) of the given paths, shortest first — so a parent is always made before its child. */
+export function allFolderPaths(paths: string[][], extra: string[][] = []): string[][] {
+  const seen = new Map<string, string[]>()
+  for (const path of [...paths, ...extra]) for (let i = 1; i <= path.length; i++) seen.set(path.slice(0, i).join("/"), path.slice(0, i))
+  return Array.from(seen.values()).sort((a, b) => a.length - b.length)
 }

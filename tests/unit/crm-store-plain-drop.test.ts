@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { filterPlainDrop, folderCount, itemsFromFileList, isInternalOwnerKind, formatBytes, PLAIN_CONCURRENCY, type PlainItem } from "@/lib/crm-store/plain-drop"
+import { allFolderPaths, filterPlainDrop, folderCount, itemsFromFileList, isInternalOwnerKind, formatBytes, PLAIN_CONCURRENCY, type PlainItem } from "@/lib/crm-store/plain-drop"
 
 const f = (name: string, size = 10) => ({ name, size }) as unknown as File
 const item = (name: string, path: string[] = []): PlainItem => ({ file: f(name), path })
@@ -45,5 +45,16 @@ describe("folders and the summary", () => {
   it("sizes read in plain units; a few uploads run at once", () => {
     expect(formatBytes(512)).toBe("512 B"); expect(formatBytes(2048)).toBe("2 KB"); expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB"); expect(formatBytes(3 * 1024 ** 3)).toBe("3.00 GB")
     expect(PLAIN_CONCURRENCY).toBeGreaterThan(1)
+  })
+})
+
+describe("folders survive when nothing in them can be uploaded", () => {
+  it("keeps a folder whose only content is a Google Docs shortcut", () => {
+    const r = filterPlainDrop([item("Doc.gdoc", ["CRM Projects", "SUITE NUMBER"]), item("a.pdf", ["CRM Projects", "STORAGE"])])
+    expect(r.items).toHaveLength(1)
+    expect(r.folders).toEqual([["CRM Projects"], ["CRM Projects", "SUITE NUMBER"], ["CRM Projects", "STORAGE"]])
+  })
+  it("allFolderPaths lists every level once, parents first, and adds empty folders", () => {
+    expect(allFolderPaths([["A", "B"]], [["A", "C"], ["D"]])).toEqual([["A"], ["D"], ["A", "B"], ["A", "C"]])
   })
 })
