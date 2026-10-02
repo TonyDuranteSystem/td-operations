@@ -36,6 +36,8 @@ export default function TeamManagementPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editRole, setEditRole] = useState<'admin' | 'team'>('team')
+  const [editingNameId, setEditingNameId] = useState<string | null>(null)
+  const [nameDraft, setNameDraft] = useState('')
 
   // AI Agent settings
   const [aiEnabledForTeam, setAiEnabledForTeam] = useState(false)
@@ -146,6 +148,28 @@ export default function TeamManagementPage() {
       fetchUsers()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update role')
+    }
+  }
+
+  const handleUpdateName = async (userId: string) => {
+    const name = nameDraft.trim()
+    if (!name) {
+      toast.error('Name cannot be empty')
+      return
+    }
+    try {
+      const res = await fetch('/api/team-management', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, full_name: name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to update name')
+      toast.success(`Name updated to ${name}`)
+      setEditingNameId(null)
+      fetchUsers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update name')
     }
   }
 
@@ -319,9 +343,52 @@ export default function TeamManagementPage() {
               {users.map(u => (
                 <tr key={u.id} className={`group hover:bg-zinc-50 ${u.disabled ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3">
-                    <span className={`text-sm font-medium ${u.disabled ? 'line-through text-zinc-400' : 'text-zinc-900'}`}>
-                      {u.full_name}
-                    </span>
+                    {editingNameId === u.id ? (
+                      <span className="flex items-center gap-1.5">
+                        <input
+                          id={`team-name-${u.id}`}
+                          value={nameDraft}
+                          onChange={e => setNameDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleUpdateName(u.id)
+                            if (e.key === 'Escape') setEditingNameId(null)
+                          }}
+                          autoFocus
+                          maxLength={100}
+                          className="w-44 px-2 py-1 text-sm border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          aria-label={`Name for ${u.email}`}
+                        />
+                        <button
+                          onClick={() => handleUpdateName(u.id)}
+                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md"
+                          aria-label="Save name"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setEditingNameId(null)}
+                          className="p-1.5 text-zinc-500 hover:bg-zinc-100 rounded-md"
+                          aria-label="Cancel"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5">
+                        <span className={`text-sm font-medium ${u.disabled ? 'line-through text-zinc-400' : 'text-zinc-900'}`}>
+                          {u.full_name}
+                        </span>
+                        <FastTooltip label="Edit name">
+                          <button
+                            onClick={() => { setEditingNameId(u.id); setNameDraft(u.full_name) }}
+                            className="p-1 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-md"
+                            aria-label={`Edit name of ${u.email}`}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </FastTooltip>
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span className="text-sm text-zinc-600 flex items-center gap-1.5">

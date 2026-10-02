@@ -137,8 +137,8 @@ export async function POST(request: NextRequest) {
 
 /**
  * PATCH /api/team-management
- * Admin-only: update a dashboard user's role or disabled status.
- * Body: { user_id, role?: 'admin' | 'team', disabled?: boolean }
+ * Admin-only: update a dashboard user's role, disabled status, or display name.
+ * Body: { user_id, role?: 'admin' | 'team', disabled?: boolean, full_name?: string }
  */
 export async function PATCH(request: NextRequest) {
   const supabase = createClient()
@@ -148,15 +148,33 @@ export async function PATCH(request: NextRequest) {
   }
 
   const body = await request.json()
-  const { user_id, role, disabled } = body
+  const { user_id, role, disabled, full_name } = body
 
   if (!user_id) {
     return NextResponse.json({ error: 'user_id required' }, { status: 400 })
   }
 
-  // Self-protection: can't change own role or disable self
-  if (user_id === user.id) {
+  // Self-protection: can't change own role or disable self. Renaming yourself is harmless, so a
+  // name-only change is allowed on your own account.
+  if (user_id === user.id && (role !== undefined || disabled !== undefined)) {
     return NextResponse.json({ error: 'Cannot modify your own account' }, { status: 400 })
+  }
+
+  if (full_name !== undefined) {
+    const name = typeof full_name === 'string' ? full_name.trim() : ''
+    if (!name || name.length > 100) {
+      return NextResponse.json({ error: 'Name must be 1-100 characters' }, { status: 400 })
+    }
+    // Read-then-write the WHOLE metadata object so nothing else stored there (e.g. the
+    // must_change_password flag) can be lost, whatever the auth server's merge behavior is.
+    const { data: existing, error: readError } = await supabaseAdmin.auth.admin.getUserById(user_id)
+    if (readError || !existing?.user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(user_id, {
+      user_metadata: { ...(existing.user.user_metadata ?? {}), full_name: name },
+    })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
   if (role !== undefined) {
