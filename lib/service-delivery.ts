@@ -81,6 +81,12 @@ export interface AdvanceStageParams {
    * non-renewal service types.
    */
   renewal_filing_for_year?: number
+  /**
+   * The filing receipt (documents row) Mark Filed attaches when it closes a job whose service card says
+   * "closes only by filing" (RA renewal, annual report). Only lib/operations/file-renewal.ts passes it; every other
+   * path is refused — here with a plain message, and by the database rule for any writer. N1a C0.
+   */
+  filing_receipt_document_id?: string
 }
 
 export interface AdvanceStageResult {
@@ -331,19 +337,6 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // 5. Build stage history entry
-  const historyEntry = {
-    from_stage: delivery.stage || "New",
-    from_order: currentOrder,
-    to_stage: targetStage.stage_name,
-    to_order: targetStage.stage_order,
-    advanced_at: new Date().toISOString(),
-    advanced_by: actor,
-    notes: notes || null,
-  }
-  const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
-
-  // 6. Update delivery
   // "Closed" is the final stage for the recurring renewal flows (State Annual
   // Report / State RA Renewal — verified the only two service types with a
   // "Closed" stage). Treating it as completed here is what fires the +1-year
@@ -357,6 +350,60 @@ export async function advanceServiceDelivery(
     targetStage.stage_name === "Completed" ||
     targetStage.stage_name === "TR Filed" ||
     isClosedRenewalFinal
+
+  // 4e. Closes only by filing (N1a C0, Antonio 2026-10-02) — a job whose service card says closes_only_by_filing
+  // (RA renewal, annual report) can only be CLOSED by Mark Filed, which passes the filing receipt. Every other path
+  // (tracker, account page, workspace stepper, tools) gets a plain refusal here, before anything is written. Same
+  // shape as 4d: the database rule (20261002-2300-renewal-close-guard.sql) is the safety net for every other writer.
+  // Test deliveries are exempt (same as the rule). A job that is ALREADY completed but not on its final step is
+  // refused too: re-advancing it to the final step would run the renewal-date roll again (bug-hunter #1).
+  if (
+    isCompleted &&
+    !params.filing_receipt_document_id &&
+    !(delivery as { is_test?: boolean | null }).is_test
+  ) {
+    let guarded = false
+    try {
+      const { closesOnlyByFiling } = await import("@/lib/services/renewal-close")
+      guarded = await closesOnlyByFiling(
+        delivery.service_type,
+        (delivery as { service_type_entry_id?: string | null }).service_type_entry_id ?? null,
+      )
+    } catch (closeErr) {
+      // A guard, not a new failure mode: if the CHECK itself errors (transient read) fall through — the database
+      // rule still refuses the closing write itself.
+      console.warn("[advanceServiceDelivery] closes-only-by-filing check failed (non-blocking):", closeErr)
+    }
+    if (guarded) {
+      const { CLOSES_ONLY_BY_FILING_MESSAGE } = await import("@/lib/services/renewal-close")
+      return {
+        success: false,
+        error: CLOSES_ONLY_BY_FILING_MESSAGE,
+        from_stage: delivery.stage || "New",
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [],
+      }
+    }
+  }
+
+  // 5. Build stage history entry
+  const historyEntry = {
+    from_stage: delivery.stage || "New",
+    from_order: currentOrder,
+    to_stage: targetStage.stage_name,
+    to_order: targetStage.stage_order,
+    advanced_at: new Date().toISOString(),
+    advanced_by: actor,
+    notes: notes || null,
+  }
+  const stageHistory = Array.isArray(delivery.stage_history) ? [...delivery.stage_history, historyEntry] : [historyEntry]
+
+  // 6. Update delivery (isCompleted is resolved above, before the 4e check)
   await dbWrite(
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     supabaseAdmin
@@ -368,6 +415,9 @@ export async function advanceServiceDelivery(
         stage_history: stageHistory,
         status: isCompleted ? "completed" : "active",
         ...(isCompleted ? { end_date: new Date().toISOString().split("T")[0] } : {}),
+        ...(isCompleted && params.filing_receipt_document_id
+          ? { filing_receipt_document_id: params.filing_receipt_document_id }
+          : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", delivery_id),

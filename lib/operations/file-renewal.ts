@@ -121,6 +121,25 @@ export function buildAccountNoteEntry(
   return currentNotes ? `${currentNotes}\n${entry}` : entry
 }
 
+/**
+ * Why the job passed to Mark Filed cannot be filed, or null when it can: it must exist, belong to the company being
+ * filed, be the right kind (RA renewal vs annual report) and still be open (not completed or cancelled).
+ */
+export function renewalJobMismatch(
+  job: { account_id: string | null; service_type: string | null; status: string | null } | null,
+  accountId: string,
+  expectedServiceType: string,
+): string | null {
+  if (!job) return "This renewal job no longer exists — reload the Calendar and try again."
+  if (job.account_id !== accountId) return "This renewal job belongs to a different company — reload the Calendar and try again."
+  if (job.service_type !== expectedServiceType) {
+    return `This job is a ${job.service_type ?? "different service"}, not a ${expectedServiceType} — reload the Calendar and try again.`
+  }
+  if (job.status === "completed") return "This renewal is already filed — reload the Calendar to see it."
+  if (job.status === "cancelled") return "This renewal job was cancelled — reload the Calendar and try again."
+  return null
+}
+
 /** Year derived from a YYYY-MM-DD filed_date. Throws on garbage. */
 export function yearFromFiledDate(filedDate: string): number {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(filedDate)) {
@@ -186,6 +205,21 @@ export async function fileRenewal(
         throw new Error(
           `Account ${params.account_id} not found: ${acctErr?.message ?? "unknown"}`,
         )
+      }
+
+      // 1b. The job being filed (when one is passed) must be THIS company's open job of THIS kind — checked before
+      // anything is uploaded or written, so a wrong or stale job id can never leave a receipt on the portal for a
+      // filing the CRM does not record, or re-date another company's job (N1a C0 bug-hunter #3). Both ids come from
+      // the request body.
+      if (params.delivery_id) {
+        const { data: job, error: jobErr } = await supabaseAdmin
+          .from("service_deliveries")
+          .select("id, account_id, service_type, status")
+          .eq("id", params.delivery_id)
+          .maybeSingle()
+        if (jobErr) throw new Error(`Could not read the renewal job: ${jobErr.message}`)
+        const problem = renewalJobMismatch(job, params.account_id, SERVICE_TYPE_BY_KIND[params.kind])
+        if (problem) throw new Error(problem)
       }
 
       // Cycle year precedence: explicit staff choice (calendar dialog) → the
@@ -311,6 +345,8 @@ export async function fileRenewal(
           params.override_unpaid ? " [FILED DESPITE UNPAID INVOICES]" : ""
         }${params.note ? ` — note: ${params.note}` : ""}`,
         renewal_filing_for_year: year,
+        // The receipt saved in step 4 — the only thing that lets a renewal / annual report close (N1a C0).
+        filing_receipt_document_id: docRowId,
       })
       if (!completion.success) {
         throw new Error(`completeSD failed: ${completion.error ?? "unknown"}`)
