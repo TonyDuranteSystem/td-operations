@@ -1,6 +1,19 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-10-01 — Claude (A legacy name-resolution path in
+_Last verified against code: 2026-10-01 — Claude (**WHATSAPP GETS A PERSISTENT DESKTOP LIST +
+A CONVERSATION-LEVEL SHARE LINK.** Antonio: "I want the chats always visible on desktop and the
+single clicked chat will open in the right space. I want a link for each conversation that I can
+copy and share with you or Luca to read the content right away." (1) The conversation list used to
+hide at every screen width the moment a chat/email opened (Antonio, 2026-07-28, deliberate for
+Gmail's full-width reading) — now, for WhatsApp specifically, the list stays visible on a real
+desktop width even with a chat open, matching the two-pane shape already used for the
+nothing-selected state; Gmail's own full-width behavior is unchanged, mobile still switches screens
+for both channels (no room for a second pane). (2) A per-message "Copy link" already existed,
+buried in each message's own menu; added an obvious conversation-level one to the thread header
+itself (`/inbox?thread=whatsapp:<groupId>`, no message id) — opens straight to that conversation for
+any signed-in staff member, same URL mechanism the per-message link and page-refresh restore
+(2026-09-29) already use. Typecheck and lint clean; full unit suite green (920 files, 12,748
+tests).) Prior 2026-10-01 — Claude (A legacy name-resolution path in
 `app/api/inbox/messages/[id]/route.ts` (the generic Gmail/Telegram message-thread route, under this
 doc's own path glob) carried a hardcoded phone→name lookup — including the business's own number
 mapped to its own name — plus a loose suffix-matching CRM lookup, the same weak pattern behind the
