@@ -806,7 +806,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const into: Fold = await ensurePlainFolder(item.path)
       if (item.driveId) {          // copied from the owner's own Google Drive — the server fetches it, nothing comes through this browser
-        const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id }, 'The file could not be copied.')
+        const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id, account: item.driveAccount ?? 'me' }, 'The file could not be copied.')
         return r.outcome === 'saved' ? { outcome: 'saved' } : r.outcome === 'unchanged' ? { outcome: 'unchanged' } : { outcome: 'failed', message: r.message ?? 'The file could not be copied.' }
       }
       const file = item.file

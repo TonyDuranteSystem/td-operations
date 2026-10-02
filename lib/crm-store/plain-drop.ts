@@ -13,7 +13,7 @@ const GOOGLE_POINTER = /\.(gdoc|gsheet|gslides|gform|gdraw|gmap|gsite|gjam|gscri
 /** Junk the operating system adds to folders. */
 const SYSTEM_JUNK = /^(\.ds_store|thumbs\.db|desktop\.ini|icon\r?)$/i
 
-export interface PlainItem { file: File; path: string[]; /** set when the file is copied from the owner's Google Drive instead of uploaded from this computer */ driveId?: string }
+export interface PlainItem { file: File; path: string[]; /** set when the file is copied from the owner's Google Drive instead of uploaded from this computer */ driveId?: string; /** whose Google Drive it comes from ("me" or a firm address) */ driveAccount?: string }
 export interface PlainSkipped { name: string; why: string }
 
 /** What a plain drop will upload, and what it leaves out (said plainly, never silently). */
