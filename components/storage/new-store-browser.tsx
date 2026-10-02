@@ -806,7 +806,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     try {
       const into: Fold = await ensurePlainFolder(item.path)
       if (item.driveId) {          // copied from the owner's own Google Drive — the server fetches it, nothing comes through this browser
-        const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id }, 'The file could not be copied.')
+        const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id, account: item.driveAccount ?? 'me' }, 'The file could not be copied.')
         return r.outcome === 'saved' ? { outcome: 'saved' } : r.outcome === 'unchanged' ? { outcome: 'unchanged' } : { outcome: 'failed', message: r.message ?? 'The file could not be copied.' }
       }
       const file = item.file
@@ -821,6 +821,20 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     } catch (e) {
       return { outcome: 'failed', message: errMsg(e, 'The file could not be saved.') }
     }
+  }
+
+  /** "Copy from my Google Drive into My files / Business" from the Import dialog: open that storage, then pick from the owner's own Drive */
+  const openMyDriveInto = async (target: 'private' | 'business') => {
+    const owner = (groups ?? []).find((g) => g.section === target)?.owners[0]
+    if (!owner) { toast.error(target === 'private' ? 'Your My files storage was not found.' : 'The Business storage was not found.'); return }
+    try {
+      await openOwner(owner.id)
+      const c = await fetchInto(owner.id, null)
+      if (!c.folder) { toast.error('This storage has no top folder yet.'); return }
+      folderOwner.current.set(c.folder.id, owner.id)
+      setImportOpen(false)
+      setMyDriveFor(c.folder)
+    } catch (err) { toast.error(errMsg(err, 'Could not open that storage.')) }
   }
 
   /** a folder or files dropped straight on the "My files" / "Business" row of the left tree: open it, then upload into its top */
@@ -2132,7 +2146,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       )}
       {importOpen && (
         <DriveImportDialog onClose={() => setImportOpen(false)}
-          onOpenStorage={(oid) => { setImportOpen(false); void loadNav(); void openOwner(oid) }} />
+          onOpenStorage={(oid) => { setImportOpen(false); void loadNav(); void openOwner(oid) }}
+          onMyDrive={myDriveProbe?.allowed ? (target) => { void openMyDriveInto(target) } : undefined} />
       )}
       {typing && (
         <SetTypeDialog file={typing} viewingOwnerId={ownerId} onClose={() => setTyping(null)}
@@ -2462,7 +2477,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               </button>
             </li>
           )}
-          {!scopedOwnerId && importProbe?.allowed && (
+          {!scopedOwnerId && (importProbe?.allowed || myDriveProbe?.allowed) && (
             <li className="pt-2">
               <button type="button" onClick={() => setImportOpen(true)}
                 className="flex w-full items-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-1 pl-2 pr-1 text-left text-sm font-medium text-blue-800 hover:bg-blue-100">

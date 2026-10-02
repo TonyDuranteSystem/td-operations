@@ -1520,43 +1520,73 @@ export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
   return Buffer.from(await res.arrayBuffer())
 }
 
-// ─── The owner's own Google Drive, for the "My Google Drive" copy into My files / Business ───
-// Owner-only by construction: every call runs as the owner's own Google identity (never support@), and the routes that use these
-// are gated on the requester being an owner. Nothing here writes to Drive.
+// ─── Any Google Drive of the firm's Workspace, for the "Google Drive" copy into My files / Business ───
+// Owner-only by construction: the routes that use these are gated on the requester being an owner, and every browse of ANOTHER account
+// and every copy is logged. They run as the chosen account (never as support@ unless that is the chosen account) and NEVER write to Drive.
 
 export interface OwnerDriveEntry { id: string; name: string; mimeType: string; size: number | null; modifiedTime: string | null }
 
-/** One page (up to 1000) of what is directly inside a folder of the owner's own Drive. `folderId` "root" = the top of My Drive. */
-export async function listOwnerDriveFolder(folderId: string, pageToken?: string | null): Promise<{ entries: OwnerDriveEntry[]; nextPageToken: string | null }> {
-  const parent = folderId === "root" ? "root" : folderId
-  if (!/^[A-Za-z0-9_-]{1,100}$/.test(parent)) throw new Error("Not a Drive folder id.")
-  const r = (await ownerDriveGet("/files", {
-    q: `'${parent}' in parents and trashed = false`,
-    fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime)",
-    pageSize: "1000",
-    orderBy: "folder,name",
-    ...(pageToken ? { pageToken } : {}),
-  })) as { files?: Array<{ id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }>; nextPageToken?: string }
-  return {
-    entries: (r.files ?? []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, size: f.size != null ? Number(f.size) : null, modifiedTime: f.modifiedTime ?? null })),
-    nextPageToken: r.nextPageToken ?? null,
+const WORKSPACE_DOMAIN = () => (OWNER_IMPERSONATE_EMAIL().split("@")[1] || "tonydurante.us").toLowerCase()
+
+/** "me" / empty = the owner; otherwise a Workspace address of the firm's own domain. Anything else is refused. */
+export function resolveDriveAccount(account?: string | null): string {
+  const a = (account ?? "").trim().toLowerCase()
+  if (!a || a === "me") return OWNER_IMPERSONATE_EMAIL()
+  if (!/^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,100}$/.test(a) || a.split("@")[1] !== WORKSPACE_DOMAIN()) throw new Error(`Only Google accounts of ${WORKSPACE_DOMAIN()} can be opened.`)
+  return a
+}
+
+const ALL_DRIVES = { corpora: "allDrives", includeItemsFromAllDrives: "true", supportsAllDrives: "true" }
+
+async function driveGetAs(subject: string, endpoint: string, params?: Record<string, string>) {
+  const token = await getAccessToken(subject)
+  const url = new URL(`${DRIVE_API}${endpoint}`)
+  for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v)
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = (err as { error?: { message?: string } }).error?.message || res.statusText
+    throw new Error(res.status === 400 && /invalid/i.test(msg) ? `That Google account could not be opened (${subject}).` : `Drive API ${res.status}: ${msg}`)
   }
+  return res.json()
 }
 
-/** Metadata of one file of the owner's own Drive. */
-export async function getOwnerDriveFile(fileId: string): Promise<OwnerDriveEntry> {
-  if (!/^[A-Za-z0-9_-]{1,100}$/.test(fileId)) throw new Error("Not a Drive file id.")
-  const f = (await ownerDriveGet(`/files/${fileId}`, { fields: "id,name,mimeType,size,modifiedTime" })) as { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }
-  return { id: f.id, name: f.name, mimeType: f.mimeType, size: f.size != null ? Number(f.size) : null, modifiedTime: f.modifiedTime ?? null }
+const toEntry = (f: { id: string; name: string; mimeType?: string; size?: string; modifiedTime?: string }): OwnerDriveEntry =>
+  ({ id: f.id, name: f.name, mimeType: f.mimeType ?? "application/vnd.google-apps.folder", size: f.size != null ? Number(f.size) : null, modifiedTime: f.modifiedTime ?? null })
+
+/**
+ * One page (up to 1000) of what is inside a place in a Google account's Drive.
+ * `folderId`: "root" = the top of that account's My Drive · "shared" = items shared with the account · "drives" = the shared drives the
+ * account belongs to (each shown as a folder) · otherwise a real folder (or shared-drive) id.
+ */
+export async function listOwnerDriveFolder(folderId: string, pageToken?: string | null, account?: string | null): Promise<{ entries: OwnerDriveEntry[]; nextPageToken: string | null }> {
+  const subject = resolveDriveAccount(account)
+  if (folderId === "drives") {
+    const r = (await driveGetAs(subject, "/drives", { pageSize: "100", fields: "nextPageToken,drives(id,name)", ...(pageToken ? { pageToken } : {}) })) as { drives?: Array<{ id: string; name: string }>; nextPageToken?: string }
+    return { entries: (r.drives ?? []).map((d) => toEntry({ id: d.id, name: d.name })), nextPageToken: r.nextPageToken ?? null }
+  }
+  if (folderId !== "root" && folderId !== "shared" && !/^[A-Za-z0-9_-]{1,100}$/.test(folderId)) throw new Error("Not a Drive folder id.")
+  const q = folderId === "shared" ? "sharedWithMe = true and trashed = false" : `'${folderId}' in parents and trashed = false`
+  const r = (await driveGetAs(subject, "/files", {
+    q, ...ALL_DRIVES, fields: "nextPageToken,files(id,name,mimeType,size,modifiedTime)", pageSize: "1000", orderBy: "folder,name", ...(pageToken ? { pageToken } : {}),
+  })) as { files?: Array<{ id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }>; nextPageToken?: string }
+  return { entries: (r.files ?? []).map(toEntry), nextPageToken: r.nextPageToken ?? null }
 }
 
-/** The bytes of one file of the owner's own Drive; a Google-native document is exported (`exportMime`) instead. */
-export async function downloadOwnerDriveFile(fileId: string, exportMime?: string): Promise<Buffer> {
+/** Metadata of one file in a Google account's Drive. */
+export async function getOwnerDriveFile(fileId: string, account?: string | null): Promise<OwnerDriveEntry> {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(fileId)) throw new Error("Not a Drive file id.")
-  const token = await getAccessToken(OWNER_IMPERSONATE_EMAIL())
+  const f = (await driveGetAs(resolveDriveAccount(account), `/files/${fileId}`, { fields: "id,name,mimeType,size,modifiedTime", supportsAllDrives: "true" })) as { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }
+  return toEntry(f)
+}
+
+/** The bytes of one file in a Google account's Drive; a Google-native document is exported (`exportMime`) instead. */
+export async function downloadOwnerDriveFile(fileId: string, exportMime?: string, account?: string | null): Promise<Buffer> {
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(fileId)) throw new Error("Not a Drive file id.")
+  const token = await getAccessToken(resolveDriveAccount(account))
   const url = exportMime
-    ? `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}`
-    : `${DRIVE_API}/files/${fileId}?alt=media`
+    ? `${DRIVE_API}/files/${fileId}/export?mimeType=${encodeURIComponent(exportMime)}&supportsAllDrives=true`
+    : `${DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
