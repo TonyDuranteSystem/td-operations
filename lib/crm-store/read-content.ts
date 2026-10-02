@@ -32,21 +32,8 @@ export interface ContentReading {
   problem: string | null
 }
 
-export function looksLikeHeic(name: string, mimeType: string | null, bytes: Buffer): boolean {
-  const m = (mimeType ?? "").toLowerCase()
-  if (m === "image/heic" || m === "image/heif" || m === "image/heic-sequence" || m === "image/heif-sequence") return true
-  if (/\.(heic|heif)$/i.test(name)) return true
-  // the file signature: bytes 4–11 are "ftyp" plus a HEIF brand
-  if (bytes.length > 12 && bytes.toString("ascii", 4, 8) === "ftyp") {
-    return /^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)$/.test(bytes.toString("ascii", 8, 12))
-  }
-  return false
-}
-
-export async function heicToJpeg(bytes: Buffer): Promise<Buffer> {
-  const convert = (await import("heic-convert")).default as (o: { buffer: Buffer; format: "JPEG" | "PNG"; quality?: number }) => Promise<ArrayBuffer>
-  return Buffer.from(await convert({ buffer: bytes, format: "JPEG", quality: 0.92 }))
-}
+export { looksLikeHeic, heicToJpeg } from "@/lib/image-heic"
+import { heicToJpeg, looksLikeHeic } from "@/lib/image-heic"
 
 export interface ReadDeps {
   readStore: (fileId: string) => Promise<{ bytes: Buffer; mimeType: string | null; name: string }>

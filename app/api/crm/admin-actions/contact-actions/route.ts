@@ -569,7 +569,7 @@ export async function POST(req: NextRequest) {
                   docSideEffects.push(`Passport uploaded to Drive: ${fileName}`)
 
                   // OCR if supported
-                  const ocrSupported = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "image/gif", "image/bmp", "image/webp"]
+                  const ocrSupported = ["application/pdf", "image/jpeg", "image/png", "image/tiff", "image/gif", "image/bmp", "image/webp", "image/heic", "image/heif"]
                   if (ocrSupported.includes(mimeType)) {
                     try {
                       const { ocrDriveFile } = await import("@/lib/docai")

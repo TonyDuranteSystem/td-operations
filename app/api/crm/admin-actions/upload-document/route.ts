@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
 
     // OCR for smart document types (best-effort — file is already saved above)
     let ocrData: Record<string, unknown> | null = null
-    const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp']
+    const ocrSupported = ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff', 'image/gif', 'image/bmp', 'image/webp', 'image/heic', 'image/heif']
     const docTypeLower = (documentType as string).toLowerCase()
     const isItinLetter = docTypeLower.includes('itin')
     const isEinLetter = docTypeLower.includes('ein')
