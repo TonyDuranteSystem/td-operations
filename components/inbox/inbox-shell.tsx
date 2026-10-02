@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
+import { WhatsAppTour } from './whatsapp-tour'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
 import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
@@ -140,6 +141,8 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [colorMenuOpen, setColorMenuOpen] = useState(false)
   const [workerOpen, setWorkerOpen] = useState(false)
   const [waWorkerOpen, setWaWorkerOpen] = useState(false)
+  const [waTourOpen, setWaTourOpen] = useState(false)
+  const waFirstRowRef = useRef<InboxConversation | null>(null)
   const [linkOpen, setLinkOpen] = useState(false)
   const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [shareFromBulk, setShareFromBulk] = useState(false)
@@ -1339,11 +1342,22 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
         <div className="pr-4 relative flex items-center gap-2">
           {isWhatsApp && (
             <button
+              data-tour="wa-find-matches"
               onClick={() => setBackfillMatchesOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-600 text-sm font-medium hover:bg-zinc-50 transition-colors"
             >
               <Link2 className="h-3.5 w-3.5" />
               Find matching clients
+            </button>
+          )}
+          {isWhatsApp && (
+            <button
+              data-tour="wa-start-tour"
+              onClick={() => setWaTourOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-600 text-sm font-medium hover:bg-zinc-50 transition-colors"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              Take the tour
             </button>
           )}
           <button
@@ -1498,7 +1512,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
           Antonio, 2026-09-19: asked for a way to find a conversation by name/
           number, and to filter down to what's actually unread. */}
       {isWhatsApp && (
-        <div className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
+        <div data-tour="wa-search" className="relative flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-zinc-50">
           <Search className="h-4 w-4 text-zinc-400 shrink-0" />
           <input
             type="text"
@@ -1665,6 +1679,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             the thread header returns (desktop WhatsApp has no need of it — the list is already
             visible — but it's harmless to leave mounted). */}
         <div
+          data-tour={isWhatsApp ? 'wa-list' : undefined}
           className={cn(
             'w-full lg:w-[350px] lg:shrink-0 flex-col border-r',
             selected ? (isWhatsApp ? 'hidden lg:flex' : 'hidden') : 'flex'
@@ -1674,6 +1689,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
+            onFirstRow={(conv) => { waFirstRowRef.current = conv }}
             onDeleted={(conv, action) => handleEmailDeleted(action ?? 'trash', conv, originViewKey)}
             onRestored={handleEmailRestored}
             overrides={overrides}
@@ -1785,6 +1801,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   {selected.channel === 'whatsapp' && whatsappGroupId && (
                     <HoverHint label="Copy a link to this conversation — opens straight to it for any staff member signed in">
                       <button
+                        data-tour="wa-copy-link"
                         onClick={() => {
                           const url = `${window.location.origin}/inbox?thread=whatsapp:${whatsappGroupId}`
                           navigator.clipboard.writeText(url)
@@ -1800,6 +1817,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
 
                   <HoverHint label="Write a reply">
                     <button
+                      data-tour={isWhatsApp ? 'wa-reply' : undefined}
                       onClick={handleReply}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 text-xs font-medium transition-colors"
                     >
@@ -1811,6 +1829,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
                   {selected.channel === 'whatsapp' && whatsappGroupId && (
                     <HoverHint label="AI worker — reads this chat and the CRM, drafts replies. It cannot send.">
                       <button
+                        data-tour="wa-worker"
                         onClick={() => setWaWorkerOpen(true)}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 text-violet-600 hover:text-violet-700 text-xs font-medium transition-colors"
                       >
@@ -2119,6 +2138,16 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
       {backfillMatchesOpen && (
         <WhatsAppBackfillMatchesDialog onClose={() => setBackfillMatchesOpen(false)} />
       )}
+
+      <WhatsAppTour
+        open={waTourOpen}
+        hasOpenChat={selected?.channel === 'whatsapp'}
+        onNeedOpenChat={() => {
+          const row = waFirstRowRef.current
+          if (row) handleSelect(row)
+        }}
+        onClose={() => setWaTourOpen(false)}
+      />
 
       <ComposeDialog
         open={composeOpen}

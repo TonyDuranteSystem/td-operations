@@ -1,6 +1,25 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
-_Last verified against code: 2026-10-01 — Claude (**WHATSAPP GETS A PERSISTENT DESKTOP LIST +
+_Last verified against code: 2026-10-01 — Claude (**A REAL, IN-APP GUIDED TOUR OF THE WHATSAPP
+INBOX, FOR TRAINING LUCA.** Antonio first asked for a written guide; after seeing it, clarified he
+meant something IN the real app: "a blinking dot or hand that explain what can do in a specic
+place, then he clicks ok and move on the next one like a tour." Built on `react-joyride` (2.9.3,
+pinned exact — a well-established library for exactly this pattern, not hand-rolled spotlight/
+tooltip positioning) in a new `components/inbox/whatsapp-tour.tsx`, started from a new "Take the
+tour" button next to "Find matching clients" (WhatsApp tab only). Ten steps targeting real
+`data-tour="..."` attributes added to the real controls across `inbox-header.tsx`, `inbox-shell.tsx`,
+`whatsapp-thread.tsx`, and `whatsapp-contact-match-banner.tsx` — the tab, Find matching clients,
+search, the conversation list, the contact-match banner, the conversation-level copy-link, Worker,
+the composer, Reply, and a message's own "⋮" menu. Content mirrors exactly what a UX pass (run the
+same day, against this same screen) confirmed as the real behavior, including the parts that look
+like they do one thing but do another (Delete only hides a message from staff's own view; there are
+two different "copy link" buttons pointing at different things; "Find matching clients" acts the
+instant it's clicked, no confirmation). Several steps only make sense with a conversation open —
+`ConversationList` gained an `onFirstRow` callback (reports whichever row is currently first,
+whenever the list changes) so the tour can open a real conversation itself, the same as a click
+would, right after the list step; a target that doesn't exist yet (e.g. a brand-new chat with no
+messages, so no per-message menu) is skipped rather than stalling the tour. Typecheck, lint, full
+unit suite (920 files, 12,750 tests), and a full production build all clean.) Prior 2026-10-01 — Claude (**WHATSAPP GETS A PERSISTENT DESKTOP LIST +
 A CONVERSATION-LEVEL SHARE LINK.** Antonio: "I want the chats always visible on desktop and the
 single clicked chat will open in the right space. I want a link for each conversation that I can
 copy and share with you or Luca to read the content right away." (1) The conversation list used to

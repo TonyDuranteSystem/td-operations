@@ -686,6 +686,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   <DropdownMenu.Trigger asChild>
                     <button
                       type="button"
+                      data-tour="wa-message-menu"
                       className="p-1 rounded-full text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors shrink-0 self-end mb-1"
                       aria-label="Actions"
                     >
@@ -1040,6 +1041,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               </div>
               <textarea
                 ref={textareaRef}
+                data-tour="wa-composer"
                 className="compose-reply-textarea flex-1 resize-none rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-blue-400 min-h-[40px] max-h-60 disabled:bg-zinc-50 disabled:text-zinc-400"
                 rows={1}
                 disabled={suggesting || audioNoteRecorder.isRecording}
