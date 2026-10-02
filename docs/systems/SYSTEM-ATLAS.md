@@ -186,7 +186,7 @@ _Regenerated 2026-10-02. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-01)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-02)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-01)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-10-02)_
