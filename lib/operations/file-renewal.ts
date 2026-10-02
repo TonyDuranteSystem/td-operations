@@ -311,6 +311,8 @@ export async function fileRenewal(
           params.override_unpaid ? " [FILED DESPITE UNPAID INVOICES]" : ""
         }${params.note ? ` — note: ${params.note}` : ""}`,
         renewal_filing_for_year: year,
+        // The receipt saved in step 4 — the only thing that lets a renewal / annual report close (N1a C0).
+        filing_receipt_document_id: docRowId,
       })
       if (!completion.success) {
         throw new Error(`completeSD failed: ${completion.error ?? "unknown"}`)

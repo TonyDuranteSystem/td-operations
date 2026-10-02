@@ -149,6 +149,8 @@ export interface CompleteSDParams {
   /** Renewal filings: the cycle year this filing is FOR (drives the
    *  completion roll — see AdvanceStageParams.renewal_filing_for_year). */
   renewal_filing_for_year?: number
+  /** Mark Filed only: the filing receipt that lets a "closes only by filing" job close (N1a C0). */
+  filing_receipt_document_id?: string
 }
 
 // ─── Internal: stage resolution ────────────────────────
@@ -718,6 +720,7 @@ export async function completeSD(
     actor: params.actor,
     notes: params.notes,
     renewal_filing_for_year: params.renewal_filing_for_year,
+    filing_receipt_document_id: params.filing_receipt_document_id,
   })
 }
 
