@@ -47,6 +47,20 @@ SELECT upd.id, 'services', 'metadata_changed', 'migration',
        jsonb_build_object('slug', upd.slug, 'metadata', upd.metadata)
   FROM upd;
 
+-- Fail loudly (whole file rolls back) unless exactly the two cards now carry the setting — a slug that differs in
+-- this environment would otherwise leave the rule silently inert (bug-hunter #4).
+DO $$
+DECLARE n integer;
+BEGIN
+  SELECT count(*) INTO n FROM public.catalog_entries
+   WHERE catalog_id = 'services' AND metadata->>'closes_only_by_filing' = 'true'
+     AND slug IN ('state_ra_renewal', 'state_annual_report')
+     AND metadata->>'delivery_service_type' IN ('State RA Renewal', 'State Annual Report');
+  IF n <> 2 THEN
+    RAISE EXCEPTION 'renewal-close-guard: expected the 2 service cards (state_ra_renewal, state_annual_report) to carry closes_only_by_filing, found %', n;
+  END IF;
+END $$;
+
 -- ─── 3. The rule ─────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.trg_delivery_renewal_close_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$

@@ -355,10 +355,10 @@ export async function advanceServiceDelivery(
   // (RA renewal, annual report) can only be CLOSED by Mark Filed, which passes the filing receipt. Every other path
   // (tracker, account page, workspace stepper, tools) gets a plain refusal here, before anything is written. Same
   // shape as 4d: the database rule (20261002-2300-renewal-close-guard.sql) is the safety net for every other writer.
-  // Test deliveries are exempt (same as the rule).
+  // Test deliveries are exempt (same as the rule). A job that is ALREADY completed but not on its final step is
+  // refused too: re-advancing it to the final step would run the renewal-date roll again (bug-hunter #1).
   if (
     isCompleted &&
-    delivery.status !== "completed" &&
     !params.filing_receipt_document_id &&
     !(delivery as { is_test?: boolean | null }).is_test
   ) {

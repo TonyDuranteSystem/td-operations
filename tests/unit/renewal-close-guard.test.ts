@@ -25,6 +25,7 @@ vi.mock('@/lib/services/renewal-close', async () => {
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cardClosesOnlyByFiling, CLOSES_ONLY_BY_FILING_MESSAGE } from '@/lib/services/renewal-close'
+import { renewalJobMismatch } from '@/lib/operations/file-renewal'
 
 let delivery: Record<string, unknown>
 const RA_STAGES = [
@@ -128,11 +129,14 @@ describe('advanceServiceDelivery §4e — closes only by filing', () => {
     expect(closesOnlyByFiling).not.toHaveBeenCalled()
   })
 
-  it('a job that is already completed is not re-checked', async () => {
-    raAt('Completed', 3, { status: 'completed' })
-    installFrom()
-    await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'Completed' }).catch(() => null)
-    expect(closesOnlyByFiling).not.toHaveBeenCalled()
+  it('a job already marked completed but NOT on its final step cannot be re-closed (no second date roll)', async () => {
+    raAt('In Progress', 2, { status: 'completed' })
+    closesOnlyByFiling.mockResolvedValue(true)
+    const writes = installFrom()
+    const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'Completed' })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe(CLOSES_ONLY_BY_FILING_MESSAGE)
+    expect(sdUpdates(writes)).toHaveLength(0)
   })
 
   it('a failed CHECK (transient read) does not block here — the database rule is still the net', async () => {
@@ -183,4 +187,17 @@ describe('only Mark Filed passes the filing receipt', () => {
     const offenders = hits.map(h => h.replace(process.cwd() + '/', '')).filter(h => !allowed.has(h))
     expect(offenders).toEqual([])
   })
+})
+
+describe('renewalJobMismatch — Mark Filed checks the job before writing anything', () => {
+  const ok = { account_id: 'acc-1', service_type: 'State RA Renewal', status: 'active' }
+  it('accepts this company\'s open job of the right kind (active or blocked)', () => {
+    expect(renewalJobMismatch(ok, 'acc-1', 'State RA Renewal')).toBeNull()
+    expect(renewalJobMismatch({ ...ok, status: 'blocked' }, 'acc-1', 'State RA Renewal')).toBeNull()
+  })
+  it('refuses a missing job', () => expect(renewalJobMismatch(null, 'acc-1', 'State RA Renewal')).toMatch(/no longer exists/))
+  it('refuses another company\'s job', () => expect(renewalJobMismatch(ok, 'acc-2', 'State RA Renewal')).toMatch(/different company/))
+  it('refuses the wrong kind', () => expect(renewalJobMismatch(ok, 'acc-1', 'State Annual Report')).toMatch(/not a State Annual Report/))
+  it('refuses an already-filed job', () => expect(renewalJobMismatch({ ...ok, status: 'completed' }, 'acc-1', 'State RA Renewal')).toMatch(/already filed/))
+  it('refuses a cancelled job', () => expect(renewalJobMismatch({ ...ok, status: 'cancelled' }, 'acc-1', 'State RA Renewal')).toMatch(/cancelled/))
 })
