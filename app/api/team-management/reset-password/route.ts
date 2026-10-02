@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isSecureAdmin, isProtectedAdminEmail, isOwnerOnly, isOwnerEmail } from '@/lib/auth'
+import { isAdmin, isSecureAdmin, isProtectedAdminEmail, isOwnerOnly, isOwnerEmail } from '@/lib/auth'
 import { generateTempPassword, sendStaffCredentialsEmail } from '@/lib/auth/staff-credentials'
 
 export const dynamic = 'force-dynamic'
@@ -64,10 +64,10 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  if (
-    (target.app_metadata?.role === 'admin' || isOwnerEmail(target.email)) &&
-    !isOwnerOnly(caller)
-  ) {
+  // isAdmin (not isSecureAdmin) on purpose HERE: for the TARGET we want the
+  // broad reading — anyone the dashboard treats as an admin, by either role
+  // field, is protected from a non-owner.
+  if ((isAdmin(target) || isOwnerEmail(target.email)) && !isOwnerOnly(caller)) {
     return NextResponse.json(
       { error: 'Only an owner can reset an administrator’s password.' },
       { status: 403, headers: NO_STORE },

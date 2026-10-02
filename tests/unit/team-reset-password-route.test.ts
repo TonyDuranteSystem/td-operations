@@ -108,6 +108,14 @@ describe('POST /api/team-management/reset-password', () => {
     expect(updateUserById).not.toHaveBeenCalled()
   })
 
+  it('an admin by user_metadata only is still protected from a non-owner admin', async () => {
+    getUser.mockResolvedValue({ data: { user: { id: 'admin-2', email: 'qa-staff@tonydurante.us', app_metadata: { role: 'admin' }, user_metadata: {} } } })
+    getUserById.mockResolvedValue({ data: { user: { ...staffTarget, id: 'x', email: 'x@tonydurante.us', app_metadata: {}, user_metadata: { role: 'admin' } } }, error: null })
+    const res = await POST(req({ user_id: 'x' }))
+    expect(res.status).toBe(403)
+    expect(updateUserById).not.toHaveBeenCalled()
+  })
+
   it('a non-owner admin CAN reset a plain team member', async () => {
     getUser.mockResolvedValue({ data: { user: { id: 'admin-2', email: 'qa-staff@tonydurante.us', app_metadata: { role: 'admin' }, user_metadata: {} } } })
     const res = await POST(req({ user_id: 'luca-1' }))
