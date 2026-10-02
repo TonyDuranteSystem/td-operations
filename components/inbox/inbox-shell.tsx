@@ -93,9 +93,11 @@ interface InboxShellProps {
   /** Admin only — shows the antonio@ personal-mailbox toggle. The API routes
    *  enforce this server-side regardless. */
   canUsePersonalMailbox?: boolean
+  /** The signed-in user — keys the "has seen the WhatsApp tour" memory so each person gets it once. */
+  userId?: string
 }
 
-export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
+export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShellProps) {
   const [activeChannel, setActiveChannel] = useState<InboxChannel | null>('gmail')
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [activeMailbox, setActiveMailbox] = useState<'support' | 'antonio'>('support')
@@ -143,6 +145,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const [waWorkerOpen, setWaWorkerOpen] = useState(false)
   const [waTourOpen, setWaTourOpen] = useState(false)
   const waFirstRowRef = useRef<InboxConversation | null>(null)
+  const [waListReady, setWaListReady] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   const [shareItems, setShareItems] = useState<ShareItem[] | null>(null)
   const [shareFromBulk, setShareFromBulk] = useState(false)
@@ -258,6 +261,24 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
   const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null } | null) => setWaChatInfo(info), [])
 
   const isWhatsApp = activeChannel === 'whatsapp'
+
+  // First time a person opens the WhatsApp tab (list loaded, nothing already open), the guided
+  // tour starts by itself — once per signed-in person on this browser, never again; the "Take the
+  // tour" button restarts it any time. Antonio, 2026-10-02: Jodi, and anyone added later, should get
+  // it on their first login. Remembered per browser (localStorage) rather than on the account: a
+  // new computer just shows it once more, which is harmless because the button is always there.
+  // The flag is written BEFORE the tour opens so a refresh mid-tour never loops it.
+  useEffect(() => {
+    if (!isWhatsApp || !waListReady || selected || !userId) return
+    try {
+      const key = `wa-tour-seen:${userId}`
+      if (window.localStorage.getItem(key)) return
+      window.localStorage.setItem(key, '1')
+      setWaTourOpen(true)
+    } catch {
+      // Storage blocked (private window) — no auto-start; the button still works.
+    }
+  }, [isWhatsApp, waListReady, selected, userId])
   const isGmail = selected?.channel === 'gmail'
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
   const openUnread = selected
@@ -1689,7 +1710,7 @@ export function InboxShell({ canUsePersonalMailbox = false }: InboxShellProps) {
             activeChannel={activeChannel}
             selectedId={selected?.id || null}
             onSelect={handleSelect}
-            onFirstRow={(conv) => { waFirstRowRef.current = conv }}
+            onFirstRow={(conv) => { waFirstRowRef.current = conv; if (conv) setWaListReady(true) }}
             onDeleted={(conv, action) => handleEmailDeleted(action ?? 'trash', conv, originViewKey)}
             onRestored={handleEmailRestored}
             overrides={overrides}

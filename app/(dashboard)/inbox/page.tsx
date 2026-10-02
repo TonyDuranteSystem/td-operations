@@ -23,7 +23,7 @@ export default async function InboxPage() {
   // scrollers. Mirrors the app-shell pattern used by /portal-chats.
   return (
     <div className="h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
-      <InboxShell canUsePersonalMailbox={isAdmin(user)} />
+      <InboxShell canUsePersonalMailbox={isAdmin(user)} userId={user?.id} />
     </div>
   )
 }

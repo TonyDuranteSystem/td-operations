@@ -17,7 +17,7 @@ two different "copy link" buttons pointing at different things; "Find matching c
 instant it's clicked, no confirmation). Several steps only make sense with a conversation open —
 `ConversationList` gained an `onFirstRow` callback (reports whichever row is currently first,
 whenever the list changes) so the tour can open a real conversation itself, the same as a click
-would, right after the list step; a target that doesn't exist yet (e.g. a brand-new chat with no
+would, right after the list step; the tour also STARTS ITSELF the first time a person opens the WhatsApp tab (list loaded, nothing already open) — once per signed-in person per browser, remembered in `localStorage` under `wa-tour-seen:<userId>` and written before the tour opens so a refresh never loops it (Antonio, 2026-10-02: Jodi, and anyone added later, should get it on first login; per-browser rather than per-account on purpose — a new computer just shows it once more, harmless since the "Take the tour" button is always there; `InboxPage` now passes the signed-in user's id into the shell); a target that doesn't exist yet (e.g. a brand-new chat with no
 messages, so no per-message menu) is skipped rather than stalling the tour. Typecheck, lint, full
 unit suite (920 files, 12,750 tests), and a full production build all clean.) Prior 2026-10-01 — Claude (**WHATSAPP GETS A PERSISTENT DESKTOP LIST +
 A CONVERSATION-LEVEL SHARE LINK.** Antonio: "I want the chats always visible on desktop and the
