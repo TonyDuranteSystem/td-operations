@@ -24,6 +24,8 @@ import { isStoreStaffRole } from "./access"
 export const STORE_BUCKET = "crm-store"
 export const STORE_STAGING_BUCKET = "crm-store-staging"
 export const UPLOAD_INTENT_TTL_MINUTES = 120
+/** a browser-uploaded HEIC photo up to this size is converted to a JPEG while registering (bigger ones are kept as they are) */
+export const HEIC_CONVERT_MAX_BYTES = 30 * 1024 * 1024
 /** Staged uploads above this size are registered in a background job (hashing streams the whole object). */
 export const INLINE_REGISTER_MAX_BYTES = 150 * 1024 * 1024
 export const REGISTER_UPLOAD_JOB = "crm_store_register_upload"
@@ -39,6 +41,9 @@ export interface WriteResult {
   fileId: string
   versionId: string | null
   name: string
+  /** what was actually stored (an iPhone HEIC photo is saved as a JPEG): callers write THESE to their CRM row */
+  mimeType?: string | null
+  size?: number
 }
 
 /** A save hit a filed (frozen) file with different content. The flow must turn this into an
@@ -74,6 +79,8 @@ export interface SaveMeta {
   links?: StoreLink[]
   subjects?: StoreSubject[]
   facts?: StoreFact[]
+  /** staff / client uploads: an iPhone HEIC photo is stored as a JPEG (name .heic → .jpg). Off for copies of Drive files (their sha is checked against Drive). */
+  convertHeic?: boolean
 }
 
 export function sha256Hex(bytes: Buffer): string {
@@ -182,7 +189,13 @@ export function isTransientStorageError(message: string | null | undefined): boo
 }
 
 /** Save server-side bytes. */
-export async function saveBytesToStore(input: SaveMeta & { bytes: Buffer }): Promise<WriteResult> {
+export async function saveBytesToStore(input0: SaveMeta & { bytes: Buffer }): Promise<WriteResult> {
+  let input = input0
+  if (input0.convertHeic) {
+    const { jpegForSaving } = await import("@/lib/image-heic")
+    const j = await jpegForSaving({ name: input0.name, mimeType: input0.mimeType, bytes: input0.bytes })
+    if (j.converted) input = { ...input0, name: j.name, mimeType: j.mimeType, bytes: j.bytes }
+  }
   await assertPersonalGoesToPerson(input.ownerId, input.documentType)
   const sha = sha256Hex(input.bytes)
   const path = storeObjectPath(input.ownerId)
@@ -209,7 +222,7 @@ export async function saveBytesToStore(input: SaveMeta & { bytes: Buffer }): Pro
     await removeIfUnreferenced(path)
     throw e
   }
-  return finish(result, path)
+  return { ...(await finish(result, path)), mimeType: input.mimeType ?? null, size: input.bytes.length }
 }
 
 export interface UploadIntent {
@@ -295,16 +308,42 @@ export async function registerNow(p: { intentId: string; actor: string } & Regis
   const bucket = inStaging ? STORE_STAGING_BUCKET : STORE_BUCKET
   const at = inStaging ? i.staging_path : i.dest_path
 
-  const size = await storedSize(bucket, at)
-  const { sha256, bytes } = await streamSha256(bucket, at)
+  let size = await storedSize(bucket, at)
+  let { sha256, bytes } = await streamSha256(bucket, at)
   if (bytes !== size) throw new Error(`store: read ${bytes} bytes but Storage reports ${size}`)
-  if (inStaging) {
+
+  // an iPhone HEIC photo is stored as a JPEG (small files only — conversion runs in this request). A retry after the
+  // conversion already landed finds JPEG bytes under the old name: it only needs the name and type corrected.
+  let fileName = i.file_name
+  let mimeOut = i.mime_type
+  let landedConverted = false
+  const heicLike = await import("@/lib/image-heic")
+  if (heicLike.isHeicByNameOrType(i.file_name, i.mime_type) && size <= HEIC_CONVERT_MAX_BYTES) {
+    const { data: blob } = await db().storage.from(bucket).download(at)
+    if (blob) {
+      const raw = Buffer.from(await blob.arrayBuffer())
+      if (heicLike.looksLikeHeic("", null, raw)) {
+        const j = await heicLike.jpegForSaving({ name: i.file_name, mimeType: null, bytes: raw })
+        if (j.converted) {
+          const { error: cvErr } = await db().storage.from(STORE_BUCKET).upload(i.dest_path, j.bytes, { contentType: "image/jpeg", upsert: true })
+          if (!cvErr) {
+            if (inStaging) await removeObject(STORE_STAGING_BUCKET, i.staging_path)
+            sha256 = sha256Hex(j.bytes); size = j.bytes.length; bytes = size
+            fileName = heicLike.jpegNameFor(i.file_name); mimeOut = "image/jpeg"; landedConverted = true
+          } else console.error(`[crm-store] converted photo could not be stored (${cvErr.message}) — keeping the original`)
+        }
+      } else if (raw.length > 3 && raw[0] === 0xff && raw[1] === 0xd8 && raw[2] === 0xff) {
+        fileName = heicLike.jpegNameFor(i.file_name); mimeOut = "image/jpeg"
+      }
+    }
+  }
+  if (inStaging && !landedConverted) {
     const { error: mvErr } = await db().storage.from(STORE_STAGING_BUCKET).move(i.staging_path, i.dest_path, { destinationBucket: STORE_BUCKET })
     if (mvErr) throw new Error(`store: could not move the upload into the store — ${mvErr.message}`)
   }
 
   const result = await callWrite(writePayload({
-    ownerId: i.owner_id, folderId: i.folder_id, name: i.file_name, mimeType: i.mime_type,
+    ownerId: i.owner_id, folderId: i.folder_id, name: fileName, mimeType: mimeOut,
     callerKey: i.caller_key, contentChanged: true, actor: p.actor,
     documentType: p.documentType, periodYear: p.periodYear, filingStatus: p.filingStatus,
     published: p.published, supersedesFileId: p.supersedesFileId,

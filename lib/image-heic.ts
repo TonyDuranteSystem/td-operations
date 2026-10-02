@@ -26,3 +26,34 @@ export async function readableImage(
   if (!looksLikeHeic(name, mimeType, bytes)) return { bytes, mimeType, converted: false }
   return { bytes: await convert(bytes), mimeType: "image/jpeg", converted: true }
 }
+
+/** "IMG_1857.HEIC" → "IMG_1857.jpg"; a name without that ending gets ".jpg" added. */
+export function jpegNameFor(name: string): string {
+  if (/\.(heic|heif)$/i.test(name)) return name.replace(/\.(heic|heif)$/i, ".jpg")
+  return /\.jpe?g$/i.test(name) ? name : `${name}.jpg`
+}
+
+/** From the name / type alone (before the bytes are read): will this upload be saved as a JPEG? */
+export function isHeicByNameOrType(name: string, mimeType: string | null | undefined): boolean {
+  return /\.(heic|heif)$/i.test(name) || /^image\/hei[cf]/i.test((mimeType ?? "").trim())
+}
+
+/**
+ * For SAVING (Antonio 2026-10-02: "when we save the document in the storage, that picture will be converted to JPEG"): an iPhone
+ * photo becomes a JPEG with the matching name; anything else, or a HEIC that cannot be converted, comes back unchanged (the save never
+ * fails because of a conversion — the viewer and the readers still convert on the fly).
+ */
+export async function jpegForSaving(
+  input: { name: string; mimeType?: string | null; bytes: Buffer }, convert: (b: Buffer) => Promise<Buffer> = heicToJpeg,
+): Promise<{ name: string; mimeType: string | null; bytes: Buffer; converted: boolean }> {
+  const mimeType = input.mimeType ?? null
+  if (!looksLikeHeic(input.name, mimeType, input.bytes)) return { name: input.name, mimeType, bytes: input.bytes, converted: false }
+  try {
+    const jpeg = await convert(input.bytes)
+    if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) throw new Error("not a JPEG")
+    return { name: jpegNameFor(input.name), mimeType: "image/jpeg", bytes: jpeg, converted: true }
+  } catch (e) {
+    console.error(`[heic] could not convert ${input.name} for saving — kept as it is:`, e instanceof Error ? e.message : e)
+    return { name: input.name, mimeType, bytes: input.bytes, converted: false }
+  }
+}
