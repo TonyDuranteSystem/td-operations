@@ -24,7 +24,7 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
 import { PlainDropPanel, type PlainOutcome } from './plain-drop-panel'
-import { filterPlainDrop, isInternalOwnerKind, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
+import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList, type PlainItem, type PlainSkipped } from '@/lib/crm-store/plain-drop'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
@@ -184,7 +184,7 @@ type SortMode = 'name' | 'date'
 const DROP_MAX_FILES = 500
 type FsEntry = { isFile: boolean; isDirectory: boolean; name: string; file?: (ok: (f: File) => void, bad: (e: unknown) => void) => void; createReader?: () => { readEntries: (ok: (list: FsEntry[]) => void, bad: (e: unknown) => void) => void } }
 /** every file inside what was dropped (files and folders, all levels), with its sub-folder path */
-async function readDropped(items: DataTransferItemList | null, files: FileList | null, max: number = DROP_MAX_FILES, unreadable?: Array<{ name: string; why: string }>): Promise<{ file: File; path: string[] }[]> {
+async function readDropped(items: DataTransferItemList | null, files: FileList | null, max: number = DROP_MAX_FILES, unreadable?: Array<{ name: string; why: string }>, dirs?: string[][]): Promise<{ file: File; path: string[] }[]> {
   const entries = Array.from(items ?? []).map((it) => (it as DataTransferItem & { webkitGetAsEntry?: () => FsEntry | null }).webkitGetAsEntry?.() ?? null)
   if (!entries.some((x) => x?.isDirectory)) return Array.from(files ?? []).filter((f) => !f.name.startsWith('.')).map((file) => ({ file, path: [] }))
   const out: { file: File; path: string[] }[] = []
@@ -198,6 +198,7 @@ async function readDropped(items: DataTransferItemList | null, files: FileList |
       return
     }
     if (e.isDirectory && e.createReader) {
+      dirs?.push([...path, e.name])                       // every folder is remembered, even one that turns out to hold nothing to upload
       const reader = e.createReader()
       for (;;) { // readEntries answers in batches until it returns nothing
         let batch: FsEntry[]
@@ -305,7 +306,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [restoring, setRestoring] = useState<string | null>(null)
   const [drop, setDrop] = useState<DropBatch | null>(null)
   /** a plain drop / upload into the firm's own areas (Business, My files): no type, no limit */
-  const [plain, setPlain] = useState<{ folder: Fold; items: PlainItem[]; skipped: PlainSkipped[] } | null>(null)
+  const [plain, setPlain] = useState<{ folder: Fold; items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] } | null>(null)
   const plainFolders = useRef(new Map<string, Fold>())
   // many files at once: selection, sort, filters, details
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
@@ -784,22 +785,26 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     return list.find((t) => t.defaultFolderKind === k)?.slug ?? ''
   }
 
+  /** a sub-folder of the open plain upload, made once (or reused) */
+  const ensurePlainFolder = async (path: string[]): Promise<Fold> => {
+    if (!plain || !ownerId) throw new Error('The upload was closed.')
+    if (!path.length) return plain.folder
+    const key = path.join('/')
+    let made = plainFolders.current.get(key)
+    if (!made) {
+      const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${plain.folder.id}/ensure-path`, { path }, 'The folders could not be created.')
+      made = { id: r.id, name: path[path.length - 1], kind: r.kind, trashed: false, locked: false }
+      folderOwner.current.set(r.id, ownerId)
+      plainFolders.current.set(key, made)
+    }
+    return made
+  }
+
   /** one file of a plain upload: its sub-folders are made (or reused) once, then the bytes go up and are registered with NO type */
   const runPlainItem = async (item: PlainItem): Promise<PlainOutcome> => {
     if (!plain || !ownerId) return { outcome: 'failed', message: 'The upload was closed.' }
     try {
-      let into: Fold = plain.folder
-      if (item.path.length) {
-        const key = item.path.join('/')
-        let made = plainFolders.current.get(key)
-        if (!made) {
-          const r = await postJson<{ id: string; kind: string }>(`/api/crm-store/browse/folder/${plain.folder.id}/ensure-path`, { path: item.path }, 'The folders could not be created.')
-          made = { id: r.id, name: item.path[item.path.length - 1], kind: r.kind, trashed: false, locked: false }
-          folderOwner.current.set(r.id, ownerId)
-          plainFolders.current.set(key, made)
-        }
-        into = made
-      }
+      const into: Fold = await ensurePlainFolder(item.path)
       if (item.driveId) {          // copied from the owner's own Google Drive — the server fetches it, nothing comes through this browser
         const r = await postJson<{ outcome: string; message?: string }>('/api/crm-store/mydrive/copy', { driveFileId: item.driveId, ownerId, folderId: into.id }, 'The file could not be copied.')
         return r.outcome === 'saved' ? { outcome: 'saved' } : r.outcome === 'unchanged' ? { outcome: 'unchanged' } : { outcome: 'failed', message: r.message ?? 'The file could not be copied.' }
@@ -823,18 +828,20 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     e.preventDefault(); e.stopPropagation(); setDropOn(null)
     if (uploading || dropRunning || !!drop || plain) { toast.error('Wait for the upload in progress to finish, then drop again.'); return }
     const unreadable: Array<{ name: string; why: string }> = []
-    const reading = readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable)   // started now: the dropped items are only readable during the drop
+    const dirs: string[][] = []
+    const reading = readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable, dirs)   // started now: the dropped items are only readable during the drop
     const tid = toast.loading('Reading what you dropped…')
     try {
       await openOwner(oid)
       const c = await fetchInto(oid, null)
       if (!c.folder) { toast.error('This storage has no folder to drop into yet.'); return }
       folderOwner.current.set(c.folder.id, oid)
-      const { items, skipped } = filterPlainDrop(await reading)
+      const { items, skipped, folders } = filterPlainDrop(await reading)
       skipped.push(...unreadable)
-      if (!items.length && !skipped.length) { toast.message('Nothing to upload in what was dropped.'); return }
+      const allFolders = allFolderPaths(folders, dirs)
+      if (!items.length && !skipped.length && !allFolders.length) { toast.message('Nothing to upload in what was dropped.'); return }
       plainFolders.current = new Map()
-      setPlain({ folder: c.folder, items, skipped })
+      setPlain({ folder: c.folder, items, skipped, folders: allFolders })
     } catch (err) { toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.')) }
     finally { toast.dismiss(tid) }
   }
@@ -847,12 +854,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const tid = toast.loading('Reading what you dropped…')
       try {
         const unreadable: Array<{ name: string; why: string }> = []
-        const got = await readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable)
-        const { items, skipped } = filterPlainDrop(got)
+        const dirs: string[][] = []
+        const got = await readDropped(e.dataTransfer.items, e.dataTransfer.files, Number.POSITIVE_INFINITY, unreadable, dirs)
+        const { items, skipped, folders } = filterPlainDrop(got)
         skipped.push(...unreadable)
-        if (!items.length && !skipped.length) { toast.message('Nothing to upload in what was dropped.'); return }
+        const allFolders = allFolderPaths(folders, dirs)
+        if (!items.length && !skipped.length && !allFolders.length) { toast.message('Nothing to upload in what was dropped.'); return }
         plainFolders.current = new Map()
-        setPlain({ folder, items, skipped })
+        setPlain({ folder, items, skipped, folders: allFolders })
       } catch (err) { toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.')) }
       finally { toast.dismiss(tid) }
       return
@@ -1978,11 +1987,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="plain-upload-box">
               <span className="text-zinc-700">Into <strong>{viewFolder.name}</strong>:</span>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose files
-                <input type="file" multiple className="hidden" onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped }); setUploadOpen(false) }} />
+                <input type="file" multiple className="hidden" onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
               <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50">Choose a folder
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- webkitdirectory is not in React's input typings */}
-                <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped }); setUploadOpen(false) }} />
+                <input type="file" multiple className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (!list.length) return; const { items, skipped, folders } = filterPlainDrop(itemsFromFileList(list.map((file) => ({ file, relative: (file as File & { webkitRelativePath?: string }).webkitRelativePath })))); plainFolders.current = new Map(); setPlain({ folder: viewFolder, items, skipped, folders }); setUploadOpen(false) }} />
               </label>
               {myDriveProbe?.allowed && <button type="button" onClick={() => { setMyDriveFor(viewFolder); setUploadOpen(false) }} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="my-drive-open">From my Google Drive</button>}
               <button type="button" onClick={() => setUploadOpen(false)} className="text-xs text-zinc-500 hover:underline">Cancel</button>
@@ -2060,10 +2069,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
       {myDriveFor && (
         <MyDriveDialog targetName={myDriveFor.name} onClose={() => setMyDriveFor(null)}
-          onChosen={(items, skipped) => { plainFolders.current = new Map(); setPlain({ folder: myDriveFor, items, skipped }); setMyDriveFor(null) }} />
+          onChosen={(items, skipped, folders) => { plainFolders.current = new Map(); setPlain({ folder: myDriveFor, items, skipped, folders }); setMyDriveFor(null) }} />
       )}
       {plain && (
-        <PlainDropPanel folderName={plain.folder.name} items={plain.items} skipped={plain.skipped} run={runPlainItem}
+        <PlainDropPanel folderName={plain.folder.name} items={plain.items} skipped={plain.skipped} folders={plain.folders} makeFolder={async (path) => { await ensurePlainFolder(path) }} run={runPlainItem}
           onClose={() => setPlain(null)} onFinished={() => { void refreshAll([plain.folder.id]) }} />
       )}
       {aiFile && ownerId && (
