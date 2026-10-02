@@ -3,6 +3,8 @@
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Upload, Loader2, CheckCircle2, FileUp, X } from 'lucide-react'
+import { PrincipalOfficeCheck } from '@/components/calendar/principal-office-check'
+import { EMPTY_PRINCIPAL_OFFICE_DRAFT, principalOfficeAnswer, type PrincipalOfficeDraft } from '@/lib/principal-office-draft'
 
 /** Window event fired after a flow document upload succeeds. The sibling
  *  DocumentViewer listens for it to re-fetch live (a server router.refresh()
@@ -29,6 +31,11 @@ interface DocumentUploadProps {
    *  The server interpolates it against the account and preserves the original
    *  extension. Absent = keep the uploaded filename. */
   rename?: string
+  /** State Annual Report only: the filing receipt upload must come with the principal-address answer (Antonio 2026-10-01) —
+   *  the same question the Calendar "Mark filed" dialog asks. The upload button stays off until it is answered. */
+  requirePrincipalOffice?: boolean
+  /** The company the answer is about (required with requirePrincipalOffice). */
+  accountId?: string | null
 }
 
 /**
@@ -49,7 +56,7 @@ interface DocumentUploadProps {
  *      switch this to a multipart/FormData body or the 4.5MB limit returns.
  * Surfaces the server's real error on failure (R099) — never a generic toast.
  */
-export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance, folder, rename }: DocumentUploadProps) {
+export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvance, folder, rename, requirePrincipalOffice, accountId }: DocumentUploadProps) {
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -58,6 +65,9 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
   const [error, setError] = useState<string | null>(null)
 
   const uploadLabel = label || 'Upload Document'
+
+  const [principalOffice, setPrincipalOffice] = useState<PrincipalOfficeDraft>(EMPTY_PRINCIPAL_OFFICE_DRAFT)
+  const principalOfficeReady = !requirePrincipalOffice || !!principalOfficeAnswer(principalOffice)
 
   // The formation flow's Articles-of-Organization upload (stage "Filed with
   // State") AUTO-ADVANCES into "Articles Received", which materializes the CRM
@@ -157,6 +167,7 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         ...(confirmedDate ? { formation_date: confirmedDate } : {}),
         ...(confirmedEntityType ? { entity_type: confirmedEntityType } : {}),
         ...(confirmedFormationState ? { formation_state: confirmedFormationState } : {}),
+        ...(requirePrincipalOffice ? { principal_office: principalOfficeAnswer(principalOffice) } : {}),
       }),
     })
     const data = await apiRes.json().catch(() => ({}))
@@ -176,6 +187,9 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
     }
     // Prefer the server's summary — for ITIN approval letters it reports the
     // OCR/finalize outcome (ITIN saved + client notified, or a warning).
+    if (typeof data.principal_office_warning === 'string' && data.principal_office_warning) {
+      setWarn(data.principal_office_warning)
+    }
     if (!matError && !advanceRefused) {
       setDone(typeof data.detail === 'string' && data.detail ? data.detail : `${fileName} uploaded`)
     }
@@ -329,13 +343,19 @@ export function DocumentUpload({ label, serviceDeliveryId, flowStage, autoAdvanc
         )}
       </div>
 
-      {/* Step 2 — prominent submit, disabled until a file is chosen. */}
+      {requirePrincipalOffice && accountId && (
+        <div className="mt-3">
+          <PrincipalOfficeCheck accountId={accountId} value={principalOffice} onChange={setPrincipalOffice} disabled={uploading} />
+        </div>
+      )}
+
+      {/* Step 2 — prominent submit, disabled until a file is chosen (and, for an annual report, the address question answered). */}
       <button
         type="button"
         onClick={handleUpload}
-        disabled={!file || uploading}
+        disabled={!file || uploading || !principalOfficeReady}
         className={`mt-3 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-          !file || uploading
+          !file || uploading || !principalOfficeReady
             ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
             : 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer'
         }`}

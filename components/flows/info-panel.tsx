@@ -83,7 +83,7 @@ export function InfoPanel({ serviceDelivery: sd, account, secondInstallment }: I
           <Row icon={<Landmark className="h-4 w-4" />} label="Registered Agent" value={account.registered_agent_address} />
         )}
         {account.mailing_address && (
-          <Row icon={<Home className="h-4 w-4" />} label="Mailing address" value={account.mailing_address} />
+          <Row icon={<Home className="h-4 w-4" />} label="Office address (Largo + suite once issued)" value={account.mailing_address} />
         )}
         <Row
           icon={<Flag className="h-4 w-4" />}

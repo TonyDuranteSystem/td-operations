@@ -426,6 +426,11 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step("suite", "error", e instanceof Error ? e.message : String(e)))
     }
     await updateJobProgress(job.id, result)
+  } else if (!account_id && p.suite_choice === "issue") {
+    // Staff chose "Issue suite" but there is no company to put it on. This used to be skipped without a word, so the choice
+    // vanished (found by the 2026-10-01 production QA). Say so — the workspace Suite step will still ask before onboarding moves on.
+    result.steps.push(step("suite", "error", "Staff chose \"Issue suite\" but there is no company yet — the suite was NOT issued. Issue it from the account page once the company exists."))
+    await updateJobProgress(job.id, result)
   }
 
   // ─── 1. DRIVE FOLDER + DOCUMENT COPY ───

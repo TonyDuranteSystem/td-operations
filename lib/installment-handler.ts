@@ -5,7 +5,7 @@
  *
  * 1st Installment Paid:
  * - Create 4 recurring SDs for the year: CMRA, RA Renewal, Annual Report, Tax Return
- * - Create new lease agreement (CMRA)
+ * - (the renewal lease is NOT created automatically any more — see step 6 below)
  * - Email team with confirmation
  *
  * 2nd Installment Paid:
@@ -348,7 +348,7 @@ export async function onFirstInstallmentPaid(
       `<h2>[PAID] 1st Installment ${year} -- ${account.company_name}</h2>` +
       `<p>Payment confirmed. Recurring services activated for ${year}.</p>` +
       `<pre style="background:#f3f4f6;padding:12px;border-radius:6px">${sdSummary}</pre>` +
-      `<p>The ${year} lease is created automatically and placed in the client portal to sign.</p>` +
+      `<p>The ${year} lease is NOT created automatically — create it from the account page and send it for signing.</p>` +
       `</div>`
     ).toString("base64url")
     await gmailPost("/messages/send", { raw })

@@ -13,21 +13,21 @@ import { planDriveEntry } from '@/lib/crm-store/my-drive'
 interface Entry { id: string; name: string; mimeType: string; size: number | null }
 const isFolder = (e: Entry) => e.mimeType === 'application/vnd.google-apps.folder'
 
-async function listPage(folder: string, page?: string | null): Promise<{ entries: Entry[]; nextPageToken: string | null }> {
-  const r = await fetch(`/api/crm-store/mydrive/list?folder=${encodeURIComponent(folder)}${page ? `&page=${encodeURIComponent(page)}` : ''}`)
+async function listPage(folder: string, account: string, page?: string | null): Promise<{ entries: Entry[]; nextPageToken: string | null }> {
+  const r = await fetch(`/api/crm-store/mydrive/list?folder=${encodeURIComponent(folder)}&account=${encodeURIComponent(account)}${page ? `&page=${encodeURIComponent(page)}` : ''}`)
   const d = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(d.error || 'Could not open your Google Drive.')
   return d
 }
-async function listAll(folder: string): Promise<Entry[]> {
+async function listAll(folder: string, account: string): Promise<Entry[]> {
   const out: Entry[] = []
   let page: string | null = null
-  do { const r = await listPage(folder, page); out.push(...r.entries); page = r.nextPageToken } while (page)
+  do { const r = await listPage(folder, account, page); out.push(...r.entries); page = r.nextPageToken } while (page)
   return out
 }
 
 /** every file under the chosen entries, with its folder path (folders are walked all the way down) */
-export async function collectDriveItems(roots: Array<{ entry: Entry; path: string[] }>, onProgress?: (n: number) => void): Promise<{ items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] }> {
+export async function collectDriveItems(roots: Array<{ entry: Entry; path: string[] }>, account: string, onProgress?: (n: number) => void): Promise<{ items: PlainItem[]; skipped: PlainSkipped[]; folders: string[][] }> {
   const items: PlainItem[] = []
   const skipped: PlainSkipped[] = []
   const dirs: string[][] = []
@@ -37,14 +37,14 @@ export async function collectDriveItems(roots: Array<{ entry: Entry; path: strin
     const plan = planDriveEntry(entry.mimeType, entry.name)
     if (plan.kind === 'folder') {
       dirs.push([...path, entry.name])                      // kept even if nothing inside can be copied
-      const kids = await listAll(entry.id)
+      const kids = await listAll(entry.id, account)
       for (const k of kids) queue.push({ entry: k, path: [...path, entry.name] })
     } else if (plan.kind === 'skip') {
       skipped.push({ name: [...path, entry.name].join(' › '), why: plan.why })
     } else {
       const f = new File([], plan.name)
       Object.defineProperty(f, 'size', { value: entry.size ?? 0 })
-      items.push({ file: f, path, driveId: entry.id })
+      items.push({ file: f, path, driveId: entry.id, driveAccount: account })
       onProgress?.(items.length)
     }
   }
@@ -56,6 +56,8 @@ export function MyDriveDialog({ targetName, onClose, onChosen }: {
   onClose: () => void
   onChosen: (items: PlainItem[], skipped: PlainSkipped[], folders: string[][]) => void
 }) {
+  const [account, setAccount] = useState<string>('me')
+  const [emailBox, setEmailBox] = useState('')
   const [crumbs, setCrumbs] = useState<Array<{ id: string; name: string }>>([{ id: 'root', name: 'My Drive' }])
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [more, setMore] = useState<string | null>(null)
@@ -66,21 +68,21 @@ export function MyDriveDialog({ targetName, onClose, onChosen }: {
 
   const open = useCallback(async (folder: string) => {
     setEntries(null); setMore(null); setError(null)
-    try { const r = await listPage(folder); setEntries(r.entries); setMore(r.nextPageToken) }
+    try { const r = await listPage(folder, account); setEntries(r.entries); setMore(r.nextPageToken) }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not open your Google Drive.'); setEntries([]) }
-  }, [])
+  }, [account])
   useEffect(() => { void open(here.id) }, [here.id, open])
 
   const loadMore = async () => {
     if (!more) return
-    try { const r = await listPage(here.id, more); setEntries((cur) => [...(cur ?? []), ...r.entries]); setMore(r.nextPageToken) }
+    try { const r = await listPage(here.id, account, more); setEntries((cur) => [...(cur ?? []), ...r.entries]); setMore(r.nextPageToken) }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not load more.') }
   }
 
   const go = async (roots: Array<{ entry: Entry; path: string[] }>) => {
     setBusy('Reading the folders…'); setError(null)
     try {
-      const r = await collectDriveItems(roots, (n) => setBusy(`Reading the folders… ${n} files found`))
+      const r = await collectDriveItems(roots, account, (n) => setBusy(`Reading the folders… ${n} files found`))
       if (!r.items.length && !r.skipped.length && !r.folders.length) { setError('There is nothing to copy there.'); setBusy(null); return }
       onChosen(r.items, r.skipped, r.folders)
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not read your Google Drive.'); setBusy(null) }
@@ -91,11 +93,30 @@ export function MyDriveDialog({ targetName, onClose, onChosen }: {
     <div className="fixed inset-0 z-[66] flex items-center justify-center bg-black/40 p-4" onClick={() => { if (!busy) onClose() }} role="dialog" aria-modal="true" aria-label="My Google Drive">
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-xl bg-white p-5 text-sm shadow-xl" onClick={(e) => e.stopPropagation()} data-testid="my-drive-dialog">
         <div className="flex items-start gap-2">
-          <h3 className="min-w-0 flex-1 text-base font-semibold text-zinc-900">Copy from my Google Drive into “{targetName}”</h3>
+          <h3 className="min-w-0 flex-1 text-base font-semibold text-zinc-900">Copy from Google Drive into “{targetName}”</h3>
           {!busy && <button type="button" aria-label="Close" onClick={onClose} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><X className="h-4 w-4" /></button>}
         </div>
-        <p className="mt-1 text-xs text-zinc-500">Your own Google Drive (not the company one). Nothing on Drive is changed — it is only copied. Google Docs, Sheets and Slides arrive as Word, Excel and PowerPoint files.</p>
+        <p className="mt-1 text-xs text-zinc-500">Pick whose Drive to look in. Nothing on Drive is changed — it is only copied. Google Docs, Sheets and Slides arrive as Word, Excel and PowerPoint files.</p>
 
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="my-drive-account">
+          <span className="text-zinc-500">Whose Drive:</span>
+          {[{ key: 'me', label: 'Mine' }, { key: 'support@tonydurante.us', label: 'Company (support@)' }].map((a) => (
+            <button key={a.key} type="button" disabled={!!busy} onClick={() => { setAccount(a.key); setPicked({}); setCrumbs([{ id: 'root', name: 'My Drive' }]) }}
+              className={`rounded-md border px-2 py-0.5 ${account === a.key ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-zinc-300 hover:bg-zinc-50'}`}>{a.label}</button>
+          ))}
+          <input value={emailBox} onChange={(e) => setEmailBox(e.target.value)} placeholder="a teammate’s address…" aria-label="A teammate’s Google address" disabled={!!busy}
+            onKeyDown={(e) => { if (e.key === 'Enter' && emailBox.includes('@')) { setAccount(emailBox.trim().toLowerCase()); setPicked({}); setCrumbs([{ id: 'root', name: 'My Drive' }]) } }}
+            className="w-44 rounded-md border border-zinc-300 px-2 py-0.5" />
+          <button type="button" disabled={!!busy || !emailBox.includes('@')} onClick={() => { setAccount(emailBox.trim().toLowerCase()); setPicked({}); setCrumbs([{ id: 'root', name: 'My Drive' }]) }} className="rounded-md border border-zinc-300 px-2 py-0.5 hover:bg-zinc-50 disabled:opacity-50">Open</button>
+        </div>
+        {account !== 'me' && <p className="mt-1 text-xs text-amber-700">You are looking at the Google Drive of <strong>{account}</strong> — it can include their personal files. Opening it and anything you copy is logged.</p>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-zinc-500">Look in:</span>
+          {[{ id: 'root', name: 'My Drive' }, { id: 'shared', name: 'Shared with me' }, { id: 'drives', name: 'Shared drives' }].map((t) => (
+            <button key={t.id} type="button" disabled={!!busy} onClick={() => { setPicked({}); setCrumbs([t]) }}
+              className={`rounded-md border px-2 py-0.5 ${crumbs[0].id === t.id ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-zinc-300 hover:bg-zinc-50'}`}>{t.name}</button>
+          ))}
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-0.5 text-xs text-zinc-600">
           {crumbs.map((c, i) => (
             <span key={c.id} className="inline-flex items-center gap-0.5">
@@ -128,7 +149,7 @@ export function MyDriveDialog({ targetName, onClose, onChosen }: {
         {busy && <p className="mt-2 text-zinc-700" role="status"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />{busy}</p>}
 
         <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <button type="button" disabled={!!busy || here.id === 'root'} onClick={() => void go([{ entry: { id: here.id, name: here.name, mimeType: 'application/vnd.google-apps.folder', size: null }, path: [] }])} className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-50 disabled:opacity-50">Copy this whole folder</button>
+          <button type="button" disabled={!!busy || here.id === 'root' || here.id === 'shared' || here.id === 'drives'} onClick={() => void go([{ entry: { id: here.id, name: here.name, mimeType: 'application/vnd.google-apps.folder', size: null }, path: [] }])} className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-50 disabled:opacity-50">Copy this whole folder</button>
           <button type="button" disabled={!!busy || pickedList.length === 0} onClick={() => void go(pickedList.map((entry) => ({ entry, path: [] })))} className="rounded-md bg-blue-600 px-3 py-1.5 text-white hover:bg-blue-700 disabled:opacity-50" data-testid="my-drive-copy-selected">Copy {pickedList.length || ''} selected</button>
         </div>
       </div>

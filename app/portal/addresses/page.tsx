@@ -6,7 +6,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow, withCompanyCmra } from '@/lib/addresses'
+import { type MailingAddressRow, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -30,8 +30,9 @@ type AddrRow = MailingAddressRow & {
  *      file". (The address on the Articles of Organization is kept inside the
  *      CRM and checked at each annual report — it is not shown here.) There is
  *      no CMRA card any more.
- *   3. Mailing address (shipping_address_id) — normally Tony Durante's Seminole
- *      office; also where clients mail original documents to TD.
+ *   3. Mailing address — always Tony Durante's Seminole mailbox (a constant,
+ *      TD_MAILING_ROW; the CRM's saved shipping link is not read) — also where
+ *      clients mail original documents to TD.
  *
  * None of these fall back to the account's legacy free-text `physical_address`
  * column. If a link isn't set in the CRM yet, the card says so — showing a
@@ -95,10 +96,10 @@ export default async function PortalAddressesPage() {
     // company's own suite (no saved CMRA link is read when the company has one).
     const companySuite = (acct?.suite_number as string | null) ?? null
     companySuiteForCard = companySuite
-    legal = companySuite
-      ? ((withCompanyCmra((acct?.legal as AddrRow | null) ?? null, companySuite) as AddrRow | null | undefined) ?? null)
-      : ((acct?.legal as AddrRow | null) ?? (acct?.mailing as AddrRow | null) ?? null) // no suite yet: saved Principal Office, else the saved office link
-    shipping = (acct?.shipping as AddrRow | null) ?? null
+    // with a suite: Largo + the company's own suite; no suite yet: the saved Principal Office (never the shared Largo row, which has no suite)
+    legal = principalOfficeForClient((acct?.legal as AddrRow | null) ?? null, (acct?.mailing as AddrRow | null) ?? null, companySuite) as AddrRow | null
+    // the Mailing card is our Seminole mailbox for everyone
+    shipping = mailingForClient() as AddrRow
     companyName = (acct?.company_name as string | null) ?? null
   }
 

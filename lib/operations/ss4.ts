@@ -20,8 +20,8 @@ import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
 import { APP_BASE_URL } from "@/lib/config"
-import { formatCountyAndState, withCompanyCmra } from "@/lib/addresses"
-import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
+import { formatCountyAndState } from "@/lib/addresses"
+import { resolveMailing } from "@/lib/operations/ss4-refresh"
 import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
 
 export interface CreateSS4Params {
@@ -291,32 +291,16 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
   const resolvedCountyAndState = formatCountyAndState(raAddress.county, raAddress.state)
 
   // ─── 7. MAILING ADDRESS ───
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  // The CMRA address is ALWAYS Largo + THIS company's own suite (accounts.suite_number) — the saved CMRA link is not used
-  // when the company has a suite; with no suite yet it keeps today's behaviour (saved row, then the fallbacks below).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ma = withCompanyCmra((account as any).mailing_address ?? null, (account as any).suite_number ?? null) ?? null
-  const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
-  const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
-  let mailingStreet: string
-  let mailingCityStateZip: string
-  if (ma && (ma.address_line1 || ma.city)) {
-    mailingStreet = [ma.address_line1, ma.address_line2].filter(Boolean).join(", ")
-    mailingCityStateZip = [ma.city, ma.state, ma.zip].filter(Boolean).join(", ")
-  } else if ((account as any).physical_address) {
-    const raw = (account as any).physical_address as string
-    const commaIdx = raw.indexOf(",")
-    if (commaIdx > -1) {
-      mailingStreet = raw.slice(0, commaIdx).trim()
-      mailingCityStateZip = raw.slice(commaIdx + 1).trim()
-    } else {
-      mailingStreet = raw
-      mailingCityStateZip = ""
-    }
-  } else {
-    mailingStreet = TD_FALLBACK_STREET
-    mailingCityStateZip = TD_FALLBACK_CITY_STATE_ZIP
-  }
+  // Largo + THIS company's own suite when it has one; with no suite yet the saved row (never the shared Largo row's bare "3D"),
+  // then the physical address, then our Seminole mailbox. One shared rule — the same one the refresh and the CRM button use.
+  const { street: mailingStreet, cityStateZip: mailingCityStateZip } = resolveMailing({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    physical_address: (account as any).physical_address ?? null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    suite_number: (account as any).suite_number ?? null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mailing_address: (account as any).mailing_address ?? null,
+  } as Parameters<typeof resolveMailing>[0])
 
   // ─── 8. TOKEN ───
   const slug = account.company_name
