@@ -66,6 +66,8 @@ function renderComponent(
           autoAdvance={component.autoAdvance}
           folder={component.folder}
           rename={component.rename}
+          requirePrincipalOffice={serviceDelivery.service_type === 'State Annual Report'}
+          accountId={account.id}
         />
       )
     case 'external_link':

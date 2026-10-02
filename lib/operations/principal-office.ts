@@ -95,10 +95,12 @@ export async function applyPrincipalOfficeDecision(opts: {
 
   const appendNote = async (line: string) => {
     // eslint-disable-next-line no-restricted-syntax -- audit line on the account (CRM update rule), same as file-renewal
-    await supabaseAdmin
+    const { error: noteErr } = await supabaseAdmin
       .from("accounts")
       .update({ notes: notes ? `${notes}\n${line}` : line, updated_at: new Date().toISOString() })
       .eq("id", accountId)
+    // a lost audit line used to pass as success — callers show this as "answer NOT recorded"
+    if (noteErr) throw new Error(`Could not save the dated note on the account: ${noteErr.message}`)
   }
 
   if (!decision.changed) {

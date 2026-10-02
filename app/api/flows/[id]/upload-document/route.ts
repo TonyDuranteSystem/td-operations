@@ -30,6 +30,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
 // migration but the generated DB types haven't been regenerated yet.
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // 1. Resolve the SD → account/contact + current stage (fallback for flow_stage).
     const { data: sd, error: sdErr } = await supabaseAdmin
       .from('service_deliveries')
-      .select('id, account_id, contact_id, stage, service_type')
+      .select('id, account_id, contact_id, stage, service_type, due_date')
       .eq('id', serviceDeliveryId)
       .single()
 
@@ -109,6 +110,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const accountId = (sd.account_id as string | null) ?? null
     const contactId = (sd.contact_id as string | null) ?? null
     const flowStage = flowStageInput ?? (sd.stage as string | null) ?? null
+
+    // State Annual Report: the filing receipt must come with the principal-address answer (unchanged, or the new address) —
+    // the same rule the Calendar "Mark filed" dialog and the To-Do card enforce. Without it this upload was a way to file
+    // the annual report without ever asking (found by the 2026-10-01 production QA). Checked BEFORE anything is saved.
+    let principalOffice: PrincipalOfficeDecision | undefined
+    if (sd.service_type === 'State Annual Report' && accountId) {
+      const parsed = parsePrincipalOfficeDecision(body.principal_office)
+      if (!parsed.ok) {
+        return NextResponse.json({ success: false, detail: parsed.error }, { status: 400 })
+      }
+      principalOffice = parsed.decision
+    }
 
     // ITIN approval letter (CP565) uploaded at the terminal "ITIN Approved"
     // stage → after filing, OCR it, stamp the contact's ITIN fields, notify
@@ -348,6 +361,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       },
     })
 
+    // 6a. Record the annual-report address answer (dated note; a changed address is saved + relinked). The receipt is already
+    // filed, so a failure here is a visible warning, never a silent loss and never a failed upload.
+    let principalOfficeWarning: string | null = null
+    if (principalOffice && accountId) {
+      try {
+        // the cycle this report belongs to: the company's stored annual-report date first (the same precedence fileRenewal uses),
+        // then the case's own due date, then this year. The date is New York's today (UTC is "tomorrow" after 8pm ET).
+        const { data: cycle } = await supabaseAdmin.from('accounts').select('annual_report_due_date').eq('id', accountId).maybeSingle()
+        const cycleSource = ((cycle as { annual_report_due_date?: string | null } | null)?.annual_report_due_date ?? (sd.due_date as string | null)) ?? null
+        const dueYear = typeof cycleSource === 'string' && /^\d{4}/.test(cycleSource) ? Number(cycleSource.slice(0, 4)) : new Date().getFullYear()
+        await applyPrincipalOfficeDecision({
+          accountId,
+          decision: principalOffice,
+          actor: 'crm-admin:annual-report',
+          filedDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
+          year: dueYear,
+        })
+      } catch (poErr) {
+        principalOfficeWarning = `The receipt is saved, but the address answer was NOT recorded (${poErr instanceof Error ? poErr.message : 'unknown error'}) — update "Address on the Articles" on the company by hand.`
+        console.error('[flow-upload-document] principal office not recorded:', poErr)
+      }
+    }
+
     // 6b. ITIN approval letter: OCR → stamp contact ITIN fields → notify the
     // client → complete the flow. Best-effort by design — the letter is
     // already filed; failures surface as staff-facing warnings in `detail`.
@@ -435,6 +471,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     } else if (autoAdvance && !isItinApprovalUpload && !advance.success && advance.error && flowStage === 'Filed with State') {
       detail += ` — ⚠️ The file is saved, but the flow did NOT advance: ${advance.error}`
     }
+    if (principalOfficeWarning) detail += ` — ⚠️ ${principalOfficeWarning}`
     if (itinFinalize) {
       if (itinFinalize.finalized) {
         detail += ` — ITIN ${itinFinalize.itin_number} saved to the contact (issued ${itinFinalize.itin_issue_date}), client notified, flow completed.`
@@ -450,6 +487,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       driveFileId: docFileId,
       advance,
       itin_finalize: itinFinalize,
+      principal_office_warning: principalOfficeWarning,
     })
   } catch (e) {
     console.error('[flow-upload-document] Error:', e)

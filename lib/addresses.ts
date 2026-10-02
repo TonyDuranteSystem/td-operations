@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
+import { TD_OFFICE } from '@/lib/td-address'
 
 // Full row shape returned by GET /api/addresses (includes computed linked_account_count).
 export interface AddressRow {
@@ -94,6 +95,40 @@ export function withCompanyCmra<T extends MailingAddressRow>(
   if (!companySuite) return row
   // Only the Largo address + the suite: nothing of the saved row (its name, provider, agent) may leak onto it.
   return { ...TD_LARGO_OFFICE, address_line2: `Suite ${companySuite}` }
+}
+
+/**
+ * The Principal Office card a CLIENT sees. A company with a suite: our Largo office + its own suite (computed). A company with
+ * no suite yet: its saved Principal Office — but NEVER the shared Largo row, which has no suite on it ("3D" alone is not an
+ * address the client can use; found by the 2026-10-01 production QA) — so a suite-less company sees "not on file" instead.
+ */
+export function principalOfficeForClient<T extends MailingAddressRow>(
+  legal: T | null | undefined,
+  mailing: T | null | undefined,
+  companySuite: string | null | undefined,
+): T | MailingAddressRow | null {
+  if (companySuite) return withCompanyCmra(legal, companySuite) ?? null
+  // no suite yet: the first saved row that is NOT the shared Largo office (it has no suite on it)
+  return [legal, mailing].find(r => !!r?.address_line1 && !isTdLargoAddressRow(r)) ?? null
+}
+
+/**
+ * The Mailing Address card a CLIENT sees: where they post documents to us — our Seminole mailbox, the same for everyone
+ * (Antonio 2026-10-01: "Mailing address in Seminole"). It read "not on file" for 236 of 248 active clients; the other 12 had a
+ * saved row and every one of them is the same Seminole box, so no client keeps a row of their own.
+ */
+export const TD_MAILING_ROW: MailingAddressRow & { name: string; country: string } = {
+  name: TD_OFFICE.company,
+  address_line1: TD_OFFICE.streetNoSuite,
+  address_line2: TD_OFFICE.street.slice(TD_OFFICE.streetNoSuite.length).replace(/^,\s*/, ''),
+  city: TD_OFFICE.city,
+  state: TD_OFFICE.state,
+  zip: TD_OFFICE.zip,
+  country: 'US',
+}
+
+export function mailingForClient(): typeof TD_MAILING_ROW {
+  return TD_MAILING_ROW
 }
 
 // The company's CMRA address as one line: Largo + its suite when it has one, else the saved FK row, else the legacy

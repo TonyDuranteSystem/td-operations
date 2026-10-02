@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { leasePageView } from '@/lib/lease/page-state'
 import { LOGO_URL } from '@/lib/supabase/public-client'
 
 const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -188,6 +189,9 @@ export default function LeasePage() {
     }
 
     setSigning(true)
+    // kept so a failed signing can put the page back exactly as it was (the PDF snapshot freezes the canvas into an image)
+    let frozenCanvas: HTMLCanvasElement | null = null
+    let frozenImg: HTMLImageElement | null = null
     try {
       // 1. Get signature as image
       const sigDataUrl = sigPadRef.current.toDataURL('image/png')
@@ -200,6 +204,8 @@ export default function LeasePage() {
         img.style.width = canvas.style.width || `${canvas.offsetWidth}px`
         img.style.height = canvas.style.height || `${canvas.offsetHeight}px`
         canvas.parentNode?.replaceChild(img, canvas)
+        frozenCanvas = canvas
+        frozenImg = img
       }
 
       // 3. Hide action bar
@@ -261,7 +267,12 @@ export default function LeasePage() {
       setSigned(true)
     } catch (err) {
       console.error('Signing failed:', err)
-      alert('An error occurred while signing. Please try again.')
+      // Put the page back so the client can try again (before this the canvas stayed a dead image and the Sign button stayed hidden)
+      if (frozenImg && frozenCanvas && frozenImg.parentNode) frozenImg.parentNode.replaceChild(frozenCanvas, frozenImg)
+      const bar = document.getElementById('lease-action-bar')
+      if (bar) bar.style.display = ''
+      // show the server's real reason (R099) — e.g. "This lease is no longer valid — please contact Tony Durante LLC"
+      alert(err instanceof Error && err.message ? err.message : 'An error occurred while signing. Please try again.')
     } finally {
       setSigning(false)
     }
@@ -269,7 +280,10 @@ export default function LeasePage() {
 
   // ─── RENDER ───
 
-  if (loading) {
+  const isAdminPreview = searchParams.get('preview') === 'td'
+  const view = leasePageView({ loading, error, hasLease: !!lease, verified, isAdminPreview, isPortal: false })
+
+  if (view === 'loading') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif' }}>
         <p style={{ color: '#666', fontSize: 18 }}>Loading lease agreement...</p>
@@ -277,7 +291,7 @@ export default function LeasePage() {
     )
   }
 
-  if (error) {
+  if (view === 'error') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif' }}>
         <div style={{ textAlign: 'center' }}>
@@ -288,11 +302,8 @@ export default function LeasePage() {
     )
   }
 
-  if (!lease) return null
-
   // Email gate (admin preview bypasses synchronously)
-  const isAdminPreview = searchParams.get('preview') === 'td'
-  if (!verified && !isAdminPreview) {
+  if (view === 'email_gate') {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', fontFamily: 'Georgia, serif', background: '#f8f8f8' }}>
         <div style={{ background: '#fff', padding: 40, borderRadius: 8, boxShadow: '0 2px 20px rgba(0,0,0,0.08)', maxWidth: 420, width: '100%' }}>
@@ -320,6 +331,9 @@ export default function LeasePage() {
       </div>
     )
   }
+
+  // the gate above does not need the lease; from here on it does
+  if (view === 'empty' || !lease) return null
 
   // Full address with suite
   const fullAddress = `${lease.premises_address.replace(/,?\s*(Largo|FL|33771).*/i, '')}, Suite ${lease.suite_number}, Largo, FL 33771`
