@@ -118,7 +118,7 @@ export async function uploadChatAttachment(
     const d = await urlRes.json().catch(() => ({}))
     throw new Error(d.error || 'Could not start the upload. Please try again.')
   }
-  const { signedUrl, publicUrl } = await urlRes.json()
+  const { signedUrl, publicUrl, path: storedPath } = await urlRes.json()
   if (!signedUrl || !publicUrl) {
     throw new Error('Could not start the upload. Please try again.')
   }
@@ -135,6 +135,22 @@ export async function uploadChatAttachment(
       throw new Error(`File too large. Maximum allowed: ${CHAT_ATTACHMENT_MAX_MB} MB.`)
     }
     throw new Error('Upload failed. Please check your connection and try again.')
+  }
+
+  // An iPhone photo (HEIC/HEIF) is turned into a JPEG right after the upload, so every screen and browser can show it.
+  // If that fails for any reason the HEIC stays (the viewers still convert it on the fly).
+  if (storedPath && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(file.type))) {
+    try {
+      const cvRes = await fetch('/api/portal/chat/convert-attachment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: storedPath, name: file.name, account_id: ctx.accountId || undefined, contact_id: ctx.contactId || undefined }),
+      })
+      if (cvRes.ok) {
+        const c = await cvRes.json()
+        if (c?.url) return { url: c.url, name: c.name || file.name, mime_type: c.mime_type || 'image/jpeg', size: c.size ?? file.size }
+      }
+    } catch { /* keep the HEIC */ }
   }
 
   return {

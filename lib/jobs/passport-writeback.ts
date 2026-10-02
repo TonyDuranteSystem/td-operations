@@ -26,6 +26,8 @@ const OCR_SUPPORTED_MIMES = new Set([
   "image/gif",
   "image/bmp",
   "image/webp",
+  "image/heic", // iPhone photos — converted to JPEG inside the OCR reader (lib/docai.ts)
+  "image/heif",
 ])
 
 export interface PassportWritebackResult {

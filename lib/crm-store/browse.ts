@@ -499,6 +499,8 @@ export async function staffUploadToStore(p: {
     const { cleanNewFileName } = await import("./file-actions")
     fileName = cleanNewFileName(p.displayName, p.fileName)
   }
+  // an iPhone HEIC photo is saved as a JPEG: use the final name for the "same name here?" check below
+  { const h = await import("@/lib/image-heic"); if (h.isHeicByNameOrType(fileName, p.mimeType)) fileName = h.jpegNameFor(fileName) }
   const { data: owner0, error: ownErr } = await db().from("store_owners").select("kind, account_id, contact_id, service_delivery_id").eq("id", p.ownerId).single()
   if (ownErr || !owner0) throw new Error("This storage owner no longer exists.")
   let owner = owner0 as { kind: string; account_id: string | null; contact_id: string | null; service_delivery_id: string | null }
@@ -609,7 +611,7 @@ export async function staffUploadToStore(p: {
   const yearToSave = p.periodYear ?? await (await import("./structure")).nearestYear(targetFolderId)
   const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: targetOwnerId, folderId: targetFolderId, name: fileName, mimeType, bytes,
-    callerKey, contentChanged: true,
+    callerKey, contentChanged: true, convertHeic: true,
     // a prepared tax return / 5472 / 1120 … is saved as a DRAFT (never shown until filed); every type starts
     // unpublished and follows the CRM row below
     documentType: p.documentType, published: false, actor: p.actorId,
@@ -624,7 +626,7 @@ export async function staffUploadToStore(p: {
   const { categoryForFolder } = await import("./structure")
   const cat = typeRow.metadata?.personal === true ? FOLDER_KIND_CATEGORY.personal : await categoryForFolder(targetFolderId)
   const row = await upsertStoreDocumentRow(w.fileId, {
-    file_name: w.name, mime_type: mimeType, file_size: bytes.length, document_type_name: typeRow.display_name ?? null,
+    file_name: w.name, mime_type: w.mimeType ?? mimeType, file_size: w.size ?? bytes.length, document_type_name: typeRow.display_name ?? null,
     category: cat.num, category_name: cat.name,
     account_id: rowAccount,
     contact_id: rowContact,
@@ -695,7 +697,7 @@ async function saveInternalAreaFile(p: { ownerId: string; folderId: string; stor
   const bytes = Buffer.from(await blob.arrayBuffer())
   const w = await removeStagedOnFailure(p.storagePath, () => saveBytesToStore({
     ownerId: p.ownerId, folderId: p.folderId, name: fileName, mimeType: p.mimeType || blob.type || "application/octet-stream", bytes,
-    callerKey: sameLive?.caller_key ?? `staff-upload:${randomUUID()}`, contentChanged: true,
+    callerKey: sameLive?.caller_key ?? `staff-upload:${randomUUID()}`, contentChanged: true, convertHeic: true,
     documentType, published: false, actor: p.actorId,
   }))
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") {

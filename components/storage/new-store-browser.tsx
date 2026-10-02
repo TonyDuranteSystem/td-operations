@@ -123,6 +123,8 @@ function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_;
   const isImage = inline && mime.startsWith('image/')
   // Word / Excel / Markdown / CSV … open as a simplified, script-free page made by the server (the current version only)
   const simple = !inline && !srcOverride && viewKindFor(file.name, file.mimeType) !== null
+  // an iPhone photo (HEIC/HEIF) is shown through the picture route, which converts it to a JPEG for the screen
+  const heic = !inline && !srcOverride && (/\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]/i.test(mime))
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -134,13 +136,16 @@ function PreviewPanel({ file, onClose, src: srcOverride, title }: { file: File_;
         <div className="flex items-center gap-2 border-b border-zinc-200 px-4 py-2">
           <FileText className="h-4 w-4 text-zinc-400" />
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{title ?? file.name}</span>
-          {simple && <a href={src} download className="text-xs text-blue-700 hover:underline">Download the original</a>}
+          {(simple || heic) && <a href={src} download className="text-xs text-blue-700 hover:underline">Download the original</a>}
           <button type="button" onClick={onClose} aria-label="Close preview" className="rounded p-1 text-zinc-500 hover:bg-zinc-100">
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="flex-1 bg-zinc-50">
-          {simple ? (
+          {heic ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={`${src}/picture`} alt={file.name} className="mx-auto h-full max-h-full object-contain" data-testid="heic-view" />
+          ) : simple ? (
             <iframe src={`${src}/view`} title={file.name} sandbox="" className="h-full w-full border-0 bg-white" data-testid="simple-view" />
           ) : !inline ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">

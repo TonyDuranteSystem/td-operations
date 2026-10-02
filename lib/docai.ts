@@ -267,6 +267,14 @@ async function downloadFileAsBinary(
 
   const data = await dataRes.arrayBuffer()
 
+  // an iPhone photo (HEIC/HEIF): Document AI cannot read it — OCR a JPEG made from it (the Drive original is untouched)
+  {
+    const { looksLikeHeic, heicToJpeg } = await import("@/lib/image-heic")
+    if (looksLikeHeic(meta.name, meta.mimeType, Buffer.from(data))) {
+      return { data: await heicToJpeg(Buffer.from(data)), mimeType: "image/jpeg", name: meta.name }
+    }
+  }
+
   if (size > maxBytes && shrinkable) {
     const shrunk = await shrinkImageToFit(Buffer.from(data), maxBytes)
     return { data: shrunk, mimeType: "image/jpeg", name: meta.name, wasShrunk: true }
@@ -566,6 +574,11 @@ export async function ocrRawContent(
   mimeType: string,
   fileName: string,
 ): Promise<OcrResult> {
+  {
+    const { readableImage } = await import("@/lib/image-heic")
+    const r = await readableImage(Buffer.from(content), mimeType, fileName)
+    if (r.converted) { content = r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset + r.bytes.byteLength) as ArrayBuffer; mimeType = r.mimeType }
+  }
   const parsed = await processWithDocai(content, mimeType)
   return {
     fullText: parsed.fullText,
@@ -595,6 +608,11 @@ export async function ocrBytesAllPages(
   opts: { maxPages?: number } = {},
 ): Promise<OcrResult & { partial: boolean }> {
   const maxPages = Math.max(1, opts.maxPages ?? 60)
+  {
+    const { readableImage } = await import("@/lib/image-heic")
+    const r = await readableImage(buffer, mimeType, name)
+    if (r.converted) { buffer = r.bytes; mimeType = r.mimeType }
+  }
   if (mimeType !== "application/pdf") {
     const data = buffer.length > DOCAI_INLINE_MAX_BYTES && SHRINKABLE_IMAGE_MIMES.has(mimeType) ? await shrinkImageToFit(buffer, DOCAI_INLINE_MAX_BYTES) : buffer
     const parsed = await processWithDocai(data, data === buffer ? mimeType : "image/jpeg")

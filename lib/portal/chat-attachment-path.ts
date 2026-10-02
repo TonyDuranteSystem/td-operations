@@ -36,3 +36,18 @@ export function buildChatAttachmentPath(filename: string, accountId: string | nu
   const ext = safeChatAttachmentExt(filename)
   return `chat-attachments/${dir}/${randomUUID()}.${ext}`
 }
+
+/**
+ * May the server convert THIS stored chat attachment (an iPhone photo → JPEG)? Only a file the uploader route made for this very
+ * thread: chat-attachments/<thread dir>/<uuid>.heic|heif — never any other path of the bucket.
+ */
+export function convertibleChatPath(path: string, accountId: string | null, contactId: string | null): boolean {
+  const dir = chatAttachmentDir(accountId, contactId)
+  const m = /^chat-attachments\/([^/]+)\/([0-9a-f-]{36})\.(heic|heif)$/.exec(path)
+  return !!m && m[1] === dir
+}
+
+/** The JPEG's path next to the HEIC: same folder, new random name. */
+export function jpegPathBeside(path: string): string {
+  return path.replace(/\/[0-9a-f-]{36}\.(heic|heif)$/, `/${randomUUID()}.jpg`)
+}
