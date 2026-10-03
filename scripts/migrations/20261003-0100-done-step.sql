@@ -46,4 +46,25 @@ BEGIN
   END IF;
 END $$;
 
+-- A step ADDED or RENAMED later (service editor, migrations) gets the same default as the old name rule, so a step
+-- named "Completed" keeps closing jobs exactly as before (bug-hunter, N1a F1). Only fills in a missing "true"; never
+-- turns a flag off. Revisit when the editor lets staff tick the done step (plan step C2).
+CREATE OR REPLACE FUNCTION public.trg_pipeline_stage_done_default() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  IF NOT COALESCE(NEW.completes_service, false)
+     AND (NEW.stage_name IN ('Completed', 'TR Filed')
+          OR (NEW.stage_name = 'Closed' AND NEW.service_type IN ('State RA Renewal', 'State Annual Report'))) THEN
+    NEW.completes_service := true;
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_pipeline_stage_done_default ON public.pipeline_stages;
+CREATE TRIGGER trg_pipeline_stage_done_default
+  BEFORE INSERT OR UPDATE OF stage_name, service_type ON public.pipeline_stages
+  FOR EACH ROW EXECUTE FUNCTION public.trg_pipeline_stage_done_default();
+
+REVOKE ALL ON FUNCTION public.trg_pipeline_stage_done_default() FROM PUBLIC, anon, authenticated;
+
 COMMIT;

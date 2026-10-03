@@ -64,6 +64,12 @@ describe('parity — after the migration, every step closes a job exactly when t
     expect(sql).toContain("stage_name IN ('Completed', 'TR Filed')")
     expect(sql).toContain("stage_name = 'Closed' AND service_type IN ('State RA Renewal', 'State Annual Report')")
   })
+  it('a step added or renamed later by the service editor gets the same default (DB trigger in the migration)', () => {
+    const sql = readFileSync(join(process.cwd(), 'scripts/migrations/20261003-0100-done-step.sql'), 'utf8')
+    expect(sql).toContain('BEFORE INSERT OR UPDATE OF stage_name, service_type ON public.pipeline_stages')
+    expect(sql).toContain("NEW.stage_name IN ('Completed', 'TR Filed')")
+    expect(sql).toContain("NEW.stage_name = 'Closed' AND NEW.service_type IN ('State RA Renewal', 'State Annual Report')")
+  })
 })
 
 describe('stageCompletesService', () => {
