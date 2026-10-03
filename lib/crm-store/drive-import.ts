@@ -130,7 +130,9 @@ export const WAITING_SENTENCE_RE = /\s*The client could see (this|it) but .*?\((
 /** Pure: the parity report of a run from its ledger rows. Parity holds when nothing failed and nothing is pending. */
 export function buildReport(items: ImportItem[], stillReadDrive: string[]): ImportReport {
   const byFolder = new Map<string, ImportReport["folders"][number]>()
-  const top = (it: ImportItem) => (it.source === "storage" ? "(files kept outside Drive)" : it.drive_path[0] ?? "(top of the Drive folder)")
+  // a plan-driven build row carries its placement in drive_path (["PLAN", fingerprint, JSON]) — show where it landed instead
+  const isPlan = (it: ImportItem) => it.drive_path[0] === "PLAN"
+  const top = (it: ImportItem) => (it.source === "storage" ? "(files kept outside Drive)" : isPlan(it) ? "(built from the approved plan)" : it.drive_path[0] ?? "(top of the Drive folder)")
   for (const it of items) {
     const k = top(it)
     const f = byFolder.get(k) ?? { folder: k, driveFiles: 0, driveBytes: 0, moved: 0, movedBytes: 0, merged: 0, skipped: 0, failed: 0, checksumChecked: 0 }
@@ -142,7 +144,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     if (it.status === "failed") f.failed++
     byFolder.set(k, f)
   }
-  const where = (it: ImportItem) => (it.source === "storage" ? "outside Drive" : it.drive_path.join(" › ") || "top of the Drive folder")
+  const where = (it: ImportItem) => (it.source === "storage" ? "outside Drive" : isPlan(it) ? (it.landed_in ?? "the approved plan") : it.drive_path.join(" › ") || "top of the Drive folder")
   return {
     folders: Array.from(byFolder.values()).sort((a, b) => a.folder.localeCompare(b.folder)),
     rowsRepointed: items.reduce((n, it) => n + it.repointed.filter((r) => !r.created).length, 0),

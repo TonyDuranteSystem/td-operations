@@ -424,15 +424,12 @@ async function buildOne(it: ImportItem, runId: string, actorId: string | null): 
     return { status: "failed", reason: "The file is not where the plan puts it (an earlier attempt left it elsewhere) — undo the build and run it again.", store_file_id: w.fileId }
   }
   const finalSha = sha256Hex(bytes)
-  // the backup records WHICH Drive originals this file came from (sources and certificates), untouched on Drive
-  for (const p of parts) {
-    const { error } = await db().rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: p.id, p_sha256: p.sha, p_drive_path: { area: "plan", key: item.key } })
-    if (error) return { status: "done", store_file_id: w.fileId, sha256: finalSha, landed_in: await landedIn(folderId, ownerId), repointed: [], reason: `The backup could not record a Drive original (${error.message}).` }
-  }
-  return {
-    status: "done", store_file_id: w.fileId, sha256: finalSha, landed_in: await landedIn(folderId, ownerId), repointed: [],
-    reason: item.appended.length ? `Merged with ${item.appended.length} signing certificate(s) into one document.` : null,
-  }
+  // the backup records the Drive original this file came from (one record per file: the DOCUMENT; the certificates' Drive
+  // ids stay in the ledger row, which keeps the whole plan item). Everything on Drive is untouched.
+  const merged = item.appended.length ? `Merged with ${item.appended.length} signing certificate(s) into one document (Drive originals: ${item.appended.map((a) => a.driveFileId).join(", ")}).` : null
+  const { error: refErr } = await db().rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: parts[0].id, p_sha256: parts[0].sha, p_drive_path: { area: "plan", key: item.key } })
+  const note = [merged, refErr ? `The backup could not record the Drive original (${refErr.message}).` : null].filter(Boolean).join(" ") || null
+  return { status: "done", store_file_id: w.fileId, sha256: finalSha, landed_in: await landedIn(folderId, ownerId), repointed: [], reason: note }
 }
 
 async function landedIn(folderId: string, ownerId: string): Promise<string | null> {

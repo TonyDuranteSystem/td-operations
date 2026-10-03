@@ -116,3 +116,18 @@ describe("ledger encoding", () => {
     expect(decodeItem([PLAN_MARK, "sha", JSON.stringify({ key: "x" })])).toBeNull()
   })
 })
+
+describe("report of a plan-driven build", () => {
+  it("shows where a plan row landed, never the raw plan text", async () => {
+    const { buildReport } = await import("@/lib/crm-store/drive-import")
+    const p = basePlan()
+    const item = {
+      id: "i1", run_id: "r", source: "drive" as const, source_id: "drive-file-1", drive_path: encodeItem(planSha(p), p.items[0]), name: p.items[0].name, mime_type: "application/pdf",
+      size_bytes: 1000, source_md5: md5("a"), status: "failed" as const, reason: "boom", store_file_id: null, sha256: null, landed_in: "Prowave / 1. Company", repointed: [],
+    }
+    const r = buildReport([item], [])
+    expect(r.failed[0].where).toBe("Prowave / 1. Company")
+    expect(r.folders[0].folder).toBe("(built from the approved plan)")
+    expect(JSON.stringify(r)).not.toContain('"key":"1"')
+  })
+})
