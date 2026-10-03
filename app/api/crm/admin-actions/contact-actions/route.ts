@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { stageCompletesService } from "@/lib/services/done-step"
 import { writeITINFields } from "@/lib/itin/write-itin-fields"
 import { upgradePortalTier } from "@/lib/portal/auto-create"
 import { createPortalNotification } from "@/lib/portal/notifications"
@@ -166,7 +167,8 @@ export async function POST(req: NextRequest) {
           : [historyEntry]
 
         // 5. Update delivery
-        const isCompleted = targetStage.stage_name === "Completed" || targetStage.stage_name === "TR Filed"
+        // The step's own "done" flag decides (N1a F1); same helper as advanceServiceDelivery, so the two paths can't drift.
+        const isCompleted = stageCompletesService(targetStage, delivery.service_type)
         // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error: uErr } = await supabaseAdmin
           .from("service_deliveries")
