@@ -6,7 +6,7 @@
  * (it simply becomes the winner's). Fails CLOSED: a read error refuses the merge.
  */
 export interface MergeGuardDeps {
-  personOwners: (contactIds: string[]) => Promise<{ contactIds: string[] } | { error: string }>
+  personOwners: (contactIds: string[]) => Promise<{ contactIds: string[]; studyOnlyContactIds?: string[] } | { error: string }>
 }
 
 export async function storeMergeBlocker(loserId: string, winnerId: string, deps?: MergeGuardDeps): Promise<string | null> {
@@ -15,6 +15,10 @@ export async function storeMergeBlocker(loserId: string, winnerId: string, deps?
   const r = await d.personOwners([loserId, winnerId])
   if ("error" in r) return "Could not check the two contacts' files in the new CRM storage — please try again."
   if (r.contactIds.includes(loserId) && r.contactIds.includes(winnerId)) {
+    const study = r.studyOnlyContactIds ?? []
+    if (study.includes(loserId) || study.includes(winnerId)) {
+      return "Both contacts have files in the new CRM storage, and at least one of them was created by a Google Drive study copy (it stays even after the copy is removed). Those two storages cannot be merged automatically yet — ask for them to be combined first, then merge the contacts."
+    }
     return "Both contacts already have their own files in the new CRM storage. Those two storages cannot be merged automatically yet — ask for them to be combined first, then merge the contacts."
   }
   return null
@@ -27,10 +31,11 @@ async function defaultDeps(): Promise<MergeGuardDeps | null> {
   return {
     personOwners: async (ids) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
-      const { data, error } = await (supabaseAdmin as any).from("store_owners").select("contact_id").in("contact_id", ids)
+      const { data, error } = await (supabaseAdmin as any).from("store_owners").select("contact_id, study_only").in("contact_id", ids)
       if (error && /does not exist|schema cache/i.test(error.message)) return { contactIds: [] }
       if (error) return { error: error.message as string }
-      return { contactIds: ((data ?? []) as { contact_id: string }[]).map((x) => x.contact_id) }
+      const rows = (data ?? []) as { contact_id: string; study_only: boolean | null }[]
+      return { contactIds: rows.map((x) => x.contact_id), studyOnlyContactIds: rows.filter((x) => x.study_only).map((x) => x.contact_id) }
     },
   }
 }

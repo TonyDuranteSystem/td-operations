@@ -99,8 +99,26 @@ export function pickPerson(p: { rowContactId: string | null; subfolder: string |
     const key = p.subfolder.trim().toLowerCase()
     const hit = p.members.filter((m) => m.name.trim().toLowerCase() === key)
     if (hit.length === 1) return hit[0].contactId
+    // a sub-folder named for someone who is NOT a member (a spouse, a partner …): never the sole member's — it goes to
+    // Correspondence marked "Needs review" instead of filing another person's passport under this one (council 2026-10-02)
+    if (key) return null
   }
   if (p.members.length === 1) return p.members[0].contactId
+  return null
+}
+
+/**
+ * Pure: why a company may NOT start an import now, in plain words (null = fine). Council 2026-10-02: a Drive folder shared with another
+ * company or held by a contact would copy THAT client's files here, and a company that already has live storage would get hidden copy
+ * files mixed into it.
+ */
+export function importStartBlocker(p: { companyName: string; otherAccountsOnSameFolder: number; contactsOnSameFolder: number; hasLiveStorage: boolean; mode: ImportMode }): string | null {
+  if (p.otherAccountsOnSameFolder > 0 || p.contactsOnSameFolder > 0) {
+    return `${p.companyName}'s Drive folder is also used by ${p.otherAccountsOnSameFolder + p.contactsOnSameFolder} other record(s) — copying it would bring another client's files in. Sort that out first.`
+  }
+  if (p.mode === "copy" && p.hasLiveStorage) {
+    return `${p.companyName} already has live files in the new storage — a study copy would mix hidden copies into them. Study copies are only for companies that are not in the new storage yet.`
+  }
   return null
 }
 
@@ -237,6 +255,16 @@ export async function startDriveImport(accountId: string, actorId: string | null
     ? "This company was already copied into the new storage — undo that copy first to copy it again."
     : "This company has already been moved to the new storage — undo that move first to run it again.")
   if (!acct.drive_folder_id) throw new Error("This company has no Drive folder.")
+  {
+    const folder = acct.drive_folder_id as string
+    const [{ count: otherAccounts }, { count: contactHolders }, { data: ownerRow }] = await Promise.all([
+      db().from("accounts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder).neq("id", accountId),
+      db().from("contacts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder),
+      db().from("store_owners").select("id, study_only").eq("account_id", accountId).eq("kind", "company").maybeSingle(),
+    ])
+    const why = importStartBlocker({ companyName: acct.company_name as string, otherAccountsOnSameFolder: otherAccounts ?? 0, contactsOnSameFolder: contactHolders ?? 0, hasLiveStorage: !!ownerRow && ownerRow.study_only === false, mode })
+    if (why) throw new Error(why)
+  }
   await assertMayImportFrom(acct.drive_folder_id as string, mode)
 
   const { data: run, error: rErr } = await db().from("store_import_runs")

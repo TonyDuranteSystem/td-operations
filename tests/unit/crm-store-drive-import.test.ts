@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
-import { kindForTopFolder, pickPerson, buildReport, skipReasonFor, cleanImportName, WAITING_RE, WAITING_SENTENCE_RE, type ImportItem } from "@/lib/crm-store/drive-import"
+import { kindForTopFolder, pickPerson, importStartBlocker, buildReport, skipReasonFor, cleanImportName, WAITING_RE, WAITING_SENTENCE_RE, type ImportItem } from "@/lib/crm-store/drive-import"
 
 const item = (p: Partial<ImportItem>): ImportItem => ({
   id: "i", run_id: "r", source: "drive", source_id: "d", drive_path: [], name: "f.pdf", mime_type: "application/pdf", size_bytes: 10,
@@ -27,6 +27,21 @@ describe("drive import — pure rules", () => {
     expect(pickPerson({ rowContactId: null, subfolder: null, members: [members[1]] })).toBe("b")
     // two members with the same name can't be told apart
     expect(pickPerson({ rowContactId: null, subfolder: "Anna Bianchi", members: [...members, { contactId: "c", name: "Anna Bianchi" }] })).toBeNull()
+  })
+  it("a sub-folder named for someone who is NOT a member never files their passport under the sole member", () => {
+    const sole = [{ contactId: "b", name: "Mario Rossi" }]
+    expect(pickPerson({ rowContactId: null, subfolder: "Maria Rossi (spouse)", members: sole })).toBeNull()
+    expect(pickPerson({ rowContactId: null, subfolder: "  ", members: sole })).toBe("b")   // a blank name names nobody
+    expect(pickPerson({ rowContactId: null, subfolder: "Mario Rossi", members: sole })).toBe("b")
+  })
+  it("refuses an import start for a shared Drive folder or a company that already has live storage", () => {
+    const ok = { companyName: "Acme LLC", otherAccountsOnSameFolder: 0, contactsOnSameFolder: 0, hasLiveStorage: false, mode: "copy" as const }
+    expect(importStartBlocker(ok)).toBeNull()
+    expect(importStartBlocker({ ...ok, otherAccountsOnSameFolder: 1 })).toMatch(/another client's files/)
+    expect(importStartBlocker({ ...ok, contactsOnSameFolder: 1 })).toMatch(/another client's files/)
+    expect(importStartBlocker({ ...ok, hasLiveStorage: true })).toMatch(/already has live files/)
+    // a real move onto live storage is the move's own business (it makes the storage the company's)
+    expect(importStartBlocker({ ...ok, hasLiveStorage: true, mode: "move" })).toBeNull()
   })
   it("never moves Google-native files or shortcuts", () => {
     expect(skipReasonFor("application/pdf")).toBeNull()
