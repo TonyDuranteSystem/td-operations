@@ -52,6 +52,7 @@ import { defaultTaskAssignee } from "@/lib/tasks/default-assignee"
 import { updateTasksBulk } from "@/lib/operations/task"
 import { setAccountRenewalDate, anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { logAction } from "@/lib/mcp/action-log"
+import { pickDoneStep, NO_DONE_STEP_MESSAGE, type StageLike } from "@/lib/services/done-step"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -680,16 +681,16 @@ export async function advanceStageIfAt(
 // ─── completeSD ────────────────────────────────────────
 
 /**
- * Advance a service delivery to its final stage ("Completed" for most
- * service types, "TR Filed" for Tax Return).  Resolves the final stage by
- * querying pipeline_stages — does NOT hardcode "Completed".
+ * Advance a service delivery to its marked "done" step (pipeline_stages.completes_service, N1a F1 — "Completed"
+ * for the renewals, "TR Filed" for tax returns). Refuses when the service has no done step (it is closed by its own
+ * action) instead of jumping to the highest-numbered step.
  */
 export async function completeSD(
   params: CompleteSDParams,
 ): Promise<AdvanceStageResult> {
   const { data: sd, error: sdErr } = await supabaseAdmin
     .from("service_deliveries")
-    .select("service_type, stage")
+    .select("service_type, stage, stage_order")
     .eq("id", params.delivery_id)
     .single()
 
@@ -701,10 +702,8 @@ export async function completeSD(
 
   const { data: stages, error: stErr } = await supabaseAdmin
     .from("pipeline_stages")
-    .select("stage_name, stage_order")
+    .select("*")
     .eq("service_type", sd.service_type)
-    .order("stage_order", { ascending: false })
-    .limit(1)
 
   if (stErr || !stages?.length) {
     throw new Error(
@@ -712,7 +711,41 @@ export async function completeSD(
     )
   }
 
-  const finalStage = stages[0].stage_name
+  // The service's marked "done" step (N1a F1) — never simply the highest-numbered step: for a tax return that is
+  // "Terminated - Non Payment". A service with no done step is closed by its own action, so refuse here.
+  const doneStep = pickDoneStep(stages as StageLike[])
+  if (!doneStep) {
+    return {
+      success: false,
+      error: NO_DONE_STEP_MESSAGE,
+      from_stage: sd.stage || "New",
+      to_stage: sd.stage || "New",
+      to_order: 0,
+      total_stages: stages.length,
+      is_completed: false,
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
+    }
+  }
+  // Never move a job BACKWARDS onto its done step (bug-hunter, N1a F1): a tax return parked on "Terminated - Non
+  // Payment" sits after "TR Filed" — "Mark complete" must not record it as filed.
+  const currentOrder = (sd as { stage_order?: number | null }).stage_order
+  if (typeof currentOrder === "number" && currentOrder > doneStep.stage_order) {
+    return {
+      success: false,
+      error: `This job is already past its "done" step ("${doneStep.stage_name}") — it can't be marked complete from here.`,
+      from_stage: sd.stage || "New",
+      to_stage: sd.stage || "New",
+      to_order: currentOrder,
+      total_stages: stages.length,
+      is_completed: false,
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
+    }
+  }
+  const finalStage = doneStep.stage_name
 
   return advanceServiceDelivery({
     delivery_id: params.delivery_id,

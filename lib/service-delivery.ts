@@ -29,6 +29,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { formationStateFromWizardData, resolveFormationStateCode } from "@/lib/formation/states"
 import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
+import { stageCompletesService } from "@/lib/services/done-step"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
@@ -337,19 +338,11 @@ export async function advanceServiceDelivery(
     }
   }
 
-  // "Closed" is the final stage for the recurring renewal flows (State Annual
-  // Report / State RA Renewal — verified the only two service types with a
-  // "Closed" stage). Treating it as completed here is what fires the +1-year
-  // renewal-date bump (sections 10/11), sets status=completed + end_date, and
-  // sends the "is complete!" portal notification. Scoped by service_type so no
-  // other flow that might name a stage "Closed" is affected.
-  const isClosedRenewalFinal =
-    targetStage.stage_name === "Closed" &&
-    (delivery.service_type === "State Annual Report" || delivery.service_type === "State RA Renewal")
-  const isCompleted =
-    targetStage.stage_name === "Completed" ||
-    targetStage.stage_name === "TR Filed" ||
-    isClosedRenewalFinal
+  // Does this move close the job? The step's own "done" flag decides (N1a F1 — pipeline_stages.completes_service,
+  // seeded to reproduce the old name rule: "Completed" / "TR Filed", or "Closed" for the two renewal services).
+  // Before that migration runs the helper falls back to the same name rule. Closing is what fires the renewal-date
+  // bump (sections 10/11), sets status=completed + end_date, and sends the "is complete!" portal notification.
+  const isCompleted = stageCompletesService(targetStage, delivery.service_type)
 
   // 4e. Closes only by filing (N1a C0, Antonio 2026-10-02) — a job whose service card says closes_only_by_filing
   // (RA renewal, annual report) can only be CLOSED by Mark Filed, which passes the filing receipt. Every other path
