@@ -194,7 +194,7 @@ _Regenerated 2026-10-03. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-29)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-01)_
-- [formation.md](formation.md) — Company Formation _(verified 2026-10-02)_
+- [formation.md](formation.md) — Company Formation _(verified 2026-10-03)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-09-29)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-01)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-01)_
@@ -221,5 +221,5 @@ _Regenerated 2026-10-03. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-09-30)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-09-30)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-03)_
 <!-- /GENERATED:deep-docs -->
