@@ -690,7 +690,7 @@ export async function completeSD(
 ): Promise<AdvanceStageResult> {
   const { data: sd, error: sdErr } = await supabaseAdmin
     .from("service_deliveries")
-    .select("service_type, stage")
+    .select("service_type, stage, stage_order")
     .eq("id", params.delivery_id)
     .single()
 
@@ -721,6 +721,23 @@ export async function completeSD(
       from_stage: sd.stage || "New",
       to_stage: sd.stage || "New",
       to_order: 0,
+      total_stages: stages.length,
+      is_completed: false,
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
+    }
+  }
+  // Never move a job BACKWARDS onto its done step (bug-hunter, N1a F1): a tax return parked on "Terminated - Non
+  // Payment" sits after "TR Filed" — "Mark complete" must not record it as filed.
+  const currentOrder = (sd as { stage_order?: number | null }).stage_order
+  if (typeof currentOrder === "number" && currentOrder > doneStep.stage_order) {
+    return {
+      success: false,
+      error: `This job is already past its "done" step ("${doneStep.stage_name}") — it can't be marked complete from here.`,
+      from_stage: sd.stage || "New",
+      to_stage: sd.stage || "New",
+      to_order: currentOrder,
       total_stages: stages.length,
       is_completed: false,
       created_tasks: [],
