@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { validatePlan, planSha, encodeItem, decodeItem, PLAN_MARK, PlanSchema, type Plan } from "@/lib/crm-store/plan-build"
+import { validatePlan, planSha, encodeItem, decodeItem, finalName, PLAN_MARK, PLAN_MAX_PART_BYTES, PlanSchema, type Plan } from "@/lib/crm-store/plan-build"
 
 const ACCT = "838f4db1-c11f-42d1-8040-a184ccf4c0ef"
 const OTHER = "248961be-39ae-43ac-98ca-50465b5d585f"
@@ -129,5 +129,40 @@ describe("report of a plan-driven build", () => {
     expect(r.failed[0].where).toBe("Prowave / 1. Company")
     expect(r.folders[0].folder).toBe("(built from the approved plan)")
     expect(JSON.stringify(r)).not.toContain('"key":"1"')
+  })
+})
+
+describe("person tax folder, filing status, size and final names", () => {
+  it("a person's tax papers go in the person's own tax folder (person_tax), not a company 'tax' folder", () => {
+    const p = basePlan()
+    p.items[4].folder = { kind: "person_tax", path: ["2024"] }
+    expect(validatePlan(p).errors).toEqual([])
+    const q = basePlan(); q.items[4].folder = { kind: "tax", path: ["2024"] }
+    expect(validatePlan(q).errors.join()).toMatch(/has no "tax" folder/)
+  })
+
+  it("carries an optional filing status without changing the fingerprint of plans that do not use it", () => {
+    const a = basePlan()
+    const b = basePlan(); b.items[0].filingStatus = "filed"
+    expect(planSha(b)).not.toBe(planSha(a))
+    expect(PlanSchema.safeParse({ ...a, items: [{ ...a.items[0], filingStatus: "wrong" }] }).success).toBe(false)
+  })
+
+  it("refuses a document (with its certificates) over the store's per-file limit", () => {
+    const p = basePlan()
+    p.items[1].source.size = PLAN_MAX_PART_BYTES
+    p.items[1].appended[0].size = 1000
+    expect(validatePlan(p).errors.join()).toMatch(/together are over/)
+    const q = basePlan(); q.items[0].source.size = PLAN_MAX_PART_BYTES + 1
+    expect(validatePlan(q).plan).toBeNull()
+  })
+
+  it("finalName adds the file's extension once, and a merged document is always a PDF", () => {
+    expect(finalName("Annual Report - X - 2025", "annual report.PDF", false)).toBe("Annual Report - X - 2025.pdf")
+    expect(finalName("Annual Report - X - 2025.pdf", "a.pdf", false)).toBe("Annual Report - X - 2025.pdf")
+    expect(finalName("Export - X", "statement.csv", false)).toBe("Export - X.csv")
+    expect(finalName("Operating Agreement - X", "scan.jpg", true)).toBe("Operating Agreement - X.pdf")
+    expect(finalName("No extension", "noext", false)).toBe("No extension")
+    expect(finalName("No drive name", undefined, false)).toBe("No drive name")
   })
 })

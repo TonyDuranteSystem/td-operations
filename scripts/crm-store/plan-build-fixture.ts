@@ -65,6 +65,7 @@ async function main() {
     brokenDoc: await pdf("ZZ Plan — a document whose certificate is broken (test)"),
     brokenCert: Buffer.from("this is not a pdf at all"),
     heldFile: await pdf("ZZ Plan — a file on hold (test)"),
+    nr: await pdf("ZZ Plan — personal Form 1040-NR of Paolo for 2024 (test only)", 2),
   }
   const id = {
     articles: await up(company, "Articles.pdf", bytes.articles),
@@ -76,6 +77,7 @@ async function main() {
     k1099: await up(y2024, "1099 Kraken.pdf", bytes.k1099),
     brokenDoc: await up(company, "Broken cert doc.pdf", bytes.brokenDoc), brokenCert: await up(corr, "Broken cert.pdf", bytes.brokenCert),
     heldFile: await up(banking, "Wise export.pdf", bytes.heldFile),
+    nr: await up(contacts, "1040-NR 2024.pdf", bytes.nr),
   }
   const account = await insert("accounts", { company_name: name, status: "Active", state_of_formation: "WY", drive_folder_id: top })
   const other = await insert("accounts", { company_name: otherName, status: "Active", state_of_formation: "WY", drive_folder_id: otherTop })
@@ -93,11 +95,12 @@ async function main() {
       { key: "articles", source: part(bytes.articles, id.articles), owner: C, folder: { kind: "company", path: [] }, name: "Articles of Organization - ZZ Plan Pilot - 2024", documentType: "articles_of_organization", year: 2024 },
       { key: "oa", source: part(bytes.oa, id.oa), appended: [part(bytes.oaCert, id.oaCert)], owner: C, folder: { kind: "company", path: [] }, name: "Operating Agreement - ZZ Plan Pilot - 2024", documentType: "operating_agreement", year: 2024 },
       { key: "dba", source: part(bytes.dba, id.dba), appended: [part(bytes.dbaCert, id.dbaCert)], owner: C, folder: { kind: "company", path: ["DBA"] }, name: "DBA Application Kaizen - ZZ Plan Pilot - 2025", documentType: null, year: 2025 },
-      { key: "return", source: part(bytes.ret, id.ret), appended: [part(bytes.retCert, id.retCert)], owner: C, folder: { kind: "tax", path: ["2024"] }, name: "Tax Return Form 1065 - ZZ Plan Pilot - 2024", documentType: "tax_return", year: 2024 },
+      { key: "return", source: part(bytes.ret, id.ret), appended: [part(bytes.retCert, id.retCert)], owner: C, folder: { kind: "tax", path: ["2024"] }, name: "Tax Return Form 1065 - ZZ Plan Pilot - 2024", documentType: "tax_return", year: 2024, filingStatus: "filed" },
       { key: "bank", source: part(bytes.bank, id.bank), owner: C, folder: { kind: "banking", path: [] }, name: "Bank Statement - ZZ Plan Pilot - 2024-01", documentType: "bank_statement", year: 2024 },
       { key: "passport", source: part(bytes.passport, id.passport), owner: P, folder: { kind: "personal", path: [] }, name: "Passport - ZZ Plan Paolo Neri", documentType: "passport", year: null },
       { key: "itin", source: part(bytes.itin, id.itin), owner: P, folder: { kind: "personal", path: [] }, name: "ITIN Notice - ZZ Plan Paolo Neri - 2026", documentType: "itin_letter", year: 2026 },
       { key: "letter", source: part(bytes.letter, id.letter), owner: P, folder: { kind: "personal", path: ["Correspondence"] }, name: "Capital One Letter - ZZ Plan Paolo Neri - 2026", documentType: null, year: 2026 },
+      { key: "nr", source: part(bytes.nr, id.nr), owner: P, folder: { kind: "person_tax", path: ["2024"] }, name: "Form 1040-NR - ZZ Plan Paolo Neri - 2024", documentType: "form_1040_nr", year: 2024, filingStatus: "draft" },
       { key: "k1099", source: part(bytes.k1099, id.k1099), crossCompany: true, owner: O, folder: { kind: "tax", path: ["2024"] }, name: "Form 1099 - ZZ Plan Other - 2024", documentType: null, year: 2024 },
       { key: "broken", source: part(bytes.brokenDoc, id.brokenDoc), appended: [part(bytes.brokenCert, id.brokenCert)], owner: C, folder: { kind: "company", path: [] }, name: "Broken Certificate Test - ZZ Plan Pilot", documentType: null, year: null },
     ],

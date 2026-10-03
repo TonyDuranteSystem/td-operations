@@ -30,7 +30,9 @@ const db = () => supabaseAdmin as any
 export const PLAN_MARK = "PLAN"
 export const PLAN_MAX_ITEMS = 300
 const COMPANY_FOLDER_KINDS = ["company", "tax", "banking", "correspondence"] as const
-const PERSON_FOLDER_KINDS = ["personal", "itin", "tax"] as const
+const PERSON_FOLDER_KINDS = ["personal", "itin", "person_tax"] as const
+/** one Drive file (or the sum of a merged document) may not pass the store's per-file limit */
+export const PLAN_MAX_PART_BYTES = 50 * 1024 * 1024
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9 .&'()-]{0,39}$/
 
 export class PlanError extends Error {
@@ -43,7 +45,7 @@ const PartSchema = z.object({
   driveFileId: z.string().min(8).max(120),
   /** what Drive says today — the build refuses a file whose bytes or size differ */
   md5: z.string().regex(/^[0-9a-f]{32}$/, "md5 must be 32 hex characters"),
-  size: z.number().int().positive(),
+  size: z.number().int().positive().max(PLAN_MAX_PART_BYTES),
 })
 const OwnerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("company"), accountId: z.string().uuid(), companyName: z.string().min(1).max(160) }),
@@ -58,13 +60,15 @@ export const PlanItemSchema = z.object({
   /** must be true when the owner is another company than the plan's, or a person who is not a member of it */
   crossCompany: z.boolean().default(false),
   folder: z.object({
-    kind: z.enum(["company", "tax", "banking", "correspondence", "personal", "itin"]),
+    kind: z.enum(["company", "tax", "banking", "correspondence", "personal", "itin", "person_tax"]),
     /** sub-folders below it: a year ("2024") inside Tax, "DBA" inside Company, "Correspondence" inside Personal */
     path: z.array(z.string().regex(SEGMENT, "folder names: letters, digits, spaces and . & ' ( ) -")).max(2).default([]),
   }),
   name: z.string().trim().min(1).max(160),
   documentType: z.string().regex(/^[a-z0-9_]{2,80}$/).nullable(),
   year: z.number().int().min(1990).max(2100).nullable(),
+  /** REQUIRED for tax-return types (draft_never_visible): "filed" freezes the file (an amended file is saved instead); "draft" can never be shown to the client */
+  filingStatus: z.enum(["none", "draft", "filed", "amended"]).optional(),
 })
 export const PlanSchema = z.object({
   company: z.string().min(1).max(160),
@@ -90,6 +94,13 @@ export function planSha(plan: Plan): string {
 }
 
 const nameKey = (n: string) => n.trim().normalize("NFC").toLowerCase()
+
+/** The name in the storage: the plan's name plus the file's extension (a merged document is always a PDF). */
+export function finalName(planName: string, driveName: string | undefined, merged: boolean): string {
+  const ext = merged ? ".pdf" : (driveName?.match(/\.[A-Za-z0-9]{1,8}$/)?.[0] ?? "").toLowerCase()
+  if (!ext || planName.toLowerCase().endsWith(ext)) return planName
+  return planName + ext
+}
 export const ownerRef = (o: PlanItem["owner"]) => (o.kind === "company" ? `company:${o.accountId}` : `person:${o.contactId}`)
 
 /** Pure checks of the plan itself. Returns the parsed plan, or every problem found. */
@@ -111,7 +122,7 @@ export function validatePlan(raw: unknown): { plan: Plan | null; errors: string[
     seenKeys.add(it.key)
     claim(it.source.driveFileId, `item ${it.key}`)
     for (const a of it.appended) claim(a.driveFileId, `certificate of item ${it.key}`)
-    if (it.appended.length && it.source.size > 0 && !it.name) errors.push(`Item ${it.key}: a merged document needs a name.`)
+    if (it.source.size + it.appended.reduce((n, a) => n + a.size, 0) > PLAN_MAX_PART_BYTES) errors.push(`Item ${it.key}: the document and its certificates together are over ${PLAN_MAX_PART_BYTES / 1048576} MB.`)
     const allowed: readonly string[] = it.owner.kind === "company" ? COMPANY_FOLDER_KINDS : PERSON_FOLDER_KINDS
     if (!allowed.includes(it.folder.kind)) errors.push(`Item ${it.key}: a ${it.owner.kind}'s storage has no "${it.folder.kind}" folder.`)
     if (/[\\/\u0000-\u001f]/.test(it.name)) errors.push(`Item ${it.key}: the name contains a slash or control character.`)
@@ -157,14 +168,15 @@ export function planBuildEnabled(): boolean {
   return process.env.STORE_PLAN_BUILD === "1"
 }
 
-interface TypeInfo { personal: boolean }
+interface TypeInfo { personal: boolean; draftNeverVisible: boolean }
 async function loadTypes(): Promise<Map<string, TypeInfo>> {
   const { data, error } = await db().from("catalog_entries").select("slug, metadata").eq("catalog_id", "storage_document_types").eq("status", "active")
   if (error) throw new Error(`Could not read the document types (${error.message}).`)
-  return new Map(((data ?? []) as { slug: string; metadata: { personal?: boolean } | null }[]).map((t) => [t.slug, { personal: t.metadata?.personal === true }]))
+  return new Map(((data ?? []) as { slug: string; metadata: { personal?: boolean; draft_never_visible?: boolean } | null }[])
+    .map((t) => [t.slug, { personal: t.metadata?.personal === true, draftNeverVisible: t.metadata?.draft_never_visible === true }]))
 }
 
-interface OwnerState { ref: string; label: string; ownerId: string | null; studyOnly: boolean | null; files: number; problems: string[] }
+interface OwnerState { ref: string; label: string; ownerId: string | null; studyOnly: boolean | null; files: number; folderKinds: Set<string> | null; problems: string[] }
 
 /** Everything that can be checked WITHOUT writing: the plan against Drive, the CRM and the storage. */
 export async function prepare(plan: Plan): Promise<PrepareResult> {
@@ -187,6 +199,8 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
   ])
   if ((others ?? 0) > 0 || (contactHolders ?? 0) > 0) errors.push("This company's Drive folder is shared with another account or a contact — it cannot be built from a plan.")
 
+  // a start whose request died before it finished is closed after 10 minutes (as the copy tool does)
+  await closeStaleScans(plan.accountId)
   // an earlier copy/move/build of this company that is still standing must be undone first
   const { data: runs } = await db().from("store_import_runs").select("id, mode, status").eq("account_id", plan.accountId).not("status", "in", "(rolled_back,failed)")
   if ((runs ?? []).length) errors.push("This company already has a copy or build in the new storage — remove (undo) it first, then build.")
@@ -206,7 +220,7 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
     const ref = ownerRef(o)
     const hit = owners.get(ref)
     if (hit) return hit
-    const st: OwnerState = { ref, label: o.kind === "company" ? o.companyName : o.fullName, ownerId: null, studyOnly: null, files: 0, problems: [] }
+    const st: OwnerState = { ref, label: o.kind === "company" ? o.companyName : o.fullName, ownerId: null, studyOnly: null, files: 0, folderKinds: null, problems: [] }
     if (o.kind === "company") {
       const { data: a } = await db().from("accounts").select("company_name").eq("id", o.accountId).maybeSingle()
       if (!a) st.problems.push(`the company ${o.accountId} does not exist`)
@@ -223,16 +237,24 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
       st.studyOnly = row.study_only as boolean
       const { count } = await db().from("store_files").select("id", { count: "exact", head: true }).eq("owner_id", row.id).eq("state", "live")
       st.files = count ?? 0
+      const { data: fk } = await db().from("store_folders").select("kind").eq("owner_id", row.id).is("trashed_at", null)
+      st.folderKinds = new Set(((fk ?? []) as { kind: string }[]).map((f) => f.kind))
       if (!st.studyOnly) {
         const { count: any } = await db().from("store_files").select("id", { count: "exact", head: true }).eq("owner_id", row.id)
         if ((any ?? 0) > 0) st.problems.push("its storage is already live (in use) — a plan can only build into a hidden or empty storage")
+        else warnings.push(`${st.label}: its storage exists, is live and EMPTY — it will be hidden first.`)
       }
-      if (st.files > 0) st.problems.push(`its storage already holds ${st.files} file(s) — remove the earlier copy (undo) first so the plan builds into an empty storage`)
+      // a company's storage holds only its own plan; a PERSON's hidden storage may already hold files of another company they belong to
+      if (o.kind === "company" && st.files > 0) st.problems.push(`its storage already holds ${st.files} file(s) — remove the earlier copy (undo) first so the plan builds into an empty storage`)
     }
     owners.set(ref, st)
     return st
   }
 
+  // the company's own storage is checked even when no item targets it
+  const own = await ownerState({ kind: "company", accountId: plan.accountId, companyName: plan.company })
+  for (const pr of own.problems) errors.push(`${own.label}: ${pr}`)
+  const finalNames = new Map<string, string>()
   const items: PlanReportItem[] = []
   for (const it of plan.items) {
     const problems: string[] = []
@@ -250,7 +272,14 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
       }
     }
     const st = await ownerState(it.owner)
-    for (const p of st.problems) problems.push(`${st.label}: ${p}`)
+    if (st.ownerId !== own.ownerId || it.owner.kind === "person") for (const p of st.problems) problems.push(`${st.label}: ${p}`)
+    // the folder must exist for that owner (an existing storage is read; a new one gets its template, checked in validatePlan)
+    if (st.folderKinds && !st.folderKinds.has(it.folder.kind)) problems.push(`${st.label}'s storage has no "${it.folder.kind}" folder`)
+    const drive0 = byId.get(it.source.driveFileId)
+    const shown = finalName(it.name, drive0?.name, it.appended.length > 0)
+    const nameSlot = `${ownerRef(it.owner)}|${it.folder.kind}|${it.folder.path.map(nameKey).join("/")}|${nameKey(shown)}`
+    if (finalNames.has(nameSlot)) problems.push(`the same final name "${shown}" is used by item ${finalNames.get(nameSlot)}`)
+    else finalNames.set(nameSlot, it.key)
     if (it.owner.kind === "person" && !members.has(it.owner.contactId) && !it.crossCompany) problems.push(`${it.owner.fullName} is not a member of ${plan.company} — mark it crossCompany on purpose`)
     // the document type: personal types only in a person's storage, and a person's storage takes only personal types
     if (it.documentType) {
@@ -258,9 +287,10 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
       if (!t) problems.push(`the document type "${it.documentType}" does not exist`)
       else if (t.personal && it.owner.kind !== "person") problems.push(`"${it.documentType}" is a personal type — it can only go in a person's storage`)
       else if (!t.personal && it.owner.kind === "person") problems.push(`"${it.documentType}" is not a personal type — a person's storage takes only personal documents`)
+      if (t?.draftNeverVisible && !it.filingStatus) problems.push(`"${it.documentType}" is a tax-return type — say whether it is filed, a draft or amended (filingStatus)`)
     } else if (it.owner.kind === "person") warnings.push(`Item ${it.key} (${it.name}) has no type and goes in a person's storage — check it by hand.`)
     items.push({
-      key: it.key, name: it.name, owner: st.label, folder: [it.folder.kind, ...it.folder.path].join(" / "), type: it.documentType, year: it.year,
+      key: it.key, name: shown, owner: st.label, folder: [it.folder.kind, ...it.folder.path].join(" / "), type: it.documentType, year: it.year,
       merged: it.appended.length, bytes: it.source.size + it.appended.reduce((n, a) => n + a.size, 0), problems,
     })
     for (const p of problems) errors.push(`Item ${it.key} (${it.name}): ${p}`)
@@ -272,6 +302,13 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
 
 // ─────────────────────────────────────────────────────────────── start
 
+/** A "scanning" run whose request died is closed as failed after 10 minutes (so the company is never locked for good). */
+async function closeStaleScans(accountId: string): Promise<void> {
+  const cutoff = new Date(Date.now() - 10 * 60_000).toISOString()
+  await db().from("store_import_runs").update({ status: "failed", finished_at: new Date().toISOString(), report: { error: "The start stopped before it finished." } })
+    .eq("account_id", accountId).eq("status", "scanning").lt("updated_at", cutoff)
+}
+
 /** A new storage must never be live: it is hidden at once (an EMPTY live storage is safe to hide; a used one is refused). */
 async function ensureHidden(ownerId: string): Promise<void> {
   const { data, error } = await db().from("store_owners").select("study_only").eq("id", ownerId).maybeSingle()
@@ -279,8 +316,12 @@ async function ensureHidden(ownerId: string): Promise<void> {
   if (data.study_only === true) return
   const { count } = await db().from("store_files").select("id", { count: "exact", head: true }).eq("owner_id", ownerId)
   if ((count ?? 0) > 0) throw new Error("A storage that is already in use cannot be built into by a plan.")
-  const { error: uErr } = await db().from("store_owners").update({ study_only: true }).eq("id", ownerId)
+  const { data: hid, error: uErr } = await db().from("store_owners").update({ study_only: true }).eq("id", ownerId).eq("study_only", false).select("id")
   if (uErr) throw new Error(`The storage could not be hidden (${uErr.message}).`)
+  if (!(hid ?? []).length) { // someone else changed it meanwhile: read again, it must be hidden now
+    const { data: again } = await db().from("store_owners").select("study_only").eq("id", ownerId).maybeSingle()
+    if (again?.study_only !== true) throw new Error("The storage could not be hidden.")
+  }
 }
 
 async function ensureOwnerHidden(o: PlanItem["owner"]): Promise<string> {
@@ -321,22 +362,28 @@ export async function startPlanBuild(raw: unknown, opts: { approvedSha: string; 
   const { data: run, error: rErr } = await db().from("store_import_runs")
     .insert({ account_id: plan.accountId, drive_folder_id: acct?.drive_folder_id, status: "scanning", started_by: opts.actorId, mode: "copy" }).select("id").single()
   if (rErr) throw new Error(/uq_store_import_runs_open|duplicate/i.test(rErr.message) ? "A build of this company is already running." : `The build could not start (${rErr.message}).`)
+  const made: string[] = []
   try {
     const refs = new Map<string, PlanItem["owner"]>()
     for (const it of plan.items) refs.set(ownerRef(it.owner), it.owner)
     // the company's own storage first (the run's owner), every owner hidden the moment it exists
     const companyOwner = await ensureOwnerHidden({ kind: "company", accountId: plan.accountId, companyName: plan.company })
-    for (const [ref, o] of Array.from(refs.entries())) if (ref !== `company:${plan.accountId}`) await ensureOwnerHidden(o)
+    made.push(companyOwner)
+    for (const [ref, o] of Array.from(refs.entries())) if (ref !== `company:${plan.accountId}`) made.push(await ensureOwnerHidden(o))
     const { scanDrive } = await import("./drive-import")
     const byId = new Map((await scanDrive(acct?.drive_folder_id as string)).map((s) => [s.source_id, s]))
     const rows = plan.items.map((it) => ({
       run_id: run.id, source: "drive", source_id: it.source.driveFileId, drive_path: encodeItem(sha, it), name: it.name,
       mime_type: byId.get(it.source.driveFileId)?.mime_type ?? null, size_bytes: it.source.size, source_md5: it.source.md5, status: "pending",
     }))
+    // the ledger name is the FINAL name in the storage (with the file's extension)
+    rows.forEach((r, i) => { r.name = finalName(plan.items[i].name, byId.get(plan.items[i].source.driveFileId)?.name, plan.items[i].appended.length > 0) })
     const { error } = await db().from("store_import_items").upsert(rows, { onConflict: "run_id,source,source_id", ignoreDuplicates: true })
     if (error) throw new Error(`The file list could not be saved (${error.message}).`)
-    await db().from("store_import_runs").update({ owner_id: companyOwner, status: "moving", updated_at: new Date().toISOString() }).eq("id", run.id)
+    const { error: mErr } = await db().from("store_import_runs").update({ owner_id: companyOwner, status: "moving", updated_at: new Date().toISOString() }).eq("id", run.id)
+    if (mErr) throw new Error(`The build could not be opened (${mErr.message}).`)
   } catch (e) {
+    for (const id of made) { try { await ensureHidden(id) } catch { /* an owner that cannot be hidden stays refused by every write */ } }
     await db().from("store_import_runs").update({ status: "failed", finished_at: new Date().toISOString(), report: { error: e instanceof Error ? e.message : String(e) } }).eq("id", run.id)
     throw e
   }
@@ -409,18 +456,21 @@ async function buildOne(it: ImportItem, runId: string, actorId: string | null): 
   const callerKey = `drive-import:${runId}:drive:${item.source.driveFileId}`
   const { storeNameKey } = await import("./rules")
   const { data: live } = await db().from("store_files").select("name, caller_key").eq("folder_id", folderId).eq("state", "live")
-  const clash = ((live ?? []) as { name: string; caller_key: string | null }[]).find((f) => f.caller_key !== callerKey && storeNameKey(f.name) === storeNameKey(item.name))
-  if (clash) return { status: "failed", reason: `A file named "${item.name}" is already in that folder.` }
+  const finalNm = it.name // the ledger holds the final name (plan name + extension)
+  const clash = ((live ?? []) as { name: string; caller_key: string | null }[]).find((f) => f.caller_key !== callerKey && storeNameKey(f.name) === storeNameKey(finalNm))
+  if (clash) return { status: "failed", reason: `A file named "${finalNm}" is already in that folder.` }
 
   const { saveBytesToStore } = await import("./writer")
   const w = await saveBytesToStore({
-    ownerId, folderId, name: item.name, mimeType: mime, bytes, callerKey, contentChanged: true,
+    ownerId, folderId, name: finalNm, mimeType: mime, bytes, callerKey, contentChanged: true,
     documentType: item.documentType, published: false, actor: actorId, ...(item.year ? { periodYear: item.year } : {}),
+    ...(item.filingStatus ? { filingStatus: item.filingStatus } : {}),
   })
+  if (w.status === "versioned") return { status: "failed", reason: "An earlier attempt saved different content under this plan item — undo the build and run it again.", store_file_id: w.fileId }
   if (w.status !== "created" && w.status !== "unchanged") return { status: "failed", reason: `The new storage refused it (${w.status}).`, store_file_id: w.fileId }
   // it must really be where the plan put it (a retry of an edited plan must not report success for a file elsewhere)
   const { data: placed } = await db().from("store_files").select("owner_id, folder_id, name").eq("id", w.fileId).maybeSingle()
-  if (!placed || placed.owner_id !== ownerId || placed.folder_id !== folderId || placed.name !== item.name) {
+  if (!placed || placed.owner_id !== ownerId || placed.folder_id !== folderId || placed.name !== finalNm) {
     return { status: "failed", reason: "The file is not where the plan puts it (an earlier attempt left it elsewhere) — undo the build and run it again.", store_file_id: w.fileId }
   }
   const finalSha = sha256Hex(bytes)
