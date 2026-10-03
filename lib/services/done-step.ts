@@ -50,4 +50,4 @@ export function pickDoneStep<T extends StageLike>(stages: T[]): T | null {
 }
 
 export const NO_DONE_STEP_MESSAGE =
-  "This service has no \"done\" step, so it can't be marked complete from here — it is closed by its own action in the workspace."
+  "This service has no \"done\" step set yet, so \"Mark complete\" can't close it. Move it through its own steps instead."

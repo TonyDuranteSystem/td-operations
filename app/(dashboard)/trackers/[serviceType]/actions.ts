@@ -119,10 +119,9 @@ export async function completeDelivery(deliveryId: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'Unauthorized' }
 
-  // Route through completeSD — it resolves the final stage from
-  // pipeline_stages (max stage_order per service_type) instead of
-  // hardcoding "Completed", so the previous raw-write fallback is
-  // unnecessary. P3.4 #4 cleanup.
+  // Route through completeSD — it moves the job to the service's marked
+  // "done" step (pipeline_stages.completes_service, N1a F1) and refuses
+  // when the service has none or the job is already past it.
   try {
     const result = await completeSD({
       delivery_id: deliveryId,
