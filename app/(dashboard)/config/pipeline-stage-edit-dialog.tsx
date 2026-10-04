@@ -10,6 +10,7 @@ import {
   stageHasAction,
   setStageAction,
 } from "@/lib/services/stage-actions"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, type WaitingOn } from "@/lib/services/step-settings"
 
 export interface PipelineStageRow {
   id: string
@@ -22,6 +23,11 @@ export interface PipelineStageRow {
   auto_advance: boolean | null
   requires_approval: boolean | null
   auto_actions: StageAction[] | null
+  waiting_on: string | null
+  completes_service: boolean | null
+  requires_document_to_advance: boolean | null
+  client_label: string | null
+  client_label_it: string | null
 }
 
 export function PipelineStageEditButton({ row }: { row: PipelineStageRow }) {
@@ -52,6 +58,11 @@ function PipelineStageEditDialog({
   const [slaDays, setSlaDays] = useState<string>(row.sla_days?.toString() ?? "")
   const [autoAdvance, setAutoAdvance] = useState(row.auto_advance ?? false)
   const [requiresApproval, setRequiresApproval] = useState(row.requires_approval ?? false)
+  const [waitingOn, setWaitingOn] = useState<string>(row.waiting_on ?? "")
+  const [isDone, setIsDone] = useState(row.completes_service === true)
+  const [needsDocument, setNeedsDocument] = useState(row.requires_document_to_advance === true)
+  const [clientLabel, setClientLabel] = useState(row.client_label ?? "")
+  const [clientLabelIt, setClientLabelIt] = useState(row.client_label_it ?? "")
   const [secondInstallmentTarget, setSecondInstallmentTarget] = useState(
     stageHasAction(row.auto_actions, SECOND_INSTALLMENT_TARGET_ACTION),
   )
@@ -77,6 +88,11 @@ function PipelineStageEditDialog({
         // A step that had no actions keeps "none" rather than becoming an empty list — the change history
         // (N1a P2) would otherwise record a change on every save.
         auto_actions: nextAutoActions.length === 0 && row.auto_actions == null ? null : nextAutoActions,
+        waiting_on: waitingOn || null,
+        completes_service: isDone,
+        requires_document_to_advance: needsDocument,
+        client_label: clientLabel.trim() || null,
+        client_label_it: clientLabelIt.trim() || null,
       })
       if (result.success) {
         toast.success("Pipeline stage saved")
@@ -135,7 +151,7 @@ function PipelineStageEditDialog({
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium text-zinc-700 mb-1">SLA Days</label>
+              <label className="block text-xs font-medium text-zinc-700 mb-1">Follow-up days</label>
               <input
                 type="number"
                 min="0"
@@ -159,6 +175,69 @@ function PipelineStageEditDialog({
                 onChange={e => setRequiresApproval(e.target.checked)}
               />
               Requires approval
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 mb-1">Client label (English)</label>
+              <input
+                type="text"
+                value={clientLabel}
+                onChange={e => setClientLabel(e.target.value)}
+                placeholder="What the client sees for this step"
+                className="w-full border rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 mb-1">Client label (Italian)</label>
+              <input
+                type="text"
+                value={clientLabelIt}
+                onChange={e => setClientLabelIt(e.target.value)}
+                className="w-full border rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <div className="border-t pt-4 space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-zinc-700 mb-1">Waiting on…</label>
+              <select
+                value={waitingOn}
+                onChange={e => setWaitingOn(e.target.value)}
+                className="w-full border rounded-md px-3 py-2 text-sm"
+              >
+                <option value="">Not set</option>
+                {WAITING_ON_VALUES.map(v => (
+                  <option key={v} value={v}>{WAITING_ON_LABELS[v as WaitingOn]}</option>
+                ))}
+              </select>
+              <span className="block text-xs text-zinc-500 mt-1">Who has to act next while a job sits on this step.</span>
+            </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-0.5" checked={isDone} onChange={e => setIsDone(e.target.checked)} />
+              <span>
+                <span className="font-medium">Done step</span>
+                <span className="block text-xs text-zinc-500">
+                  Reaching this step closes the job; Mark complete moves the job here. One per service — ticking it
+                  here unticks the service&apos;s current done step.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={needsDocument}
+                onChange={e => setNeedsDocument(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Needs a document before moving on</span>
+                <span className="block text-xs text-zinc-500">
+                  A job can&apos;t move forward past this step until a document is uploaded on it. Going back is never
+                  blocked.
+                </span>
+              </span>
             </label>
           </div>
 

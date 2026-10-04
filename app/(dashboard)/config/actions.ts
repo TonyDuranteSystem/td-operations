@@ -48,6 +48,11 @@ export async function savePipelineStage(
     auto_advance?: boolean | null
     requires_approval?: boolean | null
     auto_actions?: unknown[] | null
+    waiting_on?: string | null
+    completes_service?: boolean
+    requires_document_to_advance?: boolean
+    client_label?: string | null
+    client_label_it?: string | null
   },
 ): Promise<ActionResult> {
   return safeAction(async () => {

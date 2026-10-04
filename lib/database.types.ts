@@ -9863,10 +9863,12 @@ export type Database = {
           client_notification_message: string | null
           client_visible: boolean
           color: string | null
+          completes_service: boolean
           created_at: string | null
           icon: string | null
           id: string
           notify_client_email: boolean
+          requires_document_to_advance: boolean
           requires_approval: boolean | null
           service_type: string
           service_type_entry_id: string | null
@@ -9876,6 +9878,7 @@ export type Database = {
           stage_name: string
           stage_order: number
           stale_days: number | null
+          waiting_on: string | null
         }
         Insert: {
           auto_actions?: Json | null
@@ -9888,10 +9891,12 @@ export type Database = {
           client_notification_message?: string | null
           client_visible?: boolean
           color?: string | null
+          completes_service?: boolean
           created_at?: string | null
           icon?: string | null
           id?: string
           notify_client_email?: boolean
+          requires_document_to_advance?: boolean
           requires_approval?: boolean | null
           service_type: string
           service_type_entry_id?: string | null
@@ -9901,6 +9906,7 @@ export type Database = {
           stage_name: string
           stage_order: number
           stale_days?: number | null
+          waiting_on?: string | null
         }
         Update: {
           auto_actions?: Json | null
@@ -9913,10 +9919,12 @@ export type Database = {
           client_notification_message?: string | null
           client_visible?: boolean
           color?: string | null
+          completes_service?: boolean
           created_at?: string | null
           icon?: string | null
           id?: string
           notify_client_email?: boolean
+          requires_document_to_advance?: boolean
           requires_approval?: boolean | null
           service_type?: string
           service_type_entry_id?: string | null
@@ -9926,6 +9934,7 @@ export type Database = {
           stage_name?: string
           stage_order?: number
           stale_days?: number | null
+          waiting_on?: string | null
         }
         Relationships: [
           {

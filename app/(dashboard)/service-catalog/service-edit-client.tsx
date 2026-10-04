@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, ArrowUp, ArrowDown, Trash2, Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 import type { StageRow } from "@/lib/services/stages"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn } from "@/lib/services/step-settings"
 import {
   saveServiceComplete,
   type ServiceBasicsDraft,
@@ -269,7 +270,16 @@ export function ServiceEditClient({ mode, initial }: Props) {
     setStages((s) => [...s, { stage_order: s.length + 1, stage_name: "" }])
   }
   function updateStage(idx: number, p: Partial<StageRow>) {
-    setStages((s) => s.map((stage, i) => (i === idx ? { ...stage, ...p } : stage)))
+    // One done step per service: ticking a step as done unticks the one that had it.
+    setStages((s) =>
+      s.map((stage, i) =>
+        i === idx
+          ? { ...stage, ...p }
+          : p.completes_service === true && stage.completes_service
+            ? { ...stage, completes_service: false }
+            : stage,
+      ),
+    )
   }
   function moveStage(idx: number, dir: -1 | 1) {
     const j = idx + dir
@@ -767,7 +777,7 @@ function StageCard({
         />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="SLA days" hint="Optional. Days before this stage is flagged as overdue.">
+        <Field label="Follow-up days" hint="Optional. Days on this step before the job is flagged for follow-up.">
           <input
             type="number"
             value={stage.sla_days ?? ""}
@@ -799,6 +809,56 @@ function StageCard({
             />
             yes
           </label>
+        </Field>
+        <Field label="Waiting on…" hint="Who has to act next while a job sits on this step.">
+          <select
+            value={stage.waiting_on ?? ""}
+            onChange={(e) => onPatch({ waiting_on: isWaitingOn(e.target.value) ? e.target.value : null })}
+            className={inputClass}
+          >
+            <option value="">Not set</option>
+            {WAITING_ON_VALUES.map((v) => (
+              <option key={v} value={v}>
+                {WAITING_ON_LABELS[v]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Done step?" hint="Reaching it closes the job. One per service.">
+          <label className="inline-flex items-center gap-2 text-sm pt-1">
+            <input
+              type="checkbox"
+              checked={!!stage.completes_service}
+              onChange={(e) => onPatch({ completes_service: e.target.checked })}
+            />
+            yes
+          </label>
+        </Field>
+        <Field label="Needs a document before moving on?" hint="Going back is never blocked.">
+          <label className="inline-flex items-center gap-2 text-sm pt-1">
+            <input
+              type="checkbox"
+              checked={!!stage.requires_document_to_advance}
+              onChange={(e) => onPatch({ requires_document_to_advance: e.target.checked })}
+            />
+            yes
+          </label>
+        </Field>
+        <Field label="Client label (English)" hint="What the client sees for this step.">
+          <input
+            type="text"
+            value={stage.client_label ?? ""}
+            onChange={(e) => onPatch({ client_label: e.target.value })}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Client label (Italian)">
+          <input
+            type="text"
+            value={stage.client_label_it ?? ""}
+            onChange={(e) => onPatch({ client_label_it: e.target.value })}
+            className={inputClass}
+          />
         </Field>
       </div>
       <Field label="Internal description (admin)" hint="Optional. Shown to staff.">

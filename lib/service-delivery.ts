@@ -30,6 +30,7 @@ import { formationStateFromWizardData, resolveFormationStateCode } from "@/lib/f
 import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
+import { stageNotificationText } from "@/lib/services/step-settings"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
@@ -564,12 +565,12 @@ export async function advanceServiceDelivery(
           /* label localization is best-effort — keep the English/internal label */
         }
       }
-      const title = isCompleted
-        ? `${delivery.service_name || delivery.service_type} is complete!`
-        : `${delivery.service_name || delivery.service_type} update`
-      const body = isCompleted
-        ? "Your service has been completed."
-        : `Status updated to: ${stageLabel}`
+      const { title, body } = stageNotificationText({
+        serviceName: delivery.service_name || delivery.service_type,
+        isCompleted,
+        stageLabel,
+        hasClientLabel: !!stageForLabel.client_label,
+      })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,

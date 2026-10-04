@@ -87,4 +87,27 @@ describe('completeSD — Mark complete', () => {
     await completeSD({ delivery_id: 'sd-1' })
     expect(advance).toHaveBeenCalledWith(expect.objectContaining({ target_stage: 'Completed' }))
   })
+
+  it('refuses a job that is already complete (N1a C2) — closing it again would repeat the renewal roll and notice', async () => {
+    sdRow = { service_type: 'Tax Return', stage: 'TR Filed', stage_order: 80, status: 'completed' }
+    stageRows = TAX
+    const res = await completeSD({ delivery_id: 'sd-1' })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('This job is already complete.')
+    expect(advance).not.toHaveBeenCalled()
+  })
+
+  it('closes an OPEN job already sitting on its done step without re-creating that step\'s tasks', async () => {
+    sdRow = { service_type: 'Tax Return', stage: 'TR Filed', stage_order: 80, status: 'active' }
+    stageRows = TAX
+    await completeSD({ delivery_id: 'sd-1' })
+    expect(advance).toHaveBeenCalledWith(expect.objectContaining({ target_stage: 'TR Filed', skip_tasks: true }))
+  })
+
+  it('a normal forward close still creates the done step\'s tasks', async () => {
+    sdRow = { service_type: 'Tax Return', stage: 'Preparation', stage_order: 60, status: 'active' }
+    stageRows = TAX
+    await completeSD({ delivery_id: 'sd-1' })
+    expect(advance.mock.calls[0][0]).not.toHaveProperty('skip_tasks')
+  })
 })

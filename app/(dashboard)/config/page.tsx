@@ -12,6 +12,7 @@
 import Link from "next/link"
 import { Settings, FileText, Workflow, ListTodo, Megaphone } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { WAITING_ON_LABELS, type WaitingOn } from "@/lib/services/step-settings"
 import { SOPEditButton, type SOPRow } from "./sop-edit-dialog"
 import {
   PipelineStageEditButton,
@@ -60,7 +61,7 @@ async function fetchPipelineStages(): Promise<PipelineStageRow[]> {
   const { data } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, service_type, stage_order, stage_name, stage_description, client_description, sla_days, auto_advance, requires_approval, auto_actions",
+      "id, service_type, stage_order, stage_name, stage_description, client_description, sla_days, auto_advance, requires_approval, auto_actions, waiting_on, completes_service, requires_document_to_advance, client_label, client_label_it",
     )
     .order("service_type", { ascending: true })
     .order("stage_order", { ascending: true })
@@ -224,7 +225,7 @@ function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
               <tr>
                 <th className="px-4 py-2 font-medium w-12">#</th>
                 <th className="px-4 py-2 font-medium">Stage</th>
-                <th className="px-4 py-2 font-medium">SLA</th>
+                <th className="px-4 py-2 font-medium">Follow-up</th>
                 <th className="px-4 py-2 font-medium">Flags</th>
                 <th className="px-4 py-2 font-medium w-20"></th>
               </tr>
@@ -243,7 +244,12 @@ function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
                   <td className="px-4 py-2 text-xs text-zinc-600">
                     {s.auto_advance ? "Auto " : ""}
                     {s.requires_approval ? "Approval " : ""}
-                    {!s.auto_advance && !s.requires_approval ? "—" : ""}
+                    {s.completes_service ? "Done " : ""}
+                    {s.requires_document_to_advance ? "Needs document " : ""}
+                    {s.waiting_on ? `Waiting on: ${WAITING_ON_LABELS[s.waiting_on as WaitingOn] ?? s.waiting_on} ` : ""}
+                    {!s.auto_advance && !s.requires_approval && !s.completes_service && !s.requires_document_to_advance && !s.waiting_on
+                      ? "—"
+                      : ""}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <PipelineStageEditButton row={s} />
