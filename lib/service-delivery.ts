@@ -398,8 +398,9 @@ export async function advanceServiceDelivery(
       targetStage.stage_order,
     )
     if (crossed.length > 0) {
-      let exempt = false
-      if (delivery.account_id) {
+      // Test jobs are exempt, as in the rule: a job flagged as test (like 4d/4e) or a job of a test company.
+      let exempt = !!(delivery as { is_test?: boolean | null }).is_test
+      if (!exempt && delivery.account_id) {
         const { data: acct } = await supabaseAdmin
           .from("accounts")
           .select("is_test")

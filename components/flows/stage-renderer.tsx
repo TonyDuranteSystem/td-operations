@@ -27,6 +27,24 @@ interface StageRendererProps {
   account: WorkspaceAccount
   /** 2nd installment invoice — present only on Tax Return "Awaiting 2nd Payment". */
   secondInstallment?: WorkspaceInvoice | null
+  /**
+   * The step is marked "needs a document before moving on" (N1a C2). If its layout has no upload box, a standard one is
+   * added, so a job can never be stuck on a step that demands a document nobody can upload.
+   */
+  needsDocument?: boolean
+}
+
+/** The standard upload box added to a "needs a document" step whose layout has none (N1a C2). */
+function RequiredDocumentUpload({ serviceDelivery, account }: { serviceDelivery: WorkspaceServiceDelivery; account: WorkspaceAccount }) {
+  return (
+    <DocumentUpload
+      label="Upload the document for this step"
+      serviceDeliveryId={serviceDelivery.id}
+      flowStage={serviceDelivery.stage}
+      autoAdvance={false}
+      accountId={account.id}
+    />
+  )
 }
 
 /** Placeholder for component types built in later slices (S2–S4). */
@@ -143,14 +161,16 @@ function renderComponent(
  * layout (e.g. CMRA, not yet migrated), degrades to a default Overview panel so
  * the Workspace is never blank.
  */
-export function StageRenderer({ layout, serviceDelivery, account, secondInstallment }: StageRendererProps) {
+export function StageRenderer({ layout, serviceDelivery, account, secondInstallment, needsDocument }: StageRendererProps) {
   const components = layout?.components ?? []
+  const addUpload = !!needsDocument && !components.some(c => c.type === 'document_upload')
 
   if (components.length === 0) {
     return (
       <div className="space-y-4">
         {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
         <InfoPanel serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
+        {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
         <StubPanel type="(no stage_layout)" note="This stage has no layout configured yet." />
       </div>
     )
@@ -160,6 +180,7 @@ export function StageRenderer({ layout, serviceDelivery, account, secondInstallm
     <div className="space-y-4">
       {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
       {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment))}
+      {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
     </div>
   )
 }

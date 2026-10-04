@@ -34,10 +34,13 @@ interface InstallmentResult {
 }
 
 /**
- * The CMRA job that already covers `year`, if any: an open job (any year — the existing rule), or this year's job
- * ("CMRA {year} - …", the name the handler gives it) even if it is already closed. Cancelled jobs never count.
+ * The CMRA job that already covers `year`, if any: an open job (any year — the existing rule), or this year's job even
+ * if it is already closed — named "CMRA {year} - …" (the name this handler gives it) or CREATED in that year (activation
+ * names it "CMRA Mailing Address - …" and older backfills gave no name). Cancelled jobs never count.
  */
-export function cmraJobForYear<T extends { id: string; status: string | null; service_name: string | null }>(
+export function cmraJobForYear<
+  T extends { id: string; status: string | null; service_name: string | null; created_at?: string | null },
+>(
   jobs: T[],
   year: number,
 ): T | null {
@@ -45,6 +48,7 @@ export function cmraJobForYear<T extends { id: string; status: string | null; se
   return (
     live.find(j => (j.status ?? "").toLowerCase() === "active") ??
     live.find(j => (j.service_name ?? "").trim().toLowerCase().startsWith(`cmra ${year}`)) ??
+    live.find(j => !!j.created_at && j.created_at.slice(0, 4) === String(year)) ??
     null
   )
 }
@@ -193,7 +197,7 @@ export async function onFirstInstallmentPaid(
     // for an open job OR this year's job, open or closed (cmraJobForYear).
     const { data: cmraJobs, error: cmraErr } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id, status, service_name")
+      .select("id, status, service_name, created_at")
       .eq("account_id", accountId)
       .eq("service_type", "CMRA Mailing Address")
     if (cmraErr) throw new Error(`CMRA job check failed: ${cmraErr.message}`)

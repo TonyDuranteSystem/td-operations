@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, ArrowUp, ArrowDown, Trash2, Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 import type { StageRow } from "@/lib/services/stages"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn } from "@/lib/services/step-settings"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn, onlyChangedStepSettings } from "@/lib/services/step-settings"
 import {
   saveServiceComplete,
   type ServiceBasicsDraft,
@@ -255,6 +255,8 @@ export function ServiceEditClient({ mode, initial }: Props) {
   const [loadedStageIds] = useState<string[]>(() =>
     (initial?.stages ?? []).map(s => s.id).filter((id): id is string => !!id),
   )
+  /** The step settings as loaded — the save sends only the ones changed here (N1a C2, onlyChangedStepSettings). */
+  const [loadedStagesById] = useState(() => new Map((initial?.stages ?? []).filter(s => s.id).map(s => [s.id as string, s])))
   const [workflow, setWorkflow] = useState<WorkflowState>(() =>
     initial?.workflow ? workflowFromInitial(initial.workflow) : blankWorkflow(),
   )
@@ -309,7 +311,7 @@ export function ServiceEditClient({ mode, initial }: Props) {
       const workflowDraft = workflow.enabled ? workflowToDraft(workflow, publish) : null
       const draft: ServiceDraft = {
         basics,
-        stages,
+        stages: stages.map(s => onlyChangedStepSettings(s, s.id ? loadedStagesById.get(s.id) : undefined)),
         workflow: workflowDraft,
         // What this page saw at load. The server refuses the save if a stage
         // appeared since, rather than deleting work another tab just added.

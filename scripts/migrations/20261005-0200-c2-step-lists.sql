@@ -20,11 +20,16 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- Keep the steps' link to the DBA service card (every old DBA step carries the same one).
+CREATE TEMP TABLE c2_dba_link ON COMMIT DROP AS
+  SELECT max(service_type_entry_id::text)::uuid AS entry_id FROM public.pipeline_stages WHERE service_type = 'DBA';
+
 DELETE FROM public.pipeline_stages WHERE service_type = 'DBA';
 
 INSERT INTO public.pipeline_stages
-  (service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance)
-VALUES
+  (service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance,
+   service_type_entry_id)
+SELECT v.*, (SELECT entry_id FROM c2_dba_link) FROM (VALUES
   ('DBA', 1, 'Name Collection',          'The client gives the DBA name, what the business does and the date the name was first used.', 'client',  false, false, false),
   ('DBA', 2, 'Name Check & Approval',    'We check the name with the state and the client approves it.',                                  'us',      false, false, false),
   ('DBA', 3, 'Application Prepared',     'The trade-name application is prepared and sent to the client to sign.',                        'client',  false, false, false),
@@ -32,7 +37,8 @@ VALUES
   ('DBA', 5, 'Money Order',              'Buy the filing-fee money order payable to the Secretary of State and upload it.',                'us',      false, true,  false),
   ('DBA', 6, 'Mailed to State',          'Application and money order mailed to the Secretary of State (up to 15 business days).',          'outside', false, false, false),
   ('DBA', 7, 'Registered',               'The state registered the trade name. Upload the filed receipt.',                                 'none',    true,  false, false),
-  ('DBA', 8, 'Renewal Due',              'The registration lasts 10 years; renewal can be filed up to 6 months before it expires.',        'date',    false, false, false);
+  ('DBA', 8, 'Renewal Due',              'The registration lasts 10 years; renewal can be filed up to 6 months before it expires.',        'date',    false, false, false)
+) AS v(service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance);
 
 -- EIN ---------------------------------------------------------------------------------------------------------------
 DO $$ BEGIN
@@ -54,10 +60,13 @@ DO $$ BEGIN
   UPDATE public.pipeline_stages SET stage_order = 5 WHERE service_type = 'EIN' AND stage_name = 'Awaiting EIN';
   UPDATE public.pipeline_stages SET stage_order = 4 WHERE service_type = 'EIN' AND stage_name = 'SS-4 Submitted';
 
-  INSERT INTO public.pipeline_stages (service_type, stage_order, stage_name, stage_description, waiting_on, auto_advance, client_label, client_label_it)
-  VALUES
+  INSERT INTO public.pipeline_stages
+    (service_type, stage_order, stage_name, stage_description, waiting_on, auto_advance, client_label, client_label_it, service_type_entry_id)
+  SELECT v.*, (SELECT max(service_type_entry_id::text)::uuid FROM public.pipeline_stages WHERE service_type = 'EIN')
+  FROM (VALUES
     ('EIN', 2, 'SS-4 Prepared', 'SS-4 prepared and sent to the client to sign. Move on by hand once signed.', 'client', false, 'Sign your SS-4', 'Firma il modulo SS-4'),
-    ('EIN', 3, 'SS-4 Signed',   'The client signed the SS-4.',                                                'us',     false, 'SS-4 signed',    'SS-4 firmato');
+    ('EIN', 3, 'SS-4 Signed',   'The client signed the SS-4.',                                                'us',     false, 'SS-4 signed',    'SS-4 firmato')
+  ) AS v(service_type, stage_order, stage_name, stage_description, waiting_on, auto_advance, client_label, client_label_it);
 
   -- Completed (imported) EIN jobs: keep the step NAME, re-sync the step NUMBER to the new list.
   UPDATE public.service_deliveries sd

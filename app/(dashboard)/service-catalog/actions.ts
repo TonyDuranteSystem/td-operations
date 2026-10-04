@@ -17,6 +17,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
+import { stepSettingsProblems } from "@/lib/services/step-settings"
 import {
   getStagesForService,
   replaceStagesForService,
@@ -294,6 +295,13 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
           `steps and every live client are stored under, and moving them is not yet safe to ` +
           `interrupt. Nothing has been changed.`,
       }
+    }
+
+    // N1a C2: refuse bad step settings BEFORE the service details are written, so "Nothing has been changed" is true.
+    // The step save checks again against the stored values (a field this draft did not carry keeps its stored value).
+    if (row.pipeline) {
+      const problems = stepSettingsProblems(row.pipeline, draft.stages)
+      if (problems.length > 0) return { ok: false, error: `${problems.join(" ")} Nothing has been changed.` }
     }
 
     if (basics.id) {

@@ -5,6 +5,7 @@ import {
   documentMissingMessage,
   documentStepsCrossed,
   isWaitingOn,
+  onlyChangedStepSettings,
   stageNotificationText,
   stepSettingsProblems,
 } from "@/lib/services/step-settings"
@@ -111,5 +112,28 @@ describe("documentStepsCrossed — same range as the database rule", () => {
     expect(documentMissingMessage(["Money Order"])).toBe(
       'A document must be uploaded on "Money Order" before this job can move on.',
     )
+  })
+})
+
+describe("onlyChangedStepSettings — a screen left open can't undo someone else's change", () => {
+  const loaded = { waiting_on: "us", completes_service: true, requires_document_to_advance: false, client_label: "Old", client_label_it: null }
+  it("drops every setting the person did not touch", () => {
+    const out = onlyChangedStepSettings({ stage_name: "X", ...loaded }, loaded)
+    expect(out).toEqual({ stage_name: "X" })
+  })
+  it("keeps the ones they changed", () => {
+    const out = onlyChangedStepSettings({ stage_name: "X", ...loaded, completes_service: false, client_label: "New" }, loaded)
+    expect(out).toEqual({ stage_name: "X", completes_service: false, client_label: "New" })
+  })
+  it("treats blank vs unset text and false vs unset flags as no change", () => {
+    const out = onlyChangedStepSettings(
+      { stage_name: "X", ...loaded, client_label_it: "  ", requires_document_to_advance: null },
+      loaded,
+    )
+    expect(out).toEqual({ stage_name: "X" })
+  })
+  it("a step added on this screen sends everything", () => {
+    const fresh = { stage_name: "New step", waiting_on: "client" }
+    expect(onlyChangedStepSettings(fresh, undefined)).toEqual(fresh)
   })
 })

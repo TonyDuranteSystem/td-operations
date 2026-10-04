@@ -76,6 +76,8 @@ DECLARE
   v_missing text;
 BEGIN
   IF NEW.stage IS NOT DISTINCT FROM OLD.stage THEN RETURN NEW; END IF;
+  -- Test jobs are exempt, like the suite and renewal-close rules (job flagged as test) — and jobs of a test company.
+  IF COALESCE(NEW.is_test, false) THEN RETURN NEW; END IF;
   IF EXISTS (SELECT 1 FROM public.accounts a WHERE a.id = NEW.account_id AND a.is_test) THEN RETURN NEW; END IF;
 
   SELECT stage_order INTO v_from FROM public.pipeline_stages WHERE service_type = NEW.service_type AND stage_name = OLD.stage;

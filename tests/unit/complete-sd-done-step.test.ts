@@ -110,4 +110,13 @@ describe('completeSD — Mark complete', () => {
     await completeSD({ delivery_id: 'sd-1' })
     expect(advance.mock.calls[0][0]).not.toHaveProperty('skip_tasks')
   })
+
+  it('refuses a cancelled job — reopen it first', async () => {
+    sdRow = { service_type: 'Tax Return', stage: 'Preparation', stage_order: 60, status: 'cancelled' }
+    stageRows = TAX
+    const res = await completeSD({ delivery_id: 'sd-1' })
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/cancelled/)
+    expect(advance).not.toHaveBeenCalled()
+  })
 })

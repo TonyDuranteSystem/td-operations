@@ -72,7 +72,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       : Promise.resolve({ data: null }),
     supabaseAdmin
       .from('pipeline_stages')
-      .select('stage_name, stage_order, icon, client_label, stage_layout')
+      .select('stage_name, stage_order, icon, client_label, stage_layout, requires_document_to_advance')
       .eq('service_type', sd.service_type)
       .order('stage_order', { ascending: true }),
   ])
@@ -85,6 +85,7 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
     icon: string | null
     client_label: string | null
     stage_layout: unknown
+    requires_document_to_advance?: boolean | null
   }>
 
   // Match the current stage by NAME (SD.stage_order is often NULL/stale).
@@ -345,7 +346,13 @@ export default async function FlowWorkspacePage({ params }: { params: { id: stri
       )}
 
       {/* Stage content from stage_layout */}
-      <StageRenderer layout={layout} serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
+      <StageRenderer
+        layout={layout}
+        serviceDelivery={serviceDelivery}
+        account={account}
+        secondInstallment={secondInstallment}
+        needsDocument={currentStageRow?.requires_document_to_advance === true}
+      />
 
       {/* Go Back — every stage except the first */}
       {previousStageRow && (

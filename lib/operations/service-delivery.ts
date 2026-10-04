@@ -701,16 +701,21 @@ export async function completeSD(
   }
 
   // A closed job is not closed again (N1a C2): re-running the close would repeat what closing does — the renewal-date
-  // roll, the client's completion notice. Reopen it first if it really needs to go through again.
-  if ((sd as { status?: string | null }).status === "completed") {
+  // roll, the client's completion notice. A cancelled job is not completed either. Reopen it first if it really needs
+  // to go through again.
+  const sdStatus = ((sd as { status?: string | null }).status ?? "").trim().toLowerCase()
+  if (sdStatus === "completed" || sdStatus === "cancelled" || sdStatus === "canceled") {
     return {
       success: false,
-      error: "This job is already complete.",
+      error:
+        sdStatus === "completed"
+          ? "This job is already complete."
+          : "This job was cancelled — reopen it before marking it complete.",
       from_stage: sd.stage || "New",
       to_stage: sd.stage || "New",
       to_order: (sd as { stage_order?: number | null }).stage_order ?? 0,
       total_stages: 0,
-      is_completed: true,
+      is_completed: sdStatus === "completed",
       created_tasks: [],
       failed_tasks: [],
       auto_triggers: [],

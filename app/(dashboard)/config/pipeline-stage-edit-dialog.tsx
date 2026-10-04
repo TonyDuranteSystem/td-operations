@@ -10,7 +10,7 @@ import {
   stageHasAction,
   setStageAction,
 } from "@/lib/services/stage-actions"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, type WaitingOn } from "@/lib/services/step-settings"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, onlyChangedStepSettings, type WaitingOn } from "@/lib/services/step-settings"
 
 export interface PipelineStageRow {
   id: string
@@ -88,11 +88,18 @@ function PipelineStageEditDialog({
         // A step that had no actions keeps "none" rather than becoming an empty list — the change history
         // (N1a P2) would otherwise record a change on every save.
         auto_actions: nextAutoActions.length === 0 && row.auto_actions == null ? null : nextAutoActions,
-        waiting_on: waitingOn || null,
-        completes_service: isDone,
-        requires_document_to_advance: needsDocument,
-        client_label: clientLabel.trim() || null,
-        client_label_it: clientLabelIt.trim() || null,
+        // Only the step settings changed in this dialog are sent (N1a C2): a dialog opened before someone else's
+        // change must not put the old label / done tick back.
+        ...onlyChangedStepSettings(
+          {
+            waiting_on: waitingOn || null,
+            completes_service: isDone,
+            requires_document_to_advance: needsDocument,
+            client_label: clientLabel.trim() || null,
+            client_label_it: clientLabelIt.trim() || null,
+          },
+          row,
+        ),
       })
       if (result.success) {
         toast.success("Pipeline stage saved")

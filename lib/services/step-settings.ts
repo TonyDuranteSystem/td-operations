@@ -99,3 +99,34 @@ export function documentStepsCrossed(
 export function documentMissingMessage(stepNames: string[]): string {
   return `A document must be uploaded on "${stepNames.join(", ")}" before this job can move on.`
 }
+
+/** The N1a C2 step settings an editor can change. */
+export const STEP_SETTING_FIELDS = [
+  "waiting_on",
+  "completes_service",
+  "requires_document_to_advance",
+  "client_label",
+  "client_label_it",
+] as const
+
+/**
+ * Leave out (undefined) every C2 setting the person did not change since the screen loaded, so the save keeps the
+ * stored value. Without this a screen left open would write back the OLD label / done tick / "waiting on" over a change
+ * someone else made meanwhile. Text compares trimmed, empty ≡ unset; flags compare null ≡ false.
+ */
+export function onlyChangedStepSettings<T extends Partial<Record<(typeof STEP_SETTING_FIELDS)[number], unknown>>>(
+  current: T,
+  loaded: Partial<Record<(typeof STEP_SETTING_FIELDS)[number], unknown>> | undefined,
+): T {
+  if (!loaded) return current // a step added on this screen: send everything
+  const norm = (k: string, v: unknown): unknown => {
+    if (k === "completes_service" || k === "requires_document_to_advance") return v === true
+    if (typeof v === "string") return v.trim() === "" ? null : v.trim()
+    return v ?? null
+  }
+  const out = { ...current }
+  for (const k of STEP_SETTING_FIELDS) {
+    if (norm(k, current[k]) === norm(k, loaded[k])) delete (out as Record<string, unknown>)[k]
+  }
+  return out
+}
