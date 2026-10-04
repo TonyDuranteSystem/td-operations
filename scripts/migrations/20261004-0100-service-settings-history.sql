@@ -47,6 +47,9 @@ DECLARE
   v_old    jsonb := CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END;
   v_new    jsonb := CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END;
   v_row    jsonb := coalesce(v_new, v_old);
+  -- A NULL metadata column arrives as JSON null (not SQL NULL) — treat anything that isn't an object as {}.
+  v_om     jsonb := CASE WHEN jsonb_typeof(v_old -> 'metadata') = 'object' THEN v_old -> 'metadata' ELSE '{}'::jsonb END;
+  v_nm     jsonb := CASE WHEN jsonb_typeof(v_new -> 'metadata') = 'object' THEN v_new -> 'metadata' ELSE '{}'::jsonb END;
   v_fields text[];
   v_actor  text;
   v_key    text;
@@ -60,9 +63,8 @@ BEGIN
            AND (v_new -> k) IS DISTINCT FROM (v_old -> k)
         UNION ALL
         SELECT 'metadata.' || mk
-          FROM jsonb_object_keys(coalesce(v_new -> 'metadata', '{}'::jsonb) || coalesce(v_old -> 'metadata', '{}'::jsonb)) AS mk
-         WHERE jsonb_typeof(coalesce(v_new -> 'metadata', v_old -> 'metadata')) = 'object'
-           AND (v_new -> 'metadata' -> mk) IS DISTINCT FROM (v_old -> 'metadata' -> mk)
+          FROM jsonb_object_keys(v_nm || v_om) AS mk
+         WHERE (v_nm -> mk) IS DISTINCT FROM (v_om -> mk)
       ) s;
 
       IF v_fields IS NULL THEN

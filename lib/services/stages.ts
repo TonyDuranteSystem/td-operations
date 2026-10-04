@@ -248,13 +248,17 @@ export async function replaceStagesForService(
 
   const { data: existingRaw, error: readErr } = await supabaseAdmin
     .from("pipeline_stages")
-    .select("id, stage_name, stage_order")
+    .select(
+      "id, stage_name, stage_order, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
+    )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
   if (readErr) {
     throw new Error(`replaceStagesForService(${serviceType}) read: ${readErr.message}`)
   }
-  const existing = (existingRaw ?? []) as Array<{ id: string; stage_name: string; stage_order: number }>
+  const existing = (existingRaw ?? []) as Array<
+    { id: string; stage_name: string; stage_order: number } & Record<string, unknown>
+  >
   const existingById = new Map(existing.map(r => [r.id, r]))
 
   // A submitted id that no longer exists was deleted by someone else; treat it
@@ -507,22 +511,29 @@ export async function replaceStagesForService(
 
   // 3. UPDATE survivors in place. ONLY editor-authored columns appear here —
   //    that is what makes the workspace and client labels untouchable by a Save.
+  //    A step whose fields did not change is NOT written (N1a P2): a single-step edit from /config must not re-save
+  //    the service's other steps — two admins saving different steps at once could otherwise put back a value the
+  //    other just changed, and every unchanged step would show up in the change history.
   for (let idx = 0; idx < submitted.length; idx++) {
     const s = submitted[idx]
     if (!s.id) continue
+    const patch: Record<string, unknown> = {
+      stage_order: plannedOrders[idx],
+      stage_name: s.stage_name,
+      stage_description: s.stage_description ?? null,
+      sla_days: s.sla_days ?? null,
+      auto_advance: s.auto_advance ?? false,
+      notify_client_email: s.notify_client_email ?? false,
+      client_description: s.client_description ?? null,
+      ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
+      auto_actions: (s.auto_actions ?? null) as Json,
+    }
+    // Park rows always need their real order written back.
+    const current = existingById.get(s.id)!
+    if (current.stage_order < PARK_FLOOR && !stepPatchChanges(current, patch)) continue
     const { error } = await supabaseAdmin
       .from("pipeline_stages")
-      .update({
-        stage_order: plannedOrders[idx],
-        stage_name: s.stage_name,
-        stage_description: s.stage_description ?? null,
-        sla_days: s.sla_days ?? null,
-        auto_advance: s.auto_advance ?? false,
-        notify_client_email: s.notify_client_email ?? false,
-        client_description: s.client_description ?? null,
-        ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
-        auto_actions: (s.auto_actions ?? null) as Json,
-      })
+      .update(patch)
       .eq("id", s.id)
       .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
@@ -557,6 +568,21 @@ export async function replaceStagesForService(
   }
 
   return { warnings }
+}
+
+/**
+ * Does writing `patch` change the stored step? Booleans compare null ≡ false and actions compare null ≡ [] — the
+ * editor has always written false / the list for "unset", so treating those as changes would rewrite untouched steps.
+ */
+export function stepPatchChanges(current: Record<string, unknown>, patch: Record<string, unknown>): boolean {
+  const BOOLEAN_FIELDS = new Set(["auto_advance", "notify_client_email", "requires_approval"])
+  const norm = (k: string, v: unknown): unknown => {
+    if (BOOLEAN_FIELDS.has(k)) return v === true
+    if (k === "auto_actions") return Array.isArray(v) && v.length > 0 ? JSON.stringify(v) : null
+    if (typeof v === "string") return v === "" ? null : v
+    return v ?? null
+  }
+  return Object.keys(patch).some(k => norm(k, patch[k]) !== norm(k, current[k]))
 }
 
 /** The fields of ONE step that can be edited on its own (the /config step dialog). */

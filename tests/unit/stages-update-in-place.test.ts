@@ -184,13 +184,21 @@ describe("the columns the editor does not own are never touched", () => {
     }
   })
 
-  it("an unchanged stage is updated, never deleted", async () => {
+  it("an unchanged stage is neither rewritten nor deleted (N1a P2: only real changes are written)", async () => {
     existingRows = [realRow({ id: "a", stage_name: "Keep", stage_order: 1 })]
 
     await replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Keep" }])
 
-    expect(ops.some(o => o.kind === "update" && o.filters.some(f => f[0] === "id" && f[1] === "a"))).toBe(true)
+    expect(ops.some(o => o.kind === "update")).toBe(false)
     expect(ops.some(o => o.kind === "delete")).toBe(false)
+  })
+
+  it("an edited stage is updated in place, by id", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "Keep", stage_order: 1 })]
+
+    await replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Keep", sla_days: 3 }])
+
+    expect(ops.some(o => o.kind === "update" && o.filters.some(f => f[0] === "id" && f[1] === "a"))).toBe(true)
   })
 })
 
@@ -369,7 +377,7 @@ describe("N1a P2 — one recorded door for step changes", () => {
 
   it("an unnamed caller is still stamped, never blank", async () => {
     existingRows = [realRow({ id: "a", stage_name: "Keep", stage_order: 1 })]
-    await replaceStagesForService("Shipping", [{ id: "a", stage_order: 1, stage_name: "Keep" }])
+    await replaceStagesForService("Shipping", [{ id: "a", stage_order: 1, stage_name: "Keep", sla_days: 2 }])
     const upd = ops.find(o => o.kind === "update")!
     expect(upd.headers?.[SETTINGS_ACTOR_HEADER]).toBe("app:service-editor")
   })
@@ -380,7 +388,7 @@ describe("N1a P2 — one recorded door for step changes", () => {
       realRow({ id: "b", stage_name: "B", stage_order: 2 }),
     ]
     await replaceStagesForService("Shipping", [
-      { id: "a", stage_order: 1, stage_name: "A" },
+      { id: "a", stage_order: 1, stage_name: "A", sla_days: 6 },
       { id: "b", stage_order: 2, stage_name: "B", requires_approval: true },
       { stage_order: 3, stage_name: "C" },
     ])
@@ -403,9 +411,10 @@ describe("N1a P2 — one recorded door for step changes", () => {
     ]
     const res = await updateOneStage("b", { sla_days: 9 }, "antonio.durante@tonydurante.us")
     expect(res.serviceType).toBe("Shipping")
-    const updA = ops.find(o => o.kind === "update" && o.filters.some(f => f[1] === "a"))!
+    const updA = ops.find(o => o.kind === "update" && o.filters.some(f => f[1] === "a"))
     const updB = ops.find(o => o.kind === "update" && o.filters.some(f => f[1] === "b"))!
-    expect(updA.payload).toMatchObject({ stage_name: "Preparing", sla_days: 2 })
+    // The other step is not re-saved: an edit to step b can never put back an old value on step a.
+    expect(updA).toBeUndefined()
     expect(updB.payload).toMatchObject({ stage_name: "Shipped", sla_days: 9 })
     expect(updB.headers?.[SETTINGS_ACTOR_HEADER]).toBe("antonio.durante@tonydurante.us")
     expect(ops.some(o => o.kind === "delete" || o.kind === "insert")).toBe(false)
@@ -421,5 +430,21 @@ describe("N1a P2 — one recorded door for step changes", () => {
   it("a step deleted meanwhile is refused with a plain message", async () => {
     singleRow = null
     await expect(updateOneStage("gone", { sla_days: 1 }, "x@y.com")).rejects.toThrow(/no longer exists/)
+  })
+})
+
+describe("stepPatchChanges — only real changes are written", () => {
+  it("treats the editor's 'unset' spellings as no change", async () => {
+    const { stepPatchChanges } = await import("@/lib/services/stages")
+    expect(stepPatchChanges(
+      { stage_name: "A", auto_advance: null, requires_approval: null, auto_actions: null, stage_description: null },
+      { stage_name: "A", auto_advance: false, requires_approval: false, auto_actions: [], stage_description: "" },
+    )).toBe(false)
+  })
+  it("sees a real change", async () => {
+    const { stepPatchChanges } = await import("@/lib/services/stages")
+    expect(stepPatchChanges({ sla_days: 3 }, { sla_days: 4 })).toBe(true)
+    expect(stepPatchChanges({ auto_advance: false }, { auto_advance: true })).toBe(true)
+    expect(stepPatchChanges({ auto_actions: null }, { auto_actions: [{ type: "second_installment_target" }] })).toBe(true)
   })
 })

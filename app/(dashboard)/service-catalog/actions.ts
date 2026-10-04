@@ -272,6 +272,30 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       previousPipeline = (prior as { pipeline?: string | null } | null)?.pipeline ?? null
     }
 
+    // Checked BEFORE the service row is written (N1a P2): this refusal used to run after the update, so a refused
+    // rename had already re-pointed the service at a pipeline with no steps while saying "Nothing has been changed".
+    // The pipeline name IS the stages' key. If the admin renamed it, move the
+    // existing rows across FIRST — otherwise the write below looks for stages
+    // under a name that has none, inserts a fresh bare set, and orphans the
+    // real ones (with every in-flight service delivery still pointing at the
+    // old name).
+    // RENAMING THE PIPELINE IS NOT AVAILABLE, deliberately (2026-07-23). The
+    // pipeline name keys the stages AND every live delivery. Re-keying both is
+    // two writes with no transaction between them: if the second fails, the
+    // stages move and the deliveries do not, and the retry is a silent no-op
+    // because the catalog row already reads the new name — leaving every
+    // in-flight client on a pipeline that no longer exists, with a success
+    // message. Refusing until that is atomic.
+    if (basics.id && previousPipeline && row.pipeline && previousPipeline !== row.pipeline) {
+      return {
+        ok: false,
+        error:
+          `Renaming the pipeline is not available yet — "${previousPipeline}" is the key its ` +
+          `steps and every live client are stored under, and moving them is not yet safe to ` +
+          `interrupt. Nothing has been changed.`,
+      }
+    }
+
     if (basics.id) {
       // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
       const { data, error } = await (supabaseAdmin as any)
@@ -307,28 +331,6 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       }
       serviceId = data.id
       serviceSlug = data.slug
-    }
-
-    // The pipeline name IS the stages' key. If the admin renamed it, move the
-    // existing rows across FIRST — otherwise the write below looks for stages
-    // under a name that has none, inserts a fresh bare set, and orphans the
-    // real ones (with every in-flight service delivery still pointing at the
-    // old name).
-    // RENAMING THE PIPELINE IS NOT AVAILABLE, deliberately (2026-07-23). The
-    // pipeline name keys the stages AND every live delivery. Re-keying both is
-    // two writes with no transaction between them: if the second fails, the
-    // stages move and the deliveries do not, and the retry is a silent no-op
-    // because the catalog row already reads the new name — leaving every
-    // in-flight client on a pipeline that no longer exists, with a success
-    // message. Refusing until that is atomic.
-    if (basics.id && previousPipeline && row.pipeline && previousPipeline !== row.pipeline) {
-      return {
-        ok: false,
-        error:
-          `Renaming the pipeline is not available yet — "${previousPipeline}" is the key its ` +
-          `steps and every live client are stored under, and moving them is not yet safe to ` +
-          `interrupt. Nothing has been changed.`,
-      }
     }
 
     // Stages — only persist when a pipeline name is set. Services without a
