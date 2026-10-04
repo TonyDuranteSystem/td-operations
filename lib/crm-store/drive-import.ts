@@ -130,7 +130,9 @@ export const WAITING_SENTENCE_RE = /\s*The client could see (this|it) but .*?\((
 /** Pure: the parity report of a run from its ledger rows. Parity holds when nothing failed and nothing is pending. */
 export function buildReport(items: ImportItem[], stillReadDrive: string[]): ImportReport {
   const byFolder = new Map<string, ImportReport["folders"][number]>()
-  const top = (it: ImportItem) => (it.source === "storage" ? "(files kept outside Drive)" : it.drive_path[0] ?? "(top of the Drive folder)")
+  // a plan-driven build row carries its placement in drive_path (["PLAN", fingerprint, JSON]) — show where it landed instead
+  const isPlan = (it: ImportItem) => it.drive_path[0] === "PLAN"
+  const top = (it: ImportItem) => (it.source === "storage" ? "(files kept outside Drive)" : isPlan(it) ? "(built from the approved plan)" : it.drive_path[0] ?? "(top of the Drive folder)")
   for (const it of items) {
     const k = top(it)
     const f = byFolder.get(k) ?? { folder: k, driveFiles: 0, driveBytes: 0, moved: 0, movedBytes: 0, merged: 0, skipped: 0, failed: 0, checksumChecked: 0 }
@@ -142,7 +144,7 @@ export function buildReport(items: ImportItem[], stillReadDrive: string[]): Impo
     if (it.status === "failed") f.failed++
     byFolder.set(k, f)
   }
-  const where = (it: ImportItem) => (it.source === "storage" ? "outside Drive" : it.drive_path.join(" › ") || "top of the Drive folder")
+  const where = (it: ImportItem) => (it.source === "storage" ? "outside Drive" : isPlan(it) ? (it.landed_in ?? "the approved plan") : it.drive_path.join(" › ") || "top of the Drive folder")
   return {
     folders: Array.from(byFolder.values()).sort((a, b) => a.folder.localeCompare(b.folder)),
     rowsRepointed: items.reduce((n, it) => n + it.repointed.filter((r) => !r.created).length, 0),
@@ -192,9 +194,9 @@ const sha256Hex = (b: Buffer) => createHash("sha256").update(b).digest("hex")
 
 /** Throws unless a move may run here: the pilot environment, a live (not faked) Drive, and outside production
  *  only a folder in the TEST Shared Drive. */
-async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "move"): Promise<void> {
+export async function assertMayImportFrom(driveFolderId: string, mode: ImportMode = "move"): Promise<void> {
   const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed() && !(mode === "copy" && studyCopyAllowed())) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
+  if (!pilotEnvironmentAllowed() && !(mode === "copy" && (studyCopyAllowed() || planBuildAllowed()))) throw new Error(mode === "copy" ? "Copying clients from Google Drive is not switched on here." : "Moving a company to the new storage is not switched on here.")
   const { isProductionDatabase } = await import("@/lib/google-drive-guard")
   const { getDriveItemAnyDrive } = await import("@/lib/google-drive")
   const item = await getDriveItemAnyDrive(driveFolderId)
@@ -223,6 +225,11 @@ export async function markStudy(ownerId: string, mode: ImportMode, createdNow: b
  *  run in PRODUCTION for owners when STORE_STUDY_COPY=1 is set there. The real switch-over ("move") stays sandbox-only. */
 export function studyCopyAllowed(env: Record<string, string | undefined> = process.env): boolean {
   return env.STORE_STUDY_COPY === "1"
+}
+
+/** The plan-driven build (one hand-approved company at a time) has its OWN switch, default off. */
+export function planBuildAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return env.STORE_PLAN_BUILD === "1"
 }
 
 /** Is this run a study copy? (a missing run → false) */
@@ -299,9 +306,9 @@ export async function startDriveImport(accountId: string, actorId: string | null
   return runView(run.id as string)
 }
 
-type ScanItem = Pick<ImportItem, "source" | "source_id" | "drive_path" | "name" | "mime_type" | "size_bytes" | "source_md5">
+export type ScanItem = Pick<ImportItem, "source" | "source_id" | "drive_path" | "name" | "mime_type" | "size_bytes" | "source_md5">
 
-async function scanDrive(rootId: string): Promise<ScanItem[]> {
+export async function scanDrive(rootId: string): Promise<ScanItem[]> {
   const { listFolderPageAnyDrive } = await import("@/lib/google-drive")
   const out: ScanItem[] = []
   const walk = async (folderId: string, path: string[], depth: number) => {
@@ -367,6 +374,11 @@ export async function continueDriveImport(runId: string, actorId: string | null,
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run) throw new Error("Move not found.")
   if (run.status !== "moving") return runView(runId)
+  // a plan-driven build (hand-approved placement per file) is continued by its own module
+  {
+    const { isPlanRun, continuePlanBuild } = await import("./plan-build")
+    if (await isPlanRun(runId)) return continuePlanBuild(runId, actorId, budget)
+  }
   const ctx = await loadCtx(run.id, run.account_id, run.owner_id, actorId, run.mode === "copy" ? "copy" : "move")
   // CLAIM the next files (two tabs never move the same file; a claim of a request that died is taken over)
   const { data: claimed, error: pErr } = await db().rpc("store_import_claim", { p_run_id: runId, p_limit: budget.files })
@@ -717,13 +729,13 @@ async function repointRows(rows: DocRow[], fileId: string, ownerId: string | nul
   return out
 }
 
-async function pathOf(folderId: string, ownerId: string): Promise<string> {
+export async function pathOf(folderId: string, ownerId: string): Promise<string> {
   const { data } = await db().from("store_folders").select("id, name, parent_id").eq("owner_id", ownerId)
   const { pathOf: p } = await import("./extras")
   return p(folderId, new Map(((data ?? []) as { id: string; name: string; parent_id: string | null }[]).map((f) => [f.id, f])))
 }
 
-async function finishRun(runId: string, ownerId: string, mode: ImportMode = "move"): Promise<void> {
+export async function finishRun(runId: string, ownerId: string, mode: ImportMode = "move"): Promise<void> {
   const { data } = await db().from("store_import_items").select("*").eq("run_id", runId)
   const report = buildReport((data ?? []) as ImportItem[], STILL_READ_DRIVE)
   const status = report.parityOk ? "done" : "incomplete"
