@@ -71,3 +71,31 @@ export function stageNotificationText(p: {
   if (p.isCompleted) return { title: `${p.serviceName} is complete!`, body: "Your service has been completed." }
   return { title: `${p.serviceName} update`, body: `Status updated to: ${p.stageLabel}` }
 }
+
+interface DocStepLike {
+  stage_name: string
+  stage_order: number
+  requires_document_to_advance?: boolean | null
+}
+
+/**
+ * The "needs a document" steps a move from `fromOrder` to `toOrder` would leave or jump over — the same range the
+ * database rule checks (trg_delivery_document_to_advance: from <= step < to). Going back, staying, or an unknown
+ * step needs nothing.
+ */
+export function documentStepsCrossed(
+  steps: DocStepLike[],
+  fromOrder: number | null | undefined,
+  toOrder: number | null | undefined,
+): string[] {
+  if (typeof fromOrder !== "number" || typeof toOrder !== "number" || toOrder <= fromOrder) return []
+  return steps
+    .filter(s => s.requires_document_to_advance === true && s.stage_order >= fromOrder && s.stage_order < toOrder)
+    .sort((a, b) => a.stage_order - b.stage_order)
+    .map(s => s.stage_name)
+}
+
+/** The refusal shown when a step's document is missing — same words as the database rule. */
+export function documentMissingMessage(stepNames: string[]): string {
+  return `A document must be uploaded on "${stepNames.join(", ")}" before this job can move on.`
+}

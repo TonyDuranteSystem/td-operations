@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest"
-import { WAITING_ON_VALUES, WAITING_ON_LABELS, isWaitingOn, stageNotificationText, stepSettingsProblems } from "@/lib/services/step-settings"
+import {
+  WAITING_ON_VALUES,
+  WAITING_ON_LABELS,
+  documentMissingMessage,
+  documentStepsCrossed,
+  isWaitingOn,
+  stageNotificationText,
+  stepSettingsProblems,
+} from "@/lib/services/step-settings"
 
 describe("isWaitingOn", () => {
   it("accepts every allowed value", () => {
@@ -75,5 +83,33 @@ describe("stageNotificationText", () => {
     expect(
       stageNotificationText({ serviceName: "EIN", isCompleted: false, stageLabel: "Sign your SS-4", hasClientLabel: true }),
     ).toEqual({ title: "EIN update", body: "Status updated to: Sign your SS-4" })
+  })
+})
+
+describe("documentStepsCrossed — same range as the database rule", () => {
+  const steps = [
+    { stage_name: "Name Check", stage_order: 2 },
+    { stage_name: "Money Order", stage_order: 5, requires_document_to_advance: true },
+    { stage_name: "Mailed to State", stage_order: 6 },
+    { stage_name: "Registered", stage_order: 7 },
+  ]
+  it("leaving the step needs its document", () => {
+    expect(documentStepsCrossed(steps, 5, 6)).toEqual(["Money Order"])
+  })
+  it("jumping over the step needs its document", () => {
+    expect(documentStepsCrossed(steps, 2, 7)).toEqual(["Money Order"])
+  })
+  it("moving ONTO the step needs nothing yet", () => {
+    expect(documentStepsCrossed(steps, 2, 5)).toEqual([])
+  })
+  it("going back, staying, or an unknown step needs nothing", () => {
+    expect(documentStepsCrossed(steps, 7, 2)).toEqual([])
+    expect(documentStepsCrossed(steps, 5, 5)).toEqual([])
+    expect(documentStepsCrossed(steps, undefined, 7)).toEqual([])
+  })
+  it("the message names the step", () => {
+    expect(documentMissingMessage(["Money Order"])).toBe(
+      'A document must be uploaded on "Money Order" before this job can move on.',
+    )
   })
 })

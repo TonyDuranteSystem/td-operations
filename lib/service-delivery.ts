@@ -385,6 +385,54 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4f. Needs a document (N1a C2) — a forward move that leaves or jumps over a step marked "needs a document before
+  // moving on" is refused unless a document was uploaded on that step for this job. The database rule
+  // (trg_delivery_document_to_advance, migration 20261005-0100) enforces it for every writer; this gives the same
+  // refusal in plain words before anything is written. Test accounts are exempt, as in the rule.
+  {
+    const { documentStepsCrossed, documentMissingMessage } = await import("@/lib/services/step-settings")
+    const fromStep = stages.find(s => s.stage_name === delivery.stage)
+    const crossed = documentStepsCrossed(
+      stages as Array<{ stage_name: string; stage_order: number; requires_document_to_advance?: boolean | null }>,
+      fromStep?.stage_order,
+      targetStage.stage_order,
+    )
+    if (crossed.length > 0) {
+      let exempt = false
+      if (delivery.account_id) {
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("is_test")
+          .eq("id", delivery.account_id)
+          .maybeSingle()
+        exempt = !!(acct as { is_test?: boolean | null } | null)?.is_test
+      }
+      if (!exempt) {
+        const { data: docs } = await supabaseAdmin
+          .from("documents")
+          .select("flow_stage")
+          .eq("service_delivery_id", delivery.id)
+          .in("flow_stage", crossed)
+        const have = new Set(((docs ?? []) as Array<{ flow_stage: string | null }>).map(d => d.flow_stage))
+        const missing = crossed.filter(n => !have.has(n))
+        if (missing.length > 0) {
+          return {
+            success: false,
+            error: documentMissingMessage(missing),
+            from_stage: delivery.stage || "New",
+            to_stage: targetStage.stage_name,
+            to_order: targetStage.stage_order,
+            total_stages: stages.length,
+            is_completed: false,
+            created_tasks: [],
+            failed_tasks: [],
+            auto_triggers: [],
+          }
+        }
+      }
+    }
+  }
+
   // 5. Build stage history entry
   const historyEntry = {
     from_stage: delivery.stage || "New",
