@@ -193,7 +193,7 @@ _Regenerated 2026-10-04. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-09-29)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-01)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-04)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-04)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-04)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-01)_
