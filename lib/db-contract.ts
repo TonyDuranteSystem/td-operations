@@ -147,6 +147,9 @@ export const NOT_A_VOCABULARY = new Set([
   // Shape rule, not a vocabulary: an invoice belonging to an offer's payment plan must carry BOTH
   // the offer and the part number, or neither. A part number without an offer identifies nothing.
   "payments_tranche_pair_check",
+  // Not an app vocabulary (N1a P2): the service settings history is written ONLY by its own trigger, which stores the
+  // trigger's own operation name (TG_OP) — no code path writes this column.
+  "service_settings_history_op_check",
   // TEMPORARY (2026-09-25, WhatsApp replies from the CRM, stage 1): these two ARE value lists, not shape rules. They cannot be registered in
   // CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not contain them until Antonio runs migration
   // 20260925-2000-wabridge-outbox.sql in production, and registering them first makes "PRODUCTION accepts every value the code can write"
