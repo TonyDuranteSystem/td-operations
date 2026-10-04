@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isStaffUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { NextRequest, NextResponse } from 'next/server'
+import { SETTINGS_ACTOR_HEADER, settingsActor } from '@/lib/services/settings-actor'
 
 /**
  * Writes (create / edit / deactivate) are TD staff only. This route writes with
@@ -9,12 +10,15 @@ import { NextRequest, NextResponse } from 'next/server'
  * N1a P0 a portal client could rename, re-price or switch off a service. Clients
  * and partners are refused here; reads stay open to the dashboard and offer pages.
  */
-async function refuseNonStaff(): Promise<NextResponse | null> {
+async function refuseNonStaff(): Promise<{ denied: NextResponse | null; actor: string }> {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!isStaffUser(user)) return NextResponse.json({ error: 'Only TD staff can change the service catalog.' }, { status: 403 })
-  return null
+  if (!user) return { denied: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }), actor: '' }
+  if (!isStaffUser(user)) {
+    return { denied: NextResponse.json({ error: 'Only TD staff can change the service catalog.' }, { status: 403 }), actor: '' }
+  }
+  // Who made the change — stamped on the write for the service settings history (N1a P2).
+  return { denied: null, actor: settingsActor(user.email, 'app:service-catalog-api') }
 }
 
 /**
@@ -80,7 +84,7 @@ export async function GET(request: NextRequest) {
  * Create a new service. Body: { name, default_price?, default_currency? }
  */
 export async function POST(request: NextRequest) {
-  const denied = await refuseNonStaff()
+  const { denied, actor } = await refuseNonStaff()
   if (denied) return denied
 
   const body = await request.json()
@@ -107,6 +111,7 @@ export async function POST(request: NextRequest) {
       default_currency: default_currency || 'USD',
       sort_order: nextOrder,
     })
+    .setHeader(SETTINGS_ACTOR_HEADER, actor)
     .select('id, name, default_price, default_currency, sort_order')
     .single()
 
@@ -119,7 +124,7 @@ export async function POST(request: NextRequest) {
  * Update a service. Body: { id, name?, default_price?, default_currency?, active? }
  */
 export async function PUT(request: NextRequest) {
-  const denied = await refuseNonStaff()
+  const { denied, actor } = await refuseNonStaff()
   if (denied) return denied
 
   const body = await request.json()
@@ -137,6 +142,7 @@ export async function PUT(request: NextRequest) {
     .from('service_catalog')
     .update(cleanUpdates)
     .eq('id', id)
+    .setHeader(SETTINGS_ACTOR_HEADER, actor)
     .select('id, name, default_price, default_currency, sort_order, active')
     .single()
 
@@ -159,7 +165,7 @@ export async function PUT(request: NextRequest) {
  *   - reactivate is a 1-click PUT { id, active: true } via the same UI
  */
 export async function DELETE(request: NextRequest) {
-  const denied = await refuseNonStaff()
+  const { denied, actor } = await refuseNonStaff()
   if (denied) return denied
 
   const body = await request.json()
@@ -171,6 +177,7 @@ export async function DELETE(request: NextRequest) {
     .from('service_catalog')
     .update({ active: false, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .setHeader(SETTINGS_ACTOR_HEADER, actor)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })

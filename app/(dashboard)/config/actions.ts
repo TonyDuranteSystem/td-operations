@@ -4,9 +4,11 @@ import { revalidatePath } from "next/cache"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import {
   updateSOP,
-  updatePipelineStage,
   updateDevTask,
 } from "@/lib/operations/config"
+import { createClient } from "@/lib/supabase/server"
+import { isAdmin } from "@/lib/auth"
+import { updateOneStage, type StagePatch } from "@/lib/services/stages"
 
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s
@@ -49,14 +51,14 @@ export async function savePipelineStage(
   },
 ): Promise<ActionResult> {
   return safeAction(async () => {
-    const result = await updatePipelineStage({
-      id,
-      patch: patch as never,
-      actor: "dashboard:config",
-      summary: `Pipeline stage edited (${Object.keys(patch).join(", ")})`,
-    })
-    if (!result.success) throw new Error(result.error || `updatePipelineStage returned ${result.outcome}`)
+    // Same door as the service editor (N1a P2): admin-only, and saved through the guarded step save so a step clients
+    // are sitting on can't be renamed from here, and the change lands in the service settings history.
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user || !isAdmin(user)) throw new Error("Only an admin can change a service's steps.")
+    await updateOneStage(id, patch as StagePatch, user.email ?? "app:config")
     revalidatePath("/config")
+    revalidatePath("/service-catalog")
   })
 }
 

@@ -16,6 +16,7 @@ import { revalidatePath } from "next/cache"
 import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 import {
   getStagesForService,
   replaceStagesForService,
@@ -41,6 +42,8 @@ const WORKFLOWS_CATALOG_ID = "task_workflows"
 
 interface ActorOpts {
   userId: string | null
+  /** Staff email — stamped on every service-settings write for the database history (N1a P2). */
+  email?: string | null
 }
 
 export interface ServiceBasicsDraft {
@@ -160,7 +163,7 @@ async function requireAdmin(): Promise<ActorOpts> {
   if (!user || !isAdmin(user)) {
     throw new Error("Admin access required")
   }
-  return { userId: user.id }
+  return { userId: user.id, email: user.email ?? null }
 }
 
 function actor(opts: ActorOpts): Actor {
@@ -181,7 +184,8 @@ function slugify(input: string): string {
  */
 export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResult> {
   try {
-    await requireAdmin()
+    const admin = await requireAdmin()
+    const who = settingsActor(admin.email, "app:service-editor")
     const basics = draft.basics
 
     if (!basics.name?.trim()) {
@@ -213,9 +217,10 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       default_price: basics.default_price ?? null,
       default_currency: basics.default_currency || "USD",
       description: basics.description?.trim() || null,
-      active: true,
       updated_at: new Date().toISOString(),
     }
+    // A NEW service starts switched on. An EXISTING one keeps whatever it is — the editor has no on/off switch, so
+    // Save used to quietly switch a deactivated service back on (N1a P2 bug-hunter finding).
 
     // The pipeline name IS the key its stages are stored under, so two services
     // must never share one. Without this check, creating a service named after
@@ -273,6 +278,7 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
         .from("service_catalog")
         .update(row)
         .eq("id", basics.id)
+        .setHeader(SETTINGS_ACTOR_HEADER, who)
         .select("id, slug")
         .single()
       if (error || !data) {
@@ -292,7 +298,8 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
       // service_catalog is a view (INSTEAD OF trigger handles DML); cast past generated view types — see af35ebac
       const { data, error } = await (supabaseAdmin as any)
         .from("service_catalog")
-        .insert({ ...row, sort_order: sortOrder })
+        .insert({ ...row, active: true, sort_order: sortOrder })
+        .setHeader(SETTINGS_ACTOR_HEADER, who)
         .select("id, slug")
         .single()
       if (error || !data) {
@@ -329,6 +336,7 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     if (row.pipeline) {
       const res = await replaceStagesForService(row.pipeline, draft.stages, {
         knownStageIds: draft.knownStageIds,
+        actor: who,
       })
       stageWarnings.push(...res.warnings)
     }

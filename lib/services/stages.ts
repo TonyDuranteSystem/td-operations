@@ -12,6 +12,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { protectedStageReason } from "@/lib/services/protected-stage-names"
+import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 import type { Json } from "@/lib/database.types"
 import {
   type StageAction,
@@ -39,6 +40,11 @@ export interface StageRow {
   notify_client_email?: boolean
   client_description?: string | null
   /**
+   * The step needs staff approval before a job leaves it. Optional on purpose: a caller that never loaded it (an
+   * older editor draft) leaves the stored value untouched instead of resetting it to false.
+   */
+  requires_approval?: boolean | null
+  /**
    * Ordered list of per-stage action markers (jsonb array, mirrors auto_tasks).
    * Each entry is an object with a `type`. E.g. the 2nd-installment advance
    * target is marked with `{ type: "second_installment_target" }`.
@@ -50,7 +56,7 @@ export async function getStagesForService(serviceType: string): Promise<StageRow
   const { data, error } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, auto_actions",
+      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
@@ -227,8 +233,10 @@ export function planStageOrders(
 export async function replaceStagesForService(
   serviceType: string,
   stages: StageRow[],
-  opts: { knownStageIds?: string[] } = {},
+  opts: { knownStageIds?: string[]; actor?: string } = {},
 ): Promise<{ warnings: string[] }> {
+  // Every write below is stamped with its author for the database history (N1a P2, settings-actor.ts).
+  const actor = settingsActor(opts.actor, "app:service-editor")
   if (!serviceType || !serviceType.trim()) {
     throw new Error("replaceStagesForService: serviceType is required")
   }
@@ -461,6 +469,7 @@ export async function replaceStagesForService(
         .from("pipeline_stages")
         .update({ stage_order: base + idx })
         .eq("id", row.id)
+        .setHeader(SETTINGS_ACTOR_HEADER, actor)
       if (error) {
         throw new Error(`replaceStagesForService(${serviceType}) reorder: ${error.message}`)
       }
@@ -478,6 +487,7 @@ export async function replaceStagesForService(
       .from("pipeline_stages")
       .delete()
       .in("id", removed.map(r => r.id))
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) delete: ${error.message}`)
     }
@@ -510,9 +520,11 @@ export async function replaceStagesForService(
         auto_advance: s.auto_advance ?? false,
         notify_client_email: s.notify_client_email ?? false,
         client_description: s.client_description ?? null,
+        ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
         auto_actions: (s.auto_actions ?? null) as Json,
       })
       .eq("id", s.id)
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) update: ${error.message}`)
     }
@@ -531,16 +543,61 @@ export async function replaceStagesForService(
       auto_advance: s.auto_advance ?? false,
       notify_client_email: s.notify_client_email ?? false,
       client_description: s.client_description ?? null,
+      requires_approval: s.requires_approval ?? false,
       auto_actions: (s.auto_actions ?? null) as Json,
     }))
   if (insertRows.length > 0) {
-    const { error } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)
+    const { error } = await supabaseAdmin
+      .from("pipeline_stages")
+      .insert(insertRows)
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) insert: ${error.message}`)
     }
   }
 
   return { warnings }
+}
+
+/** The fields of ONE step that can be edited on its own (the /config step dialog). */
+export type StagePatch = Partial<
+  Pick<
+    StageRow,
+    | "stage_name"
+    | "stage_description"
+    | "client_description"
+    | "sla_days"
+    | "auto_advance"
+    | "requires_approval"
+    | "auto_actions"
+  >
+>
+
+/**
+ * Edit ONE step through the same guarded save as the service editor (N1a P2). The /config step dialog used to write
+ * the row directly — no protected-name check, no "clients are on this step" check, no button-target check. Now it
+ * loads the service's steps, changes the one, and saves the whole list through replaceStagesForService, so every
+ * guard and the history stamp apply. The other steps are passed back unchanged, so nothing else moves.
+ */
+export async function updateOneStage(
+  stageId: string,
+  patch: StagePatch,
+  actorLabel: string,
+): Promise<{ warnings: string[]; serviceType: string }> {
+  const { data: row, error } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("service_type")
+    .eq("id", stageId)
+    .maybeSingle()
+  if (error) throw new Error(`updateOneStage(${stageId}) read: ${error.message}`)
+  if (!row) throw new Error("This step no longer exists — reload the page. Nothing has been changed.")
+  const serviceType = (row as { service_type: string }).service_type
+
+  const stages = await getStagesForService(serviceType)
+  const knownStageIds = stages.map(s => s.id).filter(Boolean) as string[]
+  const next = stages.map(s => (s.id === stageId ? { ...s, ...patch } : s))
+  const { warnings } = await replaceStagesForService(serviceType, next, { knownStageIds, actor: actorLabel })
+  return { warnings, serviceType }
 }
 
 /** Record what a stage deletion destroyed — the row carries content the editor never showed. */

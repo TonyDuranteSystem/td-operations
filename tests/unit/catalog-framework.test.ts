@@ -85,6 +85,7 @@ function applyFilters(rows: Row[], filters: Filter[]): Row[] {
 interface QueryBuilder extends PromiseLike<{ data: Row[] | Row | null; error: { code?: string; message: string } | null }> {
   select: (cols?: string) => QueryBuilder
   eq: (col: string, val: unknown) => QueryBuilder
+  setHeader: (name: string, value: string) => QueryBuilder
   neq: (col: string, val: unknown) => QueryBuilder
   contains: (col: string, val: unknown[]) => QueryBuilder
   order: (col: string, opts?: { ascending?: boolean }) => QueryBuilder
@@ -97,6 +98,7 @@ interface QueryBuilder extends PromiseLike<{ data: Row[] | Row | null; error: { 
 
 function makeBuilder(table: keyof Store): QueryBuilder {
   const filters: Filter[] = []
+  const headers: Array<{ name: string; value: string }> = []
   let orderCol: string | null = null
   let orderAsc = true
   let terminal: "list" | "maybeSingle" | "single" = "list"
@@ -191,6 +193,10 @@ function makeBuilder(table: keyof Store): QueryBuilder {
     },
     neq(col, val) {
       filters.push({ op: "neq", col, val })
+      return builder
+    },
+    setHeader(name, value) {
+      headers.push({ name, value })
       return builder
     },
     contains(col, val) {

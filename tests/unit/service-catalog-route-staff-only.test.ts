@@ -34,7 +34,7 @@ const calls = [
 
 function chain(result: unknown) {
   const c: Record<string, unknown> = {}
-  for (const m of ["select", "order", "limit", "insert", "update", "eq"]) c[m] = () => c
+  for (const m of ["select", "order", "limit", "insert", "update", "eq", "setHeader"]) c[m] = () => c
   c.single = async () => result
   c.then = (r: (v: unknown) => unknown) => Promise.resolve(result).then(r)
   return c
