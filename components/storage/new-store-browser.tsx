@@ -186,7 +186,7 @@ interface TrashBatch {
   items: { kind: 'file' | 'folder'; id: string; name: string; mimeType: string | null }[]
 }
 interface DropItem { file: File; type: string; name: string; status: 'waiting' | 'uploading' | UploadOutcome; /** sub-folders of a dropped folder ("Taxes/2024") */ path: string[] }
-interface FilteredFile { id: string; name: string; folderId: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; needsReview: string | null; documentType: string | null }
+interface FilteredFile { id: string; name: string; folderId: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; needsReview: string | null; documentType: string | null; clientVisible: boolean }
 interface FileDetails {
   id: string; name: string; where: string; state: string; type: string | null; typeName: string | null; year: number | null; filingStatus: string | null
   createdAt: string; createdBy: string | null; updatedAt: string
@@ -325,8 +325,13 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [selectedFiles, setSelectedFiles] = useState<Map<string, File_ & { folderId: string | null }>>(new Map())
   const [bulkBusy, setBulkBusy] = useState(false)
   const [sortMode, setSortMode] = useState<SortMode>(() => { try { return (localStorage.getItem('store-sort') as SortMode) || 'name' } catch { return 'name' } })
-  const [filterKind, setFilterKind] = useState<'shown' | 'review' | 'untyped' | null>(null)
+  const [filterKind, setFilterKind] = useState<'all' | null>(null)
   const [filtered, setFiltered] = useState<FilteredFile[] | null>(null)
+  // the All files view: search text, one quick filter, sort and how many rows are drawn
+  const [allQ, setAllQ] = useState('')
+  const [allQuick, setAllQuick] = useState<'untyped' | 'review' | 'shown' | null>(null)
+  const [allSort, setAllSort] = useState<'name' | 'date' | 'folder'>('folder')
+  const [allMax, setAllMax] = useState(500)
   const [detailsFor, setDetailsFor] = useState<string | null>(null)
   // Escape closes the Trash window / the details panel (not while a question, picker or preview is open on top)
   useEffect(() => {
@@ -391,6 +396,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setSharedView(false)
     setSelectedFiles(new Map())
     setFilterKind(null)
+    setAllQ(''); setAllQuick(null); setAllMax(500)
     if (!fromPick) pickSeq.current++ // opening a storage by hand cancels a folder pick still loading
     ownerIdRef.current = oid
     focusRef.current = null
@@ -1004,7 +1010,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const sortFiles = (list: File_[]) => [...list].sort((a, b) => (sortMode === 'date' ? b.updatedAt.localeCompare(a.updatedAt) : a.name.localeCompare(b.name)))
 
   const filterSeq = useRef(0)
-  const openFilter = async (k: 'shown' | 'review' | 'untyped' | null) => {
+  const openFilter = async (k: 'all' | null) => {
     const my = ++filterSeq.current
     setFilterKind(k)
     setFiltered(null)
@@ -1861,6 +1867,89 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
 
   // ───────────────────────────────────────── page
 
+  const asStoreFile = (ff: FilteredFile): File_ => ({ id: ff.id, name: ff.name, documentType: ff.documentType, state: 'live', published: false, clientVisible: ff.clientVisible, staffOnly: false, personal: false, versions: 1, size: ff.size, mimeType: ff.mimeType, updatedAt: ff.updatedAt, listed: true, personName: null, inPersonStorage: false, docId: null })
+
+  /** All files: every file of this storage in one list, whichever folder it is in */
+  const allFilesView = (): React.ReactNode => {
+    const all = filtered ?? []
+    const internalOwner = ownerKind === 'business' || ownerKind === 'private'
+    const q = allQ.trim().toLowerCase()
+    const quick = (k: 'untyped' | 'review' | 'shown', f: FilteredFile) => (k === 'untyped' ? !f.documentType : k === 'review' ? !!f.needsReview : f.clientVisible)
+    const n = { untyped: all.filter((f) => quick('untyped', f)).length, review: all.filter((f) => quick('review', f)).length, shown: all.filter((f) => quick('shown', f)).length }
+    const list = all.filter((f) => (!allQuick || quick(allQuick, f)) && (!q || `${f.name} ${f.where} ${f.documentType ? typeNameOf(f.documentType) : ''}`.toLowerCase().includes(q)))
+      .sort(allSort === 'date' ? (a, b) => b.updatedAt.localeCompare(a.updatedAt) : allSort === 'folder' ? (a, b) => a.where.localeCompare(b.where) || a.name.localeCompare(b.name) : (a, b) => a.name.localeCompare(b.name))
+    const drawn = list.slice(0, allMax)
+    const qbtn = (k: 'untyped' | 'review' | 'shown', label: string, count: number) => (
+      <button key={k} type="button" aria-pressed={allQuick === k} onClick={() => setAllQuick(allQuick === k ? null : k)}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${allQuick === k ? 'border-blue-600 bg-blue-600 text-white' : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'}`}>
+        {label}<span className={`font-mono text-[11px] ${allQuick === k ? 'text-blue-100' : 'text-zinc-400'}`}>{count}</span>
+      </button>
+    )
+    return (
+      <div onClick={(e) => { e.stopPropagation(); if (menuFor) setMenuFor(null) }}>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <input value={allQ} onChange={(e) => { setAllQ(e.target.value); setAllMax(500) }} placeholder="Search by name, type or folder" aria-label="Search all files"
+            className="min-w-[14rem] flex-1 rounded-md border border-zinc-200 px-2.5 py-1.5 text-sm" />
+          {qbtn('untyped', 'Needs a type', n.untyped)}
+          {qbtn('review', 'Needs review', n.review)}
+          {!internalOwner && qbtn('shown', 'Shown to client', n.shown)}
+          <select aria-label="Sort all files" value={allSort} onChange={(e) => setAllSort(e.target.value as 'name' | 'date' | 'folder')} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1.5 text-xs">
+            <option value="folder">Sort: folder</option>
+            <option value="name">Sort: name</option>
+            <option value="date">Sort: newest first</option>
+          </select>
+        </div>
+        {filtered === null && <p className="py-3 text-sm text-zinc-500">Loading…</p>}
+        {filtered && (
+          <p className="mb-1 text-xs text-zinc-400">{list.length === all.length ? `${all.length} ${all.length === 1 ? 'file' : 'files'}` : `${list.length} of ${all.length} files`}</p>
+        )}
+        {filtered && list.length === 0 && <p className="py-3 text-sm text-zinc-500">{all.length === 0 ? 'This storage has no files yet.' : 'No file matches.'}</p>}
+        <ul className="divide-y divide-zinc-100" data-testid="all-files">
+          {drawn.map((ff) => {
+            const Icon = fileIcon(ff.mimeType)
+            const menuKey = `all:${ff.id}`
+            const showInFolder = () => { setMenuFor(null); void selectFolder(folderOwner.current.get(ff.folderId) ?? ownerId ?? '', ff.folderId); void openFilter(null) }
+            return (
+              <li key={ff.id} className="group relative flex items-start gap-2 py-2 text-sm hover:bg-zinc-50/70">
+                <Icon className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />
+                <div className="min-w-0 flex-1">
+                  <button type="button" onClick={() => setPreview(asStoreFile(ff))} className="block max-w-full break-words text-left font-medium text-zinc-800 hover:underline">{ff.name}</button>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                    <FastTooltip label="Show this file in its folder"><button type="button" onClick={showInFolder} className="hover:text-zinc-800 hover:underline">{ff.where || 'Top of the storage'}</button></FastTooltip>
+                    <span className={ff.documentType ? '' : 'font-medium text-amber-700'}>{ff.documentType ? typeNameOf(ff.documentType) : '● Needs a type'}</span>
+                    {ff.needsReview && <FastTooltip label={ff.needsReview}><span className="inline-flex items-center gap-1 font-medium text-red-600"><AlertTriangle className="h-3 w-3" />Needs review</span></FastTooltip>}
+                  </div>
+                </div>
+                {!internalOwner && (
+                  <FastTooltip label={ff.clientVisible ? 'The client can see this file' : "The client can't see this file — open its folder to change that"}>
+                    <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${ff.clientVisible ? 'bg-emerald-50 text-emerald-700' : 'text-zinc-400'}`} aria-label={ff.clientVisible ? 'Client can see' : "Client can't see"}>
+                      {ff.clientVisible ? <Eye className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                    </span>
+                  </FastTooltip>
+                )}
+                <FastTooltip label={`Added to the storage ${fmtDate(ff.updatedAt)}`}><span className="hidden w-14 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtShort(ff.updatedAt)}</span></FastTooltip>
+                <span className="hidden w-16 shrink-0 pt-1 text-right font-mono text-xs text-zinc-500 sm:block">{fmtSize(ff.size)}</span>
+                <div className="relative">
+                  <FastTooltip label="More"><button type="button" aria-label="More" onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === menuKey ? null : menuKey) }} className="rounded p-1 text-zinc-500 hover:bg-zinc-100"><MoreHorizontal className="h-4 w-4" /></button></FastTooltip>
+                  {menuFor === menuKey && (
+                    <div className="absolute right-0 z-20 mt-1 w-48 rounded-md border border-zinc-200 bg-white py-1 text-sm shadow-lg" onClick={(e) => e.stopPropagation()}>
+                      <MenuItem icon={Search} label="Preview" onClick={() => { setMenuFor(null); setPreview(asStoreFile(ff)) }} />
+                      <MenuItem icon={Layers} label="Details" onClick={() => { void openDetails(ff.id) }} />
+                      <MenuItem icon={FolderOpen} label="Show in folder" onClick={showInFolder} />
+                    </div>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+        {list.length > drawn.length && (
+          <button type="button" onClick={() => setAllMax(allMax + 500)} className="mt-2 rounded-md border border-zinc-200 px-3 py-1 text-xs hover:bg-zinc-50">Show {Math.min(500, list.length - drawn.length)} more ({list.length - drawn.length} not shown)</button>
+        )}
+      </div>
+    )
+  }
+
   // the right side shows the storage's top, or the ONE folder picked on the left / in the path
   const view: Contents | null = focus && loaded[focus] && !loaded[focus].folder?.trashed ? loaded[focus] : root
   const viewFolder = view?.folder ?? null
@@ -1872,9 +1961,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const selPerson = selected?.startsWith('person:') ? Object.values(loaded).flatMap((x) => x.people ?? []).find((p) => personKey(p.contactId) === selected) : null
   // folders across the top: one row of chips per level of the path. A person's folder reached through "2. Contacts" keeps the old tree.
   const chipsOn = !selPerson && !(pathKey && personOfFolder(pathKey))
-  const inFolderView = chipsOn && !!focus && viewFolder?.kind !== 'contacts' && !!loaded[focus]
+  const browseOn = filterKind !== 'all' // false while the All files view is showing
+  const inFolderView = browseOn && chipsOn && !!focus && viewFolder?.kind !== 'contacts' && !!loaded[focus]
   // with the chips showing the sub-folders, the list below shows only this folder's files
-  const showFolderRows = !inFolderView
+  const showFolderRows = browseOn && !inFolderView
   const totalFiles = (view?.files.length ?? 0) + (inFolderView ? 0 : topFolders.reduce((n, f) => n + (loaded[f.id]?.files.length ?? 0), 0))
   const chipLevels: Array<{ items: Fold[]; selectedId: string | null; trail: string[] }> = []
   if (chipsOn && root) {
@@ -1944,7 +2034,15 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             ))}
             {root.owner.closed && <Badge tone="gray">{root.owner.accountStatus ?? 'archived'}</Badge>}
           </nav>
-          {chipLevels.length > 0 && (
+          <div className="mb-3 flex items-center gap-2" role="tablist" aria-label="View" onClick={(e) => e.stopPropagation()}>
+            <div className="inline-flex overflow-hidden rounded-md border border-zinc-200 text-sm">
+              <button type="button" role="tab" aria-selected={browseOn} onClick={() => { if (!browseOn) void openFilter(null) }}
+                className={`px-3 py-1 ${browseOn ? 'bg-blue-600 text-white' : 'bg-white text-zinc-700 hover:bg-zinc-50'}`}>Browse folders</button>
+              <button type="button" role="tab" aria-selected={!browseOn} onClick={() => { if (browseOn) { setAllQ(''); setAllQuick(null); setAllMax(500); void openFilter('all') } }}
+                className={`px-3 py-1 ${!browseOn ? 'bg-blue-600 text-white' : 'bg-white text-zinc-700 hover:bg-zinc-50'}`}>All files</button>
+            </div>
+          </div>
+          {browseOn && chipLevels.length > 0 && (
             <div className="mb-3 space-y-1.5" data-testid="folder-bar" onClick={(e) => e.stopPropagation()}>
               {chipLevels.map((lv, li) => (
                 <div key={li} className="flex flex-wrap items-center gap-1.5">
@@ -1976,11 +2074,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 onBlur={() => { if (viewFolder) doRenameFolder(viewFolder, renaming.value) }}
                 className="min-w-0 rounded border border-blue-300 px-1.5 py-0.5 text-sm" />
             ) : (
-              <span className="font-medium text-zinc-800">{viewFolder?.name ?? root.folder.name}</span>
+              <span className="font-medium text-zinc-800">{browseOn ? (viewFolder?.name ?? root.folder.name) : 'All files'}</span>
             )}
-            {viewFolder?.kind !== 'contacts' && <span className="text-xs text-zinc-400">{topFolders.some((f) => expanded.has(f.id) && !loaded[f.id]) ? 'Loading…' : `${totalFiles} ${totalFiles === 1 ? 'file' : 'files'}`}</span>}
+            {browseOn && viewFolder?.kind !== 'contacts' && <span className="text-xs text-zinc-400">{topFolders.some((f) => expanded.has(f.id) && !loaded[f.id]) ? 'Loading…' : `${totalFiles} ${totalFiles === 1 ? 'file' : 'files'}`}</span>}
             <span className="flex-1" />
-            {viewFolder && viewFolder.kind !== 'contacts' && <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id) }}
+            {browseOn && viewFolder && viewFolder.kind !== 'contacts' && <button type="button" onClick={(e) => { e.stopPropagation(); startNewFolder(viewFolder.id) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <FolderPlus className="h-3.5 w-3.5" />New folder
             </button>}
@@ -2011,10 +2109,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 )}
               </div>
             )}
-            <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload(viewFolder && viewFolder.kind !== 'root' ? viewFolder.id : undefined) }}
+            {browseOn && <button type="button" onClick={(e) => { e.stopPropagation(); if (uploadOpen) setUploadOpen(false); else openUpload(viewFolder && viewFolder.kind !== 'root' ? viewFolder.id : undefined) }}
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <Upload className="h-3.5 w-3.5" />Upload
-            </button>
+            </button>}
             <FastTooltip label="Refresh">
               <button type="button" onClick={() => refreshAll()} aria-label="Refresh" className="rounded-md border border-zinc-200 p-1 hover:bg-zinc-50">
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -2025,16 +2123,12 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50">
               <Trash2 className="h-3.5 w-3.5" />Trash
             </button>
-            <select aria-label="Sort" value={sortMode} onChange={(e) => setSort(e.target.value as SortMode)} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs">
-              <option value="name">Sort: name</option>
-              <option value="date">Sort: newest first</option>
-            </select>
-            <select aria-label="Filter" value={filterKind ?? ''} onChange={(e) => { void openFilter((e.target.value || null) as typeof filterKind) }} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs">
-              <option value="">Filter: none</option>
-              {root.owner.kind !== 'business' && root.owner.kind !== 'private' && <option value="shown">Shown to client</option>}
-              <option value="review">Needs review</option>
-              <option value="untyped">Needs a type</option>
-            </select>
+            {browseOn && (
+              <select aria-label="Sort" value={sortMode} onChange={(e) => setSort(e.target.value as SortMode)} className="rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs">
+                <option value="name">Sort: name</option>
+                <option value="date">Sort: newest first</option>
+              </select>
+            )}
             {showFolderRows && topFolders.length > 0 && (
               <button type="button" className="text-xs text-blue-700 hover:underline"
                 onClick={() => {
@@ -2062,32 +2156,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </div>
           )}
 
-          {filterKind && (
-            <div className="mb-3 rounded-lg border border-zinc-200 p-2">
-              <div className="mb-1 flex items-center gap-2 text-sm">
-                <span className="font-medium">{filterKind === 'shown' ? 'Shown to client' : filterKind === 'review' ? 'Needs review' : 'Needs a type'}</span>
-                <span className="text-xs text-zinc-400">in all of {root.owner.label}&apos;s own folders{root.owner.kind === 'company' ? ' (its people’s own documents are in each person’s storage)' : ''}</span>
-                <span className="flex-1" />
-                <button type="button" onClick={() => { void openFilter(null) }} className="text-xs text-blue-700 hover:underline">Close filter</button>
-              </div>
-              {filtered === null && <p className="text-sm text-zinc-500">Loading…</p>}
-              {filtered && filtered.length === 0 && <p className="text-sm text-zinc-500">No files.</p>}
-              <ul className="divide-y divide-zinc-50">
-                {(filtered ?? []).map((ff) => {
-                  const Icon = fileIcon(ff.mimeType)
-                  return (
-                    <li key={ff.id} className="flex flex-wrap items-center gap-2 py-1 text-sm">
-                      <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
-                      <button type="button" className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => setPreview({ id: ff.id, name: ff.name, documentType: ff.documentType, state: 'live', published: false, clientVisible: false, staffOnly: false, personal: false, versions: 1, size: ff.size, mimeType: ff.mimeType, updatedAt: ff.updatedAt, listed: true, personName: null, inPersonStorage: false, docId: null })}>{ff.name}</button>
-                      {ff.needsReview && <Badge tone="red"><AlertTriangle className="h-3 w-3" />Needs review</Badge>}
-                      <button type="button" className="text-xs text-zinc-500 hover:underline" onClick={() => { void selectFolder(folderOwner.current.get(ff.folderId) ?? ownerId ?? '', ff.folderId); void openFilter(null) }}>{ff.where || 'top'}</button>
-                      <button type="button" className="text-xs text-blue-700 hover:underline" onClick={() => { void openDetails(ff.id) }}>Details</button>
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          )}
+          {!browseOn && allFilesView()}
 
           {uploadOpen && isInternalOwnerKind(ownerKind) && viewFolder && (
             <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm" onClick={(e) => e.stopPropagation()} data-testid="plain-upload-box">
@@ -2156,6 +2225,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             </div>
           )}
 
+          {browseOn && (<>
           <ul className={`divide-y divide-zinc-50 ${viewFolder && dropOn === `view:${viewFolder.id}` ? 'rounded ring-1 ring-blue-300' : ''}`}
             onDragOver={(e) => { if (viewFolder && isComputerDrag(e) && viewFolder.kind !== 'root' && viewFolder.kind !== 'contacts') { e.preventDefault(); setDropOn(`view:${viewFolder.id}`) } }}
             onDragLeave={() => setDropOn((d) => (d?.startsWith('view:') ? null : d))}
@@ -2176,6 +2246,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
             <p className="mt-2 text-xs text-amber-700">Some files here are not linked to the CRM documents list yet, so the client cannot see them.</p>
           )}
           <p className="mt-2 text-xs text-zinc-400">Drag a file onto a folder or a folder button above to move it. Drag files from your computer onto a folder to upload them — they arrive hidden from the client.</p>
+          </>)}
         </div>
       )}
       {preview && <PreviewPanel file={preview} onClose={() => setPreview(null)} />}
