@@ -9,8 +9,21 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
 
-export type FilterKind = "shown" | "review" | "untyped"
-export interface FilteredFile { id: string; name: string; folderId: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; needsReview: string | null; documentType: string | null }
+export type FilterKind = "all" | "shown" | "review" | "untyped"
+export const FILTER_KINDS: readonly FilterKind[] = ["all", "shown", "review", "untyped"]
+export interface FilteredFile { id: string; name: string; folderId: string; where: string; mimeType: string | null; size: number | null; updatedAt: string; needsReview: string | null; documentType: string | null; /** the client really sees it (the visible flag OR a client-facing workspace stage) */ clientVisible: boolean }
+
+interface FilterRow { id: string; name: string; folder_id: string; updated_at: string; needs_review_at: string | null; needs_review_reason: string | null; document_type: string | null; store_file_versions: { mime_type: string | null; size_bytes: number | null } | null }
+
+/** Pure: the answer for one filter — which rows stay, each with its folder path and whether the client sees it. */
+export function shapeFilteredFiles(rows: FilterRow[], folders: Map<string, { name: string; parent_id: string | null }>, shown: Set<string>, kind: FilterKind): FilteredFile[] {
+  const keep = kind === "shown" ? rows.filter((r) => shown.has(r.id)) : rows
+  return keep.map((r) => ({
+    id: r.id, name: r.name, folderId: r.folder_id, where: pathOf(r.folder_id, folders), mimeType: r.store_file_versions?.mime_type ?? null,
+    size: r.store_file_versions?.size_bytes ?? null, updatedAt: r.updated_at, needsReview: r.needs_review_at ? (r.needs_review_reason || "Needs review") : null, documentType: r.document_type,
+    clientVisible: shown.has(r.id),
+  })).sort((a, b) => a.where.localeCompare(b.where) || a.name.localeCompare(b.name))
+}
 
 /** Pure: a folder's path (names under the storage's top folder) from a map of the storage's folders. */
 export function pathOf(folderId: string, folders: Map<string, { name: string; parent_id: string | null }>): string {
@@ -30,7 +43,7 @@ export async function filterFiles(ownerId: string, kind: FilterKind): Promise<Fi
   const { data: fs, error: fErr } = await db().from("store_folders").select("id, name, parent_id").eq("owner_id", ownerId).is("trashed_at", null)
   if (fErr) throw new Error(`Could not read the folders (${fErr.message}).`)
   const folders = new Map(((fs ?? []) as { id: string; name: string; parent_id: string | null }[]).map((f) => [f.id, f]))
-  const rows: Array<{ id: string; name: string; folder_id: string; updated_at: string; needs_review_at: string | null; needs_review_reason: string | null; document_type: string | null; store_file_versions: { mime_type: string | null; size_bytes: number | null } | null }> = []
+  const rows: FilterRow[] = []
   for (let from = 0; ; from += 1000) {
     let q = db().from("store_files").select("id, name, folder_id, updated_at, needs_review_at, needs_review_reason, document_type, store_file_versions!store_files_current_version_fk(mime_type, size_bytes)")
       .eq("owner_id", ownerId).eq("state", "live")
@@ -41,17 +54,10 @@ export async function filterFiles(ownerId: string, kind: FilterKind): Promise<Fi
     rows.push(...(data ?? []))
     if ((data ?? []).length < 1000) break
   }
-  let keep = rows
-  if (kind === "shown") {
-    // what the client really sees (the visible flag OR a client-facing workspace stage)
-    const { clientVisibleFileIds } = await import("./client-visibility")
-    const shown = await clientVisibleFileIds(rows.map((r) => r.id))
-    keep = rows.filter((r) => shown.has(r.id))
-  }
-  return keep.map((r) => ({
-    id: r.id, name: r.name, folderId: r.folder_id, where: pathOf(r.folder_id, folders), mimeType: r.store_file_versions?.mime_type ?? null,
-    size: r.store_file_versions?.size_bytes ?? null, updatedAt: r.updated_at, needsReview: r.needs_review_at ? (r.needs_review_reason || "Needs review") : null, documentType: r.document_type,
-  })).sort((a, b) => a.where.localeCompare(b.where) || a.name.localeCompare(b.name))
+  // what the client really sees (the visible flag OR a client-facing workspace stage)
+  const { clientVisibleFileIds } = await import("./client-visibility")
+  const shown = await clientVisibleFileIds(rows.map((r) => r.id))
+  return shapeFilteredFiles(rows, folders, shown, kind)
 }
 
 export interface FileDetails {
