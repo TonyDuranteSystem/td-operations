@@ -1,7 +1,7 @@
 /**
  * P3.6 — lib/operations/config.ts unit tests
  *
- * Covers updateSOP / updatePipelineStage / updateDevTask: validation,
+ * Covers updateSOP / updateDevTask: validation,
  * happy path, optimistic lock (sop_runbooks + dev_tasks only — pipeline_stages
  * has no updated_at column), stale + not_found + db error, action_log shape,
  * and dev_task completed_at auto-stamp on status='done'.
@@ -144,34 +144,6 @@ describe("updateSOP", () => {
     const { updateSOP } = await import("@/lib/operations/config")
     const r = await updateSOP({ id: "missing", patch: { title: "x" } })
     expect(r.outcome).toBe("not_found")
-  })
-})
-
-// ─── updatePipelineStage ─────────────────────────────────
-
-describe("updatePipelineStage", () => {
-  it("does NOT stamp updated_at (pipeline_stages has no column)", async () => {
-    existingRow = { id: "stage-1" }
-    const { updatePipelineStage } = await import("@/lib/operations/config")
-    await updatePipelineStage({
-      id: "stage-1",
-      patch: { stage_name: "New Name", sla_days: 5 },
-    })
-    expect(updateCalls[0].table).toBe("pipeline_stages")
-    expect(updateCalls[0].patch).toMatchObject({ stage_name: "New Name", sla_days: 5 })
-    expect(updateCalls[0].patch.updated_at).toBeUndefined()
-  })
-
-  it("logs action_log with table_name=pipeline_stages", async () => {
-    existingRow = { id: "stage-1" }
-    const { updatePipelineStage } = await import("@/lib/operations/config")
-    await updatePipelineStage({
-      id: "stage-1",
-      patch: { stage_name: "New Name" },
-      actor: "dashboard:support",
-    })
-    expect(actionLogCalls[0].table_name).toBe("pipeline_stages")
-    expect(actionLogCalls[0].actor).toBe("dashboard:support")
   })
 })
 

@@ -74,7 +74,9 @@ function PipelineStageEditDialog({
         sla_days: slaNum,
         auto_advance: autoAdvance,
         requires_approval: requiresApproval,
-        auto_actions: nextAutoActions,
+        // A step that had no actions keeps "none" rather than becoming an empty list — the change history
+        // (N1a P2) would otherwise record a change on every save.
+        auto_actions: nextAutoActions.length === 0 && row.auto_actions == null ? null : nextAutoActions,
       })
       if (result.success) {
         toast.success("Pipeline stage saved")

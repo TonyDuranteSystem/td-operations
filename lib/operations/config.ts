@@ -1,16 +1,14 @@
 /**
  * P3.6 — Config table operation authority layer.
  *
- * Single-entry update path for the three config tables that were
+ * Single-entry update path for the config tables that were
  * previously edited exclusively via raw execute_sql:
  *   - sop_runbooks (17 rows, 53 raw writes/30d)
- *   - pipeline_stages (56 rows, 33 raw writes/30d)
  *   - dev_tasks (232 rows, 52 raw writes/30d)
+ * (pipeline_stages moved out in N1a P2 — see lib/services/stages.ts updateOneStage.)
  *
  * Every update goes through action_log with actor + summary + change
- * details. Optimistic-lock support on updated_at (sop_runbooks +
- * dev_tasks; pipeline_stages has no updated_at column so lock is
- * best-effort).
+ * details. Optimistic-lock support on updated_at.
  *
  * Why: the CRM /config editor (P3.6) needs a guarded surface that
  * matches the shape of the other lib/operations/ helpers
@@ -52,26 +50,8 @@ export async function updateSOP(params: UpdateSOPParams): Promise<ConfigUpdateRe
   })
 }
 
-// ─── updatePipelineStage ────────────────────────────────────
-
-type PipelineStageUpdate = Database["public"]["Tables"]["pipeline_stages"]["Update"]
-
-export interface UpdatePipelineStageParams {
-  id: string
-  patch: PipelineStageUpdate
-  actor?: string
-  summary?: string
-}
-
-export async function updatePipelineStage(
-  params: UpdatePipelineStageParams,
-): Promise<ConfigUpdateResult> {
-  return updateConfigRow(
-    "pipeline_stages",
-    { ...params, expected_updated_at: undefined },
-    { lockable: false, fallbackSummary: "Pipeline stage updated" },
-  )
-}
+// Pipeline stages are NOT edited here (N1a P2): every step change goes through the guarded
+// replaceStagesForService / updateOneStage in lib/services/stages.ts, which the database history records.
 
 // ─── updateDevTask ──────────────────────────────────────────
 

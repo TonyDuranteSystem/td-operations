@@ -12,6 +12,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { protectedStageReason } from "@/lib/services/protected-stage-names"
+import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 import type { Json } from "@/lib/database.types"
 import {
   type StageAction,
@@ -39,6 +40,11 @@ export interface StageRow {
   notify_client_email?: boolean
   client_description?: string | null
   /**
+   * The step needs staff approval before a job leaves it. Optional on purpose: a caller that never loaded it (an
+   * older editor draft) leaves the stored value untouched instead of resetting it to false.
+   */
+  requires_approval?: boolean | null
+  /**
    * Ordered list of per-stage action markers (jsonb array, mirrors auto_tasks).
    * Each entry is an object with a `type`. E.g. the 2nd-installment advance
    * target is marked with `{ type: "second_installment_target" }`.
@@ -50,7 +56,7 @@ export async function getStagesForService(serviceType: string): Promise<StageRow
   const { data, error } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, auto_actions",
+      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
@@ -227,8 +233,10 @@ export function planStageOrders(
 export async function replaceStagesForService(
   serviceType: string,
   stages: StageRow[],
-  opts: { knownStageIds?: string[] } = {},
+  opts: { knownStageIds?: string[]; actor?: string } = {},
 ): Promise<{ warnings: string[] }> {
+  // Every write below is stamped with its author for the database history (N1a P2, settings-actor.ts).
+  const actor = settingsActor(opts.actor, "app:service-editor")
   if (!serviceType || !serviceType.trim()) {
     throw new Error("replaceStagesForService: serviceType is required")
   }
@@ -240,13 +248,17 @@ export async function replaceStagesForService(
 
   const { data: existingRaw, error: readErr } = await supabaseAdmin
     .from("pipeline_stages")
-    .select("id, stage_name, stage_order")
+    .select(
+      "id, stage_name, stage_order, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
+    )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
   if (readErr) {
     throw new Error(`replaceStagesForService(${serviceType}) read: ${readErr.message}`)
   }
-  const existing = (existingRaw ?? []) as Array<{ id: string; stage_name: string; stage_order: number }>
+  const existing = (existingRaw ?? []) as Array<
+    { id: string; stage_name: string; stage_order: number } & Record<string, unknown>
+  >
   const existingById = new Map(existing.map(r => [r.id, r]))
 
   // A submitted id that no longer exists was deleted by someone else; treat it
@@ -447,13 +459,15 @@ export async function replaceStagesForService(
         `details, add a step at the end, or remove one. Nothing has been changed.`,
     )
   }
-  const needsOrderChange = submitted.some(s => !s.id) // only genuinely new rows
   // Debris from an interrupted save must be cleared even if nothing else moved.
   const hasParkDebris = existing.some(r => r.stage_order >= PARK_FLOOR)
 
-  // 1. PARK — only when an order actually moves, and always above everything
-  //    currently in the table so a half-finished park can never block a retry.
-  if ((needsOrderChange || hasParkDebris) && existing.length > 0) {
+  // 1. PARK — only to clear debris from an interrupted save, and always above everything currently in the table so
+  //    a half-finished park can never block a retry. Adding a step does NOT need it (N1a P2): reordering is refused
+  //    above, so every surviving step keeps its own number, and a new step is numbered above the current maximum —
+  //    nothing can collide. Parking on every add only rewrote every step twice and left the change history showing
+  //    a temporary number as each step's "before" order.
+  if (hasParkDebris && existing.length > 0) {
     const base = Math.max(PARK_FLOOR, ...existing.map(r => r.stage_order)) + 1
     for (let idx = 0; idx < existing.length; idx++) {
       const row = existing[idx]
@@ -461,6 +475,7 @@ export async function replaceStagesForService(
         .from("pipeline_stages")
         .update({ stage_order: base + idx })
         .eq("id", row.id)
+        .setHeader(SETTINGS_ACTOR_HEADER, actor)
       if (error) {
         throw new Error(`replaceStagesForService(${serviceType}) reorder: ${error.message}`)
       }
@@ -478,6 +493,7 @@ export async function replaceStagesForService(
       .from("pipeline_stages")
       .delete()
       .in("id", removed.map(r => r.id))
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) delete: ${error.message}`)
     }
@@ -497,22 +513,31 @@ export async function replaceStagesForService(
 
   // 3. UPDATE survivors in place. ONLY editor-authored columns appear here —
   //    that is what makes the workspace and client labels untouchable by a Save.
+  //    A step whose fields did not change is NOT written (N1a P2): a single-step edit from /config must not re-save
+  //    the service's other steps — two admins saving different steps at once could otherwise put back a value the
+  //    other just changed, and every unchanged step would show up in the change history.
   for (let idx = 0; idx < submitted.length; idx++) {
     const s = submitted[idx]
     if (!s.id) continue
+    const patch: Record<string, unknown> = {
+      stage_order: plannedOrders[idx],
+      stage_name: s.stage_name,
+      stage_description: s.stage_description ?? null,
+      sla_days: s.sla_days ?? null,
+      auto_advance: s.auto_advance ?? false,
+      notify_client_email: s.notify_client_email ?? false,
+      client_description: s.client_description ?? null,
+      ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
+      auto_actions: (s.auto_actions ?? null) as Json,
+    }
+    // Park rows always need their real order written back.
+    const current = existingById.get(s.id)!
+    if (current.stage_order < PARK_FLOOR && !stepPatchChanges(current, patch)) continue
     const { error } = await supabaseAdmin
       .from("pipeline_stages")
-      .update({
-        stage_order: plannedOrders[idx],
-        stage_name: s.stage_name,
-        stage_description: s.stage_description ?? null,
-        sla_days: s.sla_days ?? null,
-        auto_advance: s.auto_advance ?? false,
-        notify_client_email: s.notify_client_email ?? false,
-        client_description: s.client_description ?? null,
-        auto_actions: (s.auto_actions ?? null) as Json,
-      })
+      .update(patch)
       .eq("id", s.id)
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) update: ${error.message}`)
     }
@@ -531,16 +556,76 @@ export async function replaceStagesForService(
       auto_advance: s.auto_advance ?? false,
       notify_client_email: s.notify_client_email ?? false,
       client_description: s.client_description ?? null,
+      requires_approval: s.requires_approval ?? false,
       auto_actions: (s.auto_actions ?? null) as Json,
     }))
   if (insertRows.length > 0) {
-    const { error } = await supabaseAdmin.from("pipeline_stages").insert(insertRows)
+    const { error } = await supabaseAdmin
+      .from("pipeline_stages")
+      .insert(insertRows)
+      .setHeader(SETTINGS_ACTOR_HEADER, actor)
     if (error) {
       throw new Error(`replaceStagesForService(${serviceType}) insert: ${error.message}`)
     }
   }
 
   return { warnings }
+}
+
+/**
+ * Does writing `patch` change the stored step? Booleans compare null ≡ false and actions compare null ≡ [] — the
+ * editor has always written false / the list for "unset", so treating those as changes would rewrite untouched steps.
+ */
+export function stepPatchChanges(current: Record<string, unknown>, patch: Record<string, unknown>): boolean {
+  const BOOLEAN_FIELDS = new Set(["auto_advance", "notify_client_email", "requires_approval"])
+  const norm = (k: string, v: unknown): unknown => {
+    if (BOOLEAN_FIELDS.has(k)) return v === true
+    if (k === "auto_actions") return Array.isArray(v) && v.length > 0 ? JSON.stringify(v) : null
+    if (typeof v === "string") return v === "" ? null : v
+    return v ?? null
+  }
+  return Object.keys(patch).some(k => norm(k, patch[k]) !== norm(k, current[k]))
+}
+
+/** The fields of ONE step that can be edited on its own (the /config step dialog). */
+export type StagePatch = Partial<
+  Pick<
+    StageRow,
+    | "stage_name"
+    | "stage_description"
+    | "client_description"
+    | "sla_days"
+    | "auto_advance"
+    | "requires_approval"
+    | "auto_actions"
+  >
+>
+
+/**
+ * Edit ONE step through the same guarded save as the service editor (N1a P2). The /config step dialog used to write
+ * the row directly — no protected-name check, no "clients are on this step" check, no button-target check. Now it
+ * loads the service's steps, changes the one, and saves the whole list through replaceStagesForService, so every
+ * guard and the history stamp apply. The other steps are passed back unchanged, so nothing else moves.
+ */
+export async function updateOneStage(
+  stageId: string,
+  patch: StagePatch,
+  actorLabel: string,
+): Promise<{ warnings: string[]; serviceType: string }> {
+  const { data: row, error } = await supabaseAdmin
+    .from("pipeline_stages")
+    .select("service_type")
+    .eq("id", stageId)
+    .maybeSingle()
+  if (error) throw new Error(`updateOneStage(${stageId}) read: ${error.message}`)
+  if (!row) throw new Error("This step no longer exists — reload the page. Nothing has been changed.")
+  const serviceType = (row as { service_type: string }).service_type
+
+  const stages = await getStagesForService(serviceType)
+  const knownStageIds = stages.map(s => s.id).filter(Boolean) as string[]
+  const next = stages.map(s => (s.id === stageId ? { ...s, ...patch } : s))
+  const { warnings } = await replaceStagesForService(serviceType, next, { knownStageIds, actor: actorLabel })
+  return { warnings, serviceType }
 }
 
 /** Record what a stage deletion destroyed — the row carries content the editor never showed. */

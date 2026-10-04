@@ -12,6 +12,7 @@
 
 import type { Database } from "@/lib/database.types"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 
 type CatalogEntryInsert = Database["public"]["Tables"]["catalog_entries"]["Insert"]
 type CatalogDecisionLogInsert = Database["public"]["Tables"]["catalog_decision_log"]["Insert"]
@@ -50,6 +51,14 @@ export type PendingReviewStatus =
 export interface Actor {
   kind: ActorKind
   userId?: string | null
+}
+
+/**
+ * The author label stamped on every catalog write (N1a P2): the database records changes to service cards in
+ * service_settings_history and reads the author from this header. "<kind>:<userId>" or just the kind.
+ */
+function actorLabel(actor: Actor): string {
+  return settingsActor(actor.userId ? `${actor.kind}:${actor.userId}` : actor.kind, "app:catalog")
 }
 
 export interface CatalogDefinition {
@@ -258,6 +267,7 @@ export async function addEntry(
   const { data: inserted, error } = await supabaseAdmin
     .from("catalog_entries")
     .insert(insertRow)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
 
@@ -286,7 +296,7 @@ export async function addEntry(
     // Best-effort rollback: delete the orphan entry so we never leave a row
     // without a corresponding audit log. No cross-table tx available via the
     // supabase-js client.
-    await supabaseAdmin.from("catalog_entries").delete().eq("id", entry.id)
+    await supabaseAdmin.from("catalog_entries").delete().eq("id", entry.id).setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     throw logErr
   }
 
@@ -307,6 +317,7 @@ export async function renameEntry(
     .from("catalog_entries")
     .update({ display_name: newDisplayName, updated_by: actor.userId ?? null })
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`renameEntry(${entryId}): ${error.message}`)
@@ -338,6 +349,7 @@ export async function deprecateEntry(
     .from("catalog_entries")
     .update({ status: "deprecated", updated_by: actor.userId ?? null })
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`deprecateEntry(${entryId}): ${error.message}`)
@@ -369,6 +381,7 @@ export async function restoreEntry(
     .from("catalog_entries")
     .update({ status: "active", updated_by: actor.userId ?? null })
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`restoreEntry(${entryId}): ${error.message}`)
@@ -401,6 +414,7 @@ export async function tagEntry(
     .from("catalog_entries")
     .update({ tags, updated_by: actor.userId ?? null })
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`tagEntry(${entryId}): ${error.message}`)
@@ -452,6 +466,7 @@ export async function addTranslation(
       updated_by: actor.userId ?? null,
     })
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`addTranslation(${entryId}, ${lang}): ${error.message}`)
@@ -522,6 +537,7 @@ export async function updateMetadata(
     .from("catalog_entries")
     .update(updatePayload)
     .eq("id", entryId)
+    .setHeader(SETTINGS_ACTOR_HEADER, actorLabel(actor))
     .select()
     .single()
   if (error) throw new Error(`updateMetadata(${entryId}): ${error.message}`)

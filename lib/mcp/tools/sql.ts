@@ -19,6 +19,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { SETTINGS_ACTOR_HEADER } from "@/lib/services/settings-actor"
 import { logAction } from "@/lib/mcp/action-log"
 
 // Tables where mass operations (> per-table threshold) require explicit
@@ -511,9 +512,10 @@ export function registerSqlTools(server: McpServer) {
         }
 
         // ─── Execute the actual query ───
-        const { data, error } = await supabaseAdmin.rpc("exec_sql", {
-          sql_query: sqlQuery,
-        })
+        // Stamped so a raw-SQL change to a service card or step is named in service_settings_history (N1a P2).
+        const { data, error } = await supabaseAdmin
+          .rpc("exec_sql", { sql_query: sqlQuery })
+          .setHeader(SETTINGS_ACTOR_HEADER, "mcp:execute_sql")
 
         const elapsed = Date.now() - startMs
 

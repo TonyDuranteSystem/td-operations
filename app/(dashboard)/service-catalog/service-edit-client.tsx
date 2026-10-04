@@ -790,6 +790,16 @@ function StageCard({
             yes
           </label>
         </Field>
+        <Field label="Needs staff approval before moving on?">
+          <label className="inline-flex items-center gap-2 text-sm pt-1">
+            <input
+              type="checkbox"
+              checked={!!stage.requires_approval}
+              onChange={(e) => onPatch({ requires_approval: e.target.checked })}
+            />
+            yes
+          </label>
+        </Field>
       </div>
       <Field label="Internal description (admin)" hint="Optional. Shown to staff.">
         <textarea
