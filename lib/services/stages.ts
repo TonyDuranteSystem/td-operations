@@ -459,13 +459,15 @@ export async function replaceStagesForService(
         `details, add a step at the end, or remove one. Nothing has been changed.`,
     )
   }
-  const needsOrderChange = submitted.some(s => !s.id) // only genuinely new rows
   // Debris from an interrupted save must be cleared even if nothing else moved.
   const hasParkDebris = existing.some(r => r.stage_order >= PARK_FLOOR)
 
-  // 1. PARK — only when an order actually moves, and always above everything
-  //    currently in the table so a half-finished park can never block a retry.
-  if ((needsOrderChange || hasParkDebris) && existing.length > 0) {
+  // 1. PARK — only to clear debris from an interrupted save, and always above everything currently in the table so
+  //    a half-finished park can never block a retry. Adding a step does NOT need it (N1a P2): reordering is refused
+  //    above, so every surviving step keeps its own number, and a new step is numbered above the current maximum —
+  //    nothing can collide. Parking on every add only rewrote every step twice and left the change history showing
+  //    a temporary number as each step's "before" order.
+  if (hasParkDebris && existing.length > 0) {
     const base = Math.max(PARK_FLOOR, ...existing.map(r => r.stage_order)) + 1
     for (let idx = 0; idx < existing.length; idx++) {
       const row = existing[idx]

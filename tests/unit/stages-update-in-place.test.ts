@@ -357,6 +357,34 @@ describe("failure part-way through never empties the pipeline", () => {
 })
 
 describe("N1a P2 — one recorded door for step changes", () => {
+  it("adding a step at the end writes ONLY the new step — the other steps are not renumbered", async () => {
+    existingRows = [
+      realRow({ id: "a", stage_name: "A", stage_order: 10 }),
+      realRow({ id: "b", stage_name: "B", stage_order: 20 }),
+    ]
+    await replaceStagesForService("Shipping", [
+      { id: "a", stage_order: 10, stage_name: "A" },
+      { id: "b", stage_order: 20, stage_name: "B" },
+      { stage_order: 30, stage_name: "C" },
+    ])
+    expect(ops.filter(o => o.kind === "update")).toHaveLength(0)
+    const ins = ops.filter(o => o.kind === "insert")
+    expect(ins).toHaveLength(1)
+    expect((ins[0].payload as Record<string, unknown>[])[0]).toMatchObject({ stage_name: "C", stage_order: 30 })
+  })
+
+  it("leftovers from an interrupted save are still parked and put back", async () => {
+    existingRows = [
+      realRow({ id: "a", stage_name: "A", stage_order: 10 }),
+      realRow({ id: "b", stage_name: "B", stage_order: 100001 }),
+    ]
+    await replaceStagesForService("Shipping", [
+      { id: "a", stage_order: 10, stage_name: "A" },
+    ]).catch(() => undefined)
+    // b is not in the draft, so it is a removal; the park pass still runs because debris exists.
+    expect(ops.some(o => o.kind === "update" && "stage_order" in (o.payload ?? {}) && !("stage_name" in (o.payload ?? {})))).toBe(true)
+  })
+
   it("stamps EVERY write (park, delete, update, insert) with who made it", async () => {
     existingRows = [
       realRow({ id: "a", stage_name: "Keep", stage_order: 1 }),
@@ -365,7 +393,7 @@ describe("N1a P2 — one recorded door for step changes", () => {
     await replaceStagesForService(
       "Shipping",
       [
-        { id: "a", stage_order: 1, stage_name: "Keep" },
+        { id: "a", stage_order: 1, stage_name: "Keep", sla_days: 4 },
         { stage_order: 3, stage_name: "New step" },
       ],
       { actor: "luca@tonydurante.us" },
