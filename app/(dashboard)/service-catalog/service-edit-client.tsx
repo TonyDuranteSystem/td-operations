@@ -334,7 +334,7 @@ export function ServiceEditClient({ mode, initial }: Props) {
           setIssues(result.workflowIssues)
           toast.error("Workflow validation failed — fix issues below and try again.")
         } else {
-          toast.error(result.error ?? "Save failed.")
+          toast.error(result.error ?? "Save failed.", { id: "service-save-error" })
         }
       } else if (result.service) {
         if (result.warnings && result.warnings.length > 0) {

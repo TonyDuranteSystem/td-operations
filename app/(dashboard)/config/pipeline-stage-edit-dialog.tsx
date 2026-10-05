@@ -105,7 +105,8 @@ function PipelineStageEditDialog({
         toast.success("Pipeline stage saved")
         onClose()
       } else {
-        toast.error(result.error ?? "Save failed")
+        // One message per step: a repeated refusal replaces the last one instead of stacking identical copies.
+        toast.error(result.error ?? "Save failed", { id: `stage-save-${row.id}` })
       }
     })
   }

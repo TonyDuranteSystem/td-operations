@@ -1,7 +1,8 @@
 -- N1a C2 — DBA and EIN step lists (Antonio 2026-10-04, Google Doc §20). Run AFTER 20261005-0100.
 --
 -- DBA: replaced by the 8 steps of the real Wyoming case ("Business For Lawyers", filed 2026-09-23: signed by the
---      client, notarized, $100 money order, mailed). Publication removed. Refuses if any DBA job exists (0 in
+--      client, notarized, $100 money order, mailed). Publication removed. Each step has an English + Italian client label
+--      (what the client sees in the portal and in step notices; Antonio 2026-10-05 "fix 2"). Refuses if any DBA job exists (0 in
 --      production on 2026-10-04 — the steps can only be replaced while nothing points at them).
 -- EIN: the client signs the SS-4 — two steps inserted after "SS-4 Preparation", as in Company Formation. Moved by
 --      hand (SS-4 signing automation is Company Formation only — every code path that reacts to these names filters
@@ -28,17 +29,18 @@ DELETE FROM public.pipeline_stages WHERE service_type = 'DBA';
 
 INSERT INTO public.pipeline_stages
   (service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance,
-   service_type_entry_id)
+   client_label, client_label_it, service_type_entry_id)
 SELECT v.*, (SELECT entry_id FROM c2_dba_link) FROM (VALUES
-  ('DBA', 1, 'Name Collection',          'The client gives the DBA name, what the business does and the date the name was first used.', 'client',  false, false, false),
-  ('DBA', 2, 'Name Check & Approval',    'We check the name with the state and the client approves it.',                                  'us',      false, false, false),
-  ('DBA', 3, 'Application Prepared',     'The trade-name application is prepared and sent to the client to sign.',                        'client',  false, false, false),
-  ('DBA', 4, 'Notarization',             'The signed application is notarized.',                                                           'us',      false, false, false),
-  ('DBA', 5, 'Money Order',              'Buy the filing-fee money order payable to the Secretary of State and upload it.',                'us',      false, true,  false),
-  ('DBA', 6, 'Mailed to State',          'Application and money order mailed to the Secretary of State (up to 15 business days).',          'outside', false, false, false),
-  ('DBA', 7, 'Registered',               'The state registered the trade name. Upload the filed receipt.',                                 'none',    true,  false, false),
-  ('DBA', 8, 'Renewal Due',              'The registration lasts 10 years; renewal can be filed up to 6 months before it expires.',        'date',    false, false, false)
-) AS v(service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance);
+  ('DBA', 1, 'Name Collection',          'The client gives the DBA name, what the business does and the date the name was first used.', 'client',  false, false, false, 'Tell us your trade name', 'Indicaci il nome commerciale'),
+  ('DBA', 2, 'Name Check & Approval',    'We check the name with the state and the client approves it.',                                  'us',      false, false, false, 'Checking your trade name', 'Verifica del nome commerciale'),
+  ('DBA', 3, 'Application Prepared',     'The trade-name application is prepared and sent to the client to sign.',                        'client',  false, false, false, 'Sign your DBA application', 'Firma la domanda DBA'),
+  ('DBA', 4, 'Notarization',             'The signed application is notarized.',                                                           'us',      false, false, false, 'Notarizing your application', 'Autenticazione notarile della domanda'),
+  ('DBA', 5, 'Money Order',              'Buy the filing-fee money order payable to the Secretary of State and upload it.',                'us',      false, true,  false, 'Preparing the state filing fee', 'Preparazione della tassa statale'),
+  ('DBA', 6, 'Mailed to State',          'Application and money order mailed to the Secretary of State (up to 15 business days).',          'outside', false, false, false, 'Sent to the state', 'Inviata allo Stato'),
+  ('DBA', 7, 'Registered',               'The state registered the trade name. Upload the filed receipt.',                                 'none',    true,  false, false, 'Your trade name is registered', 'Il tuo nome commerciale è registrato'),
+  ('DBA', 8, 'Renewal Due',              'The registration lasts 10 years; renewal can be filed up to 6 months before it expires.',        'date',    false, false, false, 'Renewal due', 'Rinnovo in scadenza')
+) AS v(service_type, stage_order, stage_name, stage_description, waiting_on, completes_service, requires_document_to_advance, auto_advance,
+        client_label, client_label_it);
 
 -- EIN ---------------------------------------------------------------------------------------------------------------
 DO $$ BEGIN

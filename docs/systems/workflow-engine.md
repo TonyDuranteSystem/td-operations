@@ -81,7 +81,7 @@ Extensible (future: payment_received, signature_signed…). `parseTriggeredBy` s
   - **The service editor restarts from the saved data after each save** (the edit page keys the editor on the loaded data), so a second save in the same tab compares against what is really stored; save warnings are carried across the restart.
   - **The contact page's "advance step" now uses the shared move** (`advanceServiceDelivery`) instead of its own copy, so it gets every guard and the done step's completion wording.
   - When a job is CLOSED by reaching its done step and that step has a client label, the client's portal notice uses it (`stageNotificationText`) instead of the generic "is complete!".
-  - DBA steps replaced by the 8-step Wyoming flow (Money Order needs a document; Registered = done); EIN gained "SS-4 Prepared" / "SS-4 Signed" (moved by hand — SS-4 automation is Company Formation only).
+  - DBA steps replaced by the 8-step Wyoming flow (Money Order needs a document; Registered = done; every step carries an English + Italian client label, so the client never sees an internal step name); EIN gained "SS-4 Prepared" / "SS-4 Signed" (moved by hand — SS-4 automation is Company Formation only).
 - **Import SLA constants**, never string-literal them — a typo should be a TS error, not a silent UI bug.
 
 ## How to verify current state
