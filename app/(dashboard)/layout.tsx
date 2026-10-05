@@ -2,6 +2,7 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
@@ -19,6 +20,15 @@ import CaptureLayer from '@/components/captures/capture-layer'
 import MyCapturesOverlay from '@/components/captures/my-captures-overlay'
 import FloatingChat from '@/components/team-chat/floating-chat'
 import { isFloatingChatEnabled } from '@/lib/settings'
+import { isEmbeddedRequest } from '@/lib/embed/embedded-request'
+import {
+  EmbeddedProvider,
+  ChromeOnly,
+  EmbeddedOnly,
+  ShellFrame,
+  ShellMain,
+  SpikeBridge,
+} from '@/components/dashboard/embedded-shell'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -131,11 +141,18 @@ export default async function DashboardLayout({
   // account may switch its own two-factor requirement off.
   const owner = isProtectedAdminEmail(user.email)
   const dashboardUser = isDashboardUser(user)
-  const badgeCounts = await getBadgeCounts(supabase, user.id)
+  // Window mode (dev job f3f3e237, step 3 frame TEST — flag-gated, OFF everywhere except
+  // the private sandbox address): decided from the browser's FIRST-load label and frozen
+  // client-side in <EmbeddedProvider>. The login check above always runs. Inside a window
+  // the chrome's data is never shown, so its queries are skipped.
+  const embedded = isEmbeddedRequest(headers().get('sec-fetch-dest'), process.env.WINDOW_SPIKE)
+  const badgeCounts = embedded
+    ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
+    : await getBadgeCounts(supabase, user.id)
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser
-  if (!admin) {
+  if (!admin && !embedded) {
     const { data: aiSetting } = await supabaseAdmin
       .from('app_settings')
       .select('value')
@@ -146,46 +163,55 @@ export default async function DashboardLayout({
 
   // Kill switch for the floating chat window (Dev Tools → Maintenance).
   // Defaults on and fails open — see isFloatingChatEnabled.
-  const floatingChatEnabled = await isFloatingChatEnabled()
+  const floatingChatEnabled = embedded ? false : await isFloatingChatEnabled()
 
   const isSandbox = process.env.SANDBOX_MODE === '1'
 
   return (
     <Providers>
-      <SandboxBanner />
-      <SwRegister />
-      <RealtimeNotifications />
-      <ClearAllToasts />
+      {/* Window mode (see EmbeddedProvider): every piece of chrome is still rendered in
+          its place so the tree keeps the SAME shape, but renders nothing inside a window.
+          UiEventListener stays (it keeps a window's data fresh); the main scrolling area
+          stays (many pages size themselves against it). */}
+      <EmbeddedProvider initial={embedded}>
+      <ChromeOnly><SandboxBanner /></ChromeOnly>
+      <ChromeOnly><SwRegister /></ChromeOnly>
+      <ChromeOnly><RealtimeNotifications /></ChromeOnly>
+      <ChromeOnly><ClearAllToasts /></ChromeOnly>
       <UiEventListener />
-      <DashboardPullToRefresh />
-      <div data-sandbox={isSandbox ? 'true' : undefined} className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
-        <Sidebar
-          user={user}
-          isAdmin={admin}
-          isOwner={owner}
-          badgeCounts={badgeCounts}
-        />
+      <ChromeOnly><DashboardPullToRefresh /></ChromeOnly>
+      <EmbeddedOnly><SpikeBridge /></EmbeddedOnly>
+      <ShellFrame sandbox={isSandbox}>
+        <ChromeOnly>
+          <Sidebar
+            user={user}
+            isAdmin={admin}
+            isOwner={owner}
+            badgeCounts={badgeCounts}
+          />
+        </ChromeOnly>
         {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:
             padding keeps h-full pages sized to the CONTENT box, so internal
             scroll panes end exactly at the viewport bottom. A spacer div made
-            every h-full page overflow the viewport by 56px on mobile. */}
-        <main className="flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50 pt-14 lg:pt-0">
-          <DashboardHeader />
+            every h-full page overflow the viewport by 56px on mobile.
+            (The padding itself now lives in ShellMain, unchanged in the normal CRM.) */}
+        <ShellMain>
+          <ChromeOnly><DashboardHeader /></ChromeOnly>
           {children}
-        </main>
-        <CommandPalette />
-        <AiAgentPanel enabled={showAiAgent} />
-        <StickyNotesLayer />
+        </ShellMain>
+        <ChromeOnly><CommandPalette /></ChromeOnly>
+        <ChromeOnly><AiAgentPanel enabled={showAiAgent} /></ChromeOnly>
+        <ChromeOnly><StickyNotesLayer /></ChromeOnly>
         {/* Mounted OUTSIDE <main>, same reason as StickyNotesLayer/FloatingChat:
             it must survive navigating to a different page while a capture is
             in progress (Antonio, 2026-09-04). Its own trigger button lives in
             the top bar (DashboardHeader / Sidebar), not here — this only
             renders when CaptureProvider's isOpen is true. */}
-        <CaptureLayer />
+        <ChromeOnly><CaptureLayer /></ChromeOnly>
         {/* "My captures" as a popup, not a page navigation (Antonio,
             2026-09-04) — its own on/off switch on CaptureProvider, independent
             of the capture-creation flow above. */}
-        <MyCapturesOverlay />
+        <ChromeOnly><MyCapturesOverlay /></ChromeOnly>
         {/* Mounted AFTER the notes layer so the chat wins a same-corner overlap
             (it also sits one z-step above), and OUTSIDE <main> so it never
             fights pull-to-refresh. It carries its own crash guard: the
@@ -197,8 +223,9 @@ export default async function DashboardLayout({
             than inside the component, so "off" means it never mounts at all —
             no fetches, no realtime subscription, no listeners. Defaults ON and
             fails OPEN, so a settings hiccup cannot silently remove it. */}
-        {floatingChatEnabled && <FloatingChat />}
-      </div>
+        {floatingChatEnabled && <ChromeOnly><FloatingChat /></ChromeOnly>}
+      </ShellFrame>
+      </EmbeddedProvider>
     </Providers>
   )
 }
