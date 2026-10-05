@@ -5,7 +5,6 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveSignedPdfPath } from '@/lib/oa/signed-pdf-path'
 
 
 // --- Types -----------------------------------------------
@@ -128,6 +127,8 @@ function OperatingAgreementCodeContent() {
   const sigPadRef = useRef<any>(null) // eslint-disable-line @typescript-eslint/no-explicit-any
   const oaBodyRef = useRef<HTMLDivElement>(null)
   const pdfBlobRef = useRef<Blob | null>(null)
+  // Handed out by the data route once the visitor has passed every gate on a signed agreement.
+  const downloadTicketRef = useRef<string | null>(null)
 
   // Signature images fetched from storage (for already-signed members)
   const [sigImages, setSigImages] = useState<Record<number, string>>({})
@@ -210,6 +211,8 @@ function OperatingAgreementCodeContent() {
       setLoading(false)
       return 'error'
     }
+
+    downloadTicketRef.current = typeof body.downloadTicket === 'string' ? body.downloadTicket : null
 
     if (body.requiresEmail) {
       setVerified(false)
@@ -847,27 +850,41 @@ function OperatingAgreementCodeContent() {
               onClick={async () => {
                 try {
                   let blob = pdfBlobRef.current
-                  if (!blob && (oa.signed_at || allSigned)) {
-                    // Download the document the SERVER recorded — never "the
-                    // newest .pdf in the folder", which is what this used to do.
-                    // Anyone can upload into that folder (its only storage policy
-                    // is INSERT for role `public`), so listing-and-sorting served
-                    // the CLIENT whatever an attacker dropped in. Same flaw the
-                    // publish step had, pointed at the client instead of Drive.
-                    // See lib/oa/signed-pdf-path.ts.
-                    const target = resolveSignedPdfPath(token, oa.pdf_storage_path)
-                    if (target.ok && target.path) {
-                      const { data: downloaded } = await supabasePublic.storage.from('signed-oa').download(target.path)
-                      if (downloaded) blob = downloaded
+                  if (!blob) {
+                    // Ask the SERVER for the signed copy. The browser cannot read the
+                    // signed-oa bucket itself (anonymous reads were closed 2026-07-22),
+                    // so reading it here failed for everyone but the session that had
+                    // just signed — and then claimed the PDF "will be ready once all
+                    // members sign" on a fully signed agreement. The route checks the
+                    // same link + access code as this page and serves ONLY the file the
+                    // server recorded. See app/api/operating-agreement/[token]/signed-pdf.
+                    const signerParam = searchParams.get('signer')
+                    const passParam = searchParams.get('pass')
+                    const previewParam = searchParams.get('preview') === 'td'
+                    // Same email answer the data route was given (header, never the URL).
+                    const emailKey = signerParam ? `oa_email_${token}_s` : `oa_email_${token}`
+                    const emailRaw = document.cookie.split(';').find(c => c.trim().startsWith(`${emailKey}=`))?.split('=')[1]
+                    const qsd = new URLSearchParams({ code: accessCode })
+                    if (signerParam) qsd.set('signer', signerParam)
+                    if (passParam) qsd.set('pass', passParam)
+                    if (previewParam) qsd.set('preview', 'td')
+                    const dlHeaders: Record<string, string> = {}
+                    if (emailRaw) dlHeaders['x-oa-email'] = decodeURIComponent(emailRaw)
+                    if (downloadTicketRef.current) dlHeaders['x-oa-ticket'] = downloadTicketRef.current
+                    const res = await fetch(`/api/operating-agreement/${token}/signed-pdf?${qsd.toString()}`, { headers: dlHeaders })
+                    if (!res.ok) {
+                      const d = await res.json().catch(() => ({}))
+                      alert(d?.error || 'The signed copy could not be downloaded. Please try again, or contact support@tonydurante.us.')
+                      return
                     }
+                    blob = await res.blob()
                   }
-                  if (!blob) { alert('PDF not available yet. It will be ready once all members sign.'); return }
                   const dlUrl = URL.createObjectURL(blob)
                   const a = document.createElement('a')
                   a.href = dlUrl
                   a.download = `Operating_Agreement_${oa.company_name.replace(/\s+/g, '_')}.pdf`
                   a.click()
-                  URL.revokeObjectURL(dlUrl)
+                  setTimeout(() => URL.revokeObjectURL(dlUrl), 10_000)
                 } catch { alert('Download failed. Please contact support.') }
               }}
               style={{ marginTop: 16, padding: '10px 32px', fontSize: 14, fontWeight: 600, background: '#0A3161', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontFamily: 'Georgia, serif' }}

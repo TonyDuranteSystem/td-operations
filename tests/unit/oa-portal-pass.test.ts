@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { signOaPass, verifyOaPass, OA_PASS_TTL_MS } from '@/lib/oa/portal-pass'
+import { signOaPass, verifyOaPass, OA_PASS_TTL_MS, signOaDownloadTicket, verifyOaDownloadTicket, OA_DOWNLOAD_TICKET_TTL_MS } from '@/lib/oa/portal-pass'
 
 beforeAll(() => {
   process.env.API_SECRET_TOKEN = 'test-secret-for-oa-portal-pass'
@@ -65,5 +65,29 @@ describe('OA portal pass', () => {
     expect(await verifyOaPass('', OA_A, NOW)).toBeNull()
     expect(await verifyOaPass('no-dot', OA_A, NOW)).toBeNull()
     expect(await verifyOaPass('garbage.sig', OA_A, NOW)).toBeNull()
+  })
+})
+
+describe('OA signed-PDF download ticket', () => {
+  it('is good for its agreement, outlives the 2-minute pass, and expires after 30 minutes', async () => {
+    const t = await signOaDownloadTicket(OA_A, NOW)
+    expect(await verifyOaDownloadTicket(t, OA_A, NOW)).toBe(true)
+    expect(await verifyOaDownloadTicket(t, OA_A, NOW + OA_PASS_TTL_MS + 1)).toBe(true)
+    expect(await verifyOaDownloadTicket(t, OA_A, NOW + OA_DOWNLOAD_TICKET_TTL_MS + 1)).toBe(false)
+  })
+  it('does not replay on another agreement', async () => {
+    const t = await signOaDownloadTicket(OA_A, NOW)
+    expect(await verifyOaDownloadTicket(t, OA_B, NOW)).toBe(false)
+  })
+  it('is NOT accepted as a page-load pass, and a page-load pass is NOT a download ticket', async () => {
+    const t = await signOaDownloadTicket(OA_A, NOW)
+    expect(await verifyOaPass(t, OA_A, NOW)).toBeNull()
+    const pass = await signOaPass({ oaId: OA_A, kind: 'portal' }, NOW)
+    expect(await verifyOaDownloadTicket(pass, OA_A, NOW)).toBe(false)
+  })
+  it('rejects empty and garbage tokens', async () => {
+    expect(await verifyOaDownloadTicket('', OA_A, NOW)).toBe(false)
+    expect(await verifyOaDownloadTicket(null, OA_A, NOW)).toBe(false)
+    expect(await verifyOaDownloadTicket('abc.def', OA_A, NOW)).toBe(false)
   })
 })
