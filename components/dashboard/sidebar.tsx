@@ -71,6 +71,7 @@ import { CaptureButton } from '@/components/captures/capture-button'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { NavItemMenu } from '@/components/dashboard/nav-item-menu'
 
 interface NavItem {
   id: string
@@ -182,7 +183,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
       style={style}
       draggable={false}
       className={cn(
-        'flex items-center rounded-md transition-colors select-none',
+        'group flex items-center rounded-md transition-colors select-none',
         isDragging && 'opacity-50 z-50 bg-sidebar-accent shadow-lg'
       )}
     >
@@ -205,7 +206,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         onClick={onMobileClose}
         title={item.tooltip}
         className={cn(
-          'flex-1 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+          'flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
           editMode && 'pl-1',
           isActive
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
@@ -213,7 +214,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{item.name}</span>
+        <span className="flex-1 min-w-0 truncate">{item.name}</span>
         {item.badge != null && item.badge > 0 && (
           <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse">
             {item.badge > 999 ? '999+' : item.badge}
@@ -229,6 +230,10 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         )}
       </Link>
       {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} />}
+      {/* ⋯ menu (dev job f3f3e237 step 1): a SIBLING of the Link, placed last so it
+          never sits on top of the count badges or the Team Chat dot; hidden in
+          reorder mode where the drag grip owns the left edge. */}
+      {!editMode && <NavItemMenu href={item.href} name={item.name} onNavigate={onMobileClose} />}
     </div>
   )
 }
