@@ -12,6 +12,7 @@ import { deriveContractType } from '@/lib/offers/derive-contract-type'
 import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
+import { offerPreviewHref } from '@/lib/offers/offer-preview-href'
 import {
   validatePaymentPlan,
   clientFacingPartLabel,
@@ -183,7 +184,11 @@ export function CreateOfferDialog({
   const [isPending, startTransition] = useTransition()
   const [catalog, setCatalog] = useState<CatalogService[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
-  const [createdOfferUrl, setCreatedOfferUrl] = useState<string | null>(null)
+  // Token of the draft this dialog just created. Gates the "saved as draft" footer and the
+  // preview links; cleared by closeDialog on EVERY close path (X, Cancel, Close, the warnings
+  // screen) — the dialog stays mounted, so a value left here shows the previous offer's footer
+  // on the next open (dev job b834e4ae).
+  const [createdToken, setCreatedToken] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   // clientNameValue is editable so staff can correct the name shown on the offer
   const [clientNameValue, setClientNameValue] = useState(clientName)
@@ -432,6 +437,9 @@ export function CreateOfferDialog({
     setImmediateActionsJson('')
     setConversationId(null)
     setNarrativeGroundedAt(null)
+    // A create that finished AFTER the dialog was closed sets createdToken while closed;
+    // clear it on the next open so the footer never shows a previous offer's "Saved as draft".
+    setCreatedToken(null)
   }, [open])
 
   // Notes context for offer creation
@@ -443,11 +451,11 @@ export function CreateOfferDialog({
   // attached, a mis-typed price). These HOLD the screen — see the note below.
   const [creditCheckFailed, setCreditCheckFailed] = useState(false)
   const [postCreateWarnings, setPostCreateWarnings] = useState<string[]>([])
-  const [createdUrl, setCreatedUrl] = useState<string | null>(null)
 
-  const dismissWarnings = () => {
+  // The ONE way out of this dialog. Resets what the last create left behind, then closes.
+  const closeDialog = () => {
     setPostCreateWarnings([])
-    setCreatedUrl(null)
+    setCreatedToken(null)
     onClose()
   }
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set())
@@ -1243,7 +1251,7 @@ export function CreateOfferDialog({
         const data = await res.json()
 
         const warnings = (data.warnings ?? []) as string[]
-        setCreatedOfferUrl(data.offer_url)
+        setCreatedToken(typeof data.token === 'string' ? data.token : null)
 
         // WS-A: a warning must HOLD THE SCREEN, not be a toast.
         // This previously toasted and then immediately opened the offer in a new
@@ -1252,7 +1260,6 @@ export function CreateOfferDialog({
         // that. When something is wrong, the preview waits until he has read it.
         if (warnings.length > 0) {
           setPostCreateWarnings(warnings)
-          setCreatedUrl(data.offer_url)
           // Two channels on purpose. The screen is the one that holds; the toast
           // is insurance in case anything ever unmounts this component again.
           for (const w of warnings) toast.warning(w, { duration: 30000 })
@@ -1260,8 +1267,10 @@ export function CreateOfferDialog({
           return
         }
 
-        toast.success(`Draft offer created — opening preview`)
-        window.open(`${data.offer_url}?preview=td`, '_blank')
+        toast.success(`Draft saved — not sent to the client. Opening preview…`)
+        // The staff preview route, never the bare offer link: a bare link carries no staff proof
+        // on the client host and would be counted as the client opening it (dev job b834e4ae).
+        if (typeof data.token === 'string') window.open(offerPreviewHref(data.token), '_blank')
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'An error occurred')
@@ -1288,21 +1297,23 @@ export function CreateOfferDialog({
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"
-              onClick={dismissWarnings}
+              onClick={closeDialog}
               className="px-3 py-1.5 text-sm rounded-md border hover:bg-zinc-50"
             >
               Close
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (createdUrl) window.open(`${createdUrl}?preview=td`, '_blank')
-                dismissWarnings()
-              }}
-              className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
-            >
-              Open the offer anyway
-            </button>
+            {createdToken && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(offerPreviewHref(createdToken), '_blank')
+                  closeDialog()
+                }}
+                className="px-3 py-1.5 text-sm rounded-md bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Preview the offer anyway
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1333,7 +1344,7 @@ export function CreateOfferDialog({
             <FileText className="h-5 w-5 text-blue-600" />
             <h2 className="text-lg font-semibold">Create Offer</h2>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-zinc-100">
+          <button onClick={closeDialog} className="p-1 rounded hover:bg-zinc-100">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -2468,15 +2479,20 @@ export function CreateOfferDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 p-5 border-t">
-          {createdOfferUrl ? (
+        <div className="flex flex-wrap justify-end gap-3 p-5 border-t">
+          {createdToken ? (
             <>
-              <div className="flex items-center gap-2 text-sm text-emerald-700 mr-auto">
-                <CheckCircle2 className="h-4 w-4" />
-                Offer created
+              {/* "Saved as draft" — NOT a green "created" check: the success tick read as "sent",
+                  which is exactly what staff believed (dev job b834e4ae). */}
+              <div className="w-full sm:w-auto sm:mr-auto text-sm text-amber-700">
+                <div className="flex items-center gap-2 font-medium">
+                  <FileText className="h-4 w-4" />
+                  Saved as draft — not emailed to the client yet
+                </div>
+                <p className="text-xs text-amber-600 mt-0.5">Send it from the offer when you are ready.</p>
               </div>
               <a
-                href={`${createdOfferUrl}?preview=td`}
+                href={offerPreviewHref(createdToken)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md border border-blue-600 text-blue-600 hover:bg-blue-50"
@@ -2485,16 +2501,16 @@ export function CreateOfferDialog({
                 Preview Offer
               </a>
               <button
-                onClick={() => { setCreatedOfferUrl(null); onClose() }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                onClick={closeDialog}
+                className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
               >
-                Done
+                Close
               </button>
             </>
           ) : (
             <>
               <button
-                onClick={onClose}
+                onClick={closeDialog}
                 className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50"
               >
                 Cancel

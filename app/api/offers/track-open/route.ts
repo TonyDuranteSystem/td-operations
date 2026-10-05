@@ -8,10 +8,15 @@ export const dynamic = 'force-dynamic'
 /**
  * POST /api/offers/track-open — count a client opening their offer (N0, dev job f907220c).
  *
- * Body: { token, code }. Same behaviour the pages had in the browser: view_count + 1,
- * viewed_at = now, and a draft/sent/published offer becomes 'viewed' (a signed or
- * completed offer keeps its status but still counts the view). Never counts a staff
- * preview. Best-effort: the page does not wait on it.
+ * Body: { token, code }. view_count + 1, viewed_at = now, and a sent/published offer
+ * becomes 'viewed' (a signed or completed offer keeps its status but still counts the
+ * view). Never counts a staff preview. Best-effort: the page does not wait on it.
+ *
+ * A DRAFT records nothing at all (dev job b834e4ae). A draft has not been sent, so it has no
+ * client history: counting it flipped a never-sent offer to 'viewed' the moment staff opened
+ * the bare link the create dialog used to open, which hid the Send button and made
+ * publishOffer refuse it. A staff look can arrive through links that carry no staff proof
+ * (an MCP session, a pasted URL), so the guard lives here, at the one place that writes it.
  */
 export async function POST(req: NextRequest) {
   const r = await readOfferRequest(req)
@@ -21,6 +26,7 @@ export async function POST(req: NextRequest) {
   if (access.staffPreview) return NextResponse.json({ ok: true, skipped: 'staff_preview' })
 
   const o = access.offer
+  if (o.status === 'draft') return NextResponse.json({ ok: true, skipped: 'draft' })
   const now = new Date().toISOString()
   const { error } = await supabaseAdmin
     .from('offers')
@@ -33,6 +39,6 @@ export async function POST(req: NextRequest) {
     .from('offers')
     .update({ status: 'viewed' })
     .eq('id', o.id)
-    .in('status', ['draft', 'sent', 'published'])
+    .in('status', ['sent', 'published'])
   return NextResponse.json({ ok: true })
 }
