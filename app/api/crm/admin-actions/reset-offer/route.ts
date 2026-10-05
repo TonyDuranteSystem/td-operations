@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     // Get offer for audit
     const { data: offer } = await supabaseAdmin
       .from("offers")
-      .select("token, lead_id, client_name, status")
+      .select("token, lead_id, client_name, status, view_count, viewed_at")
       .eq("token", offer_token)
       .single()
 
@@ -85,6 +85,10 @@ export async function POST(request: Request) {
       .update({
         status: "draft",
         payment_links: null,
+        // A draft has no client history: clear the counters a previous send/preview left behind,
+        // or the next send lights "Viewed" on the lead before the client has opened anything.
+        view_count: 0,
+        viewed_at: null,
         updated_at: new Date().toISOString(),
       })
       .eq("token", offer_token)
@@ -119,6 +123,9 @@ export async function POST(request: Request) {
         offer_token,
         lead_id: offer.lead_id,
         previous_status: offer.status,
+        // The reset clears these counters; keep what they were so the history is recoverable.
+        previous_view_count: offer.view_count,
+        previous_viewed_at: offer.viewed_at,
         cleaned,
         admin_email: user?.email,
       },
