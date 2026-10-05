@@ -4,6 +4,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { MoreVertical, ExternalLink, Link2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { absoluteNavUrl, isInternalNavHref } from '@/lib/nav/nav-link'
+import { cn } from '@/lib/utils'
 
 /**
  * The ⋯ button on every left-menu item (dev job f3f3e237, step 1).
@@ -30,11 +31,19 @@ export function NavItemMenu({
   href,
   name,
   onNavigate,
+  overlay = false,
 }: {
   href: string
   name: string
   /** Closes the mobile drawer after a choice. */
   onNavigate?: () => void
+  /**
+   * On a screen with a mouse, float over the row's right end instead of taking a slot
+   * of its own, so it costs the item name no width. Touch screens (no hover) always
+   * keep a slot. The caller turns this off for a row whose right edge is already taken
+   * by a clickable control (the Team Chat dot).
+   */
+  overlay?: boolean
 }) {
   // A menu item pointing at anything but a normal CRM page path gets no menu.
   if (!isInternalNavHref(href)) return null
@@ -64,7 +73,11 @@ export function NavItemMenu({
         <button
           type="button"
           aria-label={`Actions for ${name}`}
-          className="mr-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-sidebar-foreground/60 opacity-0 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100"
+          className={cn(
+            'mr-1 flex h-7 w-6 shrink-0 items-center justify-center rounded text-sidebar-foreground/60 opacity-0 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100',
+            overlay &&
+              '[@media(hover:hover)]:absolute [@media(hover:hover)]:right-1 [@media(hover:hover)]:top-1/2 [@media(hover:hover)]:mr-0 [@media(hover:hover)]:-translate-y-1/2',
+          )}
         >
           <MoreVertical className="h-4 w-4" />
         </button>

@@ -41,7 +41,19 @@ describe("left menu ⋯ wiring", () => {
   })
 
   it("passes the item's own address and name, and closes the mobile drawer", () => {
-    expect(sortableItemBody()).toMatch(/<NavItemMenu href=\{item\.href\} name=\{item\.name\} onNavigate=\{onMobileClose\}/)
+    expect(sortableItemBody()).toMatch(/<NavItemMenu href=\{item\.href\} name=\{item\.name\} onNavigate=\{onMobileClose\} overlay=\{overlay\}/)
+  })
+
+  it("floats over the row on mouse screens so names never lose width to a reserved slot (QA 2026-10-05)", () => {
+    const body = sortableItemBody()
+    // a row with the clickable Team Chat dot keeps a slot; every other row overlays
+    expect(body).toMatch(/const overlay = !item\.dotBadge/)
+    // both count badges step aside while the button is shown — via visibility, because the
+    // red badge pulses and an animation would override an opacity change
+    const aside = body.match(/badgeStepAside/g) ?? []
+    expect(aside.length).toBeGreaterThanOrEqual(3) // definition + red badge + purple badge
+    expect(body).toMatch(/group-hover:invisible/)
+    expect(body).toMatch(/group-has-\[\[data-state=open\]\]:invisible/)
   })
 
   it("has exactly one place that renders nav items, so every page gets the menu", () => {
@@ -56,7 +68,7 @@ describe("left menu ⋯ wiring", () => {
   })
 
   it("marks the row as a hover/focus group so the button can reveal itself", () => {
-    expect(sortableItemBody()).toMatch(/'group flex items-center/)
+    expect(sortableItemBody()).toMatch(/'group relative flex items-center/)
   })
 })
 
@@ -77,6 +89,13 @@ describe("NavItemMenu component", () => {
 
   it("never claims the link was copied unless the clipboard write succeeded", () => {
     expect(menu).toMatch(/writeText\(url\)\s*\.then\(\(\) => toast\.success\('Link copied\.'\)\)\s*\.catch\(\(\) => toast\.error/)
+  })
+
+  it("only overlays the row on screens with a mouse (touch screens keep a slot)", () => {
+    expect(menu).toContain("[@media(hover:hover)]:absolute")
+    expect(menu).toContain("[@media(hover:hover)]:right-1")
+    expect(menu).toMatch(/overlay &&/)
+    expect(menu).toMatch(/overlay = false/)
   })
 
   it("is portalled above the mobile drawer", () => {

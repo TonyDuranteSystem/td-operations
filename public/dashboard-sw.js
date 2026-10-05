@@ -36,6 +36,13 @@ self.addEventListener('activate', function (event) {
 // is served only when the network itself fails.
 self.addEventListener('fetch', function (event) {
   if (event.request.mode !== 'navigate') return
+  // A page loaded INSIDE A FRAME (a floating window — dev job f3f3e237) goes straight
+  // to the network, untouched. Re-requesting it from here (fetch(event.request)) makes
+  // the browser drop its "this is a frame" label (Sec-Fetch-Dest becomes "empty"),
+  // and the dashboard layout reads exactly that label to decide window mode. Found by
+  // browser QA 2026-10-05: frames came back as the full CRM whenever this worker was
+  // active. Only the offline fallback is skipped, which a floating window doesn't need.
+  if (event.request.destination === 'iframe') return
   event.respondWith(
     fetch(event.request).catch(function () {
       return caches.match(OFFLINE_URL).then(function (cached) {
