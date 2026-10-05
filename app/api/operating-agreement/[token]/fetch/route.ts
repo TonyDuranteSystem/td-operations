@@ -30,7 +30,7 @@ import { accessCodeError } from "@/lib/esign/access-guard"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { checkRateLimit, recordLoginFailure } from "@/lib/portal/rate-limit"
 import { clientIp } from "@/lib/esign/request-meta"
-import { verifyOaPass } from "@/lib/oa/portal-pass"
+import { signOaDownloadTicket, verifyOaPass } from "@/lib/oa/portal-pass"
 import {
   OA_AGREEMENT_SELECT,
   OA_SIGNATURE_SELECT,
@@ -187,8 +187,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     }
   }
 
+  // A ticket for the signed-PDF download, only now that every gate above has passed and only
+  // for a signed agreement. See lib/oa/portal-pass.ts (download ticket).
+  let downloadTicket: string | null = null
+  if (agreement.status === "signed") {
+    try {
+      downloadTicket = await signOaDownloadTicket(agreement.id)
+    } catch {
+      downloadTicket = null // no secret configured: the download falls back to the normal gates
+    }
+  }
+
   const payload = {
     requiresEmail: false,
+    downloadTicket,
     isPreview,
     currentSignerIndex: signerIndex,
     agreement: toPublicAgreement(agreement),

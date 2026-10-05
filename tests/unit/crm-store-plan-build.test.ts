@@ -166,3 +166,59 @@ describe("person tax folder, filing status, size and final names", () => {
     expect(finalName("No drive name", undefined, false)).toBe("No drive name")
   })
 })
+
+describe("a Drive folder shared with another account", () => {
+  const twin = { id: "11111111-1111-4111-8111-111111111111", name: "Conversion Monster Llc", status: "Cancelled", documents: 0, members: 0, openDeliveries: 0 }
+  it("blocks when nobody has acknowledged the other account", async () => {
+    const { sharedFolderProblems } = await import("@/lib/crm-store/plan-build")
+    expect(sharedFolderProblems([twin], [], 0).join()).toMatch(/shared with another account/)
+    expect(sharedFolderProblems([], [], 0)).toEqual([])
+  })
+  it("allows an acknowledged, empty, cancelled (or closed) duplicate", async () => {
+    const { sharedFolderProblems } = await import("@/lib/crm-store/plan-build")
+    expect(sharedFolderProblems([twin], [twin.id], 0)).toEqual([])
+    expect(sharedFolderProblems([{ ...twin, status: "Closed" }], [twin.id], 0)).toEqual([])
+  })
+  it("still blocks an acknowledged account that is active, has documents, members or open services", async () => {
+    const { sharedFolderProblems } = await import("@/lib/crm-store/plan-build")
+    expect(sharedFolderProblems([{ ...twin, status: "Active" }], [twin.id], 0).join()).toMatch(/not a cancelled or closed/)
+    expect(sharedFolderProblems([{ ...twin, documents: 3 }], [twin.id], 0).join()).toMatch(/3 document/)
+    expect(sharedFolderProblems([{ ...twin, members: 1 }], [twin.id], 0).join()).toMatch(/1 member/)
+    expect(sharedFolderProblems([{ ...twin, openDeliveries: 2 }], [twin.id], 0).join()).toMatch(/2 open service/)
+  })
+  it("never lets a contact's folder through, and refuses a named account that does not share the folder", async () => {
+    const { sharedFolderProblems } = await import("@/lib/crm-store/plan-build")
+    expect(sharedFolderProblems([], [], 1).join()).toMatch(/contact's folder/)
+    expect(sharedFolderProblems([twin], ["22222222-2222-4222-8222-222222222222", twin.id], 0).join()).toMatch(/does not\./)
+  })
+  it("a plan that does not use the field keeps the same fingerprint", () => {
+    const a = basePlan()
+    const withField = PlanSchema.parse({ ...a, sharedFolderWith: ["11111111-1111-4111-8111-111111111111"] })
+    expect(planSha(withField)).not.toBe(planSha(a))
+    expect(JSON.stringify(a)).not.toContain("sharedFolderWith")
+  })
+})
+
+describe("people with several companies", () => {
+  it("says nothing for a person in one company", async () => {
+    const { otherCompaniesNote } = await import("@/lib/crm-store/plan-build")
+    expect(otherCompaniesNote("Rodrigo", [])).toBeNull()
+  })
+  it("lists the other companies and flags a non-active one", async () => {
+    const { otherCompaniesNote } = await import("@/lib/crm-store/plan-build")
+    const n = otherCompaniesNote("Rodrigo", [{ name: "Partner Alliance LLC", status: "Active" }, { name: "Old LLC", status: "Closed" }])
+    expect(n).toMatch(/2 other companies/)
+    expect(n).toMatch(/Partner Alliance LLC, Old LLC \(Closed\)/)
+  })
+  it("flags a planned file with the same size as one already stored", async () => {
+    const { personDuplicateNotes } = await import("@/lib/crm-store/plan-build")
+    const out = personDuplicateNotes("Rodrigo", [{ name: "Passport.pdf", documentType: "passport", size: 500 }], [{ name: "passport.pdf", documentType: "passport", size: 500 }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatch(/already stored/)
+  })
+  it("flags a second document of the same type with other bytes, and ignores unrelated files", async () => {
+    const { personDuplicateNotes } = await import("@/lib/crm-store/plan-build")
+    expect(personDuplicateNotes("R", [{ name: "new.pdf", documentType: "passport", size: 9 }], [{ name: "old.pdf", documentType: "passport", size: 5 }])[0]).toMatch(/already has a "passport"/)
+    expect(personDuplicateNotes("R", [{ name: "a.pdf", documentType: "passport", size: 9 }], [{ name: "b.pdf", documentType: "itin_letter", size: 5 }])).toEqual([])
+  })
+})

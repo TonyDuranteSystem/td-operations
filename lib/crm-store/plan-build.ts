@@ -79,6 +79,12 @@ export const PlanSchema = z.object({
   /** Drive files on hold (an open question) */
   hold: z.array(z.string()).default([]),
   notes: z.string().max(2000).optional(),
+  /**
+   * Other CRM accounts that point at this company's Drive folder AND that Antonio has seen are empty duplicates
+   * (a cancelled/closed twin record with no documents, members or open services). Without this the build refuses a
+   * shared folder. Optional, so a plan that does not use it keeps its fingerprint.
+   */
+  sharedFolderWith: z.array(z.string().uuid()).max(5).optional(),
 })
 export type Plan = z.infer<typeof PlanSchema>
 export type PlanItem = z.infer<typeof PlanItemSchema>
@@ -164,6 +170,48 @@ export interface PlanReportItem {
 }
 export interface PrepareResult { errors: string[]; warnings: string[]; items: PlanReportItem[]; counts: { items: number; merges: number; leaveInDrive: number; hold: number; owners: number } }
 
+export interface SharingAccount { id: string; name: string; status: string | null; documents: number; members: number; openDeliveries: number }
+/**
+ * Pure: why a shared Drive folder blocks a plan build. A contact holding the folder always blocks. Another account
+ * blocks unless the plan names it AND it is an empty duplicate (Cancelled/Closed, no documents, no members, nothing open).
+ */
+export function sharedFolderProblems(others: SharingAccount[], acknowledged: string[], contactHolders: number): string[] {
+  const out: string[] = []
+  if (contactHolders > 0) out.push("This company's Drive folder is also a contact's folder — it cannot be built from a plan.")
+  const known = new Set(others.map((o) => o.id))
+  for (const id of acknowledged) if (!known.has(id)) out.push(`The plan says account ${id} shares the folder, but it does not.`)
+  for (const o of others) {
+    if (!acknowledged.includes(o.id)) { out.push(`This company's Drive folder is shared with another account ("${o.name}") — name it in the plan only if it is an empty cancelled duplicate.`); continue }
+    const closed = o.status === "Cancelled" || o.status === "Closed"
+    if (!closed) out.push(`"${o.name}" shares the folder but is ${o.status ?? "of unknown status"}, not a cancelled or closed duplicate.`)
+    if (o.documents > 0) out.push(`"${o.name}" shares the folder but has ${o.documents} document(s) of its own.`)
+    if (o.members > 0) out.push(`"${o.name}" shares the folder but has ${o.members} member(s).`)
+    if (o.openDeliveries > 0) out.push(`"${o.name}" shares the folder but has ${o.openDeliveries} open service(s).`)
+  }
+  return out
+}
+
+export interface OtherCompany { name: string; status: string | null }
+export interface StoredPersonFile { name: string; documentType: string | null; size: number | null }
+export interface PlannedPersonFile { name: string; documentType: string | null; size: number }
+/** Pure: one plain line saying which OTHER companies a person belongs to (null when only this one). */
+export function otherCompaniesNote(person: string, others: OtherCompany[]): string | null {
+  if (others.length === 0) return null
+  const list = others.map((o) => `${o.name}${o.status && o.status !== "Active" ? ` (${o.status})` : ""}`).join(", ")
+  return `${person} also belongs to ${others.length} other ${others.length === 1 ? "company" : "companies"}: ${list} — their documents live once in their own storage and show in every company.`
+}
+/** Pure: planned personal files that look already stored — same size = likely the same file; same type with other bytes = check by hand. */
+export function personDuplicateNotes(person: string, planned: PlannedPersonFile[], stored: StoredPersonFile[]): string[] {
+  const out: string[] = []
+  for (const p of planned) {
+    const same = stored.find((s) => s.size != null && s.size === p.size)
+    if (same) { out.push(`${person}: "${p.name}" looks already stored as "${same.name}" (same size) — drop it from the plan unless it is really a different file.`); continue }
+    const sameType = p.documentType ? stored.find((s) => s.documentType === p.documentType) : undefined
+    if (sameType) out.push(`${person} already has a "${p.documentType}" ("${sameType.name}") — check "${p.name}" is not a second copy.`)
+  }
+  return out
+}
+
 export function planBuildEnabled(): boolean {
   return process.env.STORE_PLAN_BUILD === "1"
 }
@@ -192,12 +240,20 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
   if (!acct.drive_folder_id) throw new PlanError(["This company has no Drive folder."])
   const folder = acct.drive_folder_id as string
 
-  // another account or a contact on the same Drive folder → the files could belong to someone else
-  const [{ count: others }, { count: contactHolders }] = await Promise.all([
-    db().from("accounts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder).neq("id", plan.accountId),
-    db().from("contacts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder),
-  ])
-  if ((others ?? 0) > 0 || (contactHolders ?? 0) > 0) errors.push("This company's Drive folder is shared with another account or a contact — it cannot be built from a plan.")
+  // another account or a contact on the same Drive folder → the files could belong to someone else.
+  // The ONE exception: an account the plan names in `sharedFolderWith` that really is an empty cancelled/closed duplicate.
+  const { data: otherRows } = await db().from("accounts").select("id, company_name, status").eq("drive_folder_id", folder).neq("id", plan.accountId)
+  const others = (otherRows ?? []) as { id: string; company_name: string; status: string | null }[]
+  const emptiness = await Promise.all(others.map(async (o) => {
+    const [d, m, sd] = await Promise.all([
+      db().from("documents").select("id", { count: "exact", head: true }).eq("account_id", o.id),
+      db().from("members").select("id", { count: "exact", head: true }).eq("account_id", o.id),
+      db().from("service_deliveries").select("id", { count: "exact", head: true }).eq("account_id", o.id).not("status", "in", "(completed,cancelled)"),
+    ])
+    return { id: o.id, name: o.company_name, status: o.status, documents: d.count ?? 0, members: m.count ?? 0, openDeliveries: sd.count ?? 0 }
+  }))
+  const { count: contactHolders } = await db().from("contacts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder)
+  errors.push(...sharedFolderProblems(emptiness, plan.sharedFolderWith ?? [], contactHolders ?? 0))
 
   // a start whose request died before it finished is closed after 10 minutes (as the copy tool does)
   await closeStaleScans(plan.accountId)
@@ -294,6 +350,26 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
       merged: it.appended.length, bytes: it.source.size + it.appended.reduce((n, a) => n + a.size, 0), problems,
     })
     for (const p of problems) errors.push(`Item ${it.key} (${it.name}): ${p}`)
+  }
+  // people: every other company a person in this plan belongs to, and what their own storage already holds
+  const peopleSeen = new Set<string>()
+  for (const it of plan.items) {
+    if (it.owner.kind !== "person" || peopleSeen.has(it.owner.contactId)) continue
+    peopleSeen.add(it.owner.contactId)
+    const cid = it.owner.contactId
+    const label = it.owner.fullName
+    const { data: ac } = await db().from("account_contacts").select("account_id, accounts(company_name, status)").eq("contact_id", cid).neq("account_id", plan.accountId)
+    const rows = (ac ?? []) as unknown as { account_id: string; accounts: { company_name: string | null; status: string | null } | null }[]
+    const note = otherCompaniesNote(label, rows.filter((r) => r.accounts?.company_name).map((r) => ({ name: r.accounts!.company_name as string, status: r.accounts!.status })))
+    if (note) warnings.push(note)
+    const st = owners.get(ownerRef(it.owner))
+    if (st?.ownerId) {
+      const { data: sf } = await db().from("store_files").select("name, document_type, store_file_versions!store_files_current_version_fk(size_bytes)").eq("owner_id", st.ownerId).eq("state", "live")
+      const stored = ((sf ?? []) as unknown as { name: string; document_type: string | null; store_file_versions: { size_bytes: number | null } | null }[])
+        .map((f) => ({ name: f.name, documentType: f.document_type, size: f.store_file_versions?.size_bytes ?? null }))
+      const planned = plan.items.filter((x) => x.owner.kind === "person" && x.owner.contactId === cid).map((x) => ({ name: x.name, documentType: x.documentType ?? null, size: x.source.size }))
+      warnings.push(...personDuplicateNotes(label, planned, stored))
+    }
   }
   // the files the plan leaves in Drive / holds must exist in the folder too (a typo would hide a file)
   for (const id of [...plan.leaveInDrive, ...plan.hold]) if (!byId.has(id)) warnings.push(`Drive file ${id} (left in Drive / on hold) is not in this company's Drive folder.`)
