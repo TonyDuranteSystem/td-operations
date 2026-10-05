@@ -52,10 +52,10 @@ const CURSORS: Record<ResizeEdge, string> = {
 }
 
 const EDGE_CLASS: Record<ResizeEdge, string> = {
-  n: 'left-2 right-2 top-0 h-1.5',
-  s: 'left-2 right-2 bottom-0 h-1.5',
-  w: 'top-2 bottom-2 left-0 w-1.5',
-  e: 'top-2 bottom-2 right-0 w-1.5',
+  n: 'left-3 right-3 top-0 h-2',
+  s: 'left-3 right-3 bottom-0 h-2',
+  w: 'top-3 bottom-3 left-0 w-2',
+  e: 'top-3 bottom-3 right-0 w-2',
   nw: 'left-0 top-0 h-3 w-3',
   ne: 'right-0 top-0 h-3 w-3',
   sw: 'left-0 bottom-0 h-3 w-3',
@@ -234,7 +234,12 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     if (!w) return
     if (action === 'popout') {
       const url = absoluteNavUrl(window.location.origin, w.url)
-      window.open(url, '_blank', `popup=yes,width=${Math.round(w.w)},height=${Math.round(w.h)}`)
+      const popup = window.open(url, '_blank', `popup=yes,width=${Math.round(w.w)},height=${Math.round(w.h)}`)
+      if (!popup) {
+        // Blocked by the browser: keep the window — closing it would lose the page.
+        toast.error('Your browser blocked the separate window. Allow pop-ups for this site and try again.')
+        return
+      }
     } else if (action === 'dock') {
       router.push(w.url)
     }

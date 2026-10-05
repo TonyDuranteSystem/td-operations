@@ -208,6 +208,12 @@ describe("changing windows", () => {
     expect(setLocation(moved, id, "/login", "Sign in")).toBe(moved)
     expect(setLocation(moved, id, "/leads?x=1", "Leads")).toBe(moved) // no change → same object
   })
+  it("a generic page title falls back to the page name", () => {
+    const s = open(EMPTY_STATE, "/inbox").state
+    const moved = setLocation(s, s.windows[0].id, "/leads/abc", "TD Operations")
+    expect(moved.windows[0].title).toBe("Leads")
+    expect(setLocation(moved, s.windows[0].id, "/leads/abc", "Lead — TD Operations").windows[0].title).toBe("Lead — TD Operations")
+  })
   it("clampAll pulls windows back after the screen shrinks, and is a no-op when nothing moved", () => {
     const s = setBox(open(EMPTY_STATE, "/inbox").state, "w1", { x: 1500, y: 800, w: 1000, h: 600 })
     const small: Viewport = { vw: 1100, vh: 700, topInset: 0 }

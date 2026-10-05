@@ -256,7 +256,9 @@ export function setLocation(state: WindowsState, id: string, url: string, title:
   if (!isWindowableUrl(url)) return state
   const cur = state.windows.find(w => w.id === id)
   if (!cur) return state
-  const nextTitle = title.trim() || fallbackTitle(url)
+  // Most CRM pages are simply titled "TD Operations" — useless on a window; use the page name instead.
+  const t = title.trim()
+  const nextTitle = !t || t === 'TD Operations' ? fallbackTitle(url) : t
   if (cur.url === url && cur.title === nextTitle) return state
   return patch(state, id, { url, title: nextTitle })
 }
