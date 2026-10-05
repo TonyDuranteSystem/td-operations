@@ -191,6 +191,27 @@ export function sharedFolderProblems(others: SharingAccount[], acknowledged: str
   return out
 }
 
+export interface OtherCompany { name: string; status: string | null }
+export interface StoredPersonFile { name: string; documentType: string | null; size: number | null }
+export interface PlannedPersonFile { name: string; documentType: string | null; size: number }
+/** Pure: one plain line saying which OTHER companies a person belongs to (null when only this one). */
+export function otherCompaniesNote(person: string, others: OtherCompany[]): string | null {
+  if (others.length === 0) return null
+  const list = others.map((o) => `${o.name}${o.status && o.status !== "Active" ? ` (${o.status})` : ""}`).join(", ")
+  return `${person} also belongs to ${others.length} other ${others.length === 1 ? "company" : "companies"}: ${list} — their documents live once in their own storage and show in every company.`
+}
+/** Pure: planned personal files that look already stored — same size = likely the same file; same type with other bytes = check by hand. */
+export function personDuplicateNotes(person: string, planned: PlannedPersonFile[], stored: StoredPersonFile[]): string[] {
+  const out: string[] = []
+  for (const p of planned) {
+    const same = stored.find((s) => s.size != null && s.size === p.size)
+    if (same) { out.push(`${person}: "${p.name}" looks already stored as "${same.name}" (same size) — drop it from the plan unless it is really a different file.`); continue }
+    const sameType = p.documentType ? stored.find((s) => s.documentType === p.documentType) : undefined
+    if (sameType) out.push(`${person} already has a "${p.documentType}" ("${sameType.name}") — check "${p.name}" is not a second copy.`)
+  }
+  return out
+}
+
 export function planBuildEnabled(): boolean {
   return process.env.STORE_PLAN_BUILD === "1"
 }
@@ -329,6 +350,26 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
       merged: it.appended.length, bytes: it.source.size + it.appended.reduce((n, a) => n + a.size, 0), problems,
     })
     for (const p of problems) errors.push(`Item ${it.key} (${it.name}): ${p}`)
+  }
+  // people: every other company a person in this plan belongs to, and what their own storage already holds
+  const peopleSeen = new Set<string>()
+  for (const it of plan.items) {
+    if (it.owner.kind !== "person" || peopleSeen.has(it.owner.contactId)) continue
+    peopleSeen.add(it.owner.contactId)
+    const cid = it.owner.contactId
+    const label = it.owner.fullName
+    const { data: ac } = await db().from("account_contacts").select("account_id, accounts(company_name, status)").eq("contact_id", cid).neq("account_id", plan.accountId)
+    const rows = (ac ?? []) as unknown as { account_id: string; accounts: { company_name: string | null; status: string | null } | null }[]
+    const note = otherCompaniesNote(label, rows.filter((r) => r.accounts?.company_name).map((r) => ({ name: r.accounts!.company_name as string, status: r.accounts!.status })))
+    if (note) warnings.push(note)
+    const st = owners.get(ownerRef(it.owner))
+    if (st?.ownerId) {
+      const { data: sf } = await db().from("store_files").select("name, document_type, store_file_versions!store_files_current_version_fk(size_bytes)").eq("owner_id", st.ownerId).eq("state", "live")
+      const stored = ((sf ?? []) as unknown as { name: string; document_type: string | null; store_file_versions: { size_bytes: number | null } | null }[])
+        .map((f) => ({ name: f.name, documentType: f.document_type, size: f.store_file_versions?.size_bytes ?? null }))
+      const planned = plan.items.filter((x) => x.owner.kind === "person" && x.owner.contactId === cid).map((x) => ({ name: x.name, documentType: x.documentType ?? null, size: x.source.size }))
+      warnings.push(...personDuplicateNotes(label, planned, stored))
+    }
   }
   // the files the plan leaves in Drive / holds must exist in the folder too (a typo would hide a file)
   for (const id of [...plan.leaveInDrive, ...plan.hold]) if (!byId.has(id)) warnings.push(`Drive file ${id} (left in Drive / on hold) is not in this company's Drive folder.`)
