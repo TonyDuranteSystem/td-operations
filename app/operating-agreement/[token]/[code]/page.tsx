@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
-import { supabasePublic } from '@/lib/supabase/public-client'
 import { generateOASections, type OAData, type OAMember } from '@/lib/types/oa-templates'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 
@@ -240,17 +239,20 @@ function OperatingAgreementCodeContent() {
         setSigned(sigs.find(s => s.member_index === body.currentSignerIndex)?.status === 'signed')
       }
 
-      // Fetch signature images for already-signed members
+      // Fetch signature images for already-signed members — through the SERVER. The browser can no
+      // longer read the private signed-oa bucket itself (anonymous reads closed 2026-07-22), which
+      // silently dropped every picture. Same link / pass / e-mail answer the data route just accepted.
       const signedSigs = sigs.filter(s => s.status === 'signed' && s.signature_image_path)
       const images: Record<number, string> = {}
+      const imgQs = new URLSearchParams({ code: accessCode })
+      if (signerCode) imgQs.set('signer', signerCode)
+      if (passToken) imgQs.set('pass', passToken)
+      if (adminMode) imgQs.set('preview', 'td')
       for (const s of signedSigs) {
         try {
-          const { data: blob } = await supabasePublic.storage
-            .from('signed-oa')
-            .download(s.signature_image_path!)
-          if (blob) {
-            images[s.member_index] = URL.createObjectURL(blob)
-          }
+          const r = await fetch(`/api/operating-agreement/${token}/signature-image?${imgQs.toString()}&index=${s.member_index}`,
+            email ? { headers: { 'x-oa-email': email } } : undefined)
+          if (r.ok) images[s.member_index] = URL.createObjectURL(await r.blob())
         } catch {
           // Skip failed image loads
         }
