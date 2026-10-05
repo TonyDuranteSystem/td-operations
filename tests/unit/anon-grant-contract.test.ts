@@ -86,8 +86,8 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
   // as of 2026-08-11 the LEGACY bare-token page is a pure redirect — its old
   // browser-side anon write (html2pdf screenshot + status/pdf update) is gone.
   // That closes the last anon-write hole and unblocks revoking the anon UPDATE
-  // grant on oa_agreements (migration 20260811-2100). The signed-oa BUCKET stays
-  // anon-reachable (the canonical page still downloads signature images from it).
+  // grant on oa_agreements (migration 20260811-2100). The signed-oa bucket is no longer
+  // reached with the anon key at all (see ANON_REACHABLE_BUCKETS below).
   // NO onboarding_submissions entry — both onboarding-form pages moved fully
   // server-side (service key) 2026-09-20, same shape as formation_submissions
   // above: /api/onboarding-form/[token]/data + /api/onboarding-form/[token]/gate.
@@ -114,6 +114,10 @@ const REQUIRED_ANON_PRIVILEGES: Record<string, string[]> = {
  * locking a table while its bucket stays open is half a fix — the signed PDFs
  * and uploads live here.
  */
+// signed-oa was REMOVED 2026-10-05 (dev job d705ac66): the signed-PDF download and the members'
+// signature pictures now go through token-checked server routes (/api/operating-agreement/[token]/
+// signed-pdf and /signature-image, service key), so no page reaches that bucket with the anon
+// storage client any more. (Its anon read policy was already gone; the page just still tried.)
 // signed-contracts / signed-leases were REMOVED 2026-08-01 (dev_task 97177e49): the
 // client download now goes through a token-checked server route that signs the exact
 // recorded path (/api/offer/[token]/contract-pdf, /api/lease/[token]/signed-pdf), so
@@ -125,7 +129,6 @@ const ANON_REACHABLE_BUCKETS = [
   "closure-uploads",
   "formation-uploads",
   "onboarding-uploads",
-  "signed-oa",
   "tax-form-uploads",
 ]
 

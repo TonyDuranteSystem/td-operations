@@ -27,86 +27,15 @@ export const dynamic = "force-dynamic"
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { accessCodeError } from "@/lib/esign/access-guard"
-import { checkRateLimit, recordLoginFailure } from "@/lib/portal/rate-limit"
-import { clientIp } from "@/lib/esign/request-meta"
-import { isStaffPreview } from "@/lib/auth/staff-preview"
-import { verifyOaDownloadTicket, verifyOaPass } from "@/lib/oa/portal-pass"
-import { OA_AGREEMENT_SELECT, OA_SIGNATURE_SELECT, emailGateFor, emailGateMatches, resolveSignerIndex, signerLinkState } from "@/lib/oa/public-view"
+import { oaReadGate } from "@/lib/oa/read-gate"
 import { signedPdfGate } from "@/lib/oa/signed-pdf-gate"
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const db = supabaseAdmin as any
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
-  const url = new URL(req.url)
-  const code = url.searchParams.get("code") || ""
-  const signerCode = url.searchParams.get("signer")
-  const passToken = url.searchParams.get("pass")
-  const email = req.headers.get("x-oa-email")
-  const ticket = req.headers.get("x-oa-ticket")
-  const isPreview = await isStaffPreview(url.searchParams.get("preview") === "td")
-
-  // The access guard throttles wrong codes, not a caller holding a right one.
-  const rl = checkRateLimit(`oa-signed-pdf:${clientIp(req) || "unknown"}:${token}`, 10, 60_000)
-  if (!rl.allowed) {
-    return NextResponse.json({ error: "Too many requests. Please wait a moment and try again." }, { status: 429 })
-  }
-
-  const { data: agreement, error: agreementErr } = await db
-    .from("oa_agreements")
-    .select(OA_AGREEMENT_SELECT)
-    .eq("token", token)
-    .maybeSingle()
-  if (agreementErr) {
-    console.error("[oa/signed-pdf] agreement lookup failed:", agreementErr)
-    return NextResponse.json(
-      { error: "Could not load the Operating Agreement. Please try again, or contact support@tonydurante.us." },
-      { status: 503 },
-    )
-  }
-  if (!agreement) return NextResponse.json({ error: "Operating Agreement not found." }, { status: 404 })
-
-  const codeErr = accessCodeError(req, { token, expected: agreement.access_code, provided: code, isPreview })
-  if (codeErr) return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
-
-  const { data: sigRows } = await db
-    .from("oa_signatures")
-    .select(OA_SIGNATURE_SELECT)
-    .eq("oa_id", agreement.id)
-    .order("member_index")
-  const signatures = sigRows ?? []
-
-  // A co-signer link that died (members changed / 15-day expiry) cannot read the document either.
-  const signerIndex = resolveSignerIndex(signatures, signerCode)
-  if (signerCode && signerIndex === null) {
-    // A wrong signer code is a probe of the per-signer code space (a right one skips the email gate):
-    // make it cost against the same shared IP+token lockout the data route uses.
-    recordLoginFailure(`esign:${clientIp(req) || "unknown"}:${token}`)
-    return NextResponse.json({ error: "Invalid signing link." }, { status: 403 })
-  }
-  if (signerIndex !== null) {
-    const row = signatures.find((s: { member_index: number }) => s.member_index === signerIndex)
-    const state = row ? signerLinkState(row) : "ok"
-    if (state === "revoked") {
-      return NextResponse.json({ error: "This signing link is no longer valid because the company's members changed. Please ask the company owner to re-issue it from the portal." }, { status: 403 })
-    }
-    if (state === "expired") {
-      return NextResponse.json({ error: "This signing link has expired. Please ask the company owner to re-send it from the portal." }, { status: 403 })
-    }
-  }
-
-  // Email gate — identical rule to the data route, so this file is never easier to reach than the page.
-  const pass = passToken ? await verifyOaPass(passToken, agreement.id) : null
-  // A download ticket is what the data route handed this page AFTER it passed every gate (see
-  // lib/oa/portal-pass.ts) — it outlives the 2-minute page-load pass, which is the whole point.
-  const hasTicket = ticket ? await verifyOaDownloadTicket(ticket, agreement.id) : false
-  const skipEmailGate = isPreview || !!pass || signerIndex !== null || hasTicket
-  const gateAddress = skipEmailGate ? null : emailGateFor(agreement, signatures, signerIndex)
-  if (gateAddress && !emailGateMatches(gateAddress, email)) {
-    return NextResponse.json({ error: "Please confirm your e-mail address on the agreement page first." }, { status: 403 })
-  }
+  // Every gate the page's own data route applies (lib/oa/read-gate.ts).
+  const access = await oaReadGate(req, token, { rateKey: "oa-signed-pdf", rateMax: 10, logTag: "oa/signed-pdf" })
+  if (!access.ok && access.response) return access.response
+  const agreement = access.agreement
 
   const gate = signedPdfGate({ token: agreement.token, status: agreement.status, pdf_storage_path: agreement.pdf_storage_path })
   if (!gate.ok || !gate.path) return NextResponse.json({ error: gate.error }, { status: gate.status })
