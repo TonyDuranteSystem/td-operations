@@ -125,6 +125,12 @@ const EDITOR_COLUMNS = new Set([
   "client_description",
   "requires_approval",
   "auto_actions",
+  // N1a C2 step settings — written only when the caller sent them (see the C2 block below).
+  "waiting_on",
+  "completes_service",
+  "requires_document_to_advance",
+  "client_label",
+  "client_label_it",
 ])
 
 /** A realistic row: the NOT NULL columns are always present. */
@@ -474,5 +480,102 @@ describe("stepPatchChanges — only real changes are written", () => {
     expect(stepPatchChanges({ sla_days: 3 }, { sla_days: 4 })).toBe(true)
     expect(stepPatchChanges({ auto_advance: false }, { auto_advance: true })).toBe(true)
     expect(stepPatchChanges({ auto_actions: null }, { auto_actions: [{ type: "second_installment_target" }] })).toBe(true)
+  })
+})
+
+describe("N1a C2 — step settings", () => {
+  it("settings the caller never loaded are left untouched — including the client label", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "A", stage_order: 1, completes_service: true, waiting_on: "us" })]
+    await replaceStagesForService("Shipping", [{ id: "a", stage_order: 1, stage_name: "A", sla_days: 4 }])
+    const upd = ops.find(o => o.kind === "update")!
+    for (const k of ["waiting_on", "completes_service", "requires_document_to_advance", "client_label", "client_label_it"]) {
+      expect(upd.payload).not.toHaveProperty(k)
+    }
+  })
+
+  it("writes the settings it was given; a blank client label is stored as empty, not as spaces", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "A", stage_order: 1 })]
+    await replaceStagesForService("Shipping", [
+      {
+        id: "a", stage_order: 1, stage_name: "A",
+        waiting_on: "outside", requires_document_to_advance: true, client_label: "  ", client_label_it: " Spedito ",
+      },
+    ])
+    const upd = ops.find(o => o.kind === "update")!
+    expect(upd.payload).toMatchObject({
+      waiting_on: "outside", requires_document_to_advance: true, client_label: null, client_label_it: "Spedito",
+    })
+  })
+
+  it("refuses two done steps before writing anything", async () => {
+    existingRows = [
+      realRow({ id: "a", stage_name: "A", stage_order: 1, completes_service: true }),
+      realRow({ id: "b", stage_name: "B", stage_order: 2, completes_service: false }),
+    ]
+    await expect(
+      replaceStagesForService("Shipping", [
+        { id: "a", stage_order: 1, stage_name: "A" },
+        { id: "b", stage_order: 2, stage_name: "B", completes_service: true },
+      ]),
+    ).rejects.toThrow(/Only one step can be the "done" step/)
+    expect(ops.some(o => o.kind !== "select")).toBe(false)
+  })
+
+  it("moving the done tick unticks the old step FIRST, so the one-done-step rule never trips mid-save", async () => {
+    existingRows = [
+      realRow({ id: "a", stage_name: "A", stage_order: 1, completes_service: false }),
+      realRow({ id: "b", stage_name: "B", stage_order: 2, completes_service: true }),
+    ]
+    await replaceStagesForService("Shipping", [
+      { id: "a", stage_order: 1, stage_name: "A", completes_service: true },
+      { id: "b", stage_order: 2, stage_name: "B", completes_service: false },
+    ])
+    const updates = ops.filter(o => o.kind === "update")
+    expect(updates.map(u => u.filters.find(f => f[0] === "id")?.[1])).toEqual(["b", "a"])
+  })
+
+  it("refuses an invalid 'waiting on' value", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "A", stage_order: 1 })]
+    await expect(
+      replaceStagesForService("Shipping", [
+        { id: "a", stage_order: 1, stage_name: "A", waiting_on: "staff" as never },
+      ]),
+    ).rejects.toThrow(/not a valid "Waiting on"/)
+  })
+
+  it("refuses an 'action required' step that is not waiting on the client", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "Client Signing", stage_order: 1 })]
+    await expect(
+      replaceStagesForService("ITIN", [{ id: "a", stage_order: 1, stage_name: "Client Signing", waiting_on: "us" }]),
+    ).rejects.toThrow(/must be waiting on the client/)
+  })
+
+  it("the /config single-step edit: ticking a step as done unticks the old done step in the same save", async () => {
+    singleRow = { service_type: "Shipping" }
+    existingRows = [
+      realRow({ id: "a", stage_name: "Shipped", stage_order: 1, completes_service: true }),
+      realRow({ id: "b", stage_name: "Delivered", stage_order: 2, completes_service: false }),
+    ]
+    await updateOneStage("b", { completes_service: true }, "x@y.com")
+    const updates = ops.filter(o => o.kind === "update")
+    expect(updates.map(u => u.filters.find(f => f[0] === "id")?.[1])).toEqual(["a", "b"])
+    expect(updates[0].payload).toMatchObject({ completes_service: false })
+    expect(updates[1].payload).toMatchObject({ completes_service: true })
+  })
+
+  it("stepPatchChanges treats an unset done/document flag as false", async () => {
+    const { stepPatchChanges } = await import("@/lib/services/stages")
+    expect(stepPatchChanges({ completes_service: null }, { completes_service: false })).toBe(false)
+    expect(stepPatchChanges({ requires_document_to_advance: false }, { requires_document_to_advance: true })).toBe(true)
+  })
+
+  it("a field the caller did not send keeps its stored value — follow-up days, description, flags, actions", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "A", stage_order: 1, sla_days: 5, stage_description: "kept" })]
+    await replaceStagesForService("Shipping", [{ id: "a", stage_order: 1, stage_name: "A", waiting_on: "us" }])
+    const upd = ops.find(o => o.kind === "update")!
+    for (const k of ["sla_days", "stage_description", "auto_advance", "notify_client_email", "client_description", "auto_actions"]) {
+      expect(upd.payload).not.toHaveProperty(k)
+    }
+    expect(upd.payload).toMatchObject({ waiting_on: "us" })
   })
 })

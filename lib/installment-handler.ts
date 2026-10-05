@@ -34,6 +34,26 @@ interface InstallmentResult {
 }
 
 /**
+ * The CMRA job that already covers `year`, if any: an open job (any year — the existing rule), or this year's job even
+ * if it is already closed — named "CMRA {year} - …" (the name this handler gives it) or CREATED in that year (activation
+ * names it "CMRA Mailing Address - …" and older backfills gave no name). Cancelled jobs never count.
+ */
+export function cmraJobForYear<
+  T extends { id: string; status: string | null; service_name: string | null; created_at?: string | null },
+>(
+  jobs: T[],
+  year: number,
+): T | null {
+  const live = jobs.filter(j => (j.status ?? "").toLowerCase() !== "cancelled")
+  return (
+    live.find(j => (j.status ?? "").toLowerCase() === "active") ??
+    live.find(j => (j.service_name ?? "").trim().toLowerCase().startsWith(`cmra ${year}`)) ??
+    live.find(j => !!j.created_at && j.created_at.slice(0, 4) === String(year)) ??
+    null
+  )
+}
+
+/**
  * Urgent staff task for tax-tracking gaps the payment chain cannot resolve
  * itself (missing formation date; late-born record needing extension
  * verification). Title-deduped so a handler re-run never duplicates it.
@@ -172,16 +192,19 @@ export async function onFirstInstallmentPaid(
 
   // ─── 1. Create CMRA Mailing Address SD ───
   try {
-    const { data: existingCmra } = await supabaseAdmin
+    // N1a C2: a CMRA job now CLOSES at "CMRA Active" (the year's lease is active), so "is there an open CMRA job" no
+    // longer answers "does this year already have one" — a re-run would create a second job for the same year. Look
+    // for an open job OR this year's job, open or closed (cmraJobForYear).
+    const { data: cmraJobs, error: cmraErr } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id")
+      .select("id, status, service_name, created_at")
       .eq("account_id", accountId)
       .eq("service_type", "CMRA Mailing Address")
-      .eq("status", "active")
-      .limit(1)
+    if (cmraErr) throw new Error(`CMRA job check failed: ${cmraErr.message}`)
+    const existingCmra = cmraJobForYear(cmraJobs ?? [], year)
 
-    if (existingCmra?.length) {
-      steps.push({ step: "cmra_sd", status: "exists", detail: existingCmra[0].id })
+    if (existingCmra) {
+      steps.push({ step: "cmra_sd", status: "exists", detail: existingCmra.id })
     } else {
       const newSd = await createSD({
         service_type: "CMRA Mailing Address",

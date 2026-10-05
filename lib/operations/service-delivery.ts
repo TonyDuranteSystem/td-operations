@@ -690,7 +690,7 @@ export async function completeSD(
 ): Promise<AdvanceStageResult> {
   const { data: sd, error: sdErr } = await supabaseAdmin
     .from("service_deliveries")
-    .select("service_type, stage, stage_order")
+    .select("service_type, stage, stage_order, status")
     .eq("id", params.delivery_id)
     .single()
 
@@ -698,6 +698,28 @@ export async function completeSD(
     throw new Error(
       `[completeSD] SD ${params.delivery_id} not found: ${sdErr?.message || "unknown"}`,
     )
+  }
+
+  // A closed job is not closed again (N1a C2): re-running the close would repeat what closing does — the renewal-date
+  // roll, the client's completion notice. A cancelled job is not completed either. Reopen it first if it really needs
+  // to go through again.
+  const sdStatus = ((sd as { status?: string | null }).status ?? "").trim().toLowerCase()
+  if (sdStatus === "completed" || sdStatus === "cancelled" || sdStatus === "canceled") {
+    return {
+      success: false,
+      error:
+        sdStatus === "completed"
+          ? "This job is already complete."
+          : "This job was cancelled — reopen it before marking it complete.",
+      from_stage: sd.stage || "New",
+      to_stage: sd.stage || "New",
+      to_order: (sd as { stage_order?: number | null }).stage_order ?? 0,
+      total_stages: 0,
+      is_completed: sdStatus === "completed",
+      created_tasks: [],
+      failed_tasks: [],
+      auto_triggers: [],
+    }
   }
 
   const { data: stages, error: stErr } = await supabaseAdmin
@@ -750,6 +772,9 @@ export async function completeSD(
   return advanceServiceDelivery({
     delivery_id: params.delivery_id,
     target_stage: finalStage,
+    // Already sitting on the done step but still open (a step marked "done" after the job got there): close it
+    // without creating that step's tasks a second time.
+    ...(sd.stage === finalStage ? { skip_tasks: true } : {}),
     actor: params.actor,
     notes: params.notes,
     renewal_filing_for_year: params.renewal_filing_for_year,

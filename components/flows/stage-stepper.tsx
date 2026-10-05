@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CheckCircle2, Circle, ChevronRight, Loader2,
@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { FLOW_DOC_UPLOADED_EVENT, type FlowDocUploadedDetail } from './document-upload'
 
 export interface StepperStage {
   stage_name: string
@@ -57,6 +58,20 @@ export function StageStepper({ stages, currentStage, serviceDeliveryId }: StageS
   const router = useRouter()
   const [busyStage, setBusyStage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // A refusal ("A document must be uploaded on …") is stale once a document is uploaded for this job or the job has
+  // moved — clear it then, instead of leaving the red line on screen until the next click (N1a C2).
+  useEffect(() => {
+    function onUploaded(e: Event) {
+      const detail = (e as CustomEvent<FlowDocUploadedDetail>).detail
+      if (!detail || detail.serviceDeliveryId === serviceDeliveryId) setError(null)
+    }
+    window.addEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+    return () => window.removeEventListener(FLOW_DOC_UPLOADED_EVENT, onUploaded)
+  }, [serviceDeliveryId])
+  useEffect(() => {
+    setError(null)
+  }, [currentStage])
 
   const sorted = [...stages].sort(
     (a, b) => a.stage_order - b.stage_order || a.stage_name.localeCompare(b.stage_name),

@@ -30,6 +30,7 @@ import { formationStateFromWizardData, resolveFormationStateCode } from "@/lib/f
 import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
+import { stageNotificationText } from "@/lib/services/step-settings"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
@@ -384,6 +385,81 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4g. A finished (or cancelled) job does not move forward (N1a C2). Once a service has a step AFTER its done step
+  // (DBA: "Registered" then "Renewal Due"), moving a finished job onward would quietly make it active again with its
+  // end date still set — and Mark complete would then refuse it as "already past its done step". Going back (reopen)
+  // stays allowed; a job that must go through again is reopened first.
+  {
+    const st = ((delivery as { status?: string | null }).status ?? "").trim().toLowerCase()
+    const fromOrderByName = stages.find(s => s.stage_name === delivery.stage)?.stage_order ?? currentOrder
+    if ((st === "completed" || st === "cancelled" || st === "canceled") && targetStage.stage_order > fromOrderByName) {
+      return {
+        success: false,
+        error:
+          st === "completed"
+            ? "This job is complete — reopen it (Go Back) before moving it forward."
+            : "This job was cancelled — reopen it before moving it forward.",
+        from_stage: delivery.stage || "New",
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [],
+      }
+    }
+  }
+
+  // 4f. Needs a document (N1a C2) — a forward move that leaves or jumps over a step marked "needs a document before
+  // moving on" is refused unless a document was uploaded on that step for this job. The database rule
+  // (trg_delivery_document_to_advance, migration 20261005-0100) enforces it for every writer; this gives the same
+  // refusal in plain words before anything is written. Test accounts are exempt, as in the rule.
+  {
+    const { documentStepsCrossed, documentMissingMessage } = await import("@/lib/services/step-settings")
+    const fromStep = stages.find(s => s.stage_name === delivery.stage)
+    const crossed = documentStepsCrossed(
+      stages as Array<{ stage_name: string; stage_order: number; requires_document_to_advance?: boolean | null }>,
+      fromStep?.stage_order,
+      targetStage.stage_order,
+    )
+    if (crossed.length > 0) {
+      // Test jobs are exempt, as in the rule: a job flagged as test (like 4d/4e) or a job of a test company.
+      let exempt = !!(delivery as { is_test?: boolean | null }).is_test
+      if (!exempt && delivery.account_id) {
+        const { data: acct } = await supabaseAdmin
+          .from("accounts")
+          .select("is_test")
+          .eq("id", delivery.account_id)
+          .maybeSingle()
+        exempt = !!(acct as { is_test?: boolean | null } | null)?.is_test
+      }
+      if (!exempt) {
+        const { data: docs } = await supabaseAdmin
+          .from("documents")
+          .select("flow_stage")
+          .eq("service_delivery_id", delivery.id)
+          .in("flow_stage", crossed)
+        const have = new Set(((docs ?? []) as Array<{ flow_stage: string | null }>).map(d => d.flow_stage))
+        const missing = crossed.filter(n => !have.has(n))
+        if (missing.length > 0) {
+          return {
+            success: false,
+            error: documentMissingMessage(missing),
+            from_stage: delivery.stage || "New",
+            to_stage: targetStage.stage_name,
+            to_order: targetStage.stage_order,
+            total_stages: stages.length,
+            is_completed: false,
+            created_tasks: [],
+            failed_tasks: [],
+            auto_triggers: [],
+          }
+        }
+      }
+    }
+  }
+
   // 5. Build stage history entry
   const historyEntry = {
     from_stage: delivery.stage || "New",
@@ -564,12 +640,12 @@ export async function advanceServiceDelivery(
           /* label localization is best-effort — keep the English/internal label */
         }
       }
-      const title = isCompleted
-        ? `${delivery.service_name || delivery.service_type} is complete!`
-        : `${delivery.service_name || delivery.service_type} update`
-      const body = isCompleted
-        ? "Your service has been completed."
-        : `Status updated to: ${stageLabel}`
+      const { title, body } = stageNotificationText({
+        serviceName: delivery.service_name || delivery.service_type,
+        isCompleted,
+        stageLabel,
+        hasClientLabel: !!stageForLabel.client_label,
+      })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
         contact_id: delivery.contact_id ?? undefined,

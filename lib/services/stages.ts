@@ -13,6 +13,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { protectedStageReason } from "@/lib/services/protected-stage-names"
 import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
+import { isWaitingOn, stepSettingsProblems, type WaitingOn } from "@/lib/services/step-settings"
 import type { Json } from "@/lib/database.types"
 import {
   type StageAction,
@@ -45,6 +46,19 @@ export interface StageRow {
    */
   requires_approval?: boolean | null
   /**
+   * N1a C2 step settings. All optional on purpose, like requires_approval: undefined = "this caller never loaded it",
+   * so the stored value is left untouched; null/false/"" = an explicit clear.
+   *   waiting_on — who must act next while a job sits on the step (step-settings.ts).
+   *   completes_service — the service's ONE done step (Mark complete lands here; the database allows one per service).
+   *   requires_document_to_advance — a job may not move forward past the step without a document uploaded on it.
+   *   client_label / client_label_it — what the client sees for the step (portal, notices).
+   */
+  waiting_on?: WaitingOn | null
+  completes_service?: boolean | null
+  requires_document_to_advance?: boolean | null
+  client_label?: string | null
+  client_label_it?: string | null
+  /**
    * Ordered list of per-stage action markers (jsonb array, mirrors auto_tasks).
    * Each entry is an object with a `type`. E.g. the 2nd-installment advance
    * target is marked with `{ type: "second_installment_target" }`.
@@ -56,7 +70,7 @@ export async function getStagesForService(serviceType: string): Promise<StageRow
   const { data, error } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
+      "id, stage_order, stage_name, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions, waiting_on, completes_service, requires_document_to_advance, client_label, client_label_it",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
@@ -249,7 +263,7 @@ export async function replaceStagesForService(
   const { data: existingRaw, error: readErr } = await supabaseAdmin
     .from("pipeline_stages")
     .select(
-      "id, stage_name, stage_order, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions",
+      "id, stage_name, stage_order, stage_description, sla_days, auto_advance, notify_client_email, client_description, requires_approval, auto_actions, waiting_on, completes_service, requires_document_to_advance, client_label, client_label_it",
     )
     .eq("service_type", serviceType)
     .order("stage_order", { ascending: true })
@@ -306,6 +320,24 @@ export async function replaceStagesForService(
       )
     }
   }
+
+  // N1a C2: the step settings this save would leave behind (a field the caller did not send keeps its stored value)
+  // must be consistent — one done step, and the client-action steps waiting on the client. Checked before any write.
+  for (const s of submitted) {
+    if (s.waiting_on !== undefined && s.waiting_on !== null && !isWaitingOn(s.waiting_on)) {
+      throw new Error(`"${s.stage_name}": "${String(s.waiting_on)}" is not a valid "Waiting on" choice. Nothing has been changed.`)
+    }
+  }
+  const resulting = submitted.map(s => {
+    const cur = s.id ? existingById.get(s.id) : undefined
+    return {
+      stage_name: s.stage_name,
+      completes_service: s.completes_service !== undefined ? s.completes_service === true : cur?.completes_service === true,
+      waiting_on: (s.waiting_on !== undefined ? s.waiting_on : (cur?.waiting_on as string | null | undefined)) ?? null,
+    }
+  })
+  const problems = stepSettingsProblems(serviceType, resulting)
+  if (problems.length > 0) throw new Error(`${problems.join(" ")} Nothing has been changed.`)
 
   const removed = existing.filter(r => !keptIds.has(r.id))
 
@@ -516,19 +548,30 @@ export async function replaceStagesForService(
   //    A step whose fields did not change is NOT written (N1a P2): a single-step edit from /config must not re-save
   //    the service's other steps — two admins saving different steps at once could otherwise put back a value the
   //    other just changed, and every unchanged step would show up in the change history.
-  for (let idx = 0; idx < submitted.length; idx++) {
+  //    A step losing its done tick is written FIRST (N1a C2): the database allows one done step per service, so moving
+  //    the tick from one step to another in the same save must clear the old one before setting the new one.
+  const updateOrder = submitted
+    .map((s, idx) => idx)
+    .sort((a, b) => Number(isUntick(submitted[b])) - Number(isUntick(submitted[a])))
+  function isUntick(s: (typeof submitted)[number]): boolean {
+    return !!s.id && s.completes_service === false && existingById.get(s.id)?.completes_service === true
+  }
+  for (const idx of updateOrder) {
     const s = submitted[idx]
     if (!s.id) continue
     const patch: Record<string, unknown> = {
       stage_order: plannedOrders[idx],
       stage_name: s.stage_name,
-      stage_description: s.stage_description ?? null,
-      sla_days: s.sla_days ?? null,
-      auto_advance: s.auto_advance ?? false,
-      notify_client_email: s.notify_client_email ?? false,
-      client_description: s.client_description ?? null,
+      // A field the caller did not send (undefined) keeps its stored value — the editors send only what was changed
+      // on their screen (N1a C2, onlyChangedStepFields), so a screen left open can't put back an old value.
+      ...(s.stage_description !== undefined ? { stage_description: s.stage_description ?? null } : {}),
+      ...(s.sla_days !== undefined ? { sla_days: s.sla_days ?? null } : {}),
+      ...(s.auto_advance !== undefined ? { auto_advance: s.auto_advance ?? false } : {}),
+      ...(s.notify_client_email !== undefined ? { notify_client_email: s.notify_client_email ?? false } : {}),
+      ...(s.client_description !== undefined ? { client_description: s.client_description ?? null } : {}),
       ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
-      auto_actions: (s.auto_actions ?? null) as Json,
+      ...stepSettingsPatch(s),
+      ...(s.auto_actions !== undefined ? { auto_actions: (s.auto_actions ?? null) as Json } : {}),
     }
     // Park rows always need their real order written back.
     const current = existingById.get(s.id)!
@@ -557,6 +600,7 @@ export async function replaceStagesForService(
       notify_client_email: s.notify_client_email ?? false,
       client_description: s.client_description ?? null,
       requires_approval: s.requires_approval ?? false,
+      ...stepSettingsPatch(s),
       auto_actions: (s.auto_actions ?? null) as Json,
     }))
   if (insertRows.length > 0) {
@@ -573,11 +617,34 @@ export async function replaceStagesForService(
 }
 
 /**
+ * The N1a C2 settings a save writes for one step — only the ones the caller sent (undefined = untouched). Empty client
+ * labels are stored as null so "cleared" and "never set" read the same everywhere.
+ */
+export function stepSettingsPatch(s: StageRow): Record<string, unknown> {
+  const text = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null)
+  return {
+    ...(s.waiting_on !== undefined ? { waiting_on: s.waiting_on ?? null } : {}),
+    ...(s.completes_service !== undefined ? { completes_service: s.completes_service === true } : {}),
+    ...(s.requires_document_to_advance !== undefined
+      ? { requires_document_to_advance: s.requires_document_to_advance === true }
+      : {}),
+    ...(s.client_label !== undefined ? { client_label: text(s.client_label) } : {}),
+    ...(s.client_label_it !== undefined ? { client_label_it: text(s.client_label_it) } : {}),
+  }
+}
+
+/**
  * Does writing `patch` change the stored step? Booleans compare null ≡ false and actions compare null ≡ [] — the
  * editor has always written false / the list for "unset", so treating those as changes would rewrite untouched steps.
  */
 export function stepPatchChanges(current: Record<string, unknown>, patch: Record<string, unknown>): boolean {
-  const BOOLEAN_FIELDS = new Set(["auto_advance", "notify_client_email", "requires_approval"])
+  const BOOLEAN_FIELDS = new Set([
+    "auto_advance",
+    "notify_client_email",
+    "requires_approval",
+    "completes_service",
+    "requires_document_to_advance",
+  ])
   const norm = (k: string, v: unknown): unknown => {
     if (BOOLEAN_FIELDS.has(k)) return v === true
     if (k === "auto_actions") return Array.isArray(v) && v.length > 0 ? JSON.stringify(v) : null
@@ -598,6 +665,11 @@ export type StagePatch = Partial<
     | "auto_advance"
     | "requires_approval"
     | "auto_actions"
+    | "waiting_on"
+    | "completes_service"
+    | "requires_document_to_advance"
+    | "client_label"
+    | "client_label_it"
   >
 >
 
@@ -623,7 +695,14 @@ export async function updateOneStage(
 
   const stages = await getStagesForService(serviceType)
   const knownStageIds = stages.map(s => s.id).filter(Boolean) as string[]
-  const next = stages.map(s => (s.id === stageId ? { ...s, ...patch } : s))
+  // Ticking this step as the done step moves the tick here: any other done step is unticked in the same save.
+  const next = stages.map(s =>
+    s.id === stageId
+      ? { ...s, ...patch }
+      : patch.completes_service === true && s.completes_service
+        ? { ...s, completes_service: false }
+        : s,
+  )
   const { warnings } = await replaceStagesForService(serviceType, next, { knownStageIds, actor: actorLabel })
   return { warnings, serviceType }
 }
