@@ -115,12 +115,12 @@ export default function WindowSpike({ flagOn }: { flagOn: boolean }) {
 
       {flagOn ? (
         <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-          Window mode is ON for this address. Frames below should load as bare pages.
+          Window mode is ON. Frames below should load as bare pages.
         </div>
       ) : (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Window mode is OFF on this address, so every frame will load as the full CRM and the checks will FAIL.
-          That is the normal state everywhere except the private test address.
+          Window mode is OFF, so every frame will load as the full CRM and the checks will FAIL.
+          That is the normal state. Turn it on under Dev Tools, Maintenance, Floating windows.
         </div>
       )}
 

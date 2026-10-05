@@ -19,8 +19,8 @@ import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import CaptureLayer from '@/components/captures/capture-layer'
 import MyCapturesOverlay from '@/components/captures/my-captures-overlay'
 import FloatingChat from '@/components/team-chat/floating-chat'
-import { isFloatingChatEnabled } from '@/lib/settings'
-import { isEmbeddedRequest } from '@/lib/embed/embedded-request'
+import { isFloatingChatEnabled, isFloatingWindowsEnabled } from '@/lib/settings'
+import { isFramedNavigation } from '@/lib/embed/embedded-request'
 import {
   EmbeddedProvider,
   ChromeOnly,
@@ -141,11 +141,15 @@ export default async function DashboardLayout({
   // account may switch its own two-factor requirement off.
   const owner = isProtectedAdminEmail(user.email)
   const dashboardUser = isDashboardUser(user)
-  // Window mode (dev job f3f3e237, step 3 frame TEST — flag-gated, OFF everywhere except
-  // the private sandbox address): decided from the browser's FIRST-load label and frozen
-  // client-side in <EmbeddedProvider>. The login check above always runs. Inside a window
-  // the chrome's data is never shown, so its queries are skipped.
-  const embedded = isEmbeddedRequest(headers().get('sec-fetch-dest'), process.env.WINDOW_SPIKE)
+  // Window mode (dev job f3f3e237, step 4): a page loaded INSIDE A FRAME (a floating window)
+  // renders bare when the admin switch `floating_windows_enabled` is on (Dev Tools → Maintenance;
+  // default OFF, fails closed). Decided from the browser's FIRST-load label and frozen client-side in
+  // <EmbeddedProvider>. The login check above always runs; the switch is only looked up for a framed
+  // load, so ordinary page loads never pay for it. Inside a window the chrome's data is never
+  // shown, so its queries are skipped.
+  const embedded = isFramedNavigation(headers().get('sec-fetch-dest'))
+    ? await isFloatingWindowsEnabled()
+    : false
   const badgeCounts = embedded
     ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
     : await getBadgeCounts(supabase, user.id)

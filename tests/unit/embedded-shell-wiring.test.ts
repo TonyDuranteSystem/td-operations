@@ -51,14 +51,18 @@ describe("layout: window mode", () => {
 
   it("always runs the login check, whatever the window mode", () => {
     const login = layout.indexOf("if (!user) {")
-    const embeddedDecision = layout.indexOf("isEmbeddedRequest(")
+    const embeddedDecision = layout.indexOf("isFramedNavigation(headers()")
     expect(login).toBeGreaterThan(-1)
     expect(embeddedDecision).toBeGreaterThan(login)
     expect(layout).toMatch(/redirect\('\/login'\)/)
   })
 
-  it("decides from the first-load label plus the test flag, via the one helper", () => {
-    expect(layout).toMatch(/isEmbeddedRequest\(headers\(\)\.get\('sec-fetch-dest'\), process\.env\.WINDOW_SPIKE\)/)
+  it("decides from the first-load label, and only looks up the admin switch for a framed load", () => {
+    expect(layout).toMatch(/isFramedNavigation\(headers\(\)\.get\('sec-fetch-dest'\)\)\s*\?\s*await isFloatingWindowsEnabled\(\)\s*:\s*false/)
+  })
+
+  it("no longer depends on the test-only environment flag", () => {
+    expect(layout).not.toContain("WINDOW_SPIKE")
   })
 
   it("passes the decision into the freezing provider, around the whole shell", () => {
@@ -94,7 +98,27 @@ describe("embedded shell", () => {
 })
 
 describe("helper", () => {
-  it("is off unless the test flag is exactly '1'", () => {
-    expect(helper).toMatch(/if \(spikeFlag !== '1'\) return false/)
+  it("needs a real boolean true from the admin switch", () => {
+    expect(helper).toMatch(/windowsEnabled === true && isFramedNavigation\(secFetchDest\)/)
+  })
+})
+
+describe("history safety inside a window", () => {
+  const backButton = readFileSync(join(root, "components/ui/back-button.tsx"), "utf8")
+  const selection = readFileSync(join(root, "lib/hooks/use-selection-history.ts"), "utf8")
+
+  it("history.back() does nothing inside a window, and is restored afterwards", () => {
+    expect(shell).toMatch(/h\.back = \(\) => \{\}/)
+    expect(shell).toMatch(/h\.back = original/)
+    expect(shell).toMatch(/if \(!embedded\) return/)
+  })
+
+  it("the shared back arrow is not rendered inside a window (it would be dead)", () => {
+    expect(backButton).toMatch(/if \(useEmbedded\(\)\) return null/)
+  })
+
+  it("selection changes replace the history entry inside a window instead of pushing one", () => {
+    expect(selection).toMatch(/if \(embeddedRef\.current\) window\.history\.replaceState\(null, '', next\)/)
+    expect(selection).toMatch(/else window\.history\.pushState\(null, '', next\)/)
   })
 })

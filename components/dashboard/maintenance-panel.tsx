@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare } from 'lucide-react'
+import { Wrench, Loader2, AlertTriangle, Banknote, EyeOff, Mail, MessageSquare, AppWindow } from 'lucide-react'
 
 type Result =
   | { kind: 'ok'; message: string }
@@ -32,6 +32,54 @@ export function MaintenancePanel() {
   const [chatLoaded, setChatLoaded] = useState(false)
   const [chatSaving, setChatSaving] = useState(false)
   const [chatResult, setChatResult] = useState<Result | null>(null)
+
+  // Floating windows switch (app_settings.floating_windows_enabled) — dev job f3f3e237.
+  // OFF by default: while off, nothing about page loads changes anywhere.
+  const WIN_KEY = 'floating_windows_enabled'
+  const [winOn, setWinOn] = useState(false)
+  const [winLoaded, setWinLoaded] = useState(false)
+  const [winSaving, setWinSaving] = useState(false)
+  const [winResult, setWinResult] = useState<Result | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/app-settings?key=${WIN_KEY}`)
+      .then(r => r.json())
+      // default OFF: only on when explicitly stored true
+      .then(d => { if (!cancelled) setWinOn(d.value === true) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setWinLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleToggleWindows = async () => {
+    const next = !winOn
+    setWinSaving(true)
+    setWinResult(null)
+    try {
+      const res = await fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: WIN_KEY, value: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setWinResult({ kind: 'error', message: data.error || 'Save failed' })
+        return
+      }
+      setWinOn(next)
+      setWinResult({
+        kind: 'ok',
+        message: next
+          ? 'Window mode is on. A CRM page opened inside a floating window now loads as a bare page.'
+          : 'Window mode is off. Every page loads as before.',
+      })
+    } catch {
+      setWinResult({ kind: 'error', message: 'Save failed' })
+    } finally {
+      setWinSaving(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -322,6 +370,45 @@ export function MaintenancePanel() {
                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
             }`}>
               {chatResult.message}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-blue-100 pt-3 mt-2">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <AppWindow className="h-3.5 w-3.5 text-blue-600" />
+            <span className="text-xs font-medium text-blue-900">Floating windows (window mode)</span>
+          </div>
+          <p className="text-xs text-muted-foreground mb-2">
+            When on, a CRM page opened inside a floating window loads as a bare page: no left menu,
+            no alert sounds, no floating chat or notes. Off by default. While it is off nothing about
+            page loads changes anywhere. The floating windows themselves are still being built; for now
+            this only affects the test page under Dev Tools. Takes effect the next time a window loads.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleToggleWindows}
+              disabled={!winLoaded || winSaving}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 ${
+                winOn
+                  ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                  : 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-200'
+              }`}
+            >
+              {winSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {winOn ? 'On' : 'Off'}
+            </button>
+            <span className="text-xs text-muted-foreground">
+              {winLoaded ? (winOn ? 'Window mode is on' : 'Window mode is off') : 'Loading…'}
+            </span>
+          </div>
+          {winResult && (
+            <div className={`mt-2 text-xs p-2.5 rounded-md ${
+              winResult.kind === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {winResult.message}
             </div>
           )}
         </div>

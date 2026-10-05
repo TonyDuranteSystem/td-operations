@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { markInAppNavigation } from '@/lib/nav/in-app-history'
+import { useEmbedded } from '@/lib/embed/embedded-context'
 
 /**
  * Make an IN-PAGE selection (which chat / which thread you're looking at) a real
@@ -74,6 +75,13 @@ export function useSelectionHistory(
   const onRestoreRef = useRef(onRestore)
   useEffect(() => { onRestoreRef.current = onRestore }, [onRestore])
 
+  // Inside a floating window every pushed entry would join the BROWSER TAB's history and make its
+  // Back button step the window instead of the page (dev job f3f3e237, council round 2). A window
+  // therefore REPLACES the current entry: the address still follows the selection, no step is added.
+  const embedded = useEmbedded()
+  const embeddedRef = useRef(embedded)
+  embeddedRef.current = embedded
+
   // The selection currently reflected in the URL.
   const appliedRef = useRef<string | null>(null)
   const keysRef = useRef<string[]>(Object.keys(values))
@@ -91,7 +99,8 @@ export function useSelectionHistory(
     try {
       const next = applySelectionToUrl(window.location.href, valuesRef.current)
       if (next === window.location.href) return
-      window.history.pushState(null, '', next)
+      if (embeddedRef.current) window.history.replaceState(null, '', next)
+      else window.history.pushState(null, '', next)
       // Tell the global Back arrow this counts as a move. It cannot infer it:
       // the pathname is unchanged, only the query moved. Without this, Back
       // sees "no in-app history" and goes home — the exact bug this fixes.

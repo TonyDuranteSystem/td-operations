@@ -1,8 +1,11 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { EmbeddedContext, useEmbedded } from '@/lib/embed/embedded-context'
+
+export { useEmbedded }
 
 /**
  * Window mode for dashboard pages (dev job f3f3e237, step 3 — the frame TEST; not the
@@ -22,16 +25,26 @@ import { cn } from '@/lib/utils'
  * themselves against it). A hard navigation inside the frame is a brand-new document,
  * so it decides again from a fresh first-load label.
  */
-const EmbeddedContext = createContext(false)
-
 export function EmbeddedProvider({ initial, children }: { initial: boolean; children: React.ReactNode }) {
   // Frozen: later server answers (refreshes) are ignored on purpose.
   const [embedded] = useState(initial)
-  return <EmbeddedContext.Provider value={embedded}>{children}</EmbeddedContext.Provider>
-}
 
-export function useEmbedded(): boolean {
-  return useContext(EmbeddedContext)
+  // History safety inside a window (council round 2, bug hunter blocker). A frame's history entries
+  // are part of the BROWSER TAB's joint history, so a page's "back" (the arrow on a detail page, or
+  // router.back()) would step the whole tab — taking the main page somewhere else and destroying
+  // every window. Inside a window, history.back() does nothing; the window's own chrome will own
+  // back/forward (step 5). Next's router.back() calls window.history.back(), so this covers it.
+  useEffect(() => {
+    if (!embedded) return
+    const h = window.history
+    const original = h.back
+    h.back = () => {}
+    return () => {
+      h.back = original
+    }
+  }, [embedded])
+
+  return <EmbeddedContext.Provider value={embedded}>{children}</EmbeddedContext.Provider>
 }
 
 /** Renders its children in the normal CRM, nothing inside a window. Adds no DOM of its own. */
