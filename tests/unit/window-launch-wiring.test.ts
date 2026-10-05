@@ -54,7 +54,7 @@ describe("sidebar wiring", () => {
   })
 
   it("Option-click opens a window only when windows are on, and otherwise leaves the click alone", () => {
-    expect(sidebar).toMatch(/windowsAvailable && isWindowOpenClick\(e\) && isWindowableUrl\(item\.href\)/)
+    expect(sidebar).toMatch(/canOpenWindowNow\(windowsAvailable\) && isWindowOpenClick\(e\) && isWindowableUrl\(item\.href\)/)
   })
 })
 
@@ -79,7 +79,7 @@ describe("search palette", () => {
   it("Cmd/Ctrl+Enter and modified click open a window only when windows are on and the page may be a window", () => {
     expect(palette).toContain("navigate(results[selectedIndex], isWindowOpenKey(e))")
     expect(palette).toContain("navigate(result, e.metaKey || e.ctrlKey || e.altKey)")
-    expect(palette).toMatch(/asWindow && windowsAvailable && isWindowableUrl\(result\.href\)/)
+    expect(palette).toMatch(/asWindow && canOpenWindowNow\(windowsAvailable\) && isWindowableUrl\(result\.href\)/)
   })
 
   it("plain Enter and plain click still just open the page", () => {

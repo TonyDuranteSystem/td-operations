@@ -4,6 +4,7 @@
  */
 
 import { createContext, useContext } from 'react'
+import { WINDOWS_MIN_VIEWPORT_WIDTH } from '@/lib/windows/window-model'
 
 /** True when the CRM is allowed to open floating windows right now (admin switch on, desktop shell). */
 export const WindowsAvailableContext = createContext(false)
@@ -24,4 +25,14 @@ export interface OpenWindowDetail {
 export function requestOpenWindow(href: string, title?: string): void {
   if (typeof document === 'undefined') return
   document.dispatchEvent(new CustomEvent<OpenWindowDetail>(OPEN_WINDOW_EVENT, { detail: { href, title } }))
+}
+
+/**
+ * True when a click/keystroke that means "open as a window" should be intercepted RIGHT NOW: windows
+ * are on AND the screen is wide enough to show them. Callers intercept only when this is true, so on
+ * a narrow screen the normal navigation still happens (an intercepted click that opens nothing would
+ * leave the person nowhere).
+ */
+export function canOpenWindowNow(available: boolean): boolean {
+  return available && typeof window !== 'undefined' && window.innerWidth >= WINDOWS_MIN_VIEWPORT_WIDTH
 }

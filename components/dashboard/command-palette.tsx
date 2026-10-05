@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Search, Building2, ClipboardList, Users, User, Loader2 } from 'lucide-react'
 import { isWindowOpenKey } from '@/lib/windows/open-intent'
 import { isWindowableUrl } from '@/lib/windows/window-model'
-import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
+import { canOpenWindowNow, requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 
 interface SearchResult {
   id: string
@@ -110,8 +110,9 @@ export function CommandPalette() {
   const windowsAvailable = useWindowsAvailable()
   const navigate = useCallback((result: SearchResult, asWindow = false) => {
     setOpen(false)
-    if (asWindow && windowsAvailable && isWindowableUrl(result.href)) {
-      requestOpenWindow(result.href, result.title)
+    if (asWindow && canOpenWindowNow(windowsAvailable) && isWindowableUrl(result.href)) {
+      // A task result points at the generic Tasks list, so its own title would mislabel the window.
+      requestOpenWindow(result.href, result.type === 'task' ? undefined : result.title)
       return
     }
     router.push(result.href)
@@ -224,7 +225,7 @@ export function CommandPalette() {
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&uarr;</kbd> <kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&darr;</kbd> navigate</span>
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&crarr;</kbd> open</span>
             {windowsAvailable && (
-              <span className="hidden lg:inline"><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&#8984;&crarr;</kbd> open as a window</span>
+              <span className="hidden lg:inline"><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&#8984;/Ctrl &crarr;</kbd> open as a window</span>
             )}
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">esc</kbd> close</span>
           </div>

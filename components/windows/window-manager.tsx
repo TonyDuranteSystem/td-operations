@@ -98,7 +98,9 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     setVp(v)
     const store = browserStore()
     pruneOtherUsers(store, userId)
-    commit(loadWindows(store, userId, v))
+    // Load against at least a desktop-size screen: on a narrow screen nothing is drawn, and clamping to
+    // it would permanently shrink what was remembered. The real screen re-clamps once it is wide.
+    commit(loadWindows(store, userId, { ...v, vw: Math.max(v.vw, WINDOWS_MIN_VIEWPORT_WIDTH), vh: Math.max(v.vh, 600) }))
     setHydrated(true)
   }, [userId, topInset, commit])
 
@@ -107,7 +109,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
       const v = readViewport(topInset)
       vpRef.current = v
       setVp(v)
-      commit(clampAll(stateRef.current, v))
+      if (v.vw >= WINDOWS_MIN_VIEWPORT_WIDTH) commit(clampAll(stateRef.current, v))
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
@@ -116,6 +118,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   // ── remember (debounced) ──
   useEffect(() => {
     if (!hydrated) return
+    if (vpRef.current && vpRef.current.vw < WINDOWS_MIN_VIEWPORT_WIDTH) return // nothing changes while hidden
     const t = setTimeout(() => saveWindows(browserStore(), userId, state), 250)
     return () => clearTimeout(t)
   }, [state, hydrated, userId])
@@ -134,8 +137,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   // ── anything in the CRM can ask for a window ──
   useEffect(() => {
     const onOpen = (e: Event) => {
-      const v = vpRef.current
-      if (!v) return
+      const v = vpRef.current ?? readViewport(topInset)
       if (v.vw < WINDOWS_MIN_VIEWPORT_WIDTH) {
         toast.error('Floating windows are only available on a computer-size screen.')
         return
@@ -154,7 +156,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     }
     document.addEventListener(OPEN_WINDOW_EVENT, onOpen)
     return () => document.removeEventListener(OPEN_WINDOW_EVENT, onOpen)
-  }, [commit])
+  }, [commit, topInset])
 
   // ── what the pages inside the windows tell us ──
   useEffect(() => {

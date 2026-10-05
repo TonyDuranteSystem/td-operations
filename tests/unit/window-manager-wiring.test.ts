@@ -66,6 +66,13 @@ describe("window manager", () => {
     expect(sidebar).toContain("clearAllWindows(browserStore())")
   })
 
+  it("a narrow screen neither shrinks nor re-saves the remembered windows, and a request before the first measurement is not dropped", () => {
+    expect(manager).toContain("Math.max(v.vw, WINDOWS_MIN_VIEWPORT_WIDTH)")
+    expect(manager).toMatch(/if \(v\.vw >= WINDOWS_MIN_VIEWPORT_WIDTH\) commit\(clampAll/)
+    expect(manager).toMatch(/vpRef\.current\.vw < WINDOWS_MIN_VIEWPORT_WIDTH\) return/)
+    expect(manager).toContain("vpRef.current ?? readViewport(topInset)")
+  })
+
   it("Cmd+K from inside a window opens the main page's search", () => {
     expect(manager).toContain("new CustomEvent('open-command-palette')")
   })

@@ -95,8 +95,8 @@ export async function isFloatingChatEnabled(): Promise<boolean> {
  *  turns on a NEW behaviour in the shared layout; if the settings read throws, the safe answer is
  *  the old behaviour (a full page) everywhere. Only a stored `true` enables it.
  *
- *  Only ever called for a page loaded inside a frame (see the dashboard layout), so ordinary page
- *  loads never pay for this lookup. */
+ *  Read on every dashboard load by the layout (step 5: the main page needs it to decide whether to
+ *  mount the window manager); one small settings lookup, and it fails closed. */
 export async function isFloatingWindowsEnabled(): Promise<boolean> {
   try {
     const v = await getAppSetting<boolean>("floating_windows_enabled", false)

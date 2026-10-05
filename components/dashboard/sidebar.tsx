@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { browserStore, clearAllWindows } from '@/lib/windows/windows-storage'
 import { isWindowOpenClick } from '@/lib/windows/open-intent'
 import { isWindowableUrl } from '@/lib/windows/window-model'
-import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
+import { canOpenWindowNow, requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 import { WindowsLauncher } from '@/components/dashboard/windows-launcher'
 import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
@@ -224,7 +224,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         onClick={e => {
           // Option/Alt-click opens the page as a floating window (step 6) — only when windows are on;
           // Cmd/Ctrl-click and Shift-click stay the browser's own (new tab / new window).
-          if (windowsAvailable && isWindowOpenClick(e) && isWindowableUrl(item.href)) {
+          if (canOpenWindowNow(windowsAvailable) && isWindowOpenClick(e) && isWindowableUrl(item.href)) {
             e.preventDefault()
             requestOpenWindow(item.href, item.name)
           }
