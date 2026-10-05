@@ -90,3 +90,41 @@ export async function verifyOaPass(
   if (payload.oaId !== expectedOaId) return null
   return payload as unknown as OaPassPayload
 }
+
+// ─────────────────────────────────────────────────────────────── signed-PDF ticket
+//
+// The 2-minute pass above is a handoff for LOADING the page. A member can read the
+// executed agreement for longer than that before pressing "Download Signed PDF", and
+// by then the pass in the URL is dead — the download route would then ask for an
+// e-mail the portal member never typed (the portal skips that gate), a dead end.
+//
+// So the data route, AFTER the visitor has passed every gate and only for a SIGNED
+// agreement, hands the page a download TICKET: bound to this one agreement, good for
+// 30 minutes, usable ONLY on the signed-PDF route, and carried in a request header
+// (never the URL). It is a different `kind`, so `verifyOaPass` rejects it — it can
+// never skip the e-mail gate on the data route or authorise anything else.
+
+/** 30 minutes. */
+export const OA_DOWNLOAD_TICKET_TTL_MS = 30 * 60 * 1000
+
+const DOWNLOAD_KIND = 'signed_pdf_download'
+
+export async function signOaDownloadTicket(oaId: string, now: number = Date.now()): Promise<string> {
+  return signSignedTokenWithTtl(getSecret(), { oaId, kind: DOWNLOAD_KIND }, OA_DOWNLOAD_TICKET_TTL_MS, now)
+}
+
+/** True only for an unexpired ticket minted for THIS agreement. Never throws. */
+export async function verifyOaDownloadTicket(
+  token: string | undefined | null,
+  expectedOaId: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  let secret: string
+  try {
+    secret = getSecret()
+  } catch {
+    return false
+  }
+  const payload = await verifySignedToken(secret, token, { now, requireExp: true })
+  return !!payload && payload.kind === DOWNLOAD_KIND && payload.oaId === expectedOaId && typeof payload.exp === 'number'
+}
