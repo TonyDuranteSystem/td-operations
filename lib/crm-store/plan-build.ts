@@ -79,6 +79,12 @@ export const PlanSchema = z.object({
   /** Drive files on hold (an open question) */
   hold: z.array(z.string()).default([]),
   notes: z.string().max(2000).optional(),
+  /**
+   * Other CRM accounts that point at this company's Drive folder AND that Antonio has seen are empty duplicates
+   * (a cancelled/closed twin record with no documents, members or open services). Without this the build refuses a
+   * shared folder. Optional, so a plan that does not use it keeps its fingerprint.
+   */
+  sharedFolderWith: z.array(z.string().uuid()).max(5).optional(),
 })
 export type Plan = z.infer<typeof PlanSchema>
 export type PlanItem = z.infer<typeof PlanItemSchema>
@@ -164,6 +170,27 @@ export interface PlanReportItem {
 }
 export interface PrepareResult { errors: string[]; warnings: string[]; items: PlanReportItem[]; counts: { items: number; merges: number; leaveInDrive: number; hold: number; owners: number } }
 
+export interface SharingAccount { id: string; name: string; status: string | null; documents: number; members: number; openDeliveries: number }
+/**
+ * Pure: why a shared Drive folder blocks a plan build. A contact holding the folder always blocks. Another account
+ * blocks unless the plan names it AND it is an empty duplicate (Cancelled/Closed, no documents, no members, nothing open).
+ */
+export function sharedFolderProblems(others: SharingAccount[], acknowledged: string[], contactHolders: number): string[] {
+  const out: string[] = []
+  if (contactHolders > 0) out.push("This company's Drive folder is also a contact's folder — it cannot be built from a plan.")
+  const known = new Set(others.map((o) => o.id))
+  for (const id of acknowledged) if (!known.has(id)) out.push(`The plan says account ${id} shares the folder, but it does not.`)
+  for (const o of others) {
+    if (!acknowledged.includes(o.id)) { out.push(`This company's Drive folder is shared with another account ("${o.name}") — name it in the plan only if it is an empty cancelled duplicate.`); continue }
+    const closed = o.status === "Cancelled" || o.status === "Closed"
+    if (!closed) out.push(`"${o.name}" shares the folder but is ${o.status ?? "of unknown status"}, not a cancelled or closed duplicate.`)
+    if (o.documents > 0) out.push(`"${o.name}" shares the folder but has ${o.documents} document(s) of its own.`)
+    if (o.members > 0) out.push(`"${o.name}" shares the folder but has ${o.members} member(s).`)
+    if (o.openDeliveries > 0) out.push(`"${o.name}" shares the folder but has ${o.openDeliveries} open service(s).`)
+  }
+  return out
+}
+
 export function planBuildEnabled(): boolean {
   return process.env.STORE_PLAN_BUILD === "1"
 }
@@ -192,12 +219,20 @@ export async function prepare(plan: Plan): Promise<PrepareResult> {
   if (!acct.drive_folder_id) throw new PlanError(["This company has no Drive folder."])
   const folder = acct.drive_folder_id as string
 
-  // another account or a contact on the same Drive folder → the files could belong to someone else
-  const [{ count: others }, { count: contactHolders }] = await Promise.all([
-    db().from("accounts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder).neq("id", plan.accountId),
-    db().from("contacts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder),
-  ])
-  if ((others ?? 0) > 0 || (contactHolders ?? 0) > 0) errors.push("This company's Drive folder is shared with another account or a contact — it cannot be built from a plan.")
+  // another account or a contact on the same Drive folder → the files could belong to someone else.
+  // The ONE exception: an account the plan names in `sharedFolderWith` that really is an empty cancelled/closed duplicate.
+  const { data: otherRows } = await db().from("accounts").select("id, company_name, status").eq("drive_folder_id", folder).neq("id", plan.accountId)
+  const others = (otherRows ?? []) as { id: string; company_name: string; status: string | null }[]
+  const emptiness = await Promise.all(others.map(async (o) => {
+    const [d, m, sd] = await Promise.all([
+      db().from("documents").select("id", { count: "exact", head: true }).eq("account_id", o.id),
+      db().from("members").select("id", { count: "exact", head: true }).eq("account_id", o.id),
+      db().from("service_deliveries").select("id", { count: "exact", head: true }).eq("account_id", o.id).not("status", "in", "(completed,cancelled)"),
+    ])
+    return { id: o.id, name: o.company_name, status: o.status, documents: d.count ?? 0, members: m.count ?? 0, openDeliveries: sd.count ?? 0 }
+  }))
+  const { count: contactHolders } = await db().from("contacts").select("id", { count: "exact", head: true }).eq("drive_folder_id", folder)
+  errors.push(...sharedFolderProblems(emptiness, plan.sharedFolderWith ?? [], contactHolders ?? 0))
 
   // a start whose request died before it finished is closed after 10 minutes (as the copy tool does)
   await closeStaleScans(plan.accountId)
