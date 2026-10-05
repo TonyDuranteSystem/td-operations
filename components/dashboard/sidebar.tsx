@@ -4,6 +4,10 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { browserStore, clearAllWindows } from '@/lib/windows/windows-storage'
+import { isWindowOpenClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
+import { WindowsLauncher } from '@/components/dashboard/windows-launcher'
 import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
@@ -184,6 +188,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
   // and "TD Communication" shorten to "Portal ..." even with nothing hovered. Touch screens
   // have no hover, so there the button keeps its own slot. The Team Chat dot is itself
   // clickable and sits at that same edge, so a row with the dot keeps the slot everywhere.
+  const windowsAvailable = useWindowsAvailable()
   const overlay = !item.dotBadge
   // visibility (not opacity): the red badge pulses, and an animation overrides opacity.
   const badgeStepAside = overlay
@@ -216,7 +221,15 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
       )}
       <Link
         href={item.href}
-        onClick={onMobileClose}
+        onClick={e => {
+          // Option/Alt-click opens the page as a floating window (step 6) — only when windows are on;
+          // Cmd/Ctrl-click and Shift-click stay the browser's own (new tab / new window).
+          if (windowsAvailable && isWindowOpenClick(e) && isWindowableUrl(item.href)) {
+            e.preventDefault()
+            requestOpenWindow(item.href, item.name)
+          }
+          onMobileClose()
+        }}
         title={item.tooltip}
         className={cn(
           'flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
@@ -730,6 +743,7 @@ export function Sidebar({
             <span className="flex-1 text-left">AI Agent</span>
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-medium">NEW</span>
           </button>
+          {!editMode && <WindowsLauncher items={orderedNav} />}
           {!editMode && (
             <button
               onClick={() => setEditMode(true)}

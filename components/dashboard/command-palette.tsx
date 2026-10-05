@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Building2, ClipboardList, Users, User, Loader2 } from 'lucide-react'
+import { isWindowOpenKey } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 
 interface SearchResult {
   id: string
@@ -102,10 +105,17 @@ export function CommandPalette() {
     return () => clearTimeout(debounceRef.current)
   }, [query])
 
-  const navigate = useCallback((result: SearchResult) => {
+  // Step 6: with floating windows on, Cmd/Ctrl+Enter (or Cmd/Ctrl/Option-click) on a result opens it as
+  // a window instead of replacing the page. A result that cannot be a window just opens normally.
+  const windowsAvailable = useWindowsAvailable()
+  const navigate = useCallback((result: SearchResult, asWindow = false) => {
     setOpen(false)
+    if (asWindow && windowsAvailable && isWindowableUrl(result.href)) {
+      requestOpenWindow(result.href, result.title)
+      return
+    }
     router.push(result.href)
-  }, [router])
+  }, [router, windowsAvailable])
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -117,7 +127,7 @@ export function CommandPalette() {
       setSelectedIndex(i => Math.max(i - 1, 0))
     } else if (e.key === 'Enter' && results[selectedIndex]) {
       e.preventDefault()
-      navigate(results[selectedIndex])
+      navigate(results[selectedIndex], isWindowOpenKey(e))
     }
   }
 
@@ -189,7 +199,7 @@ export function CommandPalette() {
                   return (
                     <button
                       key={result.id}
-                      onClick={() => navigate(result)}
+                      onClick={e => navigate(result, e.metaKey || e.ctrlKey || e.altKey)}
                       onMouseEnter={() => setSelectedIndex(currentIndex)}
                       className={`w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
                         isSelected ? 'bg-blue-50 text-blue-900' : 'hover:bg-zinc-50'
@@ -213,6 +223,9 @@ export function CommandPalette() {
           <div className="px-4 py-2 border-t bg-zinc-50 flex items-center gap-4 text-[10px] text-muted-foreground">
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&uarr;</kbd> <kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&darr;</kbd> navigate</span>
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&crarr;</kbd> open</span>
+            {windowsAvailable && (
+              <span className="hidden lg:inline"><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">&#8984;&crarr;</kbd> open as a window</span>
+            )}
             <span><kbd className="px-1 py-0.5 bg-white rounded border text-[9px]">esc</kbd> close</span>
           </div>
         </div>
