@@ -198,3 +198,27 @@ describe("a Drive folder shared with another account", () => {
     expect(JSON.stringify(a)).not.toContain("sharedFolderWith")
   })
 })
+
+describe("people with several companies", () => {
+  it("says nothing for a person in one company", async () => {
+    const { otherCompaniesNote } = await import("@/lib/crm-store/plan-build")
+    expect(otherCompaniesNote("Rodrigo", [])).toBeNull()
+  })
+  it("lists the other companies and flags a non-active one", async () => {
+    const { otherCompaniesNote } = await import("@/lib/crm-store/plan-build")
+    const n = otherCompaniesNote("Rodrigo", [{ name: "Partner Alliance LLC", status: "Active" }, { name: "Old LLC", status: "Closed" }])
+    expect(n).toMatch(/2 other companies/)
+    expect(n).toMatch(/Partner Alliance LLC, Old LLC \(Closed\)/)
+  })
+  it("flags a planned file with the same size as one already stored", async () => {
+    const { personDuplicateNotes } = await import("@/lib/crm-store/plan-build")
+    const out = personDuplicateNotes("Rodrigo", [{ name: "Passport.pdf", documentType: "passport", size: 500 }], [{ name: "passport.pdf", documentType: "passport", size: 500 }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatch(/already stored/)
+  })
+  it("flags a second document of the same type with other bytes, and ignores unrelated files", async () => {
+    const { personDuplicateNotes } = await import("@/lib/crm-store/plan-build")
+    expect(personDuplicateNotes("R", [{ name: "new.pdf", documentType: "passport", size: 9 }], [{ name: "old.pdf", documentType: "passport", size: 5 }])[0]).toMatch(/already has a "passport"/)
+    expect(personDuplicateNotes("R", [{ name: "a.pdf", documentType: "passport", size: 9 }], [{ name: "b.pdf", documentType: "itin_letter", size: 5 }])).toEqual([])
+  })
+})
