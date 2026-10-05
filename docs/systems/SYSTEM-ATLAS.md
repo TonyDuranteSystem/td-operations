@@ -198,9 +198,9 @@ _Regenerated 2026-10-05. Every subsystem doc under `docs/systems/` (44 docs), wi
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-04)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-01)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-05)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-01)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-05)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-01)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-09-30)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-05)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-01)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
