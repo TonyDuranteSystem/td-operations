@@ -214,6 +214,15 @@ describe("changing windows", () => {
     expect(moved.windows[0].title).toBe("Leads")
     expect(setLocation(moved, s.windows[0].id, "/leads/abc", "Lead — TD Operations").windows[0].title).toBe("Lead — TD Operations")
   })
+  it("a name chosen by whoever opened the window survives the page's generic title, within the same section", () => {
+    const r = openWindow(EMPTY_STATE, "/accounts/abc", "Acme Holdings LLC", vp)
+    if (!r.ok) throw new Error("open failed")
+    const id = r.state.windows[0].id
+    expect(setLocation(r.state, id, "/accounts/abc", "TD Operations").windows[0].title).toBe("Acme Holdings LLC")
+    expect(setLocation(r.state, id, "/accounts/abc?tab=docs", "TD Operations").windows[0].title).toBe("Acme Holdings LLC")
+    expect(setLocation(r.state, id, "/leads", "TD Operations").windows[0].title).toBe("Leads") // moved elsewhere
+    expect(setLocation(r.state, id, "/accounts/abc", "Real page title").windows[0].title).toBe("Real page title")
+  })
   it("clampAll pulls windows back after the screen shrinks, and is a no-op when nothing moved", () => {
     const s = setBox(open(EMPTY_STATE, "/inbox").state, "w1", { x: 1500, y: 800, w: 1000, h: 600 })
     const small: Viewport = { vw: 1100, vh: 700, topInset: 0 }

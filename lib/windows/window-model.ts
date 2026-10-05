@@ -258,7 +258,12 @@ export function setLocation(state: WindowsState, id: string, url: string, title:
   if (!cur) return state
   // Most CRM pages are simply titled "TD Operations" — useless on a window; use the page name instead.
   const t = title.trim()
-  const nextTitle = !t || t === 'TD Operations' ? fallbackTitle(url) : t
+  const generic = !t || t === 'TD Operations'
+  // A name the opener chose ("Acme Holdings LLC", from search) beats the generic page name while the
+  // window stays inside the same section of the CRM.
+  const rootOf = (u: string) => pathOf(u).split('/')[1] ?? ''
+  const keepChosen = cur.title !== fallbackTitle(cur.url) && rootOf(cur.url) === rootOf(url)
+  const nextTitle = !generic ? t : keepChosen ? cur.title : fallbackTitle(url)
   if (cur.url === url && cur.title === nextTitle) return state
   return patch(state, id, { url, title: nextTitle })
 }

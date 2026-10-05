@@ -68,7 +68,21 @@ export function CommandPalette() {
   // Focus input when opening
   useEffect(() => {
     if (open) {
-      setTimeout(() => inputRef.current?.focus(), 50)
+      // When a floating window's page had the keyboard (Cmd+K pressed inside a window), the keyboard is
+      // still inside that frame: take it back to this page first, and try again once if it did not stick,
+      // so what is typed next lands in the search box and not in the window behind it.
+      const focusInput = () => {
+        window.focus()
+        inputRef.current?.focus()
+      }
+      const t1 = setTimeout(focusInput, 50)
+      const t2 = setTimeout(() => {
+        if (document.activeElement !== inputRef.current) focusInput()
+      }, 250)
+      return () => {
+        clearTimeout(t1)
+        clearTimeout(t2)
+      }
     } else {
       setQuery('')
       setResults([])
