@@ -57,8 +57,19 @@ describe("layout: window mode", () => {
     expect(layout).toMatch(/redirect\('\/login'\)/)
   })
 
-  it("decides from the first-load label, and only looks up the admin switch for a framed load", () => {
-    expect(layout).toMatch(/isFramedNavigation\(headers\(\)\.get\('sec-fetch-dest'\)\)\s*\?\s*await isFloatingWindowsEnabled\(\)\s*:\s*false/)
+  it("reads the admin switch on every load, and a page is only a window when framed AND the switch is on", () => {
+    expect(layout).toMatch(/const windowsEnabled = await isFloatingWindowsEnabled\(\)/)
+    expect(layout).toMatch(/const embedded = isFramedNavigation\(headers\(\)\.get\('sec-fetch-dest'\)\) && windowsEnabled/)
+  })
+
+  it("mounts the window manager once, outside <main>, only when the switch is on, and never inside a window", () => {
+    expect(layout).toMatch(/\{windowsEnabled && <ChromeOnly><WindowManager userId=\{user\.id\} sandbox=\{isSandbox\} \/><\/ChromeOnly>\}/)
+    const main = layout.indexOf("</ShellMain>")
+    expect(layout.indexOf("<WindowManager")).toBeGreaterThan(main)
+  })
+
+  it("offers 'open in a window' only on the main page, never inside a window", () => {
+    expect(layout).toMatch(/<WindowsAvailableProvider available=\{windowsEnabled && !embedded\}>/)
   })
 
   it("no longer depends on the test-only environment flag", () => {
@@ -67,7 +78,7 @@ describe("layout: window mode", () => {
 
   it("passes the decision into the freezing provider, around the whole shell", () => {
     expect(layout).toMatch(/<EmbeddedProvider initial=\{embedded\}>/)
-    expect(layout).toMatch(/<\/ShellFrame>\s*<\/EmbeddedProvider>/)
+    expect(layout).toMatch(/<\/ShellFrame>\s*<\/WindowsAvailableProvider>\s*<\/EmbeddedProvider>/)
   })
 
   it("only skips the chrome's data work when the page is in a window", () => {
@@ -106,11 +117,25 @@ describe("helper", () => {
 describe("history safety inside a window", () => {
   const backButton = readFileSync(join(root, "components/ui/back-button.tsx"), "utf8")
   const selection = readFileSync(join(root, "lib/hooks/use-selection-history.ts"), "utf8")
+  const bridge = readFileSync(join(root, "lib/embed/window-bridge.ts"), "utf8")
+
+  it("the shell installs the frame bridge only inside a window", () => {
+    expect(shell).toMatch(/if \(!embedded\) return/)
+    expect(shell).toMatch(/installWindowBridge\(window, \{ navigate: url => router\.push\(url\) \}\)/)
+  })
 
   it("history.back() does nothing inside a window, and is restored afterwards", () => {
-    expect(shell).toMatch(/h\.back = \(\) => \{\}/)
-    expect(shell).toMatch(/h\.back = original/)
-    expect(shell).toMatch(/if \(!embedded\) return/)
+    expect(bridge).toMatch(/history\.back = \(\) => \{\}/)
+    expect(bridge).toMatch(/history\.back = origBack/)
+  })
+
+  it("a navigation inside a window REPLACES the frame's history entry instead of adding one", () => {
+    expect(bridge).toMatch(/history\.pushState = function \(\.\.\.args: HistoryArgs\) \{\s*const r = origReplace\.apply\(history, args\)/)
+    expect(bridge).toMatch(/history\.pushState = origPush/)
+  })
+
+  it("the bridge only trusts messages from its own main page and own site", () => {
+    expect(bridge).toMatch(/e\.source !== win\.parent \|\| e\.origin !== origin/)
   })
 
   it("the shared back arrow is not rendered inside a window (it would be dead)", () => {

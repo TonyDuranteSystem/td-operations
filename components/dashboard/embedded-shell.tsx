@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { EmbeddedContext, useEmbedded } from '@/lib/embed/embedded-context'
+import { installWindowBridge } from '@/lib/embed/window-bridge'
 
 export { useEmbedded }
 
@@ -29,20 +30,16 @@ export function EmbeddedProvider({ initial, children }: { initial: boolean; chil
   // Frozen: later server answers (refreshes) are ignored on purpose.
   const [embedded] = useState(initial)
 
-  // History safety inside a window (council round 2, bug hunter blocker). A frame's history entries
-  // are part of the BROWSER TAB's joint history, so a page's "back" (the arrow on a detail page, or
-  // router.back()) would step the whole tab — taking the main page somewhere else and destroying
-  // every window. Inside a window, history.back() does nothing; the window's own chrome will own
-  // back/forward (step 5). Next's router.back() calls window.history.back(), so this covers it.
+  // Everything a window needs on the frame's side (dev job f3f3e237 step 5): history safety (a
+  // frame's history entries are part of the BROWSER TAB's joint history, so a page's "back" would
+  // step the whole tab and destroy every window), telling the main page where this window is,
+  // bringing it to the front, Cmd+K, and "is there typing here that would be lost". All of it lives
+  // in lib/embed/window-bridge.ts so it is one place to read and to test.
+  const router = useRouter()
   useEffect(() => {
     if (!embedded) return
-    const h = window.history
-    const original = h.back
-    h.back = () => {}
-    return () => {
-      h.back = original
-    }
-  }, [embedded])
+    return installWindowBridge(window, { navigate: url => router.push(url) })
+  }, [embedded, router])
 
   return <EmbeddedContext.Provider value={embedded}>{children}</EmbeddedContext.Provider>
 }

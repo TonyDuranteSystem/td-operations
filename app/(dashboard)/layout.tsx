@@ -29,6 +29,7 @@ import {
   ShellMain,
   SpikeBridge,
 } from '@/components/dashboard/embedded-shell'
+import { WindowManager, WindowsAvailableProvider } from '@/components/windows/window-manager'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -147,9 +148,10 @@ export default async function DashboardLayout({
   // <EmbeddedProvider>. The login check above always runs; the switch is only looked up for a framed
   // load, so ordinary page loads never pay for it. Inside a window the chrome's data is never
   // shown, so its queries are skipped.
-  const embedded = isFramedNavigation(headers().get('sec-fetch-dest'))
-    ? await isFloatingWindowsEnabled()
-    : false
+  // The admin switch is now read on EVERY load (not only a framed one): the main page needs it to
+  // decide whether to mount the window manager at all (step 5). One small settings lookup.
+  const windowsEnabled = await isFloatingWindowsEnabled()
+  const embedded = isFramedNavigation(headers().get('sec-fetch-dest')) && windowsEnabled
   const badgeCounts = embedded
     ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
     : await getBadgeCounts(supabase, user.id)
@@ -178,6 +180,7 @@ export default async function DashboardLayout({
           UiEventListener stays (it keeps a window's data fresh); the main scrolling area
           stays (many pages size themselves against it). */}
       <EmbeddedProvider initial={embedded}>
+      <WindowsAvailableProvider available={windowsEnabled && !embedded}>
       <ChromeOnly><SandboxBanner /></ChromeOnly>
       <ChromeOnly><SwRegister /></ChromeOnly>
       <ChromeOnly><RealtimeNotifications /></ChromeOnly>
@@ -228,7 +231,12 @@ export default async function DashboardLayout({
             no fetches, no realtime subscription, no listeners. Defaults ON and
             fails OPEN, so a settings hiccup cannot silently remove it. */}
         {floatingChatEnabled && <ChromeOnly><FloatingChat /></ChromeOnly>}
+        {/* Floating windows (dev job f3f3e237 step 5): mounted ONCE here, outside <main>, so a page
+            change never touches them; ChromeOnly so a window can never spawn windows of its own;
+            only when the admin switch is on (the kill switch — off means it never mounts). */}
+        {windowsEnabled && <ChromeOnly><WindowManager userId={user.id} sandbox={isSandbox} /></ChromeOnly>}
       </ShellFrame>
+      </WindowsAvailableProvider>
       </EmbeddedProvider>
     </Providers>
   )

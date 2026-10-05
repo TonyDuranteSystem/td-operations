@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { browserStore, clearAllWindows } from '@/lib/windows/windows-storage'
 import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
@@ -614,6 +615,8 @@ export function Sidebar({
 
   const handleLogout = async () => {
     const supabase = createClient()
+    // Floating windows are remembered per person on this computer — forget them at sign-out.
+    clearAllWindows(browserStore())
     await supabase.auth.signOut()
     router.push('/login')
     router.refresh()

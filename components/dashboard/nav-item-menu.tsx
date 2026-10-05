@@ -1,10 +1,12 @@
 'use client'
 
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { MoreVertical, ExternalLink, Link2 } from 'lucide-react'
+import { MoreVertical, ExternalLink, Link2, AppWindow } from 'lucide-react'
 import { toast } from 'sonner'
 import { absoluteNavUrl, isInternalNavHref } from '@/lib/nav/nav-link'
 import { cn } from '@/lib/utils'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 
 /**
  * The ⋯ button on every left-menu item (dev job f3f3e237, step 1).
@@ -45,6 +47,8 @@ export function NavItemMenu({
    */
   overlay?: boolean
 }) {
+  // Floating windows (step 5/6): only when the admin switch is on, and only for a real CRM page.
+  const windowsAvailable = useWindowsAvailable()
   // A menu item pointing at anything but a normal CRM page path gets no menu.
   if (!isInternalNavHref(href)) return null
 
@@ -89,6 +93,19 @@ export function NavItemMenu({
           sideOffset={6}
           className="z-[70] min-w-[180px] rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
         >
+          {windowsAvailable && isWindowableUrl(href) && (
+            // Desktop only: a window is a frame over the page, which makes no sense on a phone.
+            <DropdownMenu.Item
+              className={cn(itemClass, 'hidden lg:flex')}
+              onSelect={() => {
+                requestOpenWindow(href, name)
+                onNavigate?.()
+              }}
+            >
+              <AppWindow className="h-3.5 w-3.5 text-zinc-500" />
+              Open in floating window
+            </DropdownMenu.Item>
+          )}
           <DropdownMenu.Item asChild onSelect={() => onNavigate?.()}>
             <a href={href} target="_blank" rel="noopener noreferrer" className={itemClass}>
               <ExternalLink className="h-3.5 w-3.5 text-zinc-500" />
