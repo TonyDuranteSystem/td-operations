@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { updateLeadColumnGuarded, hasExpectedValue, isGuardedFailure, type LeadDb } from "@/lib/leads/guarded-update"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -19,7 +20,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { lead_id, notes } = await request.json()
+    const body = await request.json()
+    const { lead_id, notes } = body
 
     if (!lead_id) {
       return NextResponse.json({ error: "Missing lead_id" }, { status: 400 })
@@ -35,13 +37,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 })
     }
 
-    const { error } = await supabaseAdmin
-      .from("leads")
-      .update({ notes: notes ?? "", updated_at: new Date().toISOString() })
-      .eq("id", lead_id)
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    // Guarded write: the notes are overwritten WHOLE, so two people editing the same lead's
+    // notes used to lose one person's writing silently. `expected_notes` is the text the
+    // caller was editing from; a mismatch now returns 409 instead of overwriting.
+    const guarded = await updateLeadColumnGuarded(supabaseAdmin as unknown as LeadDb, {
+      leadId: lead_id,
+      column: "notes",
+      newValue: notes ?? "",
+      expected: body.expected_notes,
+      hasExpected: hasExpectedValue(body, "expected_notes"),
+    })
+    if (isGuardedFailure(guarded)) {
+      if (guarded.reason === "conflict") {
+        return NextResponse.json(
+          { error: guarded.message, conflict: true, current_value: guarded.currentValue },
+          { status: 409 }
+        )
+      }
+      if (guarded.reason === "not_found") {
+        return NextResponse.json({ error: guarded.message }, { status: 404 })
+      }
+      return NextResponse.json({ error: guarded.message }, { status: 500 })
     }
 
     logAction({

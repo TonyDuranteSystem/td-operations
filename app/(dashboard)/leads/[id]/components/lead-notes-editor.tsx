@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { MessageSquare, Pencil, Save, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -15,6 +15,10 @@ export function LeadNotesEditor({ leadId, notes }: LeadNotesEditorProps) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(notes)
   const [isPending, startTransition] = useTransition()
+  // The text this person is editing FROM, sent with the save so the server refuses (instead of
+  // silently overwriting the WHOLE notes) if someone else saved them meanwhile (dev job f3f3e237
+  // / d26b8a7e). Captured when editing starts; moved forward after this person's own save.
+  const editBase = useRef(notes)
 
   const handleSave = () => {
     startTransition(async () => {
@@ -22,15 +26,18 @@ export function LeadNotesEditor({ leadId, notes }: LeadNotesEditorProps) {
         const res = await fetch('/api/crm/admin-actions/update-lead-notes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: leadId, notes: value }),
+          body: JSON.stringify({ lead_id: leadId, notes: value, expected_notes: editBase.current }),
         })
 
         if (!res.ok) {
-          const data = await res.json()
+          const data = await res.json().catch(() => ({}))
           toast.error(data.error || 'Failed to save notes')
+          // Keep what they typed (nothing is lost); refresh so the other person's text shows.
+          if (res.status === 409) router.refresh()
           return
         }
 
+        editBase.current = value
         toast.success('Notes saved')
         setEditing(false)
         router.refresh()
@@ -54,7 +61,7 @@ export function LeadNotesEditor({ leadId, notes }: LeadNotesEditorProps) {
         </h2>
         {!editing ? (
           <button
-            onClick={() => setEditing(true)}
+            onClick={() => { editBase.current = notes; setEditing(true) }}
             className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded transition-colors"
           >
             <Pencil className="h-3 w-3" />

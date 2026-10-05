@@ -91,12 +91,14 @@ export function LeadsKanban({ items }: LeadsKanbanProps) {
         const res = await fetch('/api/crm/admin-actions/update-lead-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: leadId, status: newStatus }),
+          body: JSON.stringify({ lead_id: leadId, status: newStatus, expected_status: source.droppableId }),
         })
 
         if (!res.ok) {
-          const data = await res.json()
+          const data = await res.json().catch(() => ({}))
           toast.error(data.error || 'Failed to update status')
+          // The card moved elsewhere (or the lead changed) since this board loaded: show the truth.
+          if (res.status === 409) router.refresh()
           return
         }
 

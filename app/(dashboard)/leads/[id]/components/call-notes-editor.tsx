@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { FileText, Pencil, Save, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -15,6 +15,9 @@ export function CallNotesEditor({ leadId, callNotes }: CallNotesEditorProps) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(callNotes ?? '')
   const [isPending, startTransition] = useTransition()
+  // The text this person is editing FROM (see lead-notes-editor): lets the server refuse a
+  // silent overwrite of notes someone else saved meanwhile (dev job f3f3e237 / d26b8a7e).
+  const editBase = useRef(callNotes ?? '')
 
   const handleSave = () => {
     startTransition(async () => {
@@ -22,13 +25,16 @@ export function CallNotesEditor({ leadId, callNotes }: CallNotesEditorProps) {
         const res = await fetch('/api/crm/admin-actions/update-lead-field', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: leadId, field: 'call_notes', value }),
+          body: JSON.stringify({ lead_id: leadId, field: 'call_notes', value, expected_value: editBase.current }),
         })
         if (!res.ok) {
-          const data = await res.json()
+          const data = await res.json().catch(() => ({}))
           toast.error(data.error || 'Failed to save')
+          // Keep what they typed (nothing is lost); refresh so the other person's text shows.
+          if (res.status === 409) router.refresh()
           return
         }
+        editBase.current = value.trim()
         toast.success('Call notes saved')
         setEditing(false)
         router.refresh()
@@ -52,7 +58,7 @@ export function CallNotesEditor({ leadId, callNotes }: CallNotesEditorProps) {
         </p>
         {!editing ? (
           <button
-            onClick={() => setEditing(true)}
+            onClick={() => { editBase.current = callNotes ?? ''; setEditing(true) }}
             className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded transition-colors"
           >
             <Pencil className="h-2.5 w-2.5" />

@@ -32,6 +32,11 @@ export function EditableField({
   const [editValue, setEditValue] = useState(value ?? '')
   const [isPending, startTransition] = useTransition()
   const inputRef = useRef<HTMLInputElement | HTMLSelectElement>(null)
+  // The value this person is editing FROM (dev job f3f3e237 / d26b8a7e): sent with the save so
+  // the server can refuse, instead of silently overwriting, if someone changed this field
+  // meanwhile. Captured when editing starts, and moved forward after this person's own
+  // successful save so a second edit is not refused for their own earlier change.
+  const editBase = useRef<string>(value ?? '')
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -45,13 +50,15 @@ export function EditableField({
         const res = await fetch('/api/crm/admin-actions/update-lead-field', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: leadId, field, value: editValue }),
+          body: JSON.stringify({ lead_id: leadId, field, value: editValue, expected_value: editBase.current }),
         })
         const data = await res.json()
         if (!res.ok) {
           toast.error(data.error || 'Failed to save')
+          if (res.status === 409) router.refresh()
           return
         }
+        editBase.current = editValue.trim()
         if (field === 'email' && data.email_sync) {
           const s = data.email_sync
           const synced: string[] = []
@@ -83,13 +90,15 @@ export function EditableField({
         const res = await fetch('/api/crm/admin-actions/update-lead-field', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: leadId, field, value: '' }),
+          body: JSON.stringify({ lead_id: leadId, field, value: '', expected_value: value ?? '' }),
         })
         const data = await res.json()
         if (!res.ok) {
           toast.error(data.error || 'Failed to clear')
+          if (res.status === 409) router.refresh()
           return
         }
+        editBase.current = ''
         toast.success('Cleared')
         setEditValue('')
         setEditing(false)
@@ -173,7 +182,7 @@ export function EditableField({
       <span className="truncate">{displayValue || '\u2014'}</span>
       <FastTooltip label="Edit">
         <button
-          onClick={() => { setEditValue(value ?? ''); setEditing(true) }}
+          onClick={() => { setEditValue(value ?? ''); editBase.current = value ?? ''; setEditing(true) }}
           className="p-0.5 text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-zinc-600 transition-opacity"
           aria-label="Edit"
         >
