@@ -568,4 +568,14 @@ describe("N1a C2 — step settings", () => {
     expect(stepPatchChanges({ completes_service: null }, { completes_service: false })).toBe(false)
     expect(stepPatchChanges({ requires_document_to_advance: false }, { requires_document_to_advance: true })).toBe(true)
   })
+
+  it("a field the caller did not send keeps its stored value — follow-up days, description, flags, actions", async () => {
+    existingRows = [realRow({ id: "a", stage_name: "A", stage_order: 1, sla_days: 5, stage_description: "kept" })]
+    await replaceStagesForService("Shipping", [{ id: "a", stage_order: 1, stage_name: "A", waiting_on: "us" }])
+    const upd = ops.find(o => o.kind === "update")!
+    for (const k of ["sla_days", "stage_description", "auto_advance", "notify_client_email", "client_description", "auto_actions"]) {
+      expect(upd.payload).not.toHaveProperty(k)
+    }
+    expect(upd.payload).toMatchObject({ waiting_on: "us" })
+  })
 })

@@ -385,6 +385,32 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 4g. A finished (or cancelled) job does not move forward (N1a C2). Once a service has a step AFTER its done step
+  // (DBA: "Registered" then "Renewal Due"), moving a finished job onward would quietly make it active again with its
+  // end date still set — and Mark complete would then refuse it as "already past its done step". Going back (reopen)
+  // stays allowed; a job that must go through again is reopened first.
+  {
+    const st = ((delivery as { status?: string | null }).status ?? "").trim().toLowerCase()
+    const fromOrderByName = stages.find(s => s.stage_name === delivery.stage)?.stage_order ?? currentOrder
+    if ((st === "completed" || st === "cancelled" || st === "canceled") && targetStage.stage_order > fromOrderByName) {
+      return {
+        success: false,
+        error:
+          st === "completed"
+            ? "This job is complete — reopen it (Go Back) before moving it forward."
+            : "This job was cancelled — reopen it before moving it forward.",
+        from_stage: delivery.stage || "New",
+        to_stage: targetStage.stage_name,
+        to_order: targetStage.stage_order,
+        total_stages: stages.length,
+        is_completed: false,
+        created_tasks: [],
+        failed_tasks: [],
+        auto_triggers: [],
+      }
+    }
+  }
+
   // 4f. Needs a document (N1a C2) — a forward move that leaves or jumps over a step marked "needs a document before
   // moving on" is refused unless a document was uploaded on that step for this job. The database rule
   // (trg_delivery_document_to_advance, migration 20261005-0100) enforces it for every writer; this gives the same

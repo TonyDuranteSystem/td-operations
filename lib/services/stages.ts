@@ -562,14 +562,16 @@ export async function replaceStagesForService(
     const patch: Record<string, unknown> = {
       stage_order: plannedOrders[idx],
       stage_name: s.stage_name,
-      stage_description: s.stage_description ?? null,
-      sla_days: s.sla_days ?? null,
-      auto_advance: s.auto_advance ?? false,
-      notify_client_email: s.notify_client_email ?? false,
-      client_description: s.client_description ?? null,
+      // A field the caller did not send (undefined) keeps its stored value — the editors send only what was changed
+      // on their screen (N1a C2, onlyChangedStepFields), so a screen left open can't put back an old value.
+      ...(s.stage_description !== undefined ? { stage_description: s.stage_description ?? null } : {}),
+      ...(s.sla_days !== undefined ? { sla_days: s.sla_days ?? null } : {}),
+      ...(s.auto_advance !== undefined ? { auto_advance: s.auto_advance ?? false } : {}),
+      ...(s.notify_client_email !== undefined ? { notify_client_email: s.notify_client_email ?? false } : {}),
+      ...(s.client_description !== undefined ? { client_description: s.client_description ?? null } : {}),
       ...(s.requires_approval !== undefined ? { requires_approval: s.requires_approval ?? false } : {}),
       ...stepSettingsPatch(s),
-      auto_actions: (s.auto_actions ?? null) as Json,
+      ...(s.auto_actions !== undefined ? { auto_actions: (s.auto_actions ?? null) as Json } : {}),
     }
     // Park rows always need their real order written back.
     const current = existingById.get(s.id)!

@@ -5,7 +5,7 @@ import {
   documentMissingMessage,
   documentStepsCrossed,
   isWaitingOn,
-  onlyChangedStepSettings,
+  onlyChangedStepFields,
   stageNotificationText,
   stepSettingsProblems,
 } from "@/lib/services/step-settings"
@@ -115,18 +115,26 @@ describe("documentStepsCrossed — same range as the database rule", () => {
   })
 })
 
-describe("onlyChangedStepSettings — a screen left open can't undo someone else's change", () => {
+describe("onlyChangedStepFields — a screen left open can't undo someone else's change", () => {
+  it("covers the older fields too: follow-up days, description, flags, actions", () => {
+    const old = { sla_days: 3, stage_description: "A", auto_advance: false, notify_client_email: null, auto_actions: null }
+    expect(onlyChangedStepFields({ stage_name: "X", ...old, notify_client_email: false, auto_actions: [] }, old)).toEqual({
+      stage_name: "X",
+    })
+    expect(onlyChangedStepFields({ stage_name: "X", ...old, sla_days: 5 }, old)).toEqual({ stage_name: "X", sla_days: 5 })
+    expect(onlyChangedStepFields({ stage_name: "X", ...old, sla_days: null }, old)).toEqual({ stage_name: "X", sla_days: null })
+  })
   const loaded = { waiting_on: "us", completes_service: true, requires_document_to_advance: false, client_label: "Old", client_label_it: null }
   it("drops every setting the person did not touch", () => {
-    const out = onlyChangedStepSettings({ stage_name: "X", ...loaded }, loaded)
+    const out = onlyChangedStepFields({ stage_name: "X", ...loaded }, loaded)
     expect(out).toEqual({ stage_name: "X" })
   })
   it("keeps the ones they changed", () => {
-    const out = onlyChangedStepSettings({ stage_name: "X", ...loaded, completes_service: false, client_label: "New" }, loaded)
+    const out = onlyChangedStepFields({ stage_name: "X", ...loaded, completes_service: false, client_label: "New" }, loaded)
     expect(out).toEqual({ stage_name: "X", completes_service: false, client_label: "New" })
   })
   it("treats blank vs unset text and false vs unset flags as no change", () => {
-    const out = onlyChangedStepSettings(
+    const out = onlyChangedStepFields(
       { stage_name: "X", ...loaded, client_label_it: "  ", requires_document_to_advance: null },
       loaded,
     )
@@ -134,6 +142,6 @@ describe("onlyChangedStepSettings — a screen left open can't undo someone else
   })
   it("a step added on this screen sends everything", () => {
     const fresh = { stage_name: "New step", waiting_on: "client" }
-    expect(onlyChangedStepSettings(fresh, undefined)).toEqual(fresh)
+    expect(onlyChangedStepFields(fresh, undefined)).toEqual(fresh)
   })
 })

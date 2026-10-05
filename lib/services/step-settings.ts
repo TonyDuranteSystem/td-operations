@@ -100,32 +100,54 @@ export function documentMissingMessage(stepNames: string[]): string {
   return `A document must be uploaded on "${stepNames.join(", ")}" before this job can move on.`
 }
 
-/** The N1a C2 step settings an editor can change. */
-export const STEP_SETTING_FIELDS = [
+/**
+ * Every step field the editors show and send back (stage name aside — it is the step's identity and is always sent).
+ * Includes the N1a C2 settings and the older ones (description, follow-up days, flags, actions).
+ */
+export const EDITABLE_STEP_FIELDS = [
+  "stage_description",
+  "client_description",
+  "sla_days",
+  "auto_advance",
+  "notify_client_email",
+  "requires_approval",
+  "auto_actions",
   "waiting_on",
   "completes_service",
   "requires_document_to_advance",
   "client_label",
   "client_label_it",
 ] as const
+type EditableStepField = (typeof EDITABLE_STEP_FIELDS)[number]
+
+const FLAG_FIELDS = new Set<string>([
+  "auto_advance",
+  "notify_client_email",
+  "requires_approval",
+  "completes_service",
+  "requires_document_to_advance",
+])
 
 /**
- * Leave out (undefined) every C2 setting the person did not change since the screen loaded, so the save keeps the
- * stored value. Without this a screen left open would write back the OLD label / done tick / "waiting on" over a change
- * someone else made meanwhile. Text compares trimmed, empty ≡ unset; flags compare null ≡ false.
+ * Leave out (undefined) every step field the person did not change since the screen loaded, so the save keeps the
+ * stored value (N1a C2). Without this a screen left open would write back the OLD value — a label, the done tick,
+ * follow-up days — over a change someone else made meanwhile. Text compares trimmed with empty ≡ unset; flags compare
+ * null ≡ false; actions compare by content with an empty list ≡ none.
  */
-export function onlyChangedStepSettings<T extends Partial<Record<(typeof STEP_SETTING_FIELDS)[number], unknown>>>(
+export function onlyChangedStepFields<T extends Partial<Record<EditableStepField, unknown>>>(
   current: T,
-  loaded: Partial<Record<(typeof STEP_SETTING_FIELDS)[number], unknown>> | undefined,
+  loaded: Partial<Record<EditableStepField, unknown>> | undefined,
 ): T {
   if (!loaded) return current // a step added on this screen: send everything
   const norm = (k: string, v: unknown): unknown => {
-    if (k === "completes_service" || k === "requires_document_to_advance") return v === true
+    if (FLAG_FIELDS.has(k)) return v === true
+    if (k === "auto_actions") return Array.isArray(v) && v.length > 0 ? JSON.stringify(v) : null
     if (typeof v === "string") return v.trim() === "" ? null : v.trim()
     return v ?? null
   }
   const out = { ...current }
-  for (const k of STEP_SETTING_FIELDS) {
+  for (const k of EDITABLE_STEP_FIELDS) {
+    if (!(k in current)) continue
     if (norm(k, current[k]) === norm(k, loaded[k])) delete (out as Record<string, unknown>)[k]
   }
   return out

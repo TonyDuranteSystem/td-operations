@@ -10,7 +10,7 @@ import {
   stageHasAction,
   setStageAction,
 } from "@/lib/services/stage-actions"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, onlyChangedStepSettings, type WaitingOn } from "@/lib/services/step-settings"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, onlyChangedStepFields, type WaitingOn } from "@/lib/services/step-settings"
 
 export interface PipelineStageRow {
   id: string
@@ -78,20 +78,20 @@ function PipelineStageEditDialog({
         SECOND_INSTALLMENT_TARGET_ACTION,
         secondInstallmentTarget,
       )
+      // Only the fields changed in this dialog are sent (N1a C2): a dialog opened before someone else's change must
+      // not put the old value back — a label, the done tick, follow-up days. The step name is always sent.
       const result = await savePipelineStage(row.id, {
         stage_name: stageName.trim(),
-        stage_description: stageDescription.trim() || null,
-        client_description: clientDescription.trim() || null,
-        sla_days: slaNum,
-        auto_advance: autoAdvance,
-        requires_approval: requiresApproval,
-        // A step that had no actions keeps "none" rather than becoming an empty list — the change history
-        // (N1a P2) would otherwise record a change on every save.
-        auto_actions: nextAutoActions.length === 0 && row.auto_actions == null ? null : nextAutoActions,
-        // Only the step settings changed in this dialog are sent (N1a C2): a dialog opened before someone else's
-        // change must not put the old label / done tick back.
-        ...onlyChangedStepSettings(
+        ...onlyChangedStepFields(
           {
+            stage_description: stageDescription.trim() || null,
+            client_description: clientDescription.trim() || null,
+            sla_days: slaNum,
+            auto_advance: autoAdvance,
+            requires_approval: requiresApproval,
+            // A step that had no actions keeps "none" rather than becoming an empty list — the change history
+            // (N1a P2) would otherwise record a change on every save.
+            auto_actions: nextAutoActions.length === 0 && row.auto_actions == null ? null : nextAutoActions,
             waiting_on: waitingOn || null,
             completes_service: isDone,
             requires_document_to_advance: needsDocument,

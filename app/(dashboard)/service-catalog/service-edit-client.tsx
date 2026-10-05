@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, ArrowUp, ArrowDown, Trash2, Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 import type { StageRow } from "@/lib/services/stages"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn, onlyChangedStepSettings } from "@/lib/services/step-settings"
+import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn, onlyChangedStepFields } from "@/lib/services/step-settings"
 import {
   saveServiceComplete,
   type ServiceBasicsDraft,
@@ -245,6 +245,12 @@ const inputClass =
 
 // ── Component ──────────────────────────────────────────────────────────
 
+/**
+ * Warnings from the last save, carried across the editor restart that follows it (the edit page re-keys the editor on
+ * the freshly saved data — see the page). Read once by the next editor, then cleared.
+ */
+let carriedSaveWarnings: { slug: string; at: number; warnings: string[] } | null = null
+
 export function ServiceEditClient({ mode, initial }: Props) {
   const router = useRouter()
   const [basics, setBasics] = useState<ServiceBasicsDraft>(
@@ -255,14 +261,19 @@ export function ServiceEditClient({ mode, initial }: Props) {
   const [loadedStageIds] = useState<string[]>(() =>
     (initial?.stages ?? []).map(s => s.id).filter((id): id is string => !!id),
   )
-  /** The step settings as loaded — the save sends only the ones changed here (N1a C2, onlyChangedStepSettings). */
+  /** The steps as loaded — the save sends only the fields changed here (N1a C2, onlyChangedStepFields). */
   const [loadedStagesById] = useState(() => new Map((initial?.stages ?? []).filter(s => s.id).map(s => [s.id as string, s])))
   const [workflow, setWorkflow] = useState<WorkflowState>(() =>
     initial?.workflow ? workflowFromInitial(initial.workflow) : blankWorkflow(),
   )
   const [saving, setSaving] = useState<null | "draft" | "publish">(null)
   const [issues, setIssues] = useState<CatalogValidityIssue[]>([])
-  const [warnings, setWarnings] = useState<string[]>([])
+  const [warnings, setWarnings] = useState<string[]>(() => {
+    const c = carriedSaveWarnings
+    carriedSaveWarnings = null
+    // Only the same service, right after its save — never a stale carry-over onto another page.
+    return c && c.slug === initial?.basics?.slug && Date.now() - c.at < 15000 ? c.warnings : []
+  })
 
   function patchBasics(p: Partial<ServiceBasicsDraft>) {
     setBasics((b) => ({ ...b, ...p }))
@@ -311,7 +322,7 @@ export function ServiceEditClient({ mode, initial }: Props) {
       const workflowDraft = workflow.enabled ? workflowToDraft(workflow, publish) : null
       const draft: ServiceDraft = {
         basics,
-        stages: stages.map(s => onlyChangedStepSettings(s, s.id ? loadedStagesById.get(s.id) : undefined)),
+        stages: stages.map(s => onlyChangedStepFields(s, s.id ? loadedStagesById.get(s.id) : undefined)),
         workflow: workflowDraft,
         // What this page saw at load. The server refuses the save if a stage
         // appeared since, rather than deleting work another tab just added.
@@ -341,6 +352,7 @@ export function ServiceEditClient({ mode, initial }: Props) {
         if (mode === "new") {
           router.replace(`/service-catalog/${result.service.slug}/edit`)
         } else {
+          carriedSaveWarnings = { slug: result.service.slug, at: Date.now(), warnings: result.warnings ?? [] }
           router.refresh()
         }
       }
