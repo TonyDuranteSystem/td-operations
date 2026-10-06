@@ -44,6 +44,12 @@ describe("the tour does not get in the person's way", () => {
     expect(tour).toContain("motion-safe:animate-pulse")
   })
 
+  it("the ring hides once an action step is done, and the card warns when something covers the circled spot", () => {
+    expect(tour).toContain("!(step.kind === 'act' && done)")
+    expect(tour).toContain("document.elementFromPoint(")
+    expect(tour).toContain("A window is covering the left menu")
+  })
+
   it("the ring follows its target as it moves (a dragged window) and scrolls a far-away menu item into view", () => {
     expect(tour).toContain("requestAnimationFrame(tick)")
     expect(tour).toContain("scrollIntoView")

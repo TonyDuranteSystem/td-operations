@@ -98,7 +98,7 @@ export const STEPS: TourStep[] = [
     example: 'The window is covering the client\'s name in your chat. Drag it to the side and make it a bit smaller.',
     tryIt: 'Drag the dark bar to a new spot, then drag an edge or a corner.',
     waiting: 'Waiting for you to move it and change its size.',
-    done: 'Moved and resized. A window can\'t get smaller than about the size of a postcard.',
+    done: 'Done. Moved and resized. A window can\'t get smaller than about the size of a postcard.',
   },
   {
     id: 'buttons',
@@ -120,7 +120,7 @@ export const STEPS: TourStep[] = [
     example: 'You are halfway through a note in a window and a client messages you. Hide the window, answer, then bring it back.',
     tryIt: 'Click Minimize (the dash) on the dark bar. Then click the tab that appears at the bottom of the screen.',
     waiting: 'Waiting: first click Minimize on the dark bar, then click the tab at the bottom.',
-    done: 'Hidden, and back.',
+    done: 'Done. Hidden, and back.',
   },
   {
     id: 'fast-way',
@@ -144,7 +144,7 @@ export const STEPS: TourStep[] = [
     example: 'You found the account number you needed. Close the window and you are right back in your chat.',
     tryIt: 'Click X on a window you opened in this tour.',
     waiting: 'Waiting: click X on the window.',
-    done: 'Closed. Your page is exactly where you left it.',
+    done: 'Done. Closed. Your page is exactly where you left it.',
   },
   {
     id: 'done',

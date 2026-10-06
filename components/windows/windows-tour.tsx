@@ -190,7 +190,8 @@ export function WindowsTour({ userId }: { userId: string }) {
   }, [open])
 
   const done = open && !standalone && (isStepDone(step, progress, snapshot) || entry.kind === 'auto')
-  const selector = open && !standalone && !narrow ? ringSelector(step, progress, snapshot) : null
+  const selector = open && !standalone && !narrow && !(step.kind === 'act' && done) ? ringSelector(step, progress, snapshot) : null
+  const [covered, setCovered] = useState(false)
 
   const goNext = () => {
     if (progress.stepIndex >= STEPS.length - 1) {
@@ -216,7 +217,7 @@ export function WindowsTour({ userId }: { userId: string }) {
 
   return (
     <>
-      <TourRing selector={selector} stepKey={`${step.id}:${progress.practiceId ?? ''}`} />
+      <TourRing selector={selector} stepKey={`${step.id}:${progress.practiceId ?? ''}`} onCovered={setCovered} />
       <section
         role="region"
         aria-label="Floating windows tour"
@@ -267,6 +268,7 @@ export function WindowsTour({ userId }: { userId: string }) {
                   done={done}
                   stepState={stepState}
                   nudge={plainClickNudge}
+                  covered={covered}
                   keys={keys}
                   progress={progress}
                   snapshotCount={snapshot.count}
@@ -326,19 +328,20 @@ export function WindowsTour({ userId }: { userId: string }) {
 
 /** The words of one step, with this person's own key names and what the tour is waiting for right now. */
 function StepBody({
-  step, entry, done, stepState, nudge, keys, progress, snapshotCount,
+  step, entry, done, stepState, nudge, covered, keys, progress, snapshotCount,
 }: {
   step: (typeof STEPS)[number]
   entry: Precheck
   done: boolean
   stepState: StepState
   nudge: boolean
+  covered: boolean
   keys: { opt: string; cmd: string }
   progress: TourProgress
   snapshotCount: number
 }) {
   const t = (s: string) => fillKeys(s, keys)
-  const checklist = step.id === 'move-resize' && !done
+  const checklist = (step.id === 'move-resize' || step.id === 'hide-restore') && !done
   return (
     <>
       <h3 className="text-[15px] font-bold">{step.title}</h3>
@@ -374,15 +377,29 @@ function StepBody({
               That opened the page here instead of in a window. No problem. Hold {keys.opt} and click Leads again.
             </p>
           )}
+          {covered && !done && entry.kind === 'ok' && (
+            <p className="text-[13px] text-amber-800">
+              {step.id === 'fast-way'
+                ? 'A window is covering the left menu. Drag it aside, or click Minimize on its dark bar, so you can reach Leads.'
+                : 'Something is covering the circled spot. Move the window or this card aside.'}
+            </p>
+          )}
           {checklist ? (
-            <ul className="space-y-0.5 text-[13px]">
-              <li className={progress.flags.moved ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.moved ? '✓ Moved it' : '○ Move it (drag the dark bar)'}</li>
-              <li className={progress.flags.resized ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.resized ? '✓ Resized it' : '○ Resize it (drag an edge or a corner)'}</li>
-            </ul>
+            step.id === 'move-resize' ? (
+              <ul className="space-y-0.5 text-[13px]">
+                <li className={progress.flags.moved ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.moved ? '✓ Moved it' : '○ Move it (drag the dark bar)'}</li>
+                <li className={progress.flags.resized ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.resized ? '✓ Resized it' : '○ Resize it (drag an edge or a corner)'}</li>
+              </ul>
+            ) : (
+              <ul className="space-y-0.5 text-[13px]">
+                <li className={progress.flags.minimized ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.minimized ? '✓ Hid it' : '○ Hide it (click Minimize on the dark bar)'}</li>
+                <li className={progress.flags.restored ? 'text-emerald-800' : 'text-zinc-600'}>{progress.flags.restored ? '✓ Brought it back' : '○ Bring it back (click the tab at the bottom)'}</li>
+              </ul>
+            )
           ) : done ? (
             <p className="flex items-start gap-1.5 text-[13px] font-medium text-emerald-800">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>Done. {entry.kind === 'auto' ? '' : t(step.done ?? '')}</span>
+              <span>{entry.kind === 'auto' ? 'Done. Nothing more to do here.' : t(step.done ?? 'Done.')}</span>
             </p>
           ) : stepState === 'waiting' && entry.kind === 'ok' ? (
             <p className="flex items-start gap-1.5 text-[13px] text-zinc-600">
@@ -403,7 +420,7 @@ function StepBody({
 }
 
 /** The glowing ring around whatever the step points at. Follows it as it moves (a dragged window, a scrolled menu). */
-function TourRing({ selector, stepKey }: { selector: string | null; stepKey: string }) {
+function TourRing({ selector, stepKey, onCovered }: { selector: string | null; stepKey: string; onCovered: (covered: boolean) => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const scrolledFor = useRef<string>('')
 
@@ -412,10 +429,12 @@ function TourRing({ selector, stepKey }: { selector: string | null; stepKey: str
     if (!el) return
     if (!selector) {
       el.style.display = 'none'
+      onCovered(false)
       return
     }
     let raf = 0
     let last = ''
+    let lastCovered = false
     const tick = () => {
       const target = document.querySelector(selector)
       if (!target) {
@@ -445,12 +464,21 @@ function TourRing({ selector, stepKey }: { selector: string | null; stepKey: str
           el.style.width = `${r.width + 8}px`
           el.style.height = `${r.height + 8}px`
         }
+        // Is something (a window, the card) sitting on top of the circled spot, so it can't be clicked?
+        if (r.width >= 1 && r.height >= 1) {
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          const isCovered = !!top && !target.contains(top) && !top.contains(target)
+          if (isCovered !== lastCovered) {
+            lastCovered = isCovered
+            onCovered(isCovered)
+          }
+        }
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [selector, stepKey])
+  }, [selector, stepKey, onCovered])
 
   return (
     <div
