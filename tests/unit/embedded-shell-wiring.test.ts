@@ -104,10 +104,6 @@ describe("embedded shell", () => {
     expect(shell).toContain("!embedded && 'pt-14 lg:pt-0'")
     expect(shell).toContain("'flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50'")
   })
-
-  it("the test bridge only listens to messages from the same site", () => {
-    expect(shell).toMatch(/e\.origin !== window\.location\.origin/)
-  })
 })
 
 describe("helper", () => {

@@ -24,10 +24,8 @@ import { isFramedNavigation } from '@/lib/embed/embedded-request'
 import {
   EmbeddedProvider,
   ChromeOnly,
-  EmbeddedOnly,
   ShellFrame,
   ShellMain,
-  SpikeBridge,
 } from '@/components/dashboard/embedded-shell'
 import { WindowManager, WindowsAvailableProvider } from '@/components/windows/window-manager'
 import type { Metadata } from 'next'
@@ -189,7 +187,6 @@ export default async function DashboardLayout({
       <ChromeOnly><ClearAllToasts /></ChromeOnly>
       <UiEventListener />
       <ChromeOnly><DashboardPullToRefresh /></ChromeOnly>
-      <EmbeddedOnly><SpikeBridge /></EmbeddedOnly>
       <ShellFrame sandbox={isSandbox}>
         <ChromeOnly>
           <Sidebar

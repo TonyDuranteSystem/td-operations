@@ -49,11 +49,6 @@ export function ChromeOnly({ children }: { children: React.ReactNode }) {
   return useEmbedded() ? null : <>{children}</>
 }
 
-/** Renders its children only inside a window. */
-export function EmbeddedOnly({ children }: { children: React.ReactNode }) {
-  return useEmbedded() ? <>{children}</> : null
-}
-
 /** The outer flex frame of the dashboard (same classes as before in the normal CRM). */
 export function ShellFrame({ sandbox, children }: { sandbox: boolean; children: React.ReactNode }) {
   const embedded = useEmbedded()
@@ -79,22 +74,4 @@ export function ShellMain({ children }: { children: React.ReactNode }) {
       {children}
     </main>
   )
-}
-
-/**
- * TEST ONLY. Lets the frame test page ask a window to refresh itself, to prove a
- * refresh does not flip the window back into the full CRM. Mounted only inside a
- * window, and only listens to messages from the same site.
- */
-export function SpikeBridge() {
-  const router = useRouter()
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return
-      if (e.data && e.data.type === 'td-spike-refresh') router.refresh()
-    }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [router])
-  return null
 }
