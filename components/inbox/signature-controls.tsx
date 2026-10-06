@@ -23,6 +23,12 @@ interface SignatureControlsProps {
    */
   canUsePersonalMailbox?: boolean
   disabled?: boolean
+  /**
+   * Keep the word "Signature" next to the picker on a phone too. By default it hides below the `sm` breakpoint
+   * to save width, which leaves an unexplained "Compact" drop-down; the reply box has room (its footer wraps)
+   * and a hover label does not exist on a phone, so it asks for the word.
+   */
+  alwaysShowLabel?: boolean
   className?: string
 }
 
@@ -49,6 +55,7 @@ export function SignatureControls({
   onVariantChange,
   canUsePersonalMailbox = false,
   disabled = false,
+  alwaysShowLabel = false,
   className = '',
 }: SignatureControlsProps) {
   // Support never carries a portrait — a face on the shared mailbox would
@@ -91,7 +98,7 @@ export function SignatureControls({
       )}
 
       <label className="flex items-center gap-1 text-xs text-zinc-500">
-        <span className="hidden sm:inline">Signature</span>
+        <span className={alwaysShowLabel ? undefined : 'hidden sm:inline'}>Signature</span>
         <select
           // A variant not on offer for THIS sender — "hat" carried over from
           // switching Antonio -> Support — would otherwise render a blank
