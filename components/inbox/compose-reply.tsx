@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Send, Sparkles, Loader2, Paperclip, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, Sparkles, Loader2, Paperclip, X, ChevronDown, ChevronUp, Maximize2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { WorkerDropZone } from '@/components/chat/worker-dropzone'
@@ -14,8 +14,10 @@ import {
   type SignatureVariant,
 } from '@/lib/email/signature'
 import { findUnresolvedPlaceholders, type AiMode } from '@/lib/inbox/ai-email'
+import { readReplyPopupDefault, writeReplyPopupDefault } from '@/lib/inbox/reply-popup-pref'
+import { ReplyPopup } from './reply-popup'
 import type { InboxConversation } from '@/lib/types'
-import type { ReplyTarget } from './message-thread'
+import { MessageThread, type ReplyTarget } from './message-thread'
 
 /**
  * Pull every bare email address out of a display string like
@@ -114,6 +116,11 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   const [previewOpen, setPreviewOpen] = useState(false)
   // The recipient / From / Quote details fold behind one line (see the header block below).
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // The reply pop-up (a large window with the email beside the editor). The text, recipients, attachments and AI
+  // state all stay HERE; the pop-up only changes where the writing column is drawn, so a draft can never fork.
+  const [expanded, setExpanded] = useState(false)
+  // "Open replies in the pop-up by default" — per device, read after mount (localStorage does not exist on the server).
+  const [popupDefault, setPopupDefault] = useState(false)
   const [draftNotice, setDraftNotice] = useState<string | null>(null)
   // The ONE AI button has two honest modes (dev job bbc70ff8, 2026-10-06): box has text → 'polish' (fix his own
   // wording, nothing added); box is empty → 'draft' (first draft from the thread). Which one is running, or null.
@@ -143,6 +150,14 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // target; with an empty box the composer used to fold and shrink under the finger and the tap missed. A press that
   // starts inside the composer is remembered for a moment so that blur never folds it.
   const pointerInsideRef = useRef(false)
+  // Closing the pop-up must not immediately re-open it: with the default switched on, focusing the inline box opens
+  // the pop-up, and giving focus back to the page can look like exactly that.
+  const suppressAutoOpenRef = useRef(false)
+  // Once a reply has been closed out of the pop-up on purpose, it stays inline until it is sent or abandoned — with
+  // "open by default" on, the next click into the small box must not throw it straight back (the Expand button is
+  // always there to go back).
+  const keepInlineRef = useRef(false)
+  const expandBtnRef = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -173,6 +188,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // Everything AI-related that must not outlive a send or a saved draft: an in-flight answer is invalidated, and
   // Undo is dropped so it can never re-insert text that has already left.
   const resetAiAfterSend = () => {
+    keepInlineRef.current = false
+    setExpanded(false)
     aiRequestRef.current++
     aiBusyRef.current = false
     setAiRunning(null)
@@ -180,6 +197,48 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     setAiNotice(null)
     setPlaceholderWarn(null)
   }
+
+  useEffect(() => {
+    setPopupDefault(readReplyPopupDefault())
+  }, [])
+
+  const openPopup = () => {
+    setExpanded(true)
+    setComposing(true)
+    setDraftNotice(null)
+  }
+  // Close = the writing column goes back to the inline box with EVERYTHING kept. Nothing is discarded here.
+  const closePopup = useCallback(() => {
+    keepInlineRef.current = true
+    suppressAutoOpenRef.current = true
+    window.setTimeout(() => { suppressAutoOpenRef.current = false }, 700)
+    setExpanded(false)
+    if (!messageRef.current.trim()) setComposing(false)
+    window.requestAnimationFrame(() => expandBtnRef.current?.focus())
+  }, [])
+  const togglePopupDefault = (on: boolean) => {
+    setPopupDefault(on)
+    writeReplyPopupDefault(on)
+  }
+  // Put the cursor back in the box WITHOUT letting that focus count as "start a reply" (which, with the pop-up on by
+  // default, would open it): used after an AI answer, Undo, or the blank warning's Edit.
+  const focusBoxQuietly = () => {
+    suppressAutoOpenRef.current = true
+    textareaRef.current?.focus()
+    window.setTimeout(() => { suppressAutoOpenRef.current = false }, 700)
+  }
+  // Land the cursor at the end of the text when the pop-up opens, so writing carries on where it stopped.
+  useEffect(() => {
+    if (!expanded) return
+    const id = window.requestAnimationFrame(() => {
+      const t = textareaRef.current
+      if (!t) return
+      t.focus()
+      const n = t.value.length
+      t.setSelectionRange(n, n)
+    })
+    return () => window.cancelAnimationFrame(id)
+  }, [expanded])
 
   // An explicit pick (a real click on a message card) always wins
   // immediately, mid-draft or not — typed text is preserved, but the
@@ -462,7 +521,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setMessage(result)
       // Keep the FIRST original until Keep/send, even across several AI runs.
       setAiUndo((prev) => ({ original: prev?.original ?? sentDraft, output: result, mode }))
-      textareaRef.current?.focus()
+      focusBoxQuietly()
     } catch (err) {
       if (aiRequestRef.current === reqId) {
         setAiNotice({
@@ -486,31 +545,13 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     setMessage(aiUndo.original)
     setAiUndo(null)
     setAiNotice(null)
-    textareaRef.current?.focus()
+    focusBoxQuietly()
   }
 
-  const composer = (
-    <div
-      className="border-t bg-white px-4 py-3"
-      // The way BACK to reading (Antonio's QA, 2026-08-05): clicking anywhere
-      // outside the composer with an EMPTY draft folds the signature area
-      // away again. Checked against the whole container, not the textarea —
-      // a blur caused by touching the picker or a button inside stays open.
-      // A draft with text never auto-folds: typed words must not vanish.
-      onPointerDownCapture={() => {
-        pointerInsideRef.current = true
-        window.setTimeout(() => { pointerInsideRef.current = false }, 400)
-      }}
-      onBlur={(e) => {
-        if (pointerInsideRef.current) return
-        if (
-          !e.currentTarget.contains(e.relatedTarget as Node | null) &&
-          !message.trim()
-        ) {
-          setComposing(false)
-        }
-      }}
-    >
+  // The email composer's contents, drawn either inline (popup=false) or inside the pop-up (popup=true).
+  // ONE definition so the two can never drift: same state, same handlers, same guards.
+  const emailBody = (popup: boolean) => (
+    <>
       {/* WHO this reply goes to — ONE line instead of the stack of rows that used to eat the writing space
           (Antonio, 2026-10-06: "the space to write is super small and it's a mess"). The recipient is still
           always visible (and amber when there is none — the one state that must never hide), Reply All still
@@ -623,7 +664,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                     {/* frozenTarget.sender is the RECIPIENT for one of our own messages (the message card shows
                         "To: X"), not always an author — "replying to the message from X" read backwards on that
                         card, so this stays direction-agnostic. */}
-                    From: {mailbox === 'antonio' ? 'antonio.durante@tonydurante.us' : 'support@tonydurante.us'} · replying to the message shown above
+                    From: {mailbox === 'antonio' ? 'antonio.durante@tonydurante.us' : 'support@tonydurante.us'} · replying to the message {popup ? 'on the left' : 'shown above'}
                   </p>
                 </div>
               )}
@@ -650,8 +691,6 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         </div>
       )}
 
-      {isEmail ? (
-        <>
           {/* THE WRITING AREA — the point of the whole composer. Full width on its own line (it used to share a
               row with five buttons and got pushed narrow), taller while writing, still user-resizable.
               Compact until the reader starts replying so a long thread keeps its reading space. The class
@@ -667,16 +706,19 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
             onFocus={() => {
               setComposing(true)
               setDraftNotice(null)
+              // With "open replies in the pop-up by default" on, clicking into the inline box opens the pop-up.
+              if (!popup && popupDefault && !suppressAutoOpenRef.current && !keepInlineRef.current) setExpanded(true)
             }}
             onKeyDown={handleKeyDown}
             onPaste={attachments.onPaste}
             placeholder="Write your reply…  (⌘+Enter sends · drop files to attach)"
             rows={composing ? 6 : 3}
             className={cn(
-              'compose-reply-textarea block w-full resize-y rounded-xl border border-zinc-300 px-4 py-2.5 text-sm',
+              'compose-reply-textarea block w-full rounded-xl border border-zinc-300 px-4 py-2.5 text-sm',
               'placeholder:text-zinc-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500',
-              'max-h-[50vh]',
-              composing ? 'min-h-[150px]' : 'min-h-[76px]'
+              popup
+                ? 'min-h-[200px] flex-1 resize-none'
+                : cn('max-h-[50vh] resize-y', composing ? 'min-h-[150px]' : 'min-h-[76px]')
             )}
           />
 
@@ -727,7 +769,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                 <span className="flex items-center gap-3 font-medium">
                   <button
                     type="button"
-                    onClick={() => { setPlaceholderWarn(null); textareaRef.current?.focus() }}
+                    onClick={() => { setPlaceholderWarn(null); focusBoxQuietly() }}
                     className="underline decoration-dotted hover:text-amber-950"
                   >
                     Edit
@@ -830,6 +872,23 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
             )}
 
             <div className="ml-auto flex items-center gap-2">
+              {/* Expand — opens the reply in a large window with the email beside the editor. Inline only; the
+                  pop-up has its own ✕ / Esc. */}
+              {!popup && (
+                <FastTooltip label="Open the reply in a larger window, with the email beside it">
+                  <button
+                    ref={expandBtnRef}
+                    type="button"
+                    onClick={openPopup}
+                    aria-label="Expand — open the reply in a larger window"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-zinc-100 px-3 py-2.5 text-xs font-medium text-zinc-600
+                      transition-colors hover:bg-zinc-200 hover:text-zinc-800"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    <span>Expand</span>
+                  </button>
+                </FastTooltip>
+              )}
               {/* Save draft — needs text, refuses while files are staged: drafts are text-only for now and
                   silently dropping a staged passport would be worse than a disabled button. */}
               {composing && message.trim() && (
@@ -885,7 +944,57 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
               </button>
             </div>
           </div>
-        </>
+          {popup && (
+            <label className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
+              <input
+                type="checkbox"
+                checked={popupDefault}
+                onChange={(e) => togglePopupDefault(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600"
+              />
+              Open replies like this by default on this device
+            </label>
+          )}
+    </>
+  )
+
+  const composer = (
+    <div
+      className="border-t bg-white px-4 py-3"
+      // The way BACK to reading (Antonio's QA, 2026-08-05): clicking anywhere
+      // outside the composer with an EMPTY draft folds the signature area
+      // away again. Checked against the whole container, not the textarea —
+      // a blur caused by touching the picker or a button inside stays open.
+      // A draft with text never auto-folds: typed words must not vanish.
+      onPointerDownCapture={() => {
+        pointerInsideRef.current = true
+        window.setTimeout(() => { pointerInsideRef.current = false }, 400)
+      }}
+      onBlur={(e) => {
+        if (pointerInsideRef.current) return
+        if (
+          !e.currentTarget.contains(e.relatedTarget as Node | null) &&
+          !message.trim()
+        ) {
+          setComposing(false)
+        }
+      }}
+    >
+      {isEmail ? (
+        expanded ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-600">
+            <span>You are writing this reply in the pop-up window.</span>
+            <button
+              type="button"
+              onClick={closePopup}
+              className="font-medium text-blue-700 underline decoration-dotted hover:text-blue-900"
+            >
+              Bring it back here
+            </button>
+          </div>
+        ) : (
+          emailBody(false)
+        )
       ) : (
         // Chat channels (Telegram etc.) keep their original single-row composer. A failed send is shown again
         // here (it was lost in the layout rewrite — R099: never fail silently).
@@ -934,8 +1043,23 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   if (!isEmail) return composer
 
   return (
-    <WorkerDropZone onFiles={(f) => void attachments.add(f)} label="Drop files to attach to the reply">
-      {composer}
-    </WorkerDropZone>
+    <>
+      <WorkerDropZone onFiles={(f) => void attachments.add(f)} label="Drop files to attach to the reply">
+        {composer}
+      </WorkerDropZone>
+      {/* The pop-up is a SIBLING of the inline composer, never a child: React events bubble up the React tree
+          even through a portal, and the inline composer's blur/fold handlers must not see what happens in here. */}
+      {expanded && (
+        <ReplyPopup
+          title={`Reply to ${conversation.name}`}
+          subtitle={conversation.subject}
+          onClose={closePopup}
+          onFiles={(f) => void attachments.add(f)}
+          thread={<MessageThread conversation={conversation} mailbox={mailbox} />}
+        >
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">{emailBody(true)}</div>
+        </ReplyPopup>
+      )}
+    </>
   )
 }
