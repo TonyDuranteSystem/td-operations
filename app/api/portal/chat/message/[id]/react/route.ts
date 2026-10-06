@@ -5,6 +5,8 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { requirePortalCapability } from '@/lib/portal/team/gate'
 import { createPortalNotification } from '@/lib/portal/notifications'
 import { isValidReactionEmoji } from '@/lib/portal/reactions'
+import { buildPortalChatLink } from '@/lib/portal/chat-link'
+import { previewMessageText, reactionNoticeText } from '@/lib/portal/notification-read'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -54,7 +56,7 @@ export async function POST(
 
   const { data: msg, error: selErr } = await supabaseAdmin
     .from('portal_messages')
-    .select('id, account_id, contact_id, deleted_at, sender_type')
+    .select('id, account_id, contact_id, deleted_at, sender_type, topic, message')
     .eq('id', id)
     .maybeSingle()
   if (selErr) return NextResponse.json({ error: selErr.message }, { status: 500 })
@@ -121,16 +123,25 @@ export async function POST(
     const reactedToTeamMessage = msg.sender_type === 'admin' || msg.sender_type === 'system'
 
     if (staff && reactedToClientMessage) {
-      // Staff reacted to a client's message → notify the client (push + in-app bell).
+      // Staff reacted to a client's message → notify the client (bell row + push). The notice names the
+      // message, speaks the client's language, and opens the right company and tab. No email, ever
+      // (the digest skips type 'reaction'); the lock-screen push shows only the emoji.
       const throttleKey = `to-client:${id}`
       if (!throttled(throttleKey)) {
+        let language: string | null = null
+        if (msg.contact_id) {
+          const { data: c } = await supabaseAdmin.from('contacts').select('language').eq('id', msg.contact_id).maybeSingle()
+          language = c?.language ?? null
+        }
+        const notice = reactionNoticeText(language, emoji, previewMessageText(msg.message))
         createPortalNotification({
           account_id: msg.account_id || undefined,
           contact_id: msg.contact_id || undefined,
           type: 'reaction', // excluded from the digest email in /api/cron/portal-digest
-          title: 'New reaction from Tony Durante Team',
-          body: `${emoji} on your message`,
-          link: '/portal/chat',
+          title: notice.title,
+          body: notice.body,
+          pushBody: notice.pushBody,
+          link: buildPortalChatLink({ accountId: msg.account_id, topic: msg.topic }),
         }).catch(() => {})
       }
     } else if (!staff && reactedToTeamMessage) {

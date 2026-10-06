@@ -11,6 +11,7 @@ import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { MessageReactions } from '@/components/chat/message-reactions'
+import { reactionSeenKey } from '@/lib/portal/notification-read'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -120,6 +121,49 @@ function formatTime(dateStr: string): string {
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
+
+  // Team reactions on the client's own messages pulse until the client has actually had the chat on
+  // screen for a few seconds (reactions job 5962e46d). `reactionSeenAt`: undefined = not read yet (no
+  // pulse, so nothing flashes before localStorage is read), null = never looked on this device, number =
+  // last time. Once seen, we remember it on this device, clear the server-side reaction notices (so the
+  // Chat dot and bell stop) and tell the sidebar. Per device: the pulse can show once more on another
+  // device — harmless.
+  const [reactionSeenAt, setReactionSeenAt] = useState<number | null | undefined>(undefined)
+  useEffect(() => {
+    const key = reactionSeenKey(accountId, contactId)
+    let stored: number | null = null
+    try {
+      const v = localStorage.getItem(key)
+      const n = v ? Number(v) : NaN
+      stored = Number.isFinite(n) ? n : null
+    } catch { /* storage unavailable — treat as never looked */ }
+    setReactionSeenAt(stored)
+
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const arm = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (document.visibilityState !== 'visible') return // re-armed when the tab comes back
+        const now = Date.now()
+        try { localStorage.setItem(key, String(now)) } catch { /* no-op */ }
+        setReactionSeenAt(now)
+        fetch('/api/portal/notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'reaction', account_id: accountId || null }),
+          keepalive: true,
+        }).catch(() => {})
+        window.dispatchEvent(new CustomEvent('portal-reactions-seen'))
+      }, 6000)
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') arm() }
+    arm()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [accountId, contactId])
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
   // message is about via a first-send popup; the choice is the SEND TAG and the
   // VIEW follows it (cookie switch). Single-entity clients are auto-tagged.
@@ -1120,6 +1164,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       locale={locale}
                       align={isOwn ? 'right' : 'left'}
                       staffLabel={t('chat.team')}
+                      pulseSince={isOwn ? reactionSeenAt : undefined}
                     />
                   </div>
                 )}

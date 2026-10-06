@@ -3,7 +3,7 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getInProgressOnboardings, getPortalAccountById, getUnpaidInvoiceCount } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getInProgressOnboardings, getPortalAccountById, getUnpaidInvoiceCount, getUnseenReactionCount } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
@@ -268,12 +268,13 @@ export default async function PortalLayout({
   // async layout: there is no root-level error page to catch a throw at this
   // exact level, so it would blank the whole portal shell instead of just one
   // badge (council review, 2026-09-04).
-  const [unreadDocsCount, toSignCount, unpaidInvoiceCount] = await Promise.all([
+  const [unreadDocsCount, toSignCount, unpaidInvoiceCount, unseenReactionCount] = await Promise.all([
     contactId ? getUnopenedDocsCount(contactId, accounts.map(a => a.id)).catch(() => 0) : Promise.resolve(0),
     contactId && selectedAccountId
       ? getToSignCount({ selectedAccountId, contactId, userEmail: user.email }).catch(() => 0)
       : Promise.resolve(0),
     selectedAccountId ? getUnpaidInvoiceCount(selectedAccountId).catch(() => 0) : Promise.resolve(0),
+    contactId ? getUnseenReactionCount(contactId, selectedAccountId ?? null).catch(() => 0) : Promise.resolve(0),
   ])
 
   // "Complete Setup" sidebar visibility — see lib/portal/wizard-visibility.ts
@@ -312,6 +313,7 @@ export default async function PortalLayout({
             unreadDocsCount={unreadDocsCount}
             toSignCount={toSignCount}
             unpaidInvoiceCount={unpaidInvoiceCount}
+            unseenReactionCount={unseenReactionCount}
             accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
             contactId={contactId || undefined}
             portalRole={effectivePortalRole}

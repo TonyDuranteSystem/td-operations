@@ -50,6 +50,8 @@ interface PortalSidebarProps {
   unreadDocsCount?: number
   /** Documents awaiting this client's signature — drives the Sign tab "new" blink. */
   toSignCount?: number
+  /** Unread team reactions on the client's messages in the selected chat — pulses the Chat entry. */
+  unseenReactionCount?: number
   /** Unpaid TD invoices (Sent/Overdue) — drives the TD Billing tab pulse + count. */
   unpaidInvoiceCount?: number
   hasWizardPending?: boolean
@@ -196,12 +198,21 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [liveUnreadCount, setLiveUnreadCount] = useState(unreadChatCount)
+  // Team reactions the client has not looked at yet. A fresh server value always wins; the chat
+  // broadcasts 'portal-reactions-seen' the moment it clears them.
+  const [liveUnseenReactions, setLiveUnseenReactions] = useState(unseenReactionCount)
+  useEffect(() => { setLiveUnseenReactions(unseenReactionCount) }, [unseenReactionCount])
+  useEffect(() => {
+    const onSeen = () => setLiveUnseenReactions(0)
+    window.addEventListener('portal-reactions-seen', onSeen)
+    return () => window.removeEventListener('portal-reactions-seen', onSeen)
+  }, [])
   const { t, locale } = useLocale()
 
   // "NEW" badge on the Team nav item — shown to account-admins until they've seen
@@ -471,6 +482,8 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     const docsPulse = isDocsItem && unreadDocsCount > 0 && !isActive(item.href)
     const signPulse = isSignItem && toSignCount > 0 && !isActive(item.href)
     const billingPulse = isBillingItem && unpaidInvoiceCount > 0 && !isActive(item.href)
+    // A team reaction changes no unread-message count, so it gets its own pulse + dot on Chat.
+    const reactionPulse = item.href === '/portal/chat' && liveUnseenReactions > 0 && !isActive(item.href)
     const badge = item.href === '/portal/chat' && liveUnreadCount > 0
       ? liveUnreadCount
       : (isDocsItem && unreadDocsCount > 0 ? unreadDocsCount
@@ -540,7 +553,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           isActive(item.href)
             ? 'bg-blue-50 text-blue-700'
             : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900',
-          (docsPulse || signPulse || billingPulse) && 'animate-pulse'
+          (docsPulse || signPulse || billingPulse || reactionPulse) && 'animate-pulse'
         )}
       >
         <Link
@@ -563,6 +576,13 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             <span className="min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold">
               {badge > 99 ? '99+' : badge}
             </span>
+          )}
+          {reactionPulse && badge === 0 && (
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full bg-violet-500"
+              role="img"
+              aria-label={t('chat.newReaction')}
+            />
           )}
           {item.key === 'nav.team' && showTeamNew && (
             <span className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">

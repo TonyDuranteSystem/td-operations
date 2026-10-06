@@ -6,6 +6,7 @@ import { SmilePlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { summarizeReactions, type MessageReaction } from '@/lib/portal/reactions'
+import { shouldPulseReaction } from '@/lib/portal/notification-read'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
@@ -31,6 +32,7 @@ export function MessageReactions({
   align = 'left',
   staffLabel = 'Team',
   onReacted,
+  pulseSince,
 }: {
   messageId: string
   reactions: MessageReaction[] | null | undefined
@@ -39,6 +41,9 @@ export function MessageReactions({
   align?: 'left' | 'right'
   staffLabel?: string
   onReacted?: () => void
+  /** Portal only, on the viewer's OWN message: team reactions newer than this (ms; null = never looked)
+   *  pulse until seen. Undefined = feature off (CRM side, other people's messages). */
+  pulseSince?: number | null
 }) {
   const [showPicker, setShowPicker] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -77,6 +82,11 @@ export function MessageReactions({
   }, [messageId, busy, locale, onReacted])
 
   const groups = summarizeReactions(reactions, viewerReactorId, staffLabel)
+  const now = Date.now()
+  const attention = (emoji: string) =>
+    pulseSince !== undefined &&
+    Array.isArray(reactions) &&
+    reactions.some(r => r?.emoji === emoji && shouldPulseReaction(r, pulseSince, now))
 
   return (
     <div className={cn('flex flex-wrap items-center gap-1', align === 'right' ? 'justify-end' : 'justify-start')}>
@@ -89,6 +99,7 @@ export function MessageReactions({
             aria-label={g.names.join(', ')}
             className={cn(
               'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs leading-none transition-colors disabled:opacity-60',
+              attention(g.emoji) && 'reaction-attention',
               g.mine
                 ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
                 : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50'

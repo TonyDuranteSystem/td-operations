@@ -29,6 +29,9 @@ export async function createPortalNotification(params: {
    * cron never emails it — for callers that send their own immediate email
    * (lib/portal/action-required.ts). Push + bell are unaffected. */
   suppressDigestEmail?: boolean
+  /** Text for the instant push only, when it must differ from the bell row's body — e.g. a lock
+   * screen should not show the text of the client's own message. Defaults to `body`. */
+  pushBody?: string
 }): Promise<{ error: string | null }> {
   // Returns the failure instead of swallowing it, so a caller that reports
   // per-channel results (notifyClientActionRequired) no longer says "ok" for a
@@ -38,7 +41,7 @@ export async function createPortalNotification(params: {
     return { error: 'account_id or contact_id required' }
   }
 
-  const { suppressDigestEmail, ...row } = params
+  const { suppressDigestEmail, pushBody, ...row } = params
   const { error } = await supabaseAdmin
     .from('portal_notifications')
     .insert(suppressDigestEmail ? { ...row, email_sent_at: new Date().toISOString() } : row)
@@ -52,14 +55,14 @@ export async function createPortalNotification(params: {
   if (params.contact_id) {
     sendPushToContact(params.contact_id, {
       title: params.title,
-      body: params.body || '',
+      body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
     }).catch(() => {})
   } else if (params.account_id) {
     sendPushToAccount(params.account_id, {
       title: params.title,
-      body: params.body || '',
+      body: pushBody ?? (params.body || ''),
       url: params.link || '/portal',
       tag: params.type,
     }).catch(() => {})

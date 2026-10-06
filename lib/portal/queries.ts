@@ -1016,6 +1016,25 @@ export async function getUnpaidInvoiceCount(accountId: string): Promise<number> 
 }
 
 /**
+ * Unread "the team reacted to your message" notices for the chat the client is looking at: the selected
+ * company's, plus ones addressed to them personally with no company. Drives the quiet pulse on the Chat
+ * entry in the sidebar (reactions job 5962e46d) — a staff 👍 changes no unread-message count, so without
+ * this a client had nothing pointing them at it.
+ */
+export async function getUnseenReactionCount(contactId: string, accountId: string | null): Promise<number> {
+  if (!contactId) return 0
+  const scope = accountId
+    ? `account_id.eq.${accountId},and(contact_id.eq.${contactId},account_id.is.null)`
+    : `and(contact_id.eq.${contactId},account_id.is.null)`
+  return countOrFailOpen('unseen-reactions', supabaseAdmin
+    .from('portal_notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('type', 'reaction')
+    .is('read_at', null)
+    .or(scope))
+}
+
+/**
  * Contact-scoped payments — for clients in the formation gap (paid as
  * individual, no company yet) per Antonio's architectural model. Returns
  * payment rows attached to the contact with no account_id set.
