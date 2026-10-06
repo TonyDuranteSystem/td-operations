@@ -27,9 +27,10 @@ function fakeStore(initial: Record<string, string> = {}): KeyValueStore & { data
 }
 
 describe("parseFrameMessage", () => {
-  it("accepts the four messages a window sends", () => {
+  it("accepts the five messages a window sends", () => {
     expect(parseFrameMessage({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads" })).toEqual({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads" })
     expect(parseFrameMessage({ t: WIN_MSG, k: "focus" })).toEqual({ t: WIN_MSG, k: "focus" })
+    expect(parseFrameMessage({ t: WIN_MSG, k: "back" })).toEqual({ t: WIN_MSG, k: "back" })
     expect(parseFrameMessage({ t: WIN_MSG, k: "key", key: "k" })).toEqual({ t: WIN_MSG, k: "key", key: "k" })
     expect(parseFrameMessage({ t: WIN_MSG, k: "dirty-answer", req: "r1", dirty: true })).toEqual({ t: WIN_MSG, k: "dirty-answer", req: "r1", dirty: true })
   })

@@ -17,6 +17,8 @@ export type FrameMessage =
   | { t: typeof WIN_MSG; k: 'loc'; url: string; title: string }
   /** The person clicked or focused something inside the window: bring it to the front. */
   | { t: typeof WIN_MSG; k: 'focus' }
+  /** The page asked to go back (a page's own back arrow calls history.back): the window's own Back handles it. */
+  | { t: typeof WIN_MSG; k: 'back' }
   /** A shortcut the main page owns (Cmd/Ctrl+K opens the search palette). */
   | { t: typeof WIN_MSG; k: 'key'; key: 'k' }
   /** Answer to "is there typing here that would be lost?" */
@@ -45,6 +47,8 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
       return { t: WIN_MSG, k: 'loc', url: data.url.slice(0, 2000), title: data.title.slice(0, 200) }
     case 'focus':
       return { t: WIN_MSG, k: 'focus' }
+    case 'back':
+      return { t: WIN_MSG, k: 'back' }
     case 'key':
       return data.key === 'k' ? { t: WIN_MSG, k: 'key', key: 'k' } : null
     case 'dirty-answer':

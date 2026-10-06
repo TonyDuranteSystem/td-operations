@@ -8,8 +8,8 @@
  * part of the browser TAB's single history. Left alone, every in-window navigation would add an
  * entry the main page's Back button then steps through, and a page calling history.back() would
  * move the whole tab and destroy every window. So inside a window:
- *   - history.back() does nothing (the window's own chrome owns back / forward, from a trail the
- *     main page keeps);
+ *   - history.back() does not touch the tab; it asks the main page to take THIS window one step back
+ *     along the trail the main page keeps (so a page's own "←" arrow works like the window's Back button);
  *   - pushState becomes replaceState (a navigation REPLACES the frame's entry instead of adding one).
  * Next's router calls whatever pushState / replaceState are on the page when it navigates, so this
  * covers router.push and Link clicks. Navigation the frame does on its own full-page loads is
@@ -74,7 +74,9 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
     timer = setTimeout(postLocation, 0)
   }
 
-  history.back = () => {}
+  // A page's own back arrow (router.back / history.back) must not move the browser TAB: ask the main page,
+  // whose window Back walks this window's own trail.
+  history.back = () => post({ t: WIN_MSG, k: 'back' })
   history.pushState = function (...args: HistoryArgs) {
     const r = origReplace.apply(history, args)
     schedule()

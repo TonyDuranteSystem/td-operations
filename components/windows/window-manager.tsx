@@ -85,6 +85,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   const initialSrc = useRef(new Map<string, string>())
   const everShown = useRef(new Set<string>())
   const asking = useRef(new Map<string, (dirty: boolean) => void>())
+  const goBackRef = useRef<(id: string) => void>(() => {})
 
   const commit = useCallback((next: WindowsState) => {
     stateRef.current = next
@@ -175,6 +176,8 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
       if (!id) return
       if (msg.k === 'focus') {
         commit(focusWindow(stateRef.current, id))
+      } else if (msg.k === 'back') {
+        goBackRef.current(id)
       } else if (msg.k === 'key') {
         document.dispatchEvent(new CustomEvent('open-command-palette'))
       } else if (msg.k === 'dirty-answer') {
@@ -274,6 +277,10 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     const msg: ParentMessage = { t: WIN_MSG, k: 'go', url: t.stack[next] }
     f.contentWindow.postMessage(msg, window.location.origin)
   }, [])
+
+  useEffect(() => {
+    goBackRef.current = id => goBackForward(id, -1)
+  }, [goBackForward])
 
   const reload = useCallback((id: string) => {
     try {

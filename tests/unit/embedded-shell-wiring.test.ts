@@ -124,8 +124,8 @@ describe("history safety inside a window", () => {
     expect(shell).toMatch(/installWindowBridge\(window, \{ navigate: url => router\.push\(url\) \}\)/)
   })
 
-  it("history.back() does nothing inside a window, and is restored afterwards", () => {
-    expect(bridge).toMatch(/history\.back = \(\) => \{\}/)
+  it("history.back() never touches the tab inside a window (it asks the main page instead), and is restored afterwards", () => {
+    expect(bridge).toMatch(/history\.back = \(\) => post\(\{ t: WIN_MSG, k: 'back' \}\)/)
     expect(bridge).toMatch(/history\.back = origBack/)
   })
 

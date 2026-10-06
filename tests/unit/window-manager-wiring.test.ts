@@ -73,6 +73,11 @@ describe("window manager", () => {
     expect(manager).toContain("vpRef.current ?? readViewport(topInset)")
   })
 
+  it("a page's own back arrow takes its window one step back along the window's own trail", () => {
+    expect(manager).toContain("goBackRef.current(id)")
+    expect(manager).toContain("goBackForward(id, -1)")
+  })
+
   it("Cmd+K from inside a window opens the main page's search", () => {
     expect(manager).toContain("new CustomEvent('open-command-palette')")
   })
