@@ -52,10 +52,19 @@ export function EditableField({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ lead_id: leadId, field, value: editValue, expected_value: editBase.current }),
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
         if (!res.ok) {
-          toast.error(data.error || 'Failed to save')
-          if (res.status === 409) router.refresh()
+          if (res.status === 409) {
+            // Say what is saved now, and make the next Save a deliberate overwrite of it.
+            const latest = typeof data.current_value === 'string' ? data.current_value : null
+            if (latest !== null) editBase.current = latest
+            toast.error(latest !== null
+              ? `Someone changed this to "${latest.slice(0, 80) || '(empty)'}" while you were editing. Save again to replace it, or cancel.`
+              : (data.error || 'This changed while you were editing. Reload the page, then try again.'))
+            router.refresh()
+          } else {
+            toast.error(data.error || 'Failed to save')
+          }
           return
         }
         editBase.current = editValue.trim()
@@ -92,7 +101,7 @@ export function EditableField({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ lead_id: leadId, field, value: '', expected_value: value ?? '' }),
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
         if (!res.ok) {
           toast.error(data.error || 'Failed to clear')
           if (res.status === 409) router.refresh()
@@ -115,7 +124,7 @@ export function EditableField({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSave()
+    if (e.key === 'Enter' && !isPending) handleSave() // a held / double Enter must not send a second save
     if (e.key === 'Escape') handleCancel()
   }
 

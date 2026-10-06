@@ -63,6 +63,12 @@ function fakeDb(opts: {
   writeError?: string
 }) {
   const calls = { select: [] as string[], update: [] as Record<string, unknown>[], eq: [] as Array<[string, string]> }
+  const tail = () => ({
+    select: async () => ({
+      data: opts.writeRows === undefined ? [{ id: "x" }] : opts.writeRows,
+      error: opts.writeError ? { message: opts.writeError } : null,
+    }),
+  })
   const db: LeadDb = {
     from: () => ({
       select: (cols: string) => {
@@ -81,12 +87,11 @@ function fakeDb(opts: {
             return {
               eq: (c2: string, v2: string) => {
                 calls.eq.push([c2, v2])
-                return {
-                  select: async () => ({
-                    data: opts.writeRows === undefined ? [{ id: "x" }] : opts.writeRows,
-                    error: opts.writeError ? { message: opts.writeError } : null,
-                  }),
-                }
+                return tail()
+              },
+              is: (c2: string, v2: null) => {
+                calls.eq.push([c2, String(v2)])
+                return tail()
               },
             }
           },
@@ -100,6 +105,15 @@ function fakeDb(opts: {
 const row = { id: "L1", updated_at: "2026-10-05T10:00:00+00:00", notes: "old notes" }
 
 describe("updateLeadColumnGuarded", () => {
+  it("matches a lead whose updated_at was never set with IS NULL, not the text 'null'", async () => {
+    const { db, calls } = fakeDb({ row: { id: "L1", updated_at: null, notes: "old" } })
+    const r = await updateLeadColumnGuarded(db, {
+      leadId: "L1", column: "notes", newValue: "new", expected: "old", hasExpected: true, now: () => "NOW",
+    })
+    expect(r.ok).toBe(true)
+    expect(calls.eq).toContainEqual(["updated_at", "null"])
+  })
+
   it("writes when the field is unchanged, conditional on the updated_at it just read", async () => {
     const { db, calls } = fakeDb({ row })
     const r = await updateLeadColumnGuarded(db, {

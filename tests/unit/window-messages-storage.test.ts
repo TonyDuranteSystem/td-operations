@@ -28,7 +28,7 @@ function fakeStore(initial: Record<string, string> = {}): KeyValueStore & { data
 
 describe("parseFrameMessage", () => {
   it("accepts the five messages a window sends", () => {
-    expect(parseFrameMessage({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads" })).toEqual({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads" })
+    expect(parseFrameMessage({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads" })).toEqual({ t: WIN_MSG, k: "loc", url: "/leads?x=1", title: "Leads", replace: false })
     expect(parseFrameMessage({ t: WIN_MSG, k: "focus" })).toEqual({ t: WIN_MSG, k: "focus" })
     expect(parseFrameMessage({ t: WIN_MSG, k: "back" })).toEqual({ t: WIN_MSG, k: "back" })
     expect(parseFrameMessage({ t: WIN_MSG, k: "key", key: "k" })).toEqual({ t: WIN_MSG, k: "key", key: "k" })
@@ -43,6 +43,10 @@ describe("parseFrameMessage", () => {
       { t: WIN_MSG, k: "dirty-answer", req: "r", dirty: "yes" }]) {
       expect(parseFrameMessage(bad), JSON.stringify(bad)).toBeNull()
     }
+  })
+  it("carries whether the page replaced its address (no new Back step)", () => {
+    const m = parseFrameMessage({ t: WIN_MSG, k: "loc", url: "/notes", title: "", replace: true })
+    expect(m && m.k === "loc" && m.replace).toBe(true)
   })
   it("caps the length of what it accepts", () => {
     const m = parseFrameMessage({ t: WIN_MSG, k: "loc", url: "/" + "a".repeat(5000), title: "t".repeat(5000) })

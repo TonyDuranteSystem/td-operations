@@ -46,7 +46,7 @@ export function WindowsLauncher({ items }: { items: LauncherItem[] }) {
           className="z-[70] max-h-[min(70vh,32rem)] min-w-[220px] overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-lg"
         >
           <DropdownMenu.Label className="px-3 py-1.5 text-xs text-zinc-500">
-            Opens as a floating window. Tip: Option-click any menu item.
+            Opens as a floating window. Tip: Option/Alt-click any menu item.
           </DropdownMenu.Label>
           {pages.map(p => (
             <DropdownMenu.Item

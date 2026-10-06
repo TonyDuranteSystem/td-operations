@@ -60,6 +60,10 @@ export function isGuardedFailure(r: GuardedResult): r is GuardedFailure {
   return r.ok === false
 }
 
+interface WriteTail {
+  select(columns: string): PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>
+}
+
 /** The slice of the database client this helper uses (the real admin client satisfies it). */
 export interface LeadDb {
   from(table: "leads"): {
@@ -68,9 +72,8 @@ export interface LeadDb {
     }
     update(values: Record<string, unknown>): {
       eq(col: string, val: string): {
-        eq(col: string, val: string): {
-          select(columns: string): PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>
-        }
+        eq(col: string, val: string): WriteTail
+        is(col: string, val: null): WriteTail
       }
     }
   }
@@ -100,12 +103,13 @@ export async function updateLeadColumnGuarded(db: LeadDb, input: GuardedUpdateIn
     return { ok: false, reason: "conflict", message: LEAD_CONFLICT_MESSAGE, currentValue: normalizeCell(current) }
   }
 
-  const written = await db
-    .from("leads")
-    .update({ [column]: newValue, updated_at: now() })
-    .eq("id", leadId)
-    .eq("updated_at", String(read.data.updated_at))
-    .select("id")
+  // A lead whose updated_at was never set (the column is nullable) must be matched with IS NULL —
+  // comparing it to the text "null" is rejected by the database and would make the lead uneditable.
+  const byId = db.from("leads").update({ [column]: newValue, updated_at: now() }).eq("id", leadId)
+  const written = await (read.data.updated_at === null || read.data.updated_at === undefined
+    ? byId.is("updated_at", null)
+    : byId.eq("updated_at", String(read.data.updated_at))
+  ).select("id")
   if (written.error) return { ok: false, reason: "error", message: written.error.message }
   if (!written.data || written.data.length === 0) {
     // Something wrote to this lead between our read and our write.

@@ -38,3 +38,31 @@ describe("dashboard-sw.js fetch handler", () => {
     expect(handler).toContain("caches.match(OFFLINE_URL)")
   })
 })
+
+describe("dashboard-sw.js notification click (dev job f3f3e237)", () => {
+  const click = sw.slice(sw.indexOf("self.addEventListener('notificationclick'"))
+
+  it("prefers the top-level page, never a floating window's frame", () => {
+    expect(click).toContain("c.frameType === 'top-level'")
+  })
+
+  it("asks the page to navigate itself, and only falls back to a full reload if it never answers", () => {
+    expect(click).toContain("client.postMessage({ type: 'td-navigate', url: url }, [channel.port2])")
+    expect(click).toContain("setTimeout(fallback, 700)")
+    expect(click).toContain("client.navigate(url)")
+    // the full navigation lives only inside the fallback
+    expect(click.indexOf("client.navigate(url)")).toBeGreaterThan(click.indexOf("function fallback()"))
+    expect(click.indexOf("client.navigate(url)")).toBeLessThan(click.indexOf("var timer"))
+  })
+
+  it("still opens a new window when no page is open", () => {
+    expect(click).toContain("if (!client) return clients.openWindow(url)")
+  })
+
+  it("the page side answers on the port and only follows a normal same-site CRM path", () => {
+    const reg = readFileSync(join(__dirname, "..", "..", "components", "dashboard", "sw-register.tsx"), "utf8")
+    expect(reg).toContain("e.ports[0]?.postMessage('ok')")
+    expect(reg).toContain("u.origin !== window.location.origin")
+    expect(reg).toContain("isInternalNavHref(path)")
+  })
+})

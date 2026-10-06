@@ -380,10 +380,13 @@ export function MaintenancePanel() {
             <span className="text-xs font-medium text-blue-900">Floating windows (window mode)</span>
           </div>
           <p className="text-xs text-muted-foreground mb-2">
-            When on, a CRM page opened inside a floating window loads as a bare page: no left menu,
-            no alert sounds, no floating chat or notes. Off by default. While it is off nothing about
-            page loads changes anywhere. The floating windows themselves are still being built; for now
-            this only affects the test page under Dev Tools. Takes effect the next time a window loads.
+            When on, EVERYONE on the team gets floating windows: an Open in floating window entry in each
+            left-menu item&apos;s ⋯ menu, an Open in a window button at the bottom of the left menu, Option/Alt-click
+            on a menu item, and Cmd/Ctrl+Enter in the search. A page opened in a window loads as a bare page (no
+            left menu, alert sounds, chat or notes). Computer-size screens only. Off by default; while it is off
+            nothing changes anywhere. Takes effect on the next full page load. Before turning it on, make sure
+            each computer has picked up the latest app version (the update-available banner has been
+            accepted); an out-of-date browser can show a window as a whole CRM.
           </p>
           <div className="flex items-center gap-2">
             <button

@@ -21,7 +21,7 @@ describe("window manager", () => {
   })
 
   it("every address goes through the window rules, including after a window navigates", () => {
-    expect(manager).toContain("openWindow(stateRef.current, d?.href, d?.title, v)")
+    expect(manager).toContain("openWindow(base, d?.href, d?.title, v)")
     expect(manager).toMatch(/!isWindowableUrl\(msg\.url\)/)
   })
 
@@ -76,6 +76,32 @@ describe("window manager", () => {
   it("a page's own back arrow takes its window one step back along the window's own trail", () => {
     expect(manager).toContain("goBackRef.current(id)")
     expect(manager).toContain("goBackForward(id, -1)")
+  })
+
+  it("is never built inside a frame or a pop-out window, and once on it stays on", () => {
+    expect(manager).toContain("window.self !== window.top")
+    expect(manager).toContain("window.name.startsWith(POPOUT_NAME)")
+    expect(manager).toContain("const [on] = useState(enabled)")
+  })
+
+  it("a crash inside the windows cannot white-screen the CRM", () => {
+    expect(manager).toContain("class WindowsCrashGuard")
+    expect(manager).toContain("<WindowsCrashGuard>")
+  })
+
+  it("draws windows in a stable order and stacks with z-index only (re-ordering reloads a window's page)", () => {
+    expect(manager).toContain("state.windows.map(w => {")
+    expect(manager).not.toMatch(/\[\.\.\.state\.windows\]\.sort\([^)]*\)\.map\(\(w, rank\)/)
+    expect(manager).toContain("lostpointercapture")
+  })
+
+  it("closing a minimised window with unsent typing shows the question (the window is shown first)", () => {
+    expect(manager).toMatch(/commit\(focusWindow\(restoreWindow\(stateRef\.current, id\), id\)\)\s*setConfirm/)
+  })
+
+  it("reload is guarded like close, and a back/forward the frame never answers is undone", () => {
+    expect(manager).toContain("guarded(w.id, 'reload')")
+    expect(manager).toContain("t.idx = t.prevIdx")
   })
 
   it("Cmd+K from inside a window opens the main page's search", () => {

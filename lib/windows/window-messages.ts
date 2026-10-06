@@ -14,7 +14,7 @@ export const WIN_MSG = 'td-win'
 /** Frame → main page. */
 export type FrameMessage =
   /** The page inside the window is now at `url` (path + query) and is titled `title`. */
-  | { t: typeof WIN_MSG; k: 'loc'; url: string; title: string }
+  | { t: typeof WIN_MSG; k: 'loc'; url: string; title: string; replace?: boolean }
   /** The person clicked or focused something inside the window: bring it to the front. */
   | { t: typeof WIN_MSG; k: 'focus' }
   /** The page asked to go back (a page's own back arrow calls history.back): the window's own Back handles it. */
@@ -44,7 +44,11 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
       // The frame's path is read from its own address bar; it is NOT trusted to be a window page —
       // the manager runs it through the windowable-address rules itself. Only reject non-paths.
       if (!isInternalNavHref(data.url)) return null
-      return { t: WIN_MSG, k: 'loc', url: data.url.slice(0, 2000), title: data.title.slice(0, 200) }
+      return {
+        t: WIN_MSG, k: 'loc', url: data.url.slice(0, 2000), title: data.title.slice(0, 200),
+        // true when the page REPLACED its address (a redirect / tidy-up), not a new page: no new Back step.
+        replace: data.replace === true,
+      }
     case 'focus':
       return { t: WIN_MSG, k: 'focus' }
     case 'back':

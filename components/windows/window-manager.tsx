@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { ChevronLeft, ChevronRight, ExternalLink, Maximize2, Minus, RotateCw, X } from 'lucide-react'
@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import {
   EMPTY_STATE, WINDOWS_MIN_VIEWPORT_WIDTH, WINDOW_TITLEBAR_H,
-  clampAll, clampBox, closeWindow, focusWindow, frontWindowId, isOpenFailure, isSignedOutPath, isWindowableUrl,
+  clampAll, clampBox, closeWindow, focusWindow, frontWindowId, isOpenFailure, isSignedOutPath, isWindowableUrl, sameWindowPage,
   minimizeWindow, openWindow, resizeBox, restoreWindow, setBox, setLocation,
   type ResizeEdge, type Viewport, type WindowBox, type WindowEntry, type WindowsState,
 } from '@/lib/windows/window-model'
@@ -35,14 +35,19 @@ export function WindowsAvailableProvider({ available, children }: { available: b
   return <WindowsAvailableContext.Provider value={available}>{children}</WindowsAvailableContext.Provider>
 }
 
+/** The name every pop-out browser window gets, so it can tell it is one. */
+const POPOUT_NAME = 'td-popout'
+
 type Status = 'ok' | 'signedout' | 'gone'
-type ConfirmAction = 'close' | 'popout' | 'dock'
+type ConfirmAction = 'close' | 'popout' | 'dock' | 'reload'
 
 interface Trail {
   stack: string[]
   idx: number
   /** Set while the window's own back / forward is in flight, so the frame's report is not mistaken for a new page. */
   pending: boolean
+  /** Where the trail pointed before the in-flight back / forward (restored if the frame never answers). */
+  prevIdx: number
   reports: number
 }
 
@@ -66,7 +71,50 @@ function readViewport(topInset: number): Viewport {
   return { vw: window.innerWidth, vh: window.innerHeight, topInset }
 }
 
-export function WindowManager({ userId, sandbox }: { userId: string; sandbox: boolean }) {
+/**
+ * The public component. Two guards that must hold whatever the server decided:
+ *  - never inside a frame (a window that lost its "I am a window" label would otherwise build its own
+ *    windows, which build theirs…), and never in a pop-out browser window (which would load the same
+ *    remembered windows a second time);
+ *  - once on, it STAYS on for the life of the page: a failed settings read on a later refresh must not
+ *    tear down every window and the typing in them. Turning the admin switch off takes effect on the next
+ *    full load.
+ */
+export function WindowManager({ userId, sandbox, enabled }: { userId: string; sandbox: boolean; enabled: boolean }) {
+  const [on] = useState(enabled)
+  const [allowed, setAllowed] = useState(false)
+  useEffect(() => {
+    let framed = false
+    try {
+      framed = window.self !== window.top
+    } catch {
+      framed = true
+    }
+    setAllowed(!framed && !window.name.startsWith(POPOUT_NAME))
+  }, [])
+  if (!on || !allowed) return null
+  return (
+    <WindowsCrashGuard>
+      <WindowManagerInner userId={userId} sandbox={sandbox} />
+    </WindowsCrashGuard>
+  )
+}
+
+/** A crash inside the windows must never white-screen the CRM around them (the page-level boundary does not catch layout throws). */
+class WindowsCrashGuard extends Component<{ children: React.ReactNode }, { crashed: boolean }> {
+  state = { crashed: false }
+  static getDerivedStateFromError() {
+    return { crashed: true }
+  }
+  componentDidCatch(error: unknown) {
+    console.error('[windows] crashed', error)
+  }
+  render() {
+    return this.state.crashed ? null : this.props.children
+  }
+}
+
+function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: boolean }) {
   const router = useRouter()
   const topInset = sandbox ? 40 : 0
 
@@ -79,6 +127,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   const [dragCursor, setDragCursor] = useState<string | null>(null)
 
   const stateRef = useRef(state)
+  const statusRef = useRef<Record<string, Status>>({})
   const vpRef = useRef<Viewport | null>(null)
   const frames = useRef(new Map<string, HTMLIFrameElement>())
   const trails = useRef(new Map<string, Trail>())
@@ -86,6 +135,9 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   const everShown = useRef(new Set<string>())
   const asking = useRef(new Map<string, (dirty: boolean) => void>())
   const goBackRef = useRef<(id: string) => void>(() => {})
+  const askSeq = useRef(0)
+
+  statusRef.current = status
 
   const commit = useCallback((next: WindowsState) => {
     stateRef.current = next
@@ -116,6 +168,17 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     return () => window.removeEventListener('resize', onResize)
   }, [topInset, commit])
 
+  // A window that was hidden by a narrow screen has its page unmounted; when the screen is wide again it must
+  // come back at the page it was ON, not the one it first opened with — so forget the seeds (they are
+  // re-created from the remembered address on the next draw).
+  useEffect(() => {
+    if (vp && vp.vw < WINDOWS_MIN_VIEWPORT_WIDTH) {
+      initialSrc.current.clear()
+      everShown.current.clear()
+      trails.current.clear()
+    }
+  }, [vp])
+
   // ── remember (debounced) ──
   useEffect(() => {
     if (!hydrated) return
@@ -130,6 +193,12 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
       if (event === 'SIGNED_OUT') {
         clearAllWindows(browserStore())
         commit(EMPTY_STATE)
+        frames.current.clear()
+        trails.current.clear()
+        initialSrc.current.clear()
+        everShown.current.clear()
+        setStatus({})
+        setConfirm(null)
       }
     })
     return () => data.subscription.unsubscribe()
@@ -144,7 +213,24 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
         return
       }
       const d = (e as CustomEvent<OpenWindowDetail>).detail
-      const r = openWindow(stateRef.current, d?.href, d?.title, v)
+      // A dead window (signed out / page gone) would otherwise swallow the same address as a "duplicate".
+      let base = stateRef.current
+      const dead = typeof d?.href === 'string'
+        ? base.windows.find(w => sameWindowPage(w.url, d.href) && (statusRef.current[w.id] ?? 'ok') !== 'ok')
+        : undefined
+      if (dead) {
+        base = closeWindow(base, dead.id)
+        frames.current.delete(dead.id)
+        trails.current.delete(dead.id)
+        initialSrc.current.delete(dead.id)
+        everShown.current.delete(dead.id)
+        setStatus(s => {
+          const rest = { ...s }
+          delete rest[dead.id]
+          return rest
+        })
+      }
+      const r = openWindow(base, d?.href, d?.title, v)
       if (isOpenFailure(r)) {
         toast.error(
           r.reason === 'cap'
@@ -196,15 +282,25 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
           setStatus(s => ({ ...s, [id]: 'gone' }))
           return
         }
-        setStatus(s => (s[id] === 'ok' ? s : { ...s, [id]: msg.title.startsWith('404') ? 'gone' : 'ok' }))
+        const gone = msg.title.startsWith('404')
+        setStatus(s => {
+          const cur = s[id] ?? 'ok'
+          if (cur === 'signedout') return s
+          const next: Status = gone ? 'gone' : 'ok'
+          return cur === next ? s : { ...s, [id]: next }
+        })
         const t = trails.current.get(id)
         if (t) {
           t.reports += 1
           if (t.pending) {
-            t.pending = false
-            t.stack[t.idx] = msg.url
-          } else if (t.reports === 1) {
-            t.stack[0] = msg.url // the first report may follow a redirect
+            // Our own Back / Forward is in flight: only the report of the page we asked for settles it.
+            if (msg.url === t.stack[t.idx]) t.pending = false
+            else if (!msg.replace && msg.url !== t.stack[t.prevIdx]) {
+              t.stack[t.idx] = msg.url // the target redirected somewhere else
+              t.pending = false
+            }
+          } else if (t.reports === 1 || msg.replace) {
+            t.stack[t.idx] = msg.url // the first report may follow a redirect; a replace is not a new page
           } else if (t.stack[t.idx] !== msg.url) {
             t.stack = t.stack.slice(0, t.idx + 1)
             t.stack.push(msg.url)
@@ -224,7 +320,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     return new Promise<boolean>(resolve => {
       const f = frames.current.get(id)
       if (!f?.contentWindow) return resolve(false)
-      const req = `${id}-${Date.now()}`
+      const req = `${id}-${++askSeq.current}`
       asking.current.set(req, resolve)
       const msg: ParentMessage = { t: WIN_MSG, k: 'ask-dirty', req }
       f.contentWindow.postMessage(msg, window.location.origin)
@@ -237,9 +333,16 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   const perform = useCallback((id: string, action: ConfirmAction) => {
     const w = stateRef.current.windows.find(x => x.id === id)
     if (!w) return
+    if (action === 'reload') {
+      try {
+        frames.current.get(id)?.contentWindow?.location.reload()
+      } catch { /* frame is gone — nothing to reload */ }
+      return
+    }
     if (action === 'popout') {
       const url = absoluteNavUrl(window.location.origin, w.url)
-      const popup = window.open(url, '_blank', `popup=yes,width=${Math.round(w.w)},height=${Math.round(w.h)}`)
+      // Named, so the new browser window knows it is a pop-out and does not load these windows again.
+      const popup = window.open(url, `${POPOUT_NAME}-${id}-${Date.now()}`, `popup=yes,width=${Math.round(w.w)},height=${Math.round(w.h)}`)
       if (!popup) {
         // Blocked by the browser: keep the window — closing it would lose the page.
         toast.error('Your browser blocked the separate window. Allow pop-ups for this site and try again.')
@@ -261,9 +364,12 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
   }, [commit, router])
 
   const guarded = useCallback(async (id: string, action: ConfirmAction) => {
-    if (await askDirty(id)) setConfirm({ id, action })
-    else perform(id, action)
-  }, [askDirty, perform])
+    if (await askDirty(id)) {
+      // The question is drawn inside the window: a minimised (hidden) window must be shown first.
+      commit(focusWindow(restoreWindow(stateRef.current, id), id))
+      setConfirm({ id, action })
+    } else perform(id, action)
+  }, [askDirty, perform, commit])
 
   const goBackForward = useCallback((id: string, delta: -1 | 1) => {
     const t = trails.current.get(id)
@@ -271,22 +377,25 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
     if (!t || !f?.contentWindow) return
     const next = t.idx + delta
     if (next < 0 || next >= t.stack.length) return
+    t.prevIdx = t.idx
     t.idx = next
     t.pending = true
     setNavTick(n => n + 1)
     const msg: ParentMessage = { t: WIN_MSG, k: 'go', url: t.stack[next] }
     f.contentWindow.postMessage(msg, window.location.origin)
+    // The frame may not be listening yet (still loading). If it never answers, put the trail back.
+    setTimeout(() => {
+      if (t.pending && t.idx === next) {
+        t.pending = false
+        t.idx = t.prevIdx
+        setNavTick(n => n + 1)
+      }
+    }, 3000)
   }, [])
 
   useEffect(() => {
     goBackRef.current = id => goBackForward(id, -1)
   }, [goBackForward])
-
-  const reload = useCallback((id: string) => {
-    try {
-      frames.current.get(id)?.contentWindow?.location.reload()
-    } catch { /* frame is gone — nothing to reload */ }
-  }, [])
 
   // ── drag and resize ──
   const beginDrag = useCallback((e: React.PointerEvent, w: WindowEntry, mode: 'move' | ResizeEdge) => {
@@ -313,16 +422,21 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
       el.removeEventListener('pointermove', move)
       el.removeEventListener('pointerup', end)
       el.removeEventListener('pointercancel', end)
+      el.removeEventListener('lostpointercapture', end)
       setDragCursor(null)
     }
     el.addEventListener('pointermove', move)
     el.addEventListener('pointerup', end)
     el.addEventListener('pointercancel', end)
+    // If the element is re-created or the capture is taken away, the click-blocking sheet must still go.
+    el.addEventListener('lostpointercapture', end)
   }, [commit])
 
   if (!hydrated || !vp || vp.vw < WINDOWS_MIN_VIEWPORT_WIDTH) return null
 
-  const sorted = [...state.windows].sort((a, b) => a.z - b.z)
+  // Draw in a STABLE order (creation order) and stack with z-index only. Re-ordering the elements would make
+  // the browser reload a window's page whenever it is brought to the front, and break an in-progress drag.
+  const rankOf = new Map([...state.windows].sort((a, b) => a.z - b.z).map((w, i) => [w.id, i]))
   const front = frontWindowId(state)
   const minimized = state.windows.filter(w => w.minimized)
   void navTick // re-render when a trail changes (back / forward buttons)
@@ -334,11 +448,12 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
       className="pointer-events-none fixed inset-0 z-[44] hidden lg:block"
       style={{ isolation: 'isolate' }}
     >
-      {sorted.map((w, rank) => {
+      {state.windows.map(w => {
+        const rank = rankOf.get(w.id) ?? 0
         const st = status[w.id] ?? 'ok'
         const t = trails.current.get(w.id)
         if (!initialSrc.current.has(w.id)) initialSrc.current.set(w.id, w.url)
-        if (!trails.current.has(w.id)) trails.current.set(w.id, { stack: [w.url], idx: 0, pending: false, reports: 0 })
+        if (!trails.current.has(w.id)) trails.current.set(w.id, { stack: [w.url], idx: 0, pending: false, prevIdx: 0, reports: 0 })
         if (!w.minimized) everShown.current.add(w.id)
         const mountFrame = st === 'ok' && everShown.current.has(w.id)
         const isFront = front === w.id
@@ -374,7 +489,7 @@ export function WindowManager({ userId, sandbox }: { userId: string; sandbox: bo
             >
               <TitleButton label="Back" disabled={!t || t.idx <= 0} onClick={() => goBackForward(w.id, -1)}><ChevronLeft className="h-4 w-4" /></TitleButton>
               <TitleButton label="Forward" disabled={!t || t.idx >= t.stack.length - 1} onClick={() => goBackForward(w.id, 1)}><ChevronRight className="h-4 w-4" /></TitleButton>
-              <TitleButton label="Reload this window" onClick={() => reload(w.id)}><RotateCw className="h-3.5 w-3.5" /></TitleButton>
+              <TitleButton label="Reload this window" onClick={() => void guarded(w.id, 'reload')}><RotateCw className="h-3.5 w-3.5" /></TitleButton>
               <div className="mx-2 min-w-0 flex-1 truncate text-sm font-medium" title={w.url}>{w.title}</div>
               <TitleButton label="Minimise" onClick={() => commit(minimizeWindow(stateRef.current, w.id))}><Minus className="h-4 w-4" /></TitleButton>
               <TitleButton label="Open in a separate browser window" onClick={() => void guarded(w.id, 'popout')}><ExternalLink className="h-3.5 w-3.5" /></TitleButton>

@@ -28,9 +28,14 @@ export interface WindowBridgeOptions {
 
 type HistoryArgs = [data: unknown, unused: string, url?: string | URL | null]
 
+// Fields where typing is "unsent text". Checkboxes, radios, sliders, file pickers and buttons are excluded:
+// their value is not something a person typed and could lose.
+const TEXT_INPUT_TYPES = new Set(['text', 'search', 'email', 'tel', 'url', 'number', 'password', ''])
+
 function isTextField(el: Element): boolean {
   const tag = el.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable === true
+  if (tag === 'INPUT') return TEXT_INPUT_TYPES.has(((el as HTMLInputElement).type || '').toLowerCase())
+  return tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable === true
 }
 
 function fieldText(el: Element): string {
@@ -58,6 +63,7 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
   // ── where am I, what am I called ──
   let lastSent = ''
   let scheduled = false
+  let kind: 'push' | 'replace' | 'other' = 'other'
   let timer: ReturnType<typeof setTimeout> | undefined
   const postLocation = () => {
     scheduled = false
@@ -66,9 +72,13 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
     const key = `${url}\n${title}`
     if (key === lastSent) return
     lastSent = key
-    post({ t: WIN_MSG, k: 'loc', url, title })
+    const replace = kind === 'replace'
+    kind = 'other'
+    post({ t: WIN_MSG, k: 'loc', url, title, replace })
   }
-  const schedule = () => {
+  const schedule = (k: 'push' | 'replace' | 'other' = 'other') => {
+    // A push anywhere in the burst wins: it is a real new page even if a replace followed it.
+    if (k === 'push' || (k === 'replace' && kind !== 'push')) kind = k
     if (scheduled) return
     scheduled = true
     timer = setTimeout(postLocation, 0)
@@ -77,23 +87,35 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
   // A page's own back arrow (router.back / history.back) must not move the browser TAB: ask the main page,
   // whose window Back walks this window's own trail.
   history.back = () => post({ t: WIN_MSG, k: 'back' })
-  history.pushState = function (...args: HistoryArgs) {
+  // A navigation REPLACES the frame's entry (see the header) but is still a NEW page to the window's own
+  // trail, so it is reported as a push; a page tidying its own address (a real replaceState) is not.
+  const ourPush = function (...args: HistoryArgs) {
     const r = origReplace.apply(history, args)
-    schedule()
+    schedule('push')
     return r
   }
-  history.replaceState = function (...args: HistoryArgs) {
+  const ourReplace = function (...args: HistoryArgs) {
     const r = origReplace.apply(history, args)
-    schedule()
+    schedule('replace')
     return r
   }
+  history.pushState = ourPush
+  history.replaceState = ourReplace
+  // go() / forward() would move the whole tab, like back() did.
+  const origGo = history.go
+  const origForward = history.forward
+  history.go = () => {}
+  history.forward = () => {}
 
   // ── typing the person has not sent or saved ──
   const touched = new Set<Element>()
   const onInput = (e: Event) => {
     if (!e.isTrusted) return
     const t = e.target
-    if (t instanceof Element && isTextField(t)) touched.add(t)
+    if (t instanceof Element && isTextField(t)) {
+      if (touched.size > 100) touched.forEach(el => { if (!el.isConnected) touched.delete(el) })
+      touched.add(t)
+    }
   }
 
   // ── bring this window to the front when it is used ──
@@ -130,10 +152,11 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
     }
   }
 
-  const titleObserver = new (win as unknown as typeof globalThis).MutationObserver(schedule)
+  const titleObserver = new (win as unknown as typeof globalThis).MutationObserver(() => schedule('other'))
   titleObserver.observe(doc.head ?? doc.documentElement, { subtree: true, childList: true, characterData: true })
 
-  win.addEventListener('popstate', schedule)
+  const onPop = () => schedule('other')
+  win.addEventListener('popstate', onPop)
   win.addEventListener('message', onMessage)
   doc.addEventListener('input', onInput, true)
   doc.addEventListener('pointerdown', onUse, true)
@@ -141,15 +164,19 @@ export function installWindowBridge(win: Window, options: WindowBridgeOptions): 
   doc.addEventListener('keydown', onKey, true)
 
   // First report: tells the main page where this window really landed (a redirect, a sign-in page).
-  schedule()
+  schedule('other')
 
   return () => {
     if (timer) clearTimeout(timer)
-    history.back = origBack
-    history.pushState = origPush
-    history.replaceState = origReplace
+    // Put the originals back only if nobody has wrapped ours since (Next's router wraps these after us —
+    // restoring blindly would remove ITS wrapper too).
+    if (history.back !== origBack) history.back = origBack
+    if (history.pushState === ourPush) history.pushState = origPush
+    if (history.replaceState === ourReplace) history.replaceState = origReplace
+    if (history.go !== origGo) history.go = origGo
+    if (history.forward !== origForward) history.forward = origForward
     titleObserver.disconnect()
-    win.removeEventListener('popstate', schedule)
+    win.removeEventListener('popstate', onPop)
     win.removeEventListener('message', onMessage)
     doc.removeEventListener('input', onInput, true)
     doc.removeEventListener('pointerdown', onUse, true)

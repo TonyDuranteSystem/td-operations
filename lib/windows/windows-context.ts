@@ -34,5 +34,11 @@ export function requestOpenWindow(href: string, title?: string): void {
  * leave the person nowhere).
  */
 export function canOpenWindowNow(available: boolean): boolean {
-  return available && typeof window !== 'undefined' && window.innerWidth >= WINDOWS_MIN_VIEWPORT_WIDTH
+  if (!available || typeof window === 'undefined') return false
+  try {
+    if (window.self !== window.top) return false // never from inside a frame
+  } catch {
+    return false
+  }
+  return window.innerWidth >= WINDOWS_MIN_VIEWPORT_WIDTH
 }

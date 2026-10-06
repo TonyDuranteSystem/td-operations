@@ -58,12 +58,14 @@ describe("layout: window mode", () => {
   })
 
   it("reads the admin switch on every load, and a page is only a window when framed AND the switch is on", () => {
-    expect(layout).toMatch(/const windowsEnabled = await isFloatingWindowsEnabled\(\)/)
-    expect(layout).toMatch(/const embedded = isFramedNavigation\(headers\(\)\.get\('sec-fetch-dest'\)\) && windowsEnabled/)
+    expect(layout).toMatch(/const windowsEnabledPromise = isFloatingWindowsEnabled\(\)/)
+    expect(layout).toMatch(/const windowsEnabled = await windowsEnabledPromise/)
+    expect(layout).toMatch(/const framed = isFramedNavigation\(headers\(\)\.get\('sec-fetch-dest'\)\)/)
+    expect(layout).toMatch(/const embedded = framed && windowsEnabled/)
   })
 
   it("mounts the window manager once, outside <main>, only when the switch is on, and never inside a window", () => {
-    expect(layout).toMatch(/\{windowsEnabled && <ChromeOnly><WindowManager userId=\{user\.id\} sandbox=\{isSandbox\} \/><\/ChromeOnly>\}/)
+    expect(layout).toMatch(/<ChromeOnly><WindowManager userId=\{user\.id\} sandbox=\{isSandbox\} enabled=\{windowsEnabled\} \/><\/ChromeOnly>/)
     const main = layout.indexOf("</ShellMain>")
     expect(layout.indexOf("<WindowManager")).toBeGreaterThan(main)
   })
@@ -130,8 +132,9 @@ describe("history safety inside a window", () => {
   })
 
   it("a navigation inside a window REPLACES the frame's history entry instead of adding one", () => {
-    expect(bridge).toMatch(/history\.pushState = function \(\.\.\.args: HistoryArgs\) \{\s*const r = origReplace\.apply\(history, args\)/)
-    expect(bridge).toMatch(/history\.pushState = origPush/)
+    expect(bridge).toMatch(/const ourPush = function \(\.\.\.args: HistoryArgs\) \{\s*const r = origReplace\.apply\(history, args\)/)
+    expect(bridge).toMatch(/history\.pushState = ourPush/)
+    expect(bridge).toMatch(/if \(history\.pushState === ourPush\) history\.pushState = origPush/) // never remove Next's wrapper
   })
 
   it("the bridge only trusts messages from its own main page and own site", () => {

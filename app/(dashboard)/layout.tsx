@@ -142,19 +142,21 @@ export default async function DashboardLayout({
   // account may switch its own two-factor requirement off.
   const owner = isProtectedAdminEmail(user.email)
   const dashboardUser = isDashboardUser(user)
-  // Window mode (dev job f3f3e237, step 4): a page loaded INSIDE A FRAME (a floating window)
-  // renders bare when the admin switch `floating_windows_enabled` is on (Dev Tools → Maintenance;
-  // default OFF, fails closed). Decided from the browser's FIRST-load label and frozen client-side in
-  // <EmbeddedProvider>. The login check above always runs; the switch is only looked up for a framed
-  // load, so ordinary page loads never pay for it. Inside a window the chrome's data is never
-  // shown, so its queries are skipped.
-  // The admin switch is now read on EVERY load (not only a framed one): the main page needs it to
-  // decide whether to mount the window manager at all (step 5). One small settings lookup.
-  const windowsEnabled = await isFloatingWindowsEnabled()
-  const embedded = isFramedNavigation(headers().get('sec-fetch-dest')) && windowsEnabled
+  // Window mode (dev job f3f3e237, steps 4-5): a page loaded INSIDE A FRAME (a floating window) renders
+  // bare when the admin switch `floating_windows_enabled` is on (Dev Tools → Maintenance; default OFF,
+  // fails closed). Decided from the browser's FIRST-load label and frozen client-side in
+  // <EmbeddedProvider>; the login check above always runs. The switch is read on EVERY load now — the
+  // main page needs it to decide whether to offer windows — and is started together with the badge
+  // counts (the two slowest independent lookups), so it adds no serial round trip. Inside a window the
+  // chrome's data is never shown, so its queries are skipped.
+  const framed = isFramedNavigation(headers().get('sec-fetch-dest'))
+  const windowsEnabledPromise = isFloatingWindowsEnabled()
+  const badgeCountsPromise = framed ? null : getBadgeCounts(supabase, user.id)
+  const windowsEnabled = await windowsEnabledPromise
+  const embedded = framed && windowsEnabled
   const badgeCounts = embedded
     ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
-    : await getBadgeCounts(supabase, user.id)
+    : await (badgeCountsPromise ?? getBadgeCounts(supabase, user.id))
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser
@@ -233,8 +235,9 @@ export default async function DashboardLayout({
         {floatingChatEnabled && <ChromeOnly><FloatingChat /></ChromeOnly>}
         {/* Floating windows (dev job f3f3e237 step 5): mounted ONCE here, outside <main>, so a page
             change never touches them; ChromeOnly so a window can never spawn windows of its own;
-            only when the admin switch is on (the kill switch — off means it never mounts). */}
-        {windowsEnabled && <ChromeOnly><WindowManager userId={user.id} sandbox={isSandbox} /></ChromeOnly>}
+            only when the admin switch is on (the kill switch — `enabled` false renders nothing at all, and once on it
+            stays on for the life of the page so one failed settings read cannot tear every window down). */}
+        <ChromeOnly><WindowManager userId={user.id} sandbox={isSandbox} enabled={windowsEnabled} /></ChromeOnly>
       </ShellFrame>
       </WindowsAvailableProvider>
       </EmbeddedProvider>

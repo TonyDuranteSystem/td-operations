@@ -48,9 +48,20 @@ describe("isWindowableUrl", () => {
       expect(isWindowableUrl(u), u).toBe(false)
     }
   })
-  it("accepts the oddball nested dashboard page and mixed case", () => {
+  it("accepts the oddball nested dashboard page", () => {
     expect(isWindowableUrl("/dashboard/td-communication")).toBe(true)
-    expect(isWindowableUrl("/Inbox")).toBe(true)
+  })
+  it("is case-sensitive on the page root, like the routes (an upper-case page is a 404, not a window)", () => {
+    expect(isWindowableUrl("/Inbox")).toBe(false)
+    expect(isWindowableUrl("/TASKS")).toBe(false)
+    expect(isWindowableUrl("/tasKs")).toBe(false) // Kelvin sign look-alike
+  })
+  it("refuses dot-segments that a browser would resolve to a forbidden page", () => {
+    for (const u of ["/accounts/%2e%2e/portal/login", "/inbox/../api/x", "/inbox/./x", "/accounts/%2E%2E/login", "/inbox/..", "/a/%2e/b".replace("/a", "/leads")]) {
+      expect(isWindowableUrl(u), u).toBe(false)
+    }
+    expect(isWindowableUrl("/accounts/some.name")).toBe(true) // a dot inside a name is fine
+    expect(isWindowableUrl("/accounts/...x")).toBe(true)
   })
   it("every folder under app/(dashboard) is on the list (so a new CRM page can't silently be un-windowable)", () => {
     const dir = join(__dirname, "..", "..", "app", "(dashboard)")

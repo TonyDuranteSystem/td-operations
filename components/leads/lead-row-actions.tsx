@@ -136,7 +136,7 @@ export function LeadRowActions({ lead }: Props) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ lead_id: lead.id, status, expected_status: lead.status }),
         })
-        const data = await res.json()
+        const data = await res.json().catch(() => ({}))
         if (!res.ok) {
           toast.error(data.error ?? 'Failed to update status')
           if (res.status === 409) router.refresh()

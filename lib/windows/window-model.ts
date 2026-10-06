@@ -92,8 +92,12 @@ export function isWindowableUrl(href: unknown): href is string {
   if (!isInternalNavHref(href)) return false
   const path = pathOf(href)
   if (path === '/') return true // the home page
-  const root = path.slice(1).split('/')[0].toLowerCase()
-  return WINDOW_PAGE_ROOTS.includes(root)
+  const segments = path.slice(1).split('/')
+  // A browser resolves "." / ".." (also written %2e) before loading a frame, so "/accounts/%2e%2e/portal"
+  // would otherwise pass the root check below and load a page the allow-list forbids.
+  if (segments.some(seg => /^(\.|%2e){1,2}$/i.test(seg))) return false
+  // Case-sensitive, like the routes themselves ("/Inbox" is a 404, not the inbox).
+  return WINDOW_PAGE_ROOTS.includes(segments[0])
 }
 
 /** The pages that mean "you are signed out" — a frame landing here must tell the parent. */
@@ -179,7 +183,7 @@ export function nextOpenBox(existing: WindowEntry[], vp: Viewport): WindowBox {
   const n = existing.length
   const w = Math.min(WINDOW_DEFAULT_W, Math.max(WINDOW_MIN_W, vp.vw - 80))
   const h = Math.min(WINDOW_DEFAULT_H, Math.max(WINDOW_MIN_H, vp.vh - vp.topInset - 60))
-  const x = Math.round((vp.vw - w) / 2) + (n - 1) * step
+  const x = Math.round((vp.vw - w) / 2) + n * step
   const y = vp.topInset + 28 + n * step
   return clampBox({ x, y, w, h }, vp)
 }

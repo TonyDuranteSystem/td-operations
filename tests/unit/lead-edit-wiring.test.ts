@@ -65,10 +65,22 @@ describe("screens that edit a lead", () => {
     expect(rowActions).toContain("expected_status: lead.status")
   })
 
-  it("captures the starting value when editing STARTS, not while typing", () => {
+  it("captures the starting value when editing STARTS, not while typing — and shows the SAME text it captured", () => {
     expect(editable).toMatch(/editBase\.current = value \?\? ''; setEditing\(true\)/)
-    expect(notes).toMatch(/editBase\.current = notes; setEditing\(true\)/)
-    expect(callNotes).toMatch(/editBase\.current = callNotes \?\? ''; setEditing\(true\)/)
+    expect(notes).toMatch(/setValue\(notes\); editBase\.current = notes;/)
+    expect(callNotes).toMatch(/setValue\(callNotes \?\? ''\); editBase\.current = callNotes \?\? '';/)
+  })
+
+  it("after a refusal, the editors show the other person's version and the next save overwrites on purpose", () => {
+    for (const [name, src] of Object.entries({ notes, callNotes })) {
+      expect(src, name).toContain("editBase.current = data.current_value")
+      expect(src, name).toContain("Use their version instead")
+    }
+    expect(editable).toContain("editBase.current = latest")
+  })
+
+  it("a held or doubled Enter does not send a second save", () => {
+    expect(editable).toContain("e.key === 'Enter' && !isPending")
   })
 
   it("moves the starting value forward after the person's own successful save", () => {
@@ -79,7 +91,8 @@ describe("screens that edit a lead", () => {
 
   it("on a refusal, keeps what was typed and refreshes to show the latest", () => {
     for (const [name, src] of Object.entries({ editable, notes, callNotes, kanban, rowActions })) {
-      expect(src, name).toMatch(/res\.status === 409\) router\.refresh\(\)/)
+      expect(src, name).toMatch(/res\.status === 409\)/)
+      expect(src, name).toContain("router.refresh()")
     }
   })
 })
