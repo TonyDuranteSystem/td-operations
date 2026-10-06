@@ -122,7 +122,8 @@ export async function POST(
     const reactedToClientMessage = msg.sender_type === 'client'
     const reactedToTeamMessage = msg.sender_type === 'admin' || msg.sender_type === 'system'
 
-    if (staff && reactedToClientMessage) {
+    // 🧠 is staff's "save to memory" shortcut, not a message to the client: no notice, dot or push for it.
+    if (staff && reactedToClientMessage && emoji.replace(/\uFE0F/g, '') !== '🧠') {
       // Staff reacted to a client's message → notify the client (bell row + push). The notice names the
       // message, speaks the client's language, and opens the right company and tab. No email, ever
       // (the digest skips type 'reaction'); the lock-screen push shows only the emoji.

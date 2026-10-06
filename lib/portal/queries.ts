@@ -1016,22 +1016,38 @@ export async function getUnpaidInvoiceCount(accountId: string): Promise<number> 
 }
 
 /**
- * Unread "the team reacted to your message" notices for the chat the client is looking at: the selected
- * company's, plus ones addressed to them personally with no company. Drives the quiet pulse on the Chat
- * entry in the sidebar (reactions job 5962e46d) — a staff 👍 changes no unread-message count, so without
- * this a client had nothing pointing them at it.
+ * Unread "the team reacted to your message" notices for the person looking at the chat of the selected company:
+ * THEIR notices only (contact = them — on a shared company the other owner's notice is not theirs to clear),
+ * on the selected company or tied to no company. Drives the quiet pulse + dot on the Chat entry (reactions job
+ * 5962e46d) — a staff 👍 changes no unread-message count, so without this nothing pointed the client at it.
+ * `latestAt` changes whenever a newer notice arrives, so the sidebar can show the dot again even when the count
+ * is the same as before (1 → cleared → 1).
  */
-export async function getUnseenReactionCount(contactId: string, accountId: string | null): Promise<number> {
-  if (!contactId) return 0
-  const scope = accountId
-    ? `account_id.eq.${accountId},and(contact_id.eq.${contactId},account_id.is.null)`
-    : `and(contact_id.eq.${contactId},account_id.is.null)`
-  return countOrFailOpen('unseen-reactions', supabaseAdmin
-    .from('portal_notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('type', 'reaction')
-    .is('read_at', null)
-    .or(scope))
+export async function getUnseenReactionState(
+  contactId: string,
+  accountId: string | null,
+): Promise<{ count: number; latestAt: string | null }> {
+  if (!contactId) return { count: 0, latestAt: null }
+  try {
+    let q = supabaseAdmin
+      .from('portal_notifications')
+      .select('created_at', { count: 'exact' })
+      .eq('type', 'reaction')
+      .eq('contact_id', contactId)
+      .is('read_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    q = accountId ? q.or(`account_id.eq.${accountId},account_id.is.null`) : q.is('account_id', null)
+    const { data, count, error } = await q
+    if (error) {
+      console.error('[getUnseenReactionState] failed:', error.message)
+      return { count: 0, latestAt: null }
+    }
+    return { count: count ?? 0, latestAt: data?.[0]?.created_at ?? null }
+  } catch (err) {
+    console.error('[getUnseenReactionState] failed:', err)
+    return { count: 0, latestAt: null }
+  }
 }
 
 /**

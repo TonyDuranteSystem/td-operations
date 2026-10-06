@@ -141,20 +141,22 @@ export async function POST(request: NextRequest) {
     caller = { kind: 'client', contactId: authContactId, accountIds: await getClientAccountIds(authContactId) }
   }
 
-  // Mode 2 — "I opened the chat": clear this scope's unread REACTION notices (and only those).
+  // Mode 2 — "I opened the chat": clear THIS person's unread REACTION notices for the selected company (and
+  // the ones tied to no company, which that chat also shows) — the same scope the Chat dot counts. Another
+  // owner's notice on a shared company is not theirs to clear.
   if (body.type === 'reaction') {
+    if (caller.kind !== 'client') return NextResponse.json({ success: true })
     const accountId = typeof body.account_id === 'string' && body.account_id ? body.account_id : null
-    if (accountId && (caller.kind === 'teammate' ? accountId !== caller.accountId : !caller.accountIds.includes(accountId))) {
+    if (accountId && !caller.accountIds.includes(accountId)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
     let q = supabaseAdmin
       .from('portal_notifications')
       .update({ read_at: new Date().toISOString() })
       .eq('type', 'reaction')
+      .eq('contact_id', caller.contactId)
       .is('read_at', null)
-    if (accountId) q = q.eq('account_id', accountId)
-    else if (caller.kind === 'client') q = q.eq('contact_id', caller.contactId).is('account_id', null)
-    else return NextResponse.json({ success: true, marked: [], skipped: [] })
+    q = accountId ? q.or(`account_id.eq.${accountId},account_id.is.null`) : q.is('account_id', null)
     const { error } = await q
     if (error) {
       console.error('[portal notifications] mark reactions read failed:', error.message)

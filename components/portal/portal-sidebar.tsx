@@ -52,6 +52,8 @@ interface PortalSidebarProps {
   toSignCount?: number
   /** Unread team reactions on the client's messages in the selected chat — pulses the Chat entry. */
   unseenReactionCount?: number
+  /** Changes when a newer reaction notice arrives, so the dot can return even when the count is unchanged. */
+  unseenReactionToken?: string
   /** Unpaid TD invoices (Sent/Overdue) — drives the TD Billing tab pulse + count. */
   unpaidInvoiceCount?: number
   hasWizardPending?: boolean
@@ -198,7 +200,7 @@ const SECTION_LABELS: Record<string, Record<string, string>> = {
 }
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, unseenReactionToken = '', accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -207,7 +209,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Team reactions the client has not looked at yet. A fresh server value always wins; the chat
   // broadcasts 'portal-reactions-seen' the moment it clears them.
   const [liveUnseenReactions, setLiveUnseenReactions] = useState(unseenReactionCount)
-  useEffect(() => { setLiveUnseenReactions(unseenReactionCount) }, [unseenReactionCount])
+  useEffect(() => { setLiveUnseenReactions(unseenReactionCount) }, [unseenReactionCount, unseenReactionToken])
   useEffect(() => {
     const onSeen = () => setLiveUnseenReactions(0)
     window.addEventListener('portal-reactions-seen', onSeen)
@@ -609,10 +611,15 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       >
         <button
           onClick={() => setMobileOpen(true)}
-          className="p-2 -ml-2 rounded-md hover:bg-zinc-100 lg:hidden shrink-0"
+          className="relative p-2 -ml-2 rounded-md hover:bg-zinc-100 lg:hidden shrink-0"
           aria-label="Open menu"
         >
           <Menu className="h-5 w-5" />
+          {/* Phones have no bell: a quiet dot on the menu button tells the client a team reaction is waiting
+              in Chat (the same state that pulses the Chat entry inside the menu). */}
+          {liveUnseenReactions > 0 && !isActive('/portal/chat') && (
+            <span className="absolute top-1 right-1 h-2.5 w-2.5 rounded-full bg-violet-500 ring-2 ring-white" role="img" aria-label={t('chat.newReaction')} />
+          )}
         </button>
         <div className="w-7 h-7 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center shrink-0">TD</div>
         {!isPartner && !dualRole && showCompaniesSection ? (

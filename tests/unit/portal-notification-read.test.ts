@@ -9,6 +9,10 @@ import {
   previewMessageText,
   reactionNoticeText,
   reactionSeenKey,
+  reactionInstanceKey,
+  parseSeenReactionKeys,
+  addSeenReactionKeys,
+  REACTION_SEEN_MAX,
   shouldPulseReaction,
 } from '@/lib/portal/notification-read'
 
@@ -115,6 +119,12 @@ describe('previewMessageText', () => {
     expect(Array.from(p.slice(0, -1)).every(c => c === '👍')).toBe(true)
     expect(Array.from(p).length).toBe(11)
   })
+  it('keeps text that merely contains angle brackets, and never splits a flag', () => {
+    expect(previewMessageText('x<5 and y>3')).toBe('x<5 and y>3')
+    const p = previewMessageText('🇮🇹'.repeat(30), 5)
+    expect(p.endsWith('…')).toBe(true)
+    expect(p.slice(0, -1)).toBe('🇮🇹'.repeat(5))
+  })
   it('handles null and empty', () => {
     expect(previewMessageText(null)).toBe('')
     expect(previewMessageText('   ')).toBe('')
@@ -123,22 +133,49 @@ describe('previewMessageText', () => {
 
 describe('shouldPulseReaction', () => {
   const now = Date.parse('2026-10-06T12:00:00Z')
-  it('pulses a team reaction newer than the last look', () => {
-    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-10-06T11:00:00Z' }, now - 3600_000 * 2, now)).toBe(true)
+  const MSG = 'm-1'
+  const staff = { reactor_type: 'staff', created_at: '2026-10-06T11:00:00Z' }
+  it('pulses a recent team reaction nobody has looked at yet', () => {
+    expect(shouldPulseReaction(staff, MSG, new Set(), now)).toBe(true)
   })
-  it('does not pulse one the client already saw', () => {
-    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-10-06T09:00:00Z' }, now - 3600_000, now)).toBe(false)
+  it('stops once THAT reaction was really seen', () => {
+    expect(shouldPulseReaction(staff, MSG, new Set([reactionInstanceKey(MSG, staff)]), now)).toBe(false)
+  })
+  it('a re-added reaction (new timestamp) is a new one and pulses again', () => {
+    const seen = new Set([reactionInstanceKey(MSG, staff)])
+    expect(shouldPulseReaction({ ...staff, created_at: '2026-10-06T11:30:00Z' }, MSG, seen, now)).toBe(true)
+  })
+  it('the same reaction on another message is not covered by a seen key of this one', () => {
+    expect(shouldPulseReaction(staff, 'm-2', new Set([reactionInstanceKey(MSG, staff)]), now)).toBe(true)
   })
   it('never pulses the client’s own reaction', () => {
-    expect(shouldPulseReaction({ reactor_type: 'client', created_at: '2026-10-06T11:59:00Z' }, null, now)).toBe(false)
+    expect(shouldPulseReaction({ reactor_type: 'client', created_at: '2026-10-06T11:59:00Z' }, MSG, new Set(), now)).toBe(false)
   })
-  it('on a device that never looked, only recent reactions pulse (14 days)', () => {
-    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-10-01T00:00:00Z' }, null, now)).toBe(true)
-    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-08-01T00:00:00Z' }, null, now)).toBe(false)
+  it('a long-forgotten reaction (> 14 days) does not light up on a new phone', () => {
+    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-10-01T00:00:00Z' }, MSG, new Set(), now)).toBe(true)
+    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: '2026-08-01T00:00:00Z' }, MSG, new Set(), now)).toBe(false)
   })
   it('ignores malformed timestamps', () => {
-    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: 'nope' }, null, now)).toBe(false)
-    expect(shouldPulseReaction({ reactor_type: 'staff' }, null, now)).toBe(false)
+    expect(shouldPulseReaction({ reactor_type: 'staff', created_at: 'nope' }, MSG, new Set(), now)).toBe(false)
+    expect(shouldPulseReaction({ reactor_type: 'staff' }, MSG, new Set(), now)).toBe(false)
+  })
+})
+
+describe('seen-reaction keys in storage', () => {
+  it('survive a round trip and ignore garbage', () => {
+    const keys = addSeenReactionKeys([], ['a|1', 'b|2'])
+    expect(parseSeenReactionKeys(JSON.stringify(keys))).toEqual(['a|1', 'b|2'])
+    expect(parseSeenReactionKeys(null)).toEqual([])
+    expect(parseSeenReactionKeys('not json')).toEqual([])
+    expect(parseSeenReactionKeys('{"a":1}')).toEqual([])
+    expect(parseSeenReactionKeys('[1,"x",null]')).toEqual(['x'])
+  })
+  it('does not add duplicates and keeps only the newest REACTION_SEEN_MAX', () => {
+    expect(addSeenReactionKeys(['a'], ['a', 'b'])).toEqual(['a', 'b'])
+    const many = Array.from({ length: REACTION_SEEN_MAX + 25 }, (_, i) => `k${i}`)
+    const capped = addSeenReactionKeys([], many)
+    expect(capped).toHaveLength(REACTION_SEEN_MAX)
+    expect(capped[capped.length - 1]).toBe(`k${REACTION_SEEN_MAX + 24}`)
   })
 })
 
@@ -177,9 +214,14 @@ describe('wiring', () => {
     const chat = read('components/portal/portal-chat.tsx')
     expect(chat).toContain('reactionSeenKey')
     expect(chat).toContain('portal-reactions-seen')
-    expect(chat).toContain('pulseSince={isOwn ? reactionSeenAt : undefined}')
+    expect(chat).toContain('seenKeys={isOwn ? seenReactionKeys : undefined}')
+    expect(chat).toContain('onReactionsSeen={onReactionsSeen}')
+    const pill = read('components/chat/message-reactions.tsx')
+    expect(pill).toContain('IntersectionObserver')
+    expect(pill).toContain('SEEN_VISIBLE_MS')
     const side = read('components/portal/portal-sidebar.tsx')
     expect(side).toContain('reactionPulse')
     expect(side).toContain('portal-reactions-seen')
+    expect(side).toContain('unseenReactionToken')
   })
 })

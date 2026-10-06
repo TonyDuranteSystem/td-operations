@@ -98,7 +98,8 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
     } catch { /* the next poll shows the truth */ }
   }
 
-  const markAllRead = () => markRead(notifications.filter(n => !n.read_at).map(n => n.id))
+  const clearable = notifications.filter(n => !n.read_at && !isMustActNotification(n.type))
+  const markAllRead = () => markRead(clearable.map(n => n.id))
 
   // Tapping one item clears that item (unless it asks the client to act).
   const onItemTap = (n: Notification) => {
@@ -124,7 +125,7 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
         <div className="absolute right-0 mt-2 w-80 bg-white border rounded-xl shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b">
             <span className="text-sm font-semibold text-zinc-900">Notifications</span>
-            {unread > 0 && (
+            {clearable.length > 0 && (
               <button onClick={markAllRead} className="text-xs text-blue-600 hover:underline">
                 Mark all read
               </button>

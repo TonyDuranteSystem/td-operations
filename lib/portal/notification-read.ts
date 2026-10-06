@@ -90,9 +90,14 @@ export const REACTION_PREVIEW_MAX = 60
 
 /** One-line preview of the message that was reacted to ("…" when cut, no half emoji). */
 export function previewMessageText(text: string | null | undefined, max = REACTION_PREVIEW_MAX): string {
-  const clean = (text ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  // Only things that look like HTML tags are stripped ("x<5 and y>3" keeps its text).
+  const clean = (text ?? '').replace(/<\/?[a-z][^>]*>/gi, ' ').replace(/\s+/g, ' ').trim()
   if (!clean) return ''
-  const chars = Array.from(clean)
+  // Cut on whole characters as a person sees them (flags and family emoji are several code points).
+  const chars: string[] =
+    typeof Intl !== 'undefined' && 'Segmenter' in Intl
+      ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(clean), x => x.segment)
+      : Array.from(clean)
   return chars.length <= max ? clean : `${chars.slice(0, max).join('').trimEnd()}…`
 }
 
@@ -114,7 +119,7 @@ export function reactionNoticeText(
   return { title, body, pushBody: `${emoji} ${on}` }
 }
 
-/** localStorage key holding when this person last looked at the chat of this company (per device). */
+/** localStorage key holding which team reactions this person has actually looked at (per device). */
 export function reactionSeenKey(accountId: string | null | undefined, contactId: string): string {
   return `td-reaction-seen:${accountId || 'personal'}:${contactId}`
 }
@@ -124,19 +129,48 @@ export interface ReactionLike {
   created_at?: string
 }
 
+/** Identity of one reaction for "have I seen it": the message plus when it was added (re-adding makes a new one). */
+export function reactionInstanceKey(messageId: string, reaction: ReactionLike): string {
+  return `${messageId}|${reaction.created_at ?? ''}`
+}
+
+/** Most reaction keys remembered per device — enough for any real chat, small enough for localStorage. */
+export const REACTION_SEEN_MAX = 200
+
+/** Read the remembered keys back from localStorage text (anything unexpected → empty). */
+export function parseSeenReactionKeys(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const v = JSON.parse(raw)
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-REACTION_SEEN_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+/** Add keys, newest last, capped. */
+export function addSeenReactionKeys(existing: readonly string[], add: readonly string[]): string[] {
+  const merged = existing.slice()
+  for (const k of add) if (!merged.includes(k)) merged.push(k)
+  return merged.slice(-REACTION_SEEN_MAX)
+}
+
+/** Reactions older than this never pulse (a long-forgotten 👍 must not light up on a new phone). */
+export const REACTION_PULSE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000
+
 /**
- * True when a reaction on the viewer's OWN message should pulse: the team added it, and it arrived
- * after the last time the viewer looked. `seenAtMs` null = never looked on this device — then
- * only reactions from the last 14 days pulse, so a long-forgotten 👍 doesn't light up on a new phone.
+ * True when a reaction on the viewer's OWN message should pulse: the team added it, it is recent, and the
+ * viewer has not yet actually had it on screen on this device (`seenKeys`).
  */
 export function shouldPulseReaction(
   reaction: ReactionLike,
-  seenAtMs: number | null,
+  messageId: string,
+  seenKeys: ReadonlySet<string>,
   nowMs: number,
 ): boolean {
   if (reaction.reactor_type !== 'staff') return false
   const at = reaction.created_at ? Date.parse(reaction.created_at) : NaN
   if (!Number.isFinite(at)) return false
-  const floor = seenAtMs ?? nowMs - 14 * 24 * 60 * 60 * 1000
-  return at > floor
+  if (nowMs - at > REACTION_PULSE_WINDOW_MS) return false
+  return !seenKeys.has(reactionInstanceKey(messageId, reaction))
 }

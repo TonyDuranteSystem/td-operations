@@ -65,7 +65,8 @@ export default function NotificationsPage() {
       setNotifications(prev => prev.map(n => (marked.has(n.id) ? { ...n, read_at: n.read_at || new Date().toISOString() } : n)))
     } catch { /* the next load shows the truth */ }
   }
-  const markAllRead = () => markRead(notifications.filter(n => !n.read_at).map(n => n.id))
+  const clearable = notifications.filter(n => !n.read_at && !isMustActNotification(n.type))
+  const markAllRead = () => markRead(clearable.map(n => n.id))
   const onItemTap = (n: Notification) => {
     if (!n.read_at && !isMustActNotification(n.type)) void markRead([n.id], true)
   }
@@ -84,7 +85,7 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('settings.notifications')}</h1>
         </div>
-        {notifications.some(n => !n.read_at) && (
+        {clearable.length > 0 && (
           <button
             onClick={markAllRead}
             className="text-sm text-blue-600 hover:text-blue-700"
