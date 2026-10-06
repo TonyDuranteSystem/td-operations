@@ -3,7 +3,7 @@
 import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ChevronLeft, ChevronRight, ExternalLink, Maximize2, Minus, RotateCw, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, Minus, Replace, RotateCw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { absoluteNavUrl } from '@/lib/nav/nav-link'
 import { cn } from '@/lib/utils'
@@ -17,9 +17,12 @@ import {
 import { WIN_MSG, parseFrameMessage, type ParentMessage } from '@/lib/windows/window-messages'
 import { browserStore, clearAllWindows, loadWindows, pruneOtherUsers, saveWindows } from '@/lib/windows/windows-storage'
 import {
-  OPEN_WINDOW_EVENT, WindowsAvailableContext, type OpenWindowDetail,
+  OPEN_WINDOW_EVENT, POPOUT_NAME, WindowsAvailableContext, isFramedOrPopout, type OpenWindowDetail,
 } from '@/lib/windows/windows-context'
+import { classifyDrag, emitWindowEvent } from '@/lib/windows/window-events'
+import { EMPTY_SNAPSHOT, setWindowsSnapshot } from '@/lib/windows/windows-store'
 import { CAPTURE_TOOL_IGNORE_ATTR } from '@/lib/captures/render'
+import { WindowsTour } from '@/components/windows/windows-tour'
 
 /**
  * Floating windows (dev job f3f3e237, step 5): up to three real CRM pages shown in frames on top of
@@ -34,9 +37,6 @@ import { CAPTURE_TOOL_IGNORE_ATTR } from '@/lib/captures/render'
 export function WindowsAvailableProvider({ available, children }: { available: boolean; children: React.ReactNode }) {
   return <WindowsAvailableContext.Provider value={available}>{children}</WindowsAvailableContext.Provider>
 }
-
-/** The name every pop-out browser window gets, so it can tell it is one. */
-const POPOUT_NAME = 'td-popout'
 
 type Status = 'ok' | 'signedout' | 'gone'
 type ConfirmAction = 'close' | 'popout' | 'dock' | 'reload'
@@ -84,19 +84,19 @@ export function WindowManager({ userId, sandbox, enabled }: { userId: string; sa
   const [on] = useState(enabled)
   const [allowed, setAllowed] = useState(false)
   useEffect(() => {
-    let framed = false
-    try {
-      framed = window.self !== window.top
-    } catch {
-      framed = true
-    }
-    setAllowed(!framed && !window.name.startsWith(POPOUT_NAME))
+    setAllowed(!isFramedOrPopout())
   }, [])
   if (!on || !allowed) return null
   return (
-    <WindowsCrashGuard>
-      <WindowManagerInner userId={userId} sandbox={sandbox} />
-    </WindowsCrashGuard>
+    <>
+      <WindowsCrashGuard>
+        <WindowManagerInner userId={userId} sandbox={sandbox} />
+      </WindowsCrashGuard>
+      {/* The guided tour has its OWN crash guard: a problem in it must never take the windows down with it. */}
+      <WindowsCrashGuard>
+        <WindowsTour userId={userId} />
+      </WindowsCrashGuard>
+    </>
   )
 }
 
@@ -187,6 +187,21 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
     return () => clearTimeout(t)
   }, [state, hydrated, userId])
 
+  // ── tell the guided tour which windows exist (read-only mirror; see lib/windows/windows-store.ts) ──
+  useEffect(() => {
+    const ready = hydrated && !!vp && vp.vw >= WINDOWS_MIN_VIEWPORT_WIDTH
+    const front = frontWindowId(state)
+    setWindowsSnapshot({
+      ready,
+      count: state.windows.length,
+      ids: state.windows.map(w => w.id),
+      frontId: front,
+      minimized: state.windows.filter(w => w.minimized).map(w => w.id),
+      urls: state.windows.map(w => w.url),
+    })
+  }, [state, hydrated, vp])
+  useEffect(() => () => setWindowsSnapshot(EMPTY_SNAPSHOT), [])
+
   // ── signed out, any way it happens: forget everything ──
   useEffect(() => {
     const { data } = createClient().auth.onAuthStateChange(event => {
@@ -229,6 +244,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
           delete rest[dead.id]
           return rest
         })
+        emitWindowEvent({ type: 'closed', id: dead.id, reason: 'removed' })
       }
       const r = openWindow(base, d?.href, d?.title, v)
       if (isOpenFailure(r)) {
@@ -240,6 +256,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
         return
       }
       commit(r.state)
+      emitWindowEvent({ type: 'opened', id: r.id, url: d.href, reused: r.reused })
     }
     document.addEventListener(OPEN_WINDOW_EVENT, onOpen)
     return () => document.removeEventListener(OPEN_WINDOW_EVENT, onOpen)
@@ -361,7 +378,18 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
       delete rest[id]
       return rest
     })
+    emitWindowEvent({ type: 'closed', id, reason: action === 'popout' ? 'popout' : action === 'dock' ? 'docked' : 'closed' })
   }, [commit, router])
+
+  // A person hid / brought back a window (button, double-click on the bar, or the tab at the bottom).
+  const hideWindow = useCallback((id: string) => {
+    commit(minimizeWindow(stateRef.current, id))
+    emitWindowEvent({ type: 'minimized', id })
+  }, [commit])
+  const showWindow = useCallback((id: string) => {
+    commit(focusWindow(restoreWindow(stateRef.current, id), id))
+    emitWindowEvent({ type: 'restored', id })
+  }, [commit])
 
   const guarded = useCallback(async (id: string, action: ConfirmAction) => {
     if (await askDirty(id)) {
@@ -425,6 +453,12 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
       window.removeEventListener('pointercancel', end)
       window.removeEventListener('blur', end)
       setDragCursor(null)
+      // Report it only if the person really moved / resized it (a bare click on the bar is neither).
+      const now = stateRef.current.windows.find(x => x.id === w.id)
+      if (now) {
+        const kind = classifyDrag(start, { x: now.x, y: now.y, w: now.w, h: now.h }, mode === 'move' ? 'move' : 'resize')
+        if (kind) emitWindowEvent({ type: kind, id: w.id })
+      }
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end)
@@ -461,6 +495,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
           <div
             key={w.id}
             role="group"
+            data-win-id={w.id}
             aria-label={`Window: ${w.title}`}
             className={cn(
               'pointer-events-auto absolute flex flex-col overflow-hidden rounded-lg border bg-white',
@@ -473,6 +508,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
             }}
           >
             <div
+              data-win-part="titlebar"
               className={cn(
                 'flex shrink-0 cursor-grab select-none items-center gap-0.5 border-b px-1.5 active:cursor-grabbing',
                 isFront ? 'bg-zinc-800 text-white' : 'bg-zinc-600 text-zinc-100',
@@ -484,17 +520,17 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
               }}
               onDoubleClick={e => {
                 if ((e.target as HTMLElement).closest('button')) return
-                commit(minimizeWindow(stateRef.current, w.id))
+                hideWindow(w.id)
               }}
             >
               <TitleButton label="Back" disabled={!t || t.idx <= 0} onClick={() => goBackForward(w.id, -1)}><ChevronLeft className="h-4 w-4" /></TitleButton>
               <TitleButton label="Forward" disabled={!t || t.idx >= t.stack.length - 1} onClick={() => goBackForward(w.id, 1)}><ChevronRight className="h-4 w-4" /></TitleButton>
               <TitleButton label="Reload this window" onClick={() => void guarded(w.id, 'reload')}><RotateCw className="h-3.5 w-3.5" /></TitleButton>
               <div className="mx-2 min-w-0 flex-1 truncate text-sm font-medium" title={w.url}>{w.title}</div>
-              <TitleButton label="Minimise" onClick={() => commit(minimizeWindow(stateRef.current, w.id))}><Minus className="h-4 w-4" /></TitleButton>
-              <TitleButton label="Open in a separate browser window" onClick={() => void guarded(w.id, 'popout')}><ExternalLink className="h-3.5 w-3.5" /></TitleButton>
-              <TitleButton label="Open in the main page and close this window" onClick={() => void guarded(w.id, 'dock')}><Maximize2 className="h-3.5 w-3.5" /></TitleButton>
-              <TitleButton label="Close" onClick={() => void guarded(w.id, 'close')}><X className="h-4 w-4" /></TitleButton>
+              <TitleButton label="Minimize" part="minimize" onClick={() => hideWindow(w.id)}><Minus className="h-4 w-4" /></TitleButton>
+              <TitleButton label="Open in a separate browser window" part="popout" onClick={() => void guarded(w.id, 'popout')}><ExternalLink className="h-3.5 w-3.5" /></TitleButton>
+              <TitleButton label="Move to the main page (replaces the page behind)" part="dock" onClick={() => void guarded(w.id, 'dock')}><Replace className="h-3.5 w-3.5" /></TitleButton>
+              <TitleButton label="Close" part="close" onClick={() => void guarded(w.id, 'close')}><X className="h-4 w-4" /></TitleButton>
             </div>
 
             <div className="relative min-h-0 flex-1 bg-zinc-50">
@@ -554,6 +590,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
               <div
                 key={edge}
                 aria-hidden
+                data-win-part={`resize-${edge}`}
                 className={cn('absolute z-20', EDGE_CLASS[edge])}
                 style={{ cursor: CURSORS[edge], touchAction: 'none' }}
                 onPointerDown={e => beginDrag(e, w, edge)}
@@ -570,14 +607,18 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
         <div className="pointer-events-auto absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-2" style={{ zIndex: 1001 }}>
           {minimized.map(w => (
             <div key={w.id} className="flex max-w-[16rem] items-center overflow-hidden rounded-full border border-zinc-400 bg-zinc-800 text-sm text-white shadow-lg">
-              <button
-                type="button"
-                aria-label={`Show window: ${w.title}`}
-                className="truncate px-3 py-1.5 hover:bg-zinc-700"
-                onClick={() => commit(focusWindow(restoreWindow(stateRef.current, w.id), w.id))}
-              >
-                {w.title}
-              </button>
+              <FastTooltip label="Click to bring this window back" align="center">
+                <button
+                  type="button"
+                  aria-label={`Show window: ${w.title}`}
+                  data-win-part="tray-chip"
+                  data-win-id={w.id}
+                  className="truncate px-3 py-1.5 hover:bg-zinc-700"
+                  onClick={() => showWindow(w.id)}
+                >
+                  {w.title}
+                </button>
+              </FastTooltip>
               <button
                 type="button"
                 aria-label={`Close ${w.title}`}
@@ -595,13 +636,14 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
 }
 
 function TitleButton({
-  label, onClick, disabled, children,
-}: { label: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  label, onClick, disabled, part, children,
+}: { label: string; onClick: () => void; disabled?: boolean; part?: string; children: React.ReactNode }) {
   return (
     <FastTooltip label={label} align="center">
       <button
         type="button"
         aria-label={label}
+        data-win-part={part}
         disabled={disabled}
         onClick={onClick}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-zinc-200 hover:bg-white/15 disabled:opacity-30 disabled:hover:bg-transparent"

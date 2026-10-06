@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride'
+import { acquireTour, releaseTour } from '@/lib/ui/tour-lock'
 
 const Joyride = dynamic(() => import('react-joyride'), { ssr: false })
 
@@ -121,11 +122,20 @@ export function WhatsAppTour({
 
   useEffect(() => {
     if (open) {
+      // Only one guided tour at a time (the floating-windows tour shares this lock). If the other tour is
+      // open, this one simply does not start — the "Take the tour" button is always there to try again.
+      if (!acquireTour('whatsapp')) {
+        onClose()
+        return
+      }
       setStepIndex(0)
       setRun(true)
     } else {
+      releaseTour('whatsapp')
       setRun(false)
     }
+    return () => releaseTour('whatsapp')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onClose is stable enough; only `open` should restart it
   }, [open])
 
   const handleCallback = useCallback(

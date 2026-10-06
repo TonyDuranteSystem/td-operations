@@ -9,6 +9,8 @@ import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
 import { WhatsAppTour } from './whatsapp-tour'
+import { isFramedOrPopout } from '@/lib/windows/windows-context'
+import { isAnyTourActive } from '@/lib/ui/tour-lock'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
 import { MessageThread, type ReplyTarget } from './message-thread'
 import { WhatsappThread } from './whatsapp-thread'
@@ -270,6 +272,9 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
   // The flag is written BEFORE the tour opens so a refresh mid-tour never loops it.
   useEffect(() => {
     if (!isWhatsApp || !waListReady || selected || !userId) return
+    // Never inside a floating window's small frame or a pop-out browser window (it would use up the person's
+    // one-time flag where they cannot see it properly), and never on top of another tour that is open.
+    if (isFramedOrPopout() || isAnyTourActive()) return
     try {
       const key = `wa-tour-seen:${userId}`
       if (window.localStorage.getItem(key)) return
