@@ -17,7 +17,7 @@ export type Locale = "it" | "en"
  * null and unknown values) → "en". */
 export function localeFromLanguage(language: string | null | undefined): Locale {
   const v = (language ?? "").trim().toLowerCase()
-  return v === "it" || v.startsWith("ital") ? "it" : "en"
+  return v === "it" || v.startsWith("ital") || /^it[-_]/.test(v) ? "it" : "en"
 }
 
 /** Convenience predicate for call sites that only branch on Italian. */

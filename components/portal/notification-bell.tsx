@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Bell, MessageCircle, FileText, Activity, Calendar, Receipt } from 'lucide-react'
+import { Bell, MessageCircle, FileText, Activity, Calendar, Receipt, SmilePlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import Link from 'next/link'
 import { needsFullPageLoad } from '@/lib/portal/chat-link'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { isMustActNotification } from '@/lib/portal/notification-read'
 
 interface Notification {
   id: string
@@ -20,6 +21,7 @@ interface Notification {
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
   chat: MessageCircle,
+  reaction: SmilePlus,
   document: FileText,
   service: Activity,
   deadline: Calendar,
@@ -75,16 +77,34 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
   // Catch up the moment the client returns to the app.
   useWakeSignal({ onWake: () => { void load() } })
 
-  const markAllRead = async () => {
-    const unreadIds = notifications.filter(n => !n.read_at).map(n => n.id)
-    if (unreadIds.length === 0) return
-    await fetch('/api/portal/notifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: unreadIds }),
-    })
-    setNotifications(prev => prev.map(n => ({ ...n, read_at: n.read_at ?? new Date().toISOString() })))
-    setUnread(0)
+  // Mark notifications read on the server, then show what the SERVER says: only the ids it actually
+  // marked flip to read (must-act items — signatures, forms, decisions — stay unread by design), and
+  // the badge is re-read instead of being zeroed locally.
+  const markRead = async (ids: string[], opts: { keepalive?: boolean } = {}) => {
+    if (ids.length === 0) return
+    try {
+      const res = await fetch('/api/portal/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+        // A chat link reloads the page; without keepalive the browser can cancel this request.
+        keepalive: opts.keepalive === true,
+      })
+      if (!res.ok) return
+      const data = await res.json().catch(() => ({}))
+      const marked = new Set<string>(Array.isArray(data.marked) ? data.marked : [])
+      setNotifications(prev => prev.map(n => (marked.has(n.id) ? { ...n, read_at: n.read_at ?? new Date().toISOString() } : n)))
+      void load()
+    } catch { /* the next poll shows the truth */ }
+  }
+
+  const clearable = notifications.filter(n => !n.read_at && !isMustActNotification(n.type))
+  const markAllRead = () => markRead(clearable.map(n => n.id))
+
+  // Tapping one item clears that item (unless it asks the client to act).
+  const onItemTap = (n: Notification) => {
+    setOpen(false)
+    if (!n.read_at && !isMustActNotification(n.type)) void markRead([n.id], { keepalive: true })
   }
 
   return (
@@ -105,7 +125,7 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
         <div className="absolute right-0 mt-2 w-80 bg-white border rounded-xl shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b">
             <span className="text-sm font-semibold text-zinc-900">Notifications</span>
-            {unread > 0 && (
+            {clearable.length > 0 && (
               <button onClick={markAllRead} className="text-xs text-blue-600 hover:underline">
                 Mark all read
               </button>
@@ -135,8 +155,8 @@ export function NotificationBell({ accountId, contactId }: { accountId?: string;
                 // so the sidebar follows (see needsFullPageLoad).
                 return n.link ? (
                   needsFullPageLoad(n.link)
-                    ? <a key={n.id} href={n.link} onClick={() => setOpen(false)}>{content}</a>
-                    : <Link key={n.id} href={n.link} onClick={() => setOpen(false)}>{content}</Link>
+                    ? <a key={n.id} href={n.link} onClick={() => onItemTap(n)}>{content}</a>
+                    : <Link key={n.id} href={n.link} onClick={() => onItemTap(n)}>{content}</Link>
                 ) : (
                   <div key={n.id}>{content}</div>
                 )

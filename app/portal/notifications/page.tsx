@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Bell, Loader2, FileText, MessageCircle, Cog, Calendar, CreditCard } from 'lucide-react'
+import { Bell, Loader2, FileText, MessageCircle, Cog, Calendar, CreditCard, SmilePlus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
 import Link from 'next/link'
 import { needsFullPageLoad } from '@/lib/portal/chat-link'
+import { isMustActNotification } from '@/lib/portal/notification-read'
 
 interface Notification {
   id: string
@@ -20,6 +21,7 @@ interface Notification {
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
   chat: MessageCircle,
+  reaction: SmilePlus,
   document: FileText,
   service: Cog,
   deadline: Calendar,
@@ -45,15 +47,28 @@ export default function NotificationsPage() {
     load()
   }, [])
 
-  const markAllRead = async () => {
-    const unread = notifications.filter(n => !n.read_at).map(n => n.id)
-    if (unread.length === 0) return
-    await fetch('/api/portal/notifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: unread }),
-    })
-    setNotifications(prev => prev.map(n => ({ ...n, read_at: n.read_at || new Date().toISOString() })))
+  // Same rules as the bell: only what the server marked flips to read (signatures, forms and
+  // decisions stay unread until done); a tapped item clears itself, with keepalive so the request
+  // survives a chat link's full page load.
+  const markRead = async (ids: string[], keepalive = false) => {
+    if (ids.length === 0) return
+    try {
+      const res = await fetch('/api/portal/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+        keepalive,
+      })
+      if (!res.ok) return
+      const data = await res.json().catch(() => ({}))
+      const marked = new Set<string>(Array.isArray(data.marked) ? data.marked : [])
+      setNotifications(prev => prev.map(n => (marked.has(n.id) ? { ...n, read_at: n.read_at || new Date().toISOString() } : n)))
+    } catch { /* the next load shows the truth */ }
+  }
+  const clearable = notifications.filter(n => !n.read_at && !isMustActNotification(n.type))
+  const markAllRead = () => markRead(clearable.map(n => n.id))
+  const onItemTap = (n: Notification) => {
+    if (!n.read_at && !isMustActNotification(n.type)) void markRead([n.id], true)
   }
 
   if (loading) {
@@ -70,7 +85,7 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('settings.notifications')}</h1>
         </div>
-        {notifications.some(n => !n.read_at) && (
+        {clearable.length > 0 && (
           <button
             onClick={markAllRead}
             className="text-sm text-blue-600 hover:text-blue-700"
@@ -100,8 +115,8 @@ export default function NotificationsPage() {
                 <div className="flex-1 min-w-0">
                   {n.link ? (
                     needsFullPageLoad(n.link)
-                      ? <a href={n.link} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</a>
-                      : <Link href={n.link} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</Link>
+                      ? <a href={n.link} onClick={() => onItemTap(n)} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</a>
+                      : <Link href={n.link} onClick={() => onItemTap(n)} className="text-sm font-medium text-zinc-900 hover:text-blue-600">{n.title}</Link>
                   ) : (
                     <p className="text-sm font-medium text-zinc-900">{n.title}</p>
                   )}

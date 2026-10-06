@@ -47,3 +47,22 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
+
+/* A team reaction on the client's own message the client has not looked at yet (reactions job 5962e46d):
+   the emoji pill pops and glows so it is clearly "this emoji, on this message". Motion-reduced users get a
+   steady ring instead of animation. */
+@keyframes reaction-attention {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.55); }
+  50% { transform: scale(1.25); box-shadow: 0 0 0 6px rgba(139, 92, 246, 0); }
+}
+.reaction-attention {
+  animation: reaction-attention 1.2s ease-in-out infinite;
+  border-color: rgb(139 92 246) !important;
+  background-color: rgb(245 243 255) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reaction-attention {
+    animation: none;
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.45);
+  }
+}

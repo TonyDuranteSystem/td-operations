@@ -2,12 +2,17 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { decideNotificationOwnership, splitReadable, type OwnershipCaller } from '@/lib/portal/notification-read'
 import { NextRequest, NextResponse } from 'next/server'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * GET /api/portal/notifications?account_id=xxx&limit=20
  * GET /api/portal/notifications?contact_id=xxx&limit=20
- * POST /api/portal/notifications (mark as read) Body: { ids: [...] }
+ * POST /api/portal/notifications (mark as read) Body: { ids: [...] } — or { type: 'reaction', account_id? }
+ * to clear the reaction notices when the client opens the chat. Must-act types (signature, form,
+ * decision…) are never cleared here; the response lists what was `marked` and what was `skipped`.
  */
 export async function GET(request: NextRequest) {
   const supabase = createClient()
@@ -111,48 +116,91 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
-  const { ids } = body
+  // Only portal clients (and their teammates) own notifications. A staff login used to fall through
+  // both checks below and run the UPDATE unscoped.
+  if (user.app_metadata?.role !== 'client') {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
 
-  if (!Array.isArray(ids) || ids.length === 0) {
+  let body: { ids?: unknown; type?: unknown; account_id?: unknown }
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  // Who is asking. Teammate (Portal Team Access, no contact id): only their account, only with
+  // 'announcements'. Everyone else is a client contact.
+  const authContactId = getClientContactId(user)
+  let caller: OwnershipCaller
+  if (!authContactId) {
+    const tmAccountId = await getTeammateScopeOrNull(user, 'announcements')
+    if (!tmAccountId) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    caller = { kind: 'teammate', accountId: tmAccountId }
+  } else {
+    caller = { kind: 'client', contactId: authContactId, accountIds: await getClientAccountIds(authContactId) }
+  }
+
+  // Mode 2 — "I opened the chat": clear THIS person's unread REACTION notices for the selected company (and
+  // the ones tied to no company, which that chat also shows) — the same scope the Chat dot counts. Another
+  // owner's notice on a shared company is not theirs to clear.
+  if (body.type === 'reaction') {
+    if (caller.kind !== 'client') return NextResponse.json({ success: true })
+    const accountId = typeof body.account_id === 'string' && body.account_id ? body.account_id : null
+    if (accountId && !caller.accountIds.includes(accountId)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+    let q = supabaseAdmin
+      .from('portal_notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('type', 'reaction')
+      .eq('contact_id', caller.contactId)
+      .is('read_at', null)
+    q = accountId ? q.or(`account_id.eq.${accountId},account_id.is.null`) : q.is('account_id', null)
+    const { error } = await q
+    if (error) {
+      console.error('[portal notifications] mark reactions read failed:', error.message)
+      return NextResponse.json({ error: 'Could not update notifications — please try again.' }, { status: 500 })
+    }
+    return NextResponse.json({ success: true })
+  }
+
+  // Mode 1 — mark specific notifications read.
+  const { ids } = body
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100 || !ids.every(i => typeof i === 'string' && UUID_RE.test(i))) {
     return NextResponse.json({ error: 'ids array required' }, { status: 400 })
   }
 
-  // Verify the user owns all notifications before marking as read. Gate on
-  // role==='client' so a teammate (no contact id) cannot skip the check.
-  const isClientUser = user.app_metadata?.role === 'client'
-  const authContactId = getClientContactId(user)
-  if (isClientUser && !authContactId) {
-    // Teammate: only their account's notifications, only with 'announcements'.
-    const tmAccountId = await getTeammateScopeOrNull(user, 'announcements')
-    if (!tmAccountId) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    const { data: notifs } = await supabaseAdmin
-      .from('portal_notifications')
-      .select('id, account_id')
-      .in('id', ids)
-    if (notifs?.some(n => n.account_id !== tmAccountId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
-    }
-  } else if (authContactId) {
-    const accountIds = await getClientAccountIds(authContactId)
-    const { data: notifs } = await supabaseAdmin
-      .from('portal_notifications')
-      .select('id, account_id, contact_id')
-      .in('id', ids)
+  const { data: rows, error: selErr } = await supabaseAdmin
+    .from('portal_notifications')
+    .select('id, account_id, contact_id, type')
+    .in('id', ids)
+  if (selErr) {
+    console.error('[portal notifications] lookup failed:', selErr.message)
+    return NextResponse.json({ error: 'Could not update notifications — please try again.' }, { status: 500 })
+  }
 
-    // Check access: notification must belong to one of the client's accounts OR their contact_id
-    if (notifs?.some(n =>
-      (n.account_id && !accountIds.includes(n.account_id)) &&
-      (n.contact_id !== authContactId)
-    )) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  const decision = decideNotificationOwnership(ids, rows ?? [], caller)
+  if (!decision.ok) return NextResponse.json({ error: decision.error ?? 'Access denied' }, { status: decision.status })
+
+  // Things the client must DO stay unread until they are done.
+  const { markable, skipped } = splitReadable(rows ?? [])
+  if (markable.length > 0) {
+    const markableIds = markable.map(r => r.id)
+    const { error: updErr } = await supabaseAdmin
+      .from('portal_notifications')
+      .update({ read_at: new Date().toISOString() })
+      .in('id', markableIds)
+      .is('read_at', null)
+    if (updErr) {
+      console.error('[portal notifications] mark read failed:', updErr.message)
+      return NextResponse.json({ error: 'Could not update notifications — please try again.' }, { status: 500 })
     }
   }
 
-  await supabaseAdmin
-    .from('portal_notifications')
-    .update({ read_at: new Date().toISOString() })
-    .in('id', ids)
-
-  return NextResponse.json({ success: true })
+  return NextResponse.json({
+    success: true,
+    marked: markable.map(r => r.id),
+    skipped: skipped.map(r => r.id),
+  })
 }

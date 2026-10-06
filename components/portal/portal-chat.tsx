@@ -11,6 +11,7 @@ import type { PortalChatEntity } from '@/lib/portal/queries'
 import type { ChatAttachment, PortalMessage } from '@/lib/types'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { MessageReactions } from '@/components/chat/message-reactions'
+import { reactionSeenKey, parseSeenReactionKeys, addSeenReactionKeys, shouldPulseReaction } from '@/lib/portal/notification-read'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -120,6 +121,54 @@ function formatTime(dateStr: string): string {
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
   const router = useRouter()
+
+  // Team reactions on the client's own messages pulse until they have REALLY been on screen (the pill reports
+  // it after ~2 s in view — see ReactionPill), not after a timer: a 👍 under a panel, in another topic tab or
+  // below the fold keeps asking for attention. What was seen is remembered per device (reactionSeenKey). When
+  // none are left to see, the server-side reaction notices are cleared (so the Chat dot and bell stop) and the
+  // sidebar is told. A reaction arriving later while the chat is open pulses the same way. Per device: the
+  // pulse can show once more on another device — harmless.
+  const [seenReactionKeys, setSeenReactionKeys] = useState<ReadonlySet<string> | undefined>(undefined)
+  const storageKey = reactionSeenKey(accountId, contactId)
+  useEffect(() => {
+    let stored: string[] = []
+    try { stored = parseSeenReactionKeys(localStorage.getItem(storageKey)) } catch { /* storage unavailable — nothing seen yet */ }
+    setSeenReactionKeys(new Set(stored))
+  }, [storageKey])
+
+  const onReactionsSeen = useCallback((keys: string[]) => {
+    setSeenReactionKeys(prev => {
+      const next = new Set(addSeenReactionKeys(Array.from(prev ?? []), keys))
+      try { localStorage.setItem(storageKey, JSON.stringify(Array.from(next))) } catch { /* no-op */ }
+      return next
+    })
+  }, [storageKey])
+
+  // Clear the server notices once nothing is left to see (and on a fresh open when nothing ever pulsed, so a
+  // notice for a reaction seen on another device or too old to pulse cannot keep the dot alive).
+  const noticesClearedRef = useRef(false)
+  useEffect(() => {
+    if (!ready || seenReactionKeys === undefined) return
+    const now = Date.now()
+    const remaining = messages.some(m =>
+      !m.deleted_at && m.sender_id === userId && Array.isArray(m.reactions) &&
+      m.reactions.some(r => shouldPulseReaction(r, m.id, seenReactionKeys, now)),
+    )
+    if (remaining) { noticesClearedRef.current = false; return }
+    if (noticesClearedRef.current) return
+    noticesClearedRef.current = true
+    fetch('/api/portal/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'reaction', account_id: accountId || null }),
+      keepalive: true,
+    })
+      .then(res => {
+        if (res.ok) window.dispatchEvent(new CustomEvent('portal-reactions-seen'))
+        else noticesClearedRef.current = false // try again on the next change instead of showing a false "cleared"
+      })
+      .catch(() => { noticesClearedRef.current = false })
+  }, [ready, messages, seenReactionKeys, userId, accountId])
   // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
   // message is about via a first-send popup; the choice is the SEND TAG and the
   // VIEW follows it (cookie switch). Single-entity clients are auto-tagged.
@@ -1120,6 +1169,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       locale={locale}
                       align={isOwn ? 'right' : 'left'}
                       staffLabel={t('chat.team')}
+                      seenKeys={isOwn ? seenReactionKeys : undefined}
+                      onReactionsSeen={onReactionsSeen}
                     />
                   </div>
                 )}
