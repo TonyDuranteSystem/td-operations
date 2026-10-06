@@ -6,6 +6,7 @@ import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import { findUnresolvedPlaceholders } from "@/lib/inbox/ai-email"
+import { resolveReplyBody, type ResolvedReplyBody } from "@/lib/inbox/rich-text-sanitize"
 import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging"
 import { createClient } from "@/lib/supabase/server"
 import { isStaffUser } from "@/lib/auth"
@@ -83,7 +84,24 @@ export async function POST(req: NextRequest) {
     // A WhatsApp attachment/voice send may have no caption at all (the server fills a placeholder like
     // "[Voice note]") — every other reply kind (text, and every other channel) still requires real text.
     const isCaptionlessAttachment = channel === "whatsapp" && !!attachmentPath
-    if (!conversationId || (!message && !isCaptionlessAttachment)) {
+
+    // A FORMATTED email reply (dev job bbc70ff8, step 2) arrives as `messageHtml` + `style`. The server sanitizes it
+    // against an allow-list and derives the text FROM that sanitized result — the client's own `message` is ignored
+    // for a formatted send, so the plain and HTML halves can never disagree, and the empty/[blank] checks below look
+    // at what will actually be sent. Chat channels never see any of this (they read `message` as before).
+    const looksLikeGmail = channel === "gmail" || (typeof conversationId === "string" && conversationId.startsWith("gmail:"))
+    let resolvedBody: ResolvedReplyBody | null = null
+    if (looksLikeGmail) {
+      const r = resolveReplyBody({
+        message,
+        messageHtml: (body as { messageHtml?: unknown }).messageHtml,
+        style: (body as { style?: unknown }).style,
+      })
+      if ('error' in r) return NextResponse.json({ error: r.error }, { status: 400 })
+      resolvedBody = r
+    }
+    const effectiveMessage = resolvedBody ? resolvedBody.text : message
+    if (!conversationId || (!effectiveMessage && !isCaptionlessAttachment)) {
       return NextResponse.json(
         { error: "conversationId and message are required" },
         { status: 400 }
@@ -119,7 +137,7 @@ export async function POST(req: NextRequest) {
       // draft mode writes these on purpose when it lacks a fact. The composer asks the sender to confirm and
       // then re-sends with allowPlaceholders:true; any other caller gets a plain 400. Only the typed message is
       // checked (the quoted thread and signature are appended server-side, below).
-      const placeholders = findUnresolvedPlaceholders(message)
+      const placeholders = findUnresolvedPlaceholders(effectiveMessage)
       if (placeholders.length > 0 && (body as { allowPlaceholders?: unknown }).allowPlaceholders !== true) {
         return NextResponse.json(
           {
@@ -235,7 +253,9 @@ export async function POST(req: NextRequest) {
         subject: replySubject,
         inReplyTo: messageId,
         references,
-        message,
+        message: effectiveMessage,
+        richHtml: resolvedBody?.rich?.html,
+        richStyle: resolvedBody?.rich?.style,
         lastBody,
         lastDate,
         lastFrom: quotedFrom,

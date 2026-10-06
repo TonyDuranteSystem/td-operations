@@ -1,5 +1,6 @@
 import { encodeAddressHeader } from "@/lib/gmail"
 import { escapeHtml, splitQuotedText } from "@/lib/inbox/email-quote"
+import { DEFAULT_RICH_STYLE, richBodyOpenTag, type RichStyle } from "@/lib/inbox/rich-text"
 
 export interface ReplyMimeAttachment {
   /** Already sanitized/RFC 2047-encoded by the staging loader — safe in headers. */
@@ -41,6 +42,16 @@ export interface BuildReplyMimeInput {
   references: string
   /** The reply text the staff member typed (plain text) */
   message: string
+  /**
+   * A FORMATTED reply (dev job bbc70ff8, step 2): html that has ALREADY been through the server allow-list and had
+   * the message-level spacing applied (lib/inbox/rich-text-sanitize.ts resolveReplyBody). It replaces
+   * escapeHtml(message) in the HTML part ONLY — the text/plain part is still `message`, which the caller derived
+   * FROM this same sanitized html, so the two halves say the same thing. Never pass client html here unsanitized.
+   * Omitted = today's behaviour, byte for byte.
+   */
+  richHtml?: string
+  /** The message-level font/size/line-height for `richHtml` (defaults to the standard look). */
+  richStyle?: RichStyle
   /** Plain-text body of the last message (already capped), '' to skip quoting */
   lastBody: string
   /** Raw Date header of the last message ('' when unknown) */
@@ -162,7 +173,11 @@ export function buildReplyMime(input: BuildReplyMimeInput): string {
   const signatureHtml = input.signature?.html ?? ""
   const signatureText = input.signature ? `\r\n\r\n${input.signature.text}` : ""
 
-  const messageHtml = escapeHtml(message).replace(/\r?\n/g, "<br />")
+  const messageHtml =
+    input.richHtml !== undefined
+      ? // The signature and quote below keep their own look; only the message carries the chosen font/size.
+        `${richBodyOpenTag(input.richStyle ?? DEFAULT_RICH_STYLE)}${input.richHtml}</div>`
+      : escapeHtml(message).replace(/\r?\n/g, "<br />")
   const htmlBody =
     `<div dir="ltr" style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">` +
     messageHtml +
