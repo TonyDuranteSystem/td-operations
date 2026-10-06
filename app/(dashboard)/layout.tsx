@@ -2,6 +2,7 @@ import { SandboxBanner } from '@/components/sandbox-banner'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import { Sidebar } from '@/components/dashboard/sidebar'
 import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
@@ -18,7 +19,15 @@ import StickyNotesLayer from '@/components/dashboard/sticky-notes-layer'
 import CaptureLayer from '@/components/captures/capture-layer'
 import MyCapturesOverlay from '@/components/captures/my-captures-overlay'
 import FloatingChat from '@/components/team-chat/floating-chat'
-import { isFloatingChatEnabled } from '@/lib/settings'
+import { isFloatingChatEnabled, isFloatingWindowsEnabled } from '@/lib/settings'
+import { isFramedNavigation } from '@/lib/embed/embedded-request'
+import {
+  EmbeddedProvider,
+  ChromeOnly,
+  ShellFrame,
+  ShellMain,
+} from '@/components/dashboard/embedded-shell'
+import { WindowManager, WindowsAvailableProvider } from '@/components/windows/window-manager'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -131,11 +140,25 @@ export default async function DashboardLayout({
   // account may switch its own two-factor requirement off.
   const owner = isProtectedAdminEmail(user.email)
   const dashboardUser = isDashboardUser(user)
-  const badgeCounts = await getBadgeCounts(supabase, user.id)
+  // Window mode (dev job f3f3e237, steps 4-5): a page loaded INSIDE A FRAME (a floating window) renders
+  // bare when the admin switch `floating_windows_enabled` is on (Dev Tools → Maintenance; default OFF,
+  // fails closed). Decided from the browser's FIRST-load label and frozen client-side in
+  // <EmbeddedProvider>; the login check above always runs. The switch is read on EVERY load now — the
+  // main page needs it to decide whether to offer windows — and is started together with the badge
+  // counts (the two slowest independent lookups), so it adds no serial round trip. Inside a window the
+  // chrome's data is never shown, so its queries are skipped.
+  const framed = isFramedNavigation(headers().get('sec-fetch-dest'))
+  const windowsEnabledPromise = isFloatingWindowsEnabled()
+  const badgeCountsPromise = framed ? null : getBadgeCounts(supabase, user.id)
+  const windowsEnabled = await windowsEnabledPromise
+  const embedded = framed && windowsEnabled
+  const badgeCounts = embedded
+    ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
+    : await (badgeCountsPromise ?? getBadgeCounts(supabase, user.id))
 
   // Check if AI agent is enabled for this user
   let showAiAgent = dashboardUser
-  if (!admin) {
+  if (!admin && !embedded) {
     const { data: aiSetting } = await supabaseAdmin
       .from('app_settings')
       .select('value')
@@ -146,46 +169,55 @@ export default async function DashboardLayout({
 
   // Kill switch for the floating chat window (Dev Tools → Maintenance).
   // Defaults on and fails open — see isFloatingChatEnabled.
-  const floatingChatEnabled = await isFloatingChatEnabled()
+  const floatingChatEnabled = embedded ? false : await isFloatingChatEnabled()
 
   const isSandbox = process.env.SANDBOX_MODE === '1'
 
   return (
     <Providers>
-      <SandboxBanner />
-      <SwRegister />
-      <RealtimeNotifications />
-      <ClearAllToasts />
+      {/* Window mode (see EmbeddedProvider): every piece of chrome is still rendered in
+          its place so the tree keeps the SAME shape, but renders nothing inside a window.
+          UiEventListener stays (it keeps a window's data fresh); the main scrolling area
+          stays (many pages size themselves against it). */}
+      <EmbeddedProvider initial={embedded}>
+      <WindowsAvailableProvider available={windowsEnabled && !embedded}>
+      <ChromeOnly><SandboxBanner /></ChromeOnly>
+      <ChromeOnly><SwRegister /></ChromeOnly>
+      <ChromeOnly><RealtimeNotifications /></ChromeOnly>
+      <ChromeOnly><ClearAllToasts /></ChromeOnly>
       <UiEventListener />
-      <DashboardPullToRefresh />
-      <div data-sandbox={isSandbox ? 'true' : undefined} className={isSandbox ? 'flex h-[calc(100vh-2.5rem)] mt-10' : 'flex h-screen'}>
-        <Sidebar
-          user={user}
-          isAdmin={admin}
-          isOwner={owner}
-          badgeCounts={badgeCounts}
-        />
+      <ChromeOnly><DashboardPullToRefresh /></ChromeOnly>
+      <ShellFrame sandbox={isSandbox}>
+        <ChromeOnly>
+          <Sidebar
+            user={user}
+            isAdmin={admin}
+            isOwner={owner}
+            badgeCounts={badgeCounts}
+          />
+        </ChromeOnly>
         {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:
             padding keeps h-full pages sized to the CONTENT box, so internal
             scroll panes end exactly at the viewport bottom. A spacer div made
-            every h-full page overflow the viewport by 56px on mobile. */}
-        <main className="flex-1 overflow-y-auto overscroll-y-contain bg-zinc-50 pt-14 lg:pt-0">
-          <DashboardHeader />
+            every h-full page overflow the viewport by 56px on mobile.
+            (The padding itself now lives in ShellMain, unchanged in the normal CRM.) */}
+        <ShellMain>
+          <ChromeOnly><DashboardHeader /></ChromeOnly>
           {children}
-        </main>
-        <CommandPalette />
-        <AiAgentPanel enabled={showAiAgent} />
-        <StickyNotesLayer />
+        </ShellMain>
+        <ChromeOnly><CommandPalette /></ChromeOnly>
+        <ChromeOnly><AiAgentPanel enabled={showAiAgent} /></ChromeOnly>
+        <ChromeOnly><StickyNotesLayer /></ChromeOnly>
         {/* Mounted OUTSIDE <main>, same reason as StickyNotesLayer/FloatingChat:
             it must survive navigating to a different page while a capture is
             in progress (Antonio, 2026-09-04). Its own trigger button lives in
             the top bar (DashboardHeader / Sidebar), not here — this only
             renders when CaptureProvider's isOpen is true. */}
-        <CaptureLayer />
+        <ChromeOnly><CaptureLayer /></ChromeOnly>
         {/* "My captures" as a popup, not a page navigation (Antonio,
             2026-09-04) — its own on/off switch on CaptureProvider, independent
             of the capture-creation flow above. */}
-        <MyCapturesOverlay />
+        <ChromeOnly><MyCapturesOverlay /></ChromeOnly>
         {/* Mounted AFTER the notes layer so the chat wins a same-corner overlap
             (it also sits one z-step above), and OUTSIDE <main> so it never
             fights pull-to-refresh. It carries its own crash guard: the
@@ -197,8 +229,15 @@ export default async function DashboardLayout({
             than inside the component, so "off" means it never mounts at all —
             no fetches, no realtime subscription, no listeners. Defaults ON and
             fails OPEN, so a settings hiccup cannot silently remove it. */}
-        {floatingChatEnabled && <FloatingChat />}
-      </div>
+        {floatingChatEnabled && <ChromeOnly><FloatingChat /></ChromeOnly>}
+        {/* Floating windows (dev job f3f3e237 step 5): mounted ONCE here, outside <main>, so a page
+            change never touches them; ChromeOnly so a window can never spawn windows of its own;
+            only when the admin switch is on (the kill switch — `enabled` false renders nothing at all, and once on it
+            stays on for the life of the page so one failed settings read cannot tear every window down). */}
+        <ChromeOnly><WindowManager userId={user.id} sandbox={isSandbox} enabled={windowsEnabled} /></ChromeOnly>
+      </ShellFrame>
+      </WindowsAvailableProvider>
+      </EmbeddedProvider>
     </Providers>
   )
 }

@@ -27,6 +27,7 @@ export type AppSettingKey =
   | "td_communication_landing" // object — TD Communication landing page content (Phase 9). Shape: TdCommLandingState { draft, published: LandingContent, published_at/by, updated_at/by }. Two snapshots (draft/published); Publish promotes draft→published. Read/written via lib/td-communication/landing.ts; edited in the CRM TD Communication → Landing Page tab AND /collab.
   | "floating_chat_enabled" // boolean — when true (DEFAULT), the green floating chat window mounts on every CRM dashboard page. The kill switch the council asked for: the window lives in the always-on shell, so a bad render there has nowhere to fail safely. Set false to unmount it entirely (the Team Chat page is unaffected). Toggled in Dev Tools → Maintenance; consumed in app/(dashboard)/layout.tsx.
     | "support_person_user_id" // string (auth user UUID) — the staff member whose DM receives "Send to Support" shares from Inbox + Portal Chats. Stores the ACTUAL user id (no name-resolution at runtime — brittle). Seeded to Luca. Read via getSupportPersonUserId(); consumed in app/api/team/share. If unset, the share endpoint returns a "no support person configured" error rather than guessing.
+  | "floating_windows_enabled" // boolean — when TRUE, a dashboard page loaded INSIDE A FRAME (a floating window) renders as a bare page: no left menu, alerts, chat or notes (dev job f3f3e237). DEFAULT FALSE and fails CLOSED: window mode is off everywhere until an admin switches it on (Dev Tools → Maintenance). See isFloatingWindowsEnabled.
   | "worker_model" // string (a model id from WORKER_MODEL_OPTIONS in lib/ai-agent/worker-models.ts) — the model the WORKER runs on, shared by EVERY worker surface (Portal Chats tab, Inbox panel, dashboard sidebar, team chat). Antonio 2026-07-18: one setting, changeable from the gear on any worker panel, so the same question can't get different answers per screen. Read via resolveWorkerModelAsync() (stored → env WORKER_MODEL → built-in default), validated against the curated list so a typo'd/retired id can't take the worker down everywhere at once. Written by app/api/ai-agent/model (admin-only).
 
 export async function getAppSetting<T = unknown>(
@@ -86,6 +87,24 @@ export async function isFloatingChatEnabled(): Promise<boolean> {
   }
 }
 
+
+/** Whether window mode (a dashboard page inside a floating window renders as a bare page) is on.
+ *
+ *  Default FALSE, and FAILS CLOSED on purpose — the opposite of the chat switch above. The chat
+ *  switch removes something every page already shows, so a read error must not remove it. This one
+ *  turns on a NEW behaviour in the shared layout; if the settings read throws, the safe answer is
+ *  the old behaviour (a full page) everywhere. Only a stored `true` enables it.
+ *
+ *  Read on every dashboard load by the layout (step 5: the main page needs it to decide whether to
+ *  mount the window manager); one small settings lookup, and it fails closed. */
+export async function isFloatingWindowsEnabled(): Promise<boolean> {
+  try {
+    const v = await getAppSetting<boolean>("floating_windows_enabled", false)
+    return v === true
+  } catch {
+    return false
+  }
+}
 
 /** The staff user id whose DM receives "Send to Support" shares. Returns the
  *  stored UUID, or null when unconfigured (the share endpoint then surfaces a

@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
+import { updateLeadColumnGuarded, hasExpectedValue, isGuardedFailure, type LeadDb } from "@/lib/leads/guarded-update"
 
 const ALLOWED_STATUSES = [
   "New",
@@ -31,7 +32,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { lead_id, status } = await request.json()
+    const body = await request.json()
+    const { lead_id, status } = body
 
     if (!lead_id || !status) {
       return NextResponse.json({ error: "Missing lead_id or status" }, { status: 400 })
@@ -56,10 +58,27 @@ export async function POST(request: Request) {
 
     const previousStatus = lead.status
 
-    await supabaseAdmin
-      .from("leads")
-      .update({ status, updated_at: new Date().toISOString() })
-      .eq("id", lead_id)
+    // Guarded write: this used to ignore the update's result entirely (a failed or lost write
+    // still answered ok). `expected_status` is the status the caller saw; a mismatch returns 409.
+    const guarded = await updateLeadColumnGuarded(supabaseAdmin as unknown as LeadDb, {
+      leadId: lead_id,
+      column: "status",
+      newValue: status,
+      expected: body.expected_status,
+      hasExpected: hasExpectedValue(body, "expected_status"),
+    })
+    if (isGuardedFailure(guarded)) {
+      if (guarded.reason === "conflict") {
+        return NextResponse.json(
+          { error: guarded.message, conflict: true, current_value: guarded.currentValue },
+          { status: 409 }
+        )
+      }
+      if (guarded.reason === "not_found") {
+        return NextResponse.json({ error: guarded.message }, { status: 404 })
+      }
+      return NextResponse.json({ error: guarded.message }, { status: 500 })
+    }
 
     logAction({
       actor: "crm-admin",

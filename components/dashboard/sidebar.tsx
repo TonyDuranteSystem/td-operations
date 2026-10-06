@@ -3,6 +3,11 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { browserStore, clearAllWindows } from '@/lib/windows/windows-storage'
+import { isWindowOpenClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { canOpenWindowNow, requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
+import { WindowsLauncher } from '@/components/dashboard/windows-launcher'
 import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
@@ -71,6 +76,7 @@ import { CaptureButton } from '@/components/captures/capture-button'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { NavItemMenu } from '@/components/dashboard/nav-item-menu'
 
 interface NavItem {
   id: string
@@ -176,13 +182,26 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
     transition,
   }
 
+  // ⋯ placement (dev job f3f3e237 step 1, QA fix 2026-10-05): on a screen with a mouse the
+  // button OVERLAYS the right end of the row on hover (and the count badges there step
+  // aside), so it never costs the name any width — a reserved slot made "Portal Chats"
+  // and "TD Communication" shorten to "Portal ..." even with nothing hovered. Touch screens
+  // have no hover, so there the button keeps its own slot. The Team Chat dot is itself
+  // clickable and sits at that same edge, so a row with the dot keeps the slot everywhere.
+  const windowsAvailable = useWindowsAvailable()
+  const overlay = !item.dotBadge
+  // visibility (not opacity): the red badge pulses, and an animation overrides opacity.
+  const badgeStepAside = overlay
+    ? '[@media(hover:hover)]:group-hover:invisible [@media(hover:hover)]:group-focus-within:invisible [@media(hover:hover)]:group-has-[[data-state=open]]:invisible'
+    : ''
+
   return (
     <div
       ref={setNodeRef}
       style={style}
       draggable={false}
       className={cn(
-        'flex items-center rounded-md transition-colors select-none',
+        'group relative flex items-center rounded-md transition-colors select-none',
         isDragging && 'opacity-50 z-50 bg-sidebar-accent shadow-lg'
       )}
     >
@@ -202,10 +221,18 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
       )}
       <Link
         href={item.href}
-        onClick={onMobileClose}
+        onClick={e => {
+          // Option/Alt-click opens the page as a floating window (step 6) — only when windows are on;
+          // Cmd/Ctrl-click and Shift-click stay the browser's own (new tab / new window).
+          if (canOpenWindowNow(windowsAvailable) && isWindowOpenClick(e) && isWindowableUrl(item.href)) {
+            e.preventDefault()
+            requestOpenWindow(item.href, item.name)
+          }
+          onMobileClose()
+        }}
         title={item.tooltip}
         className={cn(
-          'flex-1 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+          'flex-1 min-w-0 flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
           editMode && 'pl-1',
           isActive
             ? 'bg-sidebar-accent text-sidebar-accent-foreground'
@@ -213,15 +240,15 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         )}
       >
         <item.icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{item.name}</span>
+        <span className="flex-1 min-w-0 truncate">{item.name}</span>
         {item.badge != null && item.badge > 0 && (
-          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse">
+          <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse', badgeStepAside)}>
             {item.badge > 999 ? '999+' : item.badge}
           </span>
         )}
         {item.purpleBadge != null && item.purpleBadge > 0 && (
           <span
-            className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-500 text-white min-w-[20px] text-center"
+            className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-500 text-white min-w-[20px] text-center', badgeStepAside)}
             title="What's New — unhandled client actions"
           >
             {item.purpleBadge > 999 ? '999+' : item.purpleBadge}
@@ -229,6 +256,10 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
         )}
       </Link>
       {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} />}
+      {/* ⋯ menu (dev job f3f3e237 step 1): a SIBLING of the Link, placed last so it
+          never sits on top of the count badges or the Team Chat dot; hidden in
+          reorder mode where the drag grip owns the left edge. */}
+      {!editMode && <NavItemMenu href={item.href} name={item.name} onNavigate={onMobileClose} overlay={overlay} />}
     </div>
   )
 }
@@ -597,6 +628,8 @@ export function Sidebar({
 
   const handleLogout = async () => {
     const supabase = createClient()
+    // Floating windows are remembered per person on this computer — forget them at sign-out.
+    clearAllWindows(browserStore())
     await supabase.auth.signOut()
     router.push('/login')
     router.refresh()
@@ -710,6 +743,7 @@ export function Sidebar({
             <span className="flex-1 text-left">AI Agent</span>
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 font-medium">NEW</span>
           </button>
+          {!editMode && <WindowsLauncher items={orderedNav} />}
           {!editMode && (
             <button
               onClick={() => setEditMode(true)}

@@ -11,6 +11,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
 import { syncLeadEmailToOfferArtifacts } from "@/lib/offers/sync-offer-email"
+import { updateLeadColumnGuarded, hasExpectedValue, isGuardedFailure, type LeadDb } from "@/lib/leads/guarded-update"
 
 const ALLOWED_FIELDS = [
   "full_name",
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { lead_id, field, value } = await request.json()
+    const body = await request.json()
+    const { lead_id, field, value } = body
 
     if (!lead_id || !field) {
       return NextResponse.json({ error: "Missing lead_id or field" }, { status: 400 })
@@ -80,13 +82,27 @@ export async function POST(request: Request) {
     // Normalize value: empty string → null for nullable fields
     const normalizedValue = (value === "" || value === undefined) ? null : value.trim()
 
-    const { error } = await supabaseAdmin
-      .from("leads")
-      .update({ [field]: normalizedValue, updated_at: new Date().toISOString() })
-      .eq("id", lead_id)
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    // Guarded write (dev job f3f3e237 / d26b8a7e): refuse, instead of silently overwriting,
+    // when THIS field changed since the caller opened it. `expected_value` is what the caller
+    // was editing from; older callers that omit it still get the read-then-write race check.
+    const guarded = await updateLeadColumnGuarded(supabaseAdmin as unknown as LeadDb, {
+      leadId: lead_id,
+      column: field,
+      newValue: normalizedValue,
+      expected: body.expected_value,
+      hasExpected: hasExpectedValue(body, "expected_value"),
+    })
+    if (isGuardedFailure(guarded)) {
+      if (guarded.reason === "conflict") {
+        return NextResponse.json(
+          { error: guarded.message, conflict: true, current_value: guarded.currentValue },
+          { status: 409 }
+        )
+      }
+      if (guarded.reason === "not_found") {
+        return NextResponse.json({ error: guarded.message }, { status: 404 })
+      }
+      return NextResponse.json({ error: guarded.message }, { status: 500 })
     }
 
     // When the email is corrected, carry the fix across to the offer + portal
