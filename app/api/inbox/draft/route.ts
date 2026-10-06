@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { gmailPost } from "@/lib/gmail"
 import { buildReplyMime } from "@/lib/inbox/reply-mime"
+import { resolveReplyBody } from "@/lib/inbox/rich-text-sanitize"
 import { resolveReplyTarget, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
 import {
@@ -38,16 +39,26 @@ export async function POST(req: NextRequest) {
     const denied = await requireStaffRoute()
     if (denied) return denied
 
-    const { conversationId, message, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw } =
-      (await req.json()) as {
-        conversationId?: string
-        message?: string
-        mailbox?: string
-        signature_variant?: string
-        messageId?: string
-        mode?: "reply" | "replyAll"
-        to?: string[]
-      }
+    const parsed = (await req.json()) as {
+      conversationId?: string
+      message?: string
+      /** A FORMATTED draft (dev job bbc70ff8, step 2): sanitized here exactly like a real send. */
+      messageHtml?: unknown
+      style?: unknown
+      mailbox?: string
+      signature_variant?: string
+      messageId?: string
+      mode?: "reply" | "replyAll"
+      to?: string[]
+    }
+    const { conversationId, mailbox, signature_variant, messageId: targetMessageId, mode, to: toOverrideRaw } = parsed
+
+    // Same body resolution as /api/inbox/reply: the server sanitizes the formatted body, derives the text FROM it,
+    // and the emptiness check below looks at what will actually be saved (a draft of nothing but a script tag or
+    // empty paragraphs is refused, a formatted draft is no longer saved as plain text).
+    const resolvedBody = resolveReplyBody({ message: parsed.message, messageHtml: parsed.messageHtml, style: parsed.style })
+    if ('error' in resolvedBody) return NextResponse.json({ error: resolvedBody.error }, { status: 400 })
+    const message = resolvedBody.text
 
     if (!conversationId?.startsWith("gmail:") || !message?.trim()) {
       return NextResponse.json(
@@ -123,6 +134,8 @@ export async function POST(req: NextRequest) {
       inReplyTo: messageId,
       references,
       message,
+      richHtml: resolvedBody.rich?.html,
+      richStyle: resolvedBody.rich?.style,
       lastBody: "",
       lastDate: "",
       lastFrom: quotedFrom,
