@@ -45,7 +45,8 @@ export const RICH_PARAS = { none: 0, small: 6, medium: 12, large: 18 } as const
 export const RICH_COLORS = ['#1f2937', '#2563eb', '#b91c1c', '#15803d'] as const
 export type RichColor = (typeof RICH_COLORS)[number]
 
-export const RICH_ALIGNMENTS = ['left', 'center'] as const
+// Left is the default, so it is never stored: "Align left" simply removes the centring.
+export const RICH_ALIGNMENTS = ['center'] as const
 
 export interface RichStyle {
   font: RichFont
@@ -95,6 +96,10 @@ function isInternalHost(host: string): boolean {
     /^127\./.test(h) ||
     /^10\./.test(h) ||
     /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    h === '[::1]' ||
+    h === '::1' ||
     h === '0.0.0.0'
   )
 }
@@ -135,7 +140,8 @@ export function checkLinkHref(raw: unknown): LinkCheck {
  */
 export function normalizeLinkInput(raw: string): string {
   const v = raw.trim()
-  if (!v || /^[a-z][a-z0-9+.-]*:/i.test(v)) return v
+  // "example.com:8080/x" is a host and port, not a scheme.
+  if (!v || /^[a-z][a-z0-9+.-]*:(?!\d+(?:[/?#]|$))/i.test(v)) return v
   if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(v)) return `mailto:${v}`
   return `https://${v}`
 }
@@ -215,7 +221,9 @@ export function tokenizeRichHtml(html: string): RichToken[] {
   return tokens
 }
 
-const INVISIBLE = /[​‌‍⁠﻿]/g
+// Zero-width space, word joiner and byte-order mark only. The zero-width JOINER / NON-JOINER are real characters
+// (emoji sequences such as a person + laptop, and several scripts) and must survive.
+const INVISIBLE = /[\u200B\u2060\uFEFF]/g
 
 // ─── Plain text <-> HTML ─────────────────────────────────────────────────────────────────────────────────
 
@@ -279,8 +287,13 @@ export function richHtmlToText(html: string): string {
           line += ' '
         }
       } else if (t.tag === 'br') {
-        if (liPrefix !== null) line += ' '
-        else {
+        if (liPrefix !== null) {
+          // A line break inside a list item: the item continues on the next line, lined up under its text.
+          if (hasText) out.push(liPrefix + line)
+          liPrefix = ' '.repeat(liPrefix.length)
+          line = ''
+          hasText = false
+        } else {
           out.push(line)
           line = ''
           hasText = false
@@ -356,6 +369,40 @@ export function shouldSendRich(html: string, style: RichStyle): boolean {
 // ─── Restyle sanitized html for sending (server applies the style from enums) ────────────────────────────
 
 /**
+ * Remove list items that hold no words (a trailing Enter in a list leaves one), and any list left with no items — the
+ * same rule richHtmlToText applies to the plain half, so the two halves of the email cannot disagree about a bullet.
+ */
+function dropEmptyListItems(tokens: RichToken[]): RichToken[] {
+  const drop = new Set<number>()
+  const items: Array<{ start: number; text: boolean }> = []
+  const lists: Array<{ start: number; kept: boolean }> = []
+  tokens.forEach((t, i) => {
+    if (t.kind === 'text') {
+      if (t.text.replace(INVISIBLE, '').trim()) items.forEach((it) => { it.text = true })
+    } else if (t.kind === 'open' && (t.tag === 'ul' || t.tag === 'ol')) lists.push({ start: i, kept: false })
+    else if (t.kind === 'open' && t.tag === 'li') items.push({ start: i, text: false })
+    else if (t.kind === 'close' && t.tag === 'li') {
+      const it = items.pop()
+      if (!it) return
+      if (it.text) {
+        const l = lists[lists.length - 1]
+        if (l) l.kept = true
+      } else for (let j = it.start; j <= i; j++) drop.add(j)
+    } else if (t.kind === 'close' && (t.tag === 'ul' || t.tag === 'ol')) {
+      const l = lists.pop()
+      if (l && !l.kept) for (let j = l.start; j <= i; j++) drop.add(j)
+    }
+  })
+  return drop.size ? tokens.filter((_, i) => !drop.has(i)) : tokens
+}
+
+/** Leading and trailing empty paragraphs are not part of the message (a stray Enter at either end). */
+export function trimEmptyParagraphs(html: string): string {
+  const empty = '<p(?:\\s[^>]*)?>\\s*(?:<br\\s*/?>\\s*)?</p>'
+  return html.replace(new RegExp(`^(?:\\s*${empty})+`, 'i'), '').replace(new RegExp(`(?:${empty}\\s*)+$`, 'i'), '')
+}
+
+/**
  * Re-emit already-SANITIZED html with the message-level spacing applied as ONE style attribute per element:
  *  - <p>: margin-bottom from `para`, line-height from `line`, merged with a centre/left alignment already there
  *  - a <p> directly inside an <li> gets margin 0 (it would otherwise double-space every list item)
@@ -369,14 +416,14 @@ export function restyleRichHtml(html: string, style: RichStyle): string {
   const out: string[] = []
   const stack: string[] = []
   let pHasContent = false
-  const tokens = tokenizeRichHtml(html)
+  const tokens = dropEmptyListItems(tokenizeRichHtml(html))
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]
     if (t.kind === 'text') {
       const s = t.text.replace(INVISIBLE, '')
       if (s) {
         out.push(s)
-        if (stack[stack.length - 1] === 'p' && s.trim()) pHasContent = true
+        if (stack.includes('p') && s.trim()) pHasContent = true
       }
       continue
     }
@@ -392,8 +439,11 @@ export function restyleRichHtml(html: string, style: RichStyle): string {
         stack.push('p')
         pHasContent = false
       } else if (t.tag === 'br') {
-        out.push('<br />')
-        if (stack[stack.length - 1] === 'p') pHasContent = true
+        // A <br> that ends a paragraph which already has words collapses to nothing in mail apps; the editor (and the
+        // plain half) show it as a blank line, so it is written twice.
+        const endsParagraph = stack[stack.length - 1] === 'p' && pHasContent && tokens[i + 1]?.kind === 'close' && (tokens[i + 1] as { tag: string }).tag === 'p'
+        out.push(endsParagraph ? '<br /><br />' : '<br />')
+        if (stack.includes('p')) pHasContent = true
       } else if (t.tag === 'ul' || t.tag === 'ol') {
         out.push(`<${t.tag} style="margin:0 0 ${para}px 0;padding-left:24px">`)
         stack.push(t.tag)

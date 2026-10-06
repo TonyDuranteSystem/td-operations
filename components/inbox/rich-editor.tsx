@@ -19,6 +19,7 @@ import TextAlign from '@tiptap/extension-text-align'
 import { ListItem } from '@tiptap/extension-list'
 import { Placeholder } from '@tiptap/extensions'
 import { Mark } from '@tiptap/core'
+import { Fragment, Slice } from '@tiptap/pm/model'
 import {
   AlignCenter,
   AlignLeft,
@@ -152,12 +153,12 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
           autolink: false,
           linkOnPaste: false,
           // The same rule the server applies: absolute http/https/mailto, never an internal address.
-          isAllowedUri: (url: string) => checkLinkHref(normalizeLinkInput(url)).ok,
+          isAllowedUri: (url: string) => checkLinkHref(url).ok,
         },
       }),
       SingleEnterListItem,
       TextColor,
-      TextAlign.configure({ types: ['paragraph'], alignments: ['left', 'center'], defaultAlignment: null }),
+      TextAlign.configure({ types: ['paragraph'], alignments: ['center'], defaultAlignment: null }),
       Placeholder.configure({ placeholder: () => cb.current.placeholder }),
     ],
     content: initialHtml || '',
@@ -177,6 +178,16 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
           return true
         }
         return false
+      },
+      // Plain text keeps its blank lines. ProseMirror's own plain-text paste treats a run of newlines as ONE paragraph
+      // break, so a pasted draft ("Dear Maria,", blank line, "Thanks…") would lose every blank line (the old textarea
+      // kept them). One line becomes one paragraph, an empty line an empty paragraph — exactly what typing Enter makes.
+      clipboardTextParser: (text, _context, _plain, view) => {
+        const lines = text.replace(/\r\n?/g, '\n').split('\n')
+        if (lines.length < 2) return null as unknown as Slice
+        const { paragraph } = view.state.schema.nodes
+        const nodes = lines.map((l) => paragraph.create(null, l ? view.state.schema.text(l) : undefined))
+        return new Slice(Fragment.from(nodes), 1, 1)
       },
       handlePaste: (_view, event) => {
         const data = event.clipboardData
@@ -413,7 +424,7 @@ function Toolbar({
         {btn('Numbered list', editor.isActive('orderedList'), () => editor.chain().focus().toggleOrderedList().run(), <ListOrdered className="h-4 w-4" />)}
         {full && (
           <>
-            {btn('Align left', !editor.isActive({ textAlign: 'center' }), () => editor.chain().focus().setTextAlign('left').run(), <AlignLeft className="h-4 w-4" />)}
+            {btn('Align left', !editor.isActive({ textAlign: 'center' }), () => editor.chain().focus().unsetTextAlign().run(), <AlignLeft className="h-4 w-4" />)}
             {btn('Centre', editor.isActive({ textAlign: 'center' }), () => editor.chain().focus().setTextAlign('center').run(), <AlignCenter className="h-4 w-4" />)}
           </>
         )}

@@ -8,6 +8,7 @@ import {
   checkLinkHref,
   normalizeLinkInput,
   normalizeRichColor,
+  trimEmptyParagraphs,
   decodeEntities,
   textToHtml,
   richHtmlToText,
@@ -300,5 +301,61 @@ describe("paragraph gap — what is typed is what arrives", () => {
     expect(parseRichStyle({ para: "normal" }).para).toBe(DEFAULT_RICH_STYLE.para)
     expect(parseRichStyle({ para: "wide" }).para).toBe(DEFAULT_RICH_STYLE.para)
     expect(parseRichStyle({ para: "close" }).para).toBe(DEFAULT_RICH_STYLE.para)
+  })
+})
+
+describe("review fixes — the two halves of an email must agree", () => {
+  const S = { ...DEFAULT_RICH_STYLE }
+  it("a paragraph whose words are all inside bold / italic / underline / a colour gets NO stray <br />", () => {
+    for (const html of ["<p><strong>Important</strong></p>", "<p><em>x</em></p>", "<p><u>x</u></p>", '<p><span style="color:#2563eb">x</span></p>', "<p><strong><em>x</em></strong></p>"]) {
+      expect(restyleRichHtml(html, S)).not.toContain("<br />")
+    }
+  })
+  it("a really empty paragraph still gets its <br /> (a blank line must survive in mail apps)", () => {
+    expect(restyleRichHtml("<p></p>", S)).toContain("<br />")
+    expect(restyleRichHtml("<p><strong></strong></p>", S)).toContain("<br />")
+  })
+  it("an empty list item (trailing Enter in a list) is dropped from the HTML exactly as it is from the text", () => {
+    const html = "<ul><li><p>one</p></li><li><p></p></li></ul>"
+    const out = restyleRichHtml(html, S)
+    expect(out.match(/<li/g)).toHaveLength(1)
+    expect(richHtmlToText(html)).toBe("• one")
+  })
+  it("a list left with nothing in it disappears; a nested list with words keeps its parent item", () => {
+    expect(restyleRichHtml("<p>a</p><ul><li><p></p></li></ul>", S)).not.toContain("<ul")
+    const nested = "<ul><li><p></p><ul><li><p>deep</p></li></ul></li></ul>"
+    expect(restyleRichHtml(nested, S)).toContain("deep")
+  })
+  it("a hard break that ends a paragraph with words is written twice (so it shows), but a lone <br> in an empty paragraph once", () => {
+    expect(restyleRichHtml("<p>a<br /></p>", S)).toContain("a<br /><br /></p>")
+    expect(restyleRichHtml("<p>a<br />b</p>", S)).toContain("a<br />b</p>")
+    expect((restyleRichHtml("<p><br /></p>", S).match(/<br \/>/g) ?? []).length).toBe(1)
+  })
+  it("a hard break inside a list item keeps the item on its own continuation line in the text half", () => {
+    expect(richHtmlToText("<ul><li><p>one<br />two</p></li><li><p>three</p></li></ul>")).toBe("• one\n  two\n• three")
+  })
+  it("the zero-width joiner survives (emoji sequences); zero-width space and BOM do not", () => {
+    expect(richHtmlToText("<p>👨‍💻</p>")).toBe("👨‍💻")
+    expect(richHtmlToText("<p>a​b﻿c</p>")).toBe("abc")
+    expect(restyleRichHtml("<p>👨‍💻</p>", S)).toContain("👨‍💻")
+  })
+  it("trimEmptyParagraphs removes stray Enters at both ends only", () => {
+    expect(trimEmptyParagraphs("<p></p><p>a</p><p></p><p>b</p><p></p><p><br /></p>")).toBe("<p>a</p><p></p><p>b</p>")
+    expect(trimEmptyParagraphs('<p style="text-align:center"></p><p>a</p>')).toBe("<p>a</p>")
+    expect(trimEmptyParagraphs("<p>a</p>")).toBe("<p>a</p>")
+  })
+  it("a host and port is not mistaken for a scheme", () => {
+    expect(normalizeLinkInput("example.com:8080/x")).toBe("https://example.com:8080/x")
+    expect(checkLinkHref(normalizeLinkInput("example.com:8080/x")).ok).toBe(true)
+    expect(checkLinkHref(normalizeLinkInput("javascript:alert(1)")).ok).toBe(false)
+  })
+  it("more private / internal hosts are refused as links", () => {
+    for (const h of ["http://[::1]/x", "http://172.16.0.1/x", "http://172.31.255.1/x", "http://169.254.169.254/x", "http://10.0.0.5/x"]) {
+      expect(checkLinkHref(h).ok).toBe(false)
+    }
+    expect(checkLinkHref("http://172.32.0.1/x").ok).toBe(true)
+  })
+  it("a left-aligned paragraph is not 'formatted' (left is the default)", () => {
+    expect(hasRichFormatting("<p>a</p>")).toBe(false)
   })
 })

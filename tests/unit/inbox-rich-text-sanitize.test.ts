@@ -83,6 +83,15 @@ describe("sanitizeRichHtml — what the editor emits passes through", () => {
   it("a colour carried alongside other declarations keeps ONLY the colour", () => {
     expect(sanitizeRichHtml('<p><span style="position:fixed; color: rgb(37, 99, 235); top:0">x</span></p>')).toBe('<p><span style="color:#2563eb">x</span></p>')
   })
+  it("left alignment is the default, so a left-aligned paragraph loses its style (and stays on the plain path)", () => {
+    expect(sanitizeRichHtml('<p style="text-align:left">x</p>')).toBe("<p>x</p>")
+    expect(resolveReplyBody({ messageHtml: '<p style="text-align: left">hello</p>', style: {} })).toEqual({ ok: true, text: "hello", rich: null })
+  })
+  it("leading and trailing empty paragraphs are not part of the message — in the text or the HTML", () => {
+    const r = resolveReplyBody({ messageHtml: "<p></p><p><strong>Hi</strong></p><p></p><p></p>", style: {} })
+    expect(r).toMatchObject({ ok: true, text: "Hi" })
+    if (r.ok) expect(r.rich?.html).not.toMatch(/<br \/>/)
+  })
   it("maps b and i to strong and em", () => {
     expect(sanitizeRichHtml("<p><b>x</b><i>y</i></p>")).toBe("<p><strong>x</strong><em>y</em></p>")
   })

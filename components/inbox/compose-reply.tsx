@@ -22,6 +22,15 @@ import {
   textToHtml,
   type RichStyle,
 } from '@/lib/inbox/rich-text'
+import {
+  clearReplyDraft,
+  describeStoredDraft,
+  getDraftStorage,
+  loadReplyDraft,
+  replyDraftKey,
+  saveReplyDraft,
+  type StoredReplyDraft,
+} from '@/lib/inbox/reply-draft-store'
 import { RichEditor, type RichEditorHandle } from './rich-editor'
 import { readReplyPopupDefault, writeReplyPopupDefault } from '@/lib/inbox/reply-popup-pref'
 import { ReplyPopup } from './reply-popup'
@@ -97,6 +106,17 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   const htmlRef = useRef('')
   const [richStyle, setRichStyle] = useState<RichStyle>({ ...DEFAULT_RICH_STYLE })
   const editorRef = useRef<RichEditorHandle>(null)
+  // The draft safety net (lib/inbox/reply-draft-store.ts): an unsent reply is copied into THIS TAB's sessionStorage and
+  // offered back after a refresh / crash / accidental Back. `restorable` is only what the bar renders; the ref is what
+  // the logic reads (it must be right inside timers and page-leave handlers).
+  const [restorable, setRestorable] = useState<StoredReplyDraft | null>(null)
+  const restorableRef = useRef<StoredReplyDraft | null>(null)
+  // Recipients to put back once the restored target has re-seeded the To chips.
+  const pendingRestoreTo = useRef<string[] | null>(null)
+  // When a send began (cleared if it fails): a draft still carrying it after a reload "may have been sent".
+  const sendStartedRef = useRef<number | null>(null)
+  // Set after a successful send / saved draft until the next real edit, so a late flush can never bring a sent reply back.
+  const suppressPersistRef = useRef(false)
   // The target THIS compose session actually uses — resolved once when
   // composing starts (never re-derived from a background poll afterward),
   // and re-resolved immediately on a genuine explicit pick (a real click is
@@ -257,6 +277,13 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     messageRef.current = text
     setBodyHtml(html)
     setMessage(text)
+    // Writing anything means the person has moved on from the offer to restore the earlier reply.
+    if (user && restorableRef.current && text.trim()) {
+      restorableRef.current = null
+      setRestorable(null)
+    }
+    // New words after a send / saved draft are a new reply: the safety net is live again.
+    if (text.trim()) suppressPersistRef.current = false
     if (user) {
       if (placeholderWarn) setPlaceholderWarn(null)
       if (aiNotice) setAiNotice(null)
@@ -315,7 +342,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setSeededFor(null)
       return
     }
-    setToAddresses(parseAddressesFromDisplay(frozenTarget.sender))
+    setToAddresses(pendingRestoreTo.current ?? parseAddressesFromDisplay(frozenTarget.sender))
+    pendingRestoreTo.current = null
     setSeededFor(frozenTarget)
   }, [frozenTarget])
 
@@ -343,9 +371,87 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     }
   }, [isEmail])
 
+  // ── Draft safety net ───────────────────────────────────────────────────────────────────────────────────────
+  const draftKey = isEmail ? replyDraftKey(mailbox, conversation.id) : null
+  const forgetStoredDraft = () => {
+    if (draftKey) clearReplyDraft(getDraftStorage(), draftKey)
+    restorableRef.current = null
+    setRestorable(null)
+  }
+  // Always the LATEST render's values (reassigned every render), so a timer or a page-leave handler never saves stale state.
+  const persistRef = useRef<() => void>(() => {})
+  persistRef.current = () => {
+    if (!draftKey || suppressPersistRef.current) return
+    // While an earlier reply is on offer nothing is saved over it: an empty box (or an AI answer that is then undone)
+    // must never erase a draft the person has not discarded. It ends when they type, restore, or discard.
+    if (restorableRef.current) return
+    saveReplyDraft(
+      getDraftStorage(),
+      draftKey,
+      {
+        html: editorRef.current?.getHTML() ?? htmlRef.current,
+        style: richStyle,
+        target: frozenTarget ? { messageId: frozenTarget.messageId, sender: frozenTarget.sender, mode: frozenTarget.mode } : null,
+        to: toAddresses,
+        quoteMode,
+        signatureVariant,
+        attachmentCount: attachments.files.length,
+        ...(sendStartedRef.current !== null && { sendStartedAt: sendStartedRef.current }),
+      },
+      Date.now(),
+    )
+  }
+  // Offer a stored reply for THIS conversation once, when the composer opens (the key= remount makes it per thread).
+  useEffect(() => {
+    if (!draftKey) return
+    const found = loadReplyDraft(getDraftStorage(), draftKey, Date.now())
+    restorableRef.current = found
+    setRestorable(found)
+  }, [draftKey])
+  // Save shortly after any change (not on every keystroke) ...
+  useEffect(() => {
+    if (!draftKey) return
+    const id = window.setTimeout(() => persistRef.current(), 600)
+    return () => window.clearTimeout(id)
+  }, [draftKey, bodyHtml, richStyle, frozenTarget, toAddresses, quoteMode, signatureVariant, attachments.files.length])
+  // ... and immediately when the page is being left or hidden, or this composer goes away (thread switch).
+  useEffect(() => {
+    if (!draftKey) return
+    const flush = () => persistRef.current()
+    const onHidden = () => { if (document.visibilityState === 'hidden') flush() }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onHidden)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onHidden)
+      flush()
+    }
+  }, [draftKey])
+  const handleRestore = () => {
+    const d = restorable
+    if (!d) return
+    restorableRef.current = null
+    setRestorable(null)
+    suppressPersistRef.current = false
+    setRichStyle(d.style)
+    setQuoteMode(d.quoteMode)
+    if (d.signatureVariant) setSignatureVariant(d.signatureVariant as SignatureVariant)
+    if (d.target && !explicitReplyTarget) {
+      pendingRestoreTo.current = d.to.length > 0 ? d.to : null
+      setFrozenTarget(d.target)
+    }
+    setComposing(true)
+    // The HTML only ever enters through the editor, whose schema drops anything it does not allow.
+    editorRef.current?.applyHtml(d.html)
+    focusBoxQuietly()
+  }
+
   const sendMutation = useMutation({
     mutationFn: async ({ text, html, rich, allowPlaceholders }: { text: string; html: string; rich: boolean; allowPlaceholders?: boolean }) => {
       const staged = attachments.uploaded()
+      // A dropped connection or a gateway timeout does not tell us whether Gmail already sent it. Those are marked, so
+      // the box warns and the saved copy keeps its "may have been sent" stamp — the route has no duplicate guard.
+      const MAYBE_SENT = ' It may still have gone out — check Sent before you send it again.'
       const res = await fetch('/api/inbox/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -362,15 +468,26 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
           ...(staged.length > 0 && { attachments: staged }),
           ...(allowPlaceholders && { allowPlaceholders: true }),
         }),
+      }).catch(() => {
+        throw Object.assign(new Error(`The connection dropped before we heard back.${MAYBE_SENT}`), { maybeSent: true })
       })
       if (!res.ok) {
         // R099: surface the server's own words; a gateway timeout returns HTML, not JSON.
         const err = await res.json().catch(() => ({}))
+        if (res.status >= 500) throw Object.assign(new Error(`${err.error || `Sending did not finish (error ${res.status}).`}${MAYBE_SENT}`), { maybeSent: true })
         throw new Error(err.error || `Send failed (error ${res.status}) — please try again.`)
       }
       return res.json()
     },
+    onError: (err) => {
+      // A clear refusal means it did not go out: an ordinary unsent reply again. An unclear failure keeps the stamp.
+      if (!(err as { maybeSent?: boolean }).maybeSent) sendStartedRef.current = null
+      persistRef.current()
+    },
     onSuccess: () => {
+      sendStartedRef.current = null
+      suppressPersistRef.current = true
+      forgetStoredDraft()
       resetAiAfterSend()
       resetBody()
       attachments.clear()
@@ -425,6 +542,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       return res.json()
     },
     onSuccess: () => {
+      suppressPersistRef.current = true
+      forgetStoredDraft()
       resetAiAfterSend()
       resetBody()
       setComposing(false)
@@ -475,6 +594,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     }
     setPlaceholderWarn(null)
     sendingRef.current = true
+    sendStartedRef.current = Date.now()
+    persistRef.current()
     sendMutation.mutate({ text, html, rich, allowPlaceholders }, { onSettled: () => { sendingRef.current = false } })
   }
 
@@ -606,6 +727,21 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // ONE definition so the two can never drift: same state, same handlers, same guards.
   const emailBody = (popup: boolean) => (
     <>
+      {/* An unsent reply from earlier in this tab (page refreshed, crashed, or Back pressed): offered, never put in
+          silently. It disappears the moment anything is written, or when it is restored or discarded. */}
+      {isEmail && restorable && !message.trim() && (
+        <div role="status" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-900">
+          <span className="min-w-0 flex-1">{describeStoredDraft(restorable, Date.now())}</span>
+          <span className="flex items-center gap-3 font-medium">
+            <button type="button" onClick={handleRestore} className="underline decoration-dotted hover:text-blue-950">
+              Restore it
+            </button>
+            <button type="button" onClick={forgetStoredDraft} className="underline decoration-dotted hover:text-blue-950">
+              Discard
+            </button>
+          </span>
+        </div>
+      )}
       {/* WHO this reply goes to — ONE line instead of the stack of rows that used to eat the writing space
           (Antonio, 2026-10-06: "the space to write is super small and it's a mess"). The recipient is still
           always visible (and amber when there is none — the one state that must never hide), Reply All still

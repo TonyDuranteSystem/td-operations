@@ -9,7 +9,7 @@
  * client — builds the plain-text half from the sanitized result and applies the spacing from four enums.
  *
  * What survives: p, br, strong, em, u, ul, ol, li, a (absolute http/https/mailto, never an internal host),
- * span carrying ONLY one of four hex colours, p carrying ONLY text-align left|center. Everything else — scripts,
+ * span carrying ONLY one of four hex colours, p carrying ONLY text-align center. Everything else — scripts,
  * images, tables, classes, ids, event handlers, other styles, other schemes — is removed (the words stay).
  */
 
@@ -22,6 +22,7 @@ import {
   restyleRichHtml,
   richHtmlToText,
   shouldSendRich,
+  trimEmptyParagraphs,
   type RichStyle,
 } from '@/lib/inbox/rich-text'
 
@@ -57,7 +58,7 @@ export function sanitizeRichHtml(raw: string): string {
     },
     allowedStyles: {
       span: { color: [COLOR_RE] },
-      p: { 'text-align': [/^(left|center)$/i] },
+      p: { 'text-align': [/^center$/i] },
     },
     allowedSchemes: ['http', 'https', 'mailto'],
     allowProtocolRelative: false,
@@ -110,7 +111,7 @@ export function resolveReplyBody(input: {
   if (input.messageHtml.length > RICH_HTML_MAX_CHARS) {
     return { ok: false, error: 'This message is too long to send with formatting. Shorten it or remove the formatting.' }
   }
-  const clean = sanitizeRichHtml(input.messageHtml)
+  const clean = trimEmptyParagraphs(sanitizeRichHtml(input.messageHtml))
   const text = richHtmlToText(clean)
   if (!text.trim()) return { ok: false, error: 'The message is empty.' }
   const style = parseRichStyle(input.style)
