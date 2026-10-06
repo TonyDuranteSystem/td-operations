@@ -20,7 +20,7 @@ export function UpdateBanner({ swPath, scope, locale }: { swPath: string; scope?
   const isItalian = locale === 'it'
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-sm shadow-lg animate-in slide-in-from-top-2 duration-300">
+    <div data-update-banner="" className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-sm shadow-lg animate-in slide-in-from-top-2 duration-300">
       <RefreshCw className="h-4 w-4 shrink-0" />
       <span className="font-medium">
         {isItalian ? 'Una nuova versione è disponibile' : 'A new version is available'}

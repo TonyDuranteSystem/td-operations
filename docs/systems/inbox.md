@@ -1,5 +1,7 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
+_2026-10-06 note: the WhatsApp tour now takes the shared one-tour-at-a-time lock (`lib/ui/tour-lock.ts`, also used by the floating-windows tour) and no longer auto-starts inside a floating window's frame or a pop-out browser window — see `dashboard-navigation.md` "The windows tour"._
+
 _Last verified against code: 2026-10-01 — Claude (**A REAL, IN-APP GUIDED TOUR OF THE WHATSAPP
 INBOX, FOR TRAINING LUCA.** Antonio first asked for a written guide; after seeing it, clarified he
 meant something IN the real app: "a blinking dot or hand that explain what can do in a specic

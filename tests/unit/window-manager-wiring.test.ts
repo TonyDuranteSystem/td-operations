@@ -79,8 +79,10 @@ describe("window manager", () => {
   })
 
   it("is never built inside a frame or a pop-out window, and once on it stays on", () => {
-    expect(manager).toContain("window.self !== window.top")
-    expect(manager).toContain("window.name.startsWith(POPOUT_NAME)")
+    expect(manager).toContain("setAllowed(!isFramedOrPopout())")
+    const ctx = read("lib/windows/windows-context.ts")
+    expect(ctx).toContain("window.self !== window.top")
+    expect(ctx).toContain("window.name.startsWith(POPOUT_NAME)")
     expect(manager).toContain("const [on] = useState(enabled)")
   })
 

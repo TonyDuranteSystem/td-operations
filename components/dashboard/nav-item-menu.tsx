@@ -103,7 +103,7 @@ export function NavItemMenu({
               }}
             >
               <AppWindow className="h-3.5 w-3.5 text-zinc-500" />
-              Open in floating window
+              Open in a window
             </DropdownMenu.Item>
           )}
           <DropdownMenu.Item asChild onSelect={() => onNavigate?.()}>
