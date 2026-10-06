@@ -13,6 +13,7 @@ import {
   DEFAULT_REPLY_SIGNATURE_VARIANT,
   type SignatureVariant,
 } from '@/lib/email/signature'
+import { findUnresolvedPlaceholders, type AiMode } from '@/lib/inbox/ai-email'
 import type { InboxConversation } from '@/lib/types'
 import type { ReplyTarget } from './message-thread'
 
@@ -103,18 +104,49 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // matters more while a thread is open above (Antonio's QA, 2026-08-05).
   const [previewOpen, setPreviewOpen] = useState(false)
   const [draftNotice, setDraftNotice] = useState<string | null>(null)
-  const [aiLoading, setAiLoading] = useState(false)
+  // The ONE AI button has two honest modes (dev job bbc70ff8, 2026-10-06): box has text → 'polish' (fix his own
+  // wording, nothing added); box is empty → 'draft' (first draft from the thread). Which one is running, or null.
+  const [aiRunning, setAiRunning] = useState<AiMode | null>(null)
+  const aiLoading = aiRunning !== null
+  // After the AI replaces text we keep the ORIGINAL until he presses Keep or sends — a programmatic setMessage
+  // wipes the browser's own Cmd+Z, so this bar is the only way back.
+  const [aiUndo, setAiUndo] = useState<{ original: string; output: string; mode: AiMode } | null>(null)
+  // Plain-language AI errors/info shown right under the box instead of failing silently (R099).
+  const [aiNotice, setAiNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
+  // Set when Send finds an unresolved [placeholder]; cleared on the next edit.
+  const [placeholderWarn, setPlaceholderWarn] = useState<string[] | null>(null)
   const [attachNotice, setAttachNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   // Synchronous double-click guard — isPending is render-state and two clicks
   // can land inside one render window, firing two POSTs (the route has no
   // idempotency key).
   const sendingRef = useRef(false)
+  // Same guard for the AI button (render-state `aiRunning` can be stale inside one click window), plus a request
+  // counter: a send (or a newer click) bumps it so a late AI answer is dropped instead of landing in a composer
+  // that has already moved on.
+  const aiBusyRef = useRef(false)
+  const aiRequestRef = useRef(0)
+  // Latest typed text, readable inside async callbacks without a stale closure.
+  const messageRef = useRef('')
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const isEmail = conversation.channel === 'gmail'
+  messageRef.current = message
+  // What the AI button will do right now — shown on the button itself (a hover label does not exist on a phone).
+  const aiMode: AiMode = message.trim() ? 'polish' : 'draft'
+
+  // Everything AI-related that must not outlive a send or a saved draft: an in-flight answer is invalidated, and
+  // Undo is dropped so it can never re-insert text that has already left.
+  const resetAiAfterSend = () => {
+    aiRequestRef.current++
+    aiBusyRef.current = false
+    setAiRunning(null)
+    setAiUndo(null)
+    setAiNotice(null)
+    setPlaceholderWarn(null)
+  }
 
   // An explicit pick (a real click on a message card) always wins
   // immediately, mid-draft or not — typed text is preserved, but the
@@ -177,7 +209,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   }, [isEmail])
 
   const sendMutation = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async ({ text, allowPlaceholders }: { text: string; allowPlaceholders?: boolean }) => {
       const staged = attachments.uploaded()
       const res = await fetch('/api/inbox/reply', {
         method: 'POST',
@@ -192,15 +224,18 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
           ...(isEmail && toAddresses.length > 0 && { to: toAddresses }),
           ...(isEmail && { quoteMode }),
           ...(staged.length > 0 && { attachments: staged }),
+          ...(allowPlaceholders && { allowPlaceholders: true }),
         }),
       })
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || 'Send failed')
+        // R099: surface the server's own words; a gateway timeout returns HTML, not JSON.
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `Send failed (error ${res.status}) — please try again.`)
       }
       return res.json()
     },
     onSuccess: () => {
+      resetAiAfterSend()
       setMessage('')
       attachments.clear()
       setAttachNotice(null)
@@ -252,6 +287,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       return res.json()
     },
     onSuccess: () => {
+      resetAiAfterSend()
       setMessage('')
       setComposing(false)
       setPreviewOpen(false)
@@ -269,9 +305,11 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     },
   })
 
-  const handleSend = () => {
+  const handleSend = (allowPlaceholders = false) => {
     const text = message.trim()
-    if (!text || sendMutation.isPending || sendingRef.current) return
+    // Never send while the AI is still working: its late answer used to land AFTER the send and refill the box
+    // with text nobody had read (Cmd+Enter reaches this function too, so the guard lives here).
+    if (!text || sendMutation.isPending || sendingRef.current || aiBusyRef.current) return
     // The empty-To warning is already visible above the textarea — no
     // recipient means nothing safe to send.
     if (isEmail && frozenTarget && toAddresses.length === 0) return
@@ -287,8 +325,18 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       return
     }
     setAttachNotice(null)
+    // An unresolved [blank] (the AI writes these on purpose when it lacks a fact) must be filled in, or sent
+    // knowingly. The server enforces the same rule; this just asks first instead of failing after the click.
+    if (isEmail && !allowPlaceholders) {
+      const blanks = findUnresolvedPlaceholders(text)
+      if (blanks.length > 0) {
+        setPlaceholderWarn(blanks)
+        return
+      }
+    }
+    setPlaceholderWarn(null)
     sendingRef.current = true
-    sendMutation.mutate(text, { onSettled: () => { sendingRef.current = false } })
+    sendMutation.mutate({ text, allowPlaceholders }, { onSettled: () => { sendingRef.current = false } })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -310,15 +358,23 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     }
   }
 
-  const handleAiSuggest = async () => {
-    if (aiLoading) return
-    setAiLoading(true)
-    // AI Suggest is reachable before the textarea's ever been focused (it
-    // sits next to Attach, not gated behind `composing`), so the usual
-    // freeze-on-composing effect may not have run yet. Resolve synchronously
-    // here too — same target the reply will actually be sent to.
+  // The one AI button. Box has text → POLISH exactly that text (the server sends nothing else to the model).
+  // Box is empty → DRAFT a first reply from the thread. See app/api/inbox/ai-suggest/route.ts.
+  const handleAi = async () => {
+    if (aiBusyRef.current || sendingRef.current || sendMutation.isPending) return
+    const mode: AiMode = messageRef.current.trim() ? 'polish' : 'draft'
+    const sentDraft = messageRef.current
+    aiBusyRef.current = true
+    const reqId = ++aiRequestRef.current
+    setAiRunning(mode)
+    setAiNotice(null)
+    setPlaceholderWarn(null)
+
+    // A draft needs the message it answers. The button is reachable before the textarea's ever been focused (it
+    // sits next to Attach, not gated behind `composing`), so the usual freeze-on-composing effect may not have
+    // run yet. Resolve synchronously here too — same target the reply will actually be sent to.
     let target = frozenTarget
-    if (!target) {
+    if (mode === 'draft' && !target) {
       target = explicitReplyTarget ?? (() => {
         const def = getDefaultReplyTarget?.()
         return def ? { ...def, mode: 'reply' as const } : null
@@ -326,27 +382,74 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       if (target) setFrozenTarget(target)
       setComposing(true)
     }
+
     try {
-      // Extract threadId from conversation.id (format: "gmail:threadId")
-      const threadId = conversation.id.replace('gmail:', '')
       const res = await fetch('/api/inbox/ai-suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ threadId, ...(target && { messageId: target.messageId }) }),
+        body: JSON.stringify({
+          mode,
+          mailbox: mailbox === 'antonio' ? 'antonio' : 'support',
+          ...(mode === 'polish'
+            ? { draft: sentDraft }
+            : {
+                // Extract threadId from conversation.id (format: "gmail:threadId")
+                threadId: conversation.id.replace('gmail:', ''),
+                ...(target && { messageId: target.messageId }),
+              }),
+        }),
       })
+      // R099: show the server's own words; a gateway timeout returns HTML, not JSON.
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || 'AI suggestion failed')
+        throw new Error(data.error || `The AI request failed (error ${res.status}) — please try again.`)
       }
-      const data = await res.json()
-      if (data.suggestion) {
-        setMessage(data.suggestion)
+      // A send (or a newer click) moved on while we waited — this answer is stale, drop it.
+      if (aiRequestRef.current !== reqId) return
+
+      const result: string = typeof data.result === 'string' ? data.result : ''
+      if (!result.trim()) throw new Error('The AI returned nothing — your text was left as it is.')
+
+      // Typing during the wait must never be overwritten: apply only if the box is exactly what we sent.
+      const unchanged = mode === 'polish'
+        ? messageRef.current === sentDraft
+        : messageRef.current.trim() === ''
+      if (!unchanged) {
+        setAiNotice({ tone: 'info', text: 'You changed the text while the AI was working, so its version was not applied.' })
+        return
       }
-    } catch {
-      // Silently fail — AI is optional
+      if (mode === 'polish' && data.changed === false) {
+        setAiNotice({ tone: 'info', text: 'Your text already reads well — the AI changed nothing.' })
+        return
+      }
+      setMessage(result)
+      // Keep the FIRST original until Keep/send, even across several AI runs.
+      setAiUndo((prev) => ({ original: prev?.original ?? sentDraft, output: result, mode }))
+      textareaRef.current?.focus()
+    } catch (err) {
+      if (aiRequestRef.current === reqId) {
+        setAiNotice({
+          tone: 'error',
+          text: err instanceof Error && err.message ? err.message : 'The AI could not do that right now — please try again.',
+        })
+      }
     } finally {
-      setAiLoading(false)
+      // Only the request that is still current may release the lock (a send already reset it).
+      if (aiRequestRef.current === reqId) {
+        aiBusyRef.current = false
+        setAiRunning(null)
+      }
     }
+  }
+
+  // Put his original text back. If he has edited the AI's version since, replacing it loses those edits — ask first.
+  const handleUndoAi = () => {
+    if (!aiUndo) return
+    if (message !== aiUndo.output && message.trim() && !window.confirm('Replace what is in the box now with your original text?')) return
+    setMessage(aiUndo.original)
+    setAiUndo(null)
+    setAiNotice(null)
+    textareaRef.current?.focus()
   }
 
   const composer = (
@@ -460,6 +563,58 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       {draftNotice && (
         <p className="text-xs text-emerald-700 mb-2">{draftNotice}</p>
       )}
+      {/* After the AI replaces text, the original stays one click away until Keep or send. */}
+      {isEmail && aiUndo && (
+        <div role="status" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-violet-50 px-3 py-2 text-xs text-violet-800">
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+            {aiUndo.mode === 'draft'
+              ? 'AI wrote a first draft from this thread. Read every line and check each fact before sending.'
+              : 'AI polished your text. Your original is one click away.'}
+          </span>
+          <span className="flex items-center gap-3 font-medium">
+            <button type="button" onClick={handleUndoAi} className="underline decoration-dotted hover:text-violet-950">
+              {message === aiUndo.output ? 'Undo' : 'Restore my original'}
+            </button>
+            <button type="button" onClick={() => setAiUndo(null)} className="underline decoration-dotted hover:text-violet-950">
+              Keep
+            </button>
+          </span>
+        </div>
+      )}
+      {isEmail && aiNotice && (
+        <p
+          role={aiNotice.tone === 'error' ? 'alert' : 'status'}
+          className={cn('text-xs mb-2', aiNotice.tone === 'error' ? 'text-red-600' : 'text-zinc-500')}
+        >
+          {aiNotice.text}
+        </p>
+      )}
+      {/* Send found a [blank to fill in] — fix it, or send knowingly. */}
+      {isEmail && placeholderWarn && (
+        <div role="alert" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span>
+            This email still has a blank to fill in: <strong>{placeholderWarn.slice(0, 4).join(', ')}</strong>
+            {placeholderWarn.length > 4 ? '…' : ''}. Replace it before sending.
+          </span>
+          <span className="flex items-center gap-3 font-medium">
+            <button
+              type="button"
+              onClick={() => { setPlaceholderWarn(null); textareaRef.current?.focus() }}
+              className="underline decoration-dotted hover:text-amber-950"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSend(true)}
+              className="underline decoration-dotted hover:text-amber-950"
+            >
+              Send anyway
+            </button>
+          </span>
+        </div>
+      )}
       {isEmail && (
         <div className="mb-2 empty:hidden">
           <EmailAttachmentChips attachments={attachments} />
@@ -504,7 +659,11 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         <textarea
           ref={textareaRef}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            setMessage(e.target.value)
+            if (placeholderWarn) setPlaceholderWarn(null)
+            if (aiNotice) setAiNotice(null)
+          }}
           onFocus={() => {
             setComposing(true)
             setDraftNotice(null)
@@ -549,19 +708,36 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                 <Paperclip className="h-4 w-4" />
               </button>
             </FastTooltip>
-            <FastTooltip label="AI Draft Reply">
+            {/* ONE button, named for what it will do RIGHT NOW (a hover label does not exist on a phone):
+                text in the box → it polishes that text; empty box → it drafts from the thread. */}
+            <FastTooltip
+              label={
+                aiMode === 'polish'
+                  ? 'Polish what you typed — fixes wording only and never adds facts or prices'
+                  : 'Write a first draft from this email thread — check every fact before sending'
+              }
+            >
               <button
-                onClick={handleAiSuggest}
-                disabled={aiLoading}
-                className="shrink-0 p-2.5 rounded-xl bg-violet-100 text-violet-600 hover:bg-violet-200
-                  disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                aria-label="AI Draft Reply"
+                onClick={handleAi}
+                disabled={aiLoading || sendMutation.isPending}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-violet-100 text-violet-700
+                  text-xs font-medium hover:bg-violet-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                aria-label={aiMode === 'polish' ? 'AI Polish — improve my text' : 'AI Draft — write a first draft from the thread'}
               >
                 {aiLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Sparkles className="h-4 w-4" />
                 )}
+                {/* The mode word is always visible; the "AI " prefix drops on a phone so the writing box keeps its width. */}
+                <span>
+                  {aiRunning === 'polish' ? 'Polishing…' : aiRunning === 'draft' ? 'Drafting…' : (
+                    <>
+                      <span className="hidden sm:inline">AI </span>
+                      {aiMode === 'polish' ? 'Polish' : 'Draft'}
+                    </>
+                  )}
+                </span>
               </button>
             </FastTooltip>
           </>
@@ -583,6 +759,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
               disabled={
                 draftMutation.isPending ||
                 sendMutation.isPending ||
+                aiLoading ||
                 attachments.files.length > 0
               }
               aria-label={
@@ -600,10 +777,12 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         )}
 
         <button
-          onClick={handleSend}
+          onClick={() => handleSend()}
+          aria-label="Send reply"
           disabled={
             !message.trim() ||
             sendMutation.isPending ||
+            aiLoading ||
             attachments.files.some((f) => !f.path && !f.error) ||
             (isEmail && !!frozenTarget && toAddresses.length === 0)
           }

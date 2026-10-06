@@ -5,6 +5,7 @@ import { gmailPost, extractBody } from "@/lib/gmail"
 import { buildReplyMime, type ReplyMimeAttachment } from "@/lib/inbox/reply-mime"
 import { resolveReplyTarget, buildThreadQuotes, ReplyTargetError } from "@/lib/inbox/reply-target"
 import { checkMailboxAccess } from "@/lib/inbox/mailbox-access"
+import { findUnresolvedPlaceholders } from "@/lib/inbox/ai-email"
 import { resolveWhatsAppAttachmentUrl } from "@/lib/messaging/attachment-staging"
 import { createClient } from "@/lib/supabase/server"
 import { isStaffUser } from "@/lib/auth"
@@ -114,6 +115,22 @@ export async function POST(req: NextRequest) {
 
     // ─── Gmail reply ─────────────────────────────────
     if (isGmail) {
+      // An email with an unresolved fill-in-the-blank ("[price]", "{name}") must not leave by accident — the AI
+      // draft mode writes these on purpose when it lacks a fact. The composer asks the sender to confirm and
+      // then re-sends with allowPlaceholders:true; any other caller gets a plain 400. Only the typed message is
+      // checked (the quoted thread and signature are appended server-side, below).
+      const placeholders = findUnresolvedPlaceholders(message)
+      if (placeholders.length > 0 && (body as { allowPlaceholders?: unknown }).allowPlaceholders !== true) {
+        return NextResponse.json(
+          {
+            error: `This email still has a blank to fill in: ${placeholders.slice(0, 5).join(", ")}. Replace it before sending.`,
+            code: "unresolved_placeholders",
+            placeholders,
+          },
+          { status: 400 }
+        )
+      }
+
       const threadId = conversationId.replace("gmail:", "")
 
       // Load staged attachments BEFORE any Gmail call — a missing/oversized
