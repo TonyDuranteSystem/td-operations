@@ -14,6 +14,15 @@ import {
   type SignatureVariant,
 } from '@/lib/email/signature'
 import { findUnresolvedPlaceholders, type AiMode } from '@/lib/inbox/ai-email'
+import {
+  DEFAULT_RICH_STYLE,
+  hasInlineFormatting,
+  richHtmlToText,
+  shouldSendRich,
+  textToHtml,
+  type RichStyle,
+} from '@/lib/inbox/rich-text'
+import { RichEditor, type RichEditorHandle } from './rich-editor'
 import { readReplyPopupDefault, writeReplyPopupDefault } from '@/lib/inbox/reply-popup-pref'
 import { ReplyPopup } from './reply-popup'
 import type { InboxConversation } from '@/lib/types'
@@ -78,7 +87,16 @@ interface ComposeReplyProps {
 }
 
 export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDefaultReplyTarget, onTargetConsumed }: ComposeReplyProps) {
+  // The reply's PLAIN TEXT. For email it mirrors the editor (richHtmlToText of its HTML) so every guard — empty,
+  // [blank], what the AI polishes — reads exactly the words the server will derive from the same HTML; for chat
+  // channels it is the textarea's own value.
   const [message, setMessage] = useState('')
+  // Email only: the editor's HTML (state, so the Undo label re-renders; the ref is for synchronous reads) and the
+  // four message-level style choices (font, size, line, gap) the server applies to the whole email.
+  const [bodyHtml, setBodyHtml] = useState('')
+  const htmlRef = useRef('')
+  const [richStyle, setRichStyle] = useState<RichStyle>({ ...DEFAULT_RICH_STYLE })
+  const editorRef = useRef<RichEditorHandle>(null)
   // The target THIS compose session actually uses — resolved once when
   // composing starts (never re-derived from a background poll afterward),
   // and re-resolved immediately on a genuine explicit pick (a real click is
@@ -128,7 +146,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   const aiLoading = aiRunning !== null
   // After the AI replaces text we keep the ORIGINAL until he presses Keep or sends — a programmatic setMessage
   // wipes the browser's own Cmd+Z, so this bar is the only way back.
-  const [aiUndo, setAiUndo] = useState<{ original: string; output: string; mode: AiMode } | null>(null)
+  const [aiUndo, setAiUndo] = useState<{ originalHtml: string; outputHtml: string; mode: AiMode } | null>(null)
   // Plain-language AI errors/info shown right under the box instead of failing silently (R099).
   const [aiNotice, setAiNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
   // Set when Send finds an unresolved [placeholder]; cleared on the next edit.
@@ -222,23 +240,45 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   }
   // Put the cursor back in the box WITHOUT letting that focus count as "start a reply" (which, with the pop-up on by
   // default, would open it): used after an AI answer, Undo, or the blank warning's Edit.
+  const focusEditor = () => {
+    if (isEmail) editorRef.current?.focus()
+    else textareaRef.current?.focus()
+  }
   const focusBoxQuietly = () => {
     suppressAutoOpenRef.current = true
-    textareaRef.current?.focus()
+    focusEditor()
     window.setTimeout(() => { suppressAutoOpenRef.current = false }, 700)
   }
-  // Land the cursor at the end of the text when the pop-up opens, so writing carries on where it stopped.
-  useEffect(() => {
-    if (!expanded) return
-    const id = window.requestAnimationFrame(() => {
-      const t = textareaRef.current
-      if (!t) return
-      t.focus()
-      const n = t.value.length
-      t.setSelectionRange(n, n)
-    })
-    return () => window.cancelAnimationFrame(id)
-  }, [expanded])
+  // The editor reports every change here: keep the plain-text mirror and the HTML current. `user` is false when WE
+  // changed the box (AI answer, Undo, reset) — only a real edit clears the AI / blank notices.
+  const handleEditorChange = (html: string, user: boolean) => {
+    const text = richHtmlToText(html)
+    htmlRef.current = html
+    messageRef.current = text
+    setBodyHtml(html)
+    setMessage(text)
+    if (user) {
+      if (placeholderWarn) setPlaceholderWarn(null)
+      if (aiNotice) setAiNotice(null)
+    }
+  }
+  // Empty the box after a send / saved draft and give the next reply the default style.
+  const resetBody = () => {
+    setMessage('')
+    messageRef.current = ''
+    htmlRef.current = ''
+    setBodyHtml('')
+    setRichStyle({ ...DEFAULT_RICH_STYLE })
+    editorRef.current?.applyHtml('')
+  }
+  // What a send / draft will carry, read at the moment of the click (never from possibly-stale state). Email: the
+  // text is derived from the editor's HTML, and the formatted payload is used only when something is actually
+  // formatted or the style was changed — plain paragraphs go out on today's exact path.
+  const readBody = () => {
+    if (!isEmail) return { text: message.trim(), html: '', rich: false }
+    const html = editorRef.current?.getHTML() ?? htmlRef.current
+    return { text: richHtmlToText(html).trim(), html, rich: shouldSendRich(html, richStyle) }
+  }
 
   // An explicit pick (a real click on a message card) always wins
   // immediately, mid-draft or not — typed text is preserved, but the
@@ -249,8 +289,9 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     if (!explicitReplyTarget) return
     setFrozenTarget(explicitReplyTarget)
     setComposing(true)
-    textareaRef.current?.focus()
-  }, [explicitReplyTarget])
+    if (isEmail) editorRef.current?.focus()
+    else textareaRef.current?.focus()
+  }, [explicitReplyTarget, isEmail])
 
   // The untargeted default is resolved exactly ONCE per compose session, at
   // the moment real composing starts — not live-recomputed on every
@@ -303,7 +344,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   }, [isEmail])
 
   const sendMutation = useMutation({
-    mutationFn: async ({ text, allowPlaceholders }: { text: string; allowPlaceholders?: boolean }) => {
+    mutationFn: async ({ text, html, rich, allowPlaceholders }: { text: string; html: string; rich: boolean; allowPlaceholders?: boolean }) => {
       const staged = attachments.uploaded()
       const res = await fetch('/api/inbox/reply', {
         method: 'POST',
@@ -311,6 +352,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         body: JSON.stringify({
           conversationId: conversation.id,
           message: text,
+          ...(isEmail && rich && { messageHtml: html, style: richStyle }),
           channel: conversation.channel,
           mailbox,
           signature_variant: signatureVariant,
@@ -330,7 +372,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     },
     onSuccess: () => {
       resetAiAfterSend()
-      setMessage('')
+      resetBody()
       attachments.clear()
       setAttachNotice(null)
       // Back to reading mode: fold the signature controls away and drop any
@@ -362,13 +404,14 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // Save the typed reply as a REAL Gmail draft, threaded, signature baked in
   // (it may be finished in Gmail's own UI where our send path never runs).
   const draftMutation = useMutation({
-    mutationFn: async (text: string) => {
+    mutationFn: async ({ text, html, rich }: { text: string; html: string; rich: boolean }) => {
       const res = await fetch('/api/inbox/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: conversation.id,
           message: text,
+          ...(rich && { messageHtml: html, style: richStyle }),
           mailbox,
           signature_variant: signatureVariant,
           ...(frozenTarget && { messageId: frozenTarget.messageId, mode: frozenTarget.mode }),
@@ -383,7 +426,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     },
     onSuccess: () => {
       resetAiAfterSend()
-      setMessage('')
+      resetBody()
       setComposing(false)
       setPreviewOpen(false)
       setFrozenTarget(null)
@@ -402,7 +445,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   })
 
   const handleSend = (allowPlaceholders = false) => {
-    const text = message.trim()
+    const { text, html, rich } = readBody()
     // Never send while the AI is still working: its late answer used to land AFTER the send and refill the box
     // with text nobody had read (Cmd+Enter reaches this function too, so the guard lives here).
     if (!text || sendMutation.isPending || sendingRef.current || aiBusyRef.current) return
@@ -432,7 +475,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     }
     setPlaceholderWarn(null)
     sendingRef.current = true
-    sendMutation.mutate({ text, allowPlaceholders }, { onSettled: () => { sendingRef.current = false } })
+    sendMutation.mutate({ text, html, rich, allowPlaceholders }, { onSettled: () => { sendingRef.current = false } })
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -460,6 +503,16 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     if (aiBusyRef.current || sendingRef.current || sendMutation.isPending) return
     const mode: AiMode = messageRef.current.trim() ? 'polish' : 'draft'
     const sentDraft = messageRef.current
+    const sentHtml = editorRef.current?.getHTML() ?? htmlRef.current
+    // The AI works on plain words, so it cannot carry bold, links, lists, colours or centred lines through. Say so
+    // and leave the text exactly as it is — never silently flatten his formatting.
+    if (mode === 'polish' && hasInlineFormatting(sentHtml)) {
+      setAiNotice({
+        tone: 'info',
+        text: 'AI Polish cannot keep bold, links, lists, colours or centred lines yet. Remove them first, or polish the text before you format it.',
+      })
+      return
+    }
     aiBusyRef.current = true
     const reqId = ++aiRequestRef.current
     setAiRunning(mode)
@@ -508,7 +561,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
 
       // Typing during the wait must never be overwritten: apply only if the box is exactly what we sent.
       const unchanged = mode === 'polish'
-        ? messageRef.current === sentDraft
+        ? (editorRef.current?.getHTML() ?? htmlRef.current) === sentHtml
         : messageRef.current.trim() === ''
       if (!unchanged) {
         setAiNotice({ tone: 'info', text: 'You changed the text while the AI was working, so its version was not applied.' })
@@ -518,9 +571,9 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         setAiNotice({ tone: 'info', text: 'Your text already reads well — the AI changed nothing.' })
         return
       }
-      setMessage(result)
+      const outputHtml = editorRef.current?.applyHtml(textToHtml(result)) ?? textToHtml(result)
       // Keep the FIRST original until Keep/send, even across several AI runs.
-      setAiUndo((prev) => ({ original: prev?.original ?? sentDraft, output: result, mode }))
+      setAiUndo((prev) => ({ originalHtml: prev?.originalHtml ?? sentHtml, outputHtml, mode }))
       focusBoxQuietly()
     } catch (err) {
       if (aiRequestRef.current === reqId) {
@@ -541,8 +594,9 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // Put his original text back. If he has edited the AI's version since, replacing it loses those edits — ask first.
   const handleUndoAi = () => {
     if (!aiUndo) return
-    if (message !== aiUndo.output && message.trim() && !window.confirm('Replace what is in the box now with your original text?')) return
-    setMessage(aiUndo.original)
+    const nowHtml = editorRef.current?.getHTML() ?? htmlRef.current
+    if (nowHtml !== aiUndo.outputHtml && richHtmlToText(nowHtml).trim() && !window.confirm('Replace what is in the box now with your original text?')) return
+    editorRef.current?.applyHtml(aiUndo.originalHtml)
     setAiUndo(null)
     setAiNotice(null)
     focusBoxQuietly()
@@ -691,34 +745,33 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         </div>
       )}
 
-          {/* THE WRITING AREA — the point of the whole composer. Full width on its own line (it used to share a
-              row with five buttons and got pushed narrow), taller while writing, still user-resizable.
-              Compact until the reader starts replying so a long thread keeps its reading space. The class
-              `compose-reply-textarea` must stay on THIS element only (the Reply button finds it by class). */}
-          <textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => {
-              setMessage(e.target.value)
-              if (placeholderWarn) setPlaceholderWarn(null)
-              if (aiNotice) setAiNotice(null)
-            }}
+          {/* THE WRITING AREA — the point of the whole composer. Full width on its own line, taller while writing,
+              still user-resizable inline. Compact until the reader starts replying so a long thread keeps its
+              reading space. The class `compose-reply-textarea` (put on the editor's writing surface by
+              RichEditor) must stay on ONE element only (the Reply button finds it by class). The toolbar is the
+              slim set while composing inline, the full set in the pop-up. */}
+          <RichEditor
+            ref={editorRef}
+            initialHtml={htmlRef.current}
+            style={richStyle}
+            onStyleChange={setRichStyle}
+            toolbar={popup ? 'full' : composing ? 'slim' : null}
+            onChange={handleEditorChange}
             onFocus={() => {
               setComposing(true)
               setDraftNotice(null)
               // With "open replies in the pop-up by default" on, clicking into the inline box opens the pop-up.
               if (!popup && popupDefault && !suppressAutoOpenRef.current && !keepInlineRef.current) setExpanded(true)
             }}
-            onKeyDown={handleKeyDown}
-            onPaste={attachments.onPaste}
+            onSend={() => handleSend()}
+            onPasteFiles={(files) => void attachments.add(files)}
             placeholder="Write your reply…  (⌘+Enter sends · drop files to attach)"
-            rows={composing ? 6 : 3}
-            className={cn(
-              'compose-reply-textarea block w-full rounded-xl border border-zinc-300 px-4 py-2.5 text-sm',
-              'placeholder:text-zinc-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500',
-              popup
-                ? 'min-h-[200px] flex-1 resize-none'
-                : cn('max-h-[50vh] resize-y', composing ? 'min-h-[150px]' : 'min-h-[76px]')
+            fill={popup}
+            autoFocus={popup}
+            surfaceClassName={cn(
+              'block w-full overflow-y-auto rounded-xl border border-zinc-300 px-4 py-2.5',
+              'focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500',
+              popup ? 'min-h-[200px] flex-1' : cn('max-h-[50vh] resize-y', composing ? 'min-h-[150px]' : 'min-h-[76px]')
             )}
           />
 
@@ -743,7 +796,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                 </span>
                 <span className="flex items-center gap-3 font-medium">
                   <button type="button" onClick={handleUndoAi} className="underline decoration-dotted hover:text-violet-950">
-                    {message === aiUndo.output ? 'Undo' : 'Restore my original'}
+                    {bodyHtml === aiUndo.outputHtml ? 'Undo' : 'Restore my original'}
                   </button>
                   <button type="button" onClick={() => setAiUndo(null)} className="underline decoration-dotted hover:text-violet-950">
                     Keep
@@ -900,7 +953,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                   }
                 >
                   <button
-                    onClick={() => draftMutation.mutate(message)}
+                    onClick={() => draftMutation.mutate(readBody())}
                     disabled={
                       draftMutation.isPending ||
                       sendMutation.isPending ||

@@ -17,6 +17,7 @@ import sanitizeHtml from 'sanitize-html'
 import {
   RICH_COLORS,
   checkLinkHref,
+  normalizeRichColor,
   parseRichStyle,
   restyleRichHtml,
   richHtmlToText,
@@ -28,6 +29,22 @@ import {
 export const RICH_HTML_MAX_CHARS = 100_000
 
 const COLOR_RE = new RegExp(`^(${RICH_COLORS.join('|')})$`, 'i')
+
+/**
+ * The colour a span carries, normalised to one of the four allowed hex values — or null. A browser reports the same
+ * colour as `rgb(37, 99, 235)` when the editor serialises its HTML (a real browser-QA catch: the hex-only rule
+ * below silently stripped every colour), so both spellings are accepted HERE, once, and only the hex is emitted.
+ * Only a declaration named exactly `color` counts (`background-color` does not).
+ */
+function spanColor(style: string | undefined): string | null {
+  if (!style) return null
+  for (const decl of style.split(';')) {
+    const i = decl.indexOf(':')
+    if (i < 0) continue
+    if (decl.slice(0, i).trim().toLowerCase() === 'color') return normalizeRichColor(decl.slice(i + 1))
+  }
+  return null
+}
 
 /** Run the allow-list. Output is well-formed, entity-escaped HTML made only of the tags above. */
 export function sanitizeRichHtml(raw: string): string {
@@ -49,6 +66,10 @@ export function sanitizeRichHtml(raw: string): string {
     transformTags: {
       b: 'strong',
       i: 'em',
+      span: (_tagName, attribs) => {
+        const color = spanColor(attribs.style)
+        return { tagName: 'span', attribs: color ? { style: `color:${color}` } : {} }
+      },
       a: (_tagName, attribs) => {
         const check = checkLinkHref(attribs.href)
         // A link the rule refuses (internal address, odd scheme…) keeps its words and loses the link.

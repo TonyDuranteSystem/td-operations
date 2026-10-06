@@ -35,7 +35,7 @@ interface ReplyPopupProps {
 }
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])'
 
 /** Same breakpoint as the layout's `md:` classes: wide enough for two panes. */
 const TWO_PANES = '(min-width: 768px)'

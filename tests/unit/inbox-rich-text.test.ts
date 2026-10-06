@@ -6,6 +6,8 @@ import {
   parseRichStyle,
   isDefaultRichStyle,
   checkLinkHref,
+  normalizeLinkInput,
+  normalizeRichColor,
   decodeEntities,
   textToHtml,
   richHtmlToText,
@@ -19,8 +21,8 @@ import {
 describe("parseRichStyle", () => {
   it("accepts every valid value", () => {
     for (const font of RICH_FONTS) expect(parseRichStyle({ font }).font).toBe(font)
-    expect(parseRichStyle({ font: "Georgia", size: "huge", line: "double", para: "wide" })).toEqual({
-      font: "Georgia", size: "huge", line: "double", para: "wide",
+    expect(parseRichStyle({ font: "Georgia", size: "huge", line: "double", para: "large" })).toEqual({
+      font: "Georgia", size: "huge", line: "double", para: "large",
     })
   })
   it("falls back to the default PER FIELD for anything unknown (no CSS can be smuggled through a style field)", () => {
@@ -179,29 +181,29 @@ describe("hasRichFormatting / shouldSendRich", () => {
 describe("restyleRichHtml — the server applies the spacing", () => {
   const S = { ...DEFAULT_RICH_STYLE }
   it("puts ONE style attribute on a paragraph (margin + line-height)", () => {
-    expect(restyleRichHtml("<p>a</p>", S)).toBe('<p style="margin:0 0 10px 0;line-height:1.5">a</p>')
+    expect(restyleRichHtml("<p>a</p>", S)).toBe('<p style="margin:0 0 0px 0;line-height:1.5">a</p>')
   })
   it("merges a centre alignment into the SAME attribute (no duplicate style attribute that a browser would ignore)", () => {
     const out = restyleRichHtml('<p style="text-align:center">a</p>', S)
-    expect(out).toBe('<p style="text-align:center;margin:0 0 10px 0;line-height:1.5">a</p>')
+    expect(out).toBe('<p style="text-align:center;margin:0 0 0px 0;line-height:1.5">a</p>')
     expect((out.match(/style=/g) ?? []).length).toBe(1)
   })
   it("keeps left alignment implicit", () => {
     expect(restyleRichHtml('<p style="text-align:left">a</p>', S)).not.toContain("text-align")
   })
   it("uses the chosen spacing presets", () => {
-    const out = restyleRichHtml("<p>a</p>", { ...DEFAULT_RICH_STYLE, line: "double", para: "wide" })
+    const out = restyleRichHtml("<p>a</p>", { ...DEFAULT_RICH_STYLE, line: "double", para: "large" })
     expect(out).toContain("margin:0 0 18px 0")
     expect(out).toContain("line-height:2.1")
   })
   it("turns an EMPTY paragraph into <p><br /></p> so a blank line survives in mail apps", () => {
-    expect(restyleRichHtml("<p></p>", S)).toBe('<p style="margin:0 0 10px 0;line-height:1.5"><br /></p>')
+    expect(restyleRichHtml("<p></p>", S)).toBe('<p style="margin:0 0 0px 0;line-height:1.5"><br /></p>')
     expect(restyleRichHtml("<p>a</p><p></p><p>b</p>", S).match(/<br \/>/g)?.length).toBe(1)
   })
   it("a paragraph inside a list item gets NO bottom margin (it would double-space every item)", () => {
     const out = restyleRichHtml("<ul><li><p>one</p></li></ul>", S)
     expect(out).toContain('<li style="line-height:1.5"><p style="margin:0 0 0px 0;line-height:1.5">one</p></li>')
-    expect(out).toContain('<ul style="margin:0 0 10px 0;padding-left:24px">')
+    expect(out).toContain('<ul style="margin:0 0 0px 0;padding-left:24px">')
   })
   it("re-emits links with target and rel, escaped, and colours from the allowlist only", () => {
     const out = restyleRichHtml('<p><a href="https://example.com/?a=1&amp;b=2">x</a><span style="color:#2563EB">y</span><span style="color:red;background:url(x)">z</span></p>', S)
@@ -240,5 +242,63 @@ describe("tokenizeRichHtml", () => {
     expect(t.map((x) => x.kind)).toEqual(["open", "text", "open", "close"])
     expect(t[0]).toMatchObject({ kind: "open", tag: "p", attrs: { class: "x" } })
     expect(t[2]).toMatchObject({ kind: "open", tag: "br", selfClosing: true })
+  })
+})
+
+describe("normalizeLinkInput — what people actually type into the link box", () => {
+  it("adds https:// to a bare domain and mailto: to a bare address", () => {
+    expect(normalizeLinkInput("example.com/sign")).toBe("https://example.com/sign")
+    expect(normalizeLinkInput("  www.example.com ")).toBe("https://www.example.com")
+    expect(normalizeLinkInput("tony@tonydurante.us")).toBe("mailto:tony@tonydurante.us")
+  })
+  it("leaves anything that names a scheme alone, so the rule can still refuse it", () => {
+    expect(normalizeLinkInput("https://example.com")).toBe("https://example.com")
+    expect(checkLinkHref(normalizeLinkInput("javascript:alert(1)")).ok).toBe(false)
+    expect(checkLinkHref(normalizeLinkInput("data:text/html,x")).ok).toBe(false)
+  })
+  it("a normalised internal address is still refused", () => {
+    expect(checkLinkHref(normalizeLinkInput("td-operations.vercel.app/x")).ok).toBe(false)
+  })
+  it("empty stays empty (and is refused)", () => {
+    expect(normalizeLinkInput("   ")).toBe("")
+    expect(checkLinkHref(normalizeLinkInput("   ")).ok).toBe(false)
+  })
+})
+
+describe("normalizeRichColor — pasted colours keep only our four", () => {
+  it("accepts the four hex colours in any case and as rgb()", () => {
+    expect(normalizeRichColor("#2563EB")).toBe("#2563eb")
+    expect(normalizeRichColor("rgb(37, 99, 235)")).toBe("#2563eb")
+    expect(normalizeRichColor("rgb(185,28,28)")).toBe("#b91c1c")
+    expect(normalizeRichColor("rgba(21, 128, 61, 1)")).toBe("#15803d")
+    expect(normalizeRichColor("#1f2937")).toBe("#1f2937")
+  })
+  it("refuses everything else", () => {
+    for (const bad of ["red", "#000", "#000000", "rgb(0,0,0)", "rgba(37,99,235,0.5)", "rgb(999,1,1)", "url(x)", "", "expression(1)", null, undefined]) {
+      expect(normalizeRichColor(bad as string)).toBeNull()
+    }
+  })
+})
+
+describe("paragraph gap — what is typed is what arrives", () => {
+  it("the DEFAULT gap adds no space between paragraphs, so a typed blank line is exactly one blank line (as the plain email always was)", () => {
+    const out = restyleRichHtml("<p>Hi,</p><p></p><p>Thanks</p><ul><li><p>one</p></li></ul>", { ...DEFAULT_RICH_STYLE })
+    expect(out).toBe(
+      '<p style="margin:0 0 0px 0;line-height:1.5">Hi,</p>' +
+        '<p style="margin:0 0 0px 0;line-height:1.5"><br /></p>' +
+        '<p style="margin:0 0 0px 0;line-height:1.5">Thanks</p>' +
+        '<ul style="margin:0 0 0px 0;padding-left:24px"><li style="line-height:1.5"><p style="margin:0 0 0px 0;line-height:1.5">one</p></li></ul>',
+    )
+  })
+  it("a chosen gap is applied to paragraphs and lists, never to the paragraph inside a list item", () => {
+    const out = restyleRichHtml("<p>a</p><ul><li><p>b</p></li></ul>", { ...DEFAULT_RICH_STYLE, para: "medium" })
+    expect(out).toContain('<p style="margin:0 0 12px 0;line-height:1.5">a</p>')
+    expect(out).toContain('<ul style="margin:0 0 12px 0;padding-left:24px">')
+    expect(out).toContain('<li style="line-height:1.5"><p style="margin:0 0 0px 0;line-height:1.5">b</p></li>')
+  })
+  it("the old names are no longer valid and fall back to the default", () => {
+    expect(parseRichStyle({ para: "normal" }).para).toBe(DEFAULT_RICH_STYLE.para)
+    expect(parseRichStyle({ para: "wide" }).para).toBe(DEFAULT_RICH_STYLE.para)
+    expect(parseRichStyle({ para: "close" }).para).toBe(DEFAULT_RICH_STYLE.para)
   })
 })

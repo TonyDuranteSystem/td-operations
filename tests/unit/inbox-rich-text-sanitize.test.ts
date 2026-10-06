@@ -67,6 +67,22 @@ describe("sanitizeRichHtml — what the editor emits passes through", () => {
     expect(out).not.toContain("target=")
     expect(out).not.toContain("rel=")
   })
+  it("keeps a colour the way a real browser writes it (rgb) and emits it as hex — the editor's own output", () => {
+    const out = sanitizeRichHtml('<p>sign the <span style="color: rgb(37, 99, 235);">amendment</span></p>')
+    expect(out).toBe('<p>sign the <span style="color:#2563eb">amendment</span></p>')
+    assertStrictShape(out)
+    for (const [rgb, hex] of [["rgb(31, 41, 55)", "#1f2937"], ["rgb(185, 28, 28)", "#b91c1c"], ["rgb(21, 128, 61)", "#15803d"]]) {
+      expect(sanitizeRichHtml(`<p><span style="color: ${rgb};">x</span></p>`)).toBe(`<p><span style="color:${hex}">x</span></p>`)
+    }
+  })
+  it("a span with a colour that is not one of the four, or only a background colour, loses the style (words stay)", () => {
+    for (const style of ["color: rgb(0, 0, 0)", "color: red", "background-color: #2563eb", "color: rgba(37,99,235,0.5)"]) {
+      expect(sanitizeRichHtml(`<p><span style="${style}">x</span></p>`)).toBe("<p><span>x</span></p>")
+    }
+  })
+  it("a colour carried alongside other declarations keeps ONLY the colour", () => {
+    expect(sanitizeRichHtml('<p><span style="position:fixed; color: rgb(37, 99, 235); top:0">x</span></p>')).toBe('<p><span style="color:#2563eb">x</span></p>')
+  })
   it("maps b and i to strong and em", () => {
     expect(sanitizeRichHtml("<p><b>x</b><i>y</i></p>")).toBe("<p><strong>x</strong><em>y</em></p>")
   })
@@ -147,10 +163,10 @@ describe("resolveReplyBody — the one place a route decides what to send", () =
     expect(r).toEqual({ ok: true, text: "Hi\n\nthere", rich: null })
   })
   it("a non-default style makes even plain paragraphs formatted — and the server applies it", () => {
-    const r = resolveReplyBody({ messageHtml: "<p>Hi</p>", style: { font: "Georgia", size: "large", line: "airy", para: "wide" } })
+    const r = resolveReplyBody({ messageHtml: "<p>Hi</p>", style: { font: "Georgia", size: "large", line: "airy", para: "large" } })
     expect(r.ok).toBe(true)
     if (r.ok) {
-      expect(r.rich?.style).toEqual({ font: "Georgia", size: "large", line: "airy", para: "wide" })
+      expect(r.rich?.style).toEqual({ font: "Georgia", size: "large", line: "airy", para: "large" })
       expect(r.rich?.html).toContain("margin:0 0 18px 0")
       expect(r.rich?.html).toContain("line-height:1.8")
     }

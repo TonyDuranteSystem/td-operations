@@ -110,7 +110,7 @@ describe("POST /api/inbox/reply — a formatted reply", () => {
     '<p>Please <a href="https://example.com/sign">click here</a> today.</p>'
 
   it("sends the sanitized HTML with the chosen style, and a text/plain built FROM it", async () => {
-    const r = await reply({ messageHtml: html, style: { font: "Georgia", size: "large", line: "airy", para: "wide" } })
+    const r = await reply({ messageHtml: html, style: { font: "Georgia", size: "large", line: "airy", para: "large" } })
     expect(r.status).toBe(200)
     const e = sentEmail()
     expect(e.html).toContain("font-family:Georgia,serif;font-size:18px;line-height:1.8")
@@ -135,10 +135,17 @@ describe("POST /api/inbox/reply — a formatted reply", () => {
     expect(e.text).toContain("> Thanks, Tony!")
   })
 
+  it("keeps a colour exactly as the browser editor serialises it (rgb) and sends it as the hex colour", async () => {
+    await reply({ messageHtml: '<p>sign the <span style="color: rgb(37, 99, 235);">amendment</span></p>', style: {} })
+    const e = sentEmail()
+    expect(e.html).toContain('<span style="color:#2563eb">amendment</span>')
+    expect(e.html).not.toContain("rgb(")
+  })
+
   it("renders a centred paragraph with ONE style attribute", async () => {
     await reply({ messageHtml: '<p style="text-align: center">Centred</p>', style: {} })
     const e = sentEmail()
-    expect(e.html).toContain('<p style="text-align:center;margin:0 0 10px 0;line-height:1.5">Centred</p>')
+    expect(e.html).toContain('<p style="text-align:center;margin:0 0 0px 0;line-height:1.5">Centred</p>')
   })
 })
 
@@ -205,7 +212,7 @@ describe("POST /api/inbox/draft — a formatted draft stays formatted", () => {
   it("saves the sanitized HTML with the chosen style and the derived plain half (it used to flatten to plain text)", async () => {
     const r = await draft({
       messageHtml: "<p>Hi,</p><ol><li><p>one</p></li><li><p>two</p></li></ol><p><u>Thanks</u></p>",
-      style: { font: "Tahoma", size: "small", para: "close" },
+      style: { font: "Tahoma", size: "small", para: "small" },
     })
     expect(r.status).toBe(200)
     expect(r.body.success).toBe(true)

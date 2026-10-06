@@ -37,7 +37,9 @@ export const RICH_FONT_STACKS: Record<RichFont, string> = {
 
 export const RICH_SIZES = { small: 12, normal: 14, large: 18, huge: 24 } as const
 export const RICH_LINES = { tight: 1.2, normal: 1.5, airy: 1.8, double: 2.1 } as const
-export const RICH_PARAS = { close: 4, normal: 10, wide: 18 } as const
+// Extra space BETWEEN paragraphs. The default is none: a blank line typed in the editor is one blank paragraph, exactly
+// as the plain email has always been sent, so what is typed is what arrives. The gap is for people who want air.
+export const RICH_PARAS = { none: 0, small: 6, medium: 12, large: 18 } as const
 
 /** Four calm colours. Hex only, lower-case: the server compares against exactly these. */
 export const RICH_COLORS = ['#1f2937', '#2563eb', '#b91c1c', '#15803d'] as const
@@ -52,7 +54,7 @@ export interface RichStyle {
   para: keyof typeof RICH_PARAS
 }
 
-export const DEFAULT_RICH_STYLE: RichStyle = { font: 'Arial', size: 'normal', line: 'normal', para: 'normal' }
+export const DEFAULT_RICH_STYLE: RichStyle = { font: 'Arial', size: 'normal', line: 'normal', para: 'none' }
 
 /** Validate a client-supplied style field by field; anything unknown falls back to the default for that field. */
 export function parseRichStyle(value: unknown): RichStyle {
@@ -124,6 +126,35 @@ export function checkLinkHref(raw: unknown): LinkCheck {
     return { ok: false, reason: 'Links to our internal address cannot be sent to clients.' }
   }
   return { ok: true, href: url.toString() }
+}
+
+/**
+ * What a person types into the link box -> the string checkLinkHref judges. People type "example.com" or
+ * "tony@x.com" without a scheme; a bare domain gets https://, a bare address gets mailto:. Anything that already
+ * names a scheme is passed through untouched, so "javascript:..." still reaches the rule and is refused there.
+ */
+export function normalizeLinkInput(raw: string): string {
+  const v = raw.trim()
+  if (!v || /^[a-z][a-z0-9+.-]*:/i.test(v)) return v
+  if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(v)) return `mailto:${v}`
+  return `https://${v}`
+}
+
+/**
+ * A colour as a browser reports it (`rgb(37, 99, 235)`, `#2563EB`) -> one of the four allowed hex values, or null.
+ * Used when text is PASTED into the editor: only our four colours survive, anything else loses its colour.
+ */
+export function normalizeRichColor(raw: string | null | undefined): RichColor | null {
+  if (!raw) return null
+  const v = raw.trim().toLowerCase()
+  let hex = v
+  const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*1(?:\.0+)?\s*)?\)$/.exec(v)
+  if (m) {
+    const parts = [m[1], m[2], m[3]].map((n) => Number(n))
+    if (parts.some((n) => n > 255)) return null
+    hex = '#' + parts.map((n) => n.toString(16).padStart(2, '0')).join('')
+  }
+  return (RICH_COLORS as readonly string[]).includes(hex) ? (hex as RichColor) : null
 }
 
 // ─── Tokenizer for the restricted HTML (editor output / sanitized output) ─────────────────────────────────
