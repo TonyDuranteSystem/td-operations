@@ -244,6 +244,7 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
           delete rest[dead.id]
           return rest
         })
+        emitWindowEvent({ type: 'closed', id: dead.id, reason: 'removed' })
       }
       const r = openWindow(base, d?.href, d?.title, v)
       if (isOpenFailure(r)) {

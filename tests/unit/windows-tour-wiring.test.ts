@@ -21,7 +21,7 @@ describe("the tour does not get in the person's way", () => {
   it("is a small card plus a ring — no dimming overlay library", () => {
     expect(tour).not.toMatch(/react-joyride/)
     expect(tour).toContain("pointer-events-none fixed z-[48]") // the ring never takes a click
-    expect(tour).toContain("pointer-events-auto fixed bottom-4 z-[47]")
+    expect(tour).toContain("pointer-events-auto fixed bottom-24 z-[47]")
   })
 
   it("sits above the windows (44), the notes and the chat, but under the menus (70), so the launcher menu is never covered", () => {
@@ -78,6 +78,45 @@ describe("the tour never lies and never strands anyone", () => {
   it("resumes at the same step after a reload, and remembers it was seen", () => {
     expect(tour).toContain("sessionStorage")
     expect(tour).toContain("PROMPTED_PREFIX")
+  })
+})
+
+describe("bug-hunt fixes on the built tour", () => {
+  it("decides whether a step can run only after the window manager has published its windows (not on a stale empty list after a reload)", () => {
+    expect(tour).toContain("!snapshot.ready")
+    expect(tour).toContain("progress.stepIndex, snapshot.ready")
+  })
+
+  it("'auto' finishes only the steps where nothing-to-do is true", () => {
+    expect(tour).toContain("AUTO_COMPLETES.includes(step.id)")
+  })
+
+  it("a note being typed survives moving between steps, and leaving with it unsent asks first", () => {
+    expect(tour).toContain("value={draft}")
+    expect(tour).toContain("You typed a note that has not been sent")
+    expect(tour).toContain("const tryEnd = (finished: boolean)")
+  })
+
+  it("signing out ends the tour", () => {
+    expect(tour).toContain("onAuthStateChange")
+    expect(tour).toContain("event === 'SIGNED_OUT'")
+  })
+
+  it("the one-time prompt only shows in a tab the person can see, and is remembered only after it was shown", () => {
+    expect(tour).toContain("document.visibilityState !== 'visible'")
+    const shown = tour.indexOf("toast('New: floating windows'")
+    const flag = tour.indexOf("setItem(key, 'shown')")
+    expect(shown).toBeGreaterThan(-1)
+    expect(flag).toBeGreaterThan(shown)
+  })
+
+  it("the card sits above the toast area, and a feedback request from the menu opens a shrunk card", () => {
+    expect(tour).toContain("fixed bottom-24 z-[47]")
+    expect(tour).toMatch(/onFeedback = \(\) => \{[\s\S]*setCollapsed\(false\)/)
+  })
+
+  it("the ring reports 'not covered' when its target changes or goes away", () => {
+    expect(tour).toContain("onCovered(false) // a new target starts uncovered")
   })
 })
 

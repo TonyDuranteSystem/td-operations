@@ -21,12 +21,13 @@ export const FEEDBACK_MAX = 1500
 /** How many notes one person may send per hour before we ask them to wait (stops a stuck button / a script). */
 export const FEEDBACK_PER_HOUR = 20
 
-const STEP_IDS = new Set<string>(STEPS.map(s => s.id))
+const STEP_IDS = new Set<string>([...STEPS.map(s => s.id), 'none'])
 const STATES = new Set(['waiting', 'done', 'skipped', 'auto', 'blocked', 'read'])
 
 export interface FeedbackInput {
   text: string
-  step: StepId
+  /** The step the note came from, or 'none' when it was sent outside the tour (from the launcher menu). */
+  step: StepId | 'none'
   state: 'waiting' | 'done' | 'skipped' | 'auto' | 'blocked' | 'read'
   platform: 'mac' | 'other'
   viewportWidth: number
@@ -63,7 +64,7 @@ export function validateFeedback(body: unknown): FeedbackCheck {
     ok: true,
     value: {
       text,
-      step: b.step as StepId,
+      step: b.step as StepId | 'none',
       state: b.state as FeedbackInput['state'],
       platform: b.platform,
       viewportWidth,
@@ -84,7 +85,7 @@ export function defuse(text: string): string {
 export function formatFeedbackMessage(input: FeedbackInput, name: string): string {
   const index = STEPS.findIndex(s => s.id === input.step)
   const step = STEPS[index]
-  const where = `Step ${index + 1} of ${STEPS.length} — ${step.title} (${input.state})`
+  const where = step ? `Step ${index + 1} of ${STEPS.length} — ${step.title} (${input.state})` : 'Sent from the menu (not during the tour)'
   const context = [
     input.platform === 'mac' ? 'Mac' : 'Windows/other',
     `screen ${input.viewportWidth}px wide`,

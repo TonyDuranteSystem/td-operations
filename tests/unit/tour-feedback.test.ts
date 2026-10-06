@@ -61,6 +61,12 @@ describe("formatFeedbackMessage", () => {
     const live = withAt.match(/@(?!​)\w+/g) ?? []
     expect(live).toEqual(["@Antonio"]) // only ours
   })
+  it("a note sent from the menu (outside the tour) says so instead of naming a step", () => {
+    const m = formatFeedbackMessage({ ...input, step: "none" as const }, "Luca")
+    expect(m).toContain("Sent from the menu (not during the tour)")
+    expect(m).not.toMatch(/Step \d of/)
+    expect(validateFeedback({ ...good, step: "none" }).ok).toBe(true)
+  })
   it("uses the singular for one window", () => {
     expect(formatFeedbackMessage({ ...input, windowCount: 1 }, "x")).toContain("1 window open")
   })

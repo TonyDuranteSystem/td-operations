@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest"
 import {
   STEPS, TOUR_VERSION, detectPlatform, keyNames, fillKeys, stepIndexOf, newProgress, enterStep, applyWindowEvent,
-  isStepDone, precheck, ringSelector, type TourProgress, type StepId,
+  isStepDone, precheck, ringSelector, AUTO_COMPLETES, type TourProgress, type StepId,
 } from "@/lib/windows/tour-steps"
 import { EMPTY_SNAPSHOT, type WindowsSnapshot } from "@/lib/windows/windows-store"
 
@@ -140,6 +140,12 @@ describe("is a step done", () => {
     const both = applyWindowEvent(m, { type: "resized", id: "w1" })
     expect(isStepDone(step("move-resize"), both, snap({ ids: ["w1"], count: 1 }))).toBe(true)
   })
+  it("'fast-way' stays done once Leads has been opened, even if another page is opened afterwards", () => {
+    const base = at("fast-way", { practiceId: "w1" })
+    const leads = applyWindowEvent(base, { type: "opened", id: "w2", url: "/leads", reused: false })
+    const then = applyWindowEvent(leads, { type: "opened", id: "w3", url: "/accounts", reused: false })
+    expect(isStepDone(step("fast-way"), then, snap())).toBe(true)
+  })
   it("'fast-way' is done by a window opened on Leads, with or without a query", () => {
     const base = at("fast-way", { practiceId: "w1" })
     expect(isStepDone(step("fast-way"), applyWindowEvent(base, { type: "opened", id: "w2", url: "/leads", reused: false }), snap())).toBe(true)
@@ -173,7 +179,21 @@ describe("can a step run", () => {
   })
   it("'close': nothing left to close is not an error", () => {
     expect(precheck(step("close"), newProgress(), snap()).kind).toBe("auto")
-    expect(precheck(step("close"), newProgress(), snap({ count: 1, ids: ["w1"] })).kind).toBe("ok")
+    expect(precheck(step("close"), at("close", { opened: ["w1"] }), snap({ count: 1, ids: ["w1"] })).kind).toBe("ok")
+  })
+  it("'close': never offers a window the person already had before the tour", () => {
+    // windows exist, but none was opened in the tour
+    const r = precheck(step("close"), at("close", { practiceId: "w1", opened: [] }), snap({ count: 2, ids: ["w1", "w2"] }))
+    expect(r.kind).toBe("auto")
+    expect(ringSelector(step("close"), at("close", { practiceId: "w1", opened: [] }), snap({ count: 2, ids: ["w1", "w2"] }))).toBeNull()
+  })
+  it("'auto' finishes only the steps where \"nothing to do\" is true", () => {
+    expect(AUTO_COMPLETES).toEqual(["open", "close"])
+  })
+  it("a window the system removed (dead) is not a close by the person", () => {
+    const p = applyWindowEvent(at("close", { practiceId: "w1", opened: ["w1"] }), { type: "closed", id: "w1", reason: "removed" })
+    expect(p.flags.closed).toBe(false)
+    expect(p.practiceId).toBeNull()
   })
 })
 
@@ -194,7 +214,7 @@ describe("what the ring points at", () => {
   })
   it("the Leads item in the left menu for the fast way, and X of the window the person opened for 'close'", () => {
     expect(ringSelector(step("fast-way"), newProgress(), snap())).toBe('aside a[href="/leads"]')
-    expect(ringSelector(step("close"), at("close", { practiceId: "w1", opened: ["w1", "w2"] }), snap())).toBe('[data-win-id="w2"] [data-win-part="close"]')
+    expect(ringSelector(step("close"), at("close", { practiceId: "w1", opened: ["w1", "w2"] }), snap({ ids: ["w1", "w2"], count: 2 }))).toBe('[data-win-id="w2"] [data-win-part="close"]')
   })
   it("nothing to point at when there is no practice window, and none on the welcome / wrap-up cards", () => {
     expect(ringSelector(step("buttons"), newProgress(), snap())).toBeNull()

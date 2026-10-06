@@ -31,17 +31,23 @@ export async function POST(request: NextRequest) {
   const checked = validateFeedback(body)
   if (isFeedbackRejected(checked)) return NextResponse.json({ error: checked.error }, { status: 400 })
 
-  const message = formatFeedbackMessage(checked.value, getUserDisplayName(user))
+  const rawName = getUserDisplayName(user)
+  const displayName = (typeof rawName === 'string' ? rawName : 'A team member').slice(0, 80)
+  const message = formatFeedbackMessage(checked.value, displayName)
 
   // Find the channel first, so "not set up yet" is a clear answer and the checks below have a thread to look at.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const admin = supabaseAdmin as any
-  const { data: thread } = await admin
+  const { data: thread, error: threadError } = await admin
     .from('internal_threads')
     .select('id')
     .eq('thread_type', 'channel')
     .eq('channel_slug', FEEDBACK_CHANNEL_SLUG)
     .maybeSingle()
+  if (threadError) {
+    console.error('[windows-feedback] channel lookup failed', threadError.message)
+    return NextResponse.json({ error: 'Could not reach the feedback channel just now. Please try again in a moment.' }, { status: 500 })
+  }
   if (!thread) {
     return NextResponse.json(
       { error: `The feedback channel is not set up yet. Ask Antonio to create a Team Chat channel named "${FEEDBACK_CHANNEL_SLUG}".` },
@@ -58,6 +64,10 @@ export async function POST(request: NextRequest) {
     .eq('message', message)
     .gte('created_at', since2m)
     .limit(1)
+  if (dup.error) {
+    console.error('[windows-feedback] duplicate check failed', dup.error.message)
+    return NextResponse.json({ error: 'Could not check your note just now. Please try again in a moment.' }, { status: 500 })
+  }
   if (dup.data && dup.data.length > 0) return NextResponse.json({ ok: true, duplicate: true })
 
   // A person can only send so many an hour.
@@ -68,6 +78,10 @@ export async function POST(request: NextRequest) {
     .eq('thread_id', thread.id)
     .eq('on_behalf_of_user_id', user.id)
     .gte('created_at', since1h)
+  if (recent.error) {
+    console.error('[windows-feedback] rate check failed', recent.error.message)
+    return NextResponse.json({ error: 'Could not check your note just now. Please try again in a moment.' }, { status: 500 })
+  }
   if ((recent.count ?? 0) >= FEEDBACK_PER_HOUR) {
     return NextResponse.json({ error: 'You have sent a lot of notes in the last hour. Please try again a little later.' }, { status: 429 })
   }
@@ -75,10 +89,9 @@ export async function POST(request: NextRequest) {
   try {
     await postTeamMessage({ channel: FEEDBACK_CHANNEL_SLUG, message, on_behalf_of: user.id })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error && err.message ? `Could not send: ${err.message}` : 'Could not send your note. Please try again.' },
-      { status: 500 },
-    )
+    // The reason goes to the server log, not to the browser (it can be database text).
+    console.error('[windows-feedback] post failed', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Could not send your note. Please try again.' }, { status: 500 })
   }
   return NextResponse.json({ ok: true })
 }

@@ -15,8 +15,8 @@ export type WindowEventDetail =
   | { type: 'resized'; id: string }
   | { type: 'minimized'; id: string }
   | { type: 'restored'; id: string }
-  /** `reason` tells a plain close from a pop-out or a "move to the main page" — all three remove the window. */
-  | { type: 'closed'; id: string; reason: 'closed' | 'popout' | 'docked' }
+  /** `reason` tells a plain close from a pop-out, a "move to the main page", or the system removing a dead window — all remove it. */
+  | { type: 'closed'; id: string; reason: 'closed' | 'popout' | 'docked' | 'removed' }
 
 export function emitWindowEvent(detail: WindowEventDetail): void {
   if (typeof document === 'undefined') return

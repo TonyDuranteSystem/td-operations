@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeftRight, CheckCircle2, ChevronDown, ChevronUp, Loader2, MessageSquare, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
 import { acquireTour, isAnyTourActive, releaseTour } from '@/lib/ui/tour-lock'
 import { WINDOWS_MIN_VIEWPORT_WIDTH } from '@/lib/windows/window-model'
 import { onWindowEvent } from '@/lib/windows/window-events'
@@ -13,7 +14,7 @@ import {
   OPEN_FEEDBACK_EVENT, START_TOUR_EVENT, canOpenWindowNow, requestOpenWindow,
 } from '@/lib/windows/windows-context'
 import {
-  STEPS, TOUR_VERSION, applyWindowEvent, detectPlatform, enterStep, fillKeys, isStepDone, keyNames, newProgress,
+  AUTO_COMPLETES, STEPS, TOUR_VERSION, applyWindowEvent, detectPlatform, enterStep, fillKeys, isStepDone, keyNames, newProgress,
   precheck, ringSelector, type Precheck, type StepId, type TourProgress,
 } from '@/lib/windows/tour-steps'
 import { FEEDBACK_MAX, FEEDBACK_MIN, type FeedbackInput } from '@/lib/windows/tour-feedback'
@@ -65,6 +66,9 @@ export function WindowsTour({ userId }: { userId: string }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [narrow, setNarrow] = useState(false)
   const [plainClickNudge, setPlainClickNudge] = useState(false)
+  // What the person has typed in the feedback box lives here, so moving between steps never throws it away.
+  const [draft, setDraft] = useState('')
+  const [leaveWarn, setLeaveWarn] = useState(false)
 
   const progressRef = useRef(progress)
   progressRef.current = progress
@@ -75,9 +79,10 @@ export function WindowsTour({ userId }: { userId: string }) {
   const storeKey = `${STORE_PREFIX}${userId}`
 
   // ── start / stop ──
-  const begin = useCallback((index = 0, resumed?: TourProgress) => {
+  const begin = useCallback((index = 0, resumed?: TourProgress, quiet = false) => {
     if (!acquireTour(LOCK)) {
-      toast.error('Another tour is open. Finish it first, then start this one.')
+      // A resume after a reload stays silent; a person who asked for the tour is told why it did not start.
+      if (!quiet) toast.error('Another tour is open. Finish it first, then start this one.')
       return
     }
     const base = resumed ?? newProgress()
@@ -86,6 +91,8 @@ export function WindowsTour({ userId }: { userId: string }) {
     setStandalone(false)
     setCollapsed(false)
     setFeedbackOpen(false)
+    setDraft('')
+    setLeaveWarn(false)
     setOpen(true)
   }, [])
 
@@ -94,6 +101,8 @@ export function WindowsTour({ userId }: { userId: string }) {
     setOpen(false)
     setStandalone(false)
     setFeedbackOpen(false)
+    setDraft('')
+    setLeaveWarn(false)
     storage('session')?.removeItem(storeKey)
     // Remember it was seen, so the one-time prompt never comes back for someone who has been through it.
     try {
@@ -111,9 +120,11 @@ export function WindowsTour({ userId }: { userId: string }) {
     }
     const onFeedback = () => {
       if (open) {
+        setCollapsed(false)
         setFeedbackOpen(true)
         return
       }
+      setCollapsed(false)
       setStandalone(true)
       setFeedbackOpen(true)
       setOpen(true)
@@ -133,10 +144,25 @@ export function WindowsTour({ userId }: { userId: string }) {
       if (!raw) return
       const saved = JSON.parse(raw) as TourProgress
       if (typeof saved?.stepIndex !== 'number' || saved.stepIndex < 0 || saved.stepIndex >= STEPS.length) return
-      if (canOpenWindowNow(true)) begin(saved.stepIndex, { ...saved, practiceId: null, opened: [] })
+      if (canOpenWindowNow(true)) begin(saved.stepIndex, { ...saved, practiceId: null, opened: [] }, true)
     } catch { /* corrupt or blocked storage — just don't resume */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, at start
   }, [])
+
+  // Signing out ends the tour (and forgets its place), however the session ends.
+  useEffect(() => {
+    const { data } = createClient().auth.onAuthStateChange(event => {
+      if (event === 'SIGNED_OUT') {
+        releaseTour(LOCK)
+        storage('session')?.removeItem(storeKey)
+        setOpen(false)
+        setStandalone(false)
+        setFeedbackOpen(false)
+        setDraft('')
+      }
+    })
+    return () => data.subscription.unsubscribe()
+  }, [storeKey])
 
   // Keep this browser tab's place, and give the lock back if the tour component goes away.
   useEffect(() => {
@@ -150,25 +176,42 @@ export function WindowsTour({ userId }: { userId: string }) {
     return onWindowEvent(ev => setProgress(p => applyWindowEvent(p, ev)))
   }, [open, standalone])
 
-  // ── a step is entered: can it run? ──
+  // ── a step is entered ──
   const step = STEPS[progress.stepIndex]
   useEffect(() => {
     if (!open || standalone) return
-    const r = precheck(STEPS[progressRef.current.stepIndex], progressRef.current, snapshotRef.current)
-    setEntry(r)
-    if (r.kind === 'auto' && r.practiceId) setProgress(p => ({ ...p, practiceId: r.practiceId ?? p.practiceId }))
     pathAtEntry.current = window.location.pathname
     setPlainClickNudge(false)
+    setLeaveWarn(false)
     setFeedbackOpen(STEPS[progressRef.current.stepIndex].id === 'done')
   }, [open, standalone, progress.stepIndex])
 
-  // The practice window disappeared mid-step (closed by hand): find another, or offer to open one.
+  // ...and can it run? Only decided once the window manager has published which windows exist — right after a
+  // reload it has not yet, and an empty list would wrongly look like "all windows closed".
   useEffect(() => {
-    if (!open || standalone) return
+    if (!open || standalone || !snapshot.ready) return
+    const current = STEPS[progressRef.current.stepIndex]
+    const r = precheck(current, progressRef.current, snapshotRef.current)
+    setEntry(r)
+    const practiceId = r.kind === 'auto' && r.practiceId ? r.practiceId : progressRef.current.practiceId
+    if (r.kind === 'auto' && r.practiceId) setProgress(p => ({ ...p, practiceId: r.practiceId ?? p.practiceId }))
+    // A window that is ALREADY hidden when "hide it" starts counts as the first half done (it can only be brought back).
+    if (current.id === 'hide-restore' && practiceId && snapshotRef.current.minimized.includes(practiceId)) {
+      setProgress(p => ({ ...p, flags: { ...p.flags, minimized: true } }))
+    }
+  }, [open, standalone, progress.stepIndex, snapshot.ready])
+
+  // The practice window disappeared mid-step (closed by hand): find another, or offer to open one. And when a
+  // window is there again (Open Accounts for me, or the person opened one), the "closed" notice goes away.
+  useEffect(() => {
+    if (!open || standalone || !snapshot.ready) return
     if (step.id !== 'move-resize' && step.id !== 'hide-restore') return
     if (isStepDone(step, progress, snapshot)) return
     const alive = progress.practiceId !== null && snapshot.ids.includes(progress.practiceId)
-    if (alive) return
+    if (alive) {
+      setEntry(e => (e.kind === 'missing' ? { kind: 'ok' } : e))
+      return
+    }
     const r = precheck(step, progress, snapshot)
     setEntry(r)
     if (r.kind === 'auto' && r.practiceId) setProgress(p => ({ ...p, practiceId: r.practiceId ?? p.practiceId }))
@@ -189,13 +232,25 @@ export function WindowsTour({ userId }: { userId: string }) {
     return () => window.removeEventListener('resize', check)
   }, [open])
 
-  const done = open && !standalone && (isStepDone(step, progress, snapshot) || entry.kind === 'auto')
+  // `auto` finishes only the steps where "nothing to do" is true; elsewhere it just picked a practice window.
+  const autoDone = entry.kind === 'auto' && AUTO_COMPLETES.includes(step.id)
+  const done = open && !standalone && (isStepDone(step, progress, snapshot) || autoDone)
   const selector = open && !standalone && !narrow && !(step.kind === 'act' && done) ? ringSelector(step, progress, snapshot) : null
   const [covered, setCovered] = useState(false)
 
+  // Leaving with a note typed but not sent asks once, instead of silently losing it.
+  const tryEnd = (finished: boolean) => {
+    if (draft.trim().length > 0 && !leaveWarn) {
+      setLeaveWarn(true)
+      setCollapsed(false)
+      setFeedbackOpen(true)
+      return
+    }
+    end(finished)
+  }
   const goNext = () => {
     if (progress.stepIndex >= STEPS.length - 1) {
-      end(true)
+      tryEnd(true)
       return
     }
     setProgress(p => enterStep(p, p.stepIndex + 1))
@@ -209,7 +264,7 @@ export function WindowsTour({ userId }: { userId: string }) {
   const stepState: StepState = standalone || step.kind === 'read'
     ? 'read'
     : skipped.includes(step.id) ? 'skipped'
-    : entry.kind === 'auto' ? 'auto'
+    : autoDone ? 'auto'
     : entry.kind === 'blocked' ? 'blocked'
     : done ? 'done' : 'waiting'
 
@@ -222,7 +277,7 @@ export function WindowsTour({ userId }: { userId: string }) {
         role="region"
         aria-label="Floating windows tour"
         className={cn(
-          'pointer-events-auto fixed bottom-4 z-[47] w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-emerald-300 bg-white text-zinc-800 shadow-2xl',
+          'pointer-events-auto fixed bottom-24 z-[47] w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-emerald-300 bg-white text-zinc-800 shadow-2xl',
           side === 'right' ? 'right-4' : 'left-4',
         )}
       >
@@ -232,12 +287,12 @@ export function WindowsTour({ userId }: { userId: string }) {
             <button type="button" onClick={() => setCollapsed(false)} aria-label="Show the tour card" className="ml-auto rounded p-1 hover:bg-zinc-100">
               <ChevronUp className="h-4 w-4" />
             </button>
-            <button type="button" onClick={() => end(false)} aria-label="Close tour" className="rounded p-1 hover:bg-zinc-100">
+            <button type="button" onClick={() => tryEnd(false)} aria-label="Close tour" className="rounded p-1 hover:bg-zinc-100">
               <X className="h-4 w-4" />
             </button>
           </div>
         ) : (
-          <div className="flex max-h-[min(34rem,calc(100vh-6rem))] flex-col">
+          <div className="flex max-h-[min(34rem,calc(100vh-9rem))] flex-col">
             <div className="flex items-center gap-1 border-b border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-900">
               <span className="font-semibold">{standalone ? 'Tell us what is off' : `Step ${progress.stepIndex + 1} of ${STEPS.length}`}</span>
               <span className="ml-auto flex items-center">
@@ -247,7 +302,7 @@ export function WindowsTour({ userId }: { userId: string }) {
                 <button type="button" onClick={() => setCollapsed(true)} aria-label="Shrink the card" className="rounded p-1 hover:bg-emerald-100">
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
-                <button type="button" onClick={() => end(false)} aria-label="Close tour" className="rounded p-1 hover:bg-emerald-100">
+                <button type="button" onClick={() => tryEnd(false)} aria-label="Close tour" className="rounded p-1 hover:bg-emerald-100">
                   <X className="h-3.5 w-3.5" />
                 </button>
               </span>
@@ -259,7 +314,7 @@ export function WindowsTour({ userId }: { userId: string }) {
               ) : narrow ? (
                 <>
                   <h3 className="text-[15px] font-bold">Paused</h3>
-                  <p>Make this window at least 1,000 pixels wide to keep going. Windows can&apos;t be drawn on a narrower screen.</p>
+                  <p>Make this window at least 1,000 pixels wide (or zoom the page out a little) to keep going. Windows can&apos;t be drawn on a narrower screen.</p>
                 </>
               ) : (
                 <StepBody
@@ -277,12 +332,16 @@ export function WindowsTour({ userId }: { userId: string }) {
 
               {feedbackOpen ? (
                 <FeedbackBox
-                  step={standalone ? 'done' : step.id}
+                  step={standalone ? 'none' : step.id}
                   state={stepState}
                   platform={platform}
                   windowCount={snapshot.count}
+                  value={draft}
+                  onChange={setDraft}
+                  warn={leaveWarn}
                   onClose={() => {
                     setFeedbackOpen(false)
+                    setLeaveWarn(false)
                     if (standalone) end(false)
                   }}
                 />
@@ -427,9 +486,9 @@ function TourRing({ selector, stepKey, onCovered }: { selector: string | null; s
   useEffect(() => {
     const el = ref.current
     if (!el) return
+    onCovered(false) // a new target starts uncovered until we have looked
     if (!selector) {
       el.style.display = 'none'
-      onCovered(false)
       return
     }
     let raf = 0
@@ -441,6 +500,10 @@ function TourRing({ selector, stepKey, onCovered }: { selector: string | null; s
         if (last !== 'none') {
           el.style.display = 'none'
           last = 'none'
+        }
+        if (lastCovered) {
+          lastCovered = false
+          onCovered(false)
         }
       } else {
         // A target far down the left menu would otherwise be out of sight: bring it into view once per step.
@@ -492,9 +555,13 @@ function TourRing({ selector, stepKey, onCovered }: { selector: string | null; s
 
 /** "Something off, or an idea?" — one box, one Send. The note goes to the team channel with the step it came from. */
 function FeedbackBox({
-  step, state, platform, windowCount, onClose,
-}: { step: StepId; state: StepState; platform: 'mac' | 'other'; windowCount: number; onClose: () => void }) {
-  const [text, setText] = useState('')
+  step, state, platform, windowCount, value, onChange, warn, onClose,
+}: {
+  step: StepId | 'none'; state: StepState; platform: 'mac' | 'other'; windowCount: number
+  value: string; onChange: (v: string) => void; warn: boolean; onClose: () => void
+}) {
+  const text = value
+  const setText = onChange
   const [phase, setPhase] = useState<'idle' | 'sending' | 'sent'>('idle')
   const [error, setError] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout>>()
@@ -523,6 +590,7 @@ function FeedbackBox({
         throw new Error(d.error || 'Could not send your note. Please try again.')
       }
       setPhase('sent')
+      setText('')
       timer.current = setTimeout(onClose, 2500)
     } catch (err) {
       setPhase('idle')
@@ -531,7 +599,7 @@ function FeedbackBox({
   }
 
   if (phase === 'sent') {
-    return <p className="flex items-center gap-1.5 text-[13px] font-medium text-emerald-800"><CheckCircle2 className="h-4 w-4" />Thanks. Antonio and Luca will see this.</p>
+    return <p className="flex items-center gap-1.5 text-[13px] font-medium text-emerald-800"><CheckCircle2 className="h-4 w-4" />Thanks. Your note is in the team channel for Antonio and Luca.</p>
   }
   return (
     <div className="space-y-1.5 rounded-md border border-zinc-200 p-2.5">
@@ -546,6 +614,7 @@ function FeedbackBox({
         className="w-full resize-y rounded-md border border-zinc-300 px-2 py-1.5 text-sm outline-none focus:border-emerald-500"
       />
       <p className="text-[11px] text-zinc-500">We will include which step you are on. Nothing from your pages is sent.</p>
+      {warn && <p role="alert" className="text-[13px] text-amber-800">You typed a note that has not been sent. Press Send first, or press Finish / Close again to leave without sending.</p>}
       {error && <p role="alert" className="text-[13px] text-red-700">{error}</p>}
       <div className="flex gap-2">
         <button
@@ -595,15 +664,10 @@ function WindowsTourPrompt({ userId, onStart }: { userId: string; onStart: () =>
       }
       const a = document.activeElement
       const typing = !!a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || (a as HTMLElement).isContentEditable)
-      const blocked = isAnyTourActive() || typing || !!document.querySelector('[data-update-banner]') || !canOpenWindowNow(true) || !snapshotRef.current.ready
+      const blocked = document.visibilityState !== 'visible' || isAnyTourActive() || typing || !!document.querySelector('[data-update-banner]') || !canOpenWindowNow(true) || !snapshotRef.current.ready
       if (snapshotRef.current.count > 0) return // already uses windows
       if (blocked) {
         if (++tries < 6) timer = setTimeout(attempt, 10_000)
-        return
-      }
-      try {
-        storage('local')?.setItem(key, 'shown')
-      } catch {
         return
       }
       toast('New: floating windows', {
@@ -612,6 +676,10 @@ function WindowsTourPrompt({ userId, onStart }: { userId: string; onStart: () =>
         action: { label: 'Show me', onClick: () => onStartRef.current() },
         cancel: { label: 'Not now', onClick: () => {} },
       })
+      // Remembered only once the toast really exists, so a tab that never showed it does not use up the offer.
+      try {
+        storage('local')?.setItem(key, 'shown')
+      } catch { /* the probe above already proved storage works; if it still fails the offer may repeat, harmless */ }
     }
     timer = setTimeout(attempt, 10_000)
     return () => clearTimeout(timer)

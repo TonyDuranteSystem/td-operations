@@ -174,8 +174,8 @@ export interface StepFlags {
   resized: boolean
   minimized: boolean
   restored: boolean
-  /** The page a window was opened on during this step (path + query), or null. */
-  openedUrl: string | null
+  /** A window was opened on Leads during this step. Sticky: opening another page afterwards doesn't undo it. */
+  openedLeads: boolean
   closed: boolean
 }
 
@@ -188,7 +188,7 @@ export interface TourProgress {
   flags: StepFlags
 }
 
-const NO_FLAGS: StepFlags = { moved: false, resized: false, minimized: false, restored: false, openedUrl: null, closed: false }
+const NO_FLAGS: StepFlags = { moved: false, resized: false, minimized: false, restored: false, openedLeads: false, closed: false }
 
 export function newProgress(): TourProgress {
   return { stepIndex: 0, practiceId: null, opened: [], flags: { ...NO_FLAGS } }
@@ -206,7 +206,8 @@ export function applyWindowEvent(p: TourProgress, ev: WindowEventDetail): TourPr
     case 'opened': {
       const opened = ev.reused || p.opened.includes(ev.id) ? p.opened : [...p.opened, ev.id]
       const practiceId = p.practiceId ?? ev.id
-      return { ...p, opened, practiceId, flags: { ...p.flags, openedUrl: ev.url } }
+      const leads = ev.url.split(/[?#]/)[0].startsWith('/leads')
+      return { ...p, opened, practiceId, flags: { ...p.flags, openedLeads: p.flags.openedLeads || leads } }
     }
     case 'moved':
       return ev.id === p.practiceId ? { ...p, flags: { ...p.flags, moved: true } } : p
@@ -243,13 +244,16 @@ export function isStepDone(step: TourStep, p: TourProgress, snap: WindowsSnapsho
     case 'hide-restore':
       return p.flags.minimized && p.flags.restored
     case 'fast-way':
-      return p.flags.openedUrl !== null && p.flags.openedUrl.split(/[?#]/)[0].startsWith('/leads')
+      return p.flags.openedLeads
     case 'close':
       return p.flags.closed
     default:
       return false
   }
 }
+
+/** Steps where "nothing to do / picked one for you" means the step is finished. For the others `auto` only picks a practice window. */
+export const AUTO_COMPLETES: StepId[] = ['open', 'close']
 
 export type Precheck =
   | { kind: 'ok' }
@@ -295,9 +299,18 @@ export function precheck(step: TourStep, p: TourProgress, snap: WindowsSnapshot)
         }
       }
       return { kind: 'ok' }
-    case 'close':
+    case 'close': {
       if (snap.count === 0) return { kind: 'auto', note: 'All your windows are already closed. Nothing to do here.' }
+      // Only a window the person opened in this tour is ever offered for closing — never one they already had.
+      const mine = p.opened.some(id => snap.ids.includes(id))
+      if (!mine) {
+        return {
+          kind: 'auto',
+          note: 'You did not open a window in this tour, so there is nothing for us to close. Close any window yourself whenever you like.',
+        }
+      }
       return { kind: 'ok' }
+    }
     default:
       return { kind: 'ok' }
   }
@@ -330,7 +343,7 @@ export function ringSelector(step: TourStep, p: TourProgress, snap: WindowsSnaps
     case 'fast-way':
       return 'aside a[href="/leads"]'
     case 'close': {
-      const target = p.opened[p.opened.length - 1] ?? p.practiceId
+      const target = [...p.opened].reverse().find(id => snap.ids.includes(id))
       return target ? `[data-win-id="${target}"] [data-win-part="close"]` : null
     }
     default:
