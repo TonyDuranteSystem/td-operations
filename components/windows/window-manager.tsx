@@ -403,8 +403,6 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
     const v = vpRef.current
     if (!v) return
     e.preventDefault()
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
     commit(focusWindow(stateRef.current, w.id))
     const start: WindowBox = { x: w.x, y: w.y, w: w.w, h: w.h }
     const sx = e.clientX
@@ -418,18 +416,20 @@ function WindowManagerInner({ userId, sandbox }: { userId: string; sandbox: bool
         : resizeBox(start, mode, dx, dy, v)
       commit(setBox(stateRef.current, w.id, box))
     }
+    // Listen on the WINDOW, not on the element with pointer capture: a drag that starts on a window that was
+    // just brought to the front lost its capture in real use, and the click-blocking sheet below then never
+    // went away. The sheet covers every frame while dragging, so these events always reach the page.
     const end = () => {
-      el.removeEventListener('pointermove', move)
-      el.removeEventListener('pointerup', end)
-      el.removeEventListener('pointercancel', end)
-      el.removeEventListener('lostpointercapture', end)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      window.removeEventListener('blur', end)
       setDragCursor(null)
     }
-    el.addEventListener('pointermove', move)
-    el.addEventListener('pointerup', end)
-    el.addEventListener('pointercancel', end)
-    // If the element is re-created or the capture is taken away, the click-blocking sheet must still go.
-    el.addEventListener('lostpointercapture', end)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    window.addEventListener('blur', end)
   }, [commit])
 
   if (!hydrated || !vp || vp.vw < WINDOWS_MIN_VIEWPORT_WIDTH) return null

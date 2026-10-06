@@ -92,7 +92,10 @@ describe("window manager", () => {
   it("draws windows in a stable order and stacks with z-index only (re-ordering reloads a window's page)", () => {
     expect(manager).toContain("state.windows.map(w => {")
     expect(manager).not.toMatch(/\[\.\.\.state\.windows\]\.sort\([^)]*\)\.map\(\(w, rank\)/)
-    expect(manager).toContain("lostpointercapture")
+    // drag listens on the window (not element pointer capture, which was lost in real use and left the sheet stuck)
+    expect(manager).toContain("window.addEventListener('pointerup', end)")
+    expect(manager).toContain("window.addEventListener('blur', end)")
+    expect(manager).not.toContain("setPointerCapture")
   })
 
   it("closing a minimised window with unsent typing shows the question (the window is shown first)", () => {
