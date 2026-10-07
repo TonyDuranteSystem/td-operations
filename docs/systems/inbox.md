@@ -1,5 +1,7 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
+_2026-10-07 note (tour): the email reply tour no longer starts by itself — only the "Reply tour" button opens it (Antonio: it popped up on every page). The auto-start gate, the once-per-load flag and the "Don't show this tour again" tick-box (and its per-browser storage key) were removed with it; the reversal of the 2026-10-06 "comes back until ticked" rule is deliberate. The WhatsApp tour is unchanged (still once ever per person).
+
 _2026-10-07 note (icon): the WhatsApp composer's AI button shows a magic wand (`Wand2`) while there is text in the box (polish mode) and the sparkle when it is empty (suggest mode); the tour step says so._
 
 _2026-10-07 note (WhatsApp sparkle polishes, not rewrites; dev job: WhatsApp Worker): the sparkle in the WhatsApp composer (`components/inbox/whatsapp-thread.tsx` `handleAi`) now has two modes. Text in the box → POLISH via `POST /api/inbox/whatsapp/polish` (staff-gated, 12/min per person, `WHATSAPP_POLISH_SYSTEM_PROMPT` + the same `validatePolishResult` as email — a changed number/link/language is rejected with 422 and the text is left alone). Empty box → the old draft-from-chat (`/api/inbox/whatsapp-new/suggest`). A late answer is applied only if `decideAiApply` (`lib/inbox/whatsapp-ai-apply.ts`) says the chat, the click and the typed text are all unchanged; polish offers Undo/Keep and the first original is kept across repeated polishes. The email path is untouched._
