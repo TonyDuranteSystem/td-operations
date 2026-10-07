@@ -17,6 +17,7 @@ const DB = "/tmp/rehearsal-chatstorage.db"
 const STATE = "/tmp/rehearsal-reactions-state.json"
 for (const f of [DB, STATE]) if (existsSync(f)) rmSync(f)
 
+const { ABSENT_SCANS_BEFORE_REMOVAL: ABSENT } = await import(`${process.cwd()}/scripts/wa-bridge/reactions-plan.mjs`)
 let failures = 0
 const check = (name, ok, extra = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : "  → " + extra}`); if (!ok) failures++ }
 
@@ -58,9 +59,10 @@ try {
   const beat = (await sb.from("wa_bridge_state").select("reactions_seen_at").eq("channel_id", ch.id).single()).data.reactions_seen_at
   check("2  the 'alive' beat was recorded", !!beat && Date.now() - Date.parse(beat) < 60_000, String(beat))
 
-  // 2. nothing changed → quiet scan (empty batch = beat), CRM unchanged
-  r = runReader(); console.log("scan 2:", r.line)
-  check("3  a quiet scan reports only the still-unmatched item (retry by design) and succeeds", r.code === 0 && /1 reported → unmatched:1/.test(r.line), r.line)
+  // 2. nothing changed → a quiet scan makes NO call to the CRM (beat is at most once a minute; the unmatched item is retried only once a minute)
+  r = runReader(); console.log("scan 2:", r.line || "(silent — no call)")
+  const beat2 = (await sb.from("wa_bridge_state").select("reactions_seen_at").eq("channel_id", ch.id).single()).data.reactions_seen_at
+  check("3  a quiet scan right after makes NO call to the CRM (beat + retry pacing) and succeeds", r.code === 0 && r.line === "" && beat2 === beat, `${r.code} ${r.line} ${beat} ${beat2}`)
 
   // 3. client changes it → same slot updated
   sqlite(`UPDATE message_reactions SET emoji='😂', reaction_timestamp='${stamp.replace(/\d\d\+/, "59+")}', updated_at=datetime('now') WHERE message_id='${ext}';`)
@@ -76,17 +78,19 @@ try {
 
   // 5. client removes it: first scan debounces, second scan removes
   sqlite(`DELETE FROM message_reactions WHERE message_id='${ext}' AND is_from_me=0;`)
-  r = runReader(); console.log("scan 5 (first scan missing):", r.line)
+  for (let i = 1; i < ABSENT; i++) r = runReader()
+  console.log(`scans 5.. (${ABSENT - 1} scans missing):`, r.line || "(silent)")
   rx = await reactions()
-  check("6  a removal is NOT applied on the first missing scan (debounce)", side(rx, "client")?.emoji === "😂", JSON.stringify(rx))
-  r = runReader(); console.log("scan 6 (second scan missing):", r.line)
+  check(`6  a removal is NOT applied before it has been missing ${ABSENT} scans (debounce)`, side(rx, "client")?.emoji === "😂", JSON.stringify(rx))
+  r = runReader(); console.log(`scan 6 (${ABSENT}th scan missing):`, r.line)
   rx = await reactions()
-  check("7  the removal applies on the second scan (tombstone, line untouched)", side(rx, "client")?.emoji === "" && side(rx, "line")?.emoji === "👍", JSON.stringify(rx))
+  check("7  the removal applies on the last debounce scan (tombstone, line untouched)", side(rx, "client")?.emoji === "" && side(rx, "line")?.emoji === "👍", JSON.stringify(rx))
 
   // 6. an UNHEALTHY bridge holds removals
   sqlite(`DELETE FROM message_reactions WHERE message_id='${ext}';`)
   await sb.from("wa_bridge_state").update({ last_heartbeat_at: new Date(Date.now() - 10 * 60_000).toISOString() }).eq("channel_id", ch.id)
-  r = runReader(); r = runReader(); console.log("scans 7-8 (bridge unhealthy):", r.line)
+  for (let i = 0; i < ABSENT; i++) r = runReader()
+  console.log("scans 7.. (bridge unhealthy):", r.line)
   rx = await reactions()
   check("8  while the bridge is unhealthy the line removal is HELD (reaction stays)", side(rx, "line")?.emoji === "👍", JSON.stringify(rx))
   await sb.from("wa_bridge_state").update({ last_heartbeat_at: new Date().toISOString() }).eq("channel_id", ch.id)

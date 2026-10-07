@@ -13,6 +13,9 @@
  *  - 'todo'  — To-Do / action-board cards or columns changed
  *  - 'tasks' — CRM tasks changed
  *  - 'notes' — staff sticky notes created/edited/shared/snoozed/archived
+ *  - 'whatsapp' — the WhatsApp Inbox changed: a message arrived, a reply's status changed, a phone reaction was applied,
+ *                 media became playable, chat names changed. Emitted by app/api/wa-bridge/[channelId]/route.ts.
+ *                 Payload-free; the listener refreshes only the WhatsApp list + open chat (lib/ui-event-whatsapp-keys.ts).
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -22,14 +25,17 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export type UiEventKind = "todo" | "tasks" | "notes"
+export type UiEventKind = "todo" | "tasks" | "notes" | "whatsapp"
 
 export async function emitUiEvent(
   kind: UiEventKind,
   payload?: Record<string, unknown>
 ): Promise<void> {
   try {
-    await db.from("ui_events").insert({ kind, payload: payload ?? null })
+    // supabase-js RETURNS a rejected insert ({ error }) instead of throwing — log it, or live updates could stop silently
+    // (RLS, a missing table / publication in some environment, an outage).
+    const { error } = await db.from("ui_events").insert({ kind, payload: payload ?? null })
+    if (error) console.warn(`[ui-events] emit '${kind}' rejected (non-fatal):`, error.message ?? error)
   } catch (err) {
     console.warn(`[ui-events] emit '${kind}' failed (non-fatal):`, err)
   }

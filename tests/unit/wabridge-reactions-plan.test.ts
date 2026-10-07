@@ -62,24 +62,24 @@ describe("planScan — removals", () => {
     expect(plan.items.some((i: { op: string }) => i.op === "remove")).toBe(false)
     expect(plan.nextState.absent[key]).toBe(1)
   })
-  it("…but is removed once it has stayed missing for the second scan, with the parent message still present", () => {
-    const plan = P.planScan({ rows: [row({ message_id: "OTHERMSG01" })], state: withAcked(1), existingParentIds: parents })
+  it("…but is removed once it has stayed missing for ABSENT_SCANS_BEFORE_REMOVAL scans, with the parent message still present", () => {
+    const plan = P.planScan({ rows: [row({ message_id: "OTHERMSG01" })], state: withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), existingParentIds: parents })
     expect(plan.items.find((i: { op: string }) => i.op === "remove")).toEqual({ ext_id: "3A005FCF60C597CA99D0", chat: "17274234285", side: "client", op: "remove" })
   })
   it("if the PARENT message is gone it is not a removal — the entry is simply forgotten", () => {
-    const plan = P.planScan({ rows: [row({ message_id: "OTHERMSG01" })], state: withAcked(1), existingParentIds: none })
+    const plan = P.planScan({ rows: [row({ message_id: "OTHERMSG01" })], state: withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), existingParentIds: none })
     expect(plan.items.some((i: { op: string }) => i.op === "remove")).toBe(false)
     expect(plan.nextState.acked[key]).toBeUndefined()
   })
   it("a reaction that comes back resets the missing count", () => {
-    const plan = P.planScan({ rows: [row()], state: withAcked(1), existingParentIds: parents })
+    const plan = P.planScan({ rows: [row()], state: withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), existingParentIds: parents })
     expect(plan.nextState.absent[key]).toBeUndefined()
   })
   it("the guard refuses a flood of removals (> 3) and keeps counting; --accept-removals lets a checked batch through", () => {
     const acked: Record<string, unknown> = {}
     const absent: Record<string, number> = {}
     const ids: string[] = []
-    for (let i = 0; i < 5; i++) { const id = `MSG${i}AAAA`; ids.push(id); acked[`${id}|client`] = { emoji: "👍", ts: "t", chat: "17274234285" }; absent[`${id}|client`] = 1 }
+    for (let i = 0; i < 5; i++) { const id = `MSG${i}AAAA`; ids.push(id); acked[`${id}|client`] = { emoji: "👍", ts: "t", chat: "17274234285" }; absent[`${id}|client`] = P.ABSENT_SCANS_BEFORE_REMOVAL - 1 }
     const state = { acked, tries: {}, absent }
     const refused = P.planScan({ rows: [row({ message_id: "OTHERMSG01" })], state, existingParentIds: new Set(ids) })
     expect(refused.guard).toEqual({ tripped: true, removals: 5 })
@@ -88,16 +88,16 @@ describe("planScan — removals", () => {
     expect(allowed.items.filter((i: { op: string }) => i.op === "remove")).toHaveLength(5)
   })
   it("an EMPTY read while reactions were reported before is distrusted as a failed read, never 'everything was removed' at once", () => {
-    const plan = P.planScan({ rows: [], state: withAcked(1), existingParentIds: parents })
+    const plan = P.planScan({ rows: [], state: withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), existingParentIds: parents })
     expect(plan.skip).toBe(true)
     expect(plan.items).toEqual([])
-    expect(plan.nextState).toEqual({ ...withAcked(1), emptyScans: 1 })
+    expect(plan.nextState).toEqual({ ...withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), emptyScans: 1 })
   })
   it("…but only for MAX_EMPTY_SCANS in a row: after that a file that really emptied is believed (and cannot wedge the reader)", () => {
-    const state = { ...withAcked(1), emptyScans: P.MAX_EMPTY_SCANS }
+    const state = { ...withAcked(P.ABSENT_SCANS_BEFORE_REMOVAL - 1), emptyScans: P.MAX_EMPTY_SCANS }
     const plan = P.planScan({ rows: [], state, existingParentIds: parents })
     expect(plan.skip).toBe(false)
-    expect(plan.items.find((i: { op: string }) => i.op === "remove")).toBeDefined() // parent exists + missing 2 scans → a normal removal
+    expect(plan.items.find((i: { op: string }) => i.op === "remove")).toBeDefined() // parent exists + missing long enough → a normal removal
     const noParent = P.planScan({ rows: [], state, existingParentIds: none })
     expect(noParent.items).toEqual([]) // a reset file whose messages are gone too reports nothing
   })
@@ -162,3 +162,75 @@ describe("toBatches and fingerprintOk", () => {
     expect(P.fingerprintOk([])).toBe(false)
   })
 })
+
+describe("paced retries for a reaction on a message the CRM does not have yet", () => {
+  const rowsFor = (id: string) => [{ message_id: id, chat_jid: "17274234285@s.whatsapp.net", reactor_jid: "17274234285@s.whatsapp.net", emoji: "👍", is_from_me: 0, reaction_timestamp: "2026-10-07 01:11:03+00:00", updated_at: "2026-10-07 01:11:03+00:00" }]
+  const none = new Set<string>()
+
+  it("is re-reported at most once per UNMATCHED_RETRY_MS, however often the loop scans", () => {
+    const t0 = 1_000_000
+    let state = P.emptyState()
+    const first = P.planScan({ rows: rowsFor("UNMATCH0001"), state, existingParentIds: none, now: t0 })
+    expect(first.items).toHaveLength(1)
+    state = P.applyResults({ state: first.nextState, plan: first, current: first.current, results: [{ i: 0, r: "unmatched" }], now: t0 })
+    expect(state.tries["UNMATCH0001|client"]).toBe(1)
+    // 10 s and 50 s later: nothing to report
+    for (const dt of [10_000, 30_000, P.UNMATCHED_RETRY_MS - 1]) {
+      const p = P.planScan({ rows: rowsFor("UNMATCH0001"), state, existingParentIds: none, now: t0 + dt })
+      expect(p.items).toHaveLength(0)
+      state = p.nextState
+    }
+    // after the pause it is asked again, and the count keeps rising toward MAX_UNMATCHED_TRIES
+    const later = P.planScan({ rows: rowsFor("UNMATCH0001"), state, existingParentIds: none, now: t0 + P.UNMATCHED_RETRY_MS })
+    expect(later.items).toHaveLength(1)
+  })
+
+  it("an acknowledged reaction forgets its retry bookkeeping", () => {
+    const t0 = 5_000
+    const first = P.planScan({ rows: rowsFor("UNMATCH0002"), state: P.emptyState(), existingParentIds: none, now: t0 })
+    let st = P.applyResults({ state: first.nextState, plan: first, current: first.current, results: [{ i: 0, r: "unmatched" }], now: t0 })
+    const again = P.planScan({ rows: rowsFor("UNMATCH0002"), state: st, existingParentIds: none, now: t0 + P.UNMATCHED_RETRY_MS })
+    st = P.applyResults({ state: st, plan: again, current: again.current, results: [{ i: 0, r: "applied" }], now: t0 + P.UNMATCHED_RETRY_MS })
+    expect(st.tries["UNMATCH0002|client"]).toBeUndefined()
+    expect(st.triedAt["UNMATCH0002|client"]).toBeUndefined()
+    expect(st.acked["UNMATCH0002|client"]).toBeDefined()
+  })
+
+  it("a CHANGED reaction on a still-unmatched message is reported at once (pacing only holds back an identical repeat)", () => {
+    const t0 = 9_000
+    const first = P.planScan({ rows: rowsFor("UNMATCH0003"), state: P.emptyState(), existingParentIds: none, now: t0 })
+    const st = P.applyResults({ state: first.nextState, plan: first, current: first.current, results: [{ i: 0, r: "unmatched" }], now: t0 })
+    const changed = rowsFor("UNMATCH0003").map((r) => ({ ...r, emoji: "😂", reaction_timestamp: "2026-10-07 01:12:09+00:00", updated_at: "2026-10-07 01:12:09+00:00" }))
+    const p = P.planScan({ rows: changed, state: st, existingParentIds: none, now: t0 + 5_000 })
+    expect(p.items).toHaveLength(1)
+    expect(p.items[0]).toMatchObject({ op: "set", emoji: "😂" })
+  })
+
+  it("a removal the CRM HELD is asked again at most once per UNMATCHED_RETRY_MS (not every scan), and an applied one is forgotten", () => {
+    const key = "HELDMSG0001|client"
+    const base = { acked: { [key]: { emoji: "👍", ts: "t", chat: "17274234285" } }, tries: {}, absent: { [key]: P.ABSENT_SCANS_BEFORE_REMOVAL }, emptyScans: 0, triedAt: {}, triedSig: {} }
+    const parents = new Set(["HELDMSG0001"])
+    const rows = [{ message_id: "OTHERMSG77", chat_jid: "17274234285@s.whatsapp.net", reactor_jid: "x", emoji: "🙏", is_from_me: 0, reaction_timestamp: "t", updated_at: "t" }]
+    const t0 = 20_000
+    const first = P.planScan({ rows, state: base, existingParentIds: parents, now: t0 })
+    expect(first.items.some((i: { op: string }) => i.op === "remove")).toBe(true)
+    let st = P.applyResults({ state: first.nextState, plan: first, current: first.current, results: [{ i: first.items.findIndex((i: { op: string }) => i.op === "remove"), r: "held" }], now: t0 })
+    for (const dt of [10_000, 40_000]) {
+      const p = P.planScan({ rows, state: st, existingParentIds: parents, now: t0 + dt })
+      expect(p.items.some((i: { op: string }) => i.op === "remove")).toBe(false)
+      st = p.nextState
+    }
+    const again = P.planScan({ rows, state: st, existingParentIds: parents, now: t0 + P.UNMATCHED_RETRY_MS })
+    const idx = again.items.findIndex((i: { op: string }) => i.op === "remove")
+    expect(idx).toBeGreaterThanOrEqual(0)
+    st = P.applyResults({ state: st, plan: again, current: again.current, results: [{ i: idx, r: "applied" }], now: t0 + P.UNMATCHED_RETRY_MS })
+    expect(st.acked[key]).toBeUndefined()
+    expect(st.triedAt[key]).toBeUndefined()
+  })
+
+  it("the thresholds keep their real-time meaning at 10-second scans", () => {
+    expect(P.ABSENT_SCANS_BEFORE_REMOVAL * 10).toBeGreaterThanOrEqual(60) // a vanished reaction must stay gone ~1 minute
+    expect(P.MAX_EMPTY_SCANS * 10).toBeGreaterThanOrEqual(600)           // an empty read is distrusted ~10 minutes
+  })
+})
+

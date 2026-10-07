@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   channelLookups: 0,
   signUrlOk: true,
   signUrlCalls: [] as Array<{ path: string; expiresIn: number }>,
+  uiEvents: [] as string[],
 }))
 
 vi.mock("@/lib/supabase-admin", () => ({
@@ -45,6 +46,9 @@ vi.mock("@/lib/supabase-admin", () => ({
       }),
     },
   },
+}))
+vi.mock("@/lib/ui-events", () => ({
+  emitUiEvent: async (kind: string) => { state.uiEvents.push(kind) },
 }))
 vi.mock("@/lib/messaging/groups", () => ({
   findOrCreateWhatsAppGroup: async (p: Record<string, unknown>) => {
@@ -92,6 +96,7 @@ beforeEach(() => {
   state.channelLookups = 0
   state.signUrlOk = true
   state.signUrlCalls = []
+  state.uiEvents = []
 })
 
 describe("POST /api/wa-bridge/[channelId] — live messages", () => {
@@ -538,5 +543,59 @@ describe("POST /api/wa-bridge/[channelId] — reactions made on the phone (bridg
     await call(batch([item()]))
     expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_apply_observed_reactions"])
     expect(state.groupCalls).toHaveLength(0)
+  })
+})
+
+describe("the live-update signal ('whatsapp' ui event) — wakes open Inboxes only when something really changed", () => {
+  const reactionItem = { ext_id: "3A005FCF60C597CA99D0", chat: "17274234285", side: "client", op: "set", emoji: "👍" }
+  const reactions = (items: unknown[]) => ({ event: "bridge.reactions", ts: Date.now(), scan_ms: Date.now(), items })
+
+  it("a new inbound message signals once; a redelivery (deduped) does not", async () => {
+    await call(goodMessage())
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    state.uiEvents = []
+    state.rpcResult = { data: false, error: null }
+    await call(goodMessage())
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("a failed save signals nothing", async () => {
+    state.rpcResult = { data: null, error: { message: "boom" } }
+    await call(goodMessage())
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("an applied phone reaction signals; the empty 'alive' beat and no-op / stale / held answers do not", async () => {
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: true, results: [{ i: 0, r: "applied" }] }, error: null }
+    await call(reactions([reactionItem]))
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    for (const r of ["noop", "stale", "held", "unmatched"]) {
+      state.uiEvents = []
+      state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: true, results: [{ i: 0, r }] }, error: null }
+      await call(reactions([reactionItem]))
+      expect(state.uiEvents).toEqual([])
+    }
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: true, results: [] }, error: null }
+    await call(reactions([]))
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("a reply's send result signals (sent / failed changes what the chat shows)", async () => {
+    state.rpcOverrides.wabridge_finish_send = { data: { ok: true }, error: null }
+    await call({ event: "bridge.send.result", ts: Date.now(), outbox_id: "11111111-1111-4111-8111-111111111111", ok: true, message_id: "3EB0ABCDEF123456" })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+  })
+
+  it("a live catch-up that inserted messages signals once per batch; a history download never does", async () => {
+    await call({ event: "bridge.backfill", ts: Date.now(), live: true, items: [item({ id: "L1" }), item({ id: "L2" })] })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    state.uiEvents = []
+    await call({ event: "bridge.backfill", ts: Date.now(), items: [item({ id: "H9" })] })
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("the heartbeat never signals", async () => {
+    await call(beat())
+    expect(state.uiEvents).toEqual([])
   })
 })

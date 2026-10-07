@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   reconcileConversations,
+  computeVisibleList,
   makeHiddenOverride,
   makePinnedOverride,
   makeUnreadOverride,
@@ -235,6 +236,15 @@ describe("unread override — released on baseline MOVE, never mid-lag", () => {
     const r = run(payload([conv("a", { unread: 2 })]), { unread, now: 2000 })
     expect(r.unread.has("gmail:a")).toBe(false) // released — new unread not suppressed
     expect(r.visible.find((c) => c.id === "gmail:a")?.unread).toBe(2)
+  })
+
+  it("the DISPLAY never overrides a server value that has moved off the baseline — even if no release pass has run (the WhatsApp list never runs one)", () => {
+    // Antonio opened the chat while it showed 3 unread (override 0, baseline 3); the server then went to 0 (mark-read) and the
+    // customer wrote again → 1. computeVisibleList alone (no advanceReleases) must show 1, not the stale 0.
+    const unread = new Map([["gmail:a", makeUnreadOverride(0, 3, 1000)]])
+    expect(computeVisibleList({ payload: payload([conv("a", { unread: 1 })]), origin: originOf({ kind: "inbox" }), overrides: new Map(), unread, prev: new Map(), now: 2000 }).find((c) => c.id === "gmail:a")?.unread).toBe(1)
+    // …while the server still lags AT the baseline the optimistic value is shown
+    expect(computeVisibleList({ payload: payload([conv("a", { unread: 3 })]), origin: originOf({ kind: "inbox" }), overrides: new Map(), unread, prev: new Map(), now: 2000 }).find((c) => c.id === "gmail:a")?.unread).toBe(0)
   })
 
   it("holds the override when the row is absent this round (unenriched/partial)", () => {

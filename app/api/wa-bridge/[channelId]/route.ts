@@ -10,6 +10,7 @@ import {
   type WabridgeMessage,
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
+import { emitUiEvent } from "@/lib/ui-events"
 import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
 import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
@@ -179,6 +180,7 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     if (finishError || typeof finished !== "object" || finished === null) {
       return NextResponse.json({ error: "could not record the result" }, { status: 500 })
     }
+    await emitUiEvent("whatsapp") // the reply's status (sent / failed) changed — open Inboxes refresh at once
     return NextResponse.json(finished)
   }
 
@@ -264,6 +266,7 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     if (finishError || typeof finished !== "object" || finished === null) {
       return NextResponse.json({ error: "could not record the result" }, { status: 500 })
     }
+    await emitUiEvent("whatsapp") // a voice note / photo became playable — open Inboxes refresh at once
     return NextResponse.json(finished)
   }
 
@@ -278,6 +281,7 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
       p_names: b.names as Json,
     })
     if (namesError) return NextResponse.json({ error: namesError.message }, { status: 500 })
+    if (typeof updated === "number" && updated > 0) await emitUiEvent("whatsapp") // chat names changed in the list
     return NextResponse.json({ ok: true, updated: updated ?? 0 })
   }
 
@@ -299,6 +303,8 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     if (!a || a.ok !== true || !Array.isArray(a.results)) {
       return NextResponse.json({ error: `reactions refused${a?.code ? `: ${a.code}` : ""}` }, { status: 400 })
     }
+    // Only a real change wakes the screens — the every-scan "alive" beat (empty batch) and no-op / stale / held answers do not.
+    if (a.results.some((x) => x.r === "applied")) await emitUiEvent("whatsapp")
     const results = mergeReactionResults(parsed.entries, a.results)
     return NextResponse.json({ ok: true, results })
   }
@@ -320,10 +326,16 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
         continue
       }
       const r = await ingest(channel.id, m, b.live !== true, groupCache)
-      if (r === "error") return NextResponse.json({ error: "ingest failed" }, { status: 500 })
+      if (r === "error") {
+        // Items saved before the failure are real — wake the screens now: the Mac's retry will see them as deduped (inserted=0) and never signal.
+        if (b.live === true && inserted > 0) await emitUiEvent("whatsapp")
+        return NextResponse.json({ error: "ingest failed" }, { status: 500 })
+      }
       if (r === "inserted") inserted++
       else deduped++
     }
+    // One signal per batch, and only for the live catch-up — a history download must not make every open Inbox refetch.
+    if (b.live === true && inserted > 0) await emitUiEvent("whatsapp")
     return NextResponse.json({ ok: true, inserted, deduped, skipped })
   }
 
@@ -338,6 +350,7 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
   }
   const r = await ingest(channel.id, parsed.message, false, new Map())
   if (r === "error") return NextResponse.json({ error: "ingest failed" }, { status: 500 })
+  if (r === "inserted") await emitUiEvent("whatsapp") // a new message — open Inboxes refresh the list and the open chat within seconds
   return NextResponse.json(r === "inserted" ? { ok: true } : { ok: true, deduped: true })
 }
 
