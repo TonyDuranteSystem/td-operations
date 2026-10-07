@@ -4,7 +4,8 @@
 //   1. read GOWA's own reaction records READ-ONLY (sqlite3 CLI, -readonly — it never writes, never blocks GOWA),
 //   2. check the layout is the one this was written for (fail CLOSED on any difference or read problem),
 //   3. work out what changed since the CRM last acknowledged (reactions-plan.mjs — pure, unit-tested),
-//   4. post a signed `bridge.reactions` batch to the CRM (even an EMPTY one — it is the "I am alive and scanning" beat),
+//   4. post a signed `bridge.reactions` batch to the CRM when something changed — and an EMPTY one as the "I am alive and
+//      scanning" beat at most once every BEAT_EVERY_MS (the loop scans every ~10 s; the beat is not needed that often),
 //   5. fold the CRM's per-item answers into a small state file.
 // It SENDS NOTHING to WhatsApp and writes nothing to GOWA's files. A missed scan self-heals on the next one.
 //
@@ -30,6 +31,9 @@ const dry = args.includes("--dry")
 const acceptRemovals = args.includes("--accept-removals")
 const known = new Set(["--once", "--dry", "--accept-removals"])
 for (const a of args) if (!known.has(a)) { console.error(`unknown option ${a}`); process.exit(2) }
+
+/** An empty batch (nothing changed) is posted at most this often — it only tells the CRM the reader is alive. */
+const BEAT_EVERY_MS = 50_000
 
 const log = (msg) => console.log(`${new Date().toISOString()} reactions: ${msg}`)
 
@@ -67,7 +71,7 @@ function loadState() {
   if (!existsSync(STATE_FILE)) return emptyState()
   try {
     const s = JSON.parse(readFileSync(STATE_FILE, "utf8"))
-    return { acked: s.acked ?? {}, tries: s.tries ?? {}, absent: s.absent ?? {}, emptyScans: s.emptyScans ?? 0 }
+    return { acked: s.acked ?? {}, tries: s.tries ?? {}, absent: s.absent ?? {}, emptyScans: s.emptyScans ?? 0, triedAt: s.triedAt ?? {}, triedSig: s.triedSig ?? {}, lastBeatMs: Number(s.lastBeatMs) || 0 }
   } catch {
     // An unreadable state file would make us re-report everything (harmless: the CRM ignores equal reactions) — but say so.
     log("WARN: state file unreadable — starting fresh (the CRM ignores anything it already has)")
@@ -124,7 +128,6 @@ async function main() {
     if (!dry) saveState(plan.nextState) // remembers how many empty scans in a row
     return 1
   }
-  if (plan.guard.tripped) log(`ALERT: ${plan.guard.removals} removals in one scan — refused (rerun with --accept-removals after checking)`)
 
   const mask = (it) => `${it.op} ${it.side} ${it.op === "set" ? it.emoji : ""} msg …${it.ext_id.slice(-4)} chat …${it.chat.slice(-4)}`
   if (dry) {
@@ -132,6 +135,14 @@ async function main() {
     for (const it of plan.items) log(`  would report: ${mask(it)}`)
     return 0
   }
+
+  // Nothing changed and the CRM heard from us recently: no call at all (the state — absence counters — is still saved).
+  const sinceBeat = Date.now() - (state.lastBeatMs ?? 0) // negative if the Mac's clock stepped back — then a beat is due, never withheld
+  if (plan.items.length === 0 && sinceBeat >= 0 && sinceBeat < BEAT_EVERY_MS) {
+    saveState({ ...plan.nextState, lastBeatMs: state.lastBeatMs ?? 0 })
+    return 0
+  }
+  if (plan.guard.tripped) log(`ALERT: ${plan.guard.removals} removals in one scan — refused (rerun with --accept-removals after checking)`)
 
   // 4+5. Post (an empty batch is the beat), then fold the per-item answers into the state.
   let next = plan.nextState
@@ -142,7 +153,7 @@ async function main() {
     for (const r of results) counts[r.r] = (counts[r.r] ?? 0) + 1
     next = applyResults({ state: next, plan: b, results, current: plan.current })
   }
-  saveState(next)
+  saveState({ ...next, lastBeatMs: Date.now() })
   log(`ok: ${rows.length} rows, ${plan.items.length} reported${Object.keys(counts).length ? " → " + Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(" ") : ""}`)
   return 0
 }

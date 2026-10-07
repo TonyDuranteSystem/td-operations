@@ -4,7 +4,7 @@
 # were measured never firing on this Mac (agent-loop.sh header). Register as launchd com.td.wa-bridge-reactions with KeepAlive,
 # the same way as the send and media jobs.
 #
-# One scan a minute. If another copy is already running this exits (a lock DIRECTORY plus a command-name check, so a stale
+# One scan every 10 seconds (a local read-only look at GOWA's records; the CRM is only called when something changed, plus an "alive" beat at most once a minute). If another copy is already running this exits (a lock DIRECTORY plus a command-name check, so a stale
 # lock left by a reboot — with the number reused by some other program — cannot wedge the job forever).
 cd "$HOME/wa-bridge" || exit 1
 LOCK="$HOME/wa-bridge/storages/reactions-loop.lock"
@@ -21,5 +21,5 @@ echo $$ > "$LOCK/pid"
 trap 'rm -rf "$LOCK"' EXIT
 while true; do
   "$NODE" "$HOME/wa-bridge/reactions.mjs" --once >> logs/reactions.log 2>&1
-  sleep 60
+  sleep 10
 done

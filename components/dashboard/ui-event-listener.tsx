@@ -20,6 +20,7 @@ import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { WHATSAPP_LIVE_QUERY_KEYS, WHATSAPP_LIST_QUERY_KEY, WHATSAPP_LIVE_DEBOUNCE_MS, WHATSAPP_LIVE_MAX_WAIT_MS } from '@/lib/ui-event-whatsapp-keys'
 
 /** kind → react-query keys to invalidate */
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
@@ -99,6 +100,8 @@ export function UiEventListener() {
   const queryClient = useQueryClient()
   const router = useRouter()
   const lastRefreshRef = useRef(0)
+  const whatsappDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const whatsappFirstSignalRef = useRef(0)
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
@@ -111,6 +114,19 @@ export function UiEventListener() {
         (msg) => {
           const kind = (msg.new as { kind?: string })?.kind
           if (!kind) return
+          if (kind === 'whatsapp') {
+            // A burst (several messages / a backfill / replies finishing together) collapses into ONE refresh of the
+            // WhatsApp list + open chat only — never the Gmail-backed inbox keys (see lib/ui-event-whatsapp-keys.ts).
+            // Trailing debounce with a MAX WAIT, so a long unbroken stream of signals cannot postpone the refresh forever.
+            const nowMs = Date.now()
+            if (whatsappDebounceRef.current) clearTimeout(whatsappDebounceRef.current)
+            else whatsappFirstSignalRef.current = nowMs
+            const waited = nowMs - whatsappFirstSignalRef.current
+            whatsappDebounceRef.current = setTimeout(() => {
+              whatsappDebounceRef.current = null
+              for (const key of WHATSAPP_LIVE_QUERY_KEYS) queryClient.invalidateQueries({ queryKey: [...key] })
+            }, Math.max(0, Math.min(WHATSAPP_LIVE_DEBOUNCE_MS, WHATSAPP_LIVE_MAX_WAIT_MS - waited)))
+          }
           for (const key of UI_EVENT_QUERY_KEYS[kind] ?? []) {
             queryClient.invalidateQueries({ queryKey: [key] })
           }
@@ -160,10 +176,15 @@ export function UiEventListener() {
           for (const key of WAKE_QUERY_KEYS) {
             queryClient.invalidateQueries({ queryKey: [key] })
           }
+          // The WhatsApp chat list too (DB only; its two-part key never matches the Gmail list).
+          queryClient.invalidateQueries({ queryKey: [...WHATSAPP_LIST_QUERY_KEY] })
         }
       })
 
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      if (whatsappDebounceRef.current) clearTimeout(whatsappDebounceRef.current)
+      supabase.removeChannel(channel)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -181,6 +202,9 @@ export function UiEventListener() {
       for (const key of WAKE_QUERY_KEYS) {
         queryClient.invalidateQueries({ queryKey: [key] })
       }
+      // Coming back to the tab: the WhatsApp chat list refreshes too (it was missing from the list above and sat stale
+      // until its 75 s poll — Antonio 2026-10-07: "every time I have to hard refresh").
+      queryClient.invalidateQueries({ queryKey: [...WHATSAPP_LIST_QUERY_KEY] })
       // Server-rendered dashboard pages don't live in react-query. Reuse the
       // same throttle the ui_events path uses so a wake plus a burst of events
       // can't stack refreshes.

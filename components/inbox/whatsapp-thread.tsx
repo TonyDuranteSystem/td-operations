@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -175,7 +175,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   // toggle both write the same column, and without the guard a fast reopen
   // right after clicking "mark unread" could race this call to land last and
   // silently undo it (the exact incident that guard was built for, 2026-08-05).
-  useEffect(() => {
+  const markChatRead = useCallback(() => {
     const call = fetch('/api/inbox/whatsapp/mark-read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -186,6 +186,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     })
     trackOpenMarkRead(`whatsapp:${groupId}`, call)
   }, [groupId, queryClient])
+  useEffect(() => { markChatRead() }, [markChatRead])
 
   // Auto-grow the textarea as the message gets longer, capped so the reply
   // bar can't push the message list off-screen (Antonio, 2026-09-17: "I don't
@@ -266,6 +267,31 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     const mid = waMessageIdFromSourceRef(a.source_ref)
     if (mid) actionByMessageId.set(mid, a.action_type)
   }
+
+  // A customer's message that lands while this chat is OPEN (it now arrives within seconds — dev job 254034f9) must not
+  // leave an unread badge on the very chat being read: the server counts it unread on arrival, and the mark-read above only
+  // runs once, when the chat is opened. Mark it read again when a NEW inbound message appears — only while the tab is
+  // actually visible (if staff are away, it waits for them to come back, so a message nobody has seen is never marked read).
+  const lastInboundId = (() => {
+    const ms = data?.messages ?? []
+    for (let i = ms.length - 1; i >= 0; i--) if (ms[i].direction === 'inbound' && !ms[i].id.startsWith('outbox:')) return ms[i].id
+    return null
+  })()
+  const seenInboundRef = useRef<{ groupId: string; id: string } | null>(null)
+  useEffect(() => {
+    if (lastInboundId === null) return
+    const prev = seenInboundRef.current
+    seenInboundRef.current = { groupId, id: lastInboundId }
+    if (!prev || prev.groupId !== groupId || prev.id === lastInboundId) return // first load of this chat: the open-time mark-read covers it
+    if (document.visibilityState === 'visible') { markChatRead(); return }
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      document.removeEventListener('visibilitychange', onVisible)
+      markChatRead()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [lastInboundId, groupId, markChatRead])
 
   // Jump to the bottom when messages are ADDED — not when only a reaction changed (a phone reaction on an old
   // message must not yank the reader away from where they are scrolled).

@@ -326,7 +326,11 @@ export function computeVisibleList(input: ReconcileInput): InboxConversation[] {
   for (const row of serverRows) {
     if (hidden.has(row.id)) continue
     const uo = nextUnread.get(row.id)
-    visible.push(uo ? { ...row, unread: uo.value } : row)
+    // The optimistic value only stands while the server still sits AT the baseline it had when the action was taken. The moment
+    // it moves off (caught up, or NEW activity) the server is authoritative — checked HERE as well as in advanceReleases because
+    // the WhatsApp list never runs advanceReleases (conversation-list.tsx skips it), so its override was never released and a
+    // customer's NEXT message in a chat Antonio had opened showed no unread badge until a hard refresh (dev job 254034f9).
+    visible.push(uo && row.unread === uo.baseline ? { ...row, unread: uo.value } : row)
     seen.add(row.id)
   }
 
