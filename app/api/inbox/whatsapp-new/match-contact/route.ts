@@ -3,6 +3,7 @@ import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findContactByPhone } from "@/lib/messaging/contact-match"
 import { jidToE164 } from "@/lib/messaging/phone"
+import { findNameSuggestion } from "@/lib/messaging/name-suggestion"
 
 export const dynamic = "force-dynamic"
 
@@ -29,16 +30,26 @@ export async function GET(request: NextRequest) {
 
   const { data: group } = await supabaseAdmin
     .from("messaging_groups")
-    .select("external_group_id, lead_id, contact_id")
+    .select("external_group_id, group_name, lead_id, contact_id, account_id")
     .eq("id", groupId)
     .single()
   if (!group) {
     return NextResponse.json({ error: "Conversation not found" }, { status: 404 })
   }
-  if (group.lead_id || group.contact_id) {
+  if (group.lead_id || group.contact_id || group.account_id) {
     return NextResponse.json({ match: null, alreadyLinked: true })
   }
 
   const match = await findContactByPhone(jidToE164(group.external_group_id))
-  return NextResponse.json({ match, alreadyLinked: false })
+  if (match) return NextResponse.json({ match, alreadyLinked: false, nameSuggestion: null })
+
+  // No client has this number. A known client may be writing from a second number: if the sender's name fits exactly one
+  // existing contact, the banner offers to add this number to them (suggest only — a person clicks). Never blocks the page.
+  let nameSuggestion = null
+  try {
+    nameSuggestion = await findNameSuggestion(groupId, group.external_group_id, group.group_name)
+  } catch (err) {
+    console.warn("[match-contact] name suggestion failed:", err instanceof Error ? err.message : err)
+  }
+  return NextResponse.json({ match: null, alreadyLinked: false, nameSuggestion })
 }

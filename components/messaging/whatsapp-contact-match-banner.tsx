@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { UserPlus, Loader2, Search, X } from 'lucide-react'
+import { UserPlus, Loader2, Search, X, UserCheck } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface ContactMatch {
@@ -21,6 +21,17 @@ interface ContactMatch {
   id: string
   name: string
   accountName?: string | null
+}
+
+interface NameSuggestion {
+  kind: 'one' | 'several'
+  contact?: { id: string; name: string; accountName: string | null; phones: string[]; canAdd: boolean }
+  names?: string[]
+}
+
+const dismissKey = (groupId: string, contactId: string) => `wa-name-suggest-dismissed:${groupId}:${contactId}`
+const wasDismissed = (groupId: string, contactId: string) => {
+  try { return window.localStorage.getItem(dismissKey(groupId, contactId)) === '1' } catch { return false }
 }
 
 interface AccountSearchResult {
@@ -52,8 +63,9 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [existingContacts, setExistingContacts] = useState<ExistingAccountContact[]>([])
   const [loadingExistingContacts, setLoadingExistingContacts] = useState(false)
   const [addingNewPerson, setAddingNewPerson] = useState(false)
+  const [, bumpDismiss] = useState(0)
 
-  const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean }>({
+  const { data, isLoading } = useQuery<{ match: ContactMatch | null; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null }>({
     queryKey: ['whatsapp-contact-match', groupId],
     queryFn: () => fetch(`/api/inbox/whatsapp-new/match-contact?groupId=${encodeURIComponent(groupId)}`).then((r) => r.json()),
   })
@@ -182,6 +194,78 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
       <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-800">
         Matches an existing {type === 'lead' ? 'lead' : 'contact'}: <span className="font-medium">{matchName}</span>
         {accountName && <> · {accountName}</>}
+      </div>
+    )
+  }
+
+  // Same name as an existing client, but a number they do not have yet — ask, never act alone (Antonio, 2026-10-07).
+  const suggestion = data?.nameSuggestion
+  if (!recordType && suggestion?.kind === 'one' && suggestion.contact && !wasDismissed(groupId, suggestion.contact.id)) {
+    const c = suggestion.contact
+    const addNumber = async () => {
+      setSaving(true)
+      try {
+        const res = await fetch('/api/inbox/whatsapp-new/add-number', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId, contactId: c.id }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json.error || 'Could not add the number — please try again.')
+        toast.success(`Added this number to ${c.name}`)
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
+        queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
+        onSaved?.()
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : 'Could not add the number — please try again.')
+      } finally {
+        setSaving(false)
+      }
+    }
+    return (
+      <div data-tour="wa-match-banner" className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <UserCheck className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 basis-60">
+          Same name as an existing client: <span className="font-medium">{c.name}</span>
+          {c.accountName && <> · {c.accountName}</>}
+          {c.phones.length > 0 && <> · on file: {c.phones.join(', ')}</>}
+          {c.canAdd ? '. Add this number to them?' : '. They already have four numbers on file, so this one cannot be added.'}
+        </span>
+        {c.canAdd && (
+          <button
+            onClick={addNumber}
+            disabled={saving}
+            className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 font-medium text-white hover:bg-amber-700 disabled:opacity-40"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Add this number
+          </button>
+        )}
+        <button
+          onClick={() => {
+            try { window.localStorage.setItem(dismissKey(groupId, c.id), '1') } catch { /* blocked storage: hidden until reload */ }
+            bumpDismiss((n) => n + 1)
+          }}
+          className="font-medium text-amber-800 underline hover:text-amber-950"
+        >
+          Not him
+        </button>
+        <button onClick={() => setRecordType('lead')} className="font-medium text-blue-700 hover:text-blue-800">
+          Save as someone new
+        </button>
+      </div>
+    )
+  }
+  if (!recordType && suggestion?.kind === 'several' && suggestion.names?.length) {
+    return (
+      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 flex items-center justify-between gap-2">
+        <span>
+          Several clients share this name ({suggestion.names.join(', ')}). Use &ldquo;Save this number&rdquo; → &ldquo;Contact of an existing client&rdquo; to pick the right one.
+        </span>
+        <button onClick={() => setRecordType('lead')} className="inline-flex shrink-0 items-center gap-1 font-medium text-blue-600 hover:text-blue-700">
+          <UserPlus className="h-3.5 w-3.5" />
+          Save this number
+        </button>
       </div>
     )
   }

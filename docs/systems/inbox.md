@@ -1,5 +1,7 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
+_2026-10-07 note (same name, new number): an unlinked WhatsApp chat whose sender name fits exactly one existing client now shows an amber 'Add this number to them?' bar in the chat banner (Add / Not him / Save as someone new); suggest-only, details and rules in `docs/systems/messaging.md`._
+
 _2026-10-07 note (narrow windows): the email thread header's action buttons (Task … Delete, 16 of them) used to be `shrink-0`, so they could never be narrower than ~770px and pushed the whole page sideways whenever the email area was narrower (browser window under ~1150px). They now wrap onto a second line (`min-w-0 flex-wrap`). Found by measuring the live inbox at several widths; the Worker panel was NOT the cause (same overflow with it closed)._
 
 _2026-10-07 note (tour): the email reply tour no longer starts by itself — only the "Reply tour" button opens it (Antonio: it popped up on every page). The auto-start gate, the once-per-load flag and the "Don't show this tour again" tick-box (and its per-browser storage key) were removed with it; the reversal of the 2026-10-06 "comes back until ticked" rule is deliberate. The WhatsApp tour is unchanged (still once ever per person).
