@@ -2,9 +2,12 @@
  * POST /api/esign/envelopes — create a draft e-sign envelope from an uploaded
  * PDF + a field/signer layout. Staff-only (dashboard auth).
  *
- * multipart/form-data:
- *   pdf:     File (the source PDF)
- *   payload: JSON string {
+ * TWO request shapes (see lib/esign/read-pdf-input.ts):
+ *   JSON  { staging_path, file_name, payload } — the PDF was uploaded straight to
+ *         storage via POST /api/esign/upload-url (no platform size limit).
+ *   multipart/form-data { pdf: File, payload: JSON string } — the original shape,
+ *         still accepted for small files / stale tabs (platform caps it at 4.5 MB).
+ * The payload is {
  *     document_name, description?, routing_order?,
  *     signers: [{ name, email?, contact_id?, role_label?, signing_order? }],
  *     fields:  [{ field_type, page_index, pos_x, pos_y, width, height,
@@ -20,6 +23,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { validatePdfUpload, scanForMalware } from "@/lib/esign/upload-guard"
+import { readPdfInput } from "@/lib/esign/read-pdf-input"
+import { sanitizePdfFileName } from "@/lib/esign/staging"
 import { createEsignEnvelope, type EsignFieldInput, type EsignSignerInput } from "@/lib/operations/esign"
 import { normalizeExpiryDays } from "@/lib/esign/expiry"
 
@@ -30,26 +35,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Dashboard access required" }, { status: 403 })
   }
 
-  let form: FormData
+  const input = await readPdfInput(req, user.id)
+  if (input.kind === "refused") return NextResponse.json({ error: input.error }, { status: input.status })
   try {
-    form = await req.formData()
-  } catch {
-    return NextResponse.json({ error: "Expected multipart form data." }, { status: 400 })
+    return await createFromInput(req, user, input)
+  } finally {
+    // The claimed staging object is PII and is never reused — gone on every exit.
+    await input.discard()
   }
+}
 
-  const file = form.get("pdf")
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "A PDF file is required." }, { status: 400 })
-  }
-
-  const payloadRaw = form.get("payload")
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let payload: any
-  try {
-    payload = JSON.parse(typeof payloadRaw === "string" ? payloadRaw : "{}")
-  } catch {
-    return NextResponse.json({ error: "Invalid payload JSON." }, { status: 400 })
-  }
+async function createFromInput(
+  req: NextRequest,
+  user: { email?: string | null } | null,
+  input: { bytes: Uint8Array; fileName: string; payload: any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+) {
+  const payload = input.payload
 
   const document_name = typeof payload.document_name === "string" ? payload.document_name.trim() : ""
   if (!document_name) return NextResponse.json({ error: "A document name is required." }, { status: 400 })
@@ -73,7 +74,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const bytes = new Uint8Array(await file.arrayBuffer())
+  const bytes = input.bytes
 
   const valid = await validatePdfUpload(bytes)
   if (!valid.ok) return NextResponse.json({ error: valid.error }, { status: 400 })
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
       baseUrl,
       description: typeof payload.description === "string" ? payload.description : null,
       pdfBuffer: Buffer.from(bytes),
-      fileName: (file.name || "document.pdf").replace(/[^a-zA-Z0-9._-]/g, "_"),
+      fileName: sanitizePdfFileName(input.fileName, "document"),
       pageCount: valid.pageCount ?? 1,
       fields,
       signers,
