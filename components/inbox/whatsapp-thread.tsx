@@ -12,7 +12,7 @@ import {
   type SendMode,
 } from '@/lib/messaging/wabridge-outbox'
 import {
-  Send, Loader2, Paperclip, Sparkles, X, Smile, MoreVertical, Reply, Link2, Users, ClipboardList,
+  Send, Loader2, Paperclip, Sparkles, Wand2, X, Smile, MoreVertical, Reply, Link2, Users, ClipboardList,
   StickyNote, Pin, Trash2, Check, AlertCircle, Clock, Hourglass, CheckCircle2, Truck, Receipt, Plus,
   Mic, Square,
 } from 'lucide-react'
@@ -1209,7 +1209,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
                   aria-label={text.trim() ? 'Polish my text' : 'Suggest a reply'}
                 >
-                  {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : (text.trim() ? <Wand2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />)}
                 </button>
               </FastTooltip>
               <button
