@@ -13197,6 +13197,7 @@ export type Database = {
           link_code: string | null
           link_code_at: string | null
           names_synced_at: string | null
+          reactions_seen_at: string | null
           reachable: boolean | null
           send_allowlist: string[]
           send_daily_cap: number
@@ -13220,6 +13221,7 @@ export type Database = {
           link_code?: string | null
           link_code_at?: string | null
           names_synced_at?: string | null
+          reactions_seen_at?: string | null
           reachable?: boolean | null
           send_allowlist?: string[]
           send_daily_cap?: number
@@ -13243,6 +13245,7 @@ export type Database = {
           link_code?: string | null
           link_code_at?: string | null
           names_synced_at?: string | null
+          reactions_seen_at?: string | null
           reachable?: boolean | null
           send_allowlist?: string[]
           send_daily_cap?: number
@@ -14352,6 +14355,7 @@ export type Database = {
         Args: { p_channel_id: string; p_names: Json }
         Returns: number
       }
+      wabridge_apply_observed_reactions: { Args: { p_channel_id: string; p_items: Json; p_scan_ms: number }; Returns: Json }
       wabridge_count_dropped: { Args: { p_channel_id: string }; Returns: undefined }
       wabridge_ingest_message: {
         Args: {

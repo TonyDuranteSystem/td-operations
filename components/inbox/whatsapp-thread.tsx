@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { isJunkChatName } from '@/lib/messaging/chat-name'
+import { splitReactions, PHONE_SIDE_LABEL } from '@/lib/messaging/wa-reactions-view'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 import { guessMessageLocale } from '@/lib/messaging/lang-detect'
@@ -59,6 +60,8 @@ interface MessageReactionRow {
   emoji: string
   reactor_id: string
   reactor_name: string | null
+  /** 'staff' = marked in the CRM; 'client' / 'line' = reported by the phone (display only); '' tombstone = a removal. */
+  reactor_type?: string | null
 }
 
 interface WhatsAppMessage {
@@ -264,9 +267,13 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     if (mid) actionByMessageId.set(mid, a.action_type)
   }
 
+  // Jump to the bottom when messages are ADDED — not when only a reaction changed (a phone reaction on an old
+  // message must not yank the reader away from where they are scrolled).
+  const messageCount = data?.messages?.length ?? 0
+  const lastMessageId = data?.messages?.[messageCount - 1]?.id ?? null
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-  }, [data?.messages])
+  }, [messageCount, lastMessageId])
 
   // Deep link: /inbox?thread=whatsapp:<groupId>&message=<id> (the per-message "Copy link" action)
   // scrolls to and briefly highlights that exact message once it's loaded. Read once per chat open —
@@ -675,10 +682,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
             const isRealMessage = !msg.id.startsWith('outbox:')
             const quotedMessage = msg.reply_to_id ? messages.find((m) => m.id === msg.reply_to_id) : null
             const activeTag = isRealMessage ? actionByMessageId.get(msg.id) : undefined
-            const reactionGroups = (msg.reactions ?? []).reduce<Record<string, number>>((acc, r) => {
-              acc[r.emoji] = (acc[r.emoji] ?? 0) + 1
-              return acc
-            }, {})
+            const reactionView = splitReactions(msg.reactions)
 
             const actionButton = isRealMessage && (
               <DropdownMenu.Root>
@@ -921,19 +925,31 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   </p>
                   {isRealMessage && (
                     <div className={cn('flex flex-wrap items-center gap-1 mt-1', isOutbound ? 'justify-end' : 'justify-start')}>
-                      {Object.entries(reactionGroups).map(([emoji, count]) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          onClick={() => reactMutation.mutate({ messageId: msg.id, emoji })}
-                          className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50"
-                        >
-                          <span className="leading-none">{emoji}</span>
-                          <span className="tabular-nums text-zinc-500">{count}</span>
-                        </button>
+                      {reactionView.phone.map((p) => (
+                        <FastTooltip key={p.side} label={PHONE_SIDE_LABEL[p.side]}>
+                          <span
+                            data-testid={`wa-phone-reaction-${p.side}`}
+                            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs leading-none"
+                          >
+                            <span className="leading-none">{p.emoji}</span>
+                            <span className="text-[10px] text-emerald-700">{p.side === 'client' ? 'client' : 'phone'}</span>
+                          </span>
+                        </FastTooltip>
+                      ))}
+                      {reactionView.staff.map((g) => (
+                        <FastTooltip key={g.emoji} label={`${g.names.length ? g.names.join(', ') + ' — ' : ''}saved here in the CRM only, not on the phone`}>
+                          <button
+                            type="button"
+                            onClick={() => reactMutation.mutate({ messageId: msg.id, emoji: g.emoji })}
+                            className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50"
+                          >
+                            <span className="leading-none">{g.emoji}</span>
+                            <span className="tabular-nums text-zinc-500">{g.count}</span>
+                          </button>
+                        </FastTooltip>
                       ))}
                       <div className="relative" ref={reactingMessageId === msg.id ? reactionPickerRef : undefined}>
-                        <FastTooltip label="Add reaction">
+                        <FastTooltip label="Add reaction (saved in the CRM only — not sent to WhatsApp)">
                           <button
                             type="button"
                             onClick={() => setReactingMessageId((cur) => (cur === msg.id ? null : msg.id))}

@@ -1,5 +1,6 @@
 # Messaging (WhatsApp / Telegram)
-_Last verified against code: 2026-10-01 — Claude (**THE BUSINESS-NAME LEAK HAD ONE MORE DOORWAY —
+_Last verified against code: 2026-10-07 — Claude (**WHATSAPP REACTIONS MADE ON THE PHONE NOW APPEAR IN THE CRM (RELEASE 1 of 2, DEV JOB `5962e46d`; sandbox only until Antonio says ship it).** The Mac reads GOWA's own reaction records read-only and reports them; the CRM shows them as display-only pills. Nothing is sent to WhatsApp (CRM → phone is Release 2, not built). See "Reactions from the phone" below.)_
+_Prior: 2026-10-01 — Claude (**THE BUSINESS-NAME LEAK HAD ONE MORE DOORWAY —
 THE PER-MESSAGE SENDER CAPTION.** Antonio, after a Bug-Hunter sweep of the whole WhatsApp system he
 asked for ("why patch???? i don't want a system patched. I wan t a fucking solid system"): the
 earlier same-day fix protected a chat's own name, but a sibling field — the small label under each
@@ -129,7 +130,7 @@ from the CRM Inbox; an inbound webhook receives new messages. The system is
 `messaging_channels.provider` at runtime and dispatches to the matching handler —
 adding a new provider is one DB row + one handler function, nothing else.
 
-**2Chat.co is the live provider today**, connected via their "QR-code" mode (an
+**(HISTORICAL — 2Chat was retired 2026-09-25, the live provider is the self-hosted `wabridge`; see the provider list below.)** 2Chat.co was the provider, connected via their "QR-code" mode (an
 existing personal/business WhatsApp number linked as a companion device — NOT the
 official Meta Business API). One number is wired: the Lead channel. Meta/Twilio
 remain unimplemented stubs.
@@ -196,7 +197,7 @@ remain unimplemented stubs.
 ```
 messaging_channels.provider = NULL       → error: "WhatsApp provider not configured"
 messaging_channels.provider = 'twochat'  → sendVia2Chat() — RETIRED (2Chat is off since 2026-09-25; no channel uses it)
-messaging_channels.provider = 'wabridge' → sendViaWabridge() — LIVE provider of the Lead channel since 2026-09-25; RECEIVE-ONLY: the send throws "not switched on" (CRM sends need the bridge outbox, a later phase — staff reply from the phone)
+messaging_channels.provider = 'wabridge' → sendViaWabridge() — LIVE provider of the Lead channel since 2026-09-25; the direct send handler throws "not switched on" on purpose — CRM replies go through the bridge outbox + the Mac sender loop (see "Reply from the CRM" below)
 messaging_channels.provider = 'meta'     → sendViaMeta() stub (TODO: implement)
 messaging_channels.provider = 'twilio'   → sendViaTwilio() stub (TODO: implement)
 unknown provider string                  → error: "Unknown WhatsApp provider ..."
@@ -262,7 +263,7 @@ phone <-WhatsApp-> GOWA (127.0.0.1:3001, launchd com.td.wa-bridge, ~/wa-bridge)
   **media files are NOT stored yet** (auto-download is off).
 - **What is dropped (200, nothing written):** groups (`@g.us`, also muted at GOWA), status/broadcast, newsletters,
   unresolved `@lid` chats (a fake phone number built from a LID would open a garbage, unreplyable thread), the owner's
-  "message yourself" chat, reactions, receipts, edits, deletions, calls, presence.
+  "message yourself" chat, receipts, edits, deletions, calls, presence. (Reactions are not dropped any more — they reach the CRM by a separate route, see "Reactions from the phone".)
 - **Dedupe/atomicity:** `wabridge_ingest_message()` (migration `20260924-2200-wabridge-provider-and-ingest.sql`) inserts
   the message `ON CONFLICT DO NOTHING` on `external_message_id` and, only if it inserted, updates the conversation in the
   SAME transaction: inbound = unread+1 and revive a hidden chat; outbound = unread reset to 0, hidden chat stays hidden;
@@ -369,6 +370,14 @@ doesn't exist yet. **This becomes a hard requirement, not optional, the moment a
 bulk/multi-recipient WhatsApp send feature is built** (e.g. a "notify several
 clients" campaign) — add the limiter there, scoped to that feature, not retrofitted
 onto manual replies.
+
+## Reactions from the phone — Release 1 (dev job `5962e46d`; built + rehearsed in the sandbox 2026-10-07; NOT in production)
+**What it does:** an emoji reaction made on the WhatsApp phone — by the customer, or by us on the business phone — shows on the message in the CRM Inbox. Display only: **it sends nothing to WhatsApp and writes nothing to GOWA's files.** CRM → phone (a reaction made in the CRM appearing on the phone) is Release 2 and does not exist yet; until then a CRM mark is labelled "saved here in the CRM only".
+**How it flows:** `~/wa-bridge` on the Mac runs `reactions-loop.sh` (own always-on loop, one scan a minute, lock directory) → `reactions.mjs` reads GOWA's `message_reactions` table with `sqlite3 -readonly` → `reactions-plan.mjs` (pure, unit-tested) decides what changed → signed `bridge.reactions` post to `app/api/wa-bridge/[channelId]/route.ts` → parsed by `lib/messaging/wabridge-reactions.ts` → DB function `wabridge_apply_observed_reactions` (migration `20261007-0100-wabridge-phone-reactions.sql`) writes ONLY `messages.reactions` (never unread count, last-message time or anything else). The scripts live in `scripts/wa-bridge/` in the repo and are copied to `~/wa-bridge/`.
+**Data shape:** one element per side per message in `messages.reactions`: `reactor_type` `client` (customer, GOWA `is_from_me=0`) or `line` (our business phone, `is_from_me=1`), `reactor_id` `wa-client`/`wa-line`, `source:'phone'`, `scan_ms` (the Mac snapshot time). The side comes from `is_from_me`, NEVER from the JID (a customer JID can be a hidden `@lid` id). Staff CRM marks keep `reactor_type:'staff'` and are never touched by this path. A phone removal leaves a **tombstone** (`emoji:''`, keeps `scan_ms`) so a replayed older "add" cannot bring it back; the screen never draws a tombstone (`lib/messaging/wa-reactions-view.ts`).
+**Ordering + safety rules:** one clock (`scan_ms`); a scan older than what the CRM holds is `stale`. A removal is applied only when the bridge is healthy (reachable + connected + logged in + heartbeat under 3 min) — otherwise `held`, retried next scan. The reader fails CLOSED: unexpected table layout, any read error, or an empty read after reactions were reported (distrusted for up to 10 scans) report nothing; a removal must stay missing for 2 scans and its parent message must still exist; more than 3 removals in one scan are refused unless `--accept-removals`. Per-item answers: applied / noop / stale / held / unmatched (message not in the CRM yet — retried up to 40 scans) / invalid. An empty batch is the "reader is alive" beat (`wa_bridge_state.reactions_seen_at`).
+**Known limits:** phone → CRM lag is about a minute; GOWA keeps no row for reactions sent through its API, so a CRM-sent reaction (Release 2) will not be visible to the reader and a native phone removal of it would be invisible; the removal guard uses absolute counts. WhatsApp allows one reaction per person per message — open decision before Release 2: how the CRM's several staff marks map onto the one slot.
+**Verify:** `node scripts/wa-bridge/rehearse-reactions.mjs` (repo root, sandbox dev server on :3000) → "REHEARSAL: ALL PASS" (12 checks, fake WhatsApp file, sandbox DB only); `node ~/wa-bridge/reactions.mjs --once --dry` on the Mac prints what WOULD be reported and posts nothing; tests `tests/unit/wabridge-reactions.test.ts`, `wabridge-reactions-plan.test.ts`, `wa-reactions-view.test.ts`, `wabridge-route.test.ts`. **To go live (Antonio's separate ship):** apply the migration on production (dashboard SQL editor), copy the scripts to `~/wa-bridge/`, dry-run on the Mac, register the launchd job `com.td.wa-bridge-reactions` (KeepAlive).
 
 ## Gotchas
 - `messaging_channels.platform` is the column that holds `'whatsapp'`/`'telegram'`.
