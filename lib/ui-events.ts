@@ -15,7 +15,9 @@
  *  - 'notes' — staff sticky notes created/edited/shared/snoozed/archived
  *  - 'whatsapp' — the WhatsApp Inbox changed: a message arrived, a reply's status changed, a phone reaction was applied,
  *                 media became playable, chat names changed. Emitted by app/api/wa-bridge/[channelId]/route.ts.
- *                 Payload-free; the listener refreshes only the WhatsApp list + open chat (lib/ui-event-whatsapp-keys.ts).
+ *                 The listener refreshes only the WhatsApp list + open chat (lib/ui-event-whatsapp-keys.ts). Payload: none, EXCEPT
+ *                 `{ inbound: n }` when n fresh CUSTOMER messages arrived — the dashboard then plays the person's chosen tone
+ *                 (lib/whatsapp-sound.ts, lib/messaging/inbound-sound.ts; dev job c84dfb4d). Never message text or names.
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"

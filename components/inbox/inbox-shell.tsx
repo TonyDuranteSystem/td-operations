@@ -26,6 +26,7 @@ import { WorkerChatPanel } from './worker-chat-panel'
 import { WhatsAppWorkerPanel } from './whatsapp-worker-panel'
 import { WhatsAppBridgeBanner } from './whatsapp-bridge-banner'
 import { WhatsAppSendSwitch } from './whatsapp-send-switch'
+import { WhatsAppSoundPicker } from './whatsapp-sound-picker'
 import { LinkClientDialog } from './link-client-dialog'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { HoverHint } from './hover-hint'
@@ -1582,6 +1583,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
               </button>
             ))}
           </div>
+          {/* Which sound plays for a new customer message (per person, this browser) — dev job c84dfb4d */}
+          <WhatsAppSoundPicker />
         </div>
       )}
 
