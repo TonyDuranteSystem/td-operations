@@ -304,6 +304,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
           anotherTourActive: isAnyTourActive(),
           wideScreen: window.matchMedia('(min-width: 768px)').matches,
           alreadySeen: !!window.localStorage.getItem(key),
+          tabVisible: document.visibilityState === 'visible',
+          replyBoxBusy: !!document.activeElement?.closest('.rich-editor-surface'),
         })
         if (!go) return
         window.localStorage.setItem(key, '1')

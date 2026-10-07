@@ -14,11 +14,11 @@
  * missing (no email open, a narrow screen) is skipped rather than stalling the tour.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride'
 import { acquireTour, releaseTour } from '@/lib/ui/tour-lock'
-import { REPLY_TOUR_EVENT, endAction, transitionAction, type ReplyTourAction } from '@/lib/inbox/reply-tour'
+import { REPLY_TOUR_EVENT, transitionAction, type ReplyTourAction } from '@/lib/inbox/reply-tour'
 
 const Joyride = dynamic(() => import('react-joyride'), { ssr: false })
 
@@ -77,7 +77,7 @@ export const REPLY_TOUR_CONTENT: Array<Step & { id: string }> = [
     target: 'body',
     title: 'Your unsent reply is safe',
     content:
-      'If the page refreshes or closes by mistake, a blue bar offers "Restore it" or "Discard" next time. Esc closes this window and your text stays in the small box. That is the whole tour. You can start it again from the Reply tour button.',
+      'If the page refreshes or closes by mistake, a blue bar offers "Restore it" or "Discard" next time. When the tour is over, Esc or the ✕ closes this window and your text stays in the small box. You can start the tour again from the Reply tour button.',
     placement: 'center',
   },
 ]
@@ -89,6 +89,9 @@ function sendReplyTour(action: ReplyTourAction | null) {
 export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [stepIndex, setStepIndex] = useState(0)
   const [run, setRun] = useState(false)
+  // Whether THIS tour has opened the pop-up and not yet closed it — so Skip / Done close it even if they land in the
+  // half second between pressing Next on the Expand step and the pop-up arriving.
+  const popupOpenedByTour = useRef(false)
 
   useEffect(() => {
     if (open) {
@@ -113,6 +116,8 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
 
   const goTo = useCallback((from: number, to: number) => {
     const action = transitionAction(from, to)
+    if (action === 'expand') popupOpenedByTour.current = true
+    if (action === 'collapse') popupOpenedByTour.current = false
     sendReplyTour(action)
     // The pop-up needs a moment to mount before the tour looks for a target inside it.
     window.setTimeout(() => setStepIndex(to), action === 'expand' ? 500 : action ? 200 : 0)
@@ -124,7 +129,8 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
 
       const finish = () => {
         setRun(false)
-        sendReplyTour(endAction(index))
+        if (popupOpenedByTour.current) sendReplyTour('collapse')
+        popupOpenedByTour.current = false
         sendReplyTour('release')
         onClose()
       }
@@ -136,7 +142,8 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
 
       // A target that is not on screen (no reply box open, a hidden control) must never stall the tour.
       if (type === EVENTS.TARGET_NOT_FOUND) {
-        const next = Math.min(index + 1, REPLY_TOUR_CONTENT.length - 1)
+        // Keep going the way the person was going (Back stays Back).
+        const next = action === ACTIONS.PREV ? Math.max(index - 1, 0) : Math.min(index + 1, REPLY_TOUR_CONTENT.length - 1)
         if (next !== index) goTo(index, next)
         return
       }
@@ -168,6 +175,8 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
       disableOverlayClose
       // Esc belongs to the pop-up (it closes it); the tour has its own Skip button.
       disableCloseOnEsc
+      // The tooltip's ✕ would otherwise move to the NEXT step (Joyride reports it as a step change); Skip is the exit.
+      hideCloseButton
       callback={handleCallback}
       locale={{ back: 'Back', close: 'Close', last: 'Done', next: 'Next', skip: 'Skip tour' }}
       styles={{

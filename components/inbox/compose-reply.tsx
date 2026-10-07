@@ -200,6 +200,8 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // The reply tour (components/inbox/reply-tour.tsx) is on screen: keep the box in writing mode so the toolbar the
   // tour points at does not fold away when focus moves to the tour's own buttons.
   const tourHoldRef = useRef(false)
+  // The tour opens and closes the pop-up itself; that must not change "stay inline after a deliberate close".
+  const tourKeepInlineRef = useRef(false)
   const tourActionRef = useRef<(a: ReplyTourAction) => void>(() => {})
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
@@ -271,11 +273,21 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
       setComposing(true)
     } else if (action === 'expand') {
       tourHoldRef.current = true
-      if (!expanded) openPopup()
+      if (!expanded) {
+        tourKeepInlineRef.current = keepInlineRef.current
+        openPopup()
+      }
     } else if (action === 'collapse') {
-      if (expanded) closePopup()
+      if (expanded) {
+        closePopup()
+        // closePopup records a DELIBERATE close; this one was the tour's, so put the earlier value back.
+        keepInlineRef.current = tourKeepInlineRef.current
+      }
     } else {
       tourHoldRef.current = false
+      // Tour over with nothing written and the cursor not in the box: fold back like a normal blur would.
+      const active = document.activeElement
+      if (!messageRef.current.trim() && !(active && active.closest('.rich-editor-surface'))) setComposing(false)
     }
   }
   useEffect(() => {

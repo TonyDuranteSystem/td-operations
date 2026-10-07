@@ -47,7 +47,7 @@ describe("transitionAction — what the reply box must do between steps", () => 
   })
 })
 
-describe("endAction", () => {
+describe("endAction (kept for the pop-up steps; the component also tracks what it opened itself)", () => {
   it("closes the pop-up only if the tour ended inside it", () => {
     expect(endAction(idx("safety"))).toBe("collapse")
     expect(endAction(idx("popup-default"))).toBe("collapse")
@@ -57,7 +57,7 @@ describe("endAction", () => {
 })
 
 describe("shouldAutoStartReplyTour", () => {
-  const ok: AutoStartContext = { userId: "u1", emailThreadOpen: true, framedOrPopout: false, anotherTourActive: false, wideScreen: true, alreadySeen: false }
+  const ok: AutoStartContext = { userId: "u1", emailThreadOpen: true, framedOrPopout: false, anotherTourActive: false, wideScreen: true, alreadySeen: false, tabVisible: true, replyBoxBusy: false }
   it("starts for a person who has not seen it, with an email open, on a normal wide screen", () => {
     expect(shouldAutoStartReplyTour(ok)).toBe(true)
   })
@@ -68,6 +68,8 @@ describe("shouldAutoStartReplyTour", () => {
     expect(shouldAutoStartReplyTour({ ...ok, anotherTourActive: true })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, wideScreen: false })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, alreadySeen: true })).toBe(false)
+    expect(shouldAutoStartReplyTour({ ...ok, tabVisible: false })).toBe(false)
+    expect(shouldAutoStartReplyTour({ ...ok, replyBoxBusy: true })).toBe(false)
   })
 })
 
@@ -93,6 +95,10 @@ describe("the tour component and the rules agree", () => {
   it("uses the shared one-tour-at-a-time lock and leaves Esc to the pop-up", () => {
     expect(src).toContain("acquireTour('reply')")
     expect(src).toContain("disableCloseOnEsc")
+  })
+  it("has no ✕ that would move to the next step, and closes the pop-up it opened on any exit", () => {
+    expect(src).toContain("hideCloseButton")
+    expect(src).toContain("popupOpenedByTour.current")
   })
 })
 

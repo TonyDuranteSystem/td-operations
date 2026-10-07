@@ -68,9 +68,22 @@ export interface AutoStartContext {
   wideScreen: boolean
   /** This person has already been shown it on this browser. */
   alreadySeen: boolean
+  /** The tab is on screen (a background tab would burn the one-time flag with nobody watching). */
+  tabVisible: boolean
+  /** The cursor is already in the reply box — they are writing; do not take the focus away. */
+  replyBoxBusy: boolean
 }
 
 /** Starts by itself once, the first time a person has an email open on a normal screen — never over something else. */
 export function shouldAutoStartReplyTour(c: AutoStartContext): boolean {
-  return !!c.userId && c.emailThreadOpen && !c.framedOrPopout && !c.anotherTourActive && c.wideScreen && !c.alreadySeen
+  return (
+    !!c.userId &&
+    c.emailThreadOpen &&
+    !c.framedOrPopout &&
+    !c.anotherTourActive &&
+    c.wideScreen &&
+    !c.alreadySeen &&
+    c.tabVisible &&
+    !c.replyBoxBusy
+  )
 }
