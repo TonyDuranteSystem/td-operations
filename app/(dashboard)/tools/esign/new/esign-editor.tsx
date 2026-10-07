@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { uploadPdfToStaging, EsignUploadError, MULTIPART_FALLBACK_MAX_BYTES, describeCreateFailure } from "@/lib/esign/upload-staged-pdf"
 import { PdfViewer, type PdfPageInfo } from "@/components/esign/pdf-viewer"
 import { normalizedToDomBox, clampNormalizedRect, type NormalizedRect } from "@/lib/esign/coordinates"
 import { EXPIRY_DAY_CHOICES, DEFAULT_EXPIRY_DAYS, type ExpiryDays } from "@/lib/esign/expiry"
@@ -421,6 +422,9 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [result, setResult] = useState<any>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Synchronous double-click guard: React state updates are async, so two clicks in the
+  // same tick would both pass a `creating` check and create two documents.
+  const busyRef = useRef(false)
 
   // Optional CRM account link — so the signed doc files into the client's records.
   const [account, setAccount] = useState<{ id: string; company_name: string } | null>(initialAccount)
@@ -498,6 +502,8 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     if (!file) { setTemplateMsg("Upload a PDF first."); return }
     if (!fields.length) { setTemplateMsg("Place at least one field first."); return }
     if (!templateName.trim()) { setTemplateMsg("Name the template."); return }
+    if (busyRef.current) return
+    busyRef.current = true
     setSavingTemplate(true)
     try {
       const payload = {
@@ -509,12 +515,27 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
           signer_role_index: f.signer_index,
         })),
       }
-      const fd = new FormData()
-      fd.append("pdf", file)
-      fd.append("payload", JSON.stringify(payload))
-      const res = await fetch("/api/esign/templates", { method: "POST", body: fd })
+      let res: Response
+      let staged: { stagingPath: string } | null = null
+      try {
+        staged = await uploadPdfToStaging(file)
+      } catch (err) {
+        if (!(err instanceof EsignUploadError && err.networkFailure && file.size <= MULTIPART_FALLBACK_MAX_BYTES)) throw err
+      }
+      if (staged) {
+        res = await fetch("/api/esign/templates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ staging_path: staged.stagingPath, file_name: file.name, payload }),
+        })
+      } else {
+        const fd = new FormData()
+        fd.append("pdf", file)
+        fd.append("payload", JSON.stringify(payload))
+        res = await fetch("/api/esign/templates", { method: "POST", body: fd })
+      }
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || "Could not save the template.")
+      if (!res.ok) throw new Error(describeCreateFailure(res.status, data.error, "save the template"))
       setTemplateMsg("Template saved.")
       setShowSaveTemplate(false)
       setTemplateName("")
@@ -522,6 +543,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     } catch (err) {
       setTemplateMsg(err instanceof Error ? err.message : "Could not save the template.")
     } finally {
+      busyRef.current = false
       setSavingTemplate(false)
     }
   }, [file, fields, signers, templateName, refreshTemplates])
@@ -636,6 +658,8 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
   const create = useCallback(async () => {
     setConfirmOpen(false)
     if (!file) return setError("Upload a PDF first.")
+    if (busyRef.current) return
+    busyRef.current = true
     setCreating(true)
     try {
       const payload = {
@@ -654,12 +678,31 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
           signer_index: f.signer_index,
         })),
       }
-      const form = new FormData()
-      form.append("pdf", file)
-      form.append("payload", JSON.stringify(payload))
-      const res = await fetch("/api/esign/envelopes", { method: "POST", body: form })
+      // Normal path: the PDF goes straight to storage (no platform size limit) and the
+      // create call carries only its path. Original multipart request is the fallback,
+      // only for a file the platform still accepts (<4 MB) when the direct upload is
+      // blocked on this network.
+      let res: Response
+      let staged: { stagingPath: string } | null = null
+      try {
+        staged = await uploadPdfToStaging(file)
+      } catch (err) {
+        if (!(err instanceof EsignUploadError && err.networkFailure && file.size <= MULTIPART_FALLBACK_MAX_BYTES)) throw err
+      }
+      if (staged) {
+        res = await fetch("/api/esign/envelopes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ staging_path: staged.stagingPath, file_name: file.name, payload }),
+        })
+      } else {
+        const form = new FormData()
+        form.append("pdf", file)
+        form.append("payload", JSON.stringify(payload))
+        res = await fetch("/api/esign/envelopes", { method: "POST", body: form })
+      }
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || "Could not create the envelope.")
+      if (!res.ok) throw new Error(describeCreateFailure(res.status, data.error))
 
       // Auto-send: dispatch invites immediately after creation (best-effort).
       // If this fails the envelope is still created as a draft — user can send
@@ -676,6 +719,7 @@ export function EsignEditor({ initialAccount = null, initialSigner = null }: {
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : "Could not create the envelope.")
     } finally {
+      busyRef.current = false
       setCreating(false)
     }
   }, [file, documentName, signers, fields, account, routingOrder, expiryDays])

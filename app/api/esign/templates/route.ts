@@ -1,7 +1,10 @@
 /**
  * GET  /api/esign/templates — list active templates (staff).
  * POST /api/esign/templates — create a template from an uploaded PDF + field
- *   layout. multipart: pdf + payload { name, description?, roleCount,
+ *   layout. Two request shapes (lib/esign/read-pdf-input.ts): JSON
+ *   { staging_path, file_name, payload } (PDF uploaded straight to storage via
+ *   POST /api/esign/upload-url — no 4.5 MB platform limit) or the original
+ *   multipart pdf + payload. payload = { name, description?, roleCount,
  *   fields: [{ field_type, page_index, pos_x, pos_y, width, height,
  *              default_required?, placeholder?, font_size?, signer_role_index }],
  *   owner_account_id? }.
@@ -14,6 +17,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { validatePdfUpload, scanForMalware } from "@/lib/esign/upload-guard"
+import { readPdfInput } from "@/lib/esign/read-pdf-input"
+import { sanitizePdfFileName } from "@/lib/esign/staging"
 import { createEsignTemplate, listEsignTemplates, type TemplateFieldInput } from "@/lib/operations/esign"
 
 async function requireStaff() {
@@ -33,24 +38,20 @@ export async function POST(req: NextRequest) {
   const { ok, user } = await requireStaff()
   if (!ok) return NextResponse.json({ error: "Dashboard access required" }, { status: 403 })
 
-  let form: FormData
+  const input = await readPdfInput(req, user!.id)
+  if (input.kind === "refused") return NextResponse.json({ error: input.error }, { status: input.status })
   try {
-    form = await req.formData()
-  } catch {
-    return NextResponse.json({ error: "Expected multipart form data." }, { status: 400 })
+    return await createTemplateFromInput(user, input)
+  } finally {
+    await input.discard()
   }
+}
 
-  const file = form.get("pdf")
-  if (!(file instanceof File)) return NextResponse.json({ error: "A PDF file is required." }, { status: 400 })
-
-  const payloadRaw = form.get("payload")
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let payload: any
-  try {
-    payload = JSON.parse(typeof payloadRaw === "string" ? payloadRaw : "{}")
-  } catch {
-    return NextResponse.json({ error: "Invalid payload JSON." }, { status: 400 })
-  }
+async function createTemplateFromInput(
+  user: { email?: string | null } | null,
+  input: { bytes: Uint8Array; fileName: string; payload: any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+) {
+  const payload = input.payload
 
   const name = typeof payload.name === "string" ? payload.name.trim() : ""
   if (!name) return NextResponse.json({ error: "A template name is required." }, { status: 400 })
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
   if (!fields.length) return NextResponse.json({ error: "Place at least one field." }, { status: 400 })
   if (!Number.isInteger(roleCount) || roleCount < 1) return NextResponse.json({ error: "Invalid signer role count." }, { status: 400 })
 
-  const bytes = new Uint8Array(await file.arrayBuffer())
+  const bytes = input.bytes
   const valid = await validatePdfUpload(bytes)
   if (!valid.ok) return NextResponse.json({ error: valid.error }, { status: 400 })
   const scan = await scanForMalware(bytes)
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
       name,
       description: typeof payload.description === "string" ? payload.description : null,
       pdfBuffer: Buffer.from(bytes),
-      fileName: (file.name || "template.pdf").replace(/[^a-zA-Z0-9._-]/g, "_"),
+      fileName: sanitizePdfFileName(input.fileName, "template"),
       pageCount: valid.pageCount ?? 1,
       fields,
       roleCount,
