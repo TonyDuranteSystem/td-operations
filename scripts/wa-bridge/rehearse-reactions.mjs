@@ -1,30 +1,13 @@
 // End-to-end REHEARSAL of the phone → CRM reactions reader (dev job 5962e46d, Release 1). SANDBOX ONLY.
-// Runs the REAL reader (reactions.mjs) against a FAKE WhatsApp reaction file and the sandbox CRM (start 
-> td-operations@2.0.0 dev
-> next dev
-
-  ▲ Next.js 14.2.35
-  - Local:        http://localhost:3001
-  - Environments: .env.local
-  - Experiments (use with caution):
-    · instrumentationHook
-
- ✓ Starting...
- ○ Compiling /instrumentation ...
- ✓ Compiled /instrumentation in 981ms (1036 modules)
- ✓ Ready in 2.8s
-[?25h first; it
-// serves the new bridge.reactions route against the sandbox database). Creates one rehearsal message, removes it at the end.
-// Needs the sandbox NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env.local; refuses anything that is not the sandbox.
-//   node scripts/wa-bridge/rehearse-reactions.mjs        (from the repo root; expect "REHEARSAL: ALL PASS")
-// End-to-end rehearsal of release 1 against the SANDBOX CRM (local dev server) with a FAKE WhatsApp reaction file.
+// Run from the repo root with the sandbox dev server up on :3000:  node scripts/wa-bridge/rehearse-reactions.mjs
+// Runs the REAL reader against a FAKE WhatsApp reaction file and the sandbox CRM.
 // The real reader script (scripts/wa-bridge/reactions.mjs) runs unchanged; only its inputs are rehearsal ones. No secrets printed.
 import { readFileSync, rmSync, existsSync } from "node:fs"
 import { execFileSync, spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-const ROOT = process.cwd() // run from the repo root: node scripts/wa-bridge/rehearse-reactions.mjs
-const { createClient } = createRequire(import.meta.url)(`${ROOT}/node_modules/@supabase/supabase-js`)
+const { createClient } = createRequire(import.meta.url)(`${process.cwd()}/node_modules/@supabase/supabase-js/dist/index.cjs`)
 
+const ROOT = process.cwd() // run from the repo root
 const envText = readFileSync(`${ROOT}/.env.local`, "utf8")
 const env = Object.fromEntries(envText.split("\n").filter((l) => l.includes("=") && !l.startsWith("#")).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1).replace(/^"|"$/g, "")] }))
 if (!env.NEXT_PUBLIC_SUPABASE_URL.includes("xjcxlmlpeywtwkhstjlw")) { console.error("NOT SANDBOX — abort"); process.exit(1) }
