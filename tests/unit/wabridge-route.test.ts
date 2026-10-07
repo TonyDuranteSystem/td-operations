@@ -603,7 +603,7 @@ describe("the live-update signal ('whatsapp' ui event) — wakes open Inboxes on
 describe("CRM → phone reactions: bridge.react.claim / bridge.react.result (the Mac's reaction sender)", () => {
   const RID = "11111111-2222-4333-8444-555555555555"
   const claimEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.react.claim", ts: Date.now(), ...over })
-  const resultEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.react.result", ts: Date.now(), id: RID, ok: true, ...over })
+  const resultEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.react.result", ts: Date.now(), id: RID, attempt: 1, ok: true, ...over })
 
   it("hands the Mac the database's answer: a due reaction, or a normal 200 'wait' (never an error)", async () => {
     state.rpcOverrides.wabridge_claim_reaction = { data: { claimed: true, id: RID, to_digits: "17274234285", external_message_id: "3A005FCF60C597CA99D0", emoji: "👍" }, error: null }
@@ -630,7 +630,9 @@ describe("CRM → phone reactions: bridge.react.claim / bridge.react.result (the
     state.rpcOverrides.wabridge_finish_reaction = { data: { ok: true, status: "sent" }, error: null }
     let r = await call(resultEvent())
     expect(r).toEqual({ status: 200, body: { ok: true, status: "sent" } })
-    expect(state.rpcCalls.find((c) => c.fn === "wabridge_finish_reaction")?.args).toEqual({ p_channel_id: CHANNEL, p_id: RID, p_ok: true, p_error: null })
+    const finishArgs = state.rpcCalls.find((c) => c.fn === "wabridge_finish_reaction")?.args
+    expect(finishArgs).toMatchObject({ p_channel_id: CHANNEL, p_id: RID, p_ok: true, p_error: null, p_attempt: 1 })
+    expect(typeof finishArgs?.p_ts).toBe("number") // the Mac's clock, passed through for the phone element's scan_ms
     expect(state.uiEvents).toEqual(["whatsapp"])
     state.uiEvents = []
     state.rpcCalls = []
@@ -646,6 +648,8 @@ describe("CRM → phone reactions: bridge.react.claim / bridge.react.result (the
     expect((await call(claimEvent({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
     expect((await call(resultEvent({ id: "nope" }))).status).toBe(400)
     expect((await call(resultEvent({ ok: "yes" }))).status).toBe(400)
+    expect((await call(resultEvent({ attempt: undefined }))).status).toBe(400) // the claim number is required
+    expect((await call(resultEvent({ attempt: 0 }))).status).toBe(400)
     expect((await call(resultEvent({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
     expect(state.rpcCalls.filter((c) => c.fn.startsWith("wabridge_claim_reaction") || c.fn === "wabridge_finish_reaction")).toHaveLength(0)
     expect(state.uiEvents).toEqual([])

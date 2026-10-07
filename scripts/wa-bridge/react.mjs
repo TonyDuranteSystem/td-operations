@@ -7,8 +7,9 @@
 //      phone→CRM reader is alive, the 10 s undo hold, pacing, caps, expiry — and hands over at most ONE reaction.
 //   2. look at the claim once more (react-plan.mjs validateClaim), then call the program: POST /message/{id}/reaction {phone, emoji}
 //      (an EMPTY emoji removes the reaction).
-//   3. report the result (signed "bridge.react.result"). A reaction is idempotent on WhatsApp, so there is no "unknown" state: anything but an
-//      explicit success is reported failed, and the next click retries.
+//   3. report the result (signed "bridge.react.result", echoing the claim number). A reaction is idempotent on WhatsApp, so there is no
+//      "unknown" state: anything but an explicit success is reported failed (a timeout says "it may or may not have been delivered") and the
+//      next pick retries.
 // It never writes a log line containing the emoji or the number — ids and a short status only.
 //
 //   node react.mjs --once            one round, then exit (the loop script calls this)
@@ -63,7 +64,7 @@ async function round() {
   const v = validateClaim(claim)
   if (!v.ok) {
     log(`claimed ${String(claim.id).slice(0, 8)} but it looked wrong (${v.reason}) — reporting it failed`)
-    if (typeof claim.id === "string") await post("bridge.react.result", { id: claim.id, ok: false, error: "the reaction request was malformed" }).catch(() => {})
+    if (typeof claim.id === "string" && Number.isInteger(claim.attempt)) await post("bridge.react.result", { id: claim.id, attempt: claim.attempt, ok: false, error: "the reaction request was malformed" }).catch(() => {})
     return 3
   }
   log(`claimed ${v.id.slice(0, 8)} (${v.emoji === "" ? "remove" : "set"})`)
@@ -78,9 +79,9 @@ async function round() {
     })
     ans = interpretProgramAnswer(r.status, await r.text())
   } catch (e) {
-    ans = { ok: false, error: e instanceof Error && e.name === "TimeoutError" ? "the WhatsApp program did not answer in time" : "could not reach the WhatsApp program" }
+    ans = { ok: false, error: e instanceof Error && e.name === "TimeoutError" ? "no answer from the WhatsApp program — it may or may not have been delivered; check the phone" : "could not reach the WhatsApp program" }
   }
-  await post("bridge.react.result", ans.ok ? { id: v.id, ok: true } : { id: v.id, ok: false, error: ans.error })
+  await post("bridge.react.result", ans.ok ? { id: v.id, attempt: v.attempt, ok: true } : { id: v.id, attempt: v.attempt, ok: false, error: ans.error })
   log(`${v.id.slice(0, 8)} ${ans.ok ? "sent" : "FAILED: " + ans.error}`)
   return 3
 }

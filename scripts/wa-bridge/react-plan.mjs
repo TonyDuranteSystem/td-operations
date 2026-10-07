@@ -16,12 +16,12 @@ export function backoffSeconds(reason, waitSeconds) {
       return 30
     case "gap": {
       const w = Number(waitSeconds)
-      return Number.isFinite(w) ? Math.min(Math.max(Math.ceil(w), 2), 60) : 4
+      return Number.isFinite(w) ? Math.min(Math.max(Math.ceil(w), 2), 60) : 6
     }
     case "in_flight":
       return 5
     default:
-      return 4 // idle: look again in 4 s (the undo hold is 10 s, so a pick goes out within ~14 s)
+      return 6 // idle: look again in 6 s (the undo hold is 10 s, so a pick goes out within ~16 s; ~14,000 looks a day while live)
   }
 }
 
@@ -36,12 +36,18 @@ export function validateClaim(c) {
   if (typeof c.to_digits !== "string" || !/^[0-9]{6,15}$/.test(c.to_digits)) return { ok: false, reason: "bad number" }
   if (typeof c.external_message_id !== "string" || !/^[A-Za-z0-9]{4,64}$/.test(c.external_message_id)) return { ok: false, reason: "bad message id" }
   if (typeof c.emoji !== "string" || c.emoji.length > 32 || /\s/.test(c.emoji) || /^[A-Za-z0-9]+$/.test(c.emoji)) return { ok: false, reason: "bad emoji" }
-  return { ok: true, id: c.id, jid: `${c.to_digits}@s.whatsapp.net`, extId: c.external_message_id, emoji: c.emoji }
+  if (!Number.isInteger(c.attempt) || c.attempt < 1 || c.attempt > 100) return { ok: false, reason: "bad claim number" }
+  return { ok: true, id: c.id, attempt: c.attempt, jid: `${c.to_digits}@s.whatsapp.net`, extId: c.external_message_id, emoji: c.emoji }
 }
 
 /** The request body for the program's reaction endpoint (POST /message/{id}/reaction). */
 export function reactionPayload(v) {
   return { phone: v.jid, emoji: v.emoji }
+}
+
+/** The program's own error text can embed the customer's number / chat address — never keep those in a log or in the CRM. */
+export function maskIdentifiers(text) {
+  return String(text).replace(/\S+@(?:s\.whatsapp\.net|c\.us|lid|g\.us)/g, "<chat>").replace(/\+?\d[\d\s().-]{5,}\d/g, "<number>")
 }
 
 /**
@@ -54,5 +60,5 @@ export function interpretProgramAnswer(httpStatus, bodyText) {
   try { json = bodyText ? JSON.parse(bodyText) : null } catch { json = null }
   if (httpStatus === 200 && json && json.code === "SUCCESS") return { ok: true, error: null }
   const detail = json && typeof json.message === "string" ? json.message : ""
-  return { ok: false, error: (detail || `the WhatsApp program answered ${httpStatus || "nothing"}`).slice(0, 200) }
+  return { ok: false, error: maskIdentifiers(detail || `the WhatsApp program answered ${httpStatus || "nothing"}`).slice(0, 200) }
 }

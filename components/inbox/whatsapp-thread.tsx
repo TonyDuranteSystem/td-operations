@@ -1033,8 +1033,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                         <FastTooltip key={g.emoji} label={`${g.names.length ? g.names.join(', ') + ' — ' : ''}team mark in the CRM. The latest pick is also sent to the customer's phone when that is switched on for this chat`}>
                           <button
                             type="button"
+                            disabled={reactMutation.isPending}
                             onClick={() => reactMutation.mutate({ messageId: msg.id, emoji: g.emoji })}
-                            className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50"
+                            className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50 disabled:opacity-60"
                           >
                             <span className="leading-none">{g.emoji}</span>
                             <span className="tabular-nums text-zinc-500">{g.count}</span>
@@ -1066,6 +1067,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                           <div className={cn('absolute z-50 bottom-full mb-1', isOutbound ? 'right-0' : 'left-0')}>
                             <EmojiPicker
                               onEmojiClick={(emojiData: { emoji: string }) => {
+                                if (reactMutation.isPending) return // a click is still being saved — never two at once
                                 reactMutation.mutate({ messageId: msg.id, emoji: emojiData.emoji })
                                 setReactingMessageId(null)
                               }}

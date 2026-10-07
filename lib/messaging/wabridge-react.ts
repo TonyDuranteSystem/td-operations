@@ -1,8 +1,8 @@
 /**
  * CRM → phone reactions on the self-hosted WhatsApp link — pure helpers (no I/O, unit-tested). Dev job 5962e46d, Release 2.
  *
- * The rules live in the database (wabridge_queue_phone_reaction / wabridge_claim_reaction / wabridge_finish_reaction in
- * scripts/migrations/20261007-1600-wabridge-crm-reactions-to-phone.sql); this file parses what the Mac sends, and turns the database's
+ * The rules live in the database (wabridge_react_click / wabridge_queue_phone_reaction / wabridge_claim_reaction / wabridge_finish_reaction
+ * in scripts/migrations/20261007-1600-wabridge-crm-reactions-to-phone.sql); this file parses what the Mac sends, and turns the database's
  * answers into screen wording. It always fails CLOSED: anything unreadable is a refusal, never a false "sent".
  */
 
@@ -14,15 +14,8 @@ import { HEARTBEAT_MAX_SKEW_MS } from "./wabridge-health"
  */
 export const PHONE_SAFE_EMOJI: readonly string[] = ["👍", "❤", "😂", "😮", "😢", "🙏", "🤝", "👏", "✅", "🔥", "🎉", "🔝"]
 
-/** The picker for a reaction the phone will actually receive offers exactly these (shown with the colourful heart etc.). */
-export const stripVariationSelector = (emoji: string): string => emoji.replace(/️/g, "")
-
-export function isPhoneSafeEmoji(emoji: unknown): boolean {
-  return typeof emoji === "string" && PHONE_SAFE_EMOJI.includes(stripVariationSelector(emoji.trim()))
-}
-
-/** A message can only be reacted to this long after it arrived / was sent (Antonio 2026-10-07). Enforced in the database; shown here. */
-export const PHONE_REACTION_MAX_AGE_MS = 60 * 60_000
+/** The same set as shown to staff (the heart with its colour). Built from the list above so the wording can never drift from it. */
+const SAFE_EMOJI_SHOWN = PHONE_SAFE_EMOJI.map((e) => (e === "❤" ? "❤️" : e)).join(" ")
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -48,38 +41,26 @@ export interface ReactResultParse {
   ok: boolean
   reason: string | null
   id: string | null
+  /** the claim number the Mac was given — an answer for an older claim is refused by the database */
+  attempt: number
+  /** the Mac's own clock (epoch ms) — becomes the phone element's scan_ms (ONE clock, like the phone→CRM reader) */
+  ts: number
   sent: boolean
   error: string | null
 }
 
-/** {event:"bridge.react.result", ts, id, ok, error?}: what the WhatsApp program answered for one claimed reaction. */
+/** {event:"bridge.react.result", ts, id, attempt, ok, error?}: what the WhatsApp program answered for one claimed reaction. */
 export function parseReactResult(body: unknown, now: Date): ReactResultParse | null {
   if (typeof body !== "object" || body === null) return null
   const b = body as Record<string, unknown>
   if (b.event !== "bridge.react.result") return null
-  const bad = (reason: string): ReactResultParse => ({ ok: false, reason, id: null, sent: false, error: null })
+  const bad = (reason: string): ReactResultParse => ({ ok: false, reason, id: null, attempt: 0, ts: 0, sent: false, error: null })
   if (typeof b.ts !== "number" || !Number.isFinite(b.ts) || Math.abs(now.getTime() - b.ts) > HEARTBEAT_MAX_SKEW_MS) return bad("stale or missing timestamp")
   if (typeof b.id !== "string" || !UUID_RE.test(b.id)) return bad("bad reaction id")
+  if (typeof b.attempt !== "number" || !Number.isInteger(b.attempt) || b.attempt < 1 || b.attempt > 100) return bad("bad claim number")
   if (typeof b.ok !== "boolean") return bad("ok must be a boolean")
   const error = typeof b.error === "string" ? b.error.slice(0, 300) : ""
-  return { ok: true, reason: null, id: b.id, sent: b.ok, error: b.ok ? null : error || "the WhatsApp program refused the reaction" }
-}
-
-/** How long the Mac waits before asking again, by the reason the CRM gave for "nothing to send right now". */
-export function reactBackoffSeconds(reason: string | undefined): number {
-  switch (reason) {
-    case "paused":
-    case "unhealthy":
-    case "reader_stale":
-      return 20
-    case "hourly_cap":
-    case "daily_cap":
-    case "held":
-      return 30
-    case "nothing_to_send":
-    default:
-      return 4
-  }
+  return { ok: true, reason: null, id: b.id, attempt: b.attempt, ts: Math.trunc(b.ts), sent: b.ok, error: b.ok ? null : error || "the WhatsApp program refused the reaction" }
 }
 
 // ─── What the staff screen says ──────────────────────────────────────────────────────────────────────────────────
@@ -102,27 +83,35 @@ export function parseQueueAnswer(data: unknown): PhoneReactionQueueAnswer {
   return { queued: false, reason: typeof d.code === "string" ? d.code : "unreadable", holdSeconds: 0 }
 }
 
-/** The message shown to staff when a reaction was saved in the CRM but NOT sent to the phone; null = say nothing. */
-export function describePhoneReactionRefusal(reason: string | null | undefined): string | null {
+/**
+ * The message shown to staff when a click was saved in the CRM but NOT sent to the phone; null = say nothing.
+ * `action` is what the click did: 'set' (a pick) or 'remove' (an un-pick) — the wording differs.
+ */
+export function describePhoneReactionRefusal(reason: string | null | undefined, action: "set" | "remove" = "set"): string | null {
+  const what = action === "remove" ? "the removal was not sent to the phone" : "not sent to the phone"
   switch (reason) {
-    case "off": // feature not switched on — the pill's tooltip already says "saved in the CRM only"
+    case "off": // feature not switched on — nothing to explain
     case "unchanged": // the phone already shows this — nothing to explain
       return null
     case "not_allowed":
-      return "Saved in the CRM — not sent to the phone: reactions to the phone aren't switched on for this chat yet."
+      return `Saved in the CRM — ${what}: reactions to the phone aren't switched on for this chat yet.`
     case "too_old":
-      return "Saved in the CRM — not sent to the phone: the message is older than 1 hour."
+      return `Saved in the CRM — ${what}: the message is older than 1 hour.`
     case "bad_emoji":
-      return "Saved in the CRM — not sent to the phone: WhatsApp only receives the common reactions (👍 ❤️ 😂 😮 😢 🙏 🤝 👏 ✅ 🔥 🎉 🔝)."
+      return `Saved in the CRM — ${what}: WhatsApp only receives the common reactions (${SAFE_EMOJI_SHOWN}).`
     case "offline":
-      return "Saved in the CRM — not sent to the phone: the WhatsApp link looks offline right now."
+      return `Saved in the CRM — ${what}: the WhatsApp link looks offline right now.`
+    case "sender_offline":
+      return `Saved in the CRM — ${what}: the reaction sender on the Mac isn't running.`
     case "no_message_id":
-      return "Saved in the CRM — not sent to the phone: this message has no WhatsApp id."
+      return `Saved in the CRM — ${what}: this message has no WhatsApp id.`
+    case "no_inbound":
+      return `Saved in the CRM — ${what}: this person hasn't written to this number yet (reactions follow the same replies-only rule).`
     case "not_one_to_one":
     case "not_wabridge":
-      return "Saved in the CRM — not sent to the phone: reactions can only go to one-to-one chats on the business line."
+      return `Saved in the CRM — ${what}: reactions can only go to one-to-one chats on the business line.`
     default:
-      return "Saved in the CRM — could not be sent to the phone."
+      return `Saved in the CRM — ${action === "remove" ? "the removal could not be sent" : "could not be sent"} to the phone.`
   }
 }
 
@@ -141,9 +130,9 @@ export function describePhoneReactionState(v: PhoneReactionView | null | undefin
     case "sending":
       return { text: "Sending to the phone…", tone: "neutral" }
     case "failed":
-      return { text: `Not sent to the phone${v.error ? ` — ${v.error}` : ""}. Click the emoji to try again.`, tone: "bad" }
+      return { text: `Not sent to the phone${v.error ? ` — ${v.error}` : ""}. To try again, click the emoji twice.`, tone: "bad" }
     case "expired":
-      return { text: "Not sent to the phone — the WhatsApp link was busy or offline for too long.", tone: "bad" }
+      return { text: "Not sent to the phone — the WhatsApp link was busy or offline for too long. To try again, click the emoji twice.", tone: "bad" }
     default:
       return null
   }

@@ -40,8 +40,9 @@ const ext = "REACTREH" + Math.floor(Math.random() * 1e9)
 const { data: msg } = await sb.from("messages").insert({ channel_id: ch.id, group_id: g.id, direction: "inbound", content_type: "text", content_text: "react rehearsal", created_at: new Date().toISOString(), external_message_id: ext }).select("id").single()
 const { data: before } = await sb.from("messaging_groups").select("unread_count, last_message_at").eq("id", g.id).single()
 const t0 = new Date().toISOString()
-await sb.from("wa_bridge_state").update({ reachable: true, connected: true, logged_in: true, last_heartbeat_at: new Date().toISOString(), reactions_seen_at: new Date().toISOString(), reactions_mode: "off", reactions_allowlist: [], reactions_allow_all: false, reactions_min_gap_seconds: 4 }).eq("channel_id", ch.id)
+await sb.from("wa_bridge_state").update({ reachable: true, connected: true, logged_in: true, last_heartbeat_at: new Date().toISOString(), reactions_seen_at: new Date().toISOString(), reactions_sender_seen_at: null, reactions_mode: "off", reactions_allowlist: [], reactions_allow_all: false, reactions_min_gap_seconds: 4, reactions_hourly_cap: 40, reactions_daily_cap: 200, reactions_per_chat_hour: 12 }).eq("channel_id", ch.id)
 await sb.from("wa_reaction_sync").delete().eq("channel_id", ch.id)
+await sb.from("wa_reaction_sends").delete().eq("channel_id", ch.id)
 
 const runSender = (extraEnv = {}) => new Promise((resolve) => {
   const child = spawn("node", [`${ROOT}/scripts/wa-bridge/react.mjs`, "--once"], {
@@ -55,7 +56,10 @@ const runSender = (extraEnv = {}) => new Promise((resolve) => {
 const queue = async (emoji, action = "set") => (await sb.rpc("wabridge_queue_phone_reaction", { p_message_id: msg.id, p_emoji: emoji, p_action: action, p_user: "11111111-1111-1111-1111-111111111111" })).data
 const lane = async () => (await sb.from("wa_reaction_sync").select("status, desired_emoji, applied_emoji, error, attempts").eq("message_id", msg.id).maybeSingle()).data
 const lineEl = async () => ((await sb.from("messages").select("reactions").eq("id", msg.id).single()).data.reactions ?? []).filter((e) => e.reactor_type === "line")
-const due = async () => sb.from("wa_reaction_sync").update({ hold_until: new Date(Date.now() - 1000).toISOString(), claimed_at: new Date(Date.now() - 60_000).toISOString() }).eq("message_id", msg.id)
+const due = async () => {
+  await sb.from("wa_reaction_sync").update({ hold_until: new Date(Date.now() - 1000).toISOString() }).eq("message_id", msg.id)
+  await sb.from("wa_reaction_sends").update({ claimed_at: new Date(Date.now() - 60_000).toISOString() }).eq("channel_id", ch.id) // the pacing gap has passed
+}
 
 try {
   // 1. switch OFF: nothing queued, the sender idles (paused) and never touches the program
@@ -67,10 +71,15 @@ try {
   // 2. switch ON for this number only
   await sb.rpc("wabridge_set_reactions_allowlist", { p_channel_id: ch.id, p_digits: [digits] })
   await sb.rpc("wabridge_set_reactions_mode", { p_channel_id: ch.id, p_mode: "live" })
+  await sb.from("wa_bridge_state").update({ reactions_sender_seen_at: new Date(Date.now() - 10 * 60_000).toISOString() }).eq("channel_id", ch.id) // as if the sender had stopped
   q = await queue("👍")
-  check("3  ON: a pick is queued with the 10 s undo hold", q.queued === true && q.hold_seconds === 10, JSON.stringify(q))
+  check("2b ON but the Mac sender has not looked for minutes: the click is refused (never a pick that sits on 'sending…')", q.queued === false && q.reason === "sender_offline", JSON.stringify(q))
   r = await runSender()
-  check("4  inside the hold the sender finds nothing due (no call to the program)", r.code === 0 && r.wait === 4 && calls.length === 0, `${r.wait} ${calls.length}`)
+  check("2c the sender's first look (idle, nothing due) records that it is alive", r.code === 0 && r.wait === 6 && calls.length === 0, `${r.code} ${r.wait} ${r.out}`)
+  q = await queue("👍")
+  check("3  now a pick is queued with the 10 s undo hold", q.queued === true && q.hold_seconds === 10, JSON.stringify(q))
+  r = await runSender()
+  check("4  inside the hold the sender finds nothing due (no call to the program)", r.code === 0 && r.wait === 6 && calls.length === 0, `${r.wait} ${calls.length}`)
 
   // 3. hold passes → sent through the program with the exact request
   await due()
@@ -80,7 +89,7 @@ try {
   let l = await lane()
   check("6  the CRM records it as SENT", l?.status === "sent" && l.applied_emoji === "👍", JSON.stringify(l))
   let el = await lineEl()
-  check("7  the green 'phone' pill (source crm) now exists on the message", el.length === 1 && el[0].emoji === "👍" && el[0].source === "crm", JSON.stringify(el))
+  check("7  the green 'phone' pill (source crm) now exists on the message, stamped with the Mac's clock", el.length === 1 && el[0].emoji === "👍" && el[0].source === "crm" && Math.abs(el[0].scan_ms - Date.now()) < 60_000, JSON.stringify(el))
   const { data: ev } = await sb.from("ui_events").select("kind").eq("kind", "whatsapp").gte("created_at", t0)
   check("8  the open Inboxes were woken by the result", (ev ?? []).length >= 1, "no ui_events row")
 

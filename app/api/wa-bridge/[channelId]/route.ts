@@ -51,7 +51,7 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.send.claim", ts}                                  the Mac's sender asks for its NEXT reply (pacing + pause switch enforced in the database)
  *  - {event:"bridge.send.result", ts, outbox_id, ok, message_id?, error?}   what the Mac's WhatsApp program answered for that reply
  *  - {event:"bridge.react.claim", ts}                                the Mac's REACTION sender asks for its next due CRM→phone reaction (switch, allowlist, health, pacing, caps enforced in the database)
- *  - {event:"bridge.react.result", ts, id, ok, error?}                what the WhatsApp program answered for that reaction
+ *  - {event:"bridge.react.result", ts, id, attempt, ok, error?}       what the WhatsApp program answered for that reaction (attempt = the claim number it was given)
  *  - {event:"bridge.media.claim", ts}                                 the Mac asks for its NEXT voice note to fetch (answer carries a signed upload URL)
  *  - {event:"bridge.media.result", ts, message_id, outcome, size_bytes?, duration_seconds?, transcript?, language?, model?, error?}
  *  - {event:"bridge.linkcode", ts, code}                            a pairing code the Mac fetched while the device is unlinked (shown to the owner only)
@@ -208,6 +208,8 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
       p_id: r.id as string,
       p_ok: r.sent,
       p_error: r.error,
+      p_attempt: r.attempt, // the claim number — an answer for an older claim is refused inside the function
+      p_ts: r.ts, // the Mac's clock: the phone element's scan_ms (ONE clock, like the phone→CRM reader)
     })
     if (finishError || typeof finished !== "object" || finished === null) {
       return NextResponse.json({ error: "could not record the result" }, { status: 500 })

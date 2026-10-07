@@ -190,12 +190,18 @@ export async function GET(
     try {
       const { data: lanes } = await supabaseAdmin
         .from("wa_reaction_sync")
-        .select("message_id, status, desired_emoji, error")
+        .select("message_id, status, desired_emoji, error, requested_at")
         .eq("group_id", groupId)
         .in("status", ["pending", "sending", "failed", "expired"])
         .gt("requested_at", new Date(Date.now() - 2 * 60 * 60_000).toISOString())
         .limit(100)
-      for (const l of lanes ?? []) phoneByMessage.set(l.message_id, { status: l.status, desired: l.desired_emoji, error: l.error })
+      // "on its way" only counts for as long as it can still go out (a queued reaction expires after 15 minutes); older ones are not shown
+      // as "sending…" even if nothing has swept them yet. Failures / expiries stay visible for the 2 hours above.
+      const stillCanGo = Date.now() - 20 * 60_000
+      for (const l of lanes ?? []) {
+        if ((l.status === "pending" || l.status === "sending") && Date.parse(l.requested_at) < stillCanGo) continue
+        phoneByMessage.set(l.message_id, { status: l.status, desired: l.desired_emoji, error: l.error })
+      }
     } catch (laneErr) {
       console.warn("WhatsApp reaction status overlay failed (chat still loads):", laneErr instanceof Error ? laneErr.message : String(laneErr))
     }
