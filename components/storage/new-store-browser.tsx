@@ -412,8 +412,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       const r = await fetchInto(oid, null)
       if (ownerIdRef.current !== oid) return // another storage was opened meanwhile
       setRoot(r)
-      // today's folder view opens the top-level folders straight away (and keeps a folder picked meanwhile)
-      setExpanded((x) => new Set([...r.folders.map((f) => f.id), ...(focusRef.current ? [focusRef.current] : []), ...Array.from(x)]))
+      // every folder starts CLOSED (Antonio 2026-10-07; "Open all" opens them) — only a folder picked meanwhile is kept open.
+      // The top folders' contents are still read below so their file counts show on the closed rows.
+      setExpanded((x) => new Set([...(focusRef.current ? [focusRef.current] : []), ...Array.from(x)]))
       const entries = await Promise.all(r.folders.map(async (f) => [f.id, await fetchInto(oid, f.id)] as const))
       if (ownerIdRef.current !== oid) return
       setLoaded((m) => ({ ...m, ...Object.fromEntries(entries) }))
