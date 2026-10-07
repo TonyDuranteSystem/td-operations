@@ -1,4 +1,5 @@
 # Messaging (WhatsApp / Telegram)
+_2026-10-07 note: `app/api/inbox/whatsapp/polish/route.ts` is new — the WhatsApp composer sparkle sends the typed text there to be polished (grammar/wording only; facts, numbers, links, language and emoji must come back identical or it answers 422 and the text is left as typed). Full flow in `docs/systems/inbox.md`._
 _Last verified against code: 2026-10-07 — Claude (**WHATSAPP REACTIONS MADE ON THE PHONE NOW APPEAR IN THE CRM (RELEASE 1 of 2, DEV JOB `5962e46d`; sandbox only until Antonio says ship it).** The Mac reads GOWA's own reaction records read-only and reports them; the CRM shows them as display-only pills. Nothing is sent to WhatsApp (CRM → phone is Release 2, not built). See "Reactions from the phone" below.)_
 _Prior: 2026-10-01 — Claude (**THE BUSINESS-NAME LEAK HAD ONE MORE DOORWAY —
 THE PER-MESSAGE SENDER CAPTION.** Antonio, after a Bug-Hunter sweep of the whole WhatsApp system he
