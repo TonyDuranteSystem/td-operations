@@ -1806,7 +1806,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
                 {/* Action buttons — WhatsApp gets Reply plus its own read-only Worker
                     (dev job 6668385e); the email Worker and the CRM quick-create actions
                     stay Gmail/Telegram-only. */}
-                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end ml-auto">
+                <div className="flex items-center gap-1 min-w-0 flex-wrap justify-end ml-auto">
                   {!isWhatsApp && (
                     <>
                       <HoverHint label="Create Task">
