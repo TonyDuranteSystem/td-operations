@@ -31,9 +31,54 @@ export const REPLY_TOUR_STEPS: readonly ReplyTourStepMeta[] = [
   { id: 'safety', needsComposing: true, inPopup: true },
 ]
 
-/** Remembered per signed-in person, per browser — same approach as the WhatsApp tour. */
-export function replyTourSeenKey(userId: string): string {
-  return `reply-tour-seen:${userId}`
+/**
+ * "Don't show this tour again" — remembered per signed-in person, per browser (same storage approach as the WhatsApp
+ * tour). The tour comes back on every visit until the person ticks that box; there is no "seen once" memory
+ * (Antonio, 2026-10-06: "the tour must appear until the user checks a box, then don't show it again").
+ */
+export function replyTourDismissedKey(userId: string): string {
+  return `reply-tour-dismissed:${userId}`
+}
+
+export interface TourStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+  removeItem(key: string): void
+}
+
+/** Has this person ticked "Don't show again" on this browser? Never throws (blocked storage = not dismissed). */
+export function isReplyTourDismissed(storage: TourStorage | null, userId: string): boolean {
+  try {
+    return storage?.getItem(replyTourDismissedKey(userId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Tick / untick the box. Returns whether the choice was stored (false = storage blocked, so it cannot stick). */
+export function setReplyTourDismissed(storage: TourStorage | null, userId: string, dismissed: boolean): boolean {
+  try {
+    if (!storage) return false
+    if (dismissed) storage.setItem(replyTourDismissedKey(userId), '1')
+    else storage.removeItem(replyTourDismissedKey(userId))
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Once per page load: the tour starts by itself on the first email opened after the inbox loads, not again on every
+// email clicked after that. Module-level on purpose (like the tour lock): a reload, or a new visit, starts it again.
+let shownThisLoad = false
+export function wasReplyTourShownThisLoad(): boolean {
+  return shownThisLoad
+}
+export function markReplyTourShownThisLoad(): void {
+  shownThisLoad = true
+}
+/** Test helper — never called by the app. */
+export function __resetReplyTourShown(): void {
+  shownThisLoad = false
 }
 
 /**
@@ -66,15 +111,20 @@ export interface AutoStartContext {
   anotherTourActive: boolean
   /** Wide enough for the two-pane pop-up. */
   wideScreen: boolean
-  /** This person has already been shown it on this browser. */
-  alreadySeen: boolean
+  /** This person ticked "Don't show this tour again" on this browser. */
+  dismissed: boolean
+  /** It already started by itself during this page load (so not again on every email clicked). */
+  shownThisLoad: boolean
   /** The tab is on screen (a background tab would burn the one-time flag with nobody watching). */
   tabVisible: boolean
   /** The cursor is already in the reply box — they are writing; do not take the focus away. */
   replyBoxBusy: boolean
 }
 
-/** Starts by itself once, the first time a person has an email open on a normal screen — never over something else. */
+/**
+ * Starts by itself on the first email opened in a page load, on a normal wide screen, until the person ticks
+ * "Don't show this tour again" — never over something else.
+ */
 export function shouldAutoStartReplyTour(c: AutoStartContext): boolean {
   return (
     !!c.userId &&
@@ -82,7 +132,8 @@ export function shouldAutoStartReplyTour(c: AutoStartContext): boolean {
     !c.framedOrPopout &&
     !c.anotherTourActive &&
     c.wideScreen &&
-    !c.alreadySeen &&
+    !c.dismissed &&
+    !c.shownThisLoad &&
     c.tabVisible &&
     !c.replyBoxBusy
   )

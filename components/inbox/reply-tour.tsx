@@ -18,7 +18,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride'
 import { acquireTour, releaseTour } from '@/lib/ui/tour-lock'
-import { REPLY_TOUR_EVENT, transitionAction, type ReplyTourAction } from '@/lib/inbox/reply-tour'
+import {
+  REPLY_TOUR_EVENT,
+  isReplyTourDismissed,
+  setReplyTourDismissed,
+  transitionAction,
+  type ReplyTourAction,
+} from '@/lib/inbox/reply-tour'
 
 const Joyride = dynamic(() => import('react-joyride'), { ssr: false })
 
@@ -77,7 +83,7 @@ export const REPLY_TOUR_CONTENT: Array<Step & { id: string }> = [
     target: 'body',
     title: 'Your unsent reply is safe',
     content:
-      'If the page refreshes or closes by mistake, a blue bar offers "Restore it" or "Discard" next time. When the tour is over, Esc or the ✕ closes this window and your text stays in the small box. You can start the tour again from the Reply tour button.',
+      `If the page refreshes or closes by mistake, a blue bar offers "Restore it" or "Discard" next time. When the tour is over, Esc or the ✕ closes this window and your text stays in the small box. This tour comes back each visit until you tick "Don't show this tour again" (bottom left). The Reply tour button always starts it.`,
     placement: 'center',
   },
 ]
@@ -86,7 +92,49 @@ function sendReplyTour(action: ReplyTourAction | null) {
   if (action) window.dispatchEvent(new CustomEvent(REPLY_TOUR_EVENT, { detail: action }))
 }
 
-export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * The tour keeps coming back until the person ticks this box (Antonio, 2026-10-06). It is shown on every step so it can
+ * be ticked at any point, even by someone who skips straight away. Ticking stores it at once (per person, per browser);
+ * unticking removes it. It sits above the tour's dim overlay so it stays clickable.
+ */
+function DontShowAgain({ userId }: { userId: string | undefined }) {
+  const [checked, setChecked] = useState(false)
+  const [cannotSave, setCannotSave] = useState(false)
+  useEffect(() => {
+    if (userId) setChecked(isReplyTourDismissed(window.localStorage, userId))
+  }, [userId])
+  if (!userId) return null
+  return (
+    <label
+      data-tour="reply-dont-show"
+      className="fixed bottom-4 left-4 flex cursor-pointer items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm text-zinc-800 shadow-lg ring-1 ring-zinc-300"
+      style={{ zIndex: 10001 }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => {
+          const on = e.target.checked
+          setChecked(on)
+          let stored = false
+          try {
+            stored = setReplyTourDismissed(window.localStorage, userId, on)
+          } catch {
+            stored = false
+          }
+          setCannotSave(!stored)
+        }}
+        className="h-4 w-4 accent-blue-600"
+      />
+      <span>
+        Don&apos;t show this tour again
+        {cannotSave && <span className="block text-xs text-amber-700">This browser can&apos;t remember it, so it will come back.</span>}
+      </span>
+    </label>
+  )
+}
+
+export function ReplyTour({ open, userId, onClose }: { open: boolean; userId?: string; onClose: () => void }) {
   const [stepIndex, setStepIndex] = useState(0)
   const [run, setRun] = useState(false)
   // Whether THIS tour has opened the pop-up and not yet closed it — so Skip / Done close it even if they land in the
@@ -164,7 +212,9 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
   if (!open) return null
 
   return (
-    <Joyride
+    <>
+      <DontShowAgain userId={userId} />
+      <Joyride
       steps={REPLY_TOUR_CONTENT}
       run={run}
       stepIndex={stepIndex}
@@ -193,5 +243,6 @@ export function ReplyTour({ open, onClose }: { open: boolean; onClose: () => voi
         buttonBack: { fontSize: 13 },
       }}
     />
+    </>
   )
 }

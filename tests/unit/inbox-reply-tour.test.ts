@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest"
 import {
   REPLY_TOUR_STEPS,
   endAction,
-  replyTourSeenKey,
+  replyTourDismissedKey,
+  isReplyTourDismissed,
+  setReplyTourDismissed,
+  wasReplyTourShownThisLoad,
+  markReplyTourShownThisLoad,
+  __resetReplyTourShown,
+  type TourStorage,
   shouldAutoStartReplyTour,
   transitionAction,
   type AutoStartContext,
@@ -57,7 +63,7 @@ describe("endAction (kept for the pop-up steps; the component also tracks what i
 })
 
 describe("shouldAutoStartReplyTour", () => {
-  const ok: AutoStartContext = { userId: "u1", emailThreadOpen: true, framedOrPopout: false, anotherTourActive: false, wideScreen: true, alreadySeen: false, tabVisible: true, replyBoxBusy: false }
+  const ok: AutoStartContext = { userId: "u1", emailThreadOpen: true, framedOrPopout: false, anotherTourActive: false, wideScreen: true, dismissed: false, shownThisLoad: false, tabVisible: true, replyBoxBusy: false }
   it("starts for a person who has not seen it, with an email open, on a normal wide screen", () => {
     expect(shouldAutoStartReplyTour(ok)).toBe(true)
   })
@@ -67,16 +73,56 @@ describe("shouldAutoStartReplyTour", () => {
     expect(shouldAutoStartReplyTour({ ...ok, framedOrPopout: true })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, anotherTourActive: true })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, wideScreen: false })).toBe(false)
-    expect(shouldAutoStartReplyTour({ ...ok, alreadySeen: true })).toBe(false)
+    expect(shouldAutoStartReplyTour({ ...ok, dismissed: true })).toBe(false)
+    expect(shouldAutoStartReplyTour({ ...ok, shownThisLoad: true })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, tabVisible: false })).toBe(false)
     expect(shouldAutoStartReplyTour({ ...ok, replyBoxBusy: true })).toBe(false)
   })
 })
 
-describe("replyTourSeenKey", () => {
+describe("the \"Don't show this tour again\" box", () => {
+  const mem = (): TourStorage & { data: Map<string, string> } => {
+    const data = new Map<string, string>()
+    return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) }
+  }
   it("is per person and does not collide with the WhatsApp tour's key", () => {
-    expect(replyTourSeenKey("a")).not.toBe(replyTourSeenKey("b"))
-    expect(replyTourSeenKey("a")).not.toBe("wa-tour-seen:a")
+    expect(replyTourDismissedKey("a")).not.toBe(replyTourDismissedKey("b"))
+    expect(replyTourDismissedKey("a")).not.toBe("wa-tour-seen:a")
+  })
+  it("starts un-ticked, sticks once ticked, and can be un-ticked again", () => {
+    const s = mem()
+    expect(isReplyTourDismissed(s, "u1")).toBe(false)
+    expect(setReplyTourDismissed(s, "u1", true)).toBe(true)
+    expect(isReplyTourDismissed(s, "u1")).toBe(true)
+    expect(isReplyTourDismissed(s, "u2")).toBe(false) // another person on the same browser is unaffected
+    expect(setReplyTourDismissed(s, "u1", false)).toBe(true)
+    expect(isReplyTourDismissed(s, "u1")).toBe(false)
+  })
+  it("only the exact tick counts as dismissed", () => {
+    const s = mem()
+    s.setItem(replyTourDismissedKey("u1"), "0")
+    expect(isReplyTourDismissed(s, "u1")).toBe(false)
+  })
+  it("blocked storage never throws: not dismissed, and the tick reports it could not be saved", () => {
+    const boom: TourStorage = {
+      getItem: () => { throw new Error("blocked") },
+      setItem: () => { throw new Error("blocked") },
+      removeItem: () => { throw new Error("blocked") },
+    }
+    expect(isReplyTourDismissed(boom, "u1")).toBe(false)
+    expect(setReplyTourDismissed(boom, "u1", true)).toBe(false)
+    expect(isReplyTourDismissed(null, "u1")).toBe(false)
+    expect(setReplyTourDismissed(null, "u1", true)).toBe(false)
+  })
+  it("the tour keeps coming back every visit until ticked: shown-this-load resets with a new load, dismissal does not", () => {
+    __resetReplyTourShown()
+    expect(wasReplyTourShownThisLoad()).toBe(false)
+    markReplyTourShownThisLoad()
+    expect(wasReplyTourShownThisLoad()).toBe(true)
+    __resetReplyTourShown() // = the next page load
+    const ctx: AutoStartContext = { userId: "u1", emailThreadOpen: true, framedOrPopout: false, anotherTourActive: false, wideScreen: true, dismissed: false, shownThisLoad: wasReplyTourShownThisLoad(), tabVisible: true, replyBoxBusy: false }
+    expect(shouldAutoStartReplyTour(ctx)).toBe(true)
+    expect(shouldAutoStartReplyTour({ ...ctx, dismissed: true })).toBe(false)
   })
 })
 
@@ -95,6 +141,11 @@ describe("the tour component and the rules agree", () => {
   it("uses the shared one-tour-at-a-time lock and leaves Esc to the pop-up", () => {
     expect(src).toContain("acquireTour('reply')")
     expect(src).toContain("disableCloseOnEsc")
+  })
+  it("shows the Don't-show-again box on every step, above the overlay, and stores the choice", () => {
+    expect(src).toContain("data-tour=\"reply-dont-show\"")
+    expect(src).toContain("setReplyTourDismissed")
+    expect(src).toMatch(/zIndex: 10001/)
   })
   it("has no ✕ that would move to the next step, and closes the pop-up it opened on any exit", () => {
     expect(src).toContain("hideCloseButton")
