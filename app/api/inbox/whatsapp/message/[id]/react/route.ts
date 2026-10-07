@@ -2,6 +2,8 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffUser, getUserDisplayName } from "@/lib/auth"
 import { isValidReactionEmoji } from "@/lib/portal/reactions"
+import { parseQueueAnswer, describePhoneReactionRefusal } from "@/lib/messaging/wabridge-react"
+import { emitUiEvent } from "@/lib/ui-events"
 import { NextRequest, NextResponse } from "next/server"
 
 /**
@@ -9,6 +11,11 @@ import { NextRequest, NextResponse } from "next/server"
  * Toggle an emoji reaction on a WhatsApp message. STAFF ONLY — unlike the portal chat reaction route
  * this has no client-facing counterpart (there is no client widget for WhatsApp), so it never notifies
  * a client and never checks a client/teammate scope. Body: { emoji: string }.
+ *
+ * RELEASE 2 (dev job 5962e46d): after the team mark is saved, the same click ALSO asks the database to put the reaction on the customer's
+ * phone (wabridge_queue_phone_reaction) — latest pick wins on the phone, un-picking the emoji that is on the phone removes it. Every rule
+ * (switch OFF by default, allowlist, 1 h message age, safe emoji set, health) is enforced there; the team mark is saved either way, and
+ * the answer says whether it was queued or why not. A queue failure NEVER undoes the team mark.
  */
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createClient()
@@ -45,5 +52,26 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return NextResponse.json({ error: "Could not react" }, { status: 500 })
   }
 
-  return NextResponse.json({ ok: true, added: !!parsed.added, reactions: parsed.reactions ?? [] })
+  // The same click, towards the phone. Best-effort: the team mark above is already saved and stays whatever happens here.
+  const added = !!parsed.added
+  let phone = { queued: false, reason: "unreadable" as string | null, holdSeconds: 0 }
+  try {
+    const { data: queued, error: queueErr } = await supabaseAdmin.rpc("wabridge_queue_phone_reaction", {
+      p_message_id: id,
+      p_emoji: emoji,
+      p_action: added ? "set" : "remove",
+      p_user: user.id,
+    })
+    phone = queueErr ? { queued: false, reason: "unreadable", holdSeconds: 0 } : parseQueueAnswer(queued)
+  } catch {
+    phone = { queued: false, reason: "unreadable", holdSeconds: 0 }
+  }
+  if (phone.queued) await emitUiEvent("whatsapp") // other open Inboxes show "sending to the phone…" at once
+
+  return NextResponse.json({
+    ok: true,
+    added,
+    reactions: parsed.reactions ?? [],
+    phone: { queued: phone.queued, holdSeconds: phone.holdSeconds, notice: phone.queued ? null : describePhoneReactionRefusal(phone.reason) },
+  })
 }
