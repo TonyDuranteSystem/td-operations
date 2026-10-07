@@ -16,12 +16,12 @@ export function backoffSeconds(reason, waitSeconds) {
       return 30
     case "gap": {
       const w = Number(waitSeconds)
-      return Number.isFinite(w) ? Math.min(Math.max(Math.ceil(w), 2), 60) : 6
+      return Number.isFinite(w) ? Math.min(Math.max(Math.ceil(w), 2), 60) : 2
     }
     case "in_flight":
       return 5
     default:
-      return 6 // idle: look again in 6 s (the undo hold is 10 s, so a pick goes out within ~16 s; ~14,000 looks a day while live)
+      return 2 // idle: look again in 2 s (the undo hold is 3 s, so a pick goes out 3-5 s after the click; ~43,000 small looks a day while live)
   }
 }
 
