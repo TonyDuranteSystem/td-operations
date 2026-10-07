@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   calls: [] as Array<{ table: string; op: string; args: unknown[] }>,
   worker: { reply: "ok", reachedMaxLoops: false, throws: null as null | Error },
   workerCalls: [] as Array<{ userBody: string; opts: Record<string, unknown> }>,
+  templates: { rows: [] as unknown[], throws: false },
+  templateCalls: [] as Array<{ query: string; opts: Record<string, unknown> }>,
 }))
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -38,6 +40,14 @@ vi.mock("@/lib/supabase-admin", () => {
 })
 
 vi.mock("@/lib/ai-agent/slack-claude", () => ({ SLACK_WORKER_SYSTEM_PROMPT: "SLACK-PERSONA" }))
+vi.mock("@/lib/ai-agent/templates", () => ({
+  loadRelevantTemplates: async (query: string, opts: Record<string, unknown>) => {
+    state.templateCalls.push({ query, opts })
+    if (state.templates.throws) throw new Error("lookup down")
+    return state.templates.rows
+  },
+  formatTemplatesForPrompt: (rows: unknown[]) => (rows.length ? "APPROVED TEMPLATES: formatted" : ""),
+}))
 vi.mock("@/lib/ai-agent/attachment-reader", () => ({
   callWorkerWithAttachments: async (userBody: string, opts: Record<string, unknown>) => {
     state.workerCalls.push({ userBody, opts })
@@ -72,6 +82,8 @@ beforeEach(() => {
   state.calls = []
   state.worker = { reply: "Here is my answer", reachedMaxLoops: false, throws: null }
   state.workerCalls = []
+  state.templates = { rows: [], throws: false }
+  state.templateCalls = []
 })
 
 describe("access and validation", () => {
@@ -264,5 +276,42 @@ describe("stale-turn recovery", () => {
     const ageMs = Date.now() - cutoff
     expect(ageMs).toBeGreaterThanOrEqual(6 * 60 * 1000 - 2000)
     expect(ageMs).toBeLessThanOrEqual(6 * 60 * 1000 + 2000)
+  })
+})
+
+
+describe("approved replies for other clients ground the Worker (Antonio, 2026-10-07)", () => {
+  it("looks them up from the staff ask + the person's latest messages, with no language filter, and puts the block in the prompt", async () => {
+    state.templates.rows = [{ source: "approved" }]
+    expect((await post({ groupId: GROUP_ID, message: "draft a reply" })).status).toBe(200)
+    expect(state.templateCalls).toHaveLength(1)
+    expect(state.templateCalls[0].query).toContain("draft a reply")
+    expect(state.templateCalls[0].query).toContain("Buongiorno, ho visto l'offerta")
+    expect(state.templateCalls[0].opts).toEqual({ limit: 3 })
+    const prompt = String(state.workerCalls[0].opts.systemPromptOverride)
+    expect(prompt).toContain("APPROVED TEMPLATES: formatted")
+    expect(prompt.indexOf("APPROVED TEMPLATES: formatted")).toBeLessThan(prompt.indexOf("<untrusted-whatsapp-chat>"))
+  })
+
+  it("adds nothing when no approved reply matches", async () => {
+    await post({ groupId: GROUP_ID, message: "hello" })
+    expect(String(state.workerCalls[0].opts.systemPromptOverride)).not.toContain("APPROVED TEMPLATES: formatted")
+  })
+
+  it("a failing lookup never blocks the Worker", async () => {
+    state.templates.throws = true
+    const res = await post({ groupId: GROUP_ID, message: "hello" })
+    expect(res.status).toBe(200)
+    expect(state.workerCalls).toHaveLength(1)
+    expect(String(state.workerCalls[0].opts.systemPromptOverride)).not.toContain("APPROVED TEMPLATES: formatted")
+  })
+
+  it("still passes the reviewed read-only options, now including web research", async () => {
+    await post({ groupId: GROUP_ID, message: "hello" })
+    const opts = state.workerCalls[0].opts
+    expect(opts.enableWebSearch).toBe(true)
+    for (const forbidden of ["enableEmailSend", "enableSlackSend", "enableDbRead", "enableCrmNotes", "enableFullToolReach"]) {
+      expect(opts).not.toHaveProperty(forbidden)
+    }
   })
 })
