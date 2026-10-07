@@ -13183,6 +13183,124 @@ export type Database = {
         }
         Relationships: []
       }
+      wa_reaction_sync: {
+        Row: {
+          applied_emoji: string
+          attempts: number
+          channel_id: string
+          claimed_at: string | null
+          desired_emoji: string
+          error: string | null
+          external_message_id: string
+          finished_at: string | null
+          group_id: string
+          hold_until: string
+          id: string
+          message_id: string
+          requested_at: string
+          requested_by: string | null
+          sent_emoji: string | null
+          status: string
+          to_digits: string
+        }
+        Insert: {
+          applied_emoji?: string
+          attempts?: number
+          channel_id: string
+          claimed_at?: string | null
+          desired_emoji?: string
+          error?: string | null
+          external_message_id: string
+          finished_at?: string | null
+          group_id: string
+          hold_until?: string
+          id?: string
+          message_id: string
+          requested_at?: string
+          requested_by?: string | null
+          sent_emoji?: string | null
+          status: string
+          to_digits: string
+        }
+        Update: {
+          applied_emoji?: string
+          attempts?: number
+          channel_id?: string
+          claimed_at?: string | null
+          desired_emoji?: string
+          error?: string | null
+          external_message_id?: string
+          finished_at?: string | null
+          group_id?: string
+          hold_until?: string
+          id?: string
+          message_id?: string
+          requested_at?: string
+          requested_by?: string | null
+          sent_emoji?: string | null
+          status?: string
+          to_digits?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_reaction_sync_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_reaction_sync_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_reaction_sync_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: true
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wa_reaction_sends: {
+        Row: {
+          channel_id: string
+          claimed_at: string
+          group_id: string
+          id: string
+        }
+        Insert: {
+          channel_id: string
+          claimed_at?: string
+          group_id: string
+          id?: string
+        }
+        Update: {
+          channel_id?: string
+          claimed_at?: string
+          group_id?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_reaction_sends_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_reaction_sends_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       wa_bridge_state: {
         Row: {
           alerted_state: string | null
@@ -13198,6 +13316,14 @@ export type Database = {
           link_code_at: string | null
           names_synced_at: string | null
           reactions_seen_at: string | null
+          reactions_sender_seen_at: string | null
+          reactions_allow_all: boolean
+          reactions_allowlist: string[]
+          reactions_daily_cap: number
+          reactions_hourly_cap: number
+          reactions_min_gap_seconds: number
+          reactions_mode: string
+          reactions_per_chat_hour: number
           reachable: boolean | null
           send_allowlist: string[]
           send_daily_cap: number
@@ -13222,6 +13348,14 @@ export type Database = {
           link_code_at?: string | null
           names_synced_at?: string | null
           reactions_seen_at?: string | null
+          reactions_sender_seen_at?: string | null
+          reactions_allow_all?: boolean
+          reactions_allowlist?: string[]
+          reactions_daily_cap?: number
+          reactions_hourly_cap?: number
+          reactions_min_gap_seconds?: number
+          reactions_mode?: string
+          reactions_per_chat_hour?: number
           reachable?: boolean | null
           send_allowlist?: string[]
           send_daily_cap?: number
@@ -13246,6 +13380,14 @@ export type Database = {
           link_code_at?: string | null
           names_synced_at?: string | null
           reactions_seen_at?: string | null
+          reactions_sender_seen_at?: string | null
+          reactions_allow_all?: boolean
+          reactions_allowlist?: string[]
+          reactions_daily_cap?: number
+          reactions_hourly_cap?: number
+          reactions_min_gap_seconds?: number
+          reactions_mode?: string
+          reactions_per_chat_hour?: number
           reachable?: boolean | null
           send_allowlist?: string[]
           send_daily_cap?: number
@@ -14356,6 +14498,14 @@ export type Database = {
         Returns: number
       }
       wabridge_apply_observed_reactions: { Args: { p_channel_id: string; p_items: Json; p_scan_ms: number }; Returns: Json }
+      wabridge_claim_reaction: { Args: { p_channel_id: string }; Returns: Json }
+      wabridge_finish_reaction: { Args: { p_attempt: number; p_channel_id: string; p_error: string | null; p_id: string; p_ok: boolean; p_ts: number }; Returns: Json }
+      wabridge_react_click: { Args: { p_emoji: string; p_message_id: string; p_reactor_id: string; p_reactor_name: string }; Returns: Json }
+      wabridge_react_line_emoji: { Args: { p_reactions: Json }; Returns: string }
+      wabridge_queue_phone_reaction: { Args: { p_action: string; p_emoji: string; p_message_id: string; p_user: string | null }; Returns: Json }
+      wabridge_react_safe_emoji: { Args: { p_emoji: string }; Returns: boolean }
+      wabridge_set_reactions_allowlist: { Args: { p_channel_id: string; p_digits: string[] }; Returns: Json }
+      wabridge_set_reactions_mode: { Args: { p_allow_all?: boolean | null; p_channel_id: string; p_mode: string }; Returns: Json }
       wabridge_count_dropped: { Args: { p_channel_id: string }; Returns: undefined }
       wabridge_ingest_message: {
         Args: {

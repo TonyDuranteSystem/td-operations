@@ -12,6 +12,7 @@ import {
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
 import { emitUiEvent } from "@/lib/ui-events"
 import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
+import { parseReactClaim, parseReactResult } from "@/lib/messaging/wabridge-react"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
 import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
 import {
@@ -49,6 +50,8 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.reactions", ts, scan_ms, items:[{ext_id,chat,side,op,emoji?,reacted_at?}]}   reactions made on the phone → shown in the CRM (display only, sends nothing; answered PER ITEM)
  *  - {event:"bridge.send.claim", ts}                                  the Mac's sender asks for its NEXT reply (pacing + pause switch enforced in the database)
  *  - {event:"bridge.send.result", ts, outbox_id, ok, message_id?, error?}   what the Mac's WhatsApp program answered for that reply
+ *  - {event:"bridge.react.claim", ts}                                the Mac's REACTION sender asks for its next due CRM→phone reaction (switch, allowlist, health, pacing, caps enforced in the database)
+ *  - {event:"bridge.react.result", ts, id, attempt, ok, error?}       what the WhatsApp program answered for that reaction (attempt = the claim number it was given)
  *  - {event:"bridge.media.claim", ts}                                 the Mac asks for its NEXT voice note to fetch (answer carries a signed upload URL)
  *  - {event:"bridge.media.result", ts, message_id, outcome, size_bytes?, duration_seconds?, transcript?, language?, model?, error?}
  *  - {event:"bridge.linkcode", ts, code}                            a pairing code the Mac fetched while the device is unlinked (shown to the owner only)
@@ -181,6 +184,37 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
       return NextResponse.json({ error: "could not record the result" }, { status: 500 })
     }
     await emitUiEvent("whatsapp") // the reply's status (sent / failed) changed — open Inboxes refresh at once
+    return NextResponse.json(finished)
+  }
+
+  // ─── CRM → phone reactions: the Mac's SEPARATE reaction sender (react.mjs) asks for the next DUE reaction and reports its result ───
+  // Every rule (switch, allowlist, health, reader alive, pacing, caps, 10 s hold, expiry) is enforced INSIDE wabridge_claim_reaction;
+  // {claimed:false, reason} is a normal 200 — the Mac just waits. A reaction is idempotent on WhatsApp, so no "unknown" state exists.
+  if (kind === "bridge.react.claim") {
+    const c = parseReactClaim(body, now)
+    if (!c) return NextResponse.json({ error: "bad claim" }, { status: 400 })
+    if (c.ok === false) return NextResponse.json({ error: c.reason }, { status: 400 })
+    const { data: claimed, error: claimError } = await supabaseAdmin.rpc("wabridge_claim_reaction", { p_channel_id: channel.id })
+    if (claimError || typeof claimed !== "object" || claimed === null) return NextResponse.json({ error: "could not claim" }, { status: 500 })
+    return NextResponse.json({ ok: true, ...(claimed as Record<string, unknown>) })
+  }
+
+  if (kind === "bridge.react.result") {
+    const r = parseReactResult(body, now)
+    if (!r) return NextResponse.json({ error: "bad result" }, { status: 400 })
+    if (r.ok === false) return NextResponse.json({ error: r.reason }, { status: 400 })
+    const { data: finished, error: finishError } = await supabaseAdmin.rpc("wabridge_finish_reaction", {
+      p_channel_id: channel.id,
+      p_id: r.id as string,
+      p_ok: r.sent,
+      p_error: r.error,
+      p_attempt: r.attempt, // the claim number — an answer for an older claim is refused inside the function
+      p_ts: r.ts, // the Mac's clock: the phone element's scan_ms (ONE clock, like the phone→CRM reader)
+    })
+    if (finishError || typeof finished !== "object" || finished === null) {
+      return NextResponse.json({ error: "could not record the result" }, { status: 500 })
+    }
+    await emitUiEvent("whatsapp") // the pill turns "phone" (sent) or shows why not — open Inboxes refresh at once
     return NextResponse.json(finished)
   }
 
