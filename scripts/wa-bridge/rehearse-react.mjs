@@ -75,11 +75,11 @@ try {
   q = await queue("👍")
   check("2b ON but the Mac sender has not looked for minutes: the click is refused (never a pick that sits on 'sending…')", q.queued === false && q.reason === "sender_offline", JSON.stringify(q))
   r = await runSender()
-  check("2c the sender's first look (idle, nothing due) records that it is alive", r.code === 0 && r.wait === 6 && calls.length === 0, `${r.code} ${r.wait} ${r.out}`)
+  check("2c the sender's first look (idle, nothing due) records that it is alive", r.code === 0 && r.wait === 2 && calls.length === 0, `${r.code} ${r.wait} ${r.out}`)
   q = await queue("👍")
-  check("3  now a pick is queued with the 10 s undo hold", q.queued === true && q.hold_seconds === 10, JSON.stringify(q))
+  check("3  now a pick is queued with the 3 s undo hold", q.queued === true && q.hold_seconds === 3, JSON.stringify(q))
   r = await runSender()
-  check("4  inside the hold the sender finds nothing due (no call to the program)", r.code === 0 && r.wait === 6 && calls.length === 0, `${r.wait} ${calls.length}`)
+  check("4  inside the hold the sender finds nothing due (no call to the program)", r.code === 0 && r.wait === 2 && calls.length === 0, `${r.wait} ${calls.length}`)
 
   // 3. hold passes → sent through the program with the exact request
   await due()
