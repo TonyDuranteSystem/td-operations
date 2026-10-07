@@ -87,7 +87,7 @@ const STEPS: TourStep[] = [
   {
     target: '[data-tour="wa-composer"]',
     title: 'Writing a reply',
-    content: "Type here. There's also a mic for a voice note, a paperclip to attach a file, and a sparkle icon: with text in the box it polishes your wording (Undo brings your exact words back), with an empty box it suggests a reply from the chat.",
+    content: "Type here. There's also a mic for a voice note, a paperclip to attach a file, and an AI icon (a magic wand when you have typed something, a sparkle when the box is empty): with text in the box it polishes your wording (Undo brings your exact words back), with an empty box it suggests a reply from the chat.",
     placement: 'top',
   },
   {
