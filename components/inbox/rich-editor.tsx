@@ -245,6 +245,7 @@ export const RichEditor = forwardRef<RichEditorHandle, RichEditorProps>(function
       {toolbar && editor && <Toolbar editor={editor} variant={toolbar} style={style} onStyleChange={onStyleChange} />}
       {/* The message-level choices are previewed here by inheritance; the SERVER applies the real spacing. */}
       <div
+        data-tour="reply-box"
         className={cn('rich-editor-wrap', fill && 'flex min-h-0 flex-1 flex-col')}
         style={
           {
@@ -370,7 +371,7 @@ function Toolbar({
 
   return (
     <div className="mb-1.5 space-y-1.5">
-      <div role="toolbar" aria-label="Formatting" className="flex flex-wrap items-center gap-x-1 gap-y-1">
+      <div role="toolbar" aria-label="Formatting" data-tour="reply-toolbar" className="flex flex-wrap items-center gap-x-1 gap-y-1">
         {full && (
           <>
             {select('font', 'Font', RICH_FONTS.map((f) => [f, f] as [string, string]), 'max-w-[8.5rem]')}

@@ -9,6 +9,13 @@ import { InboxHeader } from './inbox-header'
 import { InboxSidebar } from './inbox-sidebar'
 import { ConversationList } from './conversation-list'
 import { WhatsAppTour } from './whatsapp-tour'
+import { ReplyTour } from './reply-tour'
+import {
+  isReplyTourDismissed,
+  markReplyTourShownThisLoad,
+  shouldAutoStartReplyTour,
+  wasReplyTourShownThisLoad,
+} from '@/lib/inbox/reply-tour'
 import { isFramedOrPopout } from '@/lib/windows/windows-context'
 import { isAnyTourActive } from '@/lib/ui/tour-lock'
 import { SearchSuggestDropdown, type SearchSuggestion } from './search-suggest-dropdown'
@@ -146,6 +153,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
   const [workerOpen, setWorkerOpen] = useState(false)
   const [waWorkerOpen, setWaWorkerOpen] = useState(false)
   const [waTourOpen, setWaTourOpen] = useState(false)
+  const [replyTourOpen, setReplyTourOpen] = useState(false)
   const waFirstRowRef = useRef<InboxConversation | null>(null)
   const [waListReady, setWaListReady] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
@@ -285,6 +293,34 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
     }
   }, [isWhatsApp, waListReady, selected, userId])
   const isGmail = selected?.channel === 'gmail'
+  // The reply tour (new reply box: pop-up, formatting, AI, unsent-reply safety net) starts by itself on the first email
+  // opened in each page load, on a normal wide screen, UNTIL the person ticks "Don't show this tour again" inside it
+  // (remembered per person per browser) — never inside a floating window or pop-out, never on top of another tour.
+  // The "Reply tour" button starts it any time. (Dev job 10b8dfce, Antonio 2026-10-06, for Luca.)
+  useEffect(() => {
+    if (!isGmail || !userId) return
+    const id = window.setTimeout(() => {
+      try {
+        const go = shouldAutoStartReplyTour({
+          userId,
+          emailThreadOpen: true,
+          framedOrPopout: isFramedOrPopout(),
+          anotherTourActive: isAnyTourActive(),
+          wideScreen: window.matchMedia('(min-width: 768px)').matches,
+          dismissed: isReplyTourDismissed(window.localStorage, userId),
+          shownThisLoad: wasReplyTourShownThisLoad(),
+          tabVisible: document.visibilityState === 'visible',
+          replyBoxBusy: !!document.activeElement?.closest('.rich-editor-surface'),
+        })
+        if (!go) return
+        markReplyTourShownThisLoad()
+        setReplyTourOpen(true)
+      } catch {
+        // Storage blocked (private window) — no auto-start; the button still works.
+      }
+    }, 1200) // let the thread and the reply box finish loading before pointing at them
+    return () => window.clearTimeout(id)
+  }, [isGmail, userId])
   // Read/unread state of the OPEN email: optimistic override wins, else the row.
   const openUnread = selected
     ? (unread.has(selected.id)
@@ -1386,6 +1422,16 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
               Take the tour
             </button>
           )}
+          {isGmail && (
+            <button
+              data-tour="reply-start-tour"
+              onClick={() => setReplyTourOpen(true)}
+              className="hidden items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 md:inline-flex"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              Reply tour
+            </button>
+          )}
           <button
             onClick={() => setComposeMenuOpen(!composeMenuOpen)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-sm font-medium hover:bg-blue-600 transition-colors"
@@ -2174,6 +2220,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId }: InboxShell
         }}
         onClose={() => setWaTourOpen(false)}
       />
+
+      <ReplyTour open={replyTourOpen} userId={userId} onClose={() => setReplyTourOpen(false)} />
 
       <ComposeDialog
         open={composeOpen}
