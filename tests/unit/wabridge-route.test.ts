@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   signUrlOk: true,
   signUrlCalls: [] as Array<{ path: string; expiresIn: number }>,
   uiEvents: [] as string[],
+  uiPayloads: [] as unknown[],
 }))
 
 vi.mock("@/lib/supabase-admin", () => ({
@@ -48,7 +49,7 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 vi.mock("@/lib/ui-events", () => ({
-  emitUiEvent: async (kind: string) => { state.uiEvents.push(kind) },
+  emitUiEvent: async (kind: string, payload?: unknown) => { state.uiEvents.push(kind); state.uiPayloads.push(payload) },
 }))
 vi.mock("@/lib/messaging/groups", () => ({
   findOrCreateWhatsAppGroup: async (p: Record<string, unknown>) => {
@@ -97,6 +98,7 @@ beforeEach(() => {
   state.signUrlOk = true
   state.signUrlCalls = []
   state.uiEvents = []
+  state.uiPayloads = []
 })
 
 describe("POST /api/wa-bridge/[channelId] — live messages", () => {
@@ -592,6 +594,51 @@ describe("the live-update signal ('whatsapp' ui event) — wakes open Inboxes on
     state.uiEvents = []
     await call({ event: "bridge.backfill", ts: Date.now(), items: [item({ id: "H9" })] })
     expect(state.uiEvents).toEqual([])
+  })
+
+  // ── dev job c84dfb4d: the sound. Only a FRESH message from the CUSTOMER carries { inbound: n } ──
+  const fresh = (ms = 5_000) => new Date(Date.now() - ms).toISOString()
+
+  it("a fresh customer message rings (payload { inbound: 1 })", async () => {
+    await call(goodMessage({ timestamp: fresh() }))
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    expect(state.uiPayloads).toEqual([{ inbound: 1 }])
+  })
+
+  it("our own reply / something typed on the phone refreshes the screens but never rings", async () => {
+    await call(goodMessage({ timestamp: fresh(), is_from_me: true }))
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    expect(state.uiPayloads).toEqual([undefined])
+  })
+
+  it("a customer message that is hours old (delayed delivery) refreshes but never rings", async () => {
+    await call(goodMessage({ timestamp: fresh(3 * 3600_000) }))
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    expect(state.uiPayloads).toEqual([undefined])
+  })
+
+  it("a live catch-up rings ONCE per batch, counting only the fresh customer messages; an old or own one does not", async () => {
+    await call({ event: "bridge.backfill", ts: Date.now(), live: true, items: [
+      item({ id: "N1", ts: fresh(10_000) }),
+      item({ id: "N2", ts: fresh(20_000) }),
+      item({ id: "N3", ts: fresh(10_000), from_me: true }),
+      item({ id: "N4", ts: fresh(5 * 3600_000) }),
+    ] })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    expect(state.uiPayloads).toEqual([{ inbound: 2 }])
+  })
+
+  it("a live catch-up with only old messages refreshes but does not ring", async () => {
+    await call({ event: "bridge.backfill", ts: Date.now(), live: true, items: [item({ id: "O1" }), item({ id: "O2" })] })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    expect(state.uiPayloads).toEqual([undefined])
+  })
+
+  it("a redelivery (already saved) neither refreshes nor rings", async () => {
+    state.rpcResult = { data: false, error: null }
+    await call(goodMessage({ timestamp: fresh() }))
+    expect(state.uiEvents).toEqual([])
+    expect(state.uiPayloads).toEqual([])
   })
 
   it("the heartbeat never signals", async () => {

@@ -132,8 +132,7 @@ export function setSenderSoundId(senderId: string, soundId: string): void {
 }
 
 // Per-tone ADSR: fast linear attack → exponential release
-function runTones(ctx: AudioContext, tones: Tone[], masterVol = 0.22, debugId?: string): void {
-  console.warn('[SOUND PLAYED]', debugId ?? 'unknown', new Error().stack?.split('\n').slice(1, 4).join(' | '))
+function runTones(ctx: AudioContext, tones: Tone[], masterVol = 0.22): void {
   const now = ctx.currentTime
 
   for (const tone of tones) {
@@ -163,24 +162,33 @@ export function useNotificationSound() {
     return ctxRef.current
   }, [])
 
-  const play = useCallback((soundId: string, debugId?: string) => {
+  const play = useCallback((soundId: string) => {
     if (soundId === SOUND_NONE) return
     const sound = SOUND_MAP.get(soundId)
     if (!sound) return
     const ctx = getContext()
-    const doPlay = () => runTones(ctx, sound.tones, 0.22, debugId)
+    const doPlay = () => runTones(ctx, sound.tones, 0.22)
     if (ctx.state === 'suspended') { ctx.resume().then(doPlay) } else { doPlay() }
   }, [getContext])
 
-  const previewSound = useCallback((soundId: string) => { play(soundId, 'preview') }, [play])
+  const previewSound = useCallback((soundId: string) => { play(soundId) }, [play])
 
-  const playSound = useCallback(() => { play(SOUND_LIBRARY[0].id, 'playSound') }, [play])
+  // Browsers keep audio suspended until the page has had a click / key press. Call this on the first one so the first real
+  // notification is not silent (a no-op once the context is running).
+  const unlockAudio = useCallback(() => {
+    try {
+      const ctx = getContext()
+      if (ctx.state === 'suspended') void ctx.resume()
+    } catch { /* no audio support — nothing to unlock */ }
+  }, [getContext])
+
+  const playSound = useCallback(() => { play(SOUND_LIBRARY[0].id) }, [play])
 
   const playSenderSound = useCallback((senderId: string) => {
     const stored = getSenderSoundId(senderId)
     if (stored === SOUND_NONE) return
-    play(stored && SOUND_MAP.has(stored) ? stored : fallbackSoundId(senderId), `playSenderSound:${senderId.slice(0, 8)}`)
+    play(stored && SOUND_MAP.has(stored) ? stored : fallbackSoundId(senderId))
   }, [play])
 
-  return { playSound, playSenderSound, previewSound }
+  return { playSound, playSenderSound, previewSound, unlockAudio }
 }

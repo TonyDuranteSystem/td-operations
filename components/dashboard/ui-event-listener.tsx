@@ -21,6 +21,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import { WHATSAPP_LIVE_QUERY_KEYS, WHATSAPP_LIST_QUERY_KEY, WHATSAPP_LIVE_DEBOUNCE_MS, WHATSAPP_LIVE_MAX_WAIT_MS } from '@/lib/ui-event-whatsapp-keys'
+import { useNotificationSound, SOUND_NONE } from '@/lib/hooks/use-notification-sound'
+import { inboundCountFromPayload, readSoundPref, claimSoundEvent, gapElapsed } from '@/lib/whatsapp-sound'
 
 /** kind → react-query keys to invalidate */
 const UI_EVENT_QUERY_KEYS: Record<string, string[]> = {
@@ -102,6 +104,27 @@ export function UiEventListener() {
   const lastRefreshRef = useRef(0)
   const whatsappDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const whatsappFirstSignalRef = useRef(0)
+  const { previewSound, unlockAudio } = useNotificationSound()
+  const lastWaSoundRef = useRef(0)
+  // The effect below runs once; keep the latest player in a ref so it never goes stale.
+  const playToneRef = useRef(previewSound)
+  playToneRef.current = previewSound
+
+  // Browsers keep audio muted until the page has had a click or key press: unlock it on the first one (once), so the first real
+  // WhatsApp message after opening the CRM is audible.
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio()
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [unlockAudio])
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
@@ -115,6 +138,25 @@ export function UiEventListener() {
           const kind = (msg.new as { kind?: string })?.kind
           if (!kind) return
           if (kind === 'whatsapp') {
+            // A fresh CUSTOMER message (the receiver adds { inbound: n }) rings this person's chosen tone — dev job c84dfb4d.
+            // Several tabs of one browser get the same signal: a few ms of random delay, then only the first to claim it plays.
+            if (inboundCountFromPayload((msg.new as { payload?: unknown })?.payload) > 0) {
+              const row = msg.new as { id?: unknown; created_at?: unknown }
+              const eventId = String(row.id ?? row.created_at ?? '')
+              setTimeout(() => {
+                try {
+                  const pref = readSoundPref(window.localStorage)
+                  if (pref === SOUND_NONE) return
+                  if (!claimSoundEvent(window.localStorage, eventId)) return
+                  const nowMs = Date.now()
+                  if (!gapElapsed(nowMs, lastWaSoundRef.current)) return
+                  lastWaSoundRef.current = nowMs
+                  playToneRef.current(pref)
+                } catch {
+                  /* a sound must never break the live update */
+                }
+              }, Math.floor(Math.random() * 80))
+            }
             // A burst (several messages / a backfill / replies finishing together) collapses into ONE refresh of the
             // WhatsApp list + open chat only — never the Gmail-backed inbox keys (see lib/ui-event-whatsapp-keys.ts).
             // Trailing debounce with a MAX WAIT, so a long unbroken stream of signals cannot postpone the refresh forever.

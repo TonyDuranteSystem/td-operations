@@ -1,5 +1,7 @@
 # Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram)
 
+_2026-10-07d note (WhatsApp sound, dev job c84dfb4d): the WhatsApp search bar of the Inbox gained a speaker button (`components/inbox/whatsapp-sound-picker.tsx`) — pick the tone played for a new customer WhatsApp message, or Off; per person, per browser. The sound itself is played by the dashboard's UiEventListener; rules and verification in `docs/systems/messaging.md` ("Notification sound")._
+
 _2026-10-07 note (same name, new number): an unlinked WhatsApp chat whose sender name fits exactly one existing client now shows an amber 'Add this number to them?' bar in the chat banner (Add / Not him / Save as someone new); suggest-only, details and rules in `docs/systems/messaging.md`._
 
 _2026-10-07 note (narrow windows): the email thread header's action buttons (Task … Delete, 16 of them) used to be `shrink-0`, so they could never be narrower than ~770px and pushed the whole page sideways whenever the email area was narrower (browser window under ~1150px). They now wrap onto a second line (`min-w-0 flex-wrap`). Found by measuring the live inbox at several widths; the Worker panel was NOT the cause (same overflow with it closed)._
