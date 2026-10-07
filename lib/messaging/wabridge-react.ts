@@ -77,7 +77,7 @@ export function parseQueueAnswer(data: unknown): PhoneReactionQueueAnswer {
   if (typeof data !== "object" || data === null) return { queued: false, reason: "unreadable", holdSeconds: 0 }
   const d = data as Record<string, unknown>
   if (d.ok === true && d.queued === true) {
-    return { queued: true, reason: null, holdSeconds: typeof d.hold_seconds === "number" ? d.hold_seconds : 10 }
+    return { queued: true, reason: null, holdSeconds: typeof d.hold_seconds === "number" ? d.hold_seconds : 3 }
   }
   if (d.ok === true && d.queued === false) return { queued: false, reason: typeof d.reason === "string" ? d.reason : "unreadable", holdSeconds: 0 }
   return { queued: false, reason: typeof d.code === "string" ? d.code : "unreadable", holdSeconds: 0 }

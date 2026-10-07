@@ -53,9 +53,9 @@ describe("backoffSeconds", () => {
     expect(P.backoffSeconds("gap", 3)).toBe(3)
     expect(P.backoffSeconds("gap", 0)).toBe(2)
     expect(P.backoffSeconds("gap", 9999)).toBe(60)
-    expect(P.backoffSeconds("gap", "x")).toBe(6)
-    expect(P.backoffSeconds("nothing_to_send")).toBe(6)
-    expect(P.backoffSeconds(undefined)).toBe(6)
+    expect(P.backoffSeconds("gap", "x")).toBe(2)
+    expect(P.backoffSeconds("nothing_to_send")).toBe(2)
+    expect(P.backoffSeconds(undefined)).toBe(2)
   })
 })
 

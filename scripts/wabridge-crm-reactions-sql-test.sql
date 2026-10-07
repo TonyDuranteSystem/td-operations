@@ -94,13 +94,13 @@ BEGIN
   ASSERT r->>'code' = 'bad_request', 'bad action';
   ASSERT NOT EXISTS (SELECT 1 FROM wa_reaction_sync WHERE channel_id = ch), 'every refusal left no lane row';
 
-  -- 5. a pick is queued, then HELD 10 s (undo window): nothing to claim yet. The heart is stored with its variation selector.
+  -- 5. a pick is queued, then HELD 3 s (undo window; was 10 s until 20261007-2100): nothing to claim yet. The heart is stored with its variation selector.
   r := wabridge_queue_phone_reaction(mid, '❤', 'set', staff1);
-  ASSERT (r->>'queued')::boolean AND r->>'status' = 'pending' AND (r->>'hold_seconds')::int = 10, 'queued: ' || r::text;
+  ASSERT (r->>'queued')::boolean AND r->>'status' = 'pending' AND (r->>'hold_seconds')::int = 3, 'queued: ' || r::text;
   SELECT * INTO lane FROM wa_reaction_sync WHERE message_id = mid;
-  ASSERT lane.desired_emoji = '❤️' AND lane.applied_emoji = '' AND lane.hold_until > now() + interval '8 seconds', 'lane row (heart canonical): ' || row_to_json(lane)::text;
+  ASSERT lane.desired_emoji = '❤️' AND lane.applied_emoji = '' AND lane.hold_until > now() + interval '1 second' AND lane.hold_until <= now() + interval '4 seconds', 'lane row (heart canonical): ' || row_to_json(lane)::text;
   r := wabridge_claim_reaction(ch);
-  ASSERT NOT (r->>'claimed')::boolean AND r->>'reason' = 'nothing_to_send', 'held during the 10 s window: ' || r::text;
+  ASSERT NOT (r->>'claimed')::boolean AND r->>'reason' = 'nothing_to_send', 'held during the 3 s window: ' || r::text;
 
   -- 6. UNDO inside the hold: picking nothing → cancelled, never sent
   r := wabridge_queue_phone_reaction(mid, '❤️', 'remove', staff1);
@@ -108,6 +108,20 @@ BEGIN
   SELECT * INTO lane FROM wa_reaction_sync WHERE message_id = mid;
   ASSERT lane.status = 'cancelled' AND lane.desired_emoji = '', 'undo cancels: ' || row_to_json(lane)::text;
   ASSERT NOT (wabridge_claim_reaction(ch)->>'claimed')::boolean, 'a cancelled pick is never claimed';
+
+  -- 6b. the undo window is a SETTING (reactions_hold_seconds): too big is clamped to 30, negative to 0 (= instant), and the answer carries the value used
+  UPDATE wa_bridge_state SET reactions_hold_seconds = 99 WHERE channel_id = ch;
+  r := wabridge_queue_phone_reaction(mid, '👍', 'set', staff1);
+  ASSERT (r->>'queued')::boolean AND (r->>'hold_seconds')::int = 30, 'hold clamped to 30: ' || r::text;
+  PERFORM wabridge_queue_phone_reaction(mid, '👍', 'remove', staff1); -- undo it again
+  UPDATE wa_bridge_state SET reactions_hold_seconds = -5 WHERE channel_id = ch;
+  r := wabridge_queue_phone_reaction(mid, '👍', 'set', staff1);
+  SELECT * INTO lane FROM wa_reaction_sync WHERE message_id = mid;
+  ASSERT (r->>'queued')::boolean AND (r->>'hold_seconds')::int = 0 AND lane.hold_until <= now() + interval '1 second', 'hold clamped to 0 (instant): ' || r::text;
+  PERFORM wabridge_queue_phone_reaction(mid, '👍', 'remove', staff1); -- undo it again
+  UPDATE wa_bridge_state SET reactions_hold_seconds = 3 WHERE channel_id = ch; -- back to the default
+  SELECT * INTO lane FROM wa_reaction_sync WHERE message_id = mid;
+  ASSERT lane.status = 'cancelled', 'the tuning checks left the lane cancelled: ' || row_to_json(lane)::text;
 
   -- 7. re-pick, hold passes → the Mac claims it; the reader must be alive
   PERFORM wabridge_queue_phone_reaction(mid, '👍', 'set', staff1);
