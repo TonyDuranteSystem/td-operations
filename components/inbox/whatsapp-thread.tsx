@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-draft'
 import { isJunkChatName } from '@/lib/messaging/chat-name'
+import { decideAiApply } from '@/lib/inbox/whatsapp-ai-apply'
 import { splitReactions, PHONE_SIDE_LABEL } from '@/lib/messaging/wa-reactions-view'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
@@ -146,6 +147,13 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const [confirmLocale, setConfirmLocale] = useState<'it' | 'en'>('en')
   const [rewriting, setRewriting] = useState(false)
   const [suggesting, setSuggesting] = useState(false)
+  // The sparkle: text in the box → POLISH it; empty box → DRAFT a reply from the chat. `aiUndo` keeps the FIRST
+  // original (across several polishes) until Keep / send so his exact words can always be put back.
+  const [aiUndo, setAiUndo] = useState<{ original: string; output: string } | null>(null)
+  const [aiNotice, setAiNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null)
+  const aiRequestRef = useRef(0)
+  const textRef = useRef('') // read by the async AI callback: the CURRENT box, not the one captured when it started
+  textRef.current = text
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   // Per-message "three dots" menu (Antonio 2026-09-27, "full menu", matching Portal Chats):
   // reply-to-a-message, pin, react, tag/to-do, discuss with team, share to team chat, a note, and
@@ -341,6 +349,10 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     setConfirming(false)
     setReplyTo(null) // a quoted reply belongs to the chat being left, not the one being opened
     setRewriting(false) // an in-flight rewrite belongs to the chat being left, not the one being opened
+    aiRequestRef.current++ // an in-flight polish/draft belongs to the chat being left; its answer must be dropped
+    setSuggesting(false)
+    setAiUndo(null)
+    setAiNotice(null)
     audioNoteRecorder.cancelRecording() // an in-progress recording belongs to the chat being left; discard, don't attach it to the new one
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stopRecording is stable (useCallback with no changing deps); including the whole object would re-run this on every recorder state change
   }, [groupId])
@@ -466,23 +478,68 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     onError: (msg) => toast.error(msg),
   })
 
-  const handleSuggest = async () => {
+  // The ONE sparkle. Box has text → POLISH exactly that text (the server sends nothing else to the model and checks
+  // the result). Box is empty → DRAFT a first reply from the chat. See /api/inbox/whatsapp/polish and lib/inbox/ai-email.ts.
+  const handleAi = async () => {
+    if (suggesting || sendingRef.current) return
+    const sentText = textRef.current
+    const mode: 'polish' | 'draft' = sentText.trim() ? 'polish' : 'draft'
+    const requestGroupId = groupId // the chat this answer is FOR — a late response must never land in a different one
+    const reqId = ++aiRequestRef.current
     setSuggesting(true)
+    setAiNotice(null)
     try {
-      const res = await fetch('/api/inbox/whatsapp-new/suggest', {
+      const res = await fetch(mode === 'polish' ? '/api/inbox/whatsapp/polish' : '/api/inbox/whatsapp-new/suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId }),
+        body: JSON.stringify(mode === 'polish' ? { text: sentText } : { groupId: requestGroupId }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Could not generate a suggestion.')
-      setText(data.suggestion || '')
+      // R099: show the server's own words; a gateway timeout returns HTML, not JSON.
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || (mode === 'polish' ? 'Could not polish your text — it was left as it is.' : 'Could not generate a suggestion.'))
+      const result: string = mode === 'polish' ? (data.result ?? '') : (data.suggestion ?? '')
+      if (!result.trim()) throw new Error(mode === 'polish' ? 'The AI returned nothing — your text was left as it is.' : 'Could not generate a suggestion.')
+      // Chat switch, a newer click, typing or a Worker draft landing during the wait: see decideAiApply — never overwrite or misplace.
+      const decision = decideAiApply({
+        mode, sentText, currentText: textRef.current, requestGroupId, currentGroupId: groupIdRef.current,
+        requestId: reqId, currentRequestId: aiRequestRef.current, changed: data.changed,
+      })
+      if (decision.apply === false) {
+        if (decision.notice) setAiNotice({ tone: 'info', text: decision.notice })
+        return
+      }
+      setText(result)
+      if (mode === 'polish') {
+        // Keep the FIRST original until Keep / send, even across several polishes.
+        setAiUndo((prev) => ({ original: prev?.original ?? sentText, output: result }))
+      }
+      textareaRef.current?.focus()
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Could not generate a suggestion.')
+      if (groupIdRef.current === requestGroupId && aiRequestRef.current === reqId) {
+        setAiNotice({
+          tone: 'error',
+          text: err instanceof Error && err.message ? err.message : 'The AI could not do that right now — please try again.',
+        })
+      }
     } finally {
-      setSuggesting(false)
+      if (groupIdRef.current === requestGroupId && aiRequestRef.current === reqId) setSuggesting(false)
     }
   }
+
+  // Put his exact words back. If he has edited the AI's version since, replacing it loses those edits — ask first.
+  const handleUndoAi = () => {
+    if (!aiUndo) return
+    if (text !== aiUndo.output && text.trim() && !window.confirm('Replace what is in the box now with your original text?')) return
+    setText(aiUndo.original)
+    setAiUndo(null)
+    setAiNotice(null)
+    textareaRef.current?.focus()
+  }
+
+  // Nothing left to undo once the box is emptied (a send clears it).
+  useEffect(() => {
+    if (!text.trim()) setAiUndo(null)
+  }, [text])
 
   const handleOpenConfirm = () => {
     // A voice note or an attachment can go with NO caption at all — text is only required when there is no
@@ -1122,14 +1179,16 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
               >
                 <Paperclip className="h-4 w-4" />
               </button>
-              <button
-                onClick={handleSuggest}
-                disabled={suggesting || audioNoteRecorder.isRecording}
-                className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
-                aria-label="AI Suggest"
-              >
-                {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              </button>
+              <FastTooltip label={text.trim() ? 'Polish my text — fixes wording and keeps your meaning' : 'Suggest a reply from this chat'}>
+                <button
+                  onClick={handleAi}
+                  disabled={suggesting || audioNoteRecorder.isRecording}
+                  className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-40"
+                  aria-label={text.trim() ? 'Polish my text' : 'Suggest a reply'}
+                >
+                  {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                </button>
+              </FastTooltip>
               <button
                 onClick={handleOpenConfirm}
                 disabled={(!text.trim() && !file?.path) || uploading || !canSend || audioNoteRecorder.isRecording}
@@ -1139,6 +1198,17 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                 <Send className="h-4 w-4" />
               </button>
             </div>
+            {(aiUndo || aiNotice) && (
+              <div className={`flex items-center gap-2 text-[11px] px-1 ${aiNotice?.tone === 'error' ? 'text-red-600' : 'text-violet-700'}`}>
+                <span className="flex-1 min-w-0">{aiNotice ? aiNotice.text : 'AI polished your text.'}</span>
+                {aiUndo && (
+                  <>
+                    <button type="button" onClick={handleUndoAi} className="font-semibold underline underline-offset-2 hover:text-violet-900">Undo</button>
+                    <button type="button" onClick={() => { setAiUndo(null); setAiNotice(null) }} className="font-semibold underline underline-offset-2 hover:text-violet-900">Keep</button>
+                  </>
+                )}
+              </div>
+            )}
             {isWabridgeLine && (
               <p className="text-[11px] text-zinc-400 px-1">
                 Don&apos;t send ID or tax documents over WhatsApp — use the portal instead.

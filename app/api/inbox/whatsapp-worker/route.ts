@@ -7,9 +7,11 @@ import { SLACK_WORKER_SYSTEM_PROMPT } from "@/lib/ai-agent/slack-claude"
 import { deterministicThreadUuid } from "@/lib/ai-agent/inbox-worker-prompt"
 import { explainWorkerFailure } from "@/lib/ai-agent/transient-errors"
 import { jidToE164 } from "@/lib/messaging/phone"
+import { loadRelevantTemplates, formatTemplatesForPrompt } from "@/lib/ai-agent/templates"
 import {
   WHATSAPP_WORKER_SURFACE,
   buildIdentityBlock,
+  buildRetrievalQuery,
   buildWhatsAppSystemPrompt,
   buildWhatsAppWorkerOptions,
   formatTranscript,
@@ -166,7 +168,20 @@ export async function POST(req: NextRequest) {
   })
   const historyRows = (history?.data ?? []) as WhatsAppMessageRow[]
   const transcript = formatTranscript(historyRows, { isGroup, moreExist: historyRows.length >= HISTORY_ROWS })
-  const systemPromptOverride = buildWhatsAppSystemPrompt(SLACK_WORKER_SYSTEM_PROMPT, { identity, transcript })
+
+  // The approved-reply library (verbatim replies TD already approved for other clients): the closest
+  // matches go in the prompt so the Worker words answers the way TD does. Best-effort — "" on no match
+  // or any failure, so a lookup problem never blocks the Worker. No language filter on purpose: the
+  // library's language column mixes "Italian"/"it"/"English"/"en", and the lookup compares exact strings.
+  let approvedReplies = ""
+  try {
+    approvedReplies = formatTemplatesForPrompt(
+      await loadRelevantTemplates(buildRetrievalQuery(message, historyRows), { limit: 3 }),
+    )
+  } catch (err) {
+    console.warn("[whatsapp-worker] approved-reply lookup failed (non-fatal):", err)
+  }
+  const systemPromptOverride = buildWhatsAppSystemPrompt(SLACK_WORKER_SYSTEM_PROMPT, { identity, transcript, approvedReplies })
 
   const scope = scopeFor(groupId)
   const threadId = deterministicThreadUuid(scope)
