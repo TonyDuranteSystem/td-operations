@@ -23,6 +23,7 @@ import { loadWhatsAppDraft, saveWhatsAppDraft } from '@/lib/messaging/whatsapp-d
 import { isJunkChatName } from '@/lib/messaging/chat-name'
 import { decideAiApply } from '@/lib/inbox/whatsapp-ai-apply'
 import { splitReactions, PHONE_SIDE_LABEL } from '@/lib/messaging/wa-reactions-view'
+import { describePhoneReactionState, isPhoneReactionInFlight } from '@/lib/messaging/wabridge-react'
 import { trackOpenMarkRead } from '@/lib/inbox/pending-mark-read'
 import { mergeDraftIntoComposer } from '@/lib/inbox/whatsapp-worker-context'
 import { guessMessageLocale } from '@/lib/messaging/lang-detect'
@@ -82,6 +83,8 @@ interface WhatsAppMessage {
   voice?: VoiceInfo
   /** Self-hosted line: the per-message "three dots" menu (Antonio 2026-09-27, matching Portal Chats). */
   reactions?: MessageReactionRow[]
+  /** CRM → phone reaction on its way, or one that did not go (a SENT one shows as the green "phone" pill instead). */
+  phoneReaction?: { status: string; desired: string; error: string | null }
   pinned_at?: string | null
   reply_to_id?: string | null
 }
@@ -241,7 +244,10 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
     // 5 s while one of our replies is still waiting to be sent or a voice note is still being prepared, otherwise the usual minute
     refetchInterval: (query) =>
       query.state.data?.messages?.some(
-        (m) => (m.outbox_status && isOutboxPending(m.outbox_status)) || (m.voice && isMediaPending(m.voice.status, m.voice.audio_deleted))
+        (m) =>
+          (m.outbox_status && isOutboxPending(m.outbox_status)) ||
+          (m.voice && isMediaPending(m.voice.status, m.voice.audio_deleted)) ||
+          (m.phoneReaction && isPhoneReactionInFlight(m.phoneReaction.status))
       )
         ? 5_000
         : 60_000,
@@ -632,9 +638,13 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Could not react to that message.')
       }
-      return res.json()
+      return res.json() as Promise<{ phone?: { queued?: boolean; notice?: string | null } }>
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] }),
+    onSuccess: (d) => {
+      // The team mark is always saved; this says why it was NOT also sent to the customer's phone (silent when the feature is off).
+      if (d?.phone && !d.phone.queued && d.phone.notice) toast.message(d.phone.notice)
+      queryClient.invalidateQueries({ queryKey: ['whatsapp-messages', groupId] })
+    },
     onError: (err: Error) => toast.error(err.message || 'Could not react to that message.'),
   })
 
@@ -1020,19 +1030,31 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                         </FastTooltip>
                       ))}
                       {reactionView.staff.map((g) => (
-                        <FastTooltip key={g.emoji} label={`${g.names.length ? g.names.join(', ') + ' — ' : ''}saved here in the CRM only, not on the phone`}>
+                        <FastTooltip key={g.emoji} label={`${g.names.length ? g.names.join(', ') + ' — ' : ''}team mark in the CRM. The latest pick is also sent to the customer's phone when that is switched on for this chat`}>
                           <button
                             type="button"
+                            disabled={reactMutation.isPending}
                             onClick={() => reactMutation.mutate({ messageId: msg.id, emoji: g.emoji })}
-                            className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50"
+                            className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-1.5 py-0.5 text-xs leading-none hover:bg-zinc-50 disabled:opacity-60"
                           >
                             <span className="leading-none">{g.emoji}</span>
                             <span className="tabular-nums text-zinc-500">{g.count}</span>
                           </button>
                         </FastTooltip>
                       ))}
+                      {(() => {
+                        const pr = describePhoneReactionState(msg.phoneReaction)
+                        return pr ? (
+                          <span
+                            data-testid="wa-phone-reaction-status"
+                            className={cn('text-[10px] leading-tight', pr.tone === 'bad' ? 'text-red-600' : 'text-sky-700')}
+                          >
+                            {pr.text}
+                          </span>
+                        ) : null
+                      })()}
                       <div className="relative" ref={reactingMessageId === msg.id ? reactionPickerRef : undefined}>
-                        <FastTooltip label="Add reaction (saved in the CRM only — not sent to WhatsApp)">
+                        <FastTooltip label="Add reaction (the latest pick is also sent to the customer's phone when that is switched on for this chat)">
                           <button
                             type="button"
                             onClick={() => setReactingMessageId((cur) => (cur === msg.id ? null : msg.id))}
@@ -1045,6 +1067,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                           <div className={cn('absolute z-50 bottom-full mb-1', isOutbound ? 'right-0' : 'left-0')}>
                             <EmojiPicker
                               onEmojiClick={(emojiData: { emoji: string }) => {
+                                if (reactMutation.isPending) return // a click is still being saved — never two at once
                                 reactMutation.mutate({ messageId: msg.id, emoji: emojiData.emoji })
                                 setReactingMessageId(null)
                               }}

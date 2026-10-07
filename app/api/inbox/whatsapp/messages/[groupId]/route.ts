@@ -182,7 +182,30 @@ export async function GET(
         console.warn("WhatsApp media overlay failed (chat still loads):", mediaErr instanceof Error ? mediaErr.message : String(mediaErr))
       }
     }
-    const withMedia = withVoice.map((m) => (mediaUrlByMessage.has(m.id) ? { ...m, media_url: mediaUrlByMessage.get(m.id) } : m))
+    const withMedia0 = withVoice.map((m) => (mediaUrlByMessage.has(m.id) ? { ...m, media_url: mediaUrlByMessage.get(m.id) } : m))
+
+    // CRM → phone reactions on their way or that did not go (dev job 5962e46d, Release 2): the status line under a message's reactions.
+    // A SENT one needs no line (it is the green "phone" pill). Best-effort: a failure here must not hide the chat.
+    const phoneByMessage = new Map<string, { status: string; desired: string; error: string | null }>()
+    try {
+      const { data: lanes } = await supabaseAdmin
+        .from("wa_reaction_sync")
+        .select("message_id, status, desired_emoji, error, requested_at")
+        .eq("group_id", groupId)
+        .in("status", ["pending", "sending", "failed", "expired"])
+        .gt("requested_at", new Date(Date.now() - 2 * 60 * 60_000).toISOString())
+        .limit(100)
+      // "on its way" only counts for as long as it can still go out (a queued reaction expires after 15 minutes); older ones are not shown
+      // as "sending…" even if nothing has swept them yet. Failures / expiries stay visible for the 2 hours above.
+      const stillCanGo = Date.now() - 20 * 60_000
+      for (const l of lanes ?? []) {
+        if ((l.status === "pending" || l.status === "sending") && Date.parse(l.requested_at) < stillCanGo) continue
+        phoneByMessage.set(l.message_id, { status: l.status, desired: l.desired_emoji, error: l.error })
+      }
+    } catch (laneErr) {
+      console.warn("WhatsApp reaction status overlay failed (chat still loads):", laneErr instanceof Error ? laneErr.message : String(laneErr))
+    }
+    const withMedia = withMedia0.map((m) => (phoneByMessage.has(m.id) ? { ...m, phoneReaction: phoneByMessage.get(m.id) } : m))
 
     const messages = [...withMedia, ...outbox].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
     return NextResponse.json({ messages, send, chat })

@@ -599,3 +599,67 @@ describe("the live-update signal ('whatsapp' ui event) — wakes open Inboxes on
     expect(state.uiEvents).toEqual([])
   })
 })
+
+describe("CRM → phone reactions: bridge.react.claim / bridge.react.result (the Mac's reaction sender)", () => {
+  const RID = "11111111-2222-4333-8444-555555555555"
+  const claimEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.react.claim", ts: Date.now(), ...over })
+  const resultEvent = (over: Record<string, unknown> = {}) => ({ event: "bridge.react.result", ts: Date.now(), id: RID, attempt: 1, ok: true, ...over })
+
+  it("hands the Mac the database's answer: a due reaction, or a normal 200 'wait' (never an error)", async () => {
+    state.rpcOverrides.wabridge_claim_reaction = { data: { claimed: true, id: RID, to_digits: "17274234285", external_message_id: "3A005FCF60C597CA99D0", emoji: "👍" }, error: null }
+    let r = await call(claimEvent())
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, claimed: true, id: RID, to_digits: "17274234285", external_message_id: "3A005FCF60C597CA99D0", emoji: "👍" })
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_claim_reaction")?.args).toEqual({ p_channel_id: CHANNEL })
+    state.rpcOverrides.wabridge_claim_reaction = { data: { claimed: false, reason: "paused" }, error: null }
+    r = await call(claimEvent())
+    expect(r).toEqual({ status: 200, body: { ok: true, claimed: false, reason: "paused" } })
+  })
+
+  it("a claim never emits a screen signal; a database failure is a generic 500", async () => {
+    state.rpcOverrides.wabridge_claim_reaction = { data: { claimed: true, id: RID }, error: null }
+    await call(claimEvent())
+    expect(state.uiEvents).toEqual([])
+    state.rpcOverrides.wabridge_claim_reaction = { data: null, error: { message: "secret internals" } }
+    const r = await call(claimEvent())
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).not.toContain("secret")
+  })
+
+  it("records the result with the program's verdict and wakes the open Inboxes", async () => {
+    state.rpcOverrides.wabridge_finish_reaction = { data: { ok: true, status: "sent" }, error: null }
+    let r = await call(resultEvent())
+    expect(r).toEqual({ status: 200, body: { ok: true, status: "sent" } })
+    const finishArgs = state.rpcCalls.find((c) => c.fn === "wabridge_finish_reaction")?.args
+    expect(finishArgs).toMatchObject({ p_channel_id: CHANNEL, p_id: RID, p_ok: true, p_error: null, p_attempt: 1 })
+    expect(typeof finishArgs?.p_ts).toBe("number") // the Mac's clock, passed through for the phone element's scan_ms
+    expect(state.uiEvents).toEqual(["whatsapp"])
+    state.uiEvents = []
+    state.rpcCalls = []
+    state.rpcOverrides.wabridge_finish_reaction = { data: { ok: true, status: "failed" }, error: null }
+    r = await call(resultEvent({ ok: false, error: "the program said no" }))
+    expect(r.status).toBe(200)
+    expect(state.rpcCalls.find((c) => c.fn === "wabridge_finish_reaction")?.args).toMatchObject({ p_ok: false, p_error: "the program said no" })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+  })
+
+  it("refuses unsigned, replayed or malformed events before touching the database", async () => {
+    expect((await call(claimEvent(), { sig: null })).status).toBe(401)
+    expect((await call(claimEvent({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
+    expect((await call(resultEvent({ id: "nope" }))).status).toBe(400)
+    expect((await call(resultEvent({ ok: "yes" }))).status).toBe(400)
+    expect((await call(resultEvent({ attempt: undefined }))).status).toBe(400) // the claim number is required
+    expect((await call(resultEvent({ attempt: 0 }))).status).toBe(400)
+    expect((await call(resultEvent({ ts: Date.now() - 10 * 60_000 }))).status).toBe(400)
+    expect(state.rpcCalls.filter((c) => c.fn.startsWith("wabridge_claim_reaction") || c.fn === "wabridge_finish_reaction")).toHaveLength(0)
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("a failed save of the result is a generic 500 and signals nothing", async () => {
+    state.rpcOverrides.wabridge_finish_reaction = { data: null, error: { message: "boom" } }
+    const r = await call(resultEvent())
+    expect(r.status).toBe(500)
+    expect(state.uiEvents).toEqual([])
+  })
+})
+
