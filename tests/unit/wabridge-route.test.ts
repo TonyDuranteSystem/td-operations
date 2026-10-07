@@ -489,3 +489,54 @@ describe("bridge.send.claim / bridge.send.result (the Mac's reply sender)", () =
     expect(JSON.stringify(r.body)).not.toContain("boom")
   })
 })
+
+describe("POST /api/wa-bridge/[channelId] — reactions made on the phone (bridge.reactions)", () => {
+  const item = (over: Record<string, unknown> = {}) => ({ ext_id: "3A005FCF60C597CA99D0", chat: "17274234285", side: "client", op: "set", emoji: "👍", ...over })
+  const batch = (items: unknown, over: Record<string, unknown> = {}) => ({ event: "bridge.reactions", ts: Date.now(), scan_ms: Date.now(), items, ...over })
+
+  it("sends only the valid items to the database function and answers PER ITEM, keeping every submitted index", async () => {
+    state.rpcOverrides.wabridge_apply_observed_reactions = {
+      data: { ok: true, results: [{ i: 0, r: "applied" }, { i: 1, r: "stale" }] },
+      error: null,
+    }
+    const items = [item(), item({ emoji: "abc" }), item({ side: "line", op: "remove", emoji: undefined, ext_id: "3A194CBCD5B257FA9386" })]
+    const r = await call(batch(items))
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ ok: true, results: [{ i: 0, r: "applied" }, { i: 1, r: "invalid" }, { i: 2, r: "stale" }] })
+    const rpc = state.rpcCalls.find((c) => c.fn === "wabridge_apply_observed_reactions")!
+    expect(rpc.args.p_channel_id).toBe(CHANNEL)
+    expect((rpc.args.p_items as unknown[]).length).toBe(2)
+    expect(typeof rpc.args.p_scan_ms).toBe("number")
+  })
+
+  it("an EMPTY batch is a valid 'alive' beat and still reaches the database (which records it)", async () => {
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: true, results: [] }, error: null }
+    const r = await call(batch([]))
+    expect(r).toEqual({ status: 200, body: { ok: true, results: [] } })
+    expect(state.rpcCalls.filter((c) => c.fn === "wabridge_apply_observed_reactions")).toHaveLength(1)
+  })
+
+  it("refuses stale, malformed or oversized batches and unsigned requests before touching the database", async () => {
+    expect((await call(batch([], { ts: Date.now() - 60 * 60_000 }))).status).toBe(400)
+    expect((await call(batch([], { scan_ms: undefined }))).status).toBe(400)
+    expect((await call(batch([], { scan_ms: Date.now() - 60 * 60_000 }))).status).toBe(400)
+    expect((await call(batch("nope"))).status).toBe(400)
+    expect((await call(batch(Array.from({ length: 201 }, () => item())))).status).toBe(400)
+    expect((await call(batch([]), { sig: "sha256=" + "0".repeat(64) })).status).toBe(401)
+    expect(state.rpcCalls).toHaveLength(0)
+  })
+
+  it("500s when the database call fails so the Mac retries, and 400s when the function refuses the whole batch", async () => {
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: null, error: { message: "db down" } }
+    expect((await call(batch([item()]))).status).toBe(500)
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: false, code: "too_many" }, error: null }
+    expect((await call(batch([item()]))).status).toBe(400)
+  })
+
+  it("never ingests a message, never counts a dropped chat, and sends nothing — it only calls the one database function", async () => {
+    state.rpcOverrides.wabridge_apply_observed_reactions = { data: { ok: true, results: [{ i: 0, r: "noop" }] }, error: null }
+    await call(batch([item()]))
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_apply_observed_reactions"])
+    expect(state.groupCalls).toHaveLength(0)
+  })
+})

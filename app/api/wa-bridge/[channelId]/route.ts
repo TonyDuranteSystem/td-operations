@@ -10,6 +10,7 @@ import {
   type WabridgeMessage,
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
+import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
 import { parseSendClaim, parseSendResult } from "@/lib/messaging/wabridge-outbox"
 import {
@@ -44,6 +45,7 @@ const MAX_NAME_ITEMS = 500
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
  *  - {event:"bridge.names", ts, names:[{digits,name}]}                the phone's saved contact names
+ *  - {event:"bridge.reactions", ts, scan_ms, items:[{ext_id,chat,side,op,emoji?,reacted_at?}]}   reactions made on the phone → shown in the CRM (display only, sends nothing; answered PER ITEM)
  *  - {event:"bridge.send.claim", ts}                                  the Mac's sender asks for its NEXT reply (pacing + pause switch enforced in the database)
  *  - {event:"bridge.send.result", ts, outbox_id, ok, message_id?, error?}   what the Mac's WhatsApp program answered for that reply
  *  - {event:"bridge.media.claim", ts}                                 the Mac asks for its NEXT voice note to fetch (answer carries a signed upload URL)
@@ -277,6 +279,28 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     })
     if (namesError) return NextResponse.json({ error: namesError.message }, { status: 500 })
     return NextResponse.json({ ok: true, updated: updated ?? 0 })
+  }
+
+  // ─── Reactions made ON THE PHONE (clients' and the business line's own), read by the Mac from GOWA's own records ───
+  // Display only — nothing is ever sent to WhatsApp from here. The answer is PER ITEM (applied / noop / stale / held /
+  // unmatched / invalid) so the Mac advances only on explicit results and one bad item never blocks the rest. Even an
+  // EMPTY batch is a valid "I am alive and scanning" beat (the database records it).
+  if (kind === "bridge.reactions") {
+    const parsed = parseReactionsBatch(body, now)
+    if (!parsed.ok) return NextResponse.json({ error: `Invalid reactions batch: ${parsed.reason}` }, { status: 400 })
+    const validItems = parsed.entries.flatMap((e) => (e.valid && e.item ? [e.item] : []))
+    const { data: applied, error: reactionsError } = await supabaseAdmin.rpc("wabridge_apply_observed_reactions", {
+      p_channel_id: channel.id,
+      p_items: validItems as unknown as Json,
+      p_scan_ms: parsed.scanMs,
+    })
+    if (reactionsError) return NextResponse.json({ error: "could not apply reactions" }, { status: 500 })
+    const a = applied as { ok?: boolean; code?: string; results?: Array<{ i: number; r: string }> } | null
+    if (!a || a.ok !== true || !Array.isArray(a.results)) {
+      return NextResponse.json({ error: `reactions refused${a?.code ? `: ${a.code}` : ""}` }, { status: 400 })
+    }
+    const results = mergeReactionResults(parsed.entries, a.results)
+    return NextResponse.json({ ok: true, results })
   }
 
   // ─── History download: old messages from the phone's chats (no unread, no un-hiding) ───
