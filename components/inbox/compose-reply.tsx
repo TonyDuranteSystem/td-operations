@@ -31,6 +31,7 @@ import {
   saveReplyDraft,
   type StoredReplyDraft,
 } from '@/lib/inbox/reply-draft-store'
+import { REPLY_TOUR_EVENT, type ReplyTourAction } from '@/lib/inbox/reply-tour'
 import { RichEditor, type RichEditorHandle } from './rich-editor'
 import { readReplyPopupDefault, writeReplyPopupDefault } from '@/lib/inbox/reply-popup-pref'
 import { ReplyPopup } from './reply-popup'
@@ -196,6 +197,10 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
   // always there to go back).
   const keepInlineRef = useRef(false)
   const expandBtnRef = useRef<HTMLButtonElement>(null)
+  // The reply tour (components/inbox/reply-tour.tsx) is on screen: keep the box in writing mode so the toolbar the
+  // tour points at does not fold away when focus moves to the tour's own buttons.
+  const tourHoldRef = useRef(false)
+  const tourActionRef = useRef<(a: ReplyTourAction) => void>(() => {})
   const queryClient = useQueryClient()
   const attachments = useEmailAttachments()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -251,13 +256,34 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
     suppressAutoOpenRef.current = true
     window.setTimeout(() => { suppressAutoOpenRef.current = false }, 700)
     setExpanded(false)
-    if (!messageRef.current.trim()) setComposing(false)
+    if (!messageRef.current.trim() && !tourHoldRef.current) setComposing(false)
     window.requestAnimationFrame(() => expandBtnRef.current?.focus())
   }, [])
   const togglePopupDefault = (on: boolean) => {
     setPopupDefault(on)
     writeReplyPopupDefault(on)
   }
+  // The reply tour asks the box to get into the right state for the step it is pointing at (lib/inbox/reply-tour.ts).
+  // Reassigned every render so it always sees the latest `expanded`; the listener below is attached once.
+  tourActionRef.current = (action) => {
+    if (action === 'compose') {
+      tourHoldRef.current = true
+      setComposing(true)
+    } else if (action === 'expand') {
+      tourHoldRef.current = true
+      if (!expanded) openPopup()
+    } else if (action === 'collapse') {
+      if (expanded) closePopup()
+    } else {
+      tourHoldRef.current = false
+    }
+  }
+  useEffect(() => {
+    if (!isEmail) return
+    const onTour = (e: Event) => tourActionRef.current((e as CustomEvent<ReplyTourAction>).detail)
+    window.addEventListener(REPLY_TOUR_EVENT, onTour)
+    return () => window.removeEventListener(REPLY_TOUR_EVENT, onTour)
+  }, [isEmail])
   // Put the cursor back in the box WITHOUT letting that focus count as "start a reply" (which, with the pop-up on by
   // default, would open it): used after an AI answer, Undo, or the blank warning's Edit.
   const focusEditor = () => {
@@ -1025,6 +1051,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
             >
               <button
                 onClick={handleAi}
+                data-tour="reply-ai"
                 disabled={aiLoading || sendMutation.isPending}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-violet-100 px-3 py-2.5 text-xs font-medium text-violet-700
                   transition-colors hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1068,6 +1095,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
                   <button
                     ref={expandBtnRef}
                     type="button"
+                    data-tour="reply-expand"
                     onClick={openPopup}
                     aria-label="Expand — open the reply in a larger window"
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-zinc-100 px-3 py-2.5 text-xs font-medium text-zinc-600
@@ -1134,7 +1162,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
             </div>
           </div>
           {popup && (
-            <label className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
+            <label data-tour="reply-default" className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
               <input
                 type="checkbox"
                 checked={popupDefault}
@@ -1160,7 +1188,7 @@ export function ComposeReply({ conversation, mailbox, explicitReplyTarget, getDe
         window.setTimeout(() => { pointerInsideRef.current = false }, 400)
       }}
       onBlur={(e) => {
-        if (pointerInsideRef.current) return
+        if (pointerInsideRef.current || tourHoldRef.current) return
         if (
           !e.currentTarget.contains(e.relatedTarget as Node | null) &&
           !message.trim()
