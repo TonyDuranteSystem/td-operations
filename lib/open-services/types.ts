@@ -81,6 +81,8 @@ export interface Group {
   nextLimit: number
   /** Every job in the group has its waiting-on "Not set": shown collapsed unless a filter matches inside. */
   collapsed: boolean
+  /** Every job in the group (unfiltered) has its waiting-on "Not set": the group CAN be collapsed / re-collapsed. */
+  collapsible: boolean
   facts: GroupFacts
 }
 

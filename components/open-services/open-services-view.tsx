@@ -30,7 +30,9 @@ const CHIP_CLASS: Record<Who, string> = {
   unset: 'border border-dashed border-zinc-400 text-zinc-500',
 }
 
-const GRID = 'md:grid md:grid-cols-[minmax(150px,1.6fr)_minmax(170px,1.6fr)_150px_150px_130px_140px] md:items-center md:gap-3'
+// The six-column table needs about 950px of content next to the 256px side menu, so it only switches on from 1100px
+// wide windows (a floating window or a laptop split view is narrower and gets the stacked card layout, never a clipped one).
+const GRID = 'min-[1100px]:grid min-[1100px]:grid-cols-[minmax(150px,1.6fr)_minmax(170px,1.6fr)_150px_150px_130px_140px] min-[1100px]:items-center min-[1100px]:gap-3'
 
 function asOfLabel(iso: string): string {
   const d = new Date(iso)
@@ -65,23 +67,23 @@ function JobRow({ row, showService }: { row: Row; showService: boolean }) {
           <span key={b} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">{b}</span>
         ))}
       </div>
-      <div className="mt-1 text-zinc-500 md:mt-0">
+      <div className="mt-1 text-zinc-500 min-[1100px]:mt-0">
         {showService && <><b className="font-medium text-foreground">{row.serviceType}</b> · </>}
         {row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.stage || 'no step'}
       </div>
-      <div className="mt-2 md:mt-0">
+      <div className="mt-2 min-[1100px]:mt-0">
         <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${CHIP_CLASS[row.who]}`}>{WHO_LABELS[row.who]}</span>
       </div>
-      <div className="mt-2 tabular-nums md:mt-0">
+      <div className="mt-2 tabular-nums min-[1100px]:mt-0">
         {row.sinceLabel ? <>since {row.sinceLabel} · {row.daysHere} d</> : <span className="text-zinc-500">date unknown</span>}
       </div>
-      <div className="mt-1 tabular-nums md:mt-0"><FollowUp row={row} /></div>
-      <div className="mt-3 md:mt-0">
+      <div className="mt-1 tabular-nums min-[1100px]:mt-0"><FollowUp row={row} /></div>
+      <div className="mt-3 min-[1100px]:mt-0">
         <Link
           href={row.href}
           prefetch={false}
           aria-label={`Open workspace for ${row.name}`}
-          className="block rounded-md border px-3 py-2 text-center text-sm font-semibold text-blue-700 hover:border-blue-500 md:py-1.5"
+          className="block rounded-md border px-3 py-2 text-center text-sm font-semibold text-blue-700 hover:border-blue-500 min-[1100px]:py-1.5"
         >
           Open workspace
         </Link>
@@ -252,7 +254,7 @@ export function OpenServicesView({ model, params }: { model: ViewModel; params: 
                   Show jobs
                 </button>
               ) : (
-                params.more.some(([k]) => k === g.key) && g.facts.notSet === g.facts.total && (
+                g.collapsible && params.more.some(([k]) => k === g.key) && (
                   <button type="button" onClick={() => push(withoutMore(params, g.key))} className="ml-auto rounded-md border bg-white px-3 py-1 text-xs font-medium hover:border-blue-400">
                     Hide jobs
                   </button>

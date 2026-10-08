@@ -190,6 +190,19 @@ describe("a group where nobody's waiting-on is set", () => {
     const mixedGroup = run([...betaJobs(), job({ stage: "One" })])
     expect(mixedGroup.groups.every(g => g.collapsed === (g.key === "unset"))).toBe(true)
   })
+
+  it("'collapsible' is about the WHOLE group, so a filter cannot make a mixed group offer 'Hide jobs'", () => {
+    // Alpha: one job on a real step (waiting on the client) and one on a step that is not in the settings (Not set).
+    const mixed = [job({ stage: "One" }), job({ stage: "No such step" })]
+    // The filter keeps only the 'Not set' job of the mixed group: the group is still not all-unset.
+    const filtered = run(mixed, { view: "service", who: "unset" }).groups.find(g => g.key === "Alpha")!
+    expect(filtered.rows).toHaveLength(1)
+    expect(filtered.collapsible).toBe(false)
+    expect(filtered.facts.notSet).toBe(filtered.facts.total) // the old test of the button: true here, so it wrongly showed
+    expect(run(mixed, { view: "service" }).groups.find(g => g.key === "Alpha")!.collapsible).toBe(false)
+    expect(run(betaJobs(), { view: "service" }).groups[0].collapsible).toBe(true)
+    expect(run(betaJobs(), { view: "service", who: "unset" }).groups[0].collapsible).toBe(true)
+  })
 })
 
 describe("the paging ceiling", () => {

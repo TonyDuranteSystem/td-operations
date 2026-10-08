@@ -361,6 +361,7 @@ export function buildViewModel(classified: Classified, params: OpenServicesParam
       capped: sorted.length > shownRows.length && limit >= MAX_LIMIT,
       nextLimit: clampLimit(limit + PAGE_SIZE),
       collapsed,
+      collapsible: allUnset,
       facts: groupFacts(sorted),
     })
   }
