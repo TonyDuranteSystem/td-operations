@@ -30,3 +30,13 @@ describe('invoice hub wording', () => {
     }
   })
 })
+
+// Antonio 2026-10-08: "what do you mean 'tell us'?" — in the client's own invoicing tool the CLIENT is the
+// sender, so wording must never suggest Tony Durante receives their payment details or sends their invoices.
+describe('client invoicing wording never speaks as Tony Durante', () => {
+  const keys = KEYS.filter(k => k.startsWith('tour.invoicing.') || k.startsWith('invoices.') || k === 'nav.hint.invoicesHub' || k === 'nav.invoicesHub' || k.startsWith('profile.'))
+  it.each(keys)('%s has no we/us/our (English) or noi/nostro/possiamo (Italian)', key => {
+    expect(t(key, 'en')).not.toMatch(/\b(we|we're|we'll|us|our|ours)\b/i)
+    expect(t(key, 'it')).not.toMatch(/\b(noi|nostro|nostra|nostri|nostre|possiamo|siamo|abbiamo)\b/i)
+  })
+})

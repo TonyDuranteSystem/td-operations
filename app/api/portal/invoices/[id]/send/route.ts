@@ -169,7 +169,7 @@ export async function POST(
     } catch (pdfErr) {
       console.error('Invoice PDF could not be built; nothing was sent:', pdfErr)
       return NextResponse.json(
-        { error: 'We could not prepare the invoice PDF, so nothing was sent. Please try again.' },
+        { error: 'The invoice PDF could not be prepared, so nothing was sent. Please try again.' },
         { status: 502 },
       )
     }
