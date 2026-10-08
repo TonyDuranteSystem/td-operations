@@ -51,19 +51,6 @@ export async function GET(
     .eq('invoice_id', id)
     .order('sort_order')
 
-  // Fetch payment methods for unpaid invoices
-  let paymentMethods: unknown[] = []
-  if (['Sent', 'Overdue'].includes(invoice.status)) {
-    const { data: settings } = await supabaseAdmin
-      .from('invoice_settings')
-      .select('bank_accounts, payment_gateways')
-      .limit(1)
-      .single()
-    if (settings?.bank_accounts) {
-      paymentMethods = settings.bank_accounts as unknown[]
-    }
-  }
-
   // Fetch seller (account) data for the invoice header
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: account } = await (supabaseAdmin as any)
@@ -96,7 +83,6 @@ export async function GET(
     customer,
     payment_setup: { hasBankAccount: (bankCount ?? 0) > 0, hasPaymentLink: (linkCount ?? 0) > 0 },
     items: items ?? [],
-    payment_methods: paymentMethods,
     seller,
   })
 }
