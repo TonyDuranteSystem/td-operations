@@ -24,9 +24,11 @@ describe('getContactOnlyNavVisibility', () => {
     expect(nav.customers).toBe(false)
   })
 
-  it('returns exactly 9 keys', async () => {
+  it('returns exactly 10 keys', async () => {
     const nav = await getContactOnlyNavVisibility()
-    expect(Object.keys(nav).length).toBe(9)
+    // 9 original flags + invoiceHub (the Invoices hub naming flag, dev job 1a23f5f1 — always off for a contact with no company).
+    expect(Object.keys(nav).length).toBe(10)
+    expect(nav.invoiceHub).toBe(false)
   })
 })
 
