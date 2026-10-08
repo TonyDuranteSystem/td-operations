@@ -55,9 +55,16 @@ describe("canViewOpenServices", () => {
     expect(canViewOpenServices(partner, "all")).toBe(false)
     expect(canViewOpenServices(null, "all")).toBe(false)
     expect(canViewOpenServices(team, "all")).toBe(true)
-    expect(canViewOpenServices(noRole, "all")).toBe(true)
     expect(canViewOpenServices(adminByApp, "all")).toBe(true)
     expect(canViewOpenServices(owner, "all")).toBe(true)
+  })
+
+  it("'all' needs an EXPLICIT role: a login with no role (or an empty/blank/non-text one) counts as staff elsewhere in the CRM but not here", () => {
+    expect(canViewOpenServices(noRole, "all")).toBe(false)
+    for (const role of ["", "   ", null, 0, true, {}, []]) {
+      expect(canViewOpenServices(user({ email: "x@tonydurante.us", app: { role } }), "all"), JSON.stringify(role)).toBe(false)
+    }
+    expect(canViewOpenServices(user({ email: "x@tonydurante.us", app: { role: "team" } }), "all")).toBe(true)
   })
 
   it("'owners' = owners only: team, admins by role and self-written admins are refused", () => {

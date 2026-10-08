@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import * as Sentry from '@sentry/nextjs'
 import { notFound } from 'next/navigation'
 import { requireOpenServicesAccess } from '@/lib/open-services/audience'
 import { loadOpenServicesInputs } from '@/lib/open-services/load'
@@ -29,6 +30,8 @@ export default async function OpenServicesPage({ searchParams }: { searchParams:
     model = buildOpenServices({ ...inputs, now: new Date() }, params)
   } catch (err) {
     console.error('[open-services] load failed:', err)
+    // Also report it: a page that quietly says "Could not load" must still be visible to us (it only reaches the owners).
+    Sentry.captureException(err, { tags: { area: 'open-services' } })
   }
 
   return (
