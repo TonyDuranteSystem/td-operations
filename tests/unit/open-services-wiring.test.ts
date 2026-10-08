@@ -37,6 +37,11 @@ describe("the page", () => {
     expect(page).toContain("Could not load Open services.")
   })
 
+  it("reports a failed load to Sentry as well as the log (it only reaches the owners, so nobody else would notice)", () => {
+    expect(code).toContain("Sentry.captureException(err")
+    expect(page).toContain("from '@sentry/nextjs'")
+  })
+
   it("has its own loading and error screens (so the calendar's skeleton and error boundary are not involved)", () => {
     expect(existsSync(join(root, "app/(dashboard)/calendar/open-services/loading.tsx"))).toBe(true)
     expect(existsSync(join(root, "app/(dashboard)/calendar/open-services/error.tsx"))).toBe(true)
@@ -143,6 +148,20 @@ describe("the setting", () => {
     expect(audience).not.toContain("getAppSetting")
   })
 
+})
+
+describe("the layout", () => {
+  const view = read("components/open-services/open-services-view.tsx")
+
+  it("the six-column table starts at 1100px, never at the 768px 'md' size (it clipped the Open workspace button in narrower windows)", () => {
+    expect(view).toContain("min-[1100px]:grid-cols-")
+    expect(/(^|[^\w-])md:(grid|grid-cols|mt-0|py-1\.5|items-center|gap-3)/.test(view)).toBe(false)
+  })
+
+  it("'Hide jobs' follows the group's own 'collapsible' flag, not the filtered numbers", () => {
+    expect(view).toContain("g.collapsible && params.more.some")
+    expect(view).not.toContain("g.facts.notSet === g.facts.total")
+  })
 })
 
 describe("the search box", () => {
