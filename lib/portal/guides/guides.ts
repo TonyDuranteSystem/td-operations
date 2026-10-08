@@ -23,7 +23,7 @@ import { z } from 'zod'
 export const TOUR_MARKERS = [
   'hub-title', 'nav-invoices',
   'tab-setup', 'tab-customers', 'tab-sales', 'tab-vendors', 'tab-expenses',
-  'setup-checklist', 'setup-payment', 'customers-new', 'sales-new',
+  'setup-checklist', 'setup-payment', 'customers-new', 'sales-new', 'feature-request',
 ] as const
 export type TourMarker = (typeof TOUR_MARKERS)[number]
 
@@ -100,6 +100,7 @@ export const DEFAULT_INVOICING_TOUR: TourDef = {
     { id: 'newinv',    target: 'sales-new',     tab: 'sales', titleKey: 'tour.invoicing.newinv.title', bodyKey: 'tour.invoicing.newinv.body', placement: 'left' },
     { id: 'vendors',   target: 'tab-vendors',   titleKey: 'tour.invoicing.vendors.title',   bodyKey: 'tour.invoicing.vendors.body',   placement: 'bottom' },
     { id: 'expenses',  target: 'tab-expenses',  titleKey: 'tour.invoicing.expenses.title',  bodyKey: 'tour.invoicing.expenses.body',  placement: 'bottom' },
+    { id: 'feature',   target: 'feature-request', titleKey: 'tour.invoicing.feature.title', bodyKey: 'tour.invoicing.feature.body',  placement: 'top' },
   ],
 }
 

@@ -20,6 +20,7 @@ import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
 import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, evaluateChecklist, missingRequired, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
 import { GuidedTour } from '@/components/portal/guided-tour'
+import { FeatureRequestCard } from '@/components/portal/feature-request-card'
 import { loadInvoicingGuides, getTourPref } from '@/lib/portal/guides/guides-server'
 import { shouldOfferTour } from '@/lib/portal/guides/guides'
 import { isPlausibleEmail } from '@/lib/portal/invoice-send-notices'
@@ -426,6 +427,22 @@ export default async function PortalInvoicesPage({
       {/* ── Vendors Tab ── */}
       {activeTab === 'vendors' && (
         <VendorList vendors={vendors} accountId={selectedAccountId!} expenses={expenses} />
+      )}
+
+      {/* Feature ideas (hub clients, every tab) — also the last stop of the guided tour */}
+      {showHub && selectedAccountId && (
+        <FeatureRequestCard
+          accountId={selectedAccountId}
+          labels={{
+            title: t('invoices.feature.title', locale, translations),
+            body: t('invoices.feature.body', locale, translations),
+            placeholder: t('invoices.feature.placeholder', locale, translations),
+            send: t('invoices.feature.send', locale, translations),
+            sent: t('invoices.feature.sent', locale, translations),
+            prefix: t('invoices.feature.prefix', locale, translations),
+            tooShort: t('invoices.feature.tooShort', locale, translations),
+          }}
+        />
       )}
     </div>
   )
