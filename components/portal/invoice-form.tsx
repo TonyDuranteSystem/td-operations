@@ -264,6 +264,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   placeholder={t('invoices.email')}
                   className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <p className="text-xs text-zinc-500">{t('invoices.emailNeededToSend')}</p>
                 <div className="flex gap-2">
                   <button type="button" onClick={handleCreateCustomer} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700">{t('common.add')}</button>
                   <button type="button" onClick={() => setShowNewCustomer(false)} className="px-3 py-1.5 text-xs border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</button>

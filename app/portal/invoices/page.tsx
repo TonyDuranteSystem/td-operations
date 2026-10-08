@@ -13,7 +13,14 @@ import { TemplateList } from '@/components/portal/template-list'
 import { VendorList } from '@/components/portal/vendor-list'
 import { ExpensesHeader } from '@/components/portal/expenses-header'
 import { AutopayCard } from '@/components/portal/autopay-card'
-import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2 } from 'lucide-react'
+import { Receipt, Plus, ArrowDownLeft, ArrowUpRight, Building2, Users, Settings2 } from 'lucide-react'
+import { CustomersPanel } from '@/components/portal/customers-panel'
+import { LogoUpload } from '@/components/portal/logo-upload'
+import { BankAccounts } from '@/components/portal/bank-accounts'
+import { PaymentLinks } from '@/components/portal/payment-links'
+import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, missingRequiredCount, setupItems, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
+import { isPlausibleEmail } from '@/lib/portal/invoice-send-notices'
+import { getInvoiceHubSetting } from '@/lib/settings'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import Link from 'next/link'
@@ -79,16 +86,15 @@ export default async function PortalInvoicesPage({
   const selectedAccount = accounts.find(a => a.id === selectedAccountId) ?? null
   const companyName = selectedAccount?.company_name ?? null
 
-  // No-account clients only see Expenses (Sales + Vendors are company-scoped
-  // by design — client_invoices is the client's outgoing sales, vendors are
-  // the client's vendors). Force expenses when no account regardless of params.
-  const activeTab = !selectedAccountId
-    ? 'expenses'
-    : params.tab === 'expenses' || params.view === 'paid'
-    ? 'expenses'
-    : params.tab === 'vendors'
-    ? 'vendors'
-    : 'sales'
+  // Which tabs exist and which one is open: lib/portal/invoice-hub.ts (one tab list, one picking function).
+  // Customers + Setup appear only for the company's own client, once the roll-out switch is on for them.
+  const hubOn = isInvoiceHubOnFor(await getInvoiceHubSetting(), selectedAccountId)
+  const tabCtx: InvoiceTabContext = {
+    hasAccount: !!selectedAccountId,
+    hubOn,
+    isClient: !!contactId && !partnerAccountId,
+  }
+  const activeTab: InvoiceTabId = resolveInvoiceTab(params, tabCtx)
   // Pre-filter to paid when arriving from a receipt email link
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
@@ -118,6 +124,31 @@ export default async function PortalInvoicesPage({
           .single()
       : Promise.resolve({ data: null }),
   ])
+  // Setup facts (logo, bank account / payment link, a customer with an email). Worked out live every
+  // time from the data; never stored. Only for the hub (Customers + Setup tabs).
+  const showHub = tabCtx.hasAccount && tabCtx.hubOn && tabCtx.isClient
+  const setupFacts = showHub && selectedAccountId
+    ? await (async () => {
+        const [logoRes, bankRes, linkRes, custRes] = await Promise.all([
+          supabaseAdmin.from('accounts').select('invoice_logo_url').eq('id', selectedAccountId).single(),
+          supabaseAdmin.from('client_bank_accounts').select('id', { count: 'exact', head: true }).eq('account_id', selectedAccountId),
+          supabaseAdmin.from('payment_links').select('id', { count: 'exact', head: true }).eq('account_id', selectedAccountId),
+          supabaseAdmin.from('client_customers').select('email').eq('account_id', selectedAccountId),
+        ])
+        const customerRows = custRes.data ?? []
+        return {
+          facts: {
+            hasLogo: !!(logoRes.data as { invoice_logo_url?: string | null } | null)?.invoice_logo_url,
+            hasBankAccount: (bankRes.count ?? 0) > 0,
+            hasPaymentLink: (linkRes.count ?? 0) > 0,
+            hasCustomerWithEmail: customerRows.some(c => isPlausibleEmail(c.email)),
+          },
+          customerCount: customerRows.length,
+          logoUrl: (logoRes.data as { invoice_logo_url?: string | null } | null)?.invoice_logo_url ?? null,
+        }
+      })()
+    : null
+  const setupMissing = setupFacts ? missingRequiredCount(setupFacts.facts) : 0
   const autopay = autopayResult.data as unknown as { autopay_card_enabled: boolean; autopay_card_last4: string | null } | null
   // Hide the whole card while the pilot kill switch is off, UNLESS this
   // account is already enrolled (so an existing enrollee can still see/turn
@@ -168,7 +199,10 @@ export default async function PortalInvoicesPage({
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
             {!selectedAccountId
               ? t('invoices.yourPersonalExpenses', locale, translations)
-              : activeTab === 'sales' ? t('invoices.salesSubtitle', locale, translations) : t('invoices.expensesSubtitle', locale, translations)}
+              : activeTab === 'sales' ? t('invoices.salesSubtitle', locale, translations)
+              : activeTab === 'customers' ? t('customers.subtitle', locale, translations)
+              : activeTab === 'setup' ? t('invoices.setupSubtitle', locale, translations)
+              : t('invoices.expensesSubtitle', locale, translations)}
           </p>
         </div>
         {activeTab === 'sales' && selectedAccountId && (
@@ -190,49 +224,42 @@ export default async function PortalInvoicesPage({
           sales invoices, vendors are the client's vendors. Formation-gap clients only
           have personal expenses to view.) */}
       {selectedAccountId && (
-      <div className="flex gap-1 bg-zinc-100 p-1 rounded-lg w-fit">
-        <Link
-          href="/portal/invoices?tab=sales"
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeTab === 'sales'
-              ? 'bg-white text-zinc-900 shadow-sm'
-              : 'text-zinc-600 hover:text-zinc-900'
-          }`}
-        >
-          <ArrowUpRight className="h-4 w-4" />
-          {t('invoices.tabSales', locale, translations)}
-          {salesStats.total > 0 && (
-            <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{salesStats.total}</span>
-          )}
-        </Link>
-        <Link
-          href="/portal/invoices?tab=expenses"
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeTab === 'expenses'
-              ? 'bg-white text-zinc-900 shadow-sm'
-              : 'text-zinc-600 hover:text-zinc-900'
-          }`}
-        >
-          <ArrowDownLeft className="h-4 w-4" />
-          {t('invoices.tabExpenses', locale, translations)}
-          {expenseStats.total > 0 && (
-            <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{expenseStats.total}</span>
-          )}
-        </Link>
-        <Link
-          href="/portal/invoices?tab=vendors"
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeTab === 'vendors'
-              ? 'bg-white text-zinc-900 shadow-sm'
-              : 'text-zinc-600 hover:text-zinc-900'
-          }`}
-        >
-          <Building2 className="h-4 w-4" />
-          {t('invoices.vendors', locale, translations)}
-          {vendors.length > 0 && (
-            <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{vendors.length}</span>
-          )}
-        </Link>
+      <div className="flex gap-1 bg-zinc-100 p-1 rounded-lg w-fit max-w-full overflow-x-auto" data-testid="invoice-tabs">
+        {visibleInvoiceTabs(tabCtx).map(tab => {
+          const Icon = { sales: ArrowUpRight, customers: Users, expenses: ArrowDownLeft, vendors: Building2, setup: Settings2 }[tab.id]
+          const count = tab.id === 'sales' ? salesStats.total
+            : tab.id === 'expenses' ? expenseStats.total
+            : tab.id === 'vendors' ? vendors.length
+            : tab.id === 'customers' ? (setupFacts?.customerCount ?? 0)
+            : 0
+          return (
+            <Link
+              key={tab.id}
+              href={`/portal/invoices?tab=${tab.id}`}
+              data-tab={tab.id}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${
+                activeTab === tab.id
+                  ? 'bg-white text-zinc-900 shadow-sm'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {t(tab.labelKey, locale, translations)}
+              {count > 0 && (
+                <span className="text-xs bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-full">{count}</span>
+              )}
+              {tab.id === 'setup' && setupMissing > 0 && (
+                <span
+                  className="text-xs bg-amber-500 text-white min-w-[1.25rem] h-5 px-1.5 rounded-full inline-flex items-center justify-center font-semibold"
+                  data-testid="setup-missing-badge"
+                  title={t('invoices.setupMissingHint', locale, translations)}
+                >
+                  {setupMissing}
+                </span>
+              )}
+            </Link>
+          )
+        })}
       </div>
       )}
 
@@ -316,6 +343,43 @@ export default async function PortalInvoicesPage({
             />
           )}
         </>
+      )}
+
+      {/* ── Customers Tab (hub) ── */}
+      {activeTab === 'customers' && selectedAccountId && (
+        <CustomersPanel accountId={selectedAccountId} locale={locale} translations={translations} showHeading={false} />
+      )}
+
+      {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}
+      {activeTab === 'setup' && selectedAccountId && setupFacts && (
+        <div className="space-y-4" data-testid="invoice-setup">
+          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.setupChecklist', locale, translations)}</h2>
+            <ul className="divide-y">
+              {setupItems(setupFacts.facts).map(item => (
+                <li key={item.id} className="flex items-center gap-3 py-2 text-sm">
+                  <span className={`h-5 w-5 rounded-full border-2 flex items-center justify-center text-[11px] text-white ${item.done ? 'bg-emerald-600 border-emerald-600' : 'border-zinc-300'}`}>{item.done ? '✓' : ''}</span>
+                  <span className="flex-1 text-zinc-800">{t(`invoices.setup.${item.id}`, locale, translations)}</span>
+                  <span className={`text-xs ${item.required ? 'text-amber-700 font-medium' : 'text-zinc-400'}`}>
+                    {item.required ? t('invoices.setupRequired', locale, translations) : t('invoices.setupOptional', locale, translations)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale, translations)}</h2>
+            <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
+          </div>
+          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale, translations)}</h2>
+            <BankAccounts accountId={selectedAccountId} />
+          </div>
+          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+            <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.paymentGateway', locale, translations)}</h2>
+            <PaymentLinks accountId={selectedAccountId} />
+          </div>
+        </div>
       )}
 
       {/* ── Vendors Tab ── */}

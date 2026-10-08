@@ -1,3 +1,5 @@
+import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
+import { getInvoiceHubSetting } from '@/lib/settings'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress, formatAddressString, withCompanyCmra, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
@@ -1312,7 +1314,8 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     taxDocuments: hasTaxSD || taxReturnCount > 0,
     deadlines: deadlineCount > 0,
     documents: true,      // always available
-    customers: true,      // always visible — tier-config gates access (active/full only)
+    // Hidden once the Invoices hub is on for this company (Customers is then a tab inside Invoices).
+    customers: !isInvoiceHubOnFor(await getInvoiceHubSetting(), accountId),
     pendingSignatures: unsignedDocCount > 0,
     documentGenerator: true, // always visible — tier-config gates access (active/full only)
   }

@@ -21,29 +21,19 @@
  *   • void   — any status except Split (structural) and Cancelled (already voided).
  */
 
+import { invoiceStatusRule } from './invoice-status'
+
 export type InvoiceRowAction = 'edit' | 'send' | 'remind' | 'void'
 
-// Editing/voiding a Split parent would break its installment children; an
-// already-Cancelled invoice has nothing left to edit or void.
-const EDITABLE = ['Draft', 'Sent', 'Overdue', 'Paid', 'Partial']
-const VOIDABLE = ['Draft', 'Sent', 'Overdue', 'Paid', 'Partial']
-
+// The per-status rules live in ONE table (lib/portal/invoice-status.ts); this only turns them into
+// the list of row actions, in the order the row shows them.
 export function availableInvoiceActions(status: string | null | undefined): InvoiceRowAction[] {
-  const s = (status ?? '').trim()
+  const rule = invoiceStatusRule(status)
+  if (!rule) return []
   const actions: InvoiceRowAction[] = []
-
-  if (EDITABLE.includes(s)) {
-    actions.push('edit')
-  }
-  if (s === 'Draft') {
-    actions.push('send')
-  }
-  if (s === 'Sent' || s === 'Overdue') {
-    actions.push('remind')
-  }
-  if (VOIDABLE.includes(s)) {
-    actions.push('void')
-  }
-
+  if (rule.editable) actions.push('edit')
+  if (rule.sendable) actions.push('send')
+  if (rule.remindable) actions.push('remind')
+  if (rule.voidable) actions.push('void')
   return actions
 }

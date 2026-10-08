@@ -13,6 +13,8 @@ import { markInvoiceAsPaid, recordPartialPayment, voidInvoice, duplicateInvoice,
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
 import { PayNow } from '@/components/portal/pay-now'
+import { InvoiceSendNotices } from '@/components/portal/invoice-send-notices'
+import { sendNotices } from '@/lib/portal/invoice-send-notices'
 
 interface PaymentMethod {
   name: string
@@ -50,6 +52,7 @@ interface InvoiceDetail {
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
   payment_methods: PaymentMethod[]
+  payment_setup?: { hasBankAccount: boolean; hasPaymentLink: boolean }
   seller: {
     company_name: string | null
     invoice_logo_url: string | null
@@ -82,6 +85,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [confirmingSendAnyway, setConfirmingSendAnyway] = useState(false)
   const [reminding, setReminding] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
   const [showPartialModal, setShowPartialModal] = useState(false)
@@ -128,21 +132,60 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  const handleSend = async () => {
-    if (!invoice?.customer?.email) {
+  const notices = invoice
+    ? sendNotices({
+        status: invoice.status,
+        customerEmail: invoice.customer?.email,
+        hasBankAccount: invoice.payment_setup?.hasBankAccount ?? true,
+        hasPaymentLink: invoice.payment_setup?.hasPaymentLink ?? true,
+      })
+    : []
+
+  const handleSend = async (skipPaymentWarning = false) => {
+    if (notices.some(n => n.blocksSend)) {
+      // The permanent banner above says why and lets the client fix it on the spot.
+      document.getElementById('invoice-customer-email')?.focus()
       toast.error(t('invoices.addEmailToSend'))
+      return
+    }
+    if (!skipPaymentWarning && notices.some(n => n.id === 'no-payment-details')) {
+      setConfirmingSendAnyway(true)
       return
     }
     setSending(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoiceId}/send`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to send')
-      setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)
-      toast.success(`Invoice sent to ${invoice.customer.email}`)
-    } catch {
-      toast.error('Failed to send invoice')
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Failed to send invoice. Please try again.')
+      setConfirmingSendAnyway(false)
+      if (d.statusUpdated === false) {
+        toast.warning(t('invoices.sentNotSaved'))
+      } else {
+        setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)
+        toast.success(`Invoice sent to ${invoice?.customer?.email}`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send invoice')
     } finally {
       setSending(false)
+    }
+  }
+
+  const handleSaveCustomerEmail = async (email: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/portal/invoices/${invoiceId}/customer-email`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not save the email. Please try again.')
+      setInvoice(prev => prev && prev.customer ? { ...prev, customer: { ...prev.customer, email: d.email } } : prev)
+      toast.success(t('invoices.emailSaved'))
+      return true
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not save the email.')
+      return false
     }
   }
 
@@ -305,7 +348,7 @@ export default function InvoiceDetailPage() {
               (instead of hiding the button and leaving them confused). */}
           {invoice.status === 'Draft' && (
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={sending}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
@@ -380,6 +423,16 @@ export default function InvoiceDetailPage() {
           )}
         </div>
       </div>
+
+      <InvoiceSendNotices
+        notices={notices}
+        t={t}
+        onSaveEmail={handleSaveCustomerEmail}
+        confirmingSendAnyway={confirmingSendAnyway}
+        onSendAnyway={() => handleSend(true)}
+        onCancelSendAnyway={() => setConfirmingSendAnyway(false)}
+        sending={sending}
+      />
 
       {/* Void Confirmation Modal */}
       {showVoidConfirm && (

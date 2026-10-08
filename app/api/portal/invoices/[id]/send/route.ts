@@ -5,6 +5,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
 import { APP_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
+import { pdfStatusForSend } from '@/lib/portal/invoice-status'
+import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
 
 /**
  * POST /api/portal/invoices/[id]/send — Send invoice via email to customer
@@ -157,19 +159,19 @@ export async function POST(
     const pixelUrl = `${APP_BASE_URL}/api/track/open/${trackingId}`
     const trackedHtml = html + `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="" />`
 
-    // Generate PDF for attachment
-    let pdfBase64: string | null = null
+    // Build the PDF as it will look once sent, so the customer never receives a DRAFT-stamped file.
+    // Built in-process (no HTTP call back to ourselves). If it cannot be built we stop: an invoice
+    // email without its PDF would be reported as sent when it is not what the client meant to send.
+    let pdfBase64: string
     try {
-      const pdfBaseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
-      const pdfRes = await fetch(`${pdfBaseUrl}/api/portal/invoices/${id}/pdf`, {
-        headers: { Cookie: request.headers.get('cookie') || '' },
-      })
-      if (pdfRes.ok) {
-        const pdfBuffer = await pdfRes.arrayBuffer()
-        pdfBase64 = Buffer.from(pdfBuffer).toString('base64')
-      }
-    } catch {
-      // PDF generation failed — send without attachment
+      const pdfBytes = await renderInvoicePdf({ invoice, shownStatus: pdfStatusForSend(invoice.status) })
+      pdfBase64 = Buffer.from(pdfBytes).toString('base64')
+    } catch (pdfErr) {
+      console.error('Invoice PDF could not be built; nothing was sent:', pdfErr)
+      return NextResponse.json(
+        { error: 'We could not prepare the invoice PDF, so nothing was sent. Please try again.' },
+        { status: 502 },
+      )
     }
 
     const rawEmail = createRawEmail({
@@ -178,7 +180,7 @@ export async function POST(
       subject,
       html: trackedHtml,
       replyTo: replyTo ?? undefined,
-      attachment: pdfBase64 ? { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` } : undefined,
+      attachment: { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` },
     })
 
     const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
@@ -198,14 +200,24 @@ export async function POST(
     // Standard invoice lifecycle: sending only advances a Draft → Sent. It must
     // NEVER downgrade an already Sent / Overdue / Paid invoice — re-sending a
     // paid invoice (e.g. as a record) leaves its status untouched.
+    let statusUpdated = true
     if (invoice.status === 'Draft') {
-      await supabaseAdmin
+      // Only flips if it is still a Draft (two quick clicks cannot both write), and the result is
+      // checked: a failed update used to leave the invoice Draft after the email had gone out.
+      const { error: flipErr } = await supabaseAdmin
         .from('client_invoices')
         .update({ status: 'Sent', updated_at: new Date().toISOString() })
         .eq('id', id)
+        .eq('status', 'Draft')
+      if (flipErr) {
+        console.error('Invoice email sent but status update failed:', flipErr)
+        statusUpdated = false
+      }
+      // If someone else already moved it out of Draft, the guard above simply matches nothing.
     }
 
-    return NextResponse.json({ success: true })
+    // The email is out. If the status could not be saved say so, so the client does not send it again.
+    return NextResponse.json({ success: true, statusUpdated })
   } catch (err) {
     console.error('Failed to send invoice email:', err)
     return NextResponse.json({ error: 'Failed to send email' }, { status: 500 })

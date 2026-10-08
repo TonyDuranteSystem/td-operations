@@ -84,9 +84,17 @@ export async function GET(
     address: sellerAddress,
   } : null
 
+  // Does this company tell its customers how to pay? (a bank account or a payment link) Used for the
+  // "no payment details" warning before Send. Counts rows only; the details themselves stay private.
+  const [{ count: bankCount }, { count: linkCount }] = await Promise.all([
+    supabaseAdmin.from('client_bank_accounts').select('id', { count: 'exact', head: true }).eq('account_id', invoice.account_id),
+    supabaseAdmin.from('payment_links').select('id', { count: 'exact', head: true }).eq('account_id', invoice.account_id),
+  ])
+
   return NextResponse.json({
     ...invoice,
     customer,
+    payment_setup: { hasBankAccount: (bankCount ?? 0) > 0, hasPaymentLink: (linkCount ?? 0) > 0 },
     items: items ?? [],
     payment_methods: paymentMethods,
     seller,
