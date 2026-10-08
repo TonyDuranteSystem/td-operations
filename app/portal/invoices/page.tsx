@@ -201,10 +201,11 @@ export default async function PortalInvoicesPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t('invoices.title', locale, translations)}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t(showHub ? 'nav.invoicesHub' : 'invoices.title', locale, translations)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
             {!selectedAccountId
               ? t('invoices.yourPersonalExpenses', locale, translations)
+              : showHub ? t('invoices.hubSubtitle', locale, translations)
               : activeTab === 'sales' ? t('invoices.salesSubtitle', locale, translations)
               : activeTab === 'customers' ? t('customers.subtitle', locale, translations)
               : activeTab === 'setup' ? t('invoices.setupSubtitle', locale, translations)

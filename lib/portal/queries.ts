@@ -1193,6 +1193,7 @@ export interface PortalNavVisibility {
   deadlines: boolean      // has any pending/overdue deadlines
   documents: boolean      // always true (every client can upload docs)
   customers: boolean      // same as invoices
+  invoiceHub: boolean     // the Invoices hub is on for this company: the item is named 'Customers & Invoices' (lib/portal/invoice-hub.ts)
   pendingSignatures: boolean  // has unsigned OA or Lease agreements
   documentGenerator: boolean  // can generate distribution resolutions and tax statements
 }
@@ -1316,6 +1317,7 @@ export async function getPortalNavVisibility(accountId: string): Promise<PortalN
     documents: true,      // always available
     // Hidden once the Invoices hub is on for this company (Customers is then a tab inside Invoices).
     customers: !isInvoiceHubOnFor(await getInvoiceHubSetting(), accountId),
+    invoiceHub: isInvoiceHubOnFor(await getInvoiceHubSetting(), accountId),
     pendingSignatures: unsignedDocCount > 0,
     documentGenerator: true, // always visible — tier-config gates access (active/full only)
   }
@@ -1373,6 +1375,7 @@ export async function getContactOnlyNavVisibility(): Promise<PortalNavVisibility
     deadlines: false,
     documents: true,
     customers: false,
+    invoiceHub: false,
     pendingSignatures: false,
     documentGenerator: false,
   }

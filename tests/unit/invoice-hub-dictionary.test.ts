@@ -10,6 +10,7 @@ const KEYS = [
   'invoices.notYet', 'invoices.sentNotSaved', 'invoices.emailNeededToSend',
   'invoices.tabCustomers', 'invoices.tabSetup', 'invoices.setupSubtitle', 'invoices.setupMissingHint',
   'invoices.setupChecklist', 'invoices.setup.logo', 'invoices.setup.payment', 'invoices.setup.customer',
+  'nav.invoicesHub', 'nav.hint.invoicesHub', 'invoices.hubSubtitle',
   'invoices.setupRequired', 'invoices.setupOptional', 'profile.invoiceSettingsMoved', 'profile.openInvoiceSetup',
   ...INVOICE_TABS.map(t => t.labelKey),
 ]

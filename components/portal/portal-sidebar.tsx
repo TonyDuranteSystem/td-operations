@@ -471,7 +471,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // lives at the matching 'nav.hint.xxx' key by default. `hintKey` overrides
   // that when the same key renders two different contexts with different
   // real behavior (e.g. the no-company Invoices item — see personalInvoicesItem).
-  const navHintText = (item: NavItem) => t(`nav.hint.${item.hintKey ?? item.key.slice(4)}`)
+  // The Invoices item is renamed 'Customers & Invoices' once the hub is on for the company (clients only).
+  const invoiceHubNamed = !isTeammate && !!navVisibility?.invoiceHub
+  const navHintText = (item: NavItem) =>
+    t(`nav.hint.${item.key === 'nav.invoices' && invoiceHubNamed ? 'invoicesHub' : (item.hintKey ?? item.key.slice(4))}`)
 
   const renderNavItem = (item: NavItem) => {
     const isDocsItem = item.href === '/portal/documents'
@@ -498,7 +501,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     //   - active tier with a Banking Fintech SD → bank account application ("Bank Applications")
     // Italian had a single static label ("Completa Registrazione") that made sense
     // for onboarding but was invisible to banking clients searching for "bank applications".
-    let navLabel = t(item.key)
+    let navLabel = item.key === 'nav.invoices' && invoiceHubNamed ? t('nav.invoicesHub') : t(item.key)
     if (item.key === 'nav.wizard') {
       // The wizard is the formation/onboarding data-collection step. Banking is
       // no longer a wizard — it's the dedicated /portal/banks "Bank Applications"
