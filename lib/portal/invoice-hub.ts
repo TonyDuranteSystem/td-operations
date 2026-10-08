@@ -45,30 +45,56 @@ export interface InvoiceTabDef {
   visibleWhen: (ctx: InvoiceTabContext) => boolean
 }
 
-// Order = order on screen. Setup is last and carries the "something is missing" badge.
+// Order = order on screen, and it follows the order a client works in: set up, add the people
+// (customers), record sales; add the suppliers (vendors), record expenses.
 export const INVOICE_TABS: InvoiceTabDef[] = [
-  { id: 'sales',     labelKey: 'invoices.tabSales',     visibleWhen: c => c.hasAccount },
-  { id: 'customers', labelKey: 'invoices.tabCustomers', visibleWhen: c => c.hasAccount && c.hubOn && c.isClient },
-  { id: 'expenses',  labelKey: 'invoices.tabExpenses',  visibleWhen: () => true },
-  { id: 'vendors',   labelKey: 'invoices.vendors',      visibleWhen: c => c.hasAccount },
   { id: 'setup',     labelKey: 'invoices.tabSetup',     visibleWhen: c => c.hasAccount && c.hubOn && c.isClient },
+  { id: 'customers', labelKey: 'invoices.tabCustomers', visibleWhen: c => c.hasAccount && c.hubOn && c.isClient },
+  { id: 'sales',     labelKey: 'invoices.tabSales',     visibleWhen: c => c.hasAccount },
+  { id: 'vendors',   labelKey: 'invoices.vendors',      visibleWhen: c => c.hasAccount },
+  { id: 'expenses',  labelKey: 'invoices.tabExpenses',  visibleWhen: () => true },
 ]
 
+// With the hub off the page must stay exactly as it was: Sales, Expenses, Vendors.
+const LEGACY_ORDER: InvoiceTabId[] = ['sales', 'expenses', 'vendors']
+
 export function visibleInvoiceTabs(ctx: InvoiceTabContext): InvoiceTabDef[] {
-  return INVOICE_TABS.filter(t => t.visibleWhen(ctx))
+  const visible = INVOICE_TABS.filter(t => t.visibleWhen(ctx))
+  if (ctx.hubOn && ctx.isClient) return visible
+  return [...visible].sort((a, b) => LEGACY_ORDER.indexOf(a.id) - LEGACY_ORDER.indexOf(b.id))
+}
+
+/** What we know about the client when no tab was asked for. */
+export interface InvoiceLanding {
+  /** The company has already created at least one sales invoice. */
+  hasSalesInvoices: boolean
+  /** Required Setup items still missing (see missingRequiredCount). */
+  setupMissing: number
 }
 
 /**
- * Which tab is open. `view=paid` (the link in the "payment received" email) always means Expenses.
- * A tab the client may not see falls back to Sales (Expenses when there is no company), never an error.
+ * Which tab is open.
+ *   - A tab asked for in the link wins if the client may see it (the TD billing link opens Expenses).
+ *   - `view=paid` (the link in the "payment received" email) always means Expenses.
+ *   - With no tab asked for: a client who has not invoiced yet and still has required Setup items
+ *     lands on Setup; everyone else lands on Sales (Expenses when there is no company). Returning
+ *     clients who simply have no bank account are never sent back to Setup on every visit.
+ *   - A tab the client may not see falls back the same way, never an error.
  */
 export function resolveInvoiceTab(
   params: { tab?: string; view?: string },
   ctx: InvoiceTabContext,
+  landing?: InvoiceLanding,
 ): InvoiceTabId {
   const visible = visibleInvoiceTabs(ctx).map(t => t.id)
   const wanted = (params.view === 'paid' ? 'expenses' : params.tab) as InvoiceTabId | undefined
   if (wanted && visible.includes(wanted)) return wanted
+  if (
+    !params.tab && params.view !== 'paid' &&
+    visible.includes('setup') && landing && !landing.hasSalesInvoices && landing.setupMissing > 0
+  ) {
+    return 'setup'
+  }
   return visible.includes('sales') ? 'sales' : 'expenses'
 }
 

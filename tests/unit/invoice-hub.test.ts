@@ -26,7 +26,7 @@ describe('roll-out switch fails closed', () => {
 
 describe('tab list', () => {
   it('switch on: the five tabs in order, Setup last', () => {
-    expect(ids(client)).toEqual(['sales', 'customers', 'expenses', 'vendors', 'setup'])
+    expect(ids(client)).toEqual(['setup', 'customers', 'sales', 'vendors', 'expenses'])
   })
   it('switch off: exactly the old three tabs', () => {
     expect(ids({ ...client, hubOn: false })).toEqual(['sales', 'expenses', 'vendors'])
@@ -59,6 +59,34 @@ describe('active tab', () => {
     const c = { hasAccount: false, hubOn: true, isClient: true }
     expect(resolveInvoiceTab({ tab: 'sales' }, c)).toBe('expenses')
     expect(resolveInvoiceTab({ tab: 'setup' }, c)).toBe('expenses')
+  })
+})
+
+describe('which tab opens when none was asked for', () => {
+  it('a new client with required Setup items missing lands on Setup', () => {
+    expect(resolveInvoiceTab({}, client, { hasSalesInvoices: false, setupMissing: 2 })).toBe('setup')
+    expect(resolveInvoiceTab({}, client, { hasSalesInvoices: false, setupMissing: 1 })).toBe('setup')
+  })
+  it('a client who already invoices lands on Sales, even with no bank account', () => {
+    expect(resolveInvoiceTab({}, client, { hasSalesInvoices: true, setupMissing: 2 })).toBe('sales')
+  })
+  it('a new client who finished Setup lands on Sales', () => {
+    expect(resolveInvoiceTab({}, client, { hasSalesInvoices: false, setupMissing: 0 })).toBe('sales')
+  })
+  it('a tab asked for in the link always wins, and the paid link opens Expenses', () => {
+    const l = { hasSalesInvoices: false, setupMissing: 2 }
+    expect(resolveInvoiceTab({ tab: 'expenses' }, client, l)).toBe('expenses')
+    expect(resolveInvoiceTab({ tab: 'sales' }, client, l)).toBe('sales')
+    expect(resolveInvoiceTab({ view: 'paid' }, client, l)).toBe('expenses')
+  })
+  it('switch off, team member, or no company: never Setup', () => {
+    const l = { hasSalesInvoices: false, setupMissing: 2 }
+    expect(resolveInvoiceTab({}, { ...client, hubOn: false }, l)).toBe('sales')
+    expect(resolveInvoiceTab({}, { ...client, isClient: false }, l)).toBe('sales')
+    expect(resolveInvoiceTab({}, { hasAccount: false, hubOn: true, isClient: true }, l)).toBe('expenses')
+  })
+  it('without landing facts it behaves as before (Sales)', () => {
+    expect(resolveInvoiceTab({}, client)).toBe('sales')
   })
 })
 

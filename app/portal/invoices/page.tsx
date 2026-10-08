@@ -94,7 +94,6 @@ export default async function PortalInvoicesPage({
     hubOn,
     isClient: !!contactId && !partnerAccountId,
   }
-  const activeTab: InvoiceTabId = resolveInvoiceTab(params, tabCtx)
   // Pre-filter to paid when arriving from a receipt email link
   const defaultExpenseFilter: 'all' | 'paid' = params.view === 'paid' ? 'paid' : 'all'
   const locale = getLocale(user)
@@ -166,6 +165,13 @@ export default async function PortalInvoicesPage({
     ...accountExpenses.map(e => ({ ...e, scope_label: companyName ?? personalLabel })),
     ...personalExpenses.map(e => ({ ...e, scope_label: personalLabel })),
   ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+
+  // Which tab opens: lib/portal/invoice-hub.ts (a new client with required Setup items missing lands on
+  // Setup; everyone else on Sales; a tab asked for in the link always wins).
+  const activeTab: InvoiceTabId = resolveInvoiceTab(params, tabCtx, {
+    hasSalesInvoices: invoices.length > 0,
+    setupMissing,
+  })
 
   // Sales stats
   const salesStats = {
