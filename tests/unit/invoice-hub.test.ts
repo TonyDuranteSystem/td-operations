@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  isInvoiceHubOnFor, visibleInvoiceTabs, resolveInvoiceTab, setupItems, missingRequiredCount,
+  isInvoiceHubOnFor, visibleInvoiceTabs, resolveInvoiceTab, setupItems, missingRequiredCount, evaluateChecklist, missingRequired,
   type InvoiceTabContext,
 } from '@/lib/portal/invoice-hub'
 
@@ -102,5 +102,26 @@ describe('setup status', () => {
   it('the logo is never required', () => {
     expect(setupItems(none).find(i => i.id === 'logo')?.required).toBe(false)
     expect(missingRequiredCount({ ...none, hasBankAccount: true, hasCustomerWithEmail: true })).toBe(0)
+  })
+})
+
+describe('the checklist is driven by its definition, with rules owned by code', () => {
+  const none = { hasLogo: false, hasBankAccount: false, hasPaymentLink: false, hasCustomerWithEmail: false }
+  const items = [
+    { id: 'p', rule: 'payment' as const, required: true, labelKey: 'invoices.setup.payment' },
+    { id: 'c', rule: 'customer' as const, required: false, labelKey: 'invoices.setup.customer' },
+  ]
+  it('only the items in the definition are evaluated, in its order, with its required flags', () => {
+    const r = evaluateChecklist(items, none)
+    expect(r.map(i => i.id)).toEqual(['p', 'c'])
+    expect(r.map(i => i.required)).toEqual([true, false])
+    expect(missingRequired(r)).toBe(1)
+  })
+  it('a bank account OR a payment link completes the payment rule', () => {
+    expect(evaluateChecklist(items, { ...none, hasPaymentLink: true })[0].done).toBe(true)
+    expect(evaluateChecklist(items, { ...none, hasBankAccount: true })[0].done).toBe(true)
+  })
+  it('an optional item never counts as missing', () => {
+    expect(missingRequired(evaluateChecklist(items, { ...none, hasBankAccount: true }))).toBe(0)
   })
 })

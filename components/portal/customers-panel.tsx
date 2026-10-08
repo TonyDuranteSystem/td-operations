@@ -48,6 +48,7 @@ export async function CustomersPanel({
           <p className="text-zinc-500 text-sm">{t('customers.subtitle', locale, translations)}</p>
         )}
         <Link
+          data-tour="customers-new"
           href="/portal/customers/new"
           className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
         >

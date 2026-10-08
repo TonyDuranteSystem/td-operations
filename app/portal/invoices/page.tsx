@@ -18,9 +18,13 @@ import { CustomersPanel } from '@/components/portal/customers-panel'
 import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
-import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, missingRequiredCount, setupItems, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
+import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, evaluateChecklist, missingRequired, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
+import { GuidedTour } from '@/components/portal/guided-tour'
+import { loadInvoicingGuides, getTourPref } from '@/lib/portal/guides/guides-server'
+import { shouldOfferTour } from '@/lib/portal/guides/guides'
 import { isPlausibleEmail } from '@/lib/portal/invoice-send-notices'
 import { getInvoiceHubSetting } from '@/lib/settings'
+import { VIEW_AS_COOKIE, verifyViewAs } from '@/lib/portal/view-as'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import Link from 'next/link'
@@ -147,7 +151,13 @@ export default async function PortalInvoicesPage({
         }
       })()
     : null
-  const setupMissing = setupFacts ? missingRequiredCount(setupFacts.facts) : 0
+  // The tour and the checklist are DATA (optional catalog rows, built-in defaults): lib/portal/guides/guides.ts.
+  const guides = showHub ? await loadInvoicingGuides() : null
+  const checklist = setupFacts && guides ? evaluateChecklist(guides.checklist.items, setupFacts.facts) : []
+  const setupMissing = missingRequired(checklist)
+  const tourPref = showHub && guides ? await getTourPref(user.id, `tour.${guides.tour.id}`) : null
+  // Staff looking at a client's portal (view-as is read-only) must not be nagged with the welcome prompt every visit.
+  const viewingAsClient = !!(await verifyViewAs((await cookies()).get(VIEW_AS_COOKIE)?.value))
   const autopay = autopayResult.data as unknown as { autopay_card_enabled: boolean; autopay_card_last4: string | null } | null
   // Hide the whole card while the pilot kill switch is off, UNLESS this
   // account is already enrolled (so an existing enrollee can still see/turn
@@ -201,7 +211,7 @@ export default async function PortalInvoicesPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t(showHub ? 'nav.invoicesHub' : 'invoices.title', locale, translations)}</h1>
+          <h1 data-tour="hub-title" className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">{t(showHub ? 'nav.invoicesHub' : 'invoices.title', locale, translations)}</h1>
           <p className="text-zinc-500 text-xs sm:text-sm mt-1">
             {!selectedAccountId
               ? t('invoices.yourPersonalExpenses', locale, translations)
@@ -212,8 +222,31 @@ export default async function PortalInvoicesPage({
               : t('invoices.expensesSubtitle', locale, translations)}
           </p>
         </div>
+        {showHub && guides && (
+          <GuidedTour
+            tourId={guides.tour.id}
+            version={guides.tour.version}
+            steps={guides.tour.steps.map(s => ({ id: s.id, target: s.target, tab: s.tab, title: t(s.titleKey, locale, translations), body: t(s.bodyKey, locale, translations), placement: s.placement }))}
+            labels={{
+              introTitle: t('tour.invoicing.introTitle', locale, translations),
+              introBody: t('tour.invoicing.introBody', locale, translations),
+              start: t('tour.start', locale, translations),
+              notNow: t('tour.notNow', locale, translations),
+              dontShow: t('tour.dontShow', locale, translations),
+              takeTour: t('tour.takeTour', locale, translations),
+              next: t('tour.next', locale, translations),
+              back: t('tour.back', locale, translations),
+              skip: t('tour.skip', locale, translations),
+              done: t('tour.done', locale, translations),
+            }}
+            offer={!viewingAsClient && shouldOfferTour(tourPref, guides.tour)}
+            basePath="/portal/invoices"
+            activeTab={activeTab}
+          />
+        )}
         {activeTab === 'sales' && selectedAccountId && (
           <Link
+            data-tour="sales-new"
             href="/portal/invoices/new"
             className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
           >
@@ -244,6 +277,7 @@ export default async function PortalInvoicesPage({
               key={tab.id}
               href={`/portal/invoices?tab=${tab.id}`}
               data-tab={tab.id}
+              data-tour={`tab-${tab.id}`}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors whitespace-nowrap ${
                 activeTab === tab.id
                   ? 'bg-white text-zinc-900 shadow-sm'
@@ -360,13 +394,13 @@ export default async function PortalInvoicesPage({
       {/* ── Setup Tab (hub): logo, bank accounts, payment link — the same cards that used to live on Profile ── */}
       {activeTab === 'setup' && selectedAccountId && setupFacts && (
         <div className="space-y-4" data-testid="invoice-setup">
-          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3">
+          <div className="bg-white rounded-xl border shadow-sm p-5 space-y-3" data-tour="setup-checklist">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('invoices.setupChecklist', locale, translations)}</h2>
             <ul className="divide-y">
-              {setupItems(setupFacts.facts).map(item => (
+              {checklist.map(item => (
                 <li key={item.id} className="flex items-center gap-3 py-2 text-sm">
                   <span className={`h-5 w-5 rounded-full border-2 flex items-center justify-center text-[11px] text-white ${item.done ? 'bg-emerald-600 border-emerald-600' : 'border-zinc-300'}`}>{item.done ? '✓' : ''}</span>
-                  <span className="flex-1 text-zinc-800">{t(`invoices.setup.${item.id}`, locale, translations)}</span>
+                  <span className="flex-1 text-zinc-800">{t(item.labelKey, locale, translations)}</span>
                   <span className={`text-xs ${item.required ? 'text-amber-700 font-medium' : 'text-zinc-400'}`}>
                     {item.required ? t('invoices.setupRequired', locale, translations) : t('invoices.setupOptional', locale, translations)}
                   </span>
@@ -378,7 +412,7 @@ export default async function PortalInvoicesPage({
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.invoiceLogo', locale, translations)}</h2>
             <LogoUpload accountId={selectedAccountId} currentUrl={setupFacts.logoUrl} />
           </div>
-          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
+          <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4" data-tour="setup-payment">
             <h2 className="text-sm font-semibold text-zinc-900 uppercase tracking-wide">{t('profile.bankDetails', locale, translations)}</h2>
             <BankAccounts accountId={selectedAccountId} />
           </div>

@@ -563,6 +563,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
       >
         <Link
           href={navHref}
+          data-tour={item.key === 'nav.invoices' ? 'nav-invoices' : undefined}
           onClick={() => {
             setMobileOpen(false)
             // Clear the Team "NEW" badge once the admin opens the Team page,

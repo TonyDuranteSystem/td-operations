@@ -98,7 +98,33 @@ export function resolveInvoiceTab(
   return visible.includes('sales') ? 'sales' : 'expenses'
 }
 
-// ── Setup status ───────────────────────────────────────────────────────────────
+// ── Setup checklist, driven by the guide definition (lib/portal/guides/guides.ts) ──
+import type { ChecklistItemDef, ChecklistRule } from './guides/guides'
+
+export interface EvaluatedChecklistItem {
+  id: string
+  labelKey: string
+  required: boolean
+  done: boolean
+}
+
+// The rules a checklist item may name. Code owns them; a catalog row can only pick one.
+const RULES: Record<ChecklistRule, (f: SetupFacts) => boolean> = {
+  logo: f => f.hasLogo,
+  payment: f => f.hasBankAccount || f.hasPaymentLink,
+  customer: f => f.hasCustomerWithEmail,
+}
+
+/** Completion is worked out from live facts each time; it is never stored. */
+export function evaluateChecklist(items: ChecklistItemDef[], f: SetupFacts): EvaluatedChecklistItem[] {
+  return items.map(i => ({ id: i.id, labelKey: i.labelKey, required: i.required, done: RULES[i.rule](f) }))
+}
+
+export function missingRequired(items: EvaluatedChecklistItem[]): number {
+  return items.filter(i => i.required && !i.done).length
+}
+
+// ── Setup status (built-in checklist, kept for callers that do not load the guide definition) ───────────────────────────────────────────────────────────────
 
 export interface SetupFacts {
   hasLogo: boolean

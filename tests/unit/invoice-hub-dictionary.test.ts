@@ -11,6 +11,7 @@ const KEYS = [
   'invoices.tabCustomers', 'invoices.tabSetup', 'invoices.setupSubtitle', 'invoices.setupMissingHint',
   'invoices.setupChecklist', 'invoices.setup.logo', 'invoices.setup.payment', 'invoices.setup.customer',
   'nav.invoicesHub', 'nav.hint.invoicesHub', 'invoices.hubSubtitle',
+  'tour.invoicing.introTitle', 'tour.invoicing.introBody', 'tour.start', 'tour.notNow', 'tour.dontShow', 'tour.takeTour', 'tour.next', 'tour.back', 'tour.skip', 'tour.done',
   'invoices.setupRequired', 'invoices.setupOptional', 'profile.invoiceSettingsMoved', 'profile.openInvoiceSetup',
   ...INVOICE_TABS.map(t => t.labelKey),
 ]
