@@ -12,6 +12,7 @@ import {
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
 import { emitUiEvent } from "@/lib/ui-events"
 import { isFreshInbound, inboundSignalPayload } from "@/lib/messaging/inbound-sound"
+import { parseReceiptEvent } from "@/lib/messaging/wabridge-receipts"
 import { parseReactionsBatch, mergeReactionResults } from "@/lib/messaging/wabridge-reactions"
 import { parseReactClaim, parseReactResult } from "@/lib/messaging/wabridge-react"
 import { parseLinkCode } from "@/lib/messaging/wabridge-link"
@@ -44,6 +45,7 @@ const MAX_NAME_ITEMS = 500
  *
  * Event kinds on this one URL:
  *  - (GOWA's own webhook)  {event:"message", ...}     live message → saved
+ *  - (GOWA's own webhook)  {event:"message.ack", payload:{ids, chat_id, receipt_type:"delivered"|"read"}}   receipt on one of OUR messages → ticks in the Inbox
  *  - {event:"bridge.heartbeat", ts, reachable, connected, logged_in}   health beat from the Mac (ts must be fresh)
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
@@ -375,6 +377,25 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     // One signal per batch, and only for the live catch-up — a history download must not make every open Inbox refetch.
     if (b.live === true && inserted > 0) await emitUiEvent("whatsapp", inboundSignalPayload(freshInbound))
     return NextResponse.json({ ok: true, inserted, deduped, skipped })
+  }
+
+  // ─── A delivery / read receipt on one of OUR messages (GOWA's own webhook, event "message.ack") ───
+  // Cosmetic: anything unusable is a 200 (a non-2xx would make GOWA retry 5x for nothing); only a real database
+  // failure is a 500 so the retry can land it. Writes delivered_at / read_at only — never unread, order or status.
+  if (kind === "message.ack") {
+    const receipt = parseReceiptEvent(body, now)
+    if (receipt.action === "ignore") return NextResponse.json({ ok: true, skipped: receipt.reason })
+    const { data: applied, error: receiptError } = await supabaseAdmin.rpc("wabridge_apply_receipts", {
+      p_channel_id: channel.id,
+      p_ids: receipt.ids,
+      p_receipt_type: receipt.kind,
+      p_at: receipt.at,
+    })
+    if (receiptError) return NextResponse.json({ error: "could not apply receipt" }, { status: 500 })
+    const a = applied as { ok?: boolean; applied?: number } | null
+    // Only a real change wakes the screens (a repeated receipt, or one for a message we never stored, does not).
+    if (a?.ok === true && (a.applied ?? 0) > 0) await emitUiEvent("whatsapp")
+    return NextResponse.json({ ok: true, applied: a?.applied ?? 0 })
   }
 
   // ─── A live message (GOWA's own webhook) ───

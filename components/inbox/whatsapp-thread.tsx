@@ -13,7 +13,7 @@ import {
 } from '@/lib/messaging/wabridge-outbox'
 import {
   Send, Loader2, Paperclip, Sparkles, Wand2, X, Smile, MoreVertical, Reply, Link2, Users, ClipboardList,
-  StickyNote, Pin, Trash2, Check, AlertCircle, Clock, Hourglass, CheckCircle2, Truck, Receipt, Plus,
+  StickyNote, Pin, Trash2, Check, CheckCheck, AlertCircle, Clock, Hourglass, CheckCircle2, Truck, Receipt, Plus,
   Mic, Square,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -31,6 +31,7 @@ import { isMediaPending } from '@/lib/messaging/wabridge-media'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { WhatsAppVoiceNote, type VoiceInfo } from './whatsapp-voice-note'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { tickState, tickLabel } from '@/lib/messaging/wabridge-receipts'
 import { NoteComposeDialog } from '@/components/dashboard/note-quick-create'
 import { ShareToTeamDialog, type ShareItem } from '@/components/team/share-to-team-dialog'
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
@@ -87,6 +88,9 @@ interface WhatsAppMessage {
   phoneReaction?: { status: string; desired: string; error: string | null }
   pinned_at?: string | null
   reply_to_id?: string | null
+  /** Our outgoing message reached the person's phone / they opened the chat (WhatsApp receipts; null = none seen). */
+  delivered_at?: string | null
+  read_at?: string | null
 }
 
 interface WhatsappThreadProps {
@@ -1015,6 +1019,24 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                     {(msg.sender_name && !isJunkChatName(msg.sender_name) ? msg.sender_name : null) ?? msg.sender_phone ?? (isOutbound ? OUTBOX_TEAM_LABEL : 'Contact')}
                     {' · '}
                     {formatTimestamp(msg.created_at)}
+                    {isOutbound && isRealMessage && (() => {
+                      const tick = tickState(msg)
+                      if (!tick) return null
+                      return (
+                        <FastTooltip label={tickLabel(tick, msg, formatTimestamp)}>
+                          <span data-testid={`wa-tick-${tick}`} className="inline-flex align-middle ml-1">
+                            {tick === 'sent' ? (
+                              <Check className="h-3 w-3 text-zinc-400" aria-label="Sent" />
+                            ) : (
+                              <CheckCheck
+                                className={cn('h-3.5 w-3.5', tick === 'read' ? 'text-sky-500' : 'text-zinc-400')}
+                                aria-label={tick === 'read' ? 'Read' : 'Delivered'}
+                              />
+                            )}
+                          </span>
+                        </FastTooltip>
+                      )
+                    })()}
                   </p>
                   {isRealMessage && (
                     <div className={cn('flex flex-wrap items-center gap-1 mt-1', isOutbound ? 'justify-end' : 'justify-start')}>
