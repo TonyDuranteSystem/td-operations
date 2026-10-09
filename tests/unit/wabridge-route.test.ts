@@ -710,3 +710,56 @@ describe("CRM → phone reactions: bridge.react.claim / bridge.react.result (the
   })
 })
 
+
+describe("POST /api/wa-bridge/[channelId] — delivery / read receipts (message.ack)", () => {
+  const ack = (over: Record<string, unknown> = {}) => ({
+    event: "message.ack",
+    timestamp: new Date(Date.now() - 1000).toISOString(),
+    payload: { ids: ["W1", "W2"], chat_id: "393331234567@s.whatsapp.net", receipt_type: "read", ...over },
+  })
+
+  it("applies a read receipt through the one function and wakes the screens", async () => {
+    state.rpcOverrides = { wabridge_apply_receipts: { data: { ok: true, matched: 2, applied: 2 }, error: null } }
+    const r = await call(ack())
+    expect(r).toEqual({ status: 200, body: { ok: true, applied: 2 } })
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_apply_receipts"])
+    expect(state.rpcCalls[0].args).toMatchObject({ p_channel_id: CHANNEL, p_ids: ["W1", "W2"], p_receipt_type: "read" })
+    expect(state.uiEvents).toEqual(["whatsapp"])
+  })
+
+  it("does not wake the screens when nothing changed (repeat, or message we never stored)", async () => {
+    state.rpcOverrides = { wabridge_apply_receipts: { data: { ok: true, matched: 0, applied: 0 }, error: null } }
+    const r = await call(ack())
+    expect(r.status).toBe(200)
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("never saves a message, links a chat or touches unread for a receipt", async () => {
+    state.rpcOverrides = { wabridge_apply_receipts: { data: { ok: true, matched: 1, applied: 1 }, error: null } }
+    await call(ack())
+    expect(state.groupCalls).toEqual([])
+    expect(state.rpcCalls.map((c) => c.fn)).not.toContain("wabridge_ingest_message")
+  })
+
+  it("answers 200 and writes nothing for unusable receipts (played, group, no ids)", async () => {
+    for (const over of [{ receipt_type: "played" }, { chat_id: "1203@g.us" }, { ids: [] }]) {
+      const r = await call(ack(over))
+      expect(r.status).toBe(200)
+    }
+    expect(state.rpcCalls).toEqual([])
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("500s on a real database failure so GOWA retries", async () => {
+    state.rpcOverrides = { wabridge_apply_receipts: { data: null, error: { message: "boom" } } }
+    const r = await call(ack())
+    expect(r.status).toBe(500)
+    expect(state.uiEvents).toEqual([])
+  })
+
+  it("rejects an unsigned receipt", async () => {
+    const r = await call(ack(), { sig: "sha256=bad" })
+    expect(r.status).toBe(401)
+    expect(state.rpcCalls).toEqual([])
+  })
+})

@@ -29,7 +29,7 @@ export async function GET(
     const { data, error } = await supabaseAdmin
       .from("messages")
       .select(
-        "id, content_text, direction, sender_name, sender_phone, created_at, content_type, media_url, reactions, pinned_at, reply_to_id"
+        "id, content_text, direction, sender_name, sender_phone, created_at, content_type, media_url, reactions, pinned_at, reply_to_id, delivered_at, read_at"
       )
       .eq("group_id", groupId)
       // A hidden message (staff "Delete" — see the message route's own comment: this only removes OUR

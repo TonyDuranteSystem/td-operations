@@ -8109,6 +8109,8 @@ export type Database = {
           created_at: string
           deleted_at: string | null
           deleted_by: string | null
+          read_at: string | null
+          delivered_at: string | null
           direction: string
           external_message_id: string | null
           group_id: string
@@ -8134,6 +8136,8 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           deleted_by?: string | null
+          read_at?: string | null
+          delivered_at?: string | null
           direction: string
           external_message_id?: string | null
           group_id: string
@@ -8159,6 +8163,8 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           deleted_by?: string | null
+          read_at?: string | null
+          delivered_at?: string | null
           direction?: string
           external_message_id?: string | null
           group_id?: string
@@ -14497,6 +14503,7 @@ export type Database = {
         Args: { p_channel_id: string; p_names: Json }
         Returns: number
       }
+      wabridge_apply_receipts: { Args: { p_at: string | null; p_channel_id: string; p_ids: string[]; p_receipt_type: string }; Returns: Json }
       wabridge_apply_observed_reactions: { Args: { p_channel_id: string; p_items: Json; p_scan_ms: number }; Returns: Json }
       wabridge_claim_reaction: { Args: { p_channel_id: string }; Returns: Json }
       wabridge_finish_reaction: { Args: { p_attempt: number; p_channel_id: string; p_error: string | null; p_id: string; p_ok: boolean; p_ts: number }; Returns: Json }
