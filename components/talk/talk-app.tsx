@@ -51,6 +51,15 @@ function writeLastOpened(id: string | null) {
  * READ RULE: opening a conversation marks it read (the server does that on GET). Nothing marks anything read while the
  * app is in the background — a notification is how you learn about a message then.
  */
+/**
+ * READ RULE: a message counts as read only while the person can actually see it — the app is on screen AND its window is
+ * the one in front. A window left open behind another one (or on a second screen) must not turn the sender's tick blue.
+ */
+function isViewing(): boolean {
+  if (typeof document === 'undefined') return true
+  return document.visibilityState === 'visible' && document.hasFocus()
+}
+
 export function TalkApp() {
   const searchParams = useSearchParams()
   const urlThread = searchParams.get('thread')
@@ -113,8 +122,7 @@ export function TalkApp() {
   const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setLoadingMsgs(true)
     try {
-      const visible = typeof document === 'undefined' || document.visibilityState === 'visible'
-      const r = await fetch(`/api/team/threads/${threadId}${visible ? '' : '?mark_read=0'}`)
+      const r = await fetch(`/api/team/threads/${threadId}${isViewing() ? '' : '?mark_read=0'}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
@@ -197,7 +205,7 @@ export function TalkApp() {
           setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m])
           if (m.sender_id !== meIdRef.current) setPeerTyping(null) // they sent it — no longer "typing…"
           // someone else's message in the chat I am looking at: it is read the moment it appears (never while hidden)
-          if (m.sender_id !== meIdRef.current && document.visibilityState === 'visible') {
+          if (m.sender_id !== meIdRef.current && isViewing()) {
             void fetch(`/api/team/threads/${m.thread_id}/read`, { method: 'POST' }).catch(() => {})
           }
         }
@@ -226,9 +234,11 @@ export function TalkApp() {
     const timer = setInterval(tick, POLL_MS)
     const onVisible = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible) // coming back to a window that was behind another one = now it is read
     return () => {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
       if (debounce) clearTimeout(debounce)
       supabase.removeChannel(channel)
     }

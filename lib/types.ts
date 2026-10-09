@@ -478,6 +478,8 @@ export interface ChatAttachment {
   name: string
   mime_type?: string
   size?: number
+  /** Team Chat voice notes: written by the "Show text" button (lib/team/voice-text.ts). */
+  transcript?: import('@/lib/team/voice-text').VoiceTranscript | null
 }
 
 export interface PortalMessage {

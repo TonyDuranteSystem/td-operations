@@ -29,6 +29,8 @@ export interface TalkAttachment {
   name: string
   mime_type?: string
   size?: number
+  /** Written by the "Show text" button on a voice note (lib/team/voice-text.ts). */
+  transcript?: import('@/lib/team/voice-text').VoiceTranscript | null
 }
 
 export interface TalkReaction {
