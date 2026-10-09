@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import { TeamBoard } from './board'
 import { NewGroupModal, GroupInfoModal } from './group-modals'
+import { VoiceNote } from '@/components/team-chat/voice-note'
+import { isAudio } from '@/lib/talk/chat-model'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
@@ -205,7 +207,10 @@ export default function TeamWorkspacePage() {
   const loadMessages = useCallback(async (threadId: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoadingMsgs(true)
     try {
-      const r = await fetch(`/api/team/threads/${threadId}${showArchivedRef.current ? '?include_archived=1' : ''}`)
+      // A tab in the background (or a window behind another one) must not mark the chat read for the person using it (their sender would see "read" the
+      // moment they sent) — so a hidden tab fetches with mark_read=0; coming back to the tab re-syncs and marks it read.
+      const qs = [showArchivedRef.current ? 'include_archived=1' : '', (document.visibilityState === 'hidden' || !document.hasFocus()) ? 'mark_read=0' : ''].filter(Boolean).join('&')
+      const r = await fetch(`/api/team/threads/${threadId}${qs ? `?${qs}` : ''}`)
       if (!r.ok) throw new Error('Failed')
       const d = await r.json()
       // Ignore a stale response: if the user switched threads while this was in
@@ -421,9 +426,11 @@ export default function TeamWorkspacePage() {
     }
     const onVisible = () => { if (document.visibilityState === 'visible') resync() }
     document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible) // a window brought to the front: now it is read
     window.addEventListener('online', resync)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
       window.removeEventListener('online', resync)
     }
   }, [loadThreads, loadMessages])
@@ -2350,6 +2357,14 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
                   <div className="flex flex-col gap-1 mt-1.5">
                     {attachments.map((a, i) => {
                       const isImg = a.url && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(a.url)
+                      if (a.url && isAudio(a)) {
+                        // Voice notes play right here (no new page). "Show text" needs the stored attachments list; the
+                        // old single-file shape has none, so it gets the plain player.
+                        return m.attachments?.length
+                          ? <VoiceNote key={i} messageId={m.id} index={i} url={a.url} transcript={(a as ChatAttachment).transcript} tone={isMe ? 'dark' : 'light'} />
+                          // eslint-disable-next-line jsx-a11y/media-has-caption
+                          : <audio key={i} controls preload="metadata" src={a.url} className="h-10 w-60 max-w-full" />
+                      }
                       return isImg
                         // eslint-disable-next-line @next/next/no-img-element
                         ? <img key={i} src={a.url} alt={a.name} className="max-w-[220px] rounded-lg border border-zinc-200 cursor-pointer" onClick={() => window.open(a.url, '_blank')} />

@@ -3,25 +3,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { VoiceNote } from '@/components/team-chat/voice-note'
 import {
   formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, timeLabel,
   type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
 /** One attachment inside a bubble: a voice note you can play, a photo you can open, or a file you can download. */
-function Attachment({ a }: { a: TalkAttachment }) {
+function Attachment({ a, messageId, index }: { a: TalkAttachment; messageId: string; index: number }) {
   const [broken, setBroken] = useState(false)
   if (isAudio(a) && !broken) {
-    return (
-      <audio
-        controls
-        preload="metadata"
-        src={a.url}
-        className="h-10 w-60 max-w-full"
-        onError={() => setBroken(true)}
-        data-testid="talk-voice-note"
-      />
-    )
+    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} onBroken={() => setBroken(true)} />
   }
   if (isImage(a) && !broken) {
     return (
@@ -147,7 +139,7 @@ function Bubble({
                 <span className="block truncate text-[13px] text-zinc-600">{quote.text}</span>
               </button>
             )}
-            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} />)}
+            {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} messageId={m.id} index={i} />)}
             {m.message ? <Text text={m.message} /> : null}
           </div>
         )}
