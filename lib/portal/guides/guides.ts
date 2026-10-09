@@ -208,6 +208,23 @@ export function shouldOfferTour(pref: TourPref | null, def: Pick<TourDef, 'versi
   return pref.version < def.version
 }
 
+// ── The "New: take the tour" banner (Antonio 2026-10-09) ──────────────────────
+
+/** Window events that let the banner and the tour talk without sharing state. */
+export const TOUR_EVENT_START = 'td:tour:start'
+export const TOUR_EVENT_STATE = 'td:tour:state'
+export type TourStateEvent = 'started' | 'finished' | 'dismissed'
+
+/**
+ * The slim banner shows only while the tour is still being offered to this login (the server decides that with
+ * shouldOfferTour, and never in a staff view-as), and goes away as soon as the person starts the tour, finishes it,
+ * says "don't show again", or closes the banner itself on this browser.
+ */
+export function shouldShowTourBanner(input: { offered: boolean; closedHere: boolean; state: TourStateEvent | null }): boolean {
+  if (!input.offered || input.closedHere) return false
+  return input.state === null
+}
+
 /** Steps whose marker is not on screen are skipped, never stall the tour. */
 export function nextStepIndex(from: number, direction: 1 | -1, total: number, isPresent: (index: number) => boolean): number | null {
   let i = from + direction
