@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   directMessages, otherUserId, dmName, startThreadId, membersWithoutChat, initials,
   dayKey, dayLabel, timeLabel, groupByDay, seenState, isAudio, isImage, formatSize, clock, linkify,
-  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS, mergeSnapshot, messageSignature,
+  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS, mergeSnapshot, messageSignature, typingLabel, shouldAnnounceTyping, parseTypingSignal, TYPING_SEND_GAP_MS,
   type TalkThread, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -245,5 +245,26 @@ describe('messageSignature', () => {
     expect(messageSignature([{ ...base, reactions: [{ emoji: '👍', reactor_id: 'b' }] }])).not.toBe(sig)
     expect(messageSignature([{ ...base, attachments: [{ url: 'u', name: 'n' }] }])).not.toBe(sig)
     expect(messageSignature([])).toBe('')
+  })
+})
+
+describe('typing indicator rules', () => {
+  it('labels what the other person is doing', () => {
+    expect(typingLabel('typing')).toBe('typing…')
+    expect(typingLabel('recording')).toBe('recording a voice message…')
+    expect(typingLabel(null)).toBe('')
+    expect(typingLabel(undefined)).toBe('')
+  })
+  it('announces at most once per gap', () => {
+    expect(shouldAnnounceTyping(null, 1000)).toBe(true)
+    expect(shouldAnnounceTyping(1000, 1000 + TYPING_SEND_GAP_MS - 1)).toBe(false)
+    expect(shouldAnnounceTyping(1000, 1000 + TYPING_SEND_GAP_MS)).toBe(true)
+  })
+  it("only another person's well-formed signal counts", () => {
+    expect(parseTypingSignal({ user_id: 'b', kind: 'typing' }, ME)).toEqual({ userId: 'b', kind: 'typing' })
+    expect(parseTypingSignal({ user_id: 'b', kind: 'recording' }, ME)).toEqual({ userId: 'b', kind: 'recording' })
+    expect(parseTypingSignal({ user_id: 'b', kind: 'whatever' }, ME)).toEqual({ userId: 'b', kind: 'typing' })
+    expect(parseTypingSignal({ user_id: ME, kind: 'typing' }, ME)).toBeNull() // my own echo
+    for (const bad of [null, undefined, 'x', 5, {}, { user_id: '' }, { user_id: 5 }]) expect(parseTypingSignal(bad, ME)).toBeNull()
   })
 })

@@ -313,3 +313,32 @@ export function messageSignature(list: TalkMessage[]): string {
     .map(m => `${m.id}|${m.message ?? ''}|${m.edited_at ?? ''}|${m.deleted_at ?? ''}|${(m.reactions ?? []).map(r => `${r.emoji}${r.reactor_id}`).join(',')}|${(m.attachments ?? []).length}`)
     .join('\n')
 }
+
+// ─── "typing…" ────────────────────────────────────────────────────────────
+
+export type TypingKind = 'typing' | 'recording'
+
+/** A "typing…" line disappears by itself this long after the last signal (the other person stopped, closed the app, lost signal). */
+export const TYPING_EXPIRES_MS = 4_000
+/** How often a person's own typing is announced while they keep typing. */
+export const TYPING_SEND_GAP_MS = 2_500
+
+export function typingLabel(kind: TypingKind | null | undefined): string {
+  if (kind === 'recording') return 'recording a voice message…'
+  if (kind === 'typing') return 'typing…'
+  return ''
+}
+
+/** True when a new "typing" signal should go out: never twice within the gap. */
+export function shouldAnnounceTyping(lastSentAt: number | null, now: number, gap: number = TYPING_SEND_GAP_MS): boolean {
+  return lastSentAt === null || now - lastSentAt >= gap
+}
+
+/** Reads a received signal defensively: only a different person's signal of a known kind counts. */
+export function parseTypingSignal(payload: unknown, meId: string | null): { userId: string; kind: TypingKind } | null {
+  if (!payload || typeof payload !== 'object') return null
+  const p = payload as { user_id?: unknown; kind?: unknown }
+  if (typeof p.user_id !== 'string' || !p.user_id || p.user_id === meId) return null
+  const kind: TypingKind = p.kind === 'recording' ? 'recording' : 'typing'
+  return { userId: p.user_id, kind }
+}

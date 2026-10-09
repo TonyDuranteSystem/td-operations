@@ -8,8 +8,8 @@ import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  directMessages, dmName, initials, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, snippet, startThreadId, timeLabel, dayLabel,
-  type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread,
+  directMessages, dmName, initials, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
+  type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
@@ -70,6 +70,9 @@ export function TalkApp() {
   const [searchQ, setSearchQ] = useState('')
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const messagesRef = useRef<TalkMessage[]>([])
+  const [peerTyping, setPeerTyping] = useState<TypingKind | null>(null)
+  const typingChannelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
+  const typingSentAtRef = useRef<number | null>(null)
 
   const selectedIdRef = useRef<string | null>(null)
   const meIdRef = useRef<string | null>(null)
@@ -177,6 +180,7 @@ export function TalkApp() {
         const m = payload.new as TalkMessage & { thread_id: string }
         if (m.thread_id === selectedIdRef.current) {
           setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m])
+          if (m.sender_id !== meIdRef.current) setPeerTyping(null) // they sent it — no longer "typing…"
           // someone else's message in the chat I am looking at: it is read the moment it appears (never while hidden)
           if (m.sender_id !== meIdRef.current && document.visibilityState === 'visible') {
             void fetch(`/api/team/threads/${m.thread_id}/read`, { method: 'POST' }).catch(() => {})
@@ -212,6 +216,39 @@ export function TalkApp() {
       supabase.removeChannel(channel)
     }
   }, [loadThreads, loadMessages])
+
+  // "typing…": a lightweight broadcast on a per-chat channel (nothing is stored). Each side announces while it types or
+  // records (at most every 2.5 s) and shows the other side's signal for 4 s. A message from the other person clears it.
+  useEffect(() => {
+    setPeerTyping(null)
+    typingSentAtRef.current = null
+    if (!selectedId) return
+    const supabase = createClient()
+    let expire: ReturnType<typeof setTimeout> | null = null
+    const channel = supabase
+      .channel(`talk-typing-${selectedId}`, { config: { broadcast: { self: false } } })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        const sig = parseTypingSignal(payload, meIdRef.current)
+        if (!sig) return
+        setPeerTyping(sig.kind)
+        if (expire) clearTimeout(expire)
+        expire = setTimeout(() => setPeerTyping(null), TYPING_EXPIRES_MS)
+      })
+      .subscribe()
+    typingChannelRef.current = channel
+    return () => {
+      if (expire) clearTimeout(expire)
+      typingChannelRef.current = null
+      void supabase.removeChannel(channel)
+    }
+  }, [selectedId])
+
+  const announceTyping = useCallback((kind: TypingKind) => {
+    const now = Date.now()
+    if (!shouldAnnounceTyping(typingSentAtRef.current, now)) return
+    typingSentAtRef.current = now
+    void typingChannelRef.current?.send({ type: 'broadcast', event: 'typing', payload: { user_id: meIdRef.current, kind } })
+  }, [])
 
   const send = useCallback(async ({ text, files, replyToId }: TalkSendInput): Promise<boolean> => {
     const threadId = selectedIdRef.current
@@ -395,7 +432,10 @@ export function TalkApp() {
           </button>
         ) : <span className="w-2" />}
         <Avatar name={name} id={other} />
-        <span className="min-w-0 flex-1 truncate text-[17px] font-semibold text-zinc-900" data-testid="talk-title">{name}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[17px] font-semibold leading-tight text-zinc-900" data-testid="talk-title">{name}</span>
+          {peerTyping && <span className="block truncate text-xs text-[#BE1E2D]" data-testid="talk-typing">{typingLabel(peerTyping)}</span>}
+        </span>
         <button type="button" onClick={() => { setSearchOpen(o => !o); setSearchQ('') }} aria-label="Search this chat" data-testid="talk-search-toggle" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-600 active:bg-zinc-100">
           {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
         </button>
@@ -434,7 +474,7 @@ export function TalkApp() {
           onJumpTo={jumpTo}
         />
       )}
-      {!searchOpen && <TalkComposer key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} />}
+      {!searchOpen && <TalkComposer key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} />}
       {sheetMsg && meId && (
         <TalkMessageSheet
           message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg}

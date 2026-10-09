@@ -5,7 +5,7 @@ import { ArrowUp, Check, CornerUpLeft, Mic, Paperclip, Pencil, Trash2, X, Loader
 import { toast } from 'sonner'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
-import { clock, snippet, type TalkMessage } from '@/lib/talk/chat-model'
+import { clock, snippet, type TalkMessage, type TypingKind } from '@/lib/talk/chat-model'
 
 /** A voice note longer than this is stopped and sent by itself. */
 const MAX_VOICE_SECONDS = 5 * 60
@@ -29,12 +29,14 @@ export type TalkComposerMode =
  * message went out, so a failed send keeps what was typed.
  */
 export function TalkComposer({
-  onSend, onEdit, mode, onCancelMode, disabled,
+  onSend, onEdit, mode, onCancelMode, onTyping, disabled,
 }: {
   onSend: (input: TalkSendInput) => Promise<boolean>
   onEdit: (id: string, text: string) => Promise<boolean>
   mode: TalkComposerMode
   onCancelMode: () => void
+  /** Called while the person types or records, so the other side can show "typing…" (the caller throttles). */
+  onTyping?: (kind: TypingKind) => void
   disabled?: boolean
 }) {
   const [text, setText] = useState('')
@@ -48,6 +50,8 @@ export function TalkComposer({
   modeRef.current = mode
   const onCancelModeRef = useRef(onCancelMode)
   onCancelModeRef.current = onCancelMode
+  const onTypingRef = useRef(onTyping)
+  onTypingRef.current = onTyping
   textRef.current = text
   const editingId = mode?.kind === 'edit' ? mode.message.id : null
   const replyingId = mode?.kind === 'reply' ? mode.message.id : null
@@ -99,6 +103,7 @@ export function TalkComposer({
     const t = setInterval(() => {
       const s = Math.floor((Date.now() - started) / 1000)
       setSeconds(s)
+      onTypingRef.current?.('recording')
       if (s >= MAX_VOICE_SECONDS) stopRecording()
     }, 250)
     return () => clearInterval(t)
@@ -202,7 +207,7 @@ export function TalkComposer({
           value={text}
           rows={1}
           disabled={disabled}
-          onChange={e => setText(e.target.value)}
+          onChange={e => { setText(e.target.value); if (e.target.value && mode?.kind !== 'edit') onTyping?.('typing') }}
           onKeyDown={e => {
             if (e.key === 'Escape' && mode) { onCancelMode(); return }
             // On a computer or a tablet Enter sends (Shift+Enter = new line); on a PHONE Enter is a new line and the arrow
