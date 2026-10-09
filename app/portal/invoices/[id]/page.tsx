@@ -28,6 +28,7 @@ interface InvoiceDetail {
   currency: string
   subtotal: number
   discount: number
+  tax_total?: number | null
   total: number
   amount_paid: number | null
   amount_due: number | null
@@ -635,6 +636,12 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-between">
                 <span className="text-zinc-500">Discount</span>
                 <span className="text-red-600">-{currencySymbol}{invoice.discount.toFixed(2)}</span>
+              </div>
+            )}
+            {(Number(invoice.tax_total) || 0) > 0 && (
+              <div className="flex justify-between" data-testid="invoice-tax">
+                <span className="text-zinc-500">{t('invoices.tax')}</span>
+                <span>{currencySymbol}{Number(invoice.tax_total).toFixed(2)}</span>
               </div>
             )}
             <div className="flex justify-between pt-2 border-t font-semibold text-lg">

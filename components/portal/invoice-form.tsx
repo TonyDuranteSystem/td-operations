@@ -97,7 +97,9 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   )
 
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
-  const total = Math.max(subtotal - discount, 0)
+  // Tax is carried per line from an existing invoice (the form has no tax field of its own); shown so the total is the real one.
+  const taxTotal = Math.round(items.reduce((sum, item) => sum + item.amount * (item.tax_rate ?? 0), 0) * 100) / 100
+  const total = Math.max(subtotal - discount, 0) + taxTotal
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
 
   const updateItem = (index: number, field: keyof LineItem, value: string | number) => {
@@ -436,6 +438,12 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                 className="w-24 px-2 py-1 text-sm border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+            {taxTotal > 0 && (
+              <div className="flex justify-between items-center" data-testid="invoice-form-tax">
+                <span className="text-zinc-500">{t('invoices.tax')}</span>
+                <span className="font-medium">{currencySymbol}{taxTotal.toFixed(2)}</span>
+              </div>
+            )}
             <div className="flex justify-between pt-2 border-t font-semibold text-base">
               <span>{t('invoices.total')}</span>
               <span>{currencySymbol}{total.toFixed(2)}</span>
