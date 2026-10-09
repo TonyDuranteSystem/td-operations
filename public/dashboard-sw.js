@@ -52,6 +52,21 @@ self.addEventListener('fetch', function (event) {
   )
 })
 
+// Delivery receipt (dev job c1e326dd): a team-chat push that reaches this device means the message has been RECEIVED —
+// tell the server so the sender's tick turns grey-double. Needs only the thread id from the notification address;
+// pushes with no ?thread= (client messages, payments…) send nothing. Best effort, never blocks the notification.
+function ackDelivered(data) {
+  try {
+    var m = /[?&]thread=([0-9a-fA-F-]{36})/.exec(String((data && data.url) || ''))
+    if (!m) return Promise.resolve()
+    return fetch('/api/team/delivered', {
+      method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ thread_id: m[1] }] }),
+    }).catch(function () {})
+  } catch (e) { return Promise.resolve() }
+}
+
 // Push notifications
 self.addEventListener('push', function (event) {
   if (!event.data) return
@@ -71,7 +86,7 @@ self.addEventListener('push', function (event) {
   }
 
   event.waitUntil(
-    self.registration.showNotification(data.title || 'TD Operations', options)
+    Promise.all([self.registration.showNotification(data.title || 'TD Operations', options), ackDelivered(data)])
   )
 })
 

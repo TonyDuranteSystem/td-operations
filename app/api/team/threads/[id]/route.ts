@@ -301,6 +301,7 @@ export async function GET(
   // Direct message: how far the OTHER person has read (their per-user read pointer), so a chat screen can show
   // WhatsApp-style "seen" ticks on my messages (TD Talk, dev job c1e326dd). Null for everything else.
   let peerReadAt: string | null = null
+  let peerDeliveredAt: string | null = null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const dmKey = (thread as any).thread_type === 'dm' ? ((thread as any).dm_key as string | null) : null
   const peerId = dmKey ? dmKey.split(':').find(id => id && id !== user.id) : null
@@ -313,10 +314,16 @@ export async function GET(
       .eq('user_id', peerId)
       .maybeSingle()
     peerReadAt = peerRead?.last_read_at ?? null
+    // How far their DEVICE has received (grey double tick) — separate from reading; see lib/team/delivery.ts.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: peerDel } = await (supabaseAdmin as any)
+      .from('internal_thread_delivery').select('delivered_at').eq('thread_id', threadId).eq('user_id', peerId).maybeSingle()
+    peerDeliveredAt = peerDel?.delivered_at ?? null
   }
 
   // Group: how far each OTHER member has read (the "seen by everyone" ticks) and who is in it.
   let memberReads: Array<{ user_id: string; last_read_at: string }> | null = null
+  let memberDelivered: Array<{ user_id: string; delivered_at: string }> | null = null
   if (groupMembers) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: reads } = await (supabaseAdmin as any)
@@ -325,6 +332,10 @@ export async function GET(
       .eq('thread_id', threadId)
       .in('user_id', groupMembers)
     memberReads = (reads ?? []) as Array<{ user_id: string; last_read_at: string }>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: dels } = await (supabaseAdmin as any)
+      .from('internal_thread_delivery').select('user_id, delivered_at').eq('thread_id', threadId).in('user_id', groupMembers)
+    memberDelivered = (dels ?? []) as Array<{ user_id: string; delivered_at: string }>
   }
 
   return NextResponse.json({
@@ -332,6 +343,8 @@ export async function GET(
     members: groupMembers,
     member_reads: memberReads,
     peer_read_at: peerReadAt,
+    peer_delivered_at: peerDeliveredAt,
+    member_delivered: memberDelivered,
     messages: enriched,
     thread_meta: threadMeta,
     threads,

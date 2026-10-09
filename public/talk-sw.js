@@ -13,7 +13,7 @@
 // talkUrlFor() below turns those into the same query on /talk so a tap stays inside this app, and sends
 // anything else (another page, another site) to plain /talk — a tap can never leave the app. The same rule
 // lives in lib/talk/paths.ts::talkUrlFor and a unit test keeps the two in step.
-var SW_VERSION = 'td-talk-20261009-1'
+var SW_VERSION = 'td-talk-20261009-2'
 var TALK = '/talk'
 
 self.addEventListener('install', function () {
@@ -66,6 +66,21 @@ self.addEventListener('fetch', function (event) {
   )
 })
 
+// Delivery receipt (dev job c1e326dd): a team-chat push that reaches this device means the message has been RECEIVED —
+// tell the server so the sender's tick turns grey-double. Needs only the thread id from the notification address;
+// pushes with no ?thread= (client messages, payments…) send nothing. Best effort, never blocks the notification.
+function ackDelivered(data) {
+  try {
+    var m = /[?&]thread=([0-9a-fA-F-]{36})/.exec(String((data && data.url) || ''))
+    if (!m) return Promise.resolve()
+    return fetch('/api/team/delivered', {
+      method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ thread_id: m[1] }] }),
+    }).catch(function () {})
+  } catch (e) { return Promise.resolve() }
+}
+
 // Push. A notification is ALWAYS shown (iOS drops a subscription that receives pushes it does not display).
 self.addEventListener('push', function (event) {
   if (!event.data) return
@@ -78,7 +93,7 @@ self.addEventListener('push', function (event) {
     data: { url: talkUrlFor(data.url) },
     vibrate: [200, 100, 200],
   }
-  event.waitUntil(self.registration.showNotification(data.title || 'TD Talk', options))
+  event.waitUntil(Promise.all([self.registration.showNotification(data.title || 'TD Talk', options), ackDelivered(data)]))
 })
 
 self.addEventListener('notificationclick', function (event) {

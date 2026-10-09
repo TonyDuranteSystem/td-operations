@@ -1,5 +1,6 @@
 # Team Workspace (internal Slack-replacement chat)
 
+_Last verified against code: 2026-10-09h — Claude (dev job `c1e326dd`: delivered ticks — new table `internal_thread_delivery`, `POST /api/team/delivered`, thread GET returns `peer_delivered_at`/`member_delivered`; the CRM page reports delivery after loading its chat list. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-09g — Claude (dev job `c1e326dd`: the thread fetch's "don't mark read" rule is now fail-open via `lib/talk/window-front.ts` (blur = behind another window; any tap/click/key = back) instead of `document.hasFocus()`, which broke read marking on phone/installed apps. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-09f — Claude (dev job `c1e326dd`: voice notes play inline in the CRM Team Chat page + "Show text" (Whisper, saved on the attachment, no DDL); the page's thread fetch no longer marks a chat read while the window is hidden or not in front. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-09e — Claude (dev job `c1e326dd`: GROUP chats (`thread_type='group'`, members in `internal_thread_members`) — private to members, enforced in the app + both RPCs; CRM sidebar has a Groups section. Full detail: `docs/systems/talk.md` "Group chats".)_

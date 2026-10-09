@@ -16,6 +16,7 @@ import { NewGroupModal, GroupInfoModal } from './group-modals'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { isAudio } from '@/lib/talk/chat-model'
 import { isBeingViewed } from '@/lib/talk/window-front'
+import { reportDelivered } from '@/lib/talk/report-delivered'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
@@ -185,6 +186,7 @@ export default function TeamWorkspacePage() {
       if (!r.ok) throw new Error('Failed to load')
       const d = await r.json()
       setThreads(d.threads)
+      reportDelivered(d.threads) // this device now HAS these messages: tell the sender (grey double tick)
       setMembers(d.members)
       setCurrentUserId(d.current_user_id)
       setIsAdmin(d.is_admin)

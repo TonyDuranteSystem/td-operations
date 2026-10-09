@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import {
   formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, timeLabel,
-  type TalkAttachment, type TalkMessage,
+  type Tick, type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
 /** One attachment inside a bubble: a voice note you can play, a photo you can open, or a file you can download. */
@@ -59,9 +59,9 @@ const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
 function Bubble({
-  m, mine, seen, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
+  m, mine, tick, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
 }: {
-  m: TalkMessage; mine: boolean; seen: boolean; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
+  m: TalkMessage; mine: boolean; tick: Tick; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
 }) {
   const atts = (m.attachments ?? []).filter(a => a && a.url)
@@ -147,9 +147,11 @@ function Bubble({
           {m.edited_at && !deleted && <span>edited</span>}
           <span>{timeLabel(m.created_at)}</span>
           {mine && !deleted && (
-            seen
+            tick === 'seen'
               ? <CheckCheck className="h-3.5 w-3.5 text-sky-600" aria-label="Seen" data-testid="talk-tick-seen" />
-              : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label="Sent" data-testid="talk-tick-sent" />
+              : tick === 'delivered'
+                ? <CheckCheck className="h-3.5 w-3.5 text-zinc-400" aria-label="Delivered" data-testid="talk-tick-delivered" />
+                : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label="Sent" data-testid="talk-tick-sent" />
           )}
         </div>
         {pills.length > 0 && !deleted && (
@@ -177,11 +179,11 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, isSeen, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
 }: {
   threadId: string; messages: TalkMessage[]; meId: string
-  /** Is my message seen (a direct message: the other person read it; a group: everyone did). */
-  isSeen: (m: TalkMessage) => boolean
+  /** My message's tick: sent / delivered (their device has it) / seen (they read it; a group: everyone did). */
+  tickOf: (m: TalkMessage) => Tick
   /** A group shows who wrote each message from someone else. */
   showSender: boolean
   loading: boolean
@@ -238,7 +240,7 @@ export function TalkMessages({
                 <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{g.label}</span>
               </div>
               {g.messages.map(m => (
-                <Bubble key={m.id} m={m} mine={m.sender_id === meId} seen={m.sender_id === meId && isSeen(m)} showSender={showSender} meId={meId} byId={byId}
+                <Bubble key={m.id} m={m} mine={m.sender_id === meId} tick={m.sender_id === meId ? tickOf(m) : 'sent'} showSender={showSender} meId={meId} byId={byId}
                   highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} />
               ))}
             </div>
