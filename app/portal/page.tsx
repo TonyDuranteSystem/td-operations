@@ -895,6 +895,7 @@ export default async function PortalDashboardPage() {
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false
 
+
   // Fetch active portal announcements — graceful fallback if table missing
   let portalAnnouncements: PortalAnnouncement[] = []
   try {

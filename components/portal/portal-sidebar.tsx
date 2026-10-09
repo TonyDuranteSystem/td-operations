@@ -28,6 +28,7 @@ import {
   Palette,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { InvoicesMenuCallout } from '@/components/portal/invoices-menu-callout'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
@@ -464,7 +465,17 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Company section visible only for non-partners with at least one account.
   // Active-tier with no account (rare edge case) hides the section too.
   const showCompaniesSection = !isPartner && accounts.length > 0
-  const visibleCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+  const filteredCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+  // Companies with the new invoices screen get it right under Overview so it is seen without scrolling.
+  const visibleCompanyItems = (() => {
+    if (isTeammate || !navVisibility?.invoiceHub) return filteredCompanyItems
+    const inv = filteredCompanyItems.find(i => i.key === 'nav.invoices')
+    if (!inv) return filteredCompanyItems
+    const rest = filteredCompanyItems.filter(i => i !== inv)
+    const at = rest.findIndex(i => i.key === 'nav.overview')
+    rest.splice(at + 1, 0, inv)
+    return rest
+  })()
 
   // Personal Invoices link is added when there's no company section
   // (Antonio's model: Lorenzo as individual sees his personal formation
@@ -566,7 +577,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     // by making the hint a SIBLING of the Link, not a descendant — the outer
     // row's background/active styling moves to this wrapper so the two still
     // look like one continuous row.
-    return (
+    const row = (
       <div
         key={item.href}
         className={cn(
@@ -627,6 +638,26 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         <NavItemHint itemKey={item.key} text={navHintText(item)} label={navLabel} />
       </div>
     )
+    if (item.key === 'nav.invoices' && showInvoicesNew) {
+      // The big green callout hangs directly under the menu item so the new screen cannot be missed.
+      return (
+        <div key={item.href}>
+          {row}
+          <InvoicesMenuCallout
+            title={t('nav.invoicesCallout.title')}
+            desc={t('nav.invoicesCallout.desc')}
+            cta={t('nav.invoicesCallout.cta')}
+            dismissLabel={t('nav.invoicesCallout.dismiss')}
+            onClear={() => {
+              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
+              setShowInvoicesNew(false)
+              setMobileOpen(false)
+            }}
+          />
+        </div>
+      )
+    }
+    return row
   }
 
   return (
