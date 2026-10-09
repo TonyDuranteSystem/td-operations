@@ -21,6 +21,7 @@ import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
 import { visibleInvoiceTabs, resolveInvoiceTab, isInvoiceHubOnFor, evaluateChecklist, missingRequired, type InvoiceTabContext, type InvoiceTabId } from '@/lib/portal/invoice-hub'
 import { GuidedTour } from '@/components/portal/guided-tour'
+import { TourBanner } from '@/components/portal/tour-banner'
 import { FeatureRequestCard } from '@/components/portal/feature-request-card'
 import { loadInvoicingGuides, getTourPref } from '@/lib/portal/guides/guides-server'
 import { shouldOfferTour } from '@/lib/portal/guides/guides'
@@ -221,6 +222,16 @@ export default async function PortalInvoicesPage({
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-4 sm:space-y-6">
+      {/* Slim "New: take the tour" strip: only while the tour is still being offered to this login (never in view-as) */}
+      {showHub && guides && !viewingAsClient && shouldOfferTour(tourPref, guides.tour) && (
+        <TourBanner
+          tourId={guides.tour.id}
+          version={guides.tour.version}
+          text={t('tour.invoicing.bannerText', locale, translations)}
+          cta={t('tour.takeTour', locale, translations)}
+          closeLabel={t('tour.invoicing.bannerClose', locale, translations)}
+        />
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>

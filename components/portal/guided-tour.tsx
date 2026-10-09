@@ -19,7 +19,7 @@ import { useRouter } from 'next/navigation'
 import { HelpCircle } from 'lucide-react'
 import { ACTIONS, EVENTS, STATUS, type CallBackProps, type Step } from 'react-joyride'
 import { acquireTour, releaseTour } from '@/lib/ui/tour-lock'
-import { nextStepIndex } from '@/lib/portal/guides/guides'
+import { nextStepIndex, TOUR_EVENT_START, TOUR_EVENT_STATE, type TourStateEvent } from '@/lib/portal/guides/guides'
 
 const Joyride = dynamic(() => import('react-joyride'), { ssr: false })
 
@@ -81,6 +81,11 @@ export function GuidedTour({
   const lockName = `portal-${tourId}`
   const snoozeKey = `td-tour-snooze-${tourId}-v${version}`
 
+  // The slim "New: take the tour" banner listens to these, so it disappears the moment the tour starts or ends.
+  const announce = useCallback((state: TourStateEvent) => {
+    try { window.dispatchEvent(new CustomEvent(TOUR_EVENT_STATE, { detail: { tourId, state } })) } catch { /* no-op */ }
+  }, [tourId])
+
   useEffect(() => {
     if (!offer) return
     let snoozed = false
@@ -110,7 +115,8 @@ export function GuidedTour({
     setRun(false)
     releaseTour(lockName)
     if (remember) void save('completed')
-  }, [lockName, save])
+    announce('finished')
+  }, [lockName, save, announce])
 
   // A step is available if its marker is on screen now, or if it names a tab we can switch to first.
   const isAvailable = useCallback((i: number) => !!steps[i].tab || present(steps[i].target), [steps])
@@ -142,8 +148,19 @@ export function GuidedTour({
   const start = useCallback(() => {
     if (!acquireTour(lockName)) return // another tour is on screen
     setIntroOpen(false)
+    announce('started')
     void goTo(0)
-  }, [lockName, goTo])
+  }, [lockName, goTo, announce])
+
+  // The banner's button asks this tour to start (same as pressing "Take the tour").
+  useEffect(() => {
+    const onStart = (e: Event) => {
+      const d = (e as CustomEvent<{ tourId: string }>).detail
+      if (d && d.tourId === tourId) start()
+    }
+    window.addEventListener(TOUR_EVENT_START, onStart)
+    return () => window.removeEventListener(TOUR_EVENT_START, onStart)
+  }, [tourId, start])
 
   const handleCallback = useCallback((data: CallBackProps) => {
     const { status, type, action, index } = data
@@ -195,7 +212,7 @@ export function GuidedTour({
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                onClick={() => { setIntroOpen(false); void save('dismissed') }}
+                onClick={() => { setIntroOpen(false); void save('dismissed'); announce('dismissed') }}
                 className="rounded-lg px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-100"
               >
                 {labels.dontShow}
