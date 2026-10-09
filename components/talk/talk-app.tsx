@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { ChevronLeft, Loader2, Plus, Search, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
+import { isBeingViewed } from '@/lib/talk/window-front'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
@@ -51,15 +52,6 @@ function writeLastOpened(id: string | null) {
  * READ RULE: opening a conversation marks it read (the server does that on GET). Nothing marks anything read while the
  * app is in the background — a notification is how you learn about a message then.
  */
-/**
- * READ RULE: a message counts as read only while the person can actually see it — the app is on screen AND its window is
- * the one in front. A window left open behind another one (or on a second screen) must not turn the sender's tick blue.
- */
-function isViewing(): boolean {
-  if (typeof document === 'undefined') return true
-  return document.visibilityState === 'visible' && document.hasFocus()
-}
-
 export function TalkApp() {
   const searchParams = useSearchParams()
   const urlThread = searchParams.get('thread')
@@ -122,7 +114,7 @@ export function TalkApp() {
   const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
     if (!opts.silent) setLoadingMsgs(true)
     try {
-      const r = await fetch(`/api/team/threads/${threadId}${isViewing() ? '' : '?mark_read=0'}`)
+      const r = await fetch(`/api/team/threads/${threadId}${isBeingViewed() ? '' : '?mark_read=0'}`)
       if (!r.ok) throw new Error('Could not load this chat.')
       const d = await r.json()
       if (selectedIdRef.current !== threadId) return // switched chats while loading
@@ -205,7 +197,7 @@ export function TalkApp() {
           setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m])
           if (m.sender_id !== meIdRef.current) setPeerTyping(null) // they sent it — no longer "typing…"
           // someone else's message in the chat I am looking at: it is read the moment it appears (never while hidden)
-          if (m.sender_id !== meIdRef.current && isViewing()) {
+          if (m.sender_id !== meIdRef.current && isBeingViewed()) {
             void fetch(`/api/team/threads/${m.thread_id}/read`, { method: 'POST' }).catch(() => {})
           }
         }
