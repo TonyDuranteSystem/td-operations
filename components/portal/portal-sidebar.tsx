@@ -464,7 +464,17 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Company section visible only for non-partners with at least one account.
   // Active-tier with no account (rare edge case) hides the section too.
   const showCompaniesSection = !isPartner && accounts.length > 0
-  const visibleCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+  const filteredCompanyItems = showCompaniesSection ? companyItems.filter(isItemVisible) : []
+  // Companies with the new invoices screen get it right under Overview so it is seen without scrolling.
+  const visibleCompanyItems = (() => {
+    if (isTeammate || !navVisibility?.invoiceHub) return filteredCompanyItems
+    const inv = filteredCompanyItems.find(i => i.key === 'nav.invoices')
+    if (!inv) return filteredCompanyItems
+    const rest = filteredCompanyItems.filter(i => i !== inv)
+    const at = rest.findIndex(i => i.key === 'nav.overview')
+    rest.splice(at + 1, 0, inv)
+    return rest
+  })()
 
   // Personal Invoices link is added when there's no company section
   // (Antonio's model: Lorenzo as individual sees his personal formation
