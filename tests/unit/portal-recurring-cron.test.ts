@@ -62,6 +62,18 @@ describe('generating a cycle', () => {
     expect(hasOp(upd, 'eq', 'recurring_next_date', '2026-10-31')).toBe(true) // compare-and-swap on the cycle date
   })
 
+  it('a cycle that is long overdue is dated today and the missed cycles are skipped, not replayed one per day', async () => {
+    fake = makeFakeDb(c => {
+      if (c.ops.some(o => o.m === 'select' && String(o.args[0]).includes('client_invoice_items'))) return { data: [{ ...template, recurring_next_date: '2026-08-31' }] }
+      if (c.ops.some(o => o.m === 'update')) return { data: [{ id: 'tpl-1' }] }
+      return { data: [] }
+    })
+    await GET(req('Bearer sekret'))
+    expect(createUnifiedInvoice).toHaveBeenCalledWith(expect.objectContaining({ issue_date: '2026-10-31', due_date: '2026-11-15', idempotency_key: 'recurring:tpl-1:2026-08-31' }))
+    const upd = fake.calls.find(c => c.ops.some(o => o.m === 'update'))!
+    expect(opArgs(upd, 'update')![0]).toEqual({ recurring_next_date: '2026-11-30' })
+  })
+
   it('stops the schedule after its end date', async () => {
     fake = makeFakeDb(c => {
       if (c.ops.some(o => o.m === 'select' && String(o.args[0]).includes('client_invoice_items'))) return { data: [{ ...template, recurring_end_date: '2026-11-15' }] }
@@ -90,7 +102,7 @@ describe('generating a cycle', () => {
     fake = makeFakeDb(() => ({ data: [] }))
     await GET(req('Bearer sekret'))
     const q = fake.calls[0]
-    expect(hasOp(q, 'in', 'status', ['Sent', 'Paid'])).toBe(true)
+    expect(hasOp(q, 'in', 'status', ['Sent', 'Overdue', 'Partial', 'Paid'])).toBe(true) // an unpaid original keeps the schedule going
     expect(hasOp(q, 'lte', 'recurring_next_date', '2026-10-31')).toBe(true)
   })
 })

@@ -24,6 +24,12 @@ function verifyAccess(user: User, accountId: string): Promise<boolean> {
   return canAccessAccount(user, accountId, 'bank_applications')
 }
 
+// Reading the list is also needed by the invoice form (to pick the bank account printed on an invoice), so a
+// teammate who may invoice can read it too. Changing accounts stays under 'bank_applications' only.
+async function verifyRead(user: User, accountId: string): Promise<boolean> {
+  return (await verifyAccess(user, accountId)) || canAccessAccount(user, accountId, 'invoices_billing')
+}
+
 export async function GET(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -32,7 +38,7 @@ export async function GET(request: NextRequest) {
   const accountId = new URL(request.url).searchParams.get('account_id')
   if (!accountId) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  if (!(await verifyAccess(user, accountId))) {
+  if (!(await verifyRead(user, accountId))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

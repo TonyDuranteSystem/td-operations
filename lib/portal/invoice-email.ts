@@ -96,15 +96,38 @@ export function createRawEmail({ from, to, subject, html, replyTo, attachment }:
   return Buffer.from(parts.join('\r\n')).toString('base64url')
 }
 
-/** True when one of these exact subjects was already emailed to this person for this company within `windowSeconds`. */
+/**
+ * True when one of these exact subjects was already emailed to this person for this company within `windowSeconds`.
+ * The subjects are compared HERE, not in the database filter: a company name with a quote or a comma would break a
+ * PostgREST `in (...)` filter and silently switch the guard off. A failed lookup is logged and treated as "not sent
+ * recently" (the guard is anti-abuse, not a lock; refusing every send during a database blip would be worse).
+ */
 export async function recentlyEmailed(
   db: { from: (t: string) => any }, // eslint-disable-line @typescript-eslint/no-explicit-any
   args: { accountId: string | null; recipient: string; subjects: string[]; windowSeconds: number },
 ): Promise<boolean> {
   const since = new Date(Date.now() - args.windowSeconds * 1000).toISOString()
-  let q = db.from('email_tracking').select('id', { head: true, count: 'exact' })
-    .eq('recipient', args.recipient).in('subject', args.subjects).gte('created_at', since)
+  let q = db.from('email_tracking').select('subject').eq('recipient', args.recipient).gte('created_at', since).limit(200)
   q = args.accountId ? q.eq('account_id', args.accountId) : q.is('account_id', null)
-  const { count } = await q
-  return (count ?? 0) > 0
+  const { data, error } = await q
+  if (error) {
+    console.error('[invoice-email] could not check recent emails:', error.message)
+    return false
+  }
+  const wanted = new Set(args.subjects)
+  return ((data ?? []) as Array<{ subject: string | null }>).some(r => r.subject !== null && wanted.has(r.subject))
+}
+
+/** At most this many invoice + reminder emails per company per 24 hours (a client cannot turn the mailbox into a relay). */
+export const DAILY_EMAIL_CAP = 200
+
+export async function overDailyEmailCap(
+  db: { from: (t: string) => any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+  accountId: string | null,
+): Promise<boolean> {
+  if (!accountId) return false
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  const { count, error } = await db.from('email_tracking').select('id', { head: true, count: 'exact' }).eq('account_id', accountId).gte('created_at', since)
+  if (error) return false
+  return (count ?? 0) >= DAILY_EMAIL_CAP
 }

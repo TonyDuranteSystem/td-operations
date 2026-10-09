@@ -130,7 +130,7 @@ export async function DELETE(request: NextRequest) {
     const { data: remaining } = await supabaseAdmin.from('payment_links').select('id, created_at').eq('account_id', accountId)
     const next = pickNewDefault(remaining ?? [])
     if (next) {
-      try { await makeDefault(accountId, next.id) } catch { /* the delete itself succeeded; the readers also self-heal */ }
+      try { await makeDefault(accountId, next.id) } catch { /* the delete itself succeeded; invoices fall back to the oldest link until a default is set again */ }
     }
   }
   return NextResponse.json({ success: true })

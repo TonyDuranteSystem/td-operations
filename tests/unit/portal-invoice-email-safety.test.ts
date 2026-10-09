@@ -79,18 +79,26 @@ describe('createRawEmail', () => {
 })
 
 describe('recentlyEmailed', () => {
-  it('asks the email log for the same subject, person and company within the window', async () => {
-    const f = makeFakeDb(() => ({ count: 1 }))
+  it('is true when the log holds one of the exact subjects for this person and company in the window', async () => {
+    const f = makeFakeDb(() => ({ data: [{ subject: 'Other' }, { subject: 'S2' }] }))
     expect(await recentlyEmailed(f.db, { accountId: 'acc', recipient: 'a@b.co', subjects: ['S1', 'S2'], windowSeconds: 60 })).toBe(true)
     const q = f.calls[0]
     expect(q.table).toBe('email_tracking')
     expect(hasOp(q, 'eq', 'recipient', 'a@b.co')).toBe(true)
-    expect(hasOp(q, 'in', 'subject', ['S1', 'S2'])).toBe(true)
     expect(hasOp(q, 'eq', 'account_id', 'acc')).toBe(true)
   })
-  it('is false when nothing was sent', async () => {
-    const f = makeFakeDb(() => ({ count: 0 }))
+  it('works for a company name with quotes and commas (they used to break the database filter)', async () => {
+    const subject = 'Invoice INV-1 from Smith "Bros", S.r.l. (US)'
+    const f = makeFakeDb(() => ({ data: [{ subject }] }))
+    expect(await recentlyEmailed(f.db, { accountId: 'acc', recipient: 'a@b.co', subjects: [subject], windowSeconds: 60 })).toBe(true)
+  })
+  it('is false when nothing matching was sent', async () => {
+    const f = makeFakeDb(() => ({ data: [{ subject: 'Something else' }] }))
     expect(await recentlyEmailed(f.db, { accountId: null, recipient: 'a@b.co', subjects: ['S'], windowSeconds: 60 })).toBe(false)
     expect(hasOp(f.calls[0], 'is', 'account_id', null)).toBe(true)
+  })
+  it('a failed lookup is logged and does not block the send', async () => {
+    const f = makeFakeDb(() => ({ error: { message: 'db blip' } }))
+    expect(await recentlyEmailed(f.db, { accountId: 'acc', recipient: 'a@b.co', subjects: ['S'], windowSeconds: 60 })).toBe(false)
   })
 })

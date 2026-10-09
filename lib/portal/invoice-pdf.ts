@@ -1,4 +1,4 @@
-import { validatePaymentLinkUrl } from '@/lib/portal/payment-link-rules'
+import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
@@ -39,18 +39,8 @@ export async function renderInvoicePdf(opts: {
     .eq('id', invoice.account_id)
     .single()
 
-  // Get default payment link from payment_links table
-  const { data: defaultLink } = await supabaseAdmin
-    .from('payment_links')
-    .select('url, label')
-    .eq('account_id', invoice.account_id)
-    .eq('is_default', true)
-    .order('created_at')
-    .limit(1)
-    .maybeSingle()
-
-  const linkCheck = defaultLink?.url ? validatePaymentLinkUrl(defaultLink.url) : null
-  const paymentLinkUrl = linkCheck && 'url' in linkCheck ? linkCheck.url : null
+  // The company's default payment link (or its oldest, if none is marked), plain https only.
+  const paymentLinkUrl = await getInvoicePaymentLinkUrl(invoice.account_id)
 
   // --- Language detection ---
   let lang: InvoiceLang = 'en'

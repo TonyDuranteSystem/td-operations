@@ -14,6 +14,8 @@ export const invoiceItemSchema = z.object({
   quantity: z.number().min(0.01, 'Quantity must be greater than 0'),
   unit_price: z.number().min(0, 'Price must be 0 or greater'),
   amount: z.number(),
+  // carried through an edit so an invoice that has tax keeps it (the form has no tax field of its own)
+  tax_rate: z.number().min(0).max(1).nullable().optional(),
   sort_order: z.number().default(0),
 })
 

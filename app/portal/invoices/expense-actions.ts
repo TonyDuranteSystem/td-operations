@@ -182,6 +182,8 @@ export async function updateExpense(
     if (updates.vendor_name !== undefined) updateData.vendor_name = updates.vendor_name
     if (updates.invoice_number !== undefined) updateData.invoice_number = updates.invoice_number
     if (updates.description !== undefined) updateData.description = updates.description
+    if (updates.total !== undefined && (!Number.isFinite(updates.total) || updates.total < 0)) throw new Error('The amount must be zero or more.')
+    if (updates.due_date && !/^\d{4}-\d{2}-\d{2}$/.test(updates.due_date)) throw new Error('Dates must look like 2026-10-31.')
     if (updates.total !== undefined) {
       updateData.total = updates.total
       updateData.subtotal = updates.total

@@ -7,8 +7,8 @@ import { APP_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { pdfStatusForSend } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
-import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed } from '@/lib/portal/invoice-email'
-import { validatePaymentLinkUrl } from '@/lib/portal/payment-link-rules'
+import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
+import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
 
 /**
  * POST /api/portal/invoices/[id]/send — Send invoice via email to customer
@@ -90,19 +90,8 @@ export async function POST(
     bankAccount = data
   }
 
-  // Get default payment link
-  const { data: defaultLink } = await supabaseAdmin
-    .from('payment_links')
-    .select('url')
-    .eq('account_id', invoice.account_id)
-    .eq('is_default', true)
-    .order('created_at')
-    .limit(1)
-    .maybeSingle()
-
-  // Only a plain https link is ever put in the email (it is rendered as a button).
-  const linkCheck = defaultLink?.url ? validatePaymentLinkUrl(defaultLink.url) : null
-  const paymentLinkUrl = linkCheck && 'url' in linkCheck ? linkCheck.url : null
+  // The company's default payment link (or its oldest, if none is marked), plain https only.
+  const paymentLinkUrl = await getInvoicePaymentLinkUrl(invoice.account_id)
 
   const csym = invoice.currency === 'EUR' ? '\u20AC' : '$'
   const companyName = headerSafe(account?.company_name ?? 'Our Company')
@@ -172,6 +161,10 @@ export async function POST(
       </div>
     </div>
   `
+
+  if (await overDailyEmailCap(supabaseAdmin, invoice.account_id)) {
+    return NextResponse.json({ error: 'This company has reached today\'s limit of invoice emails. Please try again tomorrow.' }, { status: 429 })
+  }
 
   // Double-click / second-tab guard: the same invoice to the same person within a minute is a duplicate. The claim
   // row below is written BEFORE the email goes out, so the window is milliseconds, not the whole PDF + Gmail round trip.

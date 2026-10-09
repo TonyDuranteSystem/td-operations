@@ -48,7 +48,7 @@ export async function GET(
   // Fetch line items
   const { data: items } = await supabaseAdmin
     .from('client_invoice_items')
-    .select('description, quantity, unit_price, amount, sort_order')
+    .select('description, quantity, unit_price, amount, tax_rate, sort_order')
     .eq('invoice_id', id)
     .order('sort_order')
 

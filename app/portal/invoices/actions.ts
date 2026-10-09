@@ -74,6 +74,7 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
         description: item.description,
         unit_price: item.unit_price,
         quantity: item.quantity,
+        tax_rate: item.tax_rate ?? undefined,
       })),
       currency: (invoiceData.currency || 'USD') as 'USD' | 'EUR',
       discount: invoiceData.discount,
@@ -105,7 +106,7 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
 
   const { data: current, error: readErr } = await supabaseAdmin
     .from('client_invoices')
-    .select('status, subtotal, discount, tax_total, amount_paid, currency')
+    .select('*')
     .eq('id', parsed.data.id)
     .eq('account_id', accountId)
     .maybeSingle()
@@ -141,45 +142,64 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
     let subtotal = round2(Number(current.subtotal) || 0)
     let taxTotal = round2(Number(current.tax_total) || 0)
     if (items) {
-      itemRows = items.map((item, i) => ({
-        invoice_id: id,
-        description: item.description,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        amount: round2(item.quantity * item.unit_price),
-        sort_order: i,
-      }))
+      itemRows = items.map((item, i) => {
+        const amount = round2(item.quantity * item.unit_price)
+        const taxRate = item.tax_rate ?? 0
+        return {
+          invoice_id: id,
+          description: item.description,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          amount,
+          tax_rate: taxRate,
+          tax_amount: round2(amount * taxRate),
+          sort_order: i,
+        }
+      })
       subtotal = round2(itemRows.reduce((sum, r) => sum + (r.amount as number), 0))
-      taxTotal = 0 // the edit form has no tax field; the replaced lines carry none
+      // Tax rides along with each line (the edit form hands the stored rate back), so editing never drops it.
+      taxTotal = round2(itemRows.reduce((sum, r) => sum + (r.tax_amount as number), 0))
     }
     const discount = round2(Math.min(Math.max(d.discount ?? (Number(current.discount) || 0), 0), subtotal))
     const total = round2(subtotal - discount + taxTotal)
-    const paid = round2(Number(current.amount_paid) || 0)
+    // A row that says Paid but never recorded the money (legacy) is treated as paid in full at its OLD total, so an
+    // edit neither re-opens it by accident nor leaves it Paid while owing money.
+    const recordedPaid = round2(Number(current.amount_paid) || 0)
+    const paid = current.status === 'Paid' && recordedPaid <= 0 ? round2(Number(current.total) || 0) : recordedPaid
     const due = round2(Math.max(total - paid, 0))
     Object.assign(updates, { subtotal, discount, tax_total: taxTotal, total, amount_due: due })
+    if (paid !== recordedPaid) updates.amount_paid = paid
     // Edits can move a settled invoice back to open (higher total) or settle it (lower total).
     if (paid > 0) updates.status = due <= 0 ? 'Paid' : 'Partial'
 
-    if (itemRows) {
-      const { data: oldItems } = await supabaseAdmin.from('client_invoice_items').select('*').eq('invoice_id', id)
-      const { error: delErr } = await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
-      if (delErr) throw new Error(`Could not replace the invoice lines: ${delErr.message}`)
-      const { error: insErr } = await supabaseAdmin.from('client_invoice_items').insert(itemRows as never)
-      if (insErr) {
-        // Put the old lines back so the invoice is never left empty.
-        if (oldItems && oldItems.length > 0) await supabaseAdmin.from('client_invoice_items').insert(oldItems as never)
-        throw new Error(`Could not save the invoice lines: ${insErr.message}`)
-      }
-    }
-
-    const { data: written, error } = await supabaseAdmin
+    // 1) The HEADER goes first, as a compare-and-swap on updated_at: if a payment, another tab or a double click
+    //    changed the invoice since we read it, this matches nothing and the edit is refused. Only the winner then
+    //    touches the lines, so two saves can never double them.
+    const previous: Record<string, unknown> = {}
+    for (const key of Object.keys(updates)) previous[key] = (current as Record<string, unknown>)[key] ?? null
+    let guarded = supabaseAdmin
       .from('client_invoices')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
       .eq('account_id', accountId)
-      .select('id')
+    guarded = current.updated_at ? guarded.eq('updated_at', current.updated_at) : guarded
+    const { data: written, error } = await guarded.select('id')
     if (error) throw new Error(error.message)
-    if (!written || written.length === 0) throw new Error('Invoice not found')
+    if (!written || written.length === 0) throw new Error('This invoice just changed. Please refresh the page and try again.')
+
+    // 2) Then the lines. If they cannot be saved, put the old lines AND the old header numbers back.
+    if (itemRows) {
+      const { data: oldItems } = await supabaseAdmin.from('client_invoice_items').select('*').eq('invoice_id', id)
+      const revert = async () => {
+        await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
+        if (oldItems && oldItems.length > 0) await supabaseAdmin.from('client_invoice_items').insert(oldItems as never)
+        await supabaseAdmin.from('client_invoices').update({ ...previous, updated_at: current.updated_at ?? new Date().toISOString() }).eq('id', id).eq('account_id', accountId)
+      }
+      const { error: delErr } = await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
+      if (delErr) { await revert(); throw new Error(`Could not replace the invoice lines: ${delErr.message}`) }
+      const { error: insErr } = await supabaseAdmin.from('client_invoice_items').insert(itemRows as never)
+      if (insErr) { await revert(); throw new Error(`Could not save the invoice lines: ${insErr.message}`) }
+    }
 
     const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
     logInvoiceAudit({

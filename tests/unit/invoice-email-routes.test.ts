@@ -39,7 +39,11 @@ function script(over: { invoice?: object; customer?: object | null; recent?: num
     if (c.table === 'accounts') return { data: { company_name: 'Acme "Società", S.r.l.' } }
     if (c.table === 'client_bank_accounts') return { data: bank }
     if (c.table === 'payment_links') return { data: over.link === undefined ? { url: 'https://buy.stripe.com/abc123' } : over.link ? { url: over.link } : null }
-    if (c.table === 'email_tracking' && c.ops.some(o => o.m === 'select')) return { count: over.recent ?? 0 }
+    if (c.table === 'email_tracking' && c.ops.some(o => o.m === 'select')) {
+      // what the log holds when a matching email went out recently (a company name with quotes + commas on purpose)
+      const co = 'Acme "Società", S.r.l.'
+      return { data: over.recent ? [`Invoice INV-000007 from ${co}`, `Reminder: Invoice INV-000007 from ${co}`, `Overdue: Invoice INV-000007 from ${co}`].map(subject => ({ subject })) : [] }
+    }
     return { data: [] }
   }
 }

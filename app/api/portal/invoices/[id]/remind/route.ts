@@ -3,8 +3,9 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 import { gmailPost } from '@/lib/gmail'
-import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed } from '@/lib/portal/invoice-email'
-import { validatePaymentLinkUrl } from '@/lib/portal/payment-link-rules'
+import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
+import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
+import { getCompanyEmail } from '@/lib/portal/queries'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
 import { APP_BASE_URL } from '@/lib/config'
 
@@ -62,17 +63,7 @@ export async function POST(
     .eq('id', invoice.account_id)
     .single()
 
-  const { data: defaultLink } = await supabaseAdmin
-    .from('payment_links')
-    .select('url')
-    .eq('account_id', invoice.account_id)
-    .eq('is_default', true)
-    .order('created_at')
-    .limit(1)
-    .maybeSingle()
-
-  const linkCheck = defaultLink?.url ? validatePaymentLinkUrl(defaultLink.url) : null
-  const paymentLinkUrl = linkCheck && 'url' in linkCheck ? linkCheck.url : null
+  const paymentLinkUrl = await getInvoicePaymentLinkUrl(invoice.account_id)
   const companyName = headerSafe(account?.company_name ?? 'Our Company')
   // What is STILL owed (a part-paid invoice must not ask for the full total again).
   const amountDue = Number(invoice.amount_due ?? (Number(invoice.total ?? 0) - Number(invoice.amount_paid ?? 0))) || 0
@@ -82,6 +73,10 @@ export async function POST(
   const subject = isOverdue
     ? `Overdue: Invoice ${invoice.invoice_number} from ${companyName}`
     : `Reminder: Invoice ${invoice.invoice_number} from ${companyName}`
+
+  if (await overDailyEmailCap(supabaseAdmin, invoice.account_id)) {
+    return NextResponse.json({ error: 'This company has reached today\'s limit of invoice emails. Please try again tomorrow.' }, { status: 429 })
+  }
 
   // Reminder throttle (state = the email log; no new column needed).
   const subjects = [`Overdue: Invoice ${invoice.invoice_number} from ${companyName}`, `Reminder: Invoice ${invoice.invoice_number} from ${companyName}`]
@@ -151,6 +146,7 @@ export async function POST(
         to: customer.email,
         subject,
         html: trackedHtml,
+        replyTo: (invoice.account_id ? await getCompanyEmail(invoice.account_id) : null) ?? undefined,
       })
       const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
       if (!claimErr) {

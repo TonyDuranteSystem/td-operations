@@ -90,7 +90,7 @@ describe('a caller who may not act is stopped before anything is read or written
 
 describe('updateInvoice — whitelist and server-side totals', () => {
   function invoiceRow(over: Record<string, unknown> = {}) {
-    return { status: 'Draft', subtotal: 100, discount: 0, tax_total: 0, amount_paid: 0, currency: 'USD', ...over }
+    return { status: 'Draft', subtotal: 100, discount: 0, tax_total: 0, total: 100, amount_paid: 0, currency: 'USD', ...over }
   }
   function script(row: Record<string, unknown>) {
     return (c: Call) => {
@@ -151,6 +151,22 @@ describe('updateInvoice — whitelist and server-side totals', () => {
     expect(p.status).toBe('Partial')
   })
 
+  it('a legacy Paid invoice with no recorded money stays Paid with nothing due after an edit that keeps the total', async () => {
+    fake = makeFakeDb(script(invoiceRow({ status: 'Paid', subtotal: 100, total: 100, amount_paid: 0 })))
+    await actions.updateInvoice({ id: ID, notes: 'x', items: [{ description: 'A', quantity: 1, unit_price: 100, amount: 100, sort_order: 0 }] })
+    const upd = fake.calls.find(c => c.table === 'client_invoices' && c.ops.some(o => o.m === 'update'))!
+    expect(opArgs(upd, 'update')![0]).toMatchObject({ amount_paid: 100, amount_due: 0, status: 'Paid' })
+  })
+
+  it('editing an invoice that carries tax keeps the tax (the form hands each line its stored rate back)', async () => {
+    fake = makeFakeDb(script(invoiceRow()))
+    await actions.updateInvoice({ id: ID, items: [{ description: 'A', quantity: 1, unit_price: 100, amount: 100, tax_rate: 0.22, sort_order: 0 }] })
+    const upd = fake.calls.find(c => c.table === 'client_invoices' && c.ops.some(o => o.m === 'update'))!
+    expect(opArgs(upd, 'update')![0]).toMatchObject({ subtotal: 100, tax_total: 22, total: 122, amount_due: 122 })
+    const ins = fake.calls.find(c => c.table === 'client_invoice_items' && c.ops.some(o => o.m === 'insert'))!
+    expect((opArgs(ins, 'insert')![0] as Array<Record<string, number>>)[0]).toMatchObject({ tax_rate: 0.22, tax_amount: 22 })
+  })
+
   it('refuses to edit a voided invoice', async () => {
     fake = makeFakeDb(script(invoiceRow({ status: 'Cancelled' })))
     const r = await actions.updateInvoice({ id: ID, notes: 'x' })
@@ -168,10 +184,11 @@ describe('updateInvoice — whitelist and server-side totals', () => {
     expect(fake.writes().length).toBe(0)
   })
 
-  it('puts the old lines back if saving the new ones fails', async () => {
+  it('puts the old lines AND the old totals back if saving the new lines fails', async () => {
     let inserts = 0
     fake = makeFakeDb(c => {
-      if (c.table === 'client_invoices' && c.ops.some(o => o.m === 'maybeSingle')) return { data: invoiceRow() }
+      if (c.table === 'client_invoices' && c.ops.some(o => o.m === 'maybeSingle')) return { data: { ...invoiceRow(), updated_at: '2026-10-01T00:00:00Z' } }
+      if (c.table === 'client_invoices' && c.ops.some(o => o.m === 'update')) return { data: [{ id: ID }] }
       if (c.table === 'client_invoice_items' && c.ops.some(o => o.m === 'insert')) { inserts++; return inserts === 1 ? { error: { message: 'boom' } } : { data: [] } }
       if (c.table === 'client_invoice_items' && c.ops.some(o => o.m === 'select')) return { data: [{ description: 'old', quantity: 1, unit_price: 1 }] }
       return { data: [] }
@@ -179,6 +196,21 @@ describe('updateInvoice — whitelist and server-side totals', () => {
     const r = await actions.updateInvoice({ id: ID, items: [{ description: 'A', quantity: 1, unit_price: 10, amount: 10, sort_order: 0 }] })
     expect(r).toMatchObject({ success: false })
     expect(inserts).toBe(2) // the new lines failed, the old ones were restored
+    const headerWrites = fake.calls.filter(c => c.table === 'client_invoices' && c.ops.some(o => o.m === 'update'))
+    expect(headerWrites.length).toBe(2) // the edit, then the revert to the previous numbers
+    expect((opArgs(headerWrites[1], 'update')![0] as Record<string, unknown>).total).toBe(100)
+  })
+
+  it('if the invoice changed since it was read (a payment, another tab), the edit is refused and the lines are untouched', async () => {
+    fake = makeFakeDb(c => {
+      if (c.table === 'client_invoices' && c.ops.some(o => o.m === 'maybeSingle')) return { data: { ...invoiceRow(), updated_at: '2026-10-01T00:00:00Z' } }
+      return { data: [] } // the guarded header update matches nothing
+    })
+    const r = await actions.updateInvoice({ id: ID, items: [{ description: 'A', quantity: 1, unit_price: 10, amount: 10, sort_order: 0 }] })
+    expect(r).toMatchObject({ success: false, error: expect.stringContaining('just changed') })
+    expect(fake.calls.some(c => c.table === 'client_invoice_items' && c.ops.some(o => ['insert', 'delete'].includes(o.m)))).toBe(false)
+    const header = fake.calls.find(c => c.table === 'client_invoices' && c.ops.some(o => o.m === 'update'))!
+    expect(hasOp(header, 'eq', 'updated_at', '2026-10-01T00:00:00Z')).toBe(true)
   })
 })
 

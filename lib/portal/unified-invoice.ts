@@ -514,7 +514,7 @@ export async function applyClientInvoicePayment(
   const next = resolveInvoiceStatusAfterPayment(total, alreadyPaid, pay)
   const date = paidDate && /^\d{4}-\d{2}-\d{2}$/.test(paidDate) ? paidDate : getOfficeDateString()
 
-  const { data: written, error: writeErr } = await supabaseAdmin
+  let write = supabaseAdmin
     .from('client_invoices')
     .update({
       status: next.newStatus,
@@ -524,7 +524,9 @@ export async function applyClientInvoicePayment(
       updated_at: new Date().toISOString(),
     })
     .eq('id', invoiceId)
-    .eq('amount_paid', inv.amount_paid ?? 0)
+  // Compare-and-swap on the amount we just read. A legacy row can hold NULL (never equal to 0 in SQL).
+  write = inv.amount_paid === null || inv.amount_paid === undefined ? write.is('amount_paid', null) : write.eq('amount_paid', inv.amount_paid)
+  const { data: written, error: writeErr } = await write
     .in('status', [...PAYABLE_STATUSES])
     .select('id')
   if (writeErr) throw new Error(`The payment could not be saved: ${writeErr.message}`)

@@ -19,6 +19,7 @@ interface LineItem {
   quantity: number
   unit_price: number
   amount: number
+  tax_rate?: number | null
 }
 
 interface Template {

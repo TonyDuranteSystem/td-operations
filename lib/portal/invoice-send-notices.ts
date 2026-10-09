@@ -24,7 +24,9 @@ export interface SendNoticeInput {
   hasPaymentLink: boolean
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+// Same rule as isSafeRecipient (lib/portal/invoice-email.ts, which cannot be imported into the browser): one plain
+// address, no spaces, commas, angle brackets or quotes, so what the banner accepts is what Send will accept.
+const EMAIL_RE = /^[^\s@<>",;:\\]+@[^\s@<>",;:\\]+\.[^\s@<>",;:\\]{2,}$/
 
 export function isPlausibleEmail(value: string | null | undefined): boolean {
   return EMAIL_RE.test((value ?? '').trim())

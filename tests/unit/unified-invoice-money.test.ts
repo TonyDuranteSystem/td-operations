@@ -95,6 +95,13 @@ describe('applyClientInvoicePayment', () => {
     expect(opArgs(upd, 'update')![0]).toMatchObject({ status: 'Partial', amount_paid: 300, amount_due: 700, paid_date: '2026-10-09' })
     expect(hasOp(upd, 'eq', 'amount_paid', 0)).toBe(true) // compare-and-swap on what we just read
   })
+  it('a legacy row with NULL money columns can still take a payment (NULL never equals 0 in SQL)', async () => {
+    dbWith({ total: 100, amount_paid: null, status: 'Sent' })
+    expect(await applyClientInvoicePayment('inv', 40, undefined)).toMatchObject({ ok: true, status: 'Partial' })
+    const upd = fake.calls.find(c => c.ops.some(o => o.m === 'update'))!
+    expect(hasOp(upd, 'is', 'amount_paid', null)).toBe(true)
+    expect(upd.ops.some(o => o.m === 'eq' && o.args[0] === 'amount_paid')).toBe(false)
+  })
   it('"rest" pays off exactly what is still owed', async () => {
     dbWith({ total: 1000, amount_paid: 300, status: 'Partial' })
     expect(await applyClientInvoicePayment('inv', 'rest', undefined)).toEqual({ ok: true, status: 'Paid', amountPaid: 1000, amountDue: 0 })

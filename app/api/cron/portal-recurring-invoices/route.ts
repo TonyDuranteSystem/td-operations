@@ -41,7 +41,9 @@ export async function GET(request: Request) {
     .not('recurring_next_date', 'is', null)
     .lte('recurring_next_date', today)
     .or(`recurring_end_date.is.null,recurring_end_date.gte.${today}`)
-    .in('status', ['Sent', 'Paid']) // Only a schedule the client has actually sent runs
+    // Only a schedule the client has actually SENT runs. Overdue and Partial are still sent invoices: an unpaid
+    // original must not silently stop the schedule.
+    .in('status', ['Sent', 'Overdue', 'Partial', 'Paid'])
     .limit(200)
 
   if (listErr) {
@@ -71,6 +73,16 @@ export async function GET(request: Request) {
         if (due) dueDate = due
       }
 
+      // A cycle that is more than a week late (the original was sent long after it was written, or the job was down)
+      // is dated today instead of the past, and the cycles in between are skipped rather than replayed one per day.
+      const lateBy = daysBetween(cycleDate, today) ?? 0
+      const issueOn = lateBy > 7 ? today : cycleDate
+      if (lateBy > 7 && dueDate) {
+        const gap = daysBetween(template.issue_date, template.due_date)
+        const due = gap !== null ? addDaysYmd(issueOn, gap) : null
+        if (due) dueDate = due
+      }
+
       await createUnifiedInvoice({
         account_id: template.account_id || undefined,
         contact_id: template.contact_id || undefined,
@@ -84,7 +96,7 @@ export async function GET(request: Request) {
         currency: (template.currency || 'USD') as 'USD' | 'EUR',
         discount: Number(template.discount) || 0,
         bank_account_id: template.bank_account_id || null,
-        issue_date: cycleDate,
+        issue_date: issueOn,
         due_date: dueDate,
         notes: template.notes || undefined,
         message: template.message || undefined,
@@ -95,6 +107,9 @@ export async function GET(request: Request) {
       // Advance the schedule. Anchored on the ORIGINAL issue day so Jan 31 monthly goes Feb 28, Mar 31 (no drift).
       const anchor = template.issue_date ? Number(String(template.issue_date).slice(8, 10)) : undefined
       let next = nextRecurringDate(cycleDate, frequency, anchor)
+      if (!next) throw new Error('could not work out the next date')
+      // Jump past the cycles that are already behind us (bounded, so a bad date can never loop forever).
+      for (let guard = 0; guard < 120 && next && next <= today; guard++) next = nextRecurringDate(next, frequency, anchor)
       if (!next) throw new Error('could not work out the next date')
       if (template.recurring_end_date && next > template.recurring_end_date) next = null as unknown as string
 
