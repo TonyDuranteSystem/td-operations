@@ -1,0 +1,17 @@
+{
+  "id": "/talk",
+  "name": "TD Talk",
+  "short_name": "TD Talk",
+  "description": "Tony Durante LLC - team chat",
+  "start_url": "/talk",
+  "scope": "/talk",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#BE1E2D",
+  "icons": [
+    { "src": "/talk/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/talk/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/talk/icons/icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/talk/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

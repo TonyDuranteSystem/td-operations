@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { safeTalkNext, withTalkNext } from '@/lib/talk/paths'
 
 // The Supabase browser client is created ON DEMAND (inside effects and
 // handlers), NEVER in the render path: this page is statically prerendered at
@@ -41,7 +42,7 @@ export default function MfaVerifyPage() {
     // sent 'enroll'; being here without one means a race — go enroll.
     createClient().auth.mfa.listFactors().then(({ data }) => {
       const verified = data?.totp?.find(f => (f as { status?: string }).status === 'verified') ?? data?.totp?.[0]
-      if (!verified) { window.location.assign('/mfa/enroll'); return }
+      if (!verified) { window.location.assign(withTalkNext('/mfa/enroll')); return }
       factorIdRef.current = verified.id
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -66,7 +67,7 @@ export default function MfaVerifyPage() {
         // Best-effort: device trust is a convenience; verification succeeded.
         await fetch('/api/mfa/remember', { method: 'POST' }).catch(() => {})
       }
-      window.location.assign('/')
+      window.location.assign(safeTalkNext(new URLSearchParams(window.location.search).get('next')) ?? '/')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verification failed')
       setBusy(false)

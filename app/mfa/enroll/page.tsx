@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ShieldCheck, Copy, Download, Loader2, Smartphone } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { safeTalkNext } from '@/lib/talk/paths'
 
 type Step = 'loading' | 'intro' | 'scan' | 'codes' | 'blocked'
 
@@ -35,6 +36,11 @@ type Step = 'loading' | 'intro' | 'scan' | 'codes' | 'blocked'
 // every preview build of the repo (2026-08-07). Same pattern as app/login.
 
 export default function MfaEnrollPage() {
+  // TD Talk (dev job c1e326dd): after enrolling, go back to TD Talk if that is where the person was heading.
+  const [continueHref, setContinueHref] = useState('/')
+  useEffect(() => {
+    setContinueHref(safeTalkNext(new URLSearchParams(window.location.search).get('next')) ?? '/')
+  }, [])
   const [step, setStep] = useState<Step>('loading')
   const [factorId, setFactorId] = useState<string | null>(null)
   const [qrSvg, setQrSvg] = useState<string | null>(null)
@@ -159,7 +165,7 @@ export default function MfaEnrollPage() {
               at the bottom of the sidebar and use <strong>Replace</strong> —
               it removes the old one first.
             </p>
-            <a href="/" className="block text-center mt-4 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg">
+            <a href={continueHref} className="block text-center mt-4 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg">
               Go to the dashboard
             </a>
           </>
@@ -254,7 +260,7 @@ export default function MfaEnrollPage() {
               <Download className="h-4 w-4 inline mr-1" />
               Download codes
             </button>
-            <a href="/" className="block text-center mt-3 px-4 py-2.5 bg-red-600 text-white text-sm font-semibold rounded-lg">
+            <a href={continueHref} className="block text-center mt-3 px-4 py-2.5 bg-red-600 text-white text-sm font-semibold rounded-lg">
               Done — go to dashboard
             </a>
           </>

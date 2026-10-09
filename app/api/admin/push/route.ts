@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { normalizeApp } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isStaffUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
@@ -36,6 +37,8 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json()
   const { subscription } = body
+  // Which installed app this subscription belongs to: 'talk' = TD Talk, anything else = the CRM app (null).
+  const app = normalizeApp(body.app)
 
   if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
     return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 })
@@ -56,6 +59,10 @@ export async function POST(request: NextRequest) {
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,
       auth_key: subscription.keys.auth,
+      // Only written for a non-CRM app. The CRM app's own request therefore never touches the new column — it keeps
+      // working even if this code is ever live before the migration (a rejected insert here, right after the delete
+      // above, would have silently dropped the CRM app's push subscription — council finding, 2026-10-09).
+      ...(app ? { app } : {}),
     })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

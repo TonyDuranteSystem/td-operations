@@ -1,4 +1,5 @@
 import webpush from 'web-push'
+import { routeAdminSubscriptions } from '@/lib/push/route-subscriptions'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 // Status codes that mean the push subscription is permanently dead and
@@ -17,7 +18,11 @@ type StoredSubscription = {
   auth_key: string
 }
 
-type PushPayload = { title: string; body: string; url?: string; tag?: string }
+/**
+ * `dm: true` marks a DIRECT MESSAGE notification. It is a routing hint for sendPushToAdminUsers only (TD Talk, the
+ * standalone team chat app, receives direct messages and nothing else) and is never sent to the browser.
+ */
+type PushPayload = { title: string; body: string; url?: string; tag?: string; dm?: boolean }
 
 function getVapidKeys() {
   const publicKey = process.env.VAPID_PUBLIC_KEY
@@ -173,17 +178,27 @@ export async function sendPushToAdminUsers(
     return { sent: 0, failed: 0 }
   }
 
+  // select('*'): the routing needs `user_id` and `app` (TD Talk marker). Reading everything keeps this working in the
+  // moment between a deploy and the column existing — a missing `app` is simply "the CRM app".
   const { data: subscriptions } = await supabaseAdmin
     .from('admin_push_subscriptions')
-    .select('id, endpoint, p256dh, auth_key')
+    .select('*')
     .in('user_id', ids)
 
   if (!subscriptions?.length) return { sent: 0, failed: 0 }
 
+  // TD Talk gets direct messages only, and a person with TD Talk gets their DMs there instead of the CRM app.
+  const { dm, ...wire } = payload
+  const routed = routeAdminSubscriptions(
+    subscriptions as unknown as Array<StoredSubscription & { user_id: string; app?: string | null }>,
+    dm === true,
+  )
+  if (routed.length === 0) return { sent: 0, failed: 0 }
+
   return deliverPushBatch(
     'admin_push_subscriptions',
-    subscriptions,
-    payload,
+    routed,
+    wire,
     `admin-users:${ids.length}`,
   )
 }

@@ -183,8 +183,14 @@ export default function TeamWorkspacePage() {
       setCurrentUserId(d.current_user_id)
       setIsAdmin(d.is_admin)
       if (selectFirst && !selectedIdRef.current) {
+        // A deep link (a tapped notification, a copied link) wins over "General": selecting General first
+        // loaded it — and loading a thread MARKS IT READ — before the link was applied, so every launch from
+        // a notification quietly cleared General's unread count (bug hunter, 2026-10-09).
+        const wanted = new URLSearchParams(window.location.search).get('thread')
+        const deep = wanted ? d.threads.find((t: TeamThread) => t.id === wanted) : null
         const general = d.threads.find((t: TeamThread) => t.thread_type === 'general')
-        if (general) setSelectedId(general.id)
+        const first = deep ?? general
+        if (first) setSelectedId(first.id)
       }
     } catch {
       toast.error('Failed to load team workspace')

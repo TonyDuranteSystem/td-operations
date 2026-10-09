@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
+import { isTalkPath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -17,7 +18,7 @@ import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/te
  *
  * This is what makes the CRM feel like a live app instead of a static website.
  */
-export function RealtimeNotifications() {
+export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev job c1e326dd): direct-message sounds and pop-ups ONLY — no client-message, business-event, channel or topic alerts. */ teamOnly?: boolean } = {}) {
   const pathname = usePathname()
   const router = useRouter()
   const pathnameRef = useRef(pathname)
@@ -135,7 +136,7 @@ export function RealtimeNotifications() {
     const supabase = createClient()
 
     // ─── Listen for new client portal messages ───────────
-    const portalChannel = supabase
+    const portalChannel = teamOnly ? null : supabase
       .channel('global-portal-messages')
       .on(
         'postgres_changes',
@@ -221,7 +222,14 @@ export function RealtimeNotifications() {
       // at all (the floating chat also stays quiet there). He asked for the
       // pop-up "wherever I am", so only the team-chat page is silent.
       const p = pathnameRef.current
-      if (p === '/team-chat' || p.startsWith('/team-chat/')) return
+      if (isTeamChatPath(p)) return
+      // TD Talk (/talk) IS the chat — but, like WhatsApp, only the chat you are LOOKING AT is silent: a message
+      // in another chat (or while you are on the chat list) still sounds and pops up. The open chat is in the
+      // address (?thread=…), kept there by the page itself (use-selection-history).
+      if (isTalkPath(p)) {
+        const viewing = new URLSearchParams(window.location.search).get('thread')
+        if (viewing && viewing === row?.thread_id) return
+      }
 
       // Don't notify for own messages.
       if (row?.sender_id && row.sender_id === currentUserIdRef.current) return
@@ -259,14 +267,18 @@ export function RealtimeNotifications() {
         && !!threadId && myTopicThreadIdsRef.current.has(threadId)
       const channelLabel = threadId ? myChannelThreadIdsRef.current.get(threadId) : undefined
       if (!mentionsMe && !isMyDm && !isMyConversation && !isMyTopic && !channelLabel) return
+      // TD Talk is a chat between people: only a direct message pops up there (never a channel post, topic or
+      // client conversation — those belong to the CRM's Team Workspace).
+      if (teamOnly && !isMyDm) return
 
       const senderName = row?.sender_name || 'Team member'
       // Deep-link INTO the thread when the message belongs to one, so the click
       // lands on the bug rather than the channel's stream.
       const rootId = row?.root_id as string | null | undefined
+      const base = teamChatBase(pathnameRef.current)
       const url = threadId
-        ? `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
-        : '/team-chat'
+        ? `${base}?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
+        : base
 
       playSound()
 
@@ -322,7 +334,7 @@ export function RealtimeNotifications() {
     // No server-side filter — client-side filtering for business events only.
     // Volume is ~60-300/day total, client silently ignores non-matching types.
     const NOTIFY_TYPES = new Set(['payment_confirmed', 'ss4_signed', 'lease_signed', 'oa_signed', 'oa_partial_signed', 'form_submitted', 'form_completed'])
-    const actionLogChannel = supabase
+    const actionLogChannel = teamOnly ? null : supabase
       .channel('global-action-log')
       .on(
         'postgres_changes',
@@ -379,11 +391,11 @@ export function RealtimeNotifications() {
       .subscribe()
 
     return () => {
-      supabase.removeChannel(portalChannel)
+      if (portalChannel) supabase.removeChannel(portalChannel)
       supabase.removeChannel(internalChannel)
-      supabase.removeChannel(actionLogChannel)
+      if (actionLogChannel) supabase.removeChannel(actionLogChannel)
     }
-  }, [playSound, router])
+  }, [playSound, router, teamOnly])
 
   // This component renders nothing — it's a listener only
   return null

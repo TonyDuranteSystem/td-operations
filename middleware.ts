@@ -1,4 +1,5 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { isTalkPath } from '@/lib/talk/paths'
 import { NextResponse, type NextRequest } from 'next/server'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 import { isStaffAuthRole } from '@/lib/team/workspace'
@@ -167,12 +168,16 @@ const PUBLIC_PREFIXES = [
   // PWA manifests — must be public for Chrome installability
   '/manifest.webmanifest',
   '/portal/manifest.webmanifest',
+  // TD Talk (standalone Team Chat app, dev job c1e326dd). ONLY the manifest and the worker are public — the app
+  // itself (/talk) is NEVER public: it is a staff-only page. Never add a bare '/talk' prefix here.
+  '/talk/manifest.webmanifest',
   // Service workers — the browser refetches these on its own schedule (and
   // use-sw-update polls reg.update() every 60s). Without a live session
   // cookie the fetch would 307 to /login and the update silently fails,
   // leaving installed PWAs on a stale worker. Push-only scripts, no secrets.
   '/dashboard-sw.js',
   '/portal-sw.js',
+  '/talk-sw.js',
   // Offline fallback page — precached by the service workers at install time
   // (an authenticated-only page could not be cached by a fresh SW).
   '/offline',
@@ -302,6 +307,10 @@ export async function middleware(request: NextRequest) {
       url.pathname = '/portal/login'
     } else {
       url.pathname = '/login'
+      // TD Talk (dev job c1e326dd): remember where the person was going, so an expired session on the home-screen
+      // app lands back in TD Talk after login instead of in the CRM. Only /talk addresses are ever carried, and
+      // the login page re-validates the value (lib/talk/paths.ts::safeTalkNext), so this cannot become an open redirect.
+      if (isTalkPath(pathname)) url.search = `?next=${encodeURIComponent(pathname + request.nextUrl.search)}`
     }
     return NextResponse.redirect(url)
   }
@@ -409,6 +418,8 @@ export async function middleware(request: NextRequest) {
         const url = request.nextUrl.clone()
         url.pathname = verdict === 'enroll' ? '/mfa/enroll' : '/mfa/verify'
         url.search = ''
+        // Same for the two-step check: carry a TD Talk destination through it (see the login redirect above).
+        if (isTalkPath(pathname)) url.search = `?next=${encodeURIComponent(pathname + request.nextUrl.search)}`
         return NextResponse.redirect(url)
       }
     }

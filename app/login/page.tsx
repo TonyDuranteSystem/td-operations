@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { safeTalkNext } from '@/lib/talk/paths'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -27,7 +28,10 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/')
+    // TD Talk (dev job c1e326dd): go back to where the person was heading — but ONLY into TD Talk (safeTalkNext
+    // refuses everything else, so this cannot be turned into a redirect to another page or site).
+    const next = safeTalkNext(new URLSearchParams(window.location.search).get('next'))
+    router.push(next ?? '/')
     router.refresh()
   }
 

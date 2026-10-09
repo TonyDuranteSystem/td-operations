@@ -320,6 +320,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
         body: preview,
         url,
         tag: `team-mention-${target.thread_id}`,
+        dm: target.thread_type === 'dm', // TD Talk receives direct messages only
       })
     } else if (target.thread_type === 'dm') {
       // A DM goes to the ONE other participant. It used to broadcast, so a note
@@ -330,7 +331,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
       // once a dictated DM could be keyed to the real acting user.
       const otherId = otherDmParty(target.dm_key, [CLAUDE_SENDER_UUID, actingUserId])
       if (otherId) {
-        await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag })
+        await sendPushToAdminUsers([otherId], { title: CLAUDE_SENDER_NAME, body: preview, url, tag, dm: true })
       }
     } else if (target.thread_type === 'channel' || target.thread_type === 'general') {
       // SAME silence rule as the human send route — Claude answering in the
