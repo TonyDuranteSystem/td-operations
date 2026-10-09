@@ -2,18 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { ChevronLeft, Loader2, Plus, Search, X } from 'lucide-react'
+import { ChevronLeft, Loader2, Plus, Search, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  directMessages, dmName, initials, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
+  chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, seenByAll, seenState, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
   type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
 import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
 import { TalkMessageSheet } from '@/components/talk/talk-sheet'
+import { TalkGroupInfo, TalkNewGroup } from '@/components/talk/talk-group-sheets'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
 const POLL_MS = 10_000
@@ -70,7 +71,13 @@ export function TalkApp() {
   const [searchQ, setSearchQ] = useState('')
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const messagesRef = useRef<TalkMessage[]>([])
-  const [peerTyping, setPeerTyping] = useState<TypingKind | null>(null)
+  const [peerTyping, setPeerTyping] = useState<{ userId: string; kind: TypingKind } | null>(null)
+  // groups: who is in the open group, how far each member has read, and the New-group / Group-info screens
+  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([])
+  const [memberReads, setMemberReads] = useState<Record<string, string>>({})
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false)
+  const [groupBusy, setGroupBusy] = useState(false)
   const typingChannelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
   const typingSentAtRef = useRef<number | null>(null)
 
@@ -83,6 +90,7 @@ export function TalkApp() {
   threadsRef.current = threads
   messagesRef.current = messages
 
+  const chats = useMemo(() => chatThreads(threads), [threads])
   const dms = useMemo(() => directMessages(threads), [threads])
 
   const loadThreads = useCallback(async (): Promise<TalkThread[] | null> => {
@@ -120,6 +128,12 @@ export function TalkApp() {
         return merged
       })
       setPeerReadAt(d.peer_read_at ?? null)
+      if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
+      if (Array.isArray(d.member_reads)) {
+        const map: Record<string, string> = {}
+        for (const r of d.member_reads as Array<{ user_id: string; last_read_at: string }>) map[r.user_id] = r.last_read_at
+        setMemberReads(map)
+      }
     } catch (e) {
       if (!opts.silent) toast.error(e instanceof Error ? e.message : 'Could not load this chat.')
     } finally {
@@ -132,6 +146,7 @@ export function TalkApp() {
     setMessages([])
     setPeerReadAt(null)
     setSheetMsg(null); setMode(null); setSearchOpen(false); setSearchQ(''); setHighlightId(null)
+    setGroupInfoOpen(false); setNewGroupOpen(false); setGroupMemberIds([]); setMemberReads({})
     writeLastOpened(id)
     try {
       // The open chat lives in the address (?thread=…): a refresh reopens it, and the pop-up rule ("silent only for
@@ -147,8 +162,8 @@ export function TalkApp() {
       const list = await loadThreads()
       if (cancelled || !list) { setBooting(false); return }
       initialisedRef.current = true
-      const chats = directMessages(list)
-      const first = startThreadId(chats, { wanted: new URLSearchParams(window.location.search).get('thread'), lastOpened: readLastOpened() })
+      const all = chatThreads(list)
+      const first = startThreadId(all, { wanted: new URLSearchParams(window.location.search).get('thread'), lastOpened: readLastOpened() })
       if (first) select(first)
       setBooting(false)
     })()
@@ -158,9 +173,9 @@ export function TalkApp() {
   // a tapped notification (or any link) while the app is open: go to that chat
   useEffect(() => {
     if (!initialisedRef.current || !urlThread || urlThread === selectedIdRef.current) return
-    if (threadsRef.current.some(t => t.id === urlThread && t.thread_type === 'dm')) { select(urlThread); return }
+    if (chatThreads(threadsRef.current).some(t => t.id === urlThread)) { select(urlThread); return }
     void loadThreads().then(list => {
-      if (list && directMessages(list).some(t => t.id === urlThread)) select(urlThread)
+      if (list && chatThreads(list).some(t => t.id === urlThread)) select(urlThread)
     })
   }, [urlThread, loadThreads, select])
 
@@ -196,6 +211,8 @@ export function TalkApp() {
         const row = payload.new as { thread_id?: string; user_id?: string; last_read_at?: string } | undefined
         if (row?.thread_id === selectedIdRef.current && row.user_id && row.user_id !== meIdRef.current && row.last_read_at) {
           setPeerReadAt(row.last_read_at)
+          const at = row.last_read_at
+          setMemberReads(prev => ({ ...prev, [row.user_id as string]: at }))
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_threads' }, refreshList)
@@ -230,7 +247,7 @@ export function TalkApp() {
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
         const sig = parseTypingSignal(payload, meIdRef.current)
         if (!sig) return
-        setPeerTyping(sig.kind)
+        setPeerTyping({ userId: sig.userId, kind: sig.kind })
         if (expire) clearTimeout(expire)
         expire = setTimeout(() => setPeerTyping(null), TYPING_EXPIRES_MS)
       })
@@ -343,6 +360,75 @@ export function TalkApp() {
     }, 120)
   }, [])
 
+  // ── groups ──
+  const createNewGroup = useCallback(async (name: string, memberIds: string[]) => {
+    setGroupBusy(true)
+    try {
+      const r = await fetch('/api/team/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, member_ids: memberIds }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok || !d.thread?.id) throw new Error(d.error || 'Could not create the group.')
+      await loadThreads()
+      select(d.thread.id)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not create the group.')
+    } finally {
+      setGroupBusy(false)
+    }
+  }, [loadThreads, select])
+
+  const addToGroup = useCallback(async (userIds: string[]) => {
+    const id = selectedIdRef.current
+    if (!id) return
+    setGroupBusy(true)
+    try {
+      const r = await fetch(`/api/team/groups/${id}/members`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_ids: userIds }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not add them.')
+      if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
+      await loadThreads()
+      setGroupInfoOpen(false)
+      toast.success('Added to the group.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not add them.')
+    } finally {
+      setGroupBusy(false)
+    }
+  }, [loadThreads])
+
+  const renameThisGroup = useCallback(async (name: string) => {
+    const id = selectedIdRef.current
+    if (!id) return
+    setGroupBusy(true)
+    try {
+      const r = await fetch(`/api/team/groups/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not rename the group.')
+      await loadThreads()
+      setGroupInfoOpen(false)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not rename the group.')
+    } finally {
+      setGroupBusy(false)
+    }
+  }, [loadThreads])
+
+  const leaveThisGroup = useCallback(async () => {
+    const id = selectedIdRef.current
+    if (!id) return
+    setGroupBusy(true)
+    try {
+      const r = await fetch(`/api/team/groups/${id}/members`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not leave the group.')
+      select(null)
+      await loadThreads()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not leave the group.')
+    } finally {
+      setGroupBusy(false)
+    }
+  }, [loadThreads, select])
+
   const startChat = useCallback(async (userId: string) => {
     setStartingWith(userId)
     try {
@@ -358,10 +444,11 @@ export function TalkApp() {
     }
   }, [loadThreads, select])
 
-  const selected = dms.find(t => t.id === selectedId) ?? null
+  const selected = chats.find(t => t.id === selectedId) ?? null
   const strangers = useMemo(() => membersWithoutChat(dms, meId, members), [dms, meId, members])
-  const canGoBack = dms.length > 1 || strangers.length > 0
-  const otherUnread = dms.filter(t => t.id !== selectedId).reduce((n, t) => n + (t.unread_count ?? 0), 0)
+  // always reachable now: the list is also where you start a group
+  const canGoBack = true
+  const otherUnread = chats.filter(t => t.id !== selectedId).reduce((n, t) => n + (t.unread_count ?? 0), 0)
 
   if (booting) {
     return <div className="flex h-full items-center justify-center bg-white"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
@@ -375,23 +462,36 @@ export function TalkApp() {
     )
   }
 
+  // ── New group ──
+  if (newGroupOpen && meId) {
+    return <TalkNewGroup members={members} meId={meId} creating={groupBusy} onBack={() => setNewGroupOpen(false)} onCreate={(name, ids) => void createNewGroup(name, ids)} />
+  }
+
   // ── People (the short list) ──
   if (!selected) {
     return (
       <div className="flex h-full flex-col bg-white" data-testid="talk-people">
-        <div className="shrink-0 border-b border-zinc-200 px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3">
           <h1 className="text-lg font-semibold text-zinc-900">TD Talk</h1>
+          <button type="button" onClick={() => setNewGroupOpen(true)} data-testid="talk-new-group" className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-800 active:bg-zinc-100">
+            <Users className="h-4 w-4" /> New group
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {dms.map(t => {
-            const name = dmName(t, meId, members)
-            const other = otherUserId(t.dm_key, meId) ?? t.id
+          {chats.map(t => {
+            const group = isGroupThread(t)
+            const name = chatName(t, meId, members)
+            const other = group ? t.id : (otherUserId(t.dm_key, meId) ?? t.id)
             return (
-              <button key={t.id} type="button" onClick={() => select(t.id)} className="flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50" data-testid="talk-person">
+              <button key={t.id} type="button" onClick={() => select(t.id)} className="flex w-full items-center gap-3 border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50" data-testid={group ? 'talk-group-row' : 'talk-person'}>
                 <Avatar name={name} id={other} size="h-12 w-12 text-base" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[16px] font-medium text-zinc-900">{name}</span>
-                  {t.last_activity_at && <span className="block text-xs text-zinc-400">{dayLabel(t.last_activity_at) === 'Today' ? timeLabel(t.last_activity_at) : dayLabel(t.last_activity_at)}</span>}
+                  <span className="block truncate text-xs text-zinc-400">
+                    {group ? `${(t.members ?? []).length} people` : null}
+                    {group && t.last_activity_at ? ' · ' : null}
+                    {t.last_activity_at ? (dayLabel(t.last_activity_at) === 'Today' ? timeLabel(t.last_activity_at) : dayLabel(t.last_activity_at)) : null}
+                  </span>
                 </span>
                 {(t.unread_count ?? 0) > 0 && (
                   <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-[#BE1E2D] px-1.5 text-xs font-semibold text-white">{t.unread_count}</span>
@@ -411,7 +511,7 @@ export function TalkApp() {
               ))}
             </div>
           )}
-          {dms.length === 0 && strangers.length === 0 && (
+          {chats.length === 0 && strangers.length === 0 && (
             <p className="px-6 py-12 text-center text-sm text-zinc-400">No teammates to chat with yet.</p>
           )}
         </div>
@@ -420,8 +520,15 @@ export function TalkApp() {
   }
 
   // ── The conversation ──
-  const name = dmName(selected, meId, members)
-  const other = otherUserId(selected.dm_key, meId) ?? selected.id
+  const group = isGroupThread(selected)
+  const name = chatName(selected, meId, members)
+  const other = group ? selected.id : (otherUserId(selected.dm_key, meId) ?? selected.id)
+  const memberIdsNow = group ? (groupMemberIds.length > 0 ? groupMemberIds : (selected.members ?? [])) : []
+  const typingWho = group && peerTyping ? members.find(m => m.id === peerTyping.userId)?.name ?? 'Someone' : null
+  const isSeen = (m: TalkMessage): boolean => {
+    if (!group) return seenState(m, peerReadAt) === 'seen'
+    return seenByAll(m, memberIdsNow.filter(id => id !== meId), memberReads)
+  }
   return (
     <div className="flex h-full flex-col bg-white" data-testid="talk-chat">
       <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-2 py-2">
@@ -431,11 +538,15 @@ export function TalkApp() {
             {otherUnread > 0 && <span className="absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#BE1E2D] px-1 text-[10px] font-semibold text-white">{otherUnread}</span>}
           </button>
         ) : <span className="w-2" />}
-        <Avatar name={name} id={other} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[17px] font-semibold leading-tight text-zinc-900" data-testid="talk-title">{name}</span>
-          {peerTyping && <span className="block truncate text-xs text-[#BE1E2D]" data-testid="talk-typing">{typingLabel(peerTyping)}</span>}
-        </span>
+        <button type="button" disabled={!group} onClick={() => setGroupInfoOpen(true)} data-testid="talk-header" className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-default">
+          <Avatar name={name} id={other} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[17px] font-semibold leading-tight text-zinc-900" data-testid="talk-title">{name}</span>
+            {peerTyping
+              ? <span className="block truncate text-xs text-[#BE1E2D]" data-testid="talk-typing">{typingLabel(peerTyping.kind, typingWho)}</span>
+              : group && <span className="block truncate text-xs text-zinc-400" data-testid="talk-members">{groupMemberNames(memberIdsNow, meId, members)}</span>}
+          </span>
+        </button>
         <button type="button" onClick={() => { setSearchOpen(o => !o); setSearchQ('') }} aria-label="Search this chat" data-testid="talk-search-toggle" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-600 active:bg-zinc-100">
           {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
         </button>
@@ -466,7 +577,7 @@ export function TalkApp() {
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={selected.id} messages={messages} meId={meId} peerReadAt={peerReadAt} loading={loadingMsgs}
+          threadId={selected.id} messages={messages} meId={meId} isSeen={isSeen} showSender={group} loading={loadingMsgs}
           highlightId={highlightId}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
@@ -475,6 +586,15 @@ export function TalkApp() {
         />
       )}
       {!searchOpen && <TalkComposer key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping} />}
+      {groupInfoOpen && group && meId && (
+        <TalkGroupInfo
+          name={name} memberIds={memberIdsNow} members={members} meId={meId} busy={groupBusy}
+          onClose={() => setGroupInfoOpen(false)}
+          onAdd={ids => void addToGroup(ids)}
+          onRename={n => void renameThisGroup(n)}
+          onLeave={() => void leaveThisGroup()}
+        />
+      )}
       {sheetMsg && meId && (
         <TalkMessageSheet
           message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg}

@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { assertGroupAccess } from '@/lib/team/groups'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, getUserDisplayName } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
@@ -22,6 +23,16 @@ export async function POST(
   const emoji: string = (body.emoji ?? '').toString().trim()
   if (!emoji || emoji.length > 16) {
     return NextResponse.json({ error: 'A valid emoji is required.' }, { status: 400 })
+  }
+
+  // A reaction in a GROUP is for its members only (dev job c1e326dd) — the message id comes from the browser.
+  {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: target } = await (supabaseAdmin as any).from('internal_messages').select('thread_id').eq('id', msgId).maybeSingle()
+    if (target?.thread_id) {
+      const access = await assertGroupAccess(target.thread_id, user.id)
+      if (access.kind === 'denied') return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

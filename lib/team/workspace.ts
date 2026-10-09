@@ -257,7 +257,7 @@ export interface TeamThreadCountRow {
 export function countTeamNotifications(threads: TeamThreadCountRow[] | null | undefined): number {
   let n = 0
   for (const t of threads ?? []) {
-    if (t.thread_type === 'dm') n += Number(t.unread_count) || 0
+    if (t.thread_type === 'dm' || t.thread_type === 'group') n += Number(t.unread_count) || 0 // a group counts like a DM
     else if (t.thread_type === 'discussion' && t.is_participant) n += Number(t.unread_count) || 0
     else if (t.thread_type === 'channel') n += Number(t.unread_count) || 0
     else n += Number(t.mention_count) || 0
@@ -277,7 +277,7 @@ export interface TeamNotifThreadRow {
 
 export interface TeamNotifItem {
   id: string
-  kind: 'dm' | 'mention' | 'conversation' | 'thread' | 'channel'
+  kind: 'dm' | 'group' | 'mention' | 'conversation' | 'thread' | 'channel'
   /** Display label: the other person (DM), or the channel/conversation. */
   label: string
   count: number
@@ -304,6 +304,10 @@ export function buildTeamNotifications(
       if (unread <= 0) continue
       const otherId = (t.dm_key ?? '').split(':').find(id => id && id !== userId) ?? ''
       items.push({ id: t.id, kind: 'dm', label: nameFor(otherId) || 'Direct message', count: unread, url: `/team-chat?thread=${t.id}` })
+    } else if (t.thread_type === 'group') {
+      const unread = Number(t.unread_count) || 0
+      if (unread <= 0) continue
+      items.push({ id: t.id, kind: 'group', label: t.label || 'Group', count: unread, url: `/team-chat?thread=${t.id}` })
     } else if (t.thread_type === 'discussion' && t.is_participant) {
       // A conversation you're part of: unread already includes any mentions.
       const unread = Number(t.unread_count) || 0
