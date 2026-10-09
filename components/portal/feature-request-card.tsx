@@ -5,16 +5,16 @@ import { Lightbulb, Loader2, Send } from 'lucide-react'
 import { toast } from 'sonner'
 
 /**
- * "Do you want a new feature? Write us." (Antonio 2026-10-08). The idea goes to the Tony Durante team as a normal
- * message in the client's own portal chat (the place staff already watch and answer), clearly prefixed so it is easy
- * to spot. Nothing new for staff to monitor; the client can see what they sent and any reply in their chat.
+ * "Do you have an idea? Share it with us." (Antonio 2026-10-08). The idea is saved for the Tony Durante team and shows
+ * up in Portal Chats, in the client's "Idea request" tab (blue dot while nobody has handled it). It does NOT go into
+ * the client's chat.
  */
 export function FeatureRequestCard({
   accountId,
   labels,
 }: {
   accountId: string
-  labels: { title: string; body: string; placeholder: string; send: string; sent: string; prefix: string; tooShort: string }
+  labels: { title: string; body: string; placeholder: string; send: string; sent: string; tooShort: string }
 }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -26,14 +26,10 @@ export function FeatureRequestCard({
     if (idea.length < 5) { toast.error(labels.tooShort); return }
     setSending(true)
     try {
-      const res = await fetch('/api/portal/chat', {
+      const res = await fetch('/api/portal/feature-ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_id: accountId,
-          sender_context: 'company',
-          message: `${labels.prefix}\n${idea}`,
-        }),
+        body: JSON.stringify({ account_id: accountId, idea }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))

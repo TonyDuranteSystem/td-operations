@@ -12,7 +12,7 @@ const KEYS = [
   'invoices.setupChecklist', 'invoices.setup.logo', 'invoices.setup.payment', 'invoices.setup.customer',
   'nav.invoicesHub', 'nav.hint.invoicesHub', 'invoices.hubSubtitle',
   'tour.invoicing.introTitle', 'tour.invoicing.introBody', 'tour.start', 'tour.notNow', 'tour.dontShow', 'tour.takeTour', 'tour.next', 'tour.back', 'tour.skip', 'tour.done',
-  'tour.invoicing.feature.title', 'tour.invoicing.feature.body', 'invoices.feature.title', 'invoices.feature.body', 'invoices.feature.placeholder', 'invoices.feature.send', 'invoices.feature.sent', 'invoices.feature.prefix', 'invoices.feature.tooShort',
+  'tour.invoicing.feature.title', 'tour.invoicing.feature.body', 'invoices.feature.title', 'invoices.feature.body', 'invoices.feature.placeholder', 'invoices.feature.send', 'invoices.feature.sent', 'invoices.feature.tooShort',
   'payment.howTitle', 'payment.howBody', 'payment.howExample',
   'invoices.setupRequired', 'invoices.setupOptional', 'profile.invoiceSettingsMoved', 'profile.openInvoiceSetup',
   ...INVOICE_TABS.map(t => t.labelKey),

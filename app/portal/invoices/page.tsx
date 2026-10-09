@@ -439,7 +439,6 @@ export default async function PortalInvoicesPage({
             placeholder: t('invoices.feature.placeholder', locale, translations),
             send: t('invoices.feature.send', locale, translations),
             sent: t('invoices.feature.sent', locale, translations),
-            prefix: t('invoices.feature.prefix', locale, translations),
             tooShort: t('invoices.feature.tooShort', locale, translations),
           }}
         />
