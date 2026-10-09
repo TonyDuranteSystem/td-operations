@@ -88,7 +88,15 @@ self.addEventListener('notificationclick', function (event) {
       // (a team-chat notification must open Team Chat, not always /portal-chats).
       // Prefer the TOP-LEVEL page: a floating window is a frame, and navigating that would send the
       // wrong page to the target while the page the person is on stays put.
-      var focusable = windowClients.filter(function (c) { return 'focus' in c })
+      // TD Talk (/talk) windows belong to /talk-sw.js and are never taken over here: both apps live on this
+      // one site, and includeUncontrolled would otherwise hand us the TD Talk window (dev job c1e326dd).
+      var focusable = windowClients.filter(function (c) {
+        if (!('focus' in c)) return false
+        try {
+          var path = new URL(c.url).pathname
+          return !(path === '/talk' || path.indexOf('/talk/') === 0)
+        } catch (e) { return true }
+      })
       var client = focusable.filter(function (c) { return c.frameType === 'top-level' })[0] || focusable[0]
       if (!client) return clients.openWindow(url)
 

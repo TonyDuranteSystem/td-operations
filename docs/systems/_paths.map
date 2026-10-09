@@ -57,3 +57,4 @@ docs/systems/storage.md|app/(dashboard)/storage/,app/api/crm-storage/,app/api/cr
 docs/systems/portal-translation.md|lib/portal/translation-generator.ts,lib/jobs/handlers/translate-language.ts,lib/jobs/translation-watchdog.ts,app/api/cron/portal-translation-topup/,lib/portal/language-cap.ts,lib/portal/translation-exclusions.ts
 docs/systems/dashboard-navigation.md|components/dashboard/sidebar.tsx,components/dashboard/nav-item-menu.tsx,components/dashboard/windows-launcher.tsx,components/dashboard/command-palette.tsx,lib/nav/,components/dashboard/embedded-shell.tsx,lib/embed/,lib/windows/,lib/ui/tour-lock.ts,components/windows/,app/api/team/windows-feedback/,app/(dashboard)/layout.tsx
 docs/systems/open-services.md|lib/open-services/,components/open-services/,app/(dashboard)/calendar/open-services/,scripts/migrations/20261007-0100-open-services-hidden-flag.sql
+docs/systems/talk.md|app/talk/,components/talk/,lib/talk/,public/talk-sw.js,public/talk/

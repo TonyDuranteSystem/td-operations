@@ -31,6 +31,29 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array {
 export type DashboardPushResult = 'subscribed' | 'unsupported' | 'unconfigured' | 'denied'
 
 /**
+ * Which service worker the subscription belongs to. The default is the CRM dashboard worker, exactly as
+ * before. TD Talk (the standalone Team Chat app, dev job c1e326dd) passes its own worker and scope so its
+ * subscription belongs to ITS worker — without this the helper would register the CRM worker and the TD Talk
+ * app would never receive a push of its own. Still ONE implementation: pwa.md rule 5 forbids an inline copy.
+ */
+export interface PushTarget {
+  swPath?: string
+  scope?: string
+}
+
+/** Resolve once this specific registration has an active worker (`serviceWorker.ready` answers for whichever worker controls the PAGE, which on a first TD Talk load is the CRM's). */
+async function waitUntilActive(registration: ServiceWorkerRegistration): Promise<void> {
+  if (registration.active) return
+  const worker = registration.installing ?? registration.waiting
+  if (!worker) return
+  await new Promise<void>(resolve => {
+    const done = () => { if (worker.state === 'activated') resolve() }
+    worker.addEventListener('statechange', done)
+    done()
+  })
+}
+
+/**
  * Register the dashboard service worker and subscribe this browser to staff
  * push notifications. Returns a discriminated result for the non-error
  * outcomes; throws only on a real failure (subscribe/save error).
@@ -39,7 +62,7 @@ export type DashboardPushResult = 'subscribed' | 'unsupported' | 'unconfigured' 
  * register SW → fetch VAPID key (so "unconfigured" is reported without
  * bothering the user for permission) → request permission → subscribe → save.
  */
-export async function subscribeToDashboardPush(): Promise<DashboardPushResult> {
+export async function subscribeToDashboardPush(target: PushTarget = {}): Promise<DashboardPushResult> {
   if (
     typeof navigator === 'undefined' || !('serviceWorker' in navigator) ||
     typeof window === 'undefined' || !('PushManager' in window) ||
@@ -48,8 +71,14 @@ export async function subscribeToDashboardPush(): Promise<DashboardPushResult> {
     return 'unsupported'
   }
 
-  const registration = await navigator.serviceWorker.register(DASHBOARD_SW_PATH)
-  await navigator.serviceWorker.ready
+  const custom = !!(target.swPath || target.scope)
+  const swPath = target.swPath ?? DASHBOARD_SW_PATH
+  // The CRM's own call stays exactly `register(path)` — an options argument is only added for a scoped worker.
+  const registration = target.scope
+    ? await navigator.serviceWorker.register(swPath, { scope: target.scope })
+    : await navigator.serviceWorker.register(swPath)
+  if (custom) await waitUntilActive(registration)
+  else await navigator.serviceWorker.ready
 
   const keyRes = await fetch(ADMIN_PUSH_ENDPOINT)
   if (!keyRes.ok) return 'unconfigured'
@@ -72,4 +101,26 @@ export async function subscribeToDashboardPush(): Promise<DashboardPushResult> {
   if (!res.ok) throw new Error('Failed to save subscription')
 
   return 'subscribed'
+}
+
+/**
+ * Turn push OFF for one worker (TD Talk's "notifications off"): drop this browser's subscription from the
+ * server (scoped to the signed-in user's own device) and from the browser. Returns false when there was
+ * nothing to remove or push is not supported.
+ */
+export async function unsubscribeFromPush(target: PushTarget = {}): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false
+  const registration = await navigator.serviceWorker.getRegistration(target.scope ?? '/')
+  // getRegistration(url) answers with whichever registration covers that url — with no worker of its own at
+  // the scope that is the CRM's, and removing ITS subscription would silently switch the CRM app's push off.
+  if (!registration) return false
+  if (target.scope && new URL(registration.scope).pathname !== target.scope) return false
+  const subscription = await registration.pushManager?.getSubscription()
+  if (!subscription) return false
+  await fetch(ADMIN_PUSH_ENDPOINT, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint: subscription.endpoint }),
+  }).catch(() => {})
+  return subscription.unsubscribe()
 }
