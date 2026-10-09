@@ -164,10 +164,10 @@ describe('UI + read-mark source guards', () => {
     expect(read('components/talk/talk-messages.tsx')).toContain('<VoiceNote')
     expect(read('app/(dashboard)/team-chat/page.tsx')).toContain('<VoiceNote')
   })
-  it('neither the CRM Team Chat page nor TD Talk marks a chat read while the window is hidden or behind another one', () => {
-    expect(read('app/(dashboard)/team-chat/page.tsx')).toContain("(document.visibilityState === 'hidden' || !document.hasFocus()) ? 'mark_read=0'")
-    const talk = read('components/talk/talk-app.tsx')
-    expect(talk).toContain("document.visibilityState === 'visible' && document.hasFocus()")
-    expect(talk).not.toContain("document.visibilityState === 'visible') {\n            void fetch")
+  it('neither the CRM Team Chat page nor TD Talk uses hasFocus (unreliable on phones/installed apps); both use the fail-open rule', () => {
+    const crm = read('app/(dashboard)/team-chat/page.tsx'); const talk = read('components/talk/talk-app.tsx')
+    expect(crm).toContain("isBeingViewed() ? '' : 'mark_read=0'")
+    expect(talk).toContain("isBeingViewed() ? '' : '?mark_read=0'")
+    expect(crm).not.toContain('hasFocus'); expect(talk).not.toContain('hasFocus')
   })
 })

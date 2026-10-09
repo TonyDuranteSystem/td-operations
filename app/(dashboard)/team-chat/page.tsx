@@ -15,6 +15,7 @@ import { TeamBoard } from './board'
 import { NewGroupModal, GroupInfoModal } from './group-modals'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { isAudio } from '@/lib/talk/chat-model'
+import { isBeingViewed } from '@/lib/talk/window-front'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
@@ -209,7 +210,7 @@ export default function TeamWorkspacePage() {
     try {
       // A tab in the background (or a window behind another one) must not mark the chat read for the person using it (their sender would see "read" the
       // moment they sent) — so a hidden tab fetches with mark_read=0; coming back to the tab re-syncs and marks it read.
-      const qs = [showArchivedRef.current ? 'include_archived=1' : '', (document.visibilityState === 'hidden' || !document.hasFocus()) ? 'mark_read=0' : ''].filter(Boolean).join('&')
+      const qs = [showArchivedRef.current ? 'include_archived=1' : '', isBeingViewed() ? '' : 'mark_read=0'].filter(Boolean).join('&')
       const r = await fetch(`/api/team/threads/${threadId}${qs ? `?${qs}` : ''}`)
       if (!r.ok) throw new Error('Failed')
       const d = await r.json()
