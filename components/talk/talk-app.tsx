@@ -2,17 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { ChevronLeft, Loader2, Plus } from 'lucide-react'
+import { ChevronLeft, Loader2, Plus, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  directMessages, dmName, initials, membersWithoutChat, otherUserId, startThreadId, timeLabel, dayLabel,
-  type TalkAttachment, type TalkMember, type TalkMessage, type TalkThread,
+  directMessages, dmName, initials, matchMessages, membersWithoutChat, otherUserId, snippet, startThreadId, timeLabel, dayLabel,
+  type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
-import { TalkComposer, type TalkSendInput } from '@/components/talk/talk-composer'
+import { TalkComposer, type TalkComposerMode, type TalkSendInput } from '@/components/talk/talk-composer'
+import { TalkMessageSheet } from '@/components/talk/talk-sheet'
 
 const LAST_OPENED_KEY = 'td-talk-last-chat'
 const POLL_MS = 10_000
@@ -63,6 +64,12 @@ export function TalkApp() {
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [startingWith, setStartingWith] = useState<string | null>(null)
+  const [sheetMsg, setSheetMsg] = useState<TalkMessage | null>(null)
+  const [mode, setMode] = useState<TalkComposerMode>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const messagesRef = useRef<TalkMessage[]>([])
 
   const selectedIdRef = useRef<string | null>(null)
   const meIdRef = useRef<string | null>(null)
@@ -71,6 +78,7 @@ export function TalkApp() {
   selectedIdRef.current = selectedId
   meIdRef.current = meId
   threadsRef.current = threads
+  messagesRef.current = messages
 
   const dms = useMemo(() => directMessages(threads), [threads])
 
@@ -119,6 +127,7 @@ export function TalkApp() {
     setSelectedId(id)
     setMessages([])
     setPeerReadAt(null)
+    setSheetMsg(null); setMode(null); setSearchOpen(false); setSearchQ(''); setHighlightId(null)
     writeLastOpened(id)
     try {
       // The open chat lives in the address (?thread=…): a refresh reopens it, and the pop-up rule ("silent only for
@@ -203,7 +212,7 @@ export function TalkApp() {
     }
   }, [loadThreads, loadMessages])
 
-  const send = useCallback(async ({ text, files }: TalkSendInput): Promise<boolean> => {
+  const send = useCallback(async ({ text, files, replyToId }: TalkSendInput): Promise<boolean> => {
     const threadId = selectedIdRef.current
     if (!threadId) return false
     const voiceOnly = !text && files.length === 1 && files[0].type.startsWith('audio/')
@@ -213,7 +222,7 @@ export function TalkApp() {
       const r = await fetch(`/api/team/threads/${threadId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, reply_to_id: null, attachments: attachments.length ? attachments : null }),
+        body: JSON.stringify({ message: text, reply_to_id: replyToId ?? null, attachments: attachments.length ? attachments : null }),
       })
       if (!r.ok) {
         const d = await r.json().catch(() => ({}))
@@ -221,7 +230,12 @@ export function TalkApp() {
       }
       const d = await r.json().catch(() => null)
       if (d?.message && selectedIdRef.current === threadId) {
-        setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, d.message])
+        // the server's answer has no preview of the quoted message — attach it so the quote shows at once
+        const quoted = replyToId ? messagesRef.current.find(x => x.id === replyToId) : null
+        const withPreview: TalkMessage = quoted
+          ? { ...d.message, reply_to_preview: { id: quoted.id, message: quoted.message, sender_name: quoted.sender_name, deleted_at: quoted.deleted_at ?? null } }
+          : d.message
+        setMessages(prev => prev.some(x => x.id === d.message.id) ? prev : [...prev, withPreview])
       }
       return true
     } catch (e) {
@@ -229,6 +243,66 @@ export function TalkApp() {
       toast.error(voiceOnly ? `${why} Please record the voice message again.` : why)
       return false
     }
+  }, [])
+
+  // ── message actions (the long-press menu) ──
+  const applyToMessage = useCallback((id: string, patch: Partial<TalkMessage>) => {
+    setMessages(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m))
+  }, [])
+
+  const react = useCallback(async (m: TalkMessage, emoji: string) => {
+    setSheetMsg(null)
+    try {
+      const r = await fetch(`/api/team/messages/${m.id}/react`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not react.')
+      if (Array.isArray(d.reactions)) applyToMessage(m.id, { reactions: d.reactions as TalkReaction[] })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not react.')
+    }
+  }, [applyToMessage])
+
+  const copyText = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    try { await navigator.clipboard.writeText(m.message); toast.success('Copied') } catch { toast.error('Could not copy.') }
+  }, [])
+
+  const edit = useCallback(async (id: string, text: string): Promise<boolean> => {
+    if (!text.trim()) { toast.error('A message cannot be empty. Delete it instead.'); return false }
+    try {
+      const r = await fetch(`/api/team/messages/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not edit the message.')
+      if (d.message) applyToMessage(id, { message: d.message.message, edited_at: d.message.edited_at })
+      return true
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not edit the message.')
+      return false
+    }
+  }, [applyToMessage])
+
+  const remove = useCallback(async (m: TalkMessage) => {
+    setSheetMsg(null)
+    try {
+      const r = await fetch(`/api/team/messages/${m.id}`, { method: 'DELETE' })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.error || 'Could not delete the message.')
+      applyToMessage(m.id, { deleted_at: new Date().toISOString() })
+      setMode(cur => cur && cur.message.id === m.id ? null : cur)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not delete the message.')
+    }
+  }, [applyToMessage])
+
+  const jumpTo = useCallback((id: string) => {
+    if (!messagesRef.current.some(m => m.id === id)) { toast('That message is older than the latest 500 in this chat.'); return }
+    setSearchOpen(false)
+    // the message list is not on screen while searching — give it a moment to come back, then scroll and flash the message
+    setTimeout(() => {
+      document.querySelector(`[data-mid="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      setHighlightId(id)
+      setTimeout(() => setHighlightId(cur => cur === id ? null : cur), 1800)
+    }, 120)
   }, [])
 
   const startChat = useCallback(async (userId: string) => {
@@ -321,9 +395,57 @@ export function TalkApp() {
         ) : <span className="w-2" />}
         <Avatar name={name} id={other} />
         <span className="min-w-0 flex-1 truncate text-[17px] font-semibold text-zinc-900" data-testid="talk-title">{name}</span>
+        <button type="button" onClick={() => { setSearchOpen(o => !o); setSearchQ('') }} aria-label="Search this chat" data-testid="talk-search-toggle" className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-600 active:bg-zinc-100">
+          {searchOpen ? <X className="h-5 w-5" /> : <Search className="h-5 w-5" />}
+        </button>
       </div>
-      {meId && <TalkMessages threadId={selected.id} messages={messages} meId={meId} peerReadAt={peerReadAt} loading={loadingMsgs} />}
-      <TalkComposer key={selected.id} onSend={send} />
+      {searchOpen && (
+        <div className="flex min-h-0 flex-1 flex-col bg-white" data-testid="talk-search">
+          <div className="shrink-0 border-b border-zinc-200 px-3 py-2">
+            <input
+              autoFocus
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              placeholder="Search this chat"
+              className="h-10 w-full rounded-full border border-zinc-200 bg-zinc-50 px-4 text-[16px] outline-none"
+              data-testid="talk-search-input"
+            />
+            <p className="mt-1 px-2 text-[11px] text-zinc-400">Searches the latest 500 messages in this chat.</p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {matchMessages(messages, searchQ).map(m => (
+              <button key={m.id} type="button" onClick={() => jumpTo(m.id)} className="block w-full border-b border-zinc-100 px-4 py-3 text-left active:bg-zinc-50" data-testid="talk-search-hit">
+                <span className="flex justify-between text-xs text-zinc-400"><span>{m.sender_id === meId ? 'You' : m.sender_name}</span><span>{dayLabel(m.created_at)} · {timeLabel(m.created_at)}</span></span>
+                <span className="block truncate text-[15px] text-zinc-800">{snippet(m, 120)}</span>
+              </button>
+            ))}
+            {searchQ.trim().length >= 2 && matchMessages(messages, searchQ).length === 0 && <p className="px-4 py-8 text-center text-sm text-zinc-400">Nothing found.</p>}
+          </div>
+        </div>
+      )}
+      {meId && !searchOpen && (
+        <TalkMessages
+          threadId={selected.id} messages={messages} meId={meId} peerReadAt={peerReadAt} loading={loadingMsgs}
+          highlightId={highlightId}
+          onMenu={setSheetMsg}
+          onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
+          onReact={(m, emoji) => void react(m, emoji)}
+          onJumpTo={jumpTo}
+        />
+      )}
+      {!searchOpen && <TalkComposer key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} />}
+      {sheetMsg && meId && (
+        <TalkMessageSheet
+          message={messages.find(x => x.id === sheetMsg.id) ?? sheetMsg}
+          meId={meId}
+          onClose={() => setSheetMsg(null)}
+          onReact={emoji => void react(sheetMsg, emoji)}
+          onReply={() => { setMode({ kind: 'reply', message: sheetMsg, who: sheetMsg.sender_id === meId ? 'yourself' : sheetMsg.sender_name }); setSheetMsg(null) }}
+          onCopy={() => void copyText(sheetMsg)}
+          onEdit={() => { setMode({ kind: 'edit', message: sheetMsg }); setSheetMsg(null) }}
+          onDelete={() => void remove(sheetMsg)}
+        />
+      )}
     </div>
   )
 }

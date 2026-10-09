@@ -1,11 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, Mic, Paperclip, Trash2, X, Loader2 } from 'lucide-react'
+import { ArrowUp, Check, CornerUpLeft, Mic, Paperclip, Pencil, Trash2, X, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { prepareChatFiles, CHAT_ATTACHMENT_MAX_COUNT } from '@/lib/team/attachment'
-import { clock } from '@/lib/talk/chat-model'
+import { clock, snippet, type TalkMessage } from '@/lib/talk/chat-model'
 
 /** A voice note longer than this is stopped and sent by itself. */
 const MAX_VOICE_SECONDS = 5 * 60
@@ -13,14 +13,30 @@ const MAX_VOICE_SECONDS = 5 * 60
 export interface TalkSendInput {
   text: string
   files: File[]
+  /** The message being answered (a quoted reply), if any. */
+  replyToId?: string | null
 }
+
+/** What the box is doing besides plain writing: answering a message, or editing one of mine. */
+export type TalkComposerMode =
+  | { kind: 'reply'; message: TalkMessage; who: string }
+  | { kind: 'edit'; message: TalkMessage }
+  | null
 
 /**
  * The message box: text, photos/files (the paperclip — on iPhone it offers Take Photo / Photo Library / Files), and
  * voice notes (tap the microphone, talk, tap send — or the bin to throw it away). `onSend` resolves true when the
  * message went out, so a failed send keeps what was typed.
  */
-export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInput) => Promise<boolean>; disabled?: boolean }) {
+export function TalkComposer({
+  onSend, onEdit, mode, onCancelMode, disabled,
+}: {
+  onSend: (input: TalkSendInput) => Promise<boolean>
+  onEdit: (id: string, text: string) => Promise<boolean>
+  mode: TalkComposerMode
+  onCancelMode: () => void
+  disabled?: boolean
+}) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
@@ -28,7 +44,18 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const textRef = useRef(text)
+  const modeRef = useRef(mode)
+  modeRef.current = mode
   textRef.current = text
+  const editingId = mode?.kind === 'edit' ? mode.message.id : null
+  const replyingId = mode?.kind === 'reply' ? mode.message.id : null
+
+  // entering Edit loads the message into the box; entering Reply just puts the cursor there
+  useEffect(() => {
+    if (mode?.kind === 'edit') { setText(mode.message.message ?? ''); setFiles([]) }
+    if (mode) taRef.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, replyingId])
 
   const send = useCallback(async (input: TalkSendInput) => {
     setBusy(true)
@@ -42,7 +69,7 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
 
   const { isRecording, startRecording, stopRecording, cancelRecording, isSupported } = useAudioNoteRecorder({
     preferMp4: true,
-    onRecorded: file => { void send({ text: '', files: [file] }) },
+    onRecorded: file => { void send({ text: '', files: [file], replyToId: modeRef.current?.kind === 'reply' ? modeRef.current.message.id : null }) },
     onError: msg => toast.error(msg),
   })
 
@@ -72,14 +99,24 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
     if (!canSend) return
     const sentText = text.trim()
     const sentFiles = files
+    if (mode?.kind === 'edit') {
+      const id = mode.message.id
+      setBusy(true)
+      const ok = await onEdit(id, sentText)
+      setBusy(false)
+      if (ok) { setText(''); onCancelMode() }
+      return
+    }
+    const replyToId = mode?.kind === 'reply' ? mode.message.id : null
     setText(''); setFiles([])
-    const ok = await send({ text: sentText, files: sentFiles })
+    const ok = await send({ text: sentText, files: sentFiles, replyToId })
+    if (ok) { if (replyToId) onCancelMode() }
     if (!ok) {
       // keep what was typed so nothing is lost; do not overwrite anything typed meanwhile
       setText(prev => prev || sentText)
       setFiles(prev => (prev.length ? prev : sentFiles))
     }
-  }, [canSend, text, files, send])
+  }, [canSend, text, files, send, mode, onEdit, onCancelMode])
 
   const pick = (list: FileList | null) => {
     if (!list || list.length === 0) return
@@ -110,6 +147,18 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
 
   return (
     <div className="shrink-0 border-t border-zinc-200 bg-white px-2 pb-2 pt-2">
+      {mode && (
+        <div className="mx-1 mb-2 flex items-center gap-2 rounded-lg border-l-4 border-[#BE1E2D] bg-zinc-100 px-3 py-1.5" data-testid="talk-mode-bar">
+          {mode.kind === 'reply' ? <CornerUpLeft className="h-4 w-4 shrink-0 text-zinc-500" /> : <Pencil className="h-4 w-4 shrink-0 text-zinc-500" />}
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs font-semibold text-[#BE1E2D]">{mode.kind === 'reply' ? `Replying to ${mode.who}` : 'Editing message'}</span>
+            <span className="block truncate text-[13px] text-zinc-600">{snippet(mode.message, 70)}</span>
+          </span>
+          <button type="button" aria-label="Cancel" onClick={() => { if (mode.kind === 'edit') setText(''); onCancelMode() }} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-200">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2 px-1 pb-2">
           {files.map((f, i) => (
@@ -124,9 +173,11 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
       )}
       <div className="flex items-end gap-1.5">
         <input ref={fileRef} type="file" multiple className="hidden" onChange={e => pick(e.target.files)} data-testid="talk-file-input" />
-        <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} aria-label="Attach a photo or file" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100 disabled:opacity-40">
-          <Paperclip className="h-5 w-5" />
-        </button>
+        {mode?.kind !== 'edit' && (
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} aria-label="Attach a photo or file" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-100 disabled:opacity-40">
+            <Paperclip className="h-5 w-5" />
+          </button>
+        )}
         <textarea
           ref={taRef}
           value={text}
@@ -134,6 +185,7 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
           disabled={disabled}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
+            if (e.key === 'Escape' && mode) { if (mode.kind === 'edit') setText(''); onCancelMode(); return }
             // On a computer Enter sends (Shift+Enter = new line); on a phone Enter is a new line and the arrow sends.
             if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
               e.preventDefault()
@@ -147,11 +199,11 @@ export function TalkComposer({ onSend, disabled }: { onSend: (input: TalkSendInp
         />
         {canSend ? (
           <button type="button" onClick={() => void submit()} aria-label="Send" data-testid="talk-send" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#BE1E2D] text-white active:opacity-80">
-            <ArrowUp className="h-5 w-5" />
+            {mode?.kind === 'edit' ? <Check className="h-5 w-5" /> : <ArrowUp className="h-5 w-5" />}
           </button>
         ) : busy ? (
           <span className="flex h-11 w-11 shrink-0 items-center justify-center text-zinc-400"><Loader2 className="h-5 w-5 animate-spin" /></span>
-        ) : isSupported ? (
+        ) : isSupported && mode?.kind !== 'edit' ? (
           <button type="button" onClick={startRecording} disabled={disabled} aria-label="Record a voice message" data-testid="talk-mic" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#BE1E2D] text-white active:opacity-80 disabled:opacity-40">
             <Mic className="h-5 w-5" />
           </button>

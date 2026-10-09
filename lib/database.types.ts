@@ -598,6 +598,7 @@ export type Database = {
       }
       admin_push_subscriptions: {
         Row: {
+          app: string | null
           auth_key: string
           created_at: string | null
           email: string
@@ -607,6 +608,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          app?: string | null
           auth_key: string
           created_at?: string | null
           email: string
@@ -616,6 +618,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          app?: string | null
           auth_key?: string
           created_at?: string | null
           email?: string

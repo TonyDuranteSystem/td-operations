@@ -218,6 +218,7 @@ export async function POST(
         body: preview,
         url: threadUrl,
         tag: `team-mention-${threadId}`,
+        dm: thread.thread_type === 'dm', // TD Talk receives direct messages only
       })
     } else if (thread.thread_type === 'dm') {
       const otherId = (thread.dm_key ?? '').split(':').find((id: string) => id && id !== user.id)
@@ -227,6 +228,7 @@ export async function POST(
           body: preview,
           url: threadUrl,
           tag: `team-dm-${threadId}`,
+          dm: true, // TD Talk receives direct messages only (lib/push/route-subscriptions.ts)
         })
       }
     } else if (rootId && (thread.thread_type === 'channel' || thread.thread_type === 'general')) {

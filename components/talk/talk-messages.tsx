@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
-  formatSize, groupByDay, isAudio, isImage, linkify, seenState, timeLabel,
+  formatSize, groupByDay, isAudio, isImage, linkify, quotedPreview, reactionSummary, seenState, timeLabel,
   type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -63,28 +63,94 @@ function Text({ text }: { text: string }) {
   )
 }
 
-function Bubble({ m, mine, peerReadAt }: { m: TalkMessage; mine: boolean; peerReadAt: string | null }) {
+const LONG_PRESS_MS = 450
+const SWIPE_TRIGGER_PX = 64
+
+function Bubble({
+  m, mine, peerReadAt, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
+}: {
+  m: TalkMessage; mine: boolean; peerReadAt: string | null; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
+  onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
+}) {
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
   const seen = mine && seenState(m, peerReadAt) === 'seen'
+  const quote = quotedPreview(m, byId)
+  const pills = reactionSummary(m.reactions, meId)
+
+  // Long-press opens the menu; a swipe to the right replies (WhatsApp). Both are cancelled by any real movement the
+  // other way, so scrolling the chat never triggers either.
+  const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> | null; swiped: boolean; fired: boolean; dx: number } | null>(null)
+  const [dx, setDx] = useState(0)
+  const clear = () => { if (press.current?.timer) clearTimeout(press.current.timer) }
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (deleted) return
+    const t = e.touches[0]
+    press.current = { x: t.clientX, y: t.clientY, swiped: false, fired: false, dx: 0, timer: setTimeout(() => { if (press.current) { press.current.fired = true; onMenu(m) } }, LONG_PRESS_MS) }
+  }
+  const onTouchMove = (e: React.TouchEvent) => {
+    const p = press.current
+    if (!p) return
+    const t = e.touches[0]
+    const mx = t.clientX - p.x, my = t.clientY - p.y
+    if (Math.abs(mx) > 8 || Math.abs(my) > 8) clear()
+    if (!p.fired && mx > 0 && Math.abs(my) < 30 && mx > 12) { p.swiped = true; p.dx = mx; setDx(Math.min(mx, 90)) }
+  }
+  const onTouchEnd = () => {
+    const p = press.current
+    clear()
+    if (p?.swiped && p.dx >= SWIPE_TRIGGER_PX) onReply(m) // read from the ref: state may not have re-rendered yet
+    setDx(0)
+    press.current = null
+  }
+
   return (
-    <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+    <div className={cn('group flex', mine ? 'justify-end' : 'justify-start', pills.length > 0 && !deleted && 'pb-3')} data-mid={m.id}>
       <div
         data-testid={mine ? 'talk-msg-mine' : 'talk-msg-theirs'}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
+        onContextMenu={e => { e.preventDefault(); if (!deleted) onMenu(m) }}
+        style={{ transform: dx ? `translateX(${dx}px)` : undefined, transition: dx ? 'none' : 'transform 150ms' }}
         className={cn(
-          'max-w-[82%] rounded-2xl px-3 py-2 shadow-sm',
+          'relative max-w-[82%] select-none rounded-2xl px-3 py-2 shadow-sm [-webkit-touch-callout:none] [-webkit-user-select:none]',
           mine ? 'rounded-br-md bg-[#fbe3e5] text-zinc-900' : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900',
+          highlighted && 'ring-2 ring-amber-400',
         )}
       >
+        {!deleted && (
+          <button
+            type="button"
+            aria-label="Message options"
+            onClick={() => onMenu(m)}
+            className="absolute -top-2 right-1 hidden rounded-full bg-white p-1 text-zinc-500 shadow md:group-hover:block"
+          >
+            <span className="block h-4 w-4 text-center text-xs leading-4">⌄</span>
+          </button>
+        )}
         {deleted ? (
           <p className="text-sm italic text-zinc-400">This message was deleted</p>
         ) : (
           <div className="space-y-1.5">
+            {quote && (
+              <button
+                type="button"
+                onClick={() => onJumpTo(quote.id)}
+                data-testid="talk-quote"
+                className="block w-full rounded-lg border-l-4 border-[#BE1E2D] bg-black/5 px-2 py-1 text-left"
+              >
+                {quote.sender_name && <span className="block text-xs font-semibold text-[#BE1E2D]">{quote.sender_name}</span>}
+                <span className="block truncate text-[13px] text-zinc-600">{quote.text}</span>
+              </button>
+            )}
             {atts.map((a, i) => <Attachment key={`${a.url}-${i}`} a={a} />)}
             {m.message ? <Text text={m.message} /> : null}
           </div>
         )}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-zinc-500">
+          {m.edited_at && !deleted && <span>edited</span>}
           <span>{timeLabel(m.created_at)}</span>
           {mine && !deleted && (
             seen
@@ -92,6 +158,20 @@ function Bubble({ m, mine, peerReadAt }: { m: TalkMessage; mine: boolean; peerRe
               : <Check className="h-3.5 w-3.5 text-zinc-400" aria-label="Sent" data-testid="talk-tick-sent" />
           )}
         </div>
+        {pills.length > 0 && !deleted && (
+          <div className={cn('absolute -bottom-3 flex gap-1', mine ? 'right-2' : 'left-2')} data-testid="talk-reactions">
+            {pills.map(p => (
+              <button
+                key={p.emoji}
+                type="button"
+                onClick={() => onReact(m, p.emoji)}
+                className={cn('flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-xs shadow-sm', p.mine ? 'border-sky-300 bg-sky-50' : 'border-zinc-200 bg-white')}
+              >
+                <span>{p.emoji}</span>{p.count > 1 && <span className="text-zinc-600">{p.count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -103,8 +183,12 @@ function Bubble({ m, mine, peerReadAt }: { m: TalkMessage; mine: boolean; peerRe
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, peerReadAt, loading,
-}: { threadId: string; messages: TalkMessage[]; meId: string; peerReadAt: string | null; loading: boolean }) {
+  threadId, messages, meId, peerReadAt, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
+}: {
+  threadId: string; messages: TalkMessage[]; meId: string; peerReadAt: string | null; loading: boolean
+  highlightId: string | null
+  onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
+}) {
   const boxRef = useRef<HTMLDivElement>(null)
   const openedRef = useRef<string | null>(null)
   const lastCountRef = useRef(0)
@@ -139,6 +223,7 @@ export function TalkMessages({
   }, [threadId, messages.length])
 
   const groups = groupByDay(messages)
+  const byId = new Map(messages.map(m => [m.id, m]))
 
   return (
     <div ref={boxRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-zinc-100 px-3 py-3" data-testid="talk-messages">
@@ -147,13 +232,16 @@ export function TalkMessages({
       ) : groups.length === 0 ? (
         <p className="py-10 text-center text-sm text-zinc-400">No messages yet. Say hello.</p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2.5">
           {groups.map(g => (
             <div key={g.key} className="space-y-1.5">
               <div className="sticky top-0 z-[1] flex justify-center py-1">
                 <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{g.label}</span>
               </div>
-              {g.messages.map(m => <Bubble key={m.id} m={m} mine={m.sender_id === meId} peerReadAt={peerReadAt} />)}
+              {g.messages.map(m => (
+                <Bubble key={m.id} m={m} mine={m.sender_id === meId} peerReadAt={peerReadAt} meId={meId} byId={byId}
+                  highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} />
+              ))}
             </div>
           ))}
         </div>

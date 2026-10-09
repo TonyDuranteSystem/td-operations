@@ -27,14 +27,32 @@ export interface TalkAttachment {
   size?: number
 }
 
+export interface TalkReaction {
+  emoji: string
+  reactor_id: string
+  reactor_name?: string
+}
+
+export interface TalkReplyPreview {
+  id: string
+  message: string
+  sender_name: string
+  deleted_at: string | null
+}
+
 export interface TalkMessage {
   id: string
   sender_id: string
   sender_name: string
   message: string
   created_at: string
+  edited_at?: string | null
   deleted_at?: string | null
   attachments?: TalkAttachment[] | null
+  reactions?: TalkReaction[] | null
+  /** The message this one quotes (a reply), and a preview of it as the server sends it. */
+  reply_to_id?: string | null
+  reply_to_preview?: TalkReplyPreview | null
   /** Slack-thread reply inside a channel — never present in a direct message. */
   root_id?: string | null
 }
@@ -118,11 +136,14 @@ export interface DayGroup {
   messages: TalkMessage[]
 }
 
-/** Oldest-to-newest messages grouped under day headings. Direct messages have no Slack threads, so a reply row (root_id set) is skipped defensively. */
+/**
+ * Oldest-to-newest messages grouped under day headings. EVERY message is shown: the server stamps `root_id` on any
+ * quoted reply (even in a direct message, where it is just an artifact of the Slack-style threading — the CRM's own
+ * direct-message view shows replies inline too), so `root_id` must NOT hide a message here.
+ */
 export function groupByDay(messages: TalkMessage[], now: Date = new Date()): DayGroup[] {
   const groups: DayGroup[] = []
   for (const m of messages) {
-    if (m.root_id) continue
     const key = dayKey(m.created_at)
     const last = groups[groups.length - 1]
     if (last && last.key === key) last.messages.push(m)
@@ -196,4 +217,76 @@ export function linkify(text: string): TextPart[] {
   }
   if (last < text.length) parts.push({ text: text.slice(last) })
   return parts.length ? parts : [{ text }]
+}
+
+// ─── Reactions, replies, edit/delete, search ──────────────────────────────
+
+/** The quick reactions offered on a message (WhatsApp's set). */
+export const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
+
+export interface ReactionPill {
+  emoji: string
+  count: number
+  mine: boolean
+}
+
+/** Reactions grouped by emoji, in the order first used; `mine` = I reacted with it (tapping it again removes it). */
+export function reactionSummary(reactions: TalkReaction[] | null | undefined, meId: string | null): ReactionPill[] {
+  const order: string[] = []
+  const map = new Map<string, ReactionPill>()
+  for (const r of reactions ?? []) {
+    if (!r || !r.emoji) continue
+    let pill = map.get(r.emoji)
+    if (!pill) { pill = { emoji: r.emoji, count: 0, mine: false }; map.set(r.emoji, pill); order.push(r.emoji) }
+    pill.count++
+    if (meId && r.reactor_id === meId) pill.mine = true
+  }
+  return order.map(e => map.get(e)!)
+}
+
+/** A short one-line text for a message: its text, else what it carries ("Voice message", "Photo", "File"). */
+export function snippet(m: Pick<TalkMessage, 'message' | 'attachments' | 'deleted_at'>, max = 80): string {
+  if (m.deleted_at) return 'Message deleted'
+  const text = (m.message ?? '').replace(/\s+/g, ' ').trim()
+  if (text) return text.length > max ? `${text.slice(0, max - 1)}…` : text
+  const a = m.attachments?.[0]
+  if (!a) return 'Message'
+  if (isAudio(a)) return '🎤 Voice message'
+  if (isImage(a)) return '📷 Photo'
+  return `📎 ${a.name || 'File'}`
+}
+
+/** What a quoted message shows: the server's preview when it sent one, else the quoted message if it is loaded. */
+export function quotedPreview(
+  m: Pick<TalkMessage, 'reply_to_id' | 'reply_to_preview'>,
+  byId: Map<string, TalkMessage>,
+): { id: string; sender_name: string; text: string } | null {
+  if (!m.reply_to_id) return null
+  const loaded = byId.get(m.reply_to_id)
+  if (loaded) return { id: loaded.id, sender_name: loaded.sender_name, text: snippet(loaded) }
+  const p = m.reply_to_preview
+  if (p) return { id: p.id, sender_name: p.sender_name, text: snippet({ message: p.message, deleted_at: p.deleted_at }) }
+  return { id: m.reply_to_id, sender_name: '', text: 'Message' }
+}
+
+/** Edit: my own text message that is not deleted and carries no file (the server only edits the text). */
+export function canEdit(m: TalkMessage, meId: string | null): boolean {
+  return !!meId && m.sender_id === meId && !m.deleted_at && !(m.attachments && m.attachments.length > 0) && !!m.message
+}
+
+/** Delete: my own message that is not already deleted (the server soft-deletes; a tombstone stays). */
+export function canDelete(m: TalkMessage, meId: string | null): boolean {
+  return !!meId && m.sender_id === meId && !m.deleted_at
+}
+
+/** Messages matching a search, newest first (case-insensitive; matches the text and attachment names; skips deleted ones). Needs 2+ characters. */
+export function matchMessages(messages: TalkMessage[], query: string): TalkMessage[] {
+  const q = query.trim().toLowerCase()
+  if (q.length < 2) return []
+  return messages
+    .filter(m => !m.deleted_at && (
+      (m.message ?? '').toLowerCase().includes(q) ||
+      (m.attachments ?? []).some(a => (a.name ?? '').toLowerCase().includes(q))
+    ))
+    .reverse()
 }

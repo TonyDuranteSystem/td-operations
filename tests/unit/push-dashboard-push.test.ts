@@ -231,3 +231,33 @@ describe('TD Talk target (dev job c1e326dd)', () => {
     })
   })
 })
+
+describe('TD Talk subscription carries its app marker (dev job c1e326dd)', () => {
+  const subscribeMock = vi.fn()
+  const registerMock = vi.fn()
+  const fetchMock = vi.fn()
+  const requestPermissionMock = vi.fn()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    const registration = { active: {}, pushManager: { subscribe: subscribeMock } }
+    registerMock.mockResolvedValue(registration)
+    vi.stubGlobal('navigator', { serviceWorker: { register: registerMock, ready: Promise.resolve(registration) } })
+    vi.stubGlobal('window', { PushManager: function PushManager() {} })
+    vi.stubGlobal('Notification', { requestPermission: requestPermissionMock })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('atob', (s: string) => Buffer.from(s, 'base64').toString('binary'))
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ publicKey: 'aGVsbG8=' }) }).mockResolvedValueOnce({ ok: true })
+    requestPermissionMock.mockResolvedValue('granted')
+    subscribeMock.mockResolvedValue({ toJSON: () => ({ endpoint: 'https://push.example/x' }) })
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('sends app: "talk" for TD Talk', async () => {
+    await subscribeToDashboardPush({ swPath: '/talk-sw.js', scope: '/talk', app: 'talk' })
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ subscription: { endpoint: 'https://push.example/x' }, app: 'talk' })
+  })
+  it('the CRM request body is exactly what it always was (no app field)', async () => {
+    await subscribeToDashboardPush()
+    expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify({ subscription: { endpoint: 'https://push.example/x' } }))
+  })
+})

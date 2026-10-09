@@ -8,7 +8,7 @@ import { TALK_BASE } from '@/lib/talk/paths'
 
 type PushState = 'checking' | 'on' | 'off' | 'denied' | 'needs-install'
 
-const PUSH_TARGET = { swPath: '/talk-sw.js', scope: TALK_BASE }
+const PUSH_TARGET = { swPath: '/talk-sw.js', scope: TALK_BASE, app: 'talk' }
 
 /** Opened from the home-screen icon (not a Safari tab)? iPhone only allows push from an installed app. */
 function isInstalledApp(): boolean {

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   directMessages, otherUserId, dmName, startThreadId, membersWithoutChat, initials,
   dayKey, dayLabel, timeLabel, groupByDay, seenState, isAudio, isImage, formatSize, clock, linkify,
-  type TalkThread,
+  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS,
+  type TalkThread, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
 const ME = 'a-me'
@@ -74,7 +75,7 @@ describe('days and times', () => {
     expect(timeLabel(at(new Date(2026, 9, 9, 7, 5)))).toBe('07:05')
     expect(timeLabel(at(new Date(2026, 9, 9, 23, 59)))).toBe('23:59')
   })
-  it('groups messages under their day, in order, skipping thread replies', () => {
+  it('groups messages under their day, in order — a quoted reply (the server gives it a root_id) is shown, not hidden', () => {
     const msgs = [
       { id: '1', sender_id: ME, sender_name: 'A', message: 'a', created_at: at(new Date(2026, 9, 8, 9, 0)) },
       { id: '2', sender_id: 'b', sender_name: 'L', message: 'b', created_at: at(new Date(2026, 9, 8, 9, 5)) },
@@ -82,7 +83,7 @@ describe('days and times', () => {
       { id: '3', sender_id: ME, sender_name: 'A', message: 'c', created_at: at(new Date(2026, 9, 9, 9, 0)) },
     ]
     const g = groupByDay(msgs, now)
-    expect(g.map(x => [x.label, x.messages.map(m => m.id)])).toEqual([['Yesterday', ['1', '2']], ['Today', ['3']]])
+    expect(g.map(x => [x.label, x.messages.map(m => m.id)])).toEqual([['Yesterday', ['1', '2', 'r']], ['Today', ['3']]])
     expect(dayKey(at(new Date(2026, 0, 5, 12)))).toBe('2026-01-05')
   })
 })
@@ -129,5 +130,84 @@ describe('linkify', () => {
     expect(linkify('no links here')).toEqual([{ text: 'no links here' }])
     expect(linkify('javascript:alert(1) and ftp://x')).toEqual([{ text: 'javascript:alert(1) and ftp://x' }])
     expect(linkify('')).toEqual([{ text: '' }])
+  })
+})
+
+const msg = (over: Partial<TalkMessage> = {}): TalkMessage => ({ id: 'm', sender_id: ME, sender_name: 'Antonio', message: 'hello', created_at: '2026-10-09T10:00:00Z', ...over })
+
+describe('reactionSummary', () => {
+  it('groups by emoji in first-used order and marks mine', () => {
+    const pills = reactionSummary([
+      { emoji: '👍', reactor_id: 'b' }, { emoji: '❤️', reactor_id: ME }, { emoji: '👍', reactor_id: ME }, { emoji: '', reactor_id: 'x' },
+    ], ME)
+    expect(pills).toEqual([{ emoji: '👍', count: 2, mine: true }, { emoji: '❤️', count: 1, mine: true }])
+  })
+  it('handles none / null', () => {
+    expect(reactionSummary(null, ME)).toEqual([])
+    expect(reactionSummary([{ emoji: '🙏', reactor_id: 'b' }], null)).toEqual([{ emoji: '🙏', count: 1, mine: false }])
+  })
+  it('offers the six quick reactions', () => expect(REACTION_EMOJIS).toHaveLength(6))
+})
+
+describe('snippet', () => {
+  it('shows text, trimmed and cut', () => {
+    expect(snippet(msg({ message: '  hi   there ' }))).toBe('hi there')
+    expect(snippet(msg({ message: 'x'.repeat(200) }), 20)).toBe('x'.repeat(19) + '…')
+  })
+  it('describes what a message carries when it has no text', () => {
+    expect(snippet(msg({ message: '', attachments: [{ url: 'u', name: 'v.m4a', mime_type: 'audio/mp4' }] }))).toBe('🎤 Voice message')
+    expect(snippet(msg({ message: '', attachments: [{ url: 'u', name: 'p.png', mime_type: 'image/png' }] }))).toBe('📷 Photo')
+    expect(snippet(msg({ message: '', attachments: [{ url: 'u', name: 'a.pdf' }] }))).toBe('📎 a.pdf')
+    expect(snippet(msg({ message: '' }))).toBe('Message')
+  })
+  it('never reveals a deleted message', () => expect(snippet(msg({ deleted_at: '2026-10-09T11:00:00Z' }))).toBe('Message deleted'))
+})
+
+describe('quotedPreview', () => {
+  const orig = msg({ id: 'o', sender_name: 'Luca', message: 'original' })
+  const byId = new Map([[orig.id, orig]])
+  it('is null when the message quotes nothing', () => expect(quotedPreview(msg(), byId)).toBeNull())
+  it('prefers the loaded message, so an edit or delete shows up in the quote', () => {
+    expect(quotedPreview(msg({ reply_to_id: 'o', reply_to_preview: { id: 'o', message: 'stale', sender_name: 'Luca', deleted_at: null } }), byId))
+      .toEqual({ id: 'o', sender_name: 'Luca', text: 'original' })
+  })
+  it('falls back to the server preview, then to a bare marker', () => {
+    expect(quotedPreview(msg({ reply_to_id: 'far', reply_to_preview: { id: 'far', message: 'old one', sender_name: 'Luca', deleted_at: null } }), byId))
+      .toEqual({ id: 'far', sender_name: 'Luca', text: 'old one' })
+    expect(quotedPreview(msg({ reply_to_id: 'gone' }), byId)).toEqual({ id: 'gone', sender_name: '', text: 'Message' })
+  })
+})
+
+describe('edit / delete rules', () => {
+  it('only my own live text message can be edited', () => {
+    expect(canEdit(msg(), ME)).toBe(true)
+    expect(canEdit(msg({ sender_id: 'b' }), ME)).toBe(false)
+    expect(canEdit(msg({ deleted_at: 'x' }), ME)).toBe(false)
+    expect(canEdit(msg({ attachments: [{ url: 'u', name: 'n' }] }), ME)).toBe(false)
+    expect(canEdit(msg({ message: '' }), ME)).toBe(false)
+    expect(canEdit(msg(), null)).toBe(false)
+  })
+  it('only my own message can be deleted, once', () => {
+    expect(canDelete(msg(), ME)).toBe(true)
+    expect(canDelete(msg({ attachments: [{ url: 'u', name: 'n' }] }), ME)).toBe(true)
+    expect(canDelete(msg({ sender_id: 'b' }), ME)).toBe(false)
+    expect(canDelete(msg({ deleted_at: 'x' }), ME)).toBe(false)
+  })
+})
+
+describe('matchMessages', () => {
+  const list = [
+    msg({ id: '1', message: 'Invoice for Acme' }),
+    msg({ id: '2', message: 'lunch?' }),
+    msg({ id: '3', message: '', attachments: [{ url: 'u', name: 'acme-contract.pdf' }] }),
+    msg({ id: '4', message: 'acme again', deleted_at: 'x' }),
+    msg({ id: '5', message: 'reply acme', root_id: '1' }),
+  ]
+  it('finds text and file names, newest first, skipping deleted ones', () => {
+    expect(matchMessages(list, 'ACME').map(m => m.id)).toEqual(['5', '3', '1'])
+  })
+  it('needs two characters', () => {
+    expect(matchMessages(list, 'a')).toEqual([])
+    expect(matchMessages(list, '  ')).toEqual([])
   })
 })

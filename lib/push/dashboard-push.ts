@@ -39,6 +39,8 @@ export type DashboardPushResult = 'subscribed' | 'unsupported' | 'unconfigured' 
 export interface PushTarget {
   swPath?: string
   scope?: string
+  /** Which installed app the subscription belongs to ('talk' = TD Talk). Omitted = the CRM app. */
+  app?: string
 }
 
 /** Resolve once this specific registration has an active worker (`serviceWorker.ready` answers for whichever worker controls the PAGE, which on a first TD Talk load is the CRM's). */
@@ -96,7 +98,8 @@ export async function subscribeToDashboardPush(target: PushTarget = {}): Promise
   const res = await fetch(ADMIN_PUSH_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subscription: subscription.toJSON() }),
+    // `app` is only added for a non-CRM app, so the CRM's own request stays exactly as before.
+    body: JSON.stringify(target.app ? { subscription: subscription.toJSON(), app: target.app } : { subscription: subscription.toJSON() }),
   })
   if (!res.ok) throw new Error('Failed to save subscription')
 
