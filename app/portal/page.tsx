@@ -897,8 +897,8 @@ export default async function PortalDashboardPage() {
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false
 
-  // New-invoices-screen announcement: only companies the screen is switched on for, account admin only.
-  const showInvoicesHubBanner = canManageTeam && isInvoiceHubOnFor(await getInvoiceHubSetting(), selectedAccountId)
+  // New-invoices-screen announcement: any signed-in client of a company the screen is switched on for (same rule as the menu tag; teammates return earlier).
+  const showInvoicesHubBanner = !!selectedAccountId && isInvoiceHubOnFor(await getInvoiceHubSetting(), selectedAccountId)
 
   // Fetch active portal announcements — graceful fallback if table missing
   let portalAnnouncements: PortalAnnouncement[] = []

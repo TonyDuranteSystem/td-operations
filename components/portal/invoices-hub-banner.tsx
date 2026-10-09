@@ -24,7 +24,7 @@ const COPY = {
 
 /**
  * Prominent green announcement at the top of the portal home for companies that have the new invoices screen.
- * The parent only renders it when the hub is on for the company and the user is the account admin. It goes away for
+ * The parent only renders it when the hub is on for the company (teammates never reach the home page). It goes away for
  * good (per browser) once the person opens the invoices page or closes it.
  */
 export function InvoicesHubBanner({ locale }: { locale: 'en' | 'it' }) {

@@ -9,8 +9,8 @@ const home = readFileSync('app/portal/page.tsx', 'utf8')
 const side = readFileSync('components/portal/portal-sidebar.tsx', 'utf8')
 
 describe('invoices hub banner on the portal home', () => {
-  it('is rendered only for account admins of companies the new screen is on for', () => {
-    expect(home).toMatch(/showInvoicesHubBanner = canManageTeam && isInvoiceHubOnFor\(await getInvoiceHubSetting\(\), selectedAccountId\)/)
+  it('is rendered only for companies the new screen is on for', () => {
+    expect(home).toMatch(/showInvoicesHubBanner = !!selectedAccountId && isInvoiceHubOnFor\(await getInvoiceHubSetting\(\), selectedAccountId\)/)
     expect(home).toMatch(/\{showInvoicesHubBanner && <InvoicesHubBanner locale=\{locale\} \/>\}/)
   })
   it('shares its memory with the menu tag, links to invoices, and clears on open or close', () => {
