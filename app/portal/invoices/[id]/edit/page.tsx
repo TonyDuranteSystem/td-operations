@@ -24,7 +24,7 @@ export default function EditInvoicePage() {
       notes: string
       message: string
       bankAccountId?: string | null
-      items: { description: string; quantity: number; unit_price: number; amount: number }[]
+      items: { description: string; quantity: number; unit_price: number; amount: number; tax_rate?: number | null }[]
     }
   } | null>(null)
 
@@ -57,11 +57,12 @@ export default function EditInvoicePage() {
           notes: data.notes || '',
           message: data.message || '',
           bankAccountId: data.bank_account_id || null,
-          items: data.items.map((item: { description: string; quantity: number; unit_price: number; amount: number }) => ({
+          items: data.items.map((item: { description: string; quantity: number; unit_price: number; amount: number; tax_rate?: number | null }) => ({
             description: item.description,
             quantity: item.quantity,
             unit_price: item.unit_price,
             amount: item.amount,
+            tax_rate: item.tax_rate ?? null,
           })),
         },
       })

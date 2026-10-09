@@ -11,6 +11,8 @@ import { LogoUpload } from '@/components/portal/logo-upload'
 import { BankAccounts } from '@/components/portal/bank-accounts'
 import { PaymentLinks } from '@/components/portal/payment-links'
 import { ProfileEditor } from '@/components/portal/profile-editor'
+import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
+import { getInvoiceHubSetting } from '@/lib/settings'
 import { LanguageSwitcher } from '@/components/portal/language-switcher'
 
 export default async function PortalProfilePage() {
@@ -33,6 +35,7 @@ export default async function PortalProfilePage() {
   const selectedAccountId = accounts.find(a => a.id === cookieAccountId)?.id ?? accounts[0]?.id
   const account = selectedAccountId ? await getPortalAccountDetail(selectedAccountId) : null
   const locale = getLocale(user)
+  const hubOn = isInvoiceHubOnFor(await getInvoiceHubSetting(), selectedAccountId)
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-3xl mx-auto space-y-4 sm:space-y-6">
@@ -114,8 +117,18 @@ export default async function PortalProfilePage() {
         </div>
       )}
 
+      {/* Invoicing settings moved into Invoices > Setup once the hub is on for this company */}
+      {account && selectedAccountId && hubOn && (
+        <div className="bg-white rounded-xl border shadow-sm p-6 space-y-3" data-testid="profile-invoice-settings-moved">
+          <p className="text-sm text-zinc-700">{t('profile.invoiceSettingsMoved', locale)}</p>
+          <Link href="/portal/invoices?tab=setup" className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
+            {t('profile.openInvoiceSetup', locale)}
+          </Link>
+        </div>
+      )}
+
       {/* Company Logo */}
-      {account && selectedAccountId && (
+      {account && selectedAccountId && !hubOn && (
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Building2 className="h-5 w-5 text-blue-600" />
@@ -126,7 +139,7 @@ export default async function PortalProfilePage() {
       )}
 
       {/* Bank Accounts */}
-      {account && selectedAccountId && (
+      {account && selectedAccountId && !hubOn && (
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <Landmark className="h-5 w-5 text-blue-600" />
@@ -137,7 +150,7 @@ export default async function PortalProfilePage() {
       )}
 
       {/* Payment Links */}
-      {account && selectedAccountId && (
+      {account && selectedAccountId && !hubOn && (
         <div className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
           <div className="flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-blue-600" />

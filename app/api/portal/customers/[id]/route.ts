@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { revalidatePath } from 'next/cache'
 import { NextRequest, NextResponse } from 'next/server'
+import { isSafeRecipient } from '@/lib/portal/invoice-email'
 
 /**
  * GET /api/portal/customers/[id] — Customer detail + their invoices
@@ -56,7 +57,7 @@ export async function PATCH(
   // Verify ownership
   const { data: customer } = await supabaseAdmin
     .from('client_customers')
-    .select('account_id')
+    .select('account_id, first_name, last_name, company_name')
     .eq('id', id)
     .single()
 
@@ -64,6 +65,10 @@ export async function PATCH(
 
   if (!(await canAccessAccount(user, customer.account_id, 'sales_customers'))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  if (body.email && !isSafeRecipient(body.email)) {
+    return NextResponse.json({ error: 'That email address does not look valid.' }, { status: 400 })
   }
 
   const updates: Record<string, unknown> = {}
@@ -78,8 +83,11 @@ export async function PATCH(
   if (body.country !== undefined) updates.country = body.country || null
   if (body.vat_number !== undefined) updates.vat_number = body.vat_number || null
   if (body.notes !== undefined) updates.notes = body.notes || null
-  const displayName = (body.company_name || '').trim()
-    || `${(body.first_name || '').trim()} ${(body.last_name || '').trim()}`.trim()
+  // The display name is worked out from the MERGED values, so sending only a first name no longer wipes the last name.
+  const mergedCompany = (body.company_name !== undefined ? body.company_name : customer.company_name) || ''
+  const mergedFirst = (body.first_name !== undefined ? body.first_name : customer.first_name) || ''
+  const mergedLast = (body.last_name !== undefined ? body.last_name : customer.last_name) || ''
+  const displayName = String(mergedCompany).trim() || `${String(mergedFirst).trim()} ${String(mergedLast).trim()}`.trim()
   if (displayName) updates.name = displayName
   updates.updated_at = new Date().toISOString()
 
@@ -87,6 +95,7 @@ export async function PATCH(
     .from('client_customers')
     .update(updates)
     .eq('id', id)
+    .eq('account_id', customer.account_id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   revalidatePath('/portal/customers')

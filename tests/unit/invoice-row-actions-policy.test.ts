@@ -18,8 +18,8 @@ describe('availableInvoiceActions', () => {
     expect(availableInvoiceActions('Paid')).toEqual(['edit', 'void'])
   })
 
-  it('Partial → edit, void', () => {
-    expect(availableInvoiceActions('Partial')).toEqual(['edit', 'void'])
+  it('Partial → edit, remind, void', () => {
+    expect(availableInvoiceActions('Partial')).toEqual(['edit', 'remind', 'void'])
   })
 
   it('Split → no actions (structural parent of installments)', () => {

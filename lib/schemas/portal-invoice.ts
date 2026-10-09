@@ -14,6 +14,8 @@ export const invoiceItemSchema = z.object({
   quantity: z.number().min(0.01, 'Quantity must be greater than 0'),
   unit_price: z.number().min(0, 'Price must be 0 or greater'),
   amount: z.number(),
+  // carried through an edit so an invoice that has tax keeps it (the form has no tax field of its own)
+  tax_rate: z.number().min(0).max(1).nullable().optional(),
   sort_order: z.number().default(0),
 })
 
@@ -32,9 +34,11 @@ export const createInvoiceSchema = z.object({
   items: z.array(invoiceItemSchema).min(1, 'At least one line item is required'),
 })
 
+// What an edit may change. `status`, `paid_date`, `account_id` and every amount are deliberately NOT here: zod
+// drops unknown keys, so a forged payload cannot move an invoice to another company or flip it to Paid
+// (dev job 1a23f5f1). Those only change through the named actions (send, mark paid, payment, void).
 export const updateInvoiceSchema = z.object({
   id: z.string().uuid(),
-  account_id: z.string().uuid(),
   customer_id: z.string().uuid().optional(),
   currency: z.enum(['USD', 'EUR']).optional(),
   discount: z.number().min(0).optional(),
@@ -42,8 +46,6 @@ export const updateInvoiceSchema = z.object({
   due_date: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   message: z.string().optional().nullable(),
-  status: z.enum(['Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled']).optional(),
-  paid_date: z.string().optional().nullable(),
   bank_account_id: z.string().uuid().nullable().optional(),
   items: z.array(invoiceItemSchema).optional(),
 })

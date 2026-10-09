@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import dynamic from 'next/dynamic'
 import { ThreadTodoPanel } from '@/components/portal-chats/thread-todo-panel'
 import { ThreadWhatsNewPanel } from '@/components/portal-chats/thread-whats-new-panel'
+import { ThreadIdeasPanel } from '@/components/portal-chats/thread-ideas-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
@@ -410,7 +411,7 @@ export default function PortalChatsPage() {
   const [isDraggingAdmin, setIsDraggingAdmin] = useState(false)
   const [uploadingAdminFile, setUploadingAdminFile] = useState(false)
   // Right-pane sub-tab: Messages | What's New (incoming client-action notes) | To Do (cards)
-  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'todo' | 'email' | 'worker'>('messages')
+  const [chatViewMode, setChatViewMode] = useState<'messages' | 'whatsnew' | 'ideas' | 'todo' | 'email' | 'worker'>('messages')
   // Chat-list filter chip: all / unread / whatsnew / issues.
   const [listFilter, setListFilter] = useState<'all' | 'unread' | 'whatsnew'>('all')
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
@@ -789,6 +790,17 @@ export default function PortalChatsPage() {
     queryKey: ['portal-chat-whats-new-counts'],
     queryFn: () => fetch('/api/crm/admin-actions/whats-new?counts=true').then(r => r.json()),
     refetchInterval: 30_000,
+  })
+
+  // Per-thread BLUE dot = unhandled feature ideas this client wrote in the invoicing hub ("Idea request" tab).
+  const { data: ideaCounts } = useQuery<{
+    by_account: Record<string, number>
+    by_contact: Record<string, number>
+    total: number
+  }>({
+    queryKey: ['portal-chat-feature-idea-counts'],
+    queryFn: () => fetch('/api/crm/admin-actions/feature-ideas?counts=true').then(r => r.json()),
+    refetchInterval: 60_000,
   })
 
   // Per-thread GREEN dot = unread email threads from this client in support@.
@@ -3361,6 +3373,34 @@ export default function PortalChatsPage() {
                     </button>
                   )
                 })()}
+                {(() => {
+                  // Blue dot = ideas this client wrote that nobody has handled yet (this thread only).
+                  const ideasNew = selectedAccountId
+                    ? (ideaCounts?.by_account?.[selectedAccountId] ?? 0)
+                    : selectedContactId
+                      ? (ideaCounts?.by_contact?.[selectedContactId] ?? 0)
+                      : 0
+                  return (
+                    <button
+                      onClick={() => setChatViewMode('ideas')}
+                      data-testid="ideas-tab"
+                      className={cn(
+                        'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                        chatViewMode === 'ideas'
+                          ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/30'
+                          : 'text-zinc-500 hover:text-zinc-700 border-b-2 border-transparent'
+                      )}
+                    >
+                      <Lightbulb className="h-3.5 w-3.5" />
+                      Idea request
+                      {ideasNew > 0 && (
+                        <span data-testid="ideas-dot" className="inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full text-[9px] font-bold bg-blue-500 text-white">
+                          {ideasNew > 999 ? '999+' : ideasNew}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })()}
                 <button
                   onClick={() => setChatViewMode('todo')}
                   className={cn(
@@ -3612,6 +3652,8 @@ export default function PortalChatsPage() {
                   })
                 }}
               />
+            ) : chatViewMode === 'ideas' && (selectedAccountId || selectedContactId) ? (
+              <ThreadIdeasPanel accountId={selectedAccountId} contactId={selectedContactId} />
             ) : chatViewMode === 'todo' && (selectedAccountId || selectedContactId || panelCompanyId) ? (
               <ThreadTodoPanel accountId={selectedAccountId || panelCompanyId} contactId={selectedContactId} />
             ) : chatViewMode === 'email' && (selectedAccountId || selectedContactId || panelCompanyId) ? (

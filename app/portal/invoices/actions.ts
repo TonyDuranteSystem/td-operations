@@ -7,10 +7,30 @@ import {
   createInvoiceSchema, updateInvoiceSchema, createCustomerSchema, createTemplateSchema,
   type CreateInvoiceInput, type UpdateInvoiceInput, type CreateCustomerInput, type CreateTemplateInput,
 } from '@/lib/schemas/portal-invoice'
+import {
+  authorizeAccount, authorizeInvoice, belongsToAccount, actorLabel,
+} from '@/lib/portal/invoice-access'
+import { invoiceStatusRule } from '@/lib/portal/invoice-status'
+
+// EVERY exported function here is a public endpoint (a 'use server' file). Each one MUST start with
+// authorizeAccount / authorizeInvoice from lib/portal/invoice-access.ts, which takes the company from the
+// STORED row. tests/unit/portal-invoice-actions-access.test.ts fails if an export skips the guard.
+
+const round2 = (n: number) => Math.round(n * 100) / 100
+const YMD = /^\d{4}-\d{2}-\d{2}$/
+
+function deny(access: { error: string }): { success: false; error: string } {
+  return { success: false, error: access.error }
+}
 
 export async function createCustomer(input: CreateCustomerInput): Promise<ActionResult<{ id: string }>> {
   const parsed = createCustomerSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
+
+  // Same capability as the Customers page; a teammate who may invoice can also add the customer in the form.
+  let access = await authorizeAccount(parsed.data.account_id, 'sales_customers')
+  if ('error' in access) access = await authorizeAccount(parsed.data.account_id, 'invoices_billing')
+  if ('error' in access) return deny(access)
 
   return safeAction(async () => {
     const { data, error } = await supabaseAdmin
@@ -31,19 +51,35 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
   const parsed = createInvoiceSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
+  const access = await authorizeAccount(parsed.data.account_id)
+  if ('error' in access) return deny(access)
+  const { accountId } = access
+
+  // Everything the payload points at must belong to THIS company.
+  if (!(await belongsToAccount('client_customers', parsed.data.customer_id, accountId))) {
+    return { success: false, error: 'That customer does not belong to this company.' }
+  }
+  if (parsed.data.bank_account_id && !(await belongsToAccount('client_bank_accounts', parsed.data.bank_account_id, accountId))) {
+    return { success: false, error: 'That bank account does not belong to this company.' }
+  }
+
   return safeAction(async () => {
     const { items, recurring_frequency, recurring_end_date, ...invoiceData } = parsed.data
     const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
 
     const result = await createUnifiedInvoice({
-      account_id: invoiceData.account_id || undefined,
-      customer_id: invoiceData.customer_id || undefined,
+      account_id: accountId,
+      customer_id: invoiceData.customer_id,
       line_items: items.map(item => ({
         description: item.description,
         unit_price: item.unit_price,
         quantity: item.quantity,
+        tax_rate: item.tax_rate ?? undefined,
       })),
       currency: (invoiceData.currency || 'USD') as 'USD' | 'EUR',
+      discount: invoiceData.discount,
+      issue_date: invoiceData.issue_date && YMD.test(invoiceData.issue_date) ? invoiceData.issue_date : undefined,
+      bank_account_id: invoiceData.bank_account_id ?? null,
       due_date: invoiceData.due_date || undefined,
       notes: invoiceData.notes || undefined,
       message: invoiceData.message || undefined,
@@ -54,7 +90,7 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
     revalidatePath('/portal/invoices')
     return { id: result.invoiceId, invoice_number: result.invoiceNumber }
   }, {
-    action_type: 'create', table_name: 'client_invoices', account_id: parsed.data.account_id,
+    action_type: 'create', table_name: 'client_invoices', account_id: accountId,
     summary: `Invoice created`,
   })
 }
@@ -63,35 +99,114 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
   const parsed = updateInvoiceSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
+  // The company is the STORED one. `parsed.data.account_id` (if the caller sent one) is never used.
+  const access = await authorizeInvoice(parsed.data.id)
+  if ('error' in access) return deny(access)
+  const { accountId, user } = access
+
+  const { data: current, error: readErr } = await supabaseAdmin
+    .from('client_invoices')
+    .select('*')
+    .eq('id', parsed.data.id)
+    .eq('account_id', accountId)
+    .maybeSingle()
+  if (readErr || !current) return { success: false, error: 'Invoice not found' }
+  if (!invoiceStatusRule(current.status)?.editable) {
+    return { success: false, error: `A ${current.status} invoice cannot be edited.` }
+  }
+
+  if (parsed.data.customer_id && !(await belongsToAccount('client_customers', parsed.data.customer_id, accountId))) {
+    return { success: false, error: 'That customer does not belong to this company.' }
+  }
+  if (parsed.data.bank_account_id && !(await belongsToAccount('client_bank_accounts', parsed.data.bank_account_id, accountId))) {
+    return { success: false, error: 'That bank account does not belong to this company.' }
+  }
+
   return safeAction(async () => {
-    const { id, items, ...updates } = parsed.data
+    const { id, items } = parsed.data
 
-    // If items provided, recalculate totals
+    // WHITELIST. status, paid_date, account_id and every amount are NOT editable here: they only move through
+    // the named actions (send, mark paid, partial payment, void) that enforce their own rules.
+    const updates: Record<string, unknown> = {}
+    const d = parsed.data
+    if (d.customer_id !== undefined) updates.customer_id = d.customer_id
+    if (d.currency !== undefined) updates.currency = d.currency
+    if (d.issue_date !== undefined && YMD.test(d.issue_date)) updates.issue_date = d.issue_date
+    if (d.due_date !== undefined) updates.due_date = d.due_date && YMD.test(d.due_date) ? d.due_date : null
+    if (d.notes !== undefined) updates.notes = d.notes
+    if (d.message !== undefined) updates.message = d.message
+    if (d.bank_account_id !== undefined) updates.bank_account_id = d.bank_account_id
+
+    // Totals are computed HERE from quantity x price, never trusted from the browser.
+    let itemRows: Array<Record<string, unknown>> | null = null
+    let subtotal = round2(Number(current.subtotal) || 0)
+    let taxTotal = round2(Number(current.tax_total) || 0)
     if (items) {
-      const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
-      const discount = updates.discount ?? 0
-      Object.assign(updates, { subtotal, total: Math.max(subtotal - discount, 0) })
-
-      // Replace items
-      await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
-      const itemRows = items.map((item, i) => ({ invoice_id: id, ...item, sort_order: i }))
-      await supabaseAdmin.from('client_invoice_items').insert(itemRows)
+      itemRows = items.map((item, i) => {
+        const amount = round2(item.quantity * item.unit_price)
+        const taxRate = item.tax_rate ?? 0
+        return {
+          invoice_id: id,
+          description: item.description,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          amount,
+          tax_rate: taxRate,
+          tax_amount: round2(amount * taxRate),
+          sort_order: i,
+        }
+      })
+      subtotal = round2(itemRows.reduce((sum, r) => sum + (r.amount as number), 0))
+      // Tax rides along with each line (the edit form hands the stored rate back), so editing never drops it.
+      taxTotal = round2(itemRows.reduce((sum, r) => sum + (r.tax_amount as number), 0))
     }
+    const discount = round2(Math.min(Math.max(d.discount ?? (Number(current.discount) || 0), 0), subtotal))
+    const total = round2(subtotal - discount + taxTotal)
+    // A row that says Paid but never recorded the money (legacy) is treated as paid in full at its OLD total, so an
+    // edit neither re-opens it by accident nor leaves it Paid while owing money.
+    const recordedPaid = round2(Number(current.amount_paid) || 0)
+    const paid = current.status === 'Paid' && recordedPaid <= 0 ? round2(Number(current.total) || 0) : recordedPaid
+    const due = round2(Math.max(total - paid, 0))
+    Object.assign(updates, { subtotal, discount, tax_total: taxTotal, total, amount_due: due })
+    if (paid !== recordedPaid) updates.amount_paid = paid
+    // Edits can move a settled invoice back to open (higher total) or settle it (lower total).
+    if (paid > 0) updates.status = due <= 0 ? 'Paid' : 'Partial'
 
-    const { error } = await supabaseAdmin
+    // 1) The HEADER goes first, as a compare-and-swap on updated_at: if a payment, another tab or a double click
+    //    changed the invoice since we read it, this matches nothing and the edit is refused. Only the winner then
+    //    touches the lines, so two saves can never double them.
+    const previous: Record<string, unknown> = {}
+    for (const key of Object.keys(updates)) previous[key] = (current as Record<string, unknown>)[key] ?? null
+    let guarded = supabaseAdmin
       .from('client_invoices')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
-
+      .eq('account_id', accountId)
+    guarded = current.updated_at ? guarded.eq('updated_at', current.updated_at) : guarded
+    const { data: written, error } = await guarded.select('id')
     if (error) throw new Error(error.message)
+    if (!written || written.length === 0) throw new Error('This invoice just changed. Please refresh the page and try again.')
 
-    // Audit trail
+    // 2) Then the lines. If they cannot be saved, put the old lines AND the old header numbers back.
+    if (itemRows) {
+      const { data: oldItems } = await supabaseAdmin.from('client_invoice_items').select('*').eq('invoice_id', id)
+      const revert = async () => {
+        await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
+        if (oldItems && oldItems.length > 0) await supabaseAdmin.from('client_invoice_items').insert(oldItems as never)
+        await supabaseAdmin.from('client_invoices').update({ ...previous, updated_at: current.updated_at ?? new Date().toISOString() }).eq('id', id).eq('account_id', accountId)
+      }
+      const { error: delErr } = await supabaseAdmin.from('client_invoice_items').delete().eq('invoice_id', id)
+      if (delErr) { await revert(); throw new Error(`Could not replace the invoice lines: ${delErr.message}`) }
+      const { error: insErr } = await supabaseAdmin.from('client_invoice_items').insert(itemRows as never)
+      if (insErr) { await revert(); throw new Error(`Could not save the invoice lines: ${insErr.message}`) }
+    }
+
     const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
     logInvoiceAudit({
       invoice_id: id,
       action: 'edited',
       changed_fields: updates,
-      performed_by: 'system',
+      performed_by: actorLabel(user),
     })
 
     revalidatePath('/portal/invoices')
@@ -102,12 +217,13 @@ export async function updateInvoice(input: UpdateInvoiceInput): Promise<ActionRe
 }
 
 export async function markInvoiceAsPaid(invoiceId: string, paidDate: string): Promise<ActionResult> {
+  const access = await authorizeInvoice(invoiceId)
+  if ('error' in access) return deny(access)
+
   return safeAction(async () => {
-    const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
-    // Fetch invoice total to pass as amount
-    const { data: inv } = await supabaseAdmin.from('client_invoices').select('total, amount_paid').eq('id', invoiceId).single()
-    const remainingAmount = inv ? Number(inv.total) - (Number(inv.amount_paid) || 0) : undefined
-    await syncInvoiceStatus('invoice', invoiceId, 'Paid', paidDate, remainingAmount)
+    const { applyClientInvoicePayment } = await import('@/lib/portal/unified-invoice')
+    const r = await applyClientInvoicePayment(invoiceId, 'rest', paidDate, actorLabel(access.user))
+    if ('error' in r) throw new Error(r.error)
     revalidatePath('/portal/invoices')
   }, {
     action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
@@ -120,150 +236,54 @@ export async function recordPartialPayment(
   amountPaid: number,
   paidDate: string
 ): Promise<ActionResult> {
+  const access = await authorizeInvoice(invoiceId)
+  if ('error' in access) return deny(access)
+
   return safeAction(async () => {
-    const { syncInvoiceStatus } = await import('@/lib/portal/unified-invoice')
-    await syncInvoiceStatus('invoice', invoiceId, 'Partial', paidDate, amountPaid)
+    const { applyClientInvoicePayment } = await import('@/lib/portal/unified-invoice')
+    const r = await applyClientInvoicePayment(invoiceId, amountPaid, paidDate, actorLabel(access.user))
+    if ('error' in r) throw new Error(r.error)
     revalidatePath('/portal/invoices')
   }, {
     action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
-    summary: `Partial payment recorded: ${amountPaid}`,
+    summary: `Payment recorded: ${amountPaid}`,
   })
 }
 
-export async function splitInvoice(
-  invoiceId: string,
-  installments: Array<{ amount: number; due_date: string }>
-): Promise<ActionResult<{ childIds: string[] }>> {
-  return safeAction(async () => {
-    const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
-
-    // 1. Fetch parent invoice (must be status 'Sent' or 'Draft')
-    const { data: parent, error: parentErr } = await supabaseAdmin
-      .from('client_invoices')
-      .select('*, client_invoice_items(*)')
-      .eq('id', invoiceId)
-      .single()
-
-    if (parentErr || !parent) throw new Error(`Invoice not found: ${parentErr?.message || 'not found'}`)
-    if (!['Sent', 'Draft'].includes(parent.status)) {
-      throw new Error(`Cannot split invoice with status '${parent.status}' — must be Draft or Sent`)
-    }
-
-    // 2. Validate: sum of installment amounts must equal parent total
-    const installmentSum = installments.reduce((sum, inst) => sum + inst.amount, 0)
-    if (Math.abs(installmentSum - Number(parent.total)) >= 0.01) {
-      throw new Error(`Installment sum (${installmentSum}) does not match invoice total (${parent.total})`)
-    }
-
-    // 3. Update parent: status = 'Split' (non-payable)
-    await supabaseAdmin
-      .from('client_invoices')
-      .update({ status: 'Split', updated_at: new Date().toISOString() })
-      .eq('id', invoiceId)
-
-    // Audit trail
-    const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
-    logInvoiceAudit({
-      invoice_id: invoiceId,
-      action: 'split',
-      new_values: { status: 'Split', installments: installments.length },
-      performed_by: 'system',
-    })
-
-    // Also update linked payment
-    const { data: linkedPay } = await supabaseAdmin
-      .from('payments')
-      .select('id')
-      .eq('portal_invoice_id', invoiceId)
-      .limit(1)
-      .maybeSingle()
-    if (linkedPay) {
-      // eslint-disable-next-line no-restricted-syntax -- legacy portal_invoice_id-linked payment sync on split; tracked by dev_task 7ebb1e0c
-      await supabaseAdmin.from('payments').update({
-        status: 'Split' as never,
-        invoice_status: 'Split' as never,
-        updated_at: new Date().toISOString(),
-      }).eq('id', linkedPay.id)
-    }
-
-    // 4. Create child invoices
-    const childIds: string[] = []
-    const childStatus = parent.status === 'Sent' ? 'Sent' : 'Draft'
-
-    for (let idx = 0; idx < installments.length; idx++) {
-      const inst = installments[idx]
-
-      // Use a single line item per child with exact installment amount
-      // This avoids rounding drift from proportionally scaling multiple items
-      const lineItems = [{
-        description: `Installment ${idx + 1}/${installments.length} — ${parent.invoice_number || 'Split'}`,
-        unit_price: inst.amount,
-        quantity: 1,
-      }]
-
-      const result = await createUnifiedInvoice({
-        account_id: parent.account_id || undefined,
-        contact_id: parent.contact_id || undefined,
-        customer_id: parent.customer_id || undefined,
-        line_items: lineItems,
-        currency: parent.currency as never,
-        due_date: inst.due_date,
-        notes: parent.notes || undefined,
-        message: parent.message || undefined,
-        parent_invoice_id: invoiceId,
-      })
-
-      // If parent was 'Sent', update child to 'Sent' too
-      if (childStatus === 'Sent') {
-        await supabaseAdmin
-          .from('client_invoices')
-          .update({ status: 'Sent' })
-          .eq('id', result.invoiceId)
-        // eslint-disable-next-line no-restricted-syntax -- legacy portal_invoice_id-linked payment sync on split child; tracked by dev_task 7ebb1e0c
-        await supabaseAdmin
-          .from('payments')
-          .update({ status: 'Pending', invoice_status: 'Sent' })
-          .eq('id', result.paymentId)
-      }
-
-      childIds.push(result.invoiceId)
-    }
-
-    revalidatePath('/portal/invoices')
-    return { childIds }
-  }, {
-    action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
-    summary: `Invoice split into ${installments.length} installments`,
-  })
-}
+// splitInvoice was removed 2026-10-09: nothing in the app called it, it set the parent to Split before the children
+// existed with no rollback, and accepted negative installments. Existing Split parents keep working
+// (checkParentCompletion in lib/portal/unified-invoice.ts still closes a parent when its children are paid).
 
 // --- Void / Duplicate actions ---
 
 export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
+  const access = await authorizeInvoice(invoiceId)
+  if ('error' in access) return deny(access)
+
   return safeAction(async () => {
-    // Verify status allows voiding
     const { data: inv } = await supabaseAdmin
       .from('client_invoices')
       .select('status')
       .eq('id', invoiceId)
-      .single()
+      .eq('account_id', access.accountId)
+      .maybeSingle()
     if (!inv) throw new Error('Invoice not found')
-    // The client's invoice tool follows the standard lifecycle: any invoice
-    // can be voided (Draft/Sent/Overdue/Paid/Partial) — it's the client's own
-    // record, not a TD accounting document. Only an already-voided invoice
-    // can't be re-voided, and a Split parent is structurally tied to its
-    // installment children so it's left out.
-    if (inv.status === 'Cancelled') {
-      throw new Error('Invoice is already voided')
-    }
-    if (inv.status === 'Split') {
-      throw new Error('Cannot void a split invoice — void its installments instead')
-    }
+    // The client's invoice tool follows the standard lifecycle: any invoice can be voided
+    // (Draft/Sent/Overdue/Paid/Partial) — it's the client's own record, not a TD accounting document. Only an
+    // already-voided invoice can't be re-voided, and a Split parent is structurally tied to its installment
+    // children so it's left out.
+    if (inv.status === 'Cancelled') throw new Error('Invoice is already voided')
+    if (inv.status === 'Split') throw new Error('Cannot void a split invoice — void its installments instead')
 
-    await supabaseAdmin
+    const { data: written, error } = await supabaseAdmin
       .from('client_invoices')
       .update({ status: 'Cancelled', updated_at: new Date().toISOString() })
       .eq('id', invoiceId)
+      .eq('account_id', access.accountId)
+      .not('status', 'in', '("Cancelled","Split")')
+      .select('id')
+    if (error) throw new Error(error.message)
+    if (!written || written.length === 0) throw new Error('This invoice just changed. Please refresh and try again.')
 
     const { logInvoiceAudit } = await import('@/lib/portal/invoice-audit')
     logInvoiceAudit({
@@ -271,7 +291,7 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
       action: 'voided',
       previous_values: { status: inv.status },
       new_values: { status: 'Cancelled' },
-      performed_by: 'client',
+      performed_by: actorLabel(access.user),
     })
 
     revalidatePath('/portal/invoices')
@@ -282,28 +302,35 @@ export async function voidInvoice(invoiceId: string): Promise<ActionResult> {
 }
 
 export async function duplicateInvoice(invoiceId: string): Promise<ActionResult<{ id: string; invoice_number: string }>> {
+  const access = await authorizeInvoice(invoiceId)
+  if ('error' in access) return deny(access)
+
   return safeAction(async () => {
-    // Fetch source invoice with items
     const { data: source } = await supabaseAdmin
       .from('client_invoices')
       .select('*, client_invoice_items(*)')
       .eq('id', invoiceId)
-      .single()
+      .eq('account_id', access.accountId)
+      .maybeSingle()
     if (!source) throw new Error('Invoice not found')
 
     const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
-    const items = (source.client_invoice_items || []).map((item: { description: string; unit_price: number; quantity: number }) => ({
-      description: item.description,
-      unit_price: item.unit_price,
-      quantity: item.quantity,
-    }))
+    const items = (source.client_invoice_items || []).map(
+      (item: { description: string; unit_price: number; quantity: number; tax_rate: number | null }) => ({
+        description: item.description,
+        unit_price: item.unit_price,
+        quantity: item.quantity,
+        tax_rate: item.tax_rate ?? undefined,
+      }),
+    )
 
     const result = await createUnifiedInvoice({
-      account_id: source.account_id || undefined,
-      contact_id: source.contact_id || undefined,
+      account_id: access.accountId,
       customer_id: source.customer_id || undefined,
       line_items: items,
       currency: source.currency as 'USD' | 'EUR',
+      discount: Number(source.discount) || 0,
+      bank_account_id: source.bank_account_id || null,
       notes: source.notes || undefined,
       message: source.message || undefined,
     })
@@ -322,28 +349,37 @@ export async function createTemplate(input: CreateTemplateInput): Promise<Action
   const parsed = createTemplateSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
+  const access = await authorizeAccount(parsed.data.account_id)
+  if ('error' in access) return deny(access)
+  if (parsed.data.customer_id && !(await belongsToAccount('client_customers', parsed.data.customer_id, access.accountId))) {
+    return { success: false, error: 'That customer does not belong to this company.' }
+  }
+
   return safeAction(async () => {
     const { data, error } = await supabaseAdmin
       .from('client_invoice_templates')
-      .insert(parsed.data)
+      .insert({ ...parsed.data, account_id: access.accountId })
       .select('id')
       .single()
     if (error) throw new Error(error.message)
     revalidatePath('/portal/invoices')
     return data
   }, {
-    action_type: 'create', table_name: 'client_invoice_templates', account_id: parsed.data.account_id,
+    action_type: 'create', table_name: 'client_invoice_templates', account_id: access.accountId,
     summary: `Template created: ${parsed.data.name}`,
   })
 }
 
 export async function deleteTemplate(id: string, accountId: string): Promise<ActionResult> {
+  const access = await authorizeAccount(accountId)
+  if ('error' in access) return deny(access)
+
   return safeAction(async () => {
     const { error } = await supabaseAdmin
       .from('client_invoice_templates')
       .delete()
       .eq('id', id)
-      .eq('account_id', accountId)
+      .eq('account_id', access.accountId)
     if (error) throw new Error(error.message)
     revalidatePath('/portal/invoices')
   }, {
@@ -362,11 +398,15 @@ interface TemplateRow {
   created_at: string
 }
 
+/** Returns an empty list (never throws) when the caller may not see this company, so a page never crashes on it. */
 export async function listTemplates(accountId: string): Promise<TemplateRow[]> {
+  const access = await authorizeAccount(accountId)
+  if ('error' in access) return []
+
   const { data } = await supabaseAdmin
     .from('client_invoice_templates')
     .select('id, name, customer_id, currency, items, message, created_at')
-    .eq('account_id', accountId)
+    .eq('account_id', access.accountId)
     .order('created_at', { ascending: false })
 
   return (data ?? []) as unknown as TemplateRow[]

@@ -12,21 +12,12 @@ import { toast } from 'sonner'
 import { markInvoiceAsPaid, recordPartialPayment, voidInvoice, duplicateInvoice, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
-import { PayNow } from '@/components/portal/pay-now'
+import { InvoiceSendNotices } from '@/components/portal/invoice-send-notices'
+import { sendNotices } from '@/lib/portal/invoice-send-notices'
+import { invoiceStatusRule } from '@/lib/portal/invoice-status'
 
-interface PaymentMethod {
-  name: string
-  currency: string
-  active: boolean
-  type: 'zelle' | 'ach' | 'wire'
-  email?: string
-  bank_name?: string
-  account_number?: string
-  routing_number?: string
-  account_holder?: string
-  iban?: string
-  swift?: string
-}
+// The calendar day in the user's own timezone (toISOString() is UTC: after 8pm in New York it is already tomorrow).
+const todayLocal = () => new Date().toLocaleDateString('en-CA')
 
 interface InvoiceDetail {
   id: string
@@ -37,6 +28,7 @@ interface InvoiceDetail {
   currency: string
   subtotal: number
   discount: number
+  tax_total?: number | null
   total: number
   amount_paid: number | null
   amount_due: number | null
@@ -46,10 +38,9 @@ interface InvoiceDetail {
   notes: string | null
   message: string | null
   created_at: string
-  whop_checkout_url: string | null
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
-  payment_methods: PaymentMethod[]
+  payment_setup?: { hasBankAccount: boolean; hasPaymentLink: boolean }
   seller: {
     company_name: string | null
     invoice_logo_url: string | null
@@ -64,6 +55,8 @@ const STATUS_COLORS: Record<string, string> = {
   Sent: 'bg-blue-100 text-blue-700',
   Paid: 'bg-emerald-100 text-emerald-700',
   Overdue: 'bg-red-100 text-red-700',
+  Partial: 'bg-amber-100 text-amber-700',
+  Split: 'bg-zinc-100 text-zinc-600',
   Cancelled: 'bg-zinc-100 text-zinc-500',
 }
 
@@ -77,11 +70,12 @@ export default function InvoiceDetailPage() {
   const router = useRouter()
   const invoiceId = params.id as string
 
-  const { t, locale } = useLocale()
+  const { t } = useLocale()
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
   const [sending, setSending] = useState(false)
+  const [confirmingSendAnyway, setConfirmingSendAnyway] = useState(false)
   const [reminding, setReminding] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
   const [showPartialModal, setShowPartialModal] = useState(false)
@@ -128,29 +122,70 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  const handleSend = async () => {
-    if (!invoice?.customer?.email) {
+  const notices = invoice
+    ? sendNotices({
+        status: invoice.status,
+        customerEmail: invoice.customer?.email,
+        hasBankAccount: invoice.payment_setup?.hasBankAccount ?? true,
+        hasPaymentLink: invoice.payment_setup?.hasPaymentLink ?? true,
+      })
+    : []
+
+  const handleSend = async (skipPaymentWarning = false) => {
+    if (notices.some(n => n.blocksSend)) {
+      // The permanent banner above says why and lets the client fix it on the spot.
+      document.getElementById('invoice-customer-email')?.focus()
       toast.error(t('invoices.addEmailToSend'))
+      return
+    }
+    if (!skipPaymentWarning && notices.some(n => n.id === 'no-payment-details')) {
+      setConfirmingSendAnyway(true)
       return
     }
     setSending(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoiceId}/send`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to send')
-      setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)
-      toast.success(`Invoice sent to ${invoice.customer.email}`)
-    } catch {
-      toast.error('Failed to send invoice')
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Failed to send invoice. Please try again.')
+      setConfirmingSendAnyway(false)
+      if (d.statusUpdated === false) {
+        toast.warning(t('invoices.sentNotSaved'))
+      } else {
+        setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)
+        toast.success(`Invoice sent to ${invoice?.customer?.email}`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send invoice')
     } finally {
       setSending(false)
     }
   }
 
+  const handleSaveCustomerEmail = async (email: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/portal/invoices/${invoiceId}/customer-email`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not save the email. Please try again.')
+      setInvoice(prev => prev && prev.customer ? { ...prev, customer: { ...prev.customer, email: d.email } } : prev)
+      toast.success(t('invoices.emailSaved'))
+      return true
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not save the email.')
+      return false
+    }
+  }
+
   const handleMarkPaid = () => {
     startTransition(async () => {
-      const result = await markInvoiceAsPaid(invoiceId, new Date().toISOString().split('T')[0])
+      const result = await markInvoiceAsPaid(invoiceId, todayLocal())
       if (result.success) {
-        setInvoice(prev => prev ? { ...prev, status: 'Paid', paid_date: new Date().toISOString().split('T')[0] } : prev)
+        // Reload so the amounts shown (paid / still due) are the ones the server saved.
+        const res = await fetch(`/api/portal/invoices/${invoiceId}`)
+        if (res.ok) setInvoice(await res.json())
         toast.success('Invoice marked as paid')
       } else {
         toast.error(result.error ?? 'Failed to update')
@@ -166,10 +201,14 @@ export default function InvoiceDetailPage() {
     setReminding(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoiceId}/remind`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to send reminder')
+      if (!res.ok) {
+        // Show the real reason (e.g. "already sent in the last 12 hours"), not a generic failure (R099).
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Failed to send reminder')
+      }
       toast.success(`Reminder sent to ${invoice.customer.email}`)
-    } catch {
-      toast.error('Failed to send reminder')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send reminder')
     } finally {
       setReminding(false)
     }
@@ -181,7 +220,7 @@ export default function InvoiceDetailPage() {
     const result = await createTemplate({
       account_id: invoice.account_id ?? '',
       name: templateName.trim(),
-      customer_id: invoice.customer ? undefined : undefined,
+      customer_id: invoice.customer_id ?? undefined,
       currency: invoice.currency as 'USD' | 'EUR',
       items: invoice.items.map(i => ({ description: i.description, quantity: i.quantity, unit_price: i.unit_price })),
       message: invoice.message,
@@ -228,7 +267,7 @@ export default function InvoiceDetailPage() {
       return
     }
     startTransition(async () => {
-      const result = await recordPartialPayment(invoiceId, amount, new Date().toISOString().split('T')[0])
+      const result = await recordPartialPayment(invoiceId, amount, todayLocal())
       if (result.success) {
         setShowPartialModal(false)
         setPartialAmount('')
@@ -281,7 +320,7 @@ export default function InvoiceDetailPage() {
 
         {/* Actions — stack on mobile */}
         <div className="grid grid-cols-2 sm:flex gap-2 sm:flex-wrap">
-          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
+          {invoiceStatusRule(invoice.status)?.editable && (
             <Link
               href={`/portal/invoices/${invoiceId}/edit`}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50"
@@ -305,7 +344,7 @@ export default function InvoiceDetailPage() {
               (instead of hiding the button and leaving them confused). */}
           {invoice.status === 'Draft' && (
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={sending}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
@@ -314,7 +353,7 @@ export default function InvoiceDetailPage() {
             </button>
           )}
 
-          {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
+          {(invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
             <>
               <button
                 onClick={handleRemind}
@@ -353,11 +392,11 @@ export default function InvoiceDetailPage() {
             Duplicate
           </button>
 
-          {/* Partial Payment — for Sent/Overdue */}
-          {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
+          {/* Payment — for anything still waiting for money, including a part-paid invoice (it used to dead-end there) */}
+          {(invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
             <button
               onClick={() => {
-                const remaining = Number(invoice.total) - (Number(invoice.amount_paid) || 0)
+                const remaining = Math.max(Number(invoice.total) - (Number(invoice.amount_paid) || 0), 0)
                 setPartialAmount(remaining.toFixed(2))
                 setShowPartialModal(true)
               }}
@@ -368,8 +407,8 @@ export default function InvoiceDetailPage() {
             </button>
           )}
 
-          {/* Void — for Draft/Sent/Overdue */}
-          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
+          {/* Void — whenever the status table allows it */}
+          {invoiceStatusRule(invoice.status)?.voidable && (
             <button
               onClick={() => setShowVoidConfirm(true)}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
@@ -380,6 +419,16 @@ export default function InvoiceDetailPage() {
           )}
         </div>
       </div>
+
+      <InvoiceSendNotices
+        notices={notices}
+        t={t}
+        onSaveEmail={handleSaveCustomerEmail}
+        confirmingSendAnyway={confirmingSendAnyway}
+        onSendAnyway={() => handleSend(true)}
+        onCancelSendAnyway={() => setConfirmingSendAnyway(false)}
+        sending={sending}
+      />
 
       {/* Void Confirmation Modal */}
       {showVoidConfirm && (
@@ -469,18 +518,6 @@ export default function InvoiceDetailPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Pay Now — only for Sent/Overdue invoices */}
-      {['Sent', 'Overdue'].includes(invoice.status) && invoice.payment_methods?.length > 0 && (
-        <PayNow
-          invoiceNumber={invoice.invoice_number}
-          total={invoice.total}
-          currency={invoice.currency}
-          paymentMethods={invoice.payment_methods}
-          whopCheckoutUrl={invoice.whop_checkout_url ?? null}
-          locale={locale}
-        />
       )}
 
       {/* Invoice Card */}
@@ -601,10 +638,28 @@ export default function InvoiceDetailPage() {
                 <span className="text-red-600">-{currencySymbol}{invoice.discount.toFixed(2)}</span>
               </div>
             )}
+            {(Number(invoice.tax_total) || 0) > 0 && (
+              <div className="flex justify-between" data-testid="invoice-tax">
+                <span className="text-zinc-500">{t('invoices.tax')}</span>
+                <span>{currencySymbol}{Number(invoice.tax_total).toFixed(2)}</span>
+              </div>
+            )}
             <div className="flex justify-between pt-2 border-t font-semibold text-lg">
               <span>Total</span>
               <span>{currencySymbol}{invoice.total.toFixed(2)}</span>
             </div>
+            {(Number(invoice.amount_paid) || 0) > 0 && (
+              <>
+                <div className="flex justify-between text-emerald-700" data-testid="invoice-amount-paid">
+                  <span>Paid</span>
+                  <span>-{currencySymbol}{(Number(invoice.amount_paid) || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-semibold" data-testid="invoice-amount-due">
+                  <span>Still due</span>
+                  <span>{currencySymbol}{Math.max(Number(invoice.total) - (Number(invoice.amount_paid) || 0), 0).toFixed(2)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

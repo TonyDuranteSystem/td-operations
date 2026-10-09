@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Upload, Loader2, X, ImageIcon } from 'lucide-react'
+import { Loader2, ImageIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
@@ -75,7 +75,7 @@ export function LogoUpload({ accountId, currentUrl }: LogoUploadProps) {
       <input
         ref={fileRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/svg+xml"
+        accept="image/jpeg,image/png"
         onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])}
         className="hidden"
       />

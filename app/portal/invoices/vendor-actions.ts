@@ -38,6 +38,9 @@ export interface Vendor {
  * List all vendors for an account.
  */
 export async function listVendors(accountId: string): Promise<Vendor[]> {
+  // This file is 'use server', so this function is a public endpoint: it must check who is asking. A denied caller
+  // gets an empty list (never an error) so a page that loads it can not crash.
+  try { await assertOwnsVendorAccount(accountId) } catch { return [] }
   const { data } = await supabaseAdmin
     .from('client_vendors')
     .select('*')

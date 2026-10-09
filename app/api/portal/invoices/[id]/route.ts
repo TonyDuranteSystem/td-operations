@@ -40,29 +40,17 @@ export async function GET(
       .from('client_customers')
       .select('name, email, address, vat_number')
       .eq('id', invoice.customer_id)
-      .single()
+      .eq('account_id', invoice.account_id) // a customer of another company is never shown on this invoice
+      .maybeSingle()
     customer = data
   }
 
   // Fetch line items
   const { data: items } = await supabaseAdmin
     .from('client_invoice_items')
-    .select('description, quantity, unit_price, amount, sort_order')
+    .select('description, quantity, unit_price, amount, tax_rate, sort_order')
     .eq('invoice_id', id)
     .order('sort_order')
-
-  // Fetch payment methods for unpaid invoices
-  let paymentMethods: unknown[] = []
-  if (['Sent', 'Overdue'].includes(invoice.status)) {
-    const { data: settings } = await supabaseAdmin
-      .from('invoice_settings')
-      .select('bank_accounts, payment_gateways')
-      .limit(1)
-      .single()
-    if (settings?.bank_accounts) {
-      paymentMethods = settings.bank_accounts as unknown[]
-    }
-  }
 
   // Fetch seller (account) data for the invoice header
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -84,11 +72,18 @@ export async function GET(
     address: sellerAddress,
   } : null
 
+  // Does this company tell its customers how to pay? (a bank account or a payment link) Used for the
+  // "no payment details" warning before Send. Counts rows only; the details themselves stay private.
+  const [{ count: bankCount }, { count: linkCount }] = await Promise.all([
+    supabaseAdmin.from('client_bank_accounts').select('id', { count: 'exact', head: true }).eq('account_id', invoice.account_id),
+    supabaseAdmin.from('payment_links').select('id', { count: 'exact', head: true }).eq('account_id', invoice.account_id),
+  ])
+
   return NextResponse.json({
     ...invoice,
     customer,
+    payment_setup: { hasBankAccount: (bankCount ?? 0) > 0, hasPaymentLink: (linkCount ?? 0) > 0 },
     items: items ?? [],
-    payment_methods: paymentMethods,
     seller,
   })
 }

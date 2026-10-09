@@ -80,6 +80,19 @@ export async function createExpense(input: {
       throw new Error('Access denied')
     }
 
+    // Server-side validation: the types above are TypeScript-only and a direct call can send anything.
+    if (!Number.isFinite(input.total) || input.total < 0) throw new Error('The amount must be zero or more.')
+    if (!['USD', 'EUR'].includes(input.currency)) throw new Error('Currency must be USD or EUR.')
+    if (input.source && !['manual', 'upload'].includes(input.source)) throw new Error('Invalid expense source.')
+    for (const d of [input.issue_date, input.due_date]) {
+      if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error('Dates must look like 2026-10-31.')
+    }
+    if (input.vendor_id) {
+      // A vendor of another company must never be attached to this company's expense.
+      const { data: v } = await supabaseAdmin.from('client_vendors').select('id').eq('id', input.vendor_id).eq('account_id', input.account_id).maybeSingle()
+      if (!v) throw new Error('That supplier does not belong to this company.')
+    }
+
     // Generate internal reference
     const { data: lastExp } = await supabaseAdmin
       .from('client_expenses')
@@ -169,6 +182,8 @@ export async function updateExpense(
     if (updates.vendor_name !== undefined) updateData.vendor_name = updates.vendor_name
     if (updates.invoice_number !== undefined) updateData.invoice_number = updates.invoice_number
     if (updates.description !== undefined) updateData.description = updates.description
+    if (updates.total !== undefined && (!Number.isFinite(updates.total) || updates.total < 0)) throw new Error('The amount must be zero or more.')
+    if (updates.due_date && !/^\d{4}-\d{2}-\d{2}$/.test(updates.due_date)) throw new Error('Dates must look like 2026-10-31.')
     if (updates.total !== undefined) {
       updateData.total = updates.total
       updateData.subtotal = updates.total
@@ -212,7 +227,7 @@ export async function markExpensePaid(expenseId: string, paidDate?: string): Pro
       .from('client_expenses')
       .update({
         status: 'Paid',
-        paid_date: paidDate || new Date().toISOString().split('T')[0],
+        paid_date: paidDate && /^\d{4}-\d{2}-\d{2}$/.test(paidDate) ? paidDate : new Date().toLocaleDateString('en-CA'),
         updated_at: new Date().toISOString(),
       })
       .eq('id', expenseId)

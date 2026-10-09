@@ -10,6 +10,11 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateInvoiceNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { logInvoiceAudit } from '@/lib/portal/invoice-audit'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
+import { nextRecurringDate } from '@/lib/portal/recurring-date'
+import { resolveInvoiceStatusAfterPayment } from '@/lib/finance/invoice-money'
+
+const round2 = (n: number) => Math.round(n * 100) / 100
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -24,6 +29,12 @@ export interface UnifiedInvoiceInput {
     tax_rate?: number  // e.g. 0.22 for 22% VAT — display only
   }>
   currency?: 'USD' | 'EUR'
+  /** Money off the subtotal. Was silently dropped before 2026-10-09 (the form collected it, the row said 0). */
+  discount?: number
+  /** YYYY-MM-DD. Defaults to today in the office's timezone (was UTC: after 8pm ET it dated invoices tomorrow). */
+  issue_date?: string
+  /** The client's own bank account printed on this invoice. The caller must have proven it belongs to the company. */
+  bank_account_id?: string | null
   due_date?: string
   notes?: string       // internal notes (not visible to client's customer)
   message?: string     // payment terms visible to client's customer
@@ -93,9 +104,9 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
   // 2. Calculate totals (with optional tax)
   const items = line_items.map((item) => {
     const qty = item.quantity || 1
-    const amount = item.unit_price * qty
+    const amount = round2(item.unit_price * qty)
     const taxRate = item.tax_rate || 0
-    const taxAmount = Math.round(amount * taxRate * 100) / 100
+    const taxAmount = round2(amount * taxRate)
     return {
       description: item.description,
       unit_price: item.unit_price,
@@ -105,15 +116,19 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
       tax_amount: taxAmount,
     }
   })
-  const subtotal = items.reduce((sum, i) => sum + i.amount, 0)
-  const taxTotal = items.reduce((sum, i) => sum + i.tax_amount, 0)
-  const total = subtotal + taxTotal
+  const subtotal = round2(items.reduce((sum, i) => sum + i.amount, 0))
+  const taxTotal = round2(items.reduce((sum, i) => sum + i.tax_amount, 0))
+  // The discount can never exceed what is being billed (a negative total is not a thing a customer can pay).
+  const discount = round2(Math.min(Math.max(input.discount ?? 0, 0), subtotal))
+  const total = round2(subtotal - discount + taxTotal)
 
-  const effectiveAmountPaid = input.amount_paid ?? (mark_as_paid ? total : 0)
-  const effectiveAmountDue = Math.max(total - effectiveAmountPaid, 0)
+  const effectiveAmountPaid = round2(input.amount_paid ?? (mark_as_paid ? total : 0))
+  const effectiveAmountDue = round2(Math.max(total - effectiveAmountPaid, 0))
 
+  // A zero-total invoice is NOT "paid": nothing was owed and nothing was received. It stays a Draft the
+  // client can still edit (it used to be born Paid, and a Paid invoice cannot be sent).
   let status: string
-  if (mark_as_paid || effectiveAmountDue <= 0) {
+  if (mark_as_paid || (total > 0 && effectiveAmountDue <= 0)) {
     status = 'Paid'
   } else if (effectiveAmountPaid > 0 && effectiveAmountPaid < total) {
     status = 'Partial'
@@ -121,8 +136,19 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     status = 'Draft'
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = getOfficeDateString()
+  const issueDate = input.issue_date && /^\d{4}-\d{2}-\d{2}$/.test(input.issue_date) ? input.issue_date : today
   const paidDateVal = mark_as_paid ? (paid_date || today) : null
+
+  // A recurring invoice needs its NEXT run date written NOW. Nothing else ever sets it, and the daily job only
+  // looks at invoices whose next date has arrived, so without this the schedule never produced anything.
+  // Generated copies (recurring_parent_id set) never carry a schedule of their own.
+  const recurringNextDate = recurring_frequency && !recurring_parent_id
+    ? nextRecurringDate(issueDate, recurring_frequency)
+    : null
+  if (recurring_frequency && !recurring_parent_id && !recurringNextDate) {
+    throw new Error('createUnifiedInvoice: could not work out the next recurring date from the issue date')
+  }
 
   // 3. Generate invoice number + insert client_invoices row, with retry on
   //    unique-violation. Same pattern as createTDInvoice: generator is not
@@ -149,18 +175,20 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
         status,
         currency,
         subtotal,
-        discount: 0,
+        discount,
+        bank_account_id: input.bank_account_id || null,
         tax_total: taxTotal,
         total,
         amount_paid: effectiveAmountPaid,
         amount_due: effectiveAmountDue,
-        issue_date: today,
+        issue_date: issueDate,
         due_date: due_date || null,
         paid_date: paidDateVal,
         notes: notes || null,
         message: message || null,
         recurring_frequency: recurring_frequency || null,
         recurring_end_date: recurring_end_date || null,
+        recurring_next_date: recurringNextDate,
         recurring_parent_id: recurring_parent_id || null,
         parent_invoice_id: input.parent_invoice_id || null,
         source: 'client',
@@ -210,7 +238,12 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
     tax_amount: item.tax_amount,
     sort_order: i,
   }))
-  await supabaseAdmin.from('client_invoice_items').insert(itemRows)
+  const { error: itemsErr } = await supabaseAdmin.from('client_invoice_items').insert(itemRows)
+  if (itemsErr) {
+    // An invoice without its lines is a corrupt document: take the header back out instead of leaving it.
+    await supabaseAdmin.from('client_invoices').delete().eq('id', invoice.id)
+    throw new Error(`Failed to create invoice lines: ${itemsErr.message}`)
+  }
 
   // 6. Audit trail
   logInvoiceAudit({
@@ -427,6 +460,90 @@ export async function syncInvoiceStatus(
 
   if (newStatus === 'Paid') await checkParentCompletion(id)
   return { synced: true }
+}
+
+// ─── Client records a payment on their own sales invoice ─
+
+export type ClientPaymentResult =
+  | { ok: true; status: 'Paid' | 'Partial'; amountPaid: number; amountDue: number }
+  | { ok: false; error: string }
+
+/** Statuses a payment can be recorded against. Cancelled, Split and already-Paid invoices take none. */
+export const PAYABLE_STATUSES = ['Draft', 'Sent', 'Overdue', 'Partial'] as const
+
+/**
+ * The ONE place a client's own payment is written onto a client_invoices row (dev job 1a23f5f1).
+ *
+ * Why it exists: the old route (`syncInvoiceStatus('invoice', ..., amount)`) accepted ANY number (negative, NaN, more
+ * than owed), any status (it "resurrected" a Cancelled invoice to Paid), and was a read-modify-write, so a double
+ * click or two tabs added the payment twice. Here:
+ *  - the amount must be a real positive number no larger than what is still owed;
+ *  - only a payable status is accepted;
+ *  - the write is conditional on the amount_paid we just read (compare-and-swap), so a second concurrent click
+ *    changes nothing and is told so;
+ *  - status, amount_paid and amount_due are written together from `resolveInvoiceStatusAfterPayment`, the same
+ *    tested math the bank-feed writer uses, so Paid <=> nothing due holds by construction.
+ * `amount` of 'rest' means "the whole remaining balance" (Mark paid).
+ */
+export async function applyClientInvoicePayment(
+  invoiceId: string,
+  amount: number | 'rest',
+  paidDate: string | undefined,
+  performedBy = 'client',
+): Promise<ClientPaymentResult> {
+  const { data: inv, error: readErr } = await supabaseAdmin
+    .from('client_invoices')
+    .select('total, amount_paid, status')
+    .eq('id', invoiceId)
+    .maybeSingle()
+  if (readErr) throw new Error(`Could not read the invoice: ${readErr.message}`)
+  if (!inv) return { ok: false, error: 'Invoice not found' }
+
+  if (!(PAYABLE_STATUSES as readonly string[]).includes(inv.status ?? '')) {
+    return { ok: false, error: `A ${inv.status} invoice cannot take a payment.` }
+  }
+
+  const total = round2(Number(inv.total) || 0)
+  const alreadyPaid = round2(Number(inv.amount_paid) || 0)
+  const due = round2(Math.max(total - alreadyPaid, 0))
+  const pay = amount === 'rest' ? due : round2(Number(amount))
+
+  if (!Number.isFinite(pay) || pay <= 0) return { ok: false, error: 'The payment must be more than zero.' }
+  if (pay > due + 0.001) return { ok: false, error: `The payment is more than what is still owed (${due.toFixed(2)}).` }
+
+  const next = resolveInvoiceStatusAfterPayment(total, alreadyPaid, pay)
+  const date = paidDate && /^\d{4}-\d{2}-\d{2}$/.test(paidDate) ? paidDate : getOfficeDateString()
+
+  let write = supabaseAdmin
+    .from('client_invoices')
+    .update({
+      status: next.newStatus,
+      amount_paid: next.newAmountPaid,
+      amount_due: next.newAmountDue,
+      paid_date: date,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', invoiceId)
+  // Compare-and-swap on the amount we just read. A legacy row can hold NULL (never equal to 0 in SQL).
+  write = inv.amount_paid === null || inv.amount_paid === undefined ? write.is('amount_paid', null) : write.eq('amount_paid', inv.amount_paid)
+  const { data: written, error: writeErr } = await write
+    .in('status', [...PAYABLE_STATUSES])
+    .select('id')
+  if (writeErr) throw new Error(`The payment could not be saved: ${writeErr.message}`)
+  if (!written || written.length === 0) {
+    return { ok: false, error: 'This invoice just changed. Please refresh the page and try again.' }
+  }
+
+  logInvoiceAudit({
+    invoice_id: invoiceId,
+    action: next.newStatus === 'Paid' ? 'paid' : 'partial_payment',
+    previous_values: { amount_paid: alreadyPaid, status: inv.status },
+    new_values: { amount_paid: next.newAmountPaid, amount_due: next.newAmountDue, status: next.newStatus, payment: pay },
+    performed_by: performedBy,
+  })
+  if (next.newStatus === 'Paid') await checkParentCompletion(invoiceId)
+
+  return { ok: true, status: next.newStatus, amountPaid: next.newAmountPaid, amountDue: next.newAmountDue }
 }
 
 // ─── Parent Completion Check (Split Invoices) ─────────

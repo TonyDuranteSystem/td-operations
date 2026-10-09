@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useTransition } from 'react'
+import { throwIfNotOk, errorMessage } from '@/lib/portal/api-error'
+import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, User, Mail, MapPin, FileText, Receipt,
+  ArrowLeft, User, Mail, MapPin, FileText,
   Pencil, Save, X, Loader2, Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -80,12 +81,14 @@ export default function CustomerDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editData),
       })
-      if (!res.ok) throw new Error('Failed to save')
-      setCustomer(editData)
+      await throwIfNotOk(res, t('profile.saveFailed'))
+      // The server works out the display name from first / last / company: show what it saved, not the form's guess.
+      const displayName = (editData.company_name || '').trim() || `${(editData.first_name || '').trim()} ${(editData.last_name || '').trim()}`.trim() || editData.name
+      setCustomer({ ...editData, name: displayName })
       setEditing(false)
       toast.success(t('customers.updated'))
-    } catch {
-      toast.error(t('profile.saveFailed'))
+    } catch (err) {
+      toast.error(errorMessage(err, t('profile.saveFailed')))
     } finally {
       setSaving(false)
     }
@@ -95,11 +98,11 @@ export default function CustomerDetailPage() {
     if (!confirm(t('customers.deleteConfirm'))) return
     try {
       const res = await fetch(`/api/portal/customers/${customerId}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete')
+      await throwIfNotOk(res, t('customers.cannotDelete'))
       toast.success(t('customers.deleted'))
       router.push('/portal/customers')
-    } catch {
-      toast.error(t('customers.cannotDelete'))
+    } catch (err) {
+      toast.error(errorMessage(err, t('customers.cannotDelete')))
     }
   }
 

@@ -4,7 +4,10 @@ import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 const MAX_SIZE = 2 * 1024 * 1024 // 2MB
-const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml']
+// PNG and JPEG only: those are the two formats the invoice PDF can embed. WebP and SVG used to be accepted, then
+// silently left off every PDF, and an SVG in a public bucket can carry scripts.
+const ALLOWED_TYPES = ['image/jpeg', 'image/png']
+const EXT_BY_TYPE: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png' }
 
 /**
  * POST /api/portal/logo — Upload company logo for invoices
@@ -28,7 +31,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!ALLOWED_TYPES.includes(file.type)) {
-    return NextResponse.json({ error: 'Use JPEG, PNG, WebP, or SVG' }, { status: 400 })
+    return NextResponse.json({ error: 'Use a JPEG or PNG image' }, { status: 400 })
   }
 
   // Access control — default-deny (contacts AND teammates; never skipped).
@@ -38,7 +41,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer())
-    const ext = file.name.split('.').pop() || 'png'
+    // The browser-declared type is not proof: check the first bytes really are a PNG or a JPEG.
+    const isPng = buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    const isJpg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+    if ((file.type === 'image/png' && !isPng) || (file.type === 'image/jpeg' && !isJpg)) {
+      return NextResponse.json({ error: 'That file is not a valid JPEG or PNG image' }, { status: 400 })
+    }
+    // Extension comes from the VALIDATED type, never from the file name the browser sent.
+    const ext = EXT_BY_TYPE[file.type]
     const storagePath = `portal-logos/${accountId}.${ext}`
 
     // Upload to Supabase Storage (public bucket)
@@ -67,14 +77,16 @@ export async function POST(request: NextRequest) {
       .from('public-assets')
       .getPublicUrl(storagePath)
 
-    const logoUrl = urlData.publicUrl
+    // A changed logo reuses the same file name, so add a version to the address or browsers show the old one.
+    const logoUrl = `${urlData.publicUrl}?v=${Date.now()}`
 
     // Save URL to account
     // eslint-disable-next-line no-restricted-syntax -- pre-existing portal logo write; access now gated via canAccessAccount above
-    await supabaseAdmin
+    const { error: saveErr } = await supabaseAdmin
       .from('accounts')
       .update({ invoice_logo_url: logoUrl })
       .eq('id', accountId)
+    if (saveErr) throw saveErr
 
     return NextResponse.json({ success: true, url: logoUrl })
   } catch (err) {

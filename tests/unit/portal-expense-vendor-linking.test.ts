@@ -43,6 +43,9 @@ vi.mock('@/lib/supabase-admin', () => ({
         like: vi.fn(() => chain),
         order: vi.fn(() => chain),
         limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+        eq: vi.fn(() => chain),
+        // the explicit-vendor ownership check (client_vendors row of THIS company)
+        maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'v-picked' }, error: null })),
         insert: vi.fn((row: Record<string, unknown>) => { insertedRow = row; return chain }),
         single: vi.fn(() => Promise.resolve({ data: { id: 'exp-1' }, error: null })),
       }

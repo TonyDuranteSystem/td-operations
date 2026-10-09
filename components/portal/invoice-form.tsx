@@ -19,6 +19,7 @@ interface LineItem {
   quantity: number
   unit_price: number
   amount: number
+  tax_rate?: number | null
 }
 
 interface Template {
@@ -64,7 +65,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   // Invoice fields
   const [currency, setCurrency] = useState<'USD' | 'EUR'>(initialData?.currency ?? 'USD')
   const [discount, setDiscount] = useState(initialData?.discount ?? 0)
-  const [issueDate, setIssueDate] = useState(initialData?.issueDate ?? new Date().toISOString().split('T')[0])
+  const [issueDate, setIssueDate] = useState(initialData?.issueDate ?? new Date().toLocaleDateString('en-CA'))
   const [dueDate, setDueDate] = useState(initialData?.dueDate ?? '')
   const [notes, setNotes] = useState(initialData?.notes ?? '')
   const [message, setMessage] = useState(initialData?.message ?? '')
@@ -82,7 +83,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         const list = Array.isArray(data) ? data : []
         setBankAccounts(list)
         // Auto-select the show_on_invoice account if none selected
-        if (!bankAccountId && list.length > 0) {
+        if (mode === 'create' && !bankAccountId && list.length > 0) {
           const defaultAcc = list.find((a: { show_on_invoice?: boolean }) => a.show_on_invoice) || list[0]
           setBankAccountId(defaultAcc.id)
         }
@@ -96,7 +97,9 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   )
 
   const subtotal = items.reduce((sum, item) => sum + item.amount, 0)
-  const total = Math.max(subtotal - discount, 0)
+  // Tax is carried per line from an existing invoice (the form has no tax field of its own); shown so the total is the real one.
+  const taxTotal = Math.round(items.reduce((sum, item) => sum + item.amount * (item.tax_rate ?? 0), 0) * 100) / 100
+  const total = Math.max(subtotal - discount, 0) + taxTotal
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
 
   const updateItem = (index: number, field: keyof LineItem, value: string | number) => {
@@ -164,14 +167,14 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
       if (mode === 'edit' && initialData?.id) {
         const result = await updateInvoice({
           id: initialData.id,
-          account_id: accountId,
           customer_id: customerId,
           currency,
           discount,
           issue_date: issueDate,
-          due_date: dueDate || undefined,
-          notes: notes || undefined,
-          message: message || undefined,
+          // null (not undefined) so a field the client EMPTIED is really cleared; undefined means "no change".
+          due_date: dueDate || null,
+          notes: notes || null,
+          message: message || null,
           bank_account_id: bankAccountId || null,
           items: itemsPayload,
         })
@@ -264,6 +267,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   placeholder={t('invoices.email')}
                   className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <p className="text-xs text-zinc-500">{t('invoices.emailNeededToSend')}</p>
                 <div className="flex gap-2">
                   <button type="button" onClick={handleCreateCustomer} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700">{t('common.add')}</button>
                   <button type="button" onClick={() => setShowNewCustomer(false)} className="px-3 py-1.5 text-xs border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</button>
@@ -322,8 +326,8 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           </div>
         </div>
 
-        {/* Recurring */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Recurring: set when the invoice is created. It is not editable afterwards (void it to stop it). */}
+        {mode === 'create' && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="invoice-recurring">
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.recurring')}</label>
             <select
@@ -349,7 +353,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               <p className="text-xs text-zinc-400 mt-1">{t('invoices.indefinite')}</p>
             </div>
           )}
-        </div>
+          {recurringFrequency && (
+            <p className="sm:col-span-3 text-xs text-zinc-500" data-testid="invoice-recurring-hint">{t('invoices.recurringHint')}</p>
+          )}
+        </div>}
 
         {/* Line Items */}
         <div>
@@ -431,6 +438,12 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                 className="w-24 px-2 py-1 text-sm border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+            {taxTotal > 0 && (
+              <div className="flex justify-between items-center" data-testid="invoice-form-tax">
+                <span className="text-zinc-500">{t('invoices.tax')}</span>
+                <span className="font-medium">{currencySymbol}{taxTotal.toFixed(2)}</span>
+              </div>
+            )}
             <div className="flex justify-between pt-2 border-t font-semibold text-base">
               <span>{t('invoices.total')}</span>
               <span>{currencySymbol}{total.toFixed(2)}</span>
