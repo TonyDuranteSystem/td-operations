@@ -1,27 +1,36 @@
 /**
- * Home-page banner + menu position for "Customers & Invoices" (Antonio 2026-10-09, dev job 1a23f5f1).
+ * The big green callout hanging under the "Customers & Invoices" menu item + the menu position
+ * (Antonio 2026-10-09, dev job 1a23f5f1). It replaced a banner on the home page.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { t } from '@/lib/portal/i18n'
 
-const banner = readFileSync('components/portal/invoices-hub-banner.tsx', 'utf8')
+const callout = readFileSync('components/portal/invoices-menu-callout.tsx', 'utf8')
 const home = readFileSync('app/portal/page.tsx', 'utf8')
 const side = readFileSync('components/portal/portal-sidebar.tsx', 'utf8')
 
-describe('invoices hub banner on the portal home', () => {
-  it('is rendered only for companies the new screen is on for', () => {
-    expect(home).toMatch(/showInvoicesHubBanner = !!selectedAccountId && isInvoiceHubOnFor\(await getInvoiceHubSetting\(\), selectedAccountId\)/)
-    expect(home).toMatch(/\{showInvoicesHubBanner && <InvoicesHubBanner locale=\{locale\} \/>\}/)
+describe('callout under the invoices menu item', () => {
+  it('is drawn under the invoices row only while the NEW state is on (hub on, not a teammate, not yet opened)', () => {
+    expect(side).toMatch(/if \(item\.key === 'nav\.invoices' && showInvoicesNew\) \{[\s\S]*<InvoicesMenuCallout/)
   })
-  it('shares its memory with the menu tag, links to invoices, and clears on open or close', () => {
-    expect(banner).toContain("'td-invoices-hub-new-v1'")
-    expect(banner).toContain('href="/portal/invoices"')
-    expect(banner.match(/onClick=\{clear\}/g)?.length).toBe(2)
+  it('clears the shared memory key and hides on open or close', () => {
+    expect(side).toMatch(/onClear=\{\(\) => \{\s*try \{ localStorage\.setItem\(INVOICES_NEW_KEY, '1'\)/)
+    expect(callout).toContain('href="/portal/invoices"')
+    expect(callout.match(/onClear/g)?.length).toBeGreaterThanOrEqual(3)
   })
-  it('is green, blinks only when motion is allowed, and has English and Italian text', () => {
-    expect(banner).toContain('motion-safe:animate-pulse')
-    expect(banner).toContain('Clienti e Fatture')
-    expect(banner).toContain('Customers & Invoices')
+  it('is green, blinks only when motion is allowed', () => {
+    expect(callout).toContain('border-emerald-500')
+    expect(callout).toContain('motion-safe:animate-pulse')
+  })
+  it('has English and Italian text', () => {
+    expect(t('nav.invoicesCallout.title', 'en')).toBe('New: Customers & Invoices')
+    expect(t('nav.invoicesCallout.title', 'it')).toBe('Novità: Clienti e Fatture')
+    expect(t('nav.invoicesCallout.cta', 'it')).toBe('Aprila')
+  })
+  it('the old home-page banner is gone', () => {
+    expect(existsSync('components/portal/invoices-hub-banner.tsx')).toBe(false)
+    expect(home).not.toContain('InvoicesHubBanner')
   })
 })
 

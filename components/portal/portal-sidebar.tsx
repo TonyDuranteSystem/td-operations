@@ -28,6 +28,7 @@ import {
   Palette,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { InvoicesMenuCallout } from '@/components/portal/invoices-menu-callout'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
 import { CompanySwitcher } from './company-switcher'
@@ -576,7 +577,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     // by making the hint a SIBLING of the Link, not a descendant — the outer
     // row's background/active styling moves to this wrapper so the two still
     // look like one continuous row.
-    return (
+    const row = (
       <div
         key={item.href}
         className={cn(
@@ -637,6 +638,26 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
         <NavItemHint itemKey={item.key} text={navHintText(item)} label={navLabel} />
       </div>
     )
+    if (item.key === 'nav.invoices' && showInvoicesNew) {
+      // The big green callout hangs directly under the menu item so the new screen cannot be missed.
+      return (
+        <div key={item.href}>
+          {row}
+          <InvoicesMenuCallout
+            title={t('nav.invoicesCallout.title')}
+            desc={t('nav.invoicesCallout.desc')}
+            cta={t('nav.invoicesCallout.cta')}
+            dismissLabel={t('nav.invoicesCallout.dismiss')}
+            onClear={() => {
+              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
+              setShowInvoicesNew(false)
+              setMobileOpen(false)
+            }}
+          />
+        </div>
+      )
+    }
+    return row
   }
 
   return (

@@ -24,8 +24,6 @@ import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
 import { GuideAnnouncementBanner } from '@/components/portal/guide-announcement-banner'
 import { TeamAccessAnnouncementBanner } from '@/components/portal/team-access-announcement-banner'
-import { InvoicesHubBanner } from '@/components/portal/invoices-hub-banner'
-import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
 import { WhatsNewBanner } from '@/components/portal/whats-new-banner'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { ProfileCompletionBanner } from '@/components/portal/profile-completion-banner'
@@ -38,7 +36,7 @@ import { AnnouncementBanners, type PortalAnnouncement } from '@/components/porta
 import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { differenceInDays, parseISO, format } from 'date-fns'
-import { getRenewalBannerMinYear, getInvoiceHubSetting } from '@/lib/settings'
+import { getRenewalBannerMinYear } from '@/lib/settings'
 
 function formatEin(ein: string | null): string {
   if (!ein) return '\u2014'
@@ -897,8 +895,6 @@ export default async function PortalDashboardPage() {
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false
 
-  // New-invoices-screen announcement: any signed-in client of a company the screen is switched on for (same rule as the menu tag; teammates return earlier).
-  const showInvoicesHubBanner = !!selectedAccountId && isInvoiceHubOnFor(await getInvoiceHubSetting(), selectedAccountId)
 
   // Fetch active portal announcements — graceful fallback if table missing
   let portalAnnouncements: PortalAnnouncement[] = []
@@ -987,8 +983,6 @@ export default async function PortalDashboardPage() {
       {renewalOffer && (
         <RenewalBanner token={renewalOffer.token} locale={locale} />
       )}
-
-      {showInvoicesHubBanner && <InvoicesHubBanner locale={locale} />}
 
       {/* Relay Wire guide announcement — dismissible per device via localStorage */}
       <GuideAnnouncementBanner locale={locale} />
