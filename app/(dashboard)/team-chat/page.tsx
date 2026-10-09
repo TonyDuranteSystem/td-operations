@@ -12,6 +12,7 @@ import {
   Bell, BellOff, Archive, ArchiveRestore, Mail, Link2,
 } from 'lucide-react'
 import { TeamBoard } from './board'
+import { NewGroupModal, GroupInfoModal } from './group-modals'
 import { matchesConversationFilter } from '@/lib/team/conversation-filter'
 import { groupIntoSections, badgeTextFor, DEFAULT_OPEN_BUCKETS, type BucketKey } from '@/lib/team/conversation-buckets'
 import EmojiPicker from 'emoji-picker-react'
@@ -87,6 +88,8 @@ export default function TeamWorkspacePage() {
   const [commandQuery, setCommandQuery] = useState<string | null>(null)
   const [showNewChannel, setShowNewChannel] = useState(false)
   const [showNewDm, setShowNewDm] = useState(false)
+  const [showNewGroup, setShowNewGroup] = useState(false)
+  const [showGroupInfo, setShowGroupInfo] = useState(false)
   const [showNewConversation, setShowNewConversation] = useState(false)
   const [view, setView] = useState<'list' | 'board'>('list')
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set())
@@ -1199,6 +1202,7 @@ export default function TeamWorkspacePage() {
   const generalThread = threads.find(t => t.thread_type === 'general')
   const channels = threads.filter(t => t.thread_type === 'channel')
   const dms = threads.filter(t => t.thread_type === 'dm')
+  const groups = threads.filter(t => t.thread_type === 'group')
   const discussions = threads.filter(t => t.thread_type === 'discussion')
   const laterThreads = threads.filter(t => t.later && !t.archived_at)
   const mentionThreads = threads.filter(t => t.mention_count > 0 && !t.archived_at)
@@ -1407,6 +1411,10 @@ export default function TeamWorkspacePage() {
               {dms.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No DMs yet.</p>}
               {dms.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => onSelectThread(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(dmLabel(t))}</span>} label={dmLabel(t)} />)}
 
+              <SectionHeader label="Groups" dot={groups.some(g => g.unread_count > 0)} onAdd={() => setShowNewGroup(true)} />
+              {groups.length === 0 && <p className="px-2 text-[11px] text-zinc-400 mb-2">No groups yet.</p>}
+              {groups.map(t => <ThreadRow key={t.id} t={t} selected={selectedId === t.id} onClick={() => onSelectThread(t.id)} icon={<span className={cn('w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white', senderColor(t.id))}>{initials(t.label || 'G')}</span>} label={t.label || 'Group'} />)}
+
               <SectionHeader label="Conversations" onAdd={() => setShowNewConversation(true)} />
 
               {/* Topic + state filters */}
@@ -1521,9 +1529,13 @@ export default function TeamWorkspacePage() {
                   {selected.thread_type === 'channel' && <Hash className="h-4 w-4" style={selected.color ? { color: selected.color } : undefined} />}
                   {selected.thread_type === 'dm' && <MessageSquare className="h-4 w-4" />}
                   {selected.thread_type === 'discussion' && <Building2 className="h-4 w-4" />}
+                  {selected.thread_type === 'group' && <Users className="h-4 w-4" />}
                   {selected.thread_type === 'channel' ? (selected.channel_slug ?? selected.label) : selected.thread_type === 'dm' ? dmLabel(selected) : selected.label}
                 </h2>
                 {selected.description && <p className="text-[11px] text-zinc-500 truncate">{selected.description}</p>}
+                {selected.thread_type === 'group' && (
+                  <button onClick={() => setShowGroupInfo(true)} className="text-[11px] text-zinc-500 hover:text-zinc-800 truncate max-w-full text-left">Group info · add people, rename, leave</button>
+                )}
               </div>
               {isThreadedChannel && (
                 <div className="flex items-center gap-2 shrink-0">
@@ -1882,6 +1894,8 @@ export default function TeamWorkspacePage() {
       </div>
 
       {showNewChannel && <NewChannelModal onClose={() => setShowNewChannel(false)} onCreate={createChannel} />}
+      {showNewGroup && <NewGroupModal members={members.filter(m => m.id !== currentUserId)} onClose={() => setShowNewGroup(false)} onCreated={async id => { setShowNewGroup(false); await loadThreads(); setSelectedId(id) }} />}
+      {showGroupInfo && selected?.thread_type === 'group' && <GroupInfoModal threadId={selected.id} title={selected.label} members={members} currentUserId={currentUserId} onClose={() => setShowGroupInfo(false)} onChanged={() => loadThreads()} onLeft={async () => { setShowGroupInfo(false); setSelectedId(null); await loadThreads() }} />}
       {showNewDm && <NewDmModal members={members.filter(m => m.id !== currentUserId)} onClose={() => setShowNewDm(false)} onPick={startDm} />}
       {showNewConversation && <NewConversationModal channels={channels} generalThread={generalThread ?? null} onClose={() => setShowNewConversation(false)} onCreate={createConversation} />}
       {showNewThread && <NewThreadModal channelName={selected ? (selected.channel_slug ?? selected.label) : ''} onClose={() => setShowNewThread(false)} onCreate={createThread} />}

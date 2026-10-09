@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, CheckCheck, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
-  formatSize, groupByDay, isAudio, isImage, linkify, quotedPreview, reactionSummary, seenState, timeLabel,
+  formatSize, groupByDay, isAudio, isImage, linkify, nameColorFor, quotedPreview, reactionSummary, timeLabel,
   type TalkAttachment, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -67,14 +67,13 @@ const LONG_PRESS_MS = 450
 const SWIPE_TRIGGER_PX = 64
 
 function Bubble({
-  m, mine, peerReadAt, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
+  m, mine, seen, showSender, meId, byId, highlighted, onMenu, onReply, onReact, onJumpTo,
 }: {
-  m: TalkMessage; mine: boolean; peerReadAt: string | null; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
+  m: TalkMessage; mine: boolean; seen: boolean; showSender: boolean; meId: string; byId: Map<string, TalkMessage>; highlighted: boolean
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
 }) {
   const atts = (m.attachments ?? []).filter(a => a && a.url)
   const deleted = !!m.deleted_at
-  const seen = mine && seenState(m, peerReadAt) === 'seen'
   const quote = quotedPreview(m, byId)
   const pills = reactionSummary(m.reactions, meId)
 
@@ -134,6 +133,9 @@ function Bubble({
           <p className="text-sm italic text-zinc-400">This message was deleted</p>
         ) : (
           <div className="space-y-1.5">
+            {showSender && !mine && (
+              <span className={cn('block text-[13px] font-semibold', nameColorFor(m.sender_id))} data-testid="talk-sender">{m.sender_name}</span>
+            )}
             {quote && (
               <button
                 type="button"
@@ -183,9 +185,14 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, peerReadAt, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
+  threadId, messages, meId, isSeen, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo,
 }: {
-  threadId: string; messages: TalkMessage[]; meId: string; peerReadAt: string | null; loading: boolean
+  threadId: string; messages: TalkMessage[]; meId: string
+  /** Is my message seen (a direct message: the other person read it; a group: everyone did). */
+  isSeen: (m: TalkMessage) => boolean
+  /** A group shows who wrote each message from someone else. */
+  showSender: boolean
+  loading: boolean
   highlightId: string | null
   onMenu: (m: TalkMessage) => void; onReply: (m: TalkMessage) => void; onReact: (m: TalkMessage, emoji: string) => void; onJumpTo: (id: string) => void
 }) {
@@ -239,7 +246,7 @@ export function TalkMessages({
                 <span className="rounded-full bg-white/90 px-3 py-0.5 text-xs font-medium text-zinc-500 shadow-sm">{g.label}</span>
               </div>
               {g.messages.map(m => (
-                <Bubble key={m.id} m={m} mine={m.sender_id === meId} peerReadAt={peerReadAt} meId={meId} byId={byId}
+                <Bubble key={m.id} m={m} mine={m.sender_id === meId} seen={m.sender_id === meId && isSeen(m)} showSender={showSender} meId={meId} byId={byId}
                   highlighted={highlightId === m.id} onMenu={onMenu} onReply={onReply} onReact={onReact} onJumpTo={onJumpTo} />
               ))}
             </div>

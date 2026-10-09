@@ -294,6 +294,22 @@ export function computeChatAlerts(
       continue
     }
 
+    // A GROUP alerts like a DM (dev job c1e326dd): its message is for you, no @mention needed.
+    if (t.thread_type === "group") {
+      const unread = num(t.unread_count)
+      if (unread <= 0) continue
+      out.push({
+        kind: "chat_dm",
+        thread_id: t.id,
+        title: `${t.last_sender_name || "Someone"} posted in ${t.label || "a group"}`,
+        body: withExtra((t.last_message ?? "").slice(0, 160), unread - 1),
+        url: `/team-chat?thread=${t.id}`,
+        tag: `staff-alert-chat-dm-${t.id}`,
+        created_at: t.last_message_at || new Date(0).toISOString(),
+      })
+      continue
+    }
+
     // An internal TOPIC (discussion, client_bucket === 'internal') alerts like
     // a DM — no @mention required. Added 2026-09-08 alongside the toast + push
     // fix in channel-notify.ts's conversationNotifiesParticipants: a topic

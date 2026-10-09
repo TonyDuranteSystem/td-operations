@@ -134,7 +134,7 @@ export interface BoardThread {
   waiting_name?: string | null
 }
 
-export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm'
+export type ThreadType = 'general' | 'channel' | 'discussion' | 'dm' | 'group'
 
 export interface TeamThread {
   id: string

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   directMessages, otherUserId, dmName, startThreadId, membersWithoutChat, initials,
   dayKey, dayLabel, timeLabel, groupByDay, seenState, isAudio, isImage, formatSize, clock, linkify,
-  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS, mergeSnapshot, messageSignature, typingLabel, shouldAnnounceTyping, parseTypingSignal, TYPING_SEND_GAP_MS,
+  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS, mergeSnapshot, messageSignature, typingLabel, chatThreads, chatName, groupMemberNames, membersNotInGroup, nameColorFor, seenByAll, isGroupThread, shouldAnnounceTyping, parseTypingSignal, TYPING_SEND_GAP_MS,
   type TalkThread, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -251,6 +251,8 @@ describe('messageSignature', () => {
 describe('typing indicator rules', () => {
   it('labels what the other person is doing', () => {
     expect(typingLabel('typing')).toBe('typing…')
+    expect(typingLabel('typing', 'Luca')).toBe('Luca is typing…')
+    expect(typingLabel('recording', 'Jodi')).toBe('Jodi is recording a voice message…')
     expect(typingLabel('recording')).toBe('recording a voice message…')
     expect(typingLabel(null)).toBe('')
     expect(typingLabel(undefined)).toBe('')
@@ -266,5 +268,54 @@ describe('typing indicator rules', () => {
     expect(parseTypingSignal({ user_id: 'b', kind: 'whatever' }, ME)).toEqual({ userId: 'b', kind: 'typing' })
     expect(parseTypingSignal({ user_id: ME, kind: 'typing' }, ME)).toBeNull() // my own echo
     for (const bad of [null, undefined, 'x', 5, {}, { user_id: '' }, { user_id: 5 }]) expect(parseTypingSignal(bad, ME)).toBeNull()
+  })
+})
+
+describe('groups in the chat list', () => {
+  const group = (id: string, title: string, last: string | null, members: string[] = [ME, 'b-luca', 'c-other'], extra: Partial<TalkThread> = {}): TalkThread =>
+    ({ id, thread_type: 'group', dm_key: null, title, members, archived_at: null, last_activity_at: last, ...extra })
+  const threads = [
+    dm('dm1', 'b-luca', '2026-10-01T00:00:00Z'),
+    group('g1', 'Office', '2026-10-08T00:00:00Z'),
+    group('g-arch', 'Old', '2026-10-09T00:00:00Z', undefined, { archived_at: '2026-10-09T01:00:00Z' }),
+    { ...dm('chan', 'x', '2026-10-09T00:00:00Z'), thread_type: 'channel' },
+  ]
+  it('shows direct messages and groups together, newest first, hiding archived groups and other kinds', () => {
+    expect(chatThreads(threads).map(t => t.id)).toEqual(['g1', 'dm1'])
+    expect(isGroupThread(threads[1])).toBe(true)
+    expect(isGroupThread(threads[0])).toBe(false)
+  })
+  it('names a group by its title and a DM by the other person', () => {
+    expect(chatName(threads[1], ME, members)).toBe('Office')
+    expect(chatName(group('g', '  ', null), ME, members)).toBe('Group')
+    expect(chatName(threads[0], ME, members)).toBe('Luca')
+  })
+  it('opens on the most recent chat, group or not', () => {
+    expect(startThreadId(chatThreads(threads), {})).toBe('g1')
+    expect(startThreadId(chatThreads(threads), { wanted: 'g1' })).toBe('g1')
+    expect(startThreadId(chatThreads(threads), { wanted: 'g-arch' })).toBe('g1')
+  })
+  it('lists a group\'s members by name with me last, and who can still be added', () => {
+    expect(groupMemberNames([ME, 'b-luca', 'c-other', 'ghost'], ME, members)).toBe('Luca, Cris, You')
+    expect(groupMemberNames(null, ME, members)).toBe('')
+    expect(membersNotInGroup([ME, 'b-luca'], members).map(m => m.id)).toEqual(['c-other'])
+  })
+  it('gives a person a stable name colour', () => {
+    expect(nameColorFor('b-luca')).toBe(nameColorFor('b-luca'))
+    expect(nameColorFor('b-luca')).toMatch(/^text-/)
+  })
+})
+
+describe('seenByAll — group ticks', () => {
+  const m = { created_at: '2026-10-09T10:00:00Z' }
+  it('is seen only when EVERY other member has read up to the message', () => {
+    expect(seenByAll(m, ['a', 'b'], { a: '2026-10-09T10:05:00Z', b: '2026-10-09T10:00:00Z' })).toBe(true)
+    expect(seenByAll(m, ['a', 'b'], { a: '2026-10-09T10:05:00Z', b: '2026-10-09T09:59:00Z' })).toBe(false)
+  })
+  it('a member who has never read blocks it; nobody to see it is never "seen"', () => {
+    expect(seenByAll(m, ['a', 'b'], { a: '2026-10-09T10:05:00Z' })).toBe(false)
+    expect(seenByAll(m, [], {})).toBe(false)
+    expect(seenByAll({ created_at: 'x' }, ['a'], { a: '2026-10-09T10:05:00Z' })).toBe(false)
+    expect(seenByAll(m, ['a'], { a: 'garbage' })).toBe(false)
   })
 })

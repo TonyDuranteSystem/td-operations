@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { groupMembersFor } from '@/lib/team/groups'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { listTeamMembers } from '@/lib/team/directory'
@@ -154,6 +155,19 @@ export async function GET() {
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const t of enriched as any[]) t.ever_mentioned = t.thread_type === 'discussion' ? everMentionedSet.has(t.id) : null
+
+  // Groups: who is in each (the RPC already returned only the groups this person belongs to).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const groupIds = (enriched as any[]).filter(t => t.thread_type === 'group').map(t => t.id as string)
+  if (groupIds.length > 0) {
+    try {
+      const byGroup = await groupMembersFor(groupIds)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const t of enriched as any[]) if (t.thread_type === 'group') t.members = byGroup[t.id] ?? []
+    } catch (e) {
+      console.error('team/threads: group members lookup failed', e)
+    }
+  }
 
   const members = await listTeamMembers()
 

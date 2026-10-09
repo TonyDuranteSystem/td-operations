@@ -27,9 +27,9 @@
     "it on every push, so a hand-edit of this file cannot pass unnoticed."
   ],
   "generated_from": "production (Supabase ref ydzipybqeebtpcvsbtvs)",
-  "generated_at": "2026-08-09",
+  "generated_at": "2026-10-09",
   "constraint_count": 210,
-  "checksum_md5": "39916b7ce4711871c2416ae118985559",
+  "checksum_md5": "f45bd22b591a92e75fc031d748c8559c",
   "constraints": {
     "account_bank_balances_source_check": "CHECK ((source = ANY (ARRAY['client'::text, 'staff'::text])))",
     "account_location_policies_choice_check": "CHECK ((choice = ANY (ARRAY['business'::text, 'personal'::text])))",
@@ -140,7 +140,7 @@
     "formation_submissions_status_check": "CHECK ((status = ANY (ARRAY['pending'::text, 'sent'::text, 'opened'::text, 'completed'::text, 'reviewed'::text])))",
     "internal_thread_state_status_check": "CHECK ((status = ANY (ARRAY['todo'::text, 'in_progress'::text, 'waiting'::text, 'handled'::text])))",
     "internal_threads_resolution_check": "CHECK (((resolution IS NULL) OR (resolution = ANY (ARRAY['solved'::text, 'closed'::text]))))",
-    "internal_threads_thread_type_chk": "CHECK ((thread_type = ANY (ARRAY['general'::text, 'channel'::text, 'discussion'::text, 'dm'::text])))",
+    "internal_threads_thread_type_chk": "CHECK ((thread_type = ANY (ARRAY['general'::text, 'channel'::text, 'discussion'::text, 'dm'::text, 'group'::text])))",
     "internal_threads_work_status_chk": "CHECK ((work_status = ANY (ARRAY['todo'::text, 'in_progress'::text, 'waiting'::text, 'handled'::text])))",
     "invoice_has_owner": "CHECK (((account_id IS NOT NULL) OR (contact_id IS NOT NULL)))",
     "invoice_reminder_log_source_check": "CHECK ((source = ANY (ARRAY['auto'::text, 'manual'::text])))",
