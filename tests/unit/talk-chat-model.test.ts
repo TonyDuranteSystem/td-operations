@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   directMessages, otherUserId, dmName, startThreadId, membersWithoutChat, initials,
   dayKey, dayLabel, timeLabel, groupByDay, seenState, isAudio, isImage, formatSize, clock, linkify,
-  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS,
+  reactionSummary, snippet, quotedPreview, canEdit, canDelete, matchMessages, REACTION_EMOJIS, mergeSnapshot, messageSignature,
   type TalkThread, type TalkMessage,
 } from '@/lib/talk/chat-model'
 
@@ -209,5 +209,41 @@ describe('matchMessages', () => {
   it('needs two characters', () => {
     expect(matchMessages(list, 'a')).toEqual([])
     expect(matchMessages(list, '  ')).toEqual([])
+  })
+})
+
+describe('mergeSnapshot — a slow refresh must not erase a newer message', () => {
+  const m = (id: string, at: string, over: Partial<TalkMessage> = {}) => msg({ id, created_at: at, message: id, ...over })
+  it('keeps a message sent after the snapshot was taken', () => {
+    const local = [m('a', '2026-10-09T10:00:00Z'), m('b', '2026-10-09T10:01:00Z'), m('new', '2026-10-09T10:05:00Z')]
+    const snap = [m('a', '2026-10-09T10:00:00Z'), m('b', '2026-10-09T10:01:00Z')]
+    expect(mergeSnapshot(local, snap).map(x => x.id)).toEqual(['a', 'b', 'new'])
+  })
+  it('the snapshot wins for messages it contains (edits, deletes, reactions)', () => {
+    const local = [m('a', '2026-10-09T10:00:00Z')]
+    const snap = [m('a', '2026-10-09T10:00:00Z', { message: 'edited', edited_at: 'x' })]
+    expect(mergeSnapshot(local, snap)[0].message).toBe('edited')
+  })
+  it('drops a local message that is older than the snapshot but missing from it (it no longer exists)', () => {
+    const local = [m('gone', '2026-10-09T09:00:00Z'), m('a', '2026-10-09T10:00:00Z')]
+    expect(mergeSnapshot(local, [m('a', '2026-10-09T10:00:00Z')]).map(x => x.id)).toEqual(['a'])
+  })
+  it('an empty snapshot never wipes what is on screen', () => {
+    const local = [m('a', '2026-10-09T10:00:00Z')]
+    expect(mergeSnapshot(local, [])).toBe(local)
+    expect(mergeSnapshot([], [])).toEqual([])
+  })
+})
+
+describe('messageSignature', () => {
+  const base = msg({ id: 'a' })
+  it('is equal for equal lists and changes with an edit, a delete, a reaction or a file', () => {
+    const sig = messageSignature([base])
+    expect(messageSignature([{ ...base }])).toBe(sig)
+    expect(messageSignature([{ ...base, edited_at: 'x' }])).not.toBe(sig)
+    expect(messageSignature([{ ...base, deleted_at: 'x' }])).not.toBe(sig)
+    expect(messageSignature([{ ...base, reactions: [{ emoji: '👍', reactor_id: 'b' }] }])).not.toBe(sig)
+    expect(messageSignature([{ ...base, attachments: [{ url: 'u', name: 'n' }] }])).not.toBe(sig)
+    expect(messageSignature([])).toBe('')
   })
 })

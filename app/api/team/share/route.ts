@@ -146,6 +146,8 @@ export async function POST(request: NextRequest) {
   let threadId: string
   let pushIds: string[] = []
   let openLabel = 'teammate'
+  // true when the share lands in a teammate's DM (TD Talk receives direct messages only — lib/push/route-subscriptions.ts)
+  let sharedToDm = false
 
   const convTarget =
     body.target && typeof body.target === 'object' && body.target.conversation
@@ -237,6 +239,7 @@ export async function POST(request: NextRequest) {
       )
     }
     pushIds = recipientId !== user.id ? [recipientId] : []
+    sharedToDm = true
   }
 
   // One message per item. The message body = the sharer's note + the item's full
@@ -287,6 +290,7 @@ export async function POST(request: NextRequest) {
       body: note ? note.slice(0, 120) : (cards[0].title || 'Shared to team chat'),
       url: `/team-chat?thread=${threadId}`,
       tag: `team-share-${threadId}`,
+      dm: sharedToDm,
     })
   } catch {
     // non-critical

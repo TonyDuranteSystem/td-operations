@@ -290,3 +290,26 @@ export function matchMessages(messages: TalkMessage[], query: string): TalkMessa
     ))
     .reverse()
 }
+
+// ─── Keeping the list honest while it refreshes ───────────────────────────
+
+/**
+ * Combine what the screen already has with a fresh snapshot from the server. The snapshot wins for every message it
+ * contains; a local message the snapshot does NOT contain is kept when it is not older than the snapshot's newest
+ * message (it was sent or received after the snapshot was taken). Result is oldest to newest.
+ */
+export function mergeSnapshot(local: TalkMessage[], snapshot: TalkMessage[]): TalkMessage[] {
+  if (snapshot.length === 0) return local.length === 0 ? snapshot : local
+  const have = new Set(snapshot.map(m => m.id))
+  const newest = Math.max(...snapshot.map(m => Date.parse(m.created_at) || 0))
+  const extra = local.filter(m => !have.has(m.id) && (Date.parse(m.created_at) || 0) >= newest)
+  if (extra.length === 0) return snapshot
+  return [...snapshot, ...extra].sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0))
+}
+
+/** A cheap fingerprint of everything on screen that can change (text, edits, deletes, reactions, files) — equal means "nothing to redraw". */
+export function messageSignature(list: TalkMessage[]): string {
+  return list
+    .map(m => `${m.id}|${m.message ?? ''}|${m.edited_at ?? ''}|${m.deleted_at ?? ''}|${(m.reactions ?? []).map(r => `${r.emoji}${r.reactor_id}`).join(',')}|${(m.attachments ?? []).length}`)
+    .join('\n')
+}

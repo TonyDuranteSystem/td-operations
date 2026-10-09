@@ -8,7 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  directMessages, dmName, initials, matchMessages, membersWithoutChat, otherUserId, snippet, startThreadId, timeLabel, dayLabel,
+  directMessages, dmName, initials, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, snippet, startThreadId, timeLabel, dayLabel,
   type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
@@ -109,11 +109,12 @@ export function TalkApp() {
       if (selectedIdRef.current !== threadId) return // switched chats while loading
       const incoming = (d.messages ?? []) as TalkMessage[]
       setMessages(prev => {
-        if (opts.silent) {
-          const a = prev[prev.length - 1], b = incoming[incoming.length - 1]
-          if (prev.length === incoming.length && a?.id === b?.id && a?.message === b?.message && a?.deleted_at === b?.deleted_at) return prev
-        }
-        return incoming
+        // MERGE, never replace: a poll that started before a send (or a realtime message) and answers after it would
+        // otherwise wipe that newer message until the next poll. Anything local that the snapshot does not have yet and
+        // is not older than the snapshot is kept (council finding, 2026-10-09).
+        const merged = mergeSnapshot(prev, incoming)
+        if (opts.silent && messageSignature(merged) === messageSignature(prev)) return prev
+        return merged
       })
       setPeerReadAt(d.peer_read_at ?? null)
     } catch (e) {

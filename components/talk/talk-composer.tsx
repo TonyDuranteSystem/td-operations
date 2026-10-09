@@ -46,13 +46,28 @@ export function TalkComposer({
   const textRef = useRef(text)
   const modeRef = useRef(mode)
   modeRef.current = mode
+  const onCancelModeRef = useRef(onCancelMode)
+  onCancelModeRef.current = onCancelMode
   textRef.current = text
   const editingId = mode?.kind === 'edit' ? mode.message.id : null
   const replyingId = mode?.kind === 'reply' ? mode.message.id : null
 
-  // entering Edit loads the message into the box; entering Reply just puts the cursor there
+  // Entering Edit loads the message into the box and stashes whatever was being typed; leaving Edit (for a reply,
+  // a cancel or a finished edit) gives that draft back instead of leaving the edited text behind to be re-sent as a
+  // new message. Entering Reply just puts the cursor in the box.
+  const prevModeRef = useRef<TalkComposerMode>(null)
+  const draftRef = useRef('')
   useEffect(() => {
-    if (mode?.kind === 'edit') { setText(mode.message.message ?? ''); setFiles([]) }
+    const prev = prevModeRef.current
+    prevModeRef.current = mode
+    if (mode?.kind === 'edit' && prev?.kind !== 'edit') {
+      draftRef.current = textRef.current
+      setText(mode.message.message ?? ''); setFiles([])
+    } else if (mode?.kind === 'edit' && prev?.kind === 'edit' && prev.message.id !== mode.message.id) {
+      setText(mode.message.message ?? '')
+    } else if (prev?.kind === 'edit' && mode?.kind !== 'edit') {
+      setText(draftRef.current); draftRef.current = ''
+    }
     if (mode) taRef.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingId, replyingId])
@@ -69,7 +84,11 @@ export function TalkComposer({
 
   const { isRecording, startRecording, stopRecording, cancelRecording, isSupported } = useAudioNoteRecorder({
     preferMp4: true,
-    onRecorded: file => { void send({ text: '', files: [file], replyToId: modeRef.current?.kind === 'reply' ? modeRef.current.message.id : null }) },
+    onRecorded: file => {
+      const replyToId = modeRef.current?.kind === 'reply' ? modeRef.current.message.id : null
+      // a voice note answering a message ends the reply, exactly like a typed answer (else the NEXT text would quote it too)
+      void send({ text: '', files: [file], replyToId }).then(ok => { if (ok && replyToId) onCancelModeRef.current() })
+    },
     onError: msg => toast.error(msg),
   })
 
@@ -104,7 +123,7 @@ export function TalkComposer({
       setBusy(true)
       const ok = await onEdit(id, sentText)
       setBusy(false)
-      if (ok) { setText(''); onCancelMode() }
+      if (ok) onCancelMode() // leaving Edit hands the stashed draft back (see the mode effect)
       return
     }
     const replyToId = mode?.kind === 'reply' ? mode.message.id : null
@@ -154,7 +173,7 @@ export function TalkComposer({
             <span className="block text-xs font-semibold text-[#BE1E2D]">{mode.kind === 'reply' ? `Replying to ${mode.who}` : 'Editing message'}</span>
             <span className="block truncate text-[13px] text-zinc-600">{snippet(mode.message, 70)}</span>
           </span>
-          <button type="button" aria-label="Cancel" onClick={() => { if (mode.kind === 'edit') setText(''); onCancelMode() }} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-200">
+          <button type="button" aria-label="Cancel" onClick={onCancelMode} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 active:bg-zinc-200">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -185,9 +204,11 @@ export function TalkComposer({
           disabled={disabled}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Escape' && mode) { if (mode.kind === 'edit') setText(''); onCancelMode(); return }
-            // On a computer Enter sends (Shift+Enter = new line); on a phone Enter is a new line and the arrow sends.
-            if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
+            if (e.key === 'Escape' && mode) { onCancelMode(); return }
+            // On a computer or a tablet Enter sends (Shift+Enter = new line); on a PHONE Enter is a new line and the arrow
+            // sends. Never while an input method is composing a word (Enter confirms the word there).
+            const phone = window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 768
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !phone) {
               e.preventDefault()
               void submit()
             }

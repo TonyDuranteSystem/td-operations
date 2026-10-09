@@ -59,7 +59,10 @@ export async function POST(request: NextRequest) {
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,
       auth_key: subscription.keys.auth,
-      app,
+      // Only written for a non-CRM app. The CRM app's own request therefore never touches the new column — it keeps
+      // working even if this code is ever live before the migration (a rejected insert here, right after the delete
+      // above, would have silently dropped the CRM app's push subscription — council finding, 2026-10-09).
+      ...(app ? { app } : {}),
     })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

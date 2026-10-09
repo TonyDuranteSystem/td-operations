@@ -47,6 +47,8 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   const onErrorRef = useRef(onError)
   const preferMp4Ref = useRef(!!preferMp4)
   const cancelledRef = useRef(false)
+  const startingRef = useRef(false)
+  const unmountedRef = useRef(false)
 
   useEffect(() => { onRecordedRef.current = onRecorded }, [onRecorded])
   useEffect(() => { onErrorRef.current = onError }, [onError])
@@ -61,11 +63,18 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   }, [])
 
   const startRecording = useCallback(async () => {
-    if (isRecording) return
+    // startingRef: a second tap while the microphone permission prompt is still open must not start a second recorder
+    if (isRecording || startingRef.current) return
+    startingRef.current = true
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       })
+      if (unmountedRef.current) {
+        // the screen went away while the permission prompt was open — release the microphone, record nothing
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = stream
       chunksRef.current = []
 
@@ -113,6 +122,8 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         ? 'Microphone access denied. Check your browser permissions and try again.'
         : 'Could not start recording. Check your microphone connection and browser permissions.'
       onErrorRef.current?.(msg)
+    } finally {
+      startingRef.current = false
     }
   }, [isRecording])
 
@@ -133,7 +144,9 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
     // Reset on every mount: React Strict Mode (dev) runs mount → cleanup → mount, and the cleanup below leaves this
     // flag true — which silently swallowed the FIRST recording after the page loaded (found 2026-10-09 in TD Talk).
     cancelledRef.current = false
+    unmountedRef.current = false
     return () => {
+      unmountedRef.current = true
       cancelledRef.current = true // an unmount (e.g. navigating away) must never fire onRecorded after the composer is gone
       const recorder = mediaRecorderRef.current
       if (recorder && recorder.state !== 'inactive') recorder.stop()

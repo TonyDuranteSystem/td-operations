@@ -696,7 +696,8 @@ export async function processClaudeReply(params: {
       const { sendPushToStaffExcept } = await import('@/lib/team/notify')
       await sendPushToStaffExcept(CLAUDE_SENDER_UUID, payload)
     } else {
-      await sendPushToAdminUsers([prompt.sender_id], payload)
+      // In a DM this IS a direct message (TD Talk receives those and nothing else — lib/push/route-subscriptions.ts).
+      await sendPushToAdminUsers([prompt.sender_id], { ...payload, dm: thread?.thread_type === 'dm' })
     }
   } catch { /* non-critical */ }
 

@@ -60,10 +60,15 @@ export async function POST(
 
   // Attachment URL guard (mirror portal chat): every attachment must live on our
   // Storage host — never an arbitrary off-site URL.
-  if (attachments && SUPABASE_URL) {
+  // The check is against `<host>/` (a bare prefix would let https://proj.supabase.co.evil.com through) and it FAILS
+  // CLOSED when the Supabase URL is not configured, rather than skipping the check (council finding, 2026-10-09).
+  if (attachments) {
+    if (!SUPABASE_URL) {
+      return NextResponse.json({ error: 'Attachments are unavailable right now.' }, { status: 503 })
+    }
     for (const a of attachments) {
       const u = (a?.url ?? '').toString().trim()
-      if (!u.startsWith(SUPABASE_URL)) {
+      if (!u.startsWith(`${SUPABASE_URL}/`)) {
         return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
       }
     }
