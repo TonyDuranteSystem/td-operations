@@ -18,7 +18,7 @@ import { isTalkPath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
  *
  * This is what makes the CRM feel like a live app instead of a static website.
  */
-export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev job c1e326dd): team-chat sounds and pop-ups ONLY — no client-message or business-event alerts. */ teamOnly?: boolean } = {}) {
+export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev job c1e326dd): direct-message sounds and pop-ups ONLY — no client-message, business-event, channel or topic alerts. */ teamOnly?: boolean } = {}) {
   const pathname = usePathname()
   const router = useRouter()
   const pathnameRef = useRef(pathname)
@@ -267,6 +267,9 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
         && !!threadId && myTopicThreadIdsRef.current.has(threadId)
       const channelLabel = threadId ? myChannelThreadIdsRef.current.get(threadId) : undefined
       if (!mentionsMe && !isMyDm && !isMyConversation && !isMyTopic && !channelLabel) return
+      // TD Talk is a chat between people: only a direct message pops up there (never a channel post, topic or
+      // client conversation — those belong to the CRM's Team Workspace).
+      if (teamOnly && !isMyDm) return
 
       const senderName = row?.sender_name || 'Team member'
       // Deep-link INTO the thread when the message belongs to one, so the click

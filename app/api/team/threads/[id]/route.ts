@@ -286,8 +286,26 @@ export async function GET(
     ;(threadMeta as any)[rid].waiting_name = turn?.waiting_name ?? null
   }
 
+  // Direct message: how far the OTHER person has read (their per-user read pointer), so a chat screen can show
+  // WhatsApp-style "seen" ticks on my messages (TD Talk, dev job c1e326dd). Null for everything else.
+  let peerReadAt: string | null = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dmKey = (thread as any).thread_type === 'dm' ? ((thread as any).dm_key as string | null) : null
+  const peerId = dmKey ? dmKey.split(':').find(id => id && id !== user.id) : null
+  if (peerId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: peerRead } = await (supabaseAdmin as any)
+      .from('internal_thread_reads')
+      .select('last_read_at')
+      .eq('thread_id', threadId)
+      .eq('user_id', peerId)
+      .maybeSingle()
+    peerReadAt = peerRead?.last_read_at ?? null
+  }
+
   return NextResponse.json({
     thread,
+    peer_read_at: peerReadAt,
     messages: enriched,
     thread_meta: threadMeta,
     threads,

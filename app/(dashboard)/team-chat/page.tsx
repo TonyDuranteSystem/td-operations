@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { useSearchParams, usePathname } from 'next/navigation'
-import { isTalkPath, teamChatBase } from '@/lib/talk/paths'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import {
@@ -49,9 +48,6 @@ function fileSize(b: number): string {
 }
 
 export default function TeamWorkspacePage() {
-  // TD Talk (dev job c1e326dd) renders this SAME page under /talk, without the CRM's header above it.
-  const inTalk = isTalkPath(usePathname())
-  const rootH = inTalk ? 'h-full' : 'h-full lg:h-[calc(100%_-_3.5rem)]'
   const [threads, setThreads] = useState<TeamThread[]>([])
   // Mirror of `threads` for effects that must READ the list without re-running
   // whenever it refreshes (the selection effect below decides the opening view;
@@ -192,11 +188,8 @@ export default function TeamWorkspacePage() {
         // a notification quietly cleared General's unread count (bug hunter, 2026-10-09).
         const wanted = new URLSearchParams(window.location.search).get('thread')
         const deep = wanted ? d.threads.find((t: TeamThread) => t.id === wanted) : null
-        // TD Talk on a phone opens on the list of chats, like WhatsApp: nothing is selected, so nothing is
-        // loaded or marked read until the person taps a chat.
-        const phoneApp = isTalkPath(window.location.pathname) && window.matchMedia('(max-width: 767px)').matches
         const general = d.threads.find((t: TeamThread) => t.thread_type === 'general')
-        const first = deep ?? (phoneApp ? null : general)
+        const first = deep ?? general
         if (first) setSelectedId(first.id)
       }
     } catch {
@@ -1258,7 +1251,7 @@ export default function TeamWorkspacePage() {
 
   if (view === 'board') {
     return (
-      <div className={`flex flex-col ${rootH} overflow-hidden`}>
+      <div className="flex flex-col h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
         <div className="flex items-center gap-3 px-5 py-2 border-b border-zinc-200 bg-white shrink-0">
           <ViewToggle view={view} setView={setView} />
           <span className="text-sm font-semibold text-zinc-800">Team Workspace</span>
@@ -1275,7 +1268,7 @@ export default function TeamWorkspacePage() {
   }
 
   return (
-    <div className={`flex ${rootH} overflow-hidden`}>
+    <div className="flex h-full lg:h-[calc(100%_-_3.5rem)] overflow-hidden">
       {/* Sidebar — full-screen pane on mobile until a conversation is open */}
       <div className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full md:w-64 md:shrink-0 border-r border-zinc-200 bg-zinc-50 flex-col`}>
         <div className="px-4 py-3 border-b border-zinc-200">
@@ -2207,7 +2200,7 @@ function ThreadActionsMenu({ thread, channelId, currentUserId, onRename, onArchi
   const deletable = !!currentUserId && thread.root_sender_id === currentUserId && thread.reply_count === 0
   const close = () => { setOpen(false); setRenaming(false); setConfirmDel(false) }
   const copyLink = () => {
-    const url = `${window.location.origin}${teamChatBase(window.location.pathname)}?thread=${channelId}&root=${thread.root_id}`
+    const url = `${window.location.origin}/team-chat?thread=${channelId}&root=${thread.root_id}`
     navigator.clipboard.writeText(url)
       .then(() => toast.success('Thread link copied — paste it into a Claude Code session and say "read this link".'))
       .catch(() => toast.error('Could not copy the link.'))

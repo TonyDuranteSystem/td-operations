@@ -6,6 +6,12 @@ interface UseAudioNoteRecorderOptions {
   /** Called with the finished recording, ready to attach and send like any other file. */
   onRecorded?: (file: File) => void
   onError?: (message: string) => void
+  /**
+   * Prefer MP4/AAC (.m4a) over WebM when the browser can record it. TD Talk (dev job c1e326dd) sets this: an iPhone
+   * cannot PLAY a WebM voice note, so a note recorded on Android/desktop in WebM would be silent on the other
+   * person's iPhone. iPhone Safari and Chrome 126+ record MP4. Off by default — the WhatsApp composer is unchanged.
+   */
+  preferMp4?: boolean
 }
 
 interface UseAudioNoteRecorderReturn {
@@ -29,7 +35,7 @@ interface UseAudioNoteRecorderReturn {
  * there — no transcription call, no text callback.
  */
 export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}): UseAudioNoteRecorderReturn {
-  const { onRecorded, onError } = options
+  const { onRecorded, onError, preferMp4 } = options
 
   const [isRecording, setIsRecording] = useState(false)
   const [isSupported, setIsSupported] = useState(false)
@@ -39,10 +45,12 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   const streamRef = useRef<MediaStream | null>(null)
   const onRecordedRef = useRef(onRecorded)
   const onErrorRef = useRef(onError)
+  const preferMp4Ref = useRef(!!preferMp4)
   const cancelledRef = useRef(false)
 
   useEffect(() => { onRecordedRef.current = onRecorded }, [onRecorded])
   useEffect(() => { onErrorRef.current = onError }, [onError])
+  useEffect(() => { preferMp4Ref.current = !!preferMp4 }, [preferMp4])
 
   useEffect(() => {
     setIsSupported(
@@ -61,11 +69,15 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
       streamRef.current = stream
       chunksRef.current = []
 
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : 'audio/mp4'
+      const mp4Wanted = preferMp4Ref.current
+        && (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2') || MediaRecorder.isTypeSupported('audio/mp4'))
+      const mimeType = mp4Wanted
+        ? (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2') ? 'audio/mp4;codecs=mp4a.40.2' : 'audio/mp4')
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : MediaRecorder.isTypeSupported('audio/webm')
+            ? 'audio/webm'
+            : 'audio/mp4'
 
       const recorder = new MediaRecorder(stream, { mimeType })
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
@@ -118,6 +130,9 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   }, [])
 
   useEffect(() => {
+    // Reset on every mount: React Strict Mode (dev) runs mount → cleanup → mount, and the cleanup below leaves this
+    // flag true — which silently swallowed the FIRST recording after the page loaded (found 2026-10-09 in TD Talk).
+    cancelledRef.current = false
     return () => {
       cancelledRef.current = true // an unmount (e.g. navigating away) must never fire onRecorded after the composer is gone
       const recorder = mediaRecorderRef.current

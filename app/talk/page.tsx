@@ -1,6 +1,15 @@
+import { Suspense } from 'react'
+import { TalkApp } from '@/components/talk/talk-app'
+
 /**
- * TD Talk's one page: the existing Team Chat workspace, unchanged. Re-exported (not copied) so the two can
- * never drift — a fix to Team Chat is a fix to TD Talk. The page itself knows when it is running under /talk
- * (usePathname) and adjusts only its height, its deep links and its first screen on a phone.
+ * TD Talk's one screen: a WhatsApp-style chat for the team (opens straight into a conversation). It is NOT the Team
+ * Workspace — it only shows direct messages — but it reads and writes the same Team Chat data. See
+ * docs/systems/talk.md.
  */
-export { default } from '@/app/(dashboard)/team-chat/page'
+export default function TalkPage() {
+  return (
+    <Suspense fallback={null}>
+      <TalkApp />
+    </Suspense>
+  )
+}
