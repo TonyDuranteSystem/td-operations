@@ -229,6 +229,22 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     }
   }, [canManageTeam])
 
+  // Green blinking "NEW" tag on the "Customers & Invoices" menu item (Antonio 2026-10-09): shown only to companies
+  // that have the new invoices screen (hub on), until the person opens that page once on this browser. Same
+  // pattern as the Team tag above; green so it is not mistaken for the purple Team tag or the red chat counters.
+  const INVOICES_NEW_KEY = 'td-invoices-hub-new-v1'
+  const [showInvoicesNew, setShowInvoicesNew] = useState(false)
+  const invoicesHubOn = !isTeammate && !!navVisibility?.invoiceHub
+  useEffect(() => {
+    try {
+      const onPage = pathname.startsWith('/portal/invoices')
+      if (onPage && invoicesHubOn) window.localStorage.setItem(INVOICES_NEW_KEY, '1')
+      setShowInvoicesNew(invoicesHubOn && !onPage && !window.localStorage.getItem(INVOICES_NEW_KEY))
+    } catch {
+      // localStorage unavailable: skip the tag
+    }
+  }, [invoicesHubOn, pathname])
+
   // The count is no longer forced to 0 when the chat page opens (dev job
   // 05d997f2, Phase 2): opening the chat no longer means "read everything" —
   // a message in another tab stays unread until the client opens that tab.
@@ -558,7 +574,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
           isActive(item.href)
             ? 'bg-blue-50 text-blue-700'
             : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900',
-          (docsPulse || signPulse || billingPulse || reactionPulse) && 'animate-pulse'
+          (docsPulse || signPulse || billingPulse || reactionPulse || (item.key === 'nav.invoices' && showInvoicesNew)) && 'motion-safe:animate-pulse'
         )}
       >
         <Link
@@ -568,6 +584,10 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             setMobileOpen(false)
             // Clear the Team "NEW" badge once the admin opens the Team page,
             // even if they never saw the home announcement banner.
+            if (item.key === 'nav.invoices' && showInvoicesNew) {
+              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
+              setShowInvoicesNew(false)
+            }
             if (item.key === 'nav.team' && showTeamNew) {
               try { localStorage.setItem('td-team-access-announce-v1', '1') } catch { /* no-op */ }
               setShowTeamNew(false)
@@ -589,6 +609,14 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
               role="img"
               aria-label={t('chat.newReaction')}
             />
+          )}
+          {item.key === 'nav.invoices' && showInvoicesNew && (
+            <span
+              data-testid="invoices-new-tag"
+              className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-emerald-600 text-white text-[10px] font-semibold"
+            >
+              {t('nav.newBadge')}
+            </span>
           )}
           {item.key === 'nav.team' && showTeamNew && (
             <span className="ml-auto h-5 px-2 inline-flex items-center justify-center rounded-full bg-violet-600 text-white text-[10px] font-semibold">
