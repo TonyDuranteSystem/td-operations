@@ -101,8 +101,8 @@ export async function PATCH(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json()
-  const { id, account_id, ...updates } = body
+  const body = await request.json().catch(() => ({}))
+  const { id, account_id } = body
 
   if (!id || !account_id) {
     return NextResponse.json({ error: 'id and account_id required' }, { status: 400 })
@@ -112,12 +112,30 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
-  // If toggling show_on_invoice ON, uncheck others first
+  // WHITELIST: only these fields can change (the old code spread the whole body into the update, which also let a
+  // caller set a currency the POST path refuses).
+  const updates: Record<string, unknown> = {}
+  for (const key of ['label', 'account_holder', 'bank_name', 'iban', 'swift_bic', 'account_number', 'routing_number', 'notes'] as const) {
+    if (body[key] !== undefined) updates[key] = typeof body[key] === 'string' ? body[key].trim() || null : null
+  }
+  if (updates.label === null) return NextResponse.json({ error: 'The label cannot be empty.' }, { status: 400 })
+  if (body.currency !== undefined) {
+    if (!['USD', 'EUR'].includes(body.currency)) return NextResponse.json({ error: 'Currency must be USD or EUR' }, { status: 400 })
+    updates.currency = body.currency
+  }
+  if (body.show_on_invoice !== undefined) updates.show_on_invoice = body.show_on_invoice === true
+
+  const { data: existing } = await supabaseAdmin
+    .from('client_bank_accounts').select('id').eq('id', id).eq('account_id', account_id).maybeSingle()
+  if (!existing) return NextResponse.json({ error: 'Bank account not found' }, { status: 404 })
+
+  // If toggling show_on_invoice ON, uncheck the others (after we know this account is really ours).
   if (updates.show_on_invoice === true) {
     await supabaseAdmin
       .from('client_bank_accounts')
       .update({ show_on_invoice: false })
       .eq('account_id', account_id)
+      .neq('id', id)
   }
 
   const { data, error } = await supabaseAdmin

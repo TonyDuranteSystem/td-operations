@@ -1,5 +1,6 @@
 'use client'
 
+import { throwIfNotOk, errorMessage } from '@/lib/portal/api-error'
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, Save, Loader2, ExternalLink, Star, CreditCard, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -64,14 +65,15 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
           is_default: links.length === 0,
         }),
       })
-      if (!res.ok) throw new Error('Failed to add')
+      await throwIfNotOk(res, 'Failed to add payment link')
       const data = await res.json()
-      setLinks(prev => [...prev, data])
+      // The server makes the first link (or one marked default) the default and clears the others.
+      setLinks(prev => (data.is_default ? [...prev.map(l => ({ ...l, is_default: false })), data] : [...prev, data]))
       setShowAdd(false)
       setNewLabel(''); setNewUrl(''); setNewAmount('')
       toast.success(t('payment.added'))
-    } catch {
-      toast.error('Failed to add payment link')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to add payment link'))
     } finally {
       setSaving(false)
     }
@@ -80,25 +82,30 @@ export function PaymentLinks({ accountId }: { accountId: string }) {
   const handleDelete = async (id: string) => {
     setConfirmingDeleteId(null)
     try {
-      await fetch(`/api/portal/payment-links?id=${id}&account_id=${accountId}`, { method: 'DELETE' })
-      setLinks(prev => prev.filter(l => l.id !== id))
+      const res = await fetch(`/api/portal/payment-links?id=${id}&account_id=${accountId}`, { method: 'DELETE' })
+      await throwIfNotOk(res, 'Failed to remove')
+      // The oldest remaining link becomes the default when the default is deleted: reload so the list shows it.
+      const fresh = await fetch(`/api/portal/payment-links?account_id=${accountId}`)
+      if (fresh.ok) setLinks(await fresh.json())
+      else setLinks(prev => prev.filter(l => l.id !== id))
       toast.success(t('payment.removed'))
-    } catch {
-      toast.error('Failed to remove')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to remove'))
     }
   }
 
   const handleSetDefault = async (id: string) => {
     try {
-      await fetch('/api/portal/payment-links', {
+      const res = await fetch('/api/portal/payment-links', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, account_id: accountId, is_default: true }),
       })
+      await throwIfNotOk(res, 'Failed to update')
       setLinks(prev => prev.map(l => ({ ...l, is_default: l.id === id })))
       toast.success(t('payment.defaultUpdated'))
-    } catch {
-      toast.error('Failed to update')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Failed to update'))
     }
   }
 

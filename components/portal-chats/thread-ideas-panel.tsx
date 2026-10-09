@@ -28,9 +28,18 @@ export function ThreadIdeasPanel({ accountId, contactId }: { accountId: string |
   const scopeKey = accountId ?? contactId
   const param = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
 
-  const { data: ideas, isLoading } = useQuery<ApiIdea[]>({
+  const { data: ideas, isLoading, error: loadError } = useQuery<ApiIdea[]>({
     queryKey: ['thread-feature-ideas', scopeKey],
-    queryFn: () => fetch(`${API}?list=true&${param}`).then(r => r.json()).then((d: { ideas?: ApiIdea[] }) => d.ideas || []),
+    queryFn: async () => {
+      const r = await fetch(`${API}?list=true&${param}`)
+      // A 403 / 500 must not look like "this client has no ideas" (R099): let the query report the real error.
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not load the ideas.')
+      }
+      const d = (await r.json()) as { ideas?: ApiIdea[] }
+      return d.ideas || []
+    },
     enabled: !!param,
     refetchInterval: 30_000,
   })
@@ -67,7 +76,7 @@ export function ThreadIdeasPanel({ accountId, contactId }: { accountId: string |
         <Lightbulb className="h-3.5 w-3.5 text-blue-500" />
         <span className="text-xs font-medium text-blue-700">Idea request — what this client would like us to build</span>
       </div>
-      {error && <p className="px-4 py-2 text-xs text-red-600">{error}</p>}
+      {(error || loadError) && <p className="px-4 py-2 text-xs text-red-600">{error || (loadError instanceof Error ? loadError.message : 'Could not load the ideas.')}</p>}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {isLoading ? (
           <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-zinc-400" /></div>

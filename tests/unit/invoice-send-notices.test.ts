@@ -43,8 +43,13 @@ describe('sendNotices', () => {
     expect(ids({ ...i, status: 'Overdue' })).toEqual(['no-customer-email'])
   })
 
+  it('a part-paid invoice can be reminded, so it needs the customer email like Sent / Overdue', () => {
+    expect(ids({ status: 'Partial', customerEmail: null, hasBankAccount: false, hasPaymentLink: false })).toEqual(['no-customer-email'])
+    expect(ids({ status: 'Partial', customerEmail: 'a@b.co', hasBankAccount: false, hasPaymentLink: false })).toEqual([])
+  })
+
   it('statuses that cannot send or remind get no notices', () => {
-    for (const status of ['Paid', 'Partial', 'Cancelled', 'Split', 'Nonsense', null]) {
+    for (const status of ['Paid', 'Cancelled', 'Split', 'Nonsense', null]) {
       expect(ids({ status: status as string | null, customerEmail: null, hasBankAccount: false, hasPaymentLink: false })).toEqual([])
     }
   })

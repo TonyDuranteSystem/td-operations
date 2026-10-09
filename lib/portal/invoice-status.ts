@@ -30,7 +30,7 @@ export const INVOICE_STATUS: Record<string, InvoiceStatusRule> = {
   Draft:     { watermark: { text: 'DRAFT',     color: [0.7, 0.7, 0.7] }, editable: true,  voidable: true,  sendable: true,  remindable: false, outstanding: true },
   Sent:      { watermark: null,                                           editable: true,  voidable: true,  sendable: false, remindable: true,  outstanding: true },
   Overdue:   { watermark: { text: 'OVERDUE',   color: [0.9, 0.2, 0.2] }, editable: true,  voidable: true,  sendable: false, remindable: true,  outstanding: true },
-  Partial:   { watermark: { text: 'PARTIAL',   color: [0.9, 0.6, 0.1] }, editable: true,  voidable: true,  sendable: false, remindable: false, outstanding: true },
+  Partial:   { watermark: { text: 'PARTIAL',   color: [0.9, 0.6, 0.1] }, editable: true,  voidable: true,  sendable: false, remindable: true,  outstanding: true },
   Paid:      { watermark: { text: 'PAID',      color: [0.2, 0.8, 0.2] }, editable: true,  voidable: true,  sendable: false, remindable: false, outstanding: false },
   Cancelled: { watermark: { text: 'CANCELLED', color: [0.7, 0.7, 0.7] }, editable: false, voidable: false, sendable: false, remindable: false, outstanding: false },
   Split:     { watermark: null,                                           editable: false, voidable: false, sendable: false, remindable: false, outstanding: true },

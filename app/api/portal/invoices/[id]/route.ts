@@ -40,7 +40,8 @@ export async function GET(
       .from('client_customers')
       .select('name, email, address, vat_number')
       .eq('id', invoice.customer_id)
-      .single()
+      .eq('account_id', invoice.account_id) // a customer of another company is never shown on this invoice
+      .maybeSingle()
     customer = data
   }
 

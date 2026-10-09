@@ -7,6 +7,8 @@ import { APP_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { pdfStatusForSend } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
+import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed } from '@/lib/portal/invoice-email'
+import { validatePaymentLinkUrl } from '@/lib/portal/payment-link-rules'
 
 /**
  * POST /api/portal/invoices/[id]/send — Send invoice via email to customer
@@ -35,15 +37,25 @@ export async function POST(
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
+  // A voided or split invoice must never be emailed. Re-sending a Sent / Overdue / Partial / Paid one (as a
+  // record, or because the customer lost it) stays allowed and leaves its status alone.
+  if (invoice.status === 'Cancelled' || invoice.status === 'Split') {
+    return NextResponse.json({ error: `A ${invoice.status === 'Cancelled' ? 'voided' : 'split'} invoice cannot be sent.` }, { status: 400 })
+  }
+
   // Get customer email
   const { data: customer } = await supabaseAdmin
     .from('client_customers')
     .select('name, email')
     .eq('id', invoice.customer_id)
-    .single()
+    .eq('account_id', invoice.account_id) // the customer must be this company's own
+    .maybeSingle()
 
   if (!customer?.email) {
     return NextResponse.json({ error: 'Customer has no email address' }, { status: 400 })
+  }
+  if (!isSafeRecipient(customer.email)) {
+    return NextResponse.json({ error: 'The customer\'s email address is not valid. Please correct it and try again.' }, { status: 400 })
   }
 
   // Get account name and reply-to email
@@ -62,6 +74,7 @@ export async function POST(
       .from('client_bank_accounts')
       .select('*')
       .eq('id', invoice.bank_account_id)
+      .eq('account_id', invoice.account_id) // never another company's bank details
       .maybeSingle()
     bankAccount = data
   }
@@ -71,6 +84,8 @@ export async function POST(
       .select('*')
       .eq('account_id', invoice.account_id)
       .eq('show_on_invoice', true)
+      .order('created_at')
+      .limit(1)
       .maybeSingle()
     bankAccount = data
   }
@@ -81,36 +96,40 @@ export async function POST(
     .select('url')
     .eq('account_id', invoice.account_id)
     .eq('is_default', true)
+    .order('created_at')
+    .limit(1)
     .maybeSingle()
 
-  const paymentLinkUrl = defaultLink?.url || null
+  // Only a plain https link is ever put in the email (it is rendered as a button).
+  const linkCheck = defaultLink?.url ? validatePaymentLinkUrl(defaultLink.url) : null
+  const paymentLinkUrl = linkCheck && 'url' in linkCheck ? linkCheck.url : null
 
   const csym = invoice.currency === 'EUR' ? '\u20AC' : '$'
-  const companyName = account?.company_name ?? 'Our Company'
+  const companyName = headerSafe(account?.company_name ?? 'Our Company')
 
   // Build email
   const subject = `Invoice ${invoice.invoice_number} from ${companyName}`
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <div style="background: #2563eb; padding: 24px; border-radius: 12px 12px 0 0;">
-        <h1 style="color: white; margin: 0; font-size: 20px;">${companyName}</h1>
+        <h1 style="color: white; margin: 0; font-size: 20px;">${esc(companyName)}</h1>
       </div>
       <div style="border: 1px solid #e5e7eb; border-top: none; padding: 24px; border-radius: 0 0 12px 12px;">
-        <p>Dear ${customer.name},</p>
-        <p>Please find below the details for invoice <strong>${invoice.invoice_number}</strong>.</p>
+        <p>Dear ${esc(customer.name)},</p>
+        <p>Please find below the details for invoice <strong>${esc(invoice.invoice_number)}</strong>.</p>
 
         <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
           <tr style="background: #f8fafc;">
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Invoice Number</td>
-            <td style="padding: 8px 12px; font-size: 14px;">${invoice.invoice_number}</td>
+            <td style="padding: 8px 12px; font-size: 14px;">${esc(invoice.invoice_number)}</td>
           </tr>
           <tr>
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Issue Date</td>
-            <td style="padding: 8px 12px; font-size: 14px;">${invoice.issue_date}</td>
+            <td style="padding: 8px 12px; font-size: 14px;">${esc(invoice.issue_date)}</td>
           </tr>
           ${invoice.due_date ? `<tr style="background: #f8fafc;">
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Due Date</td>
-            <td style="padding: 8px 12px; font-size: 14px;">${invoice.due_date}</td>
+            <td style="padding: 8px 12px; font-size: 14px;">${esc(invoice.due_date)}</td>
           </tr>` : ''}
           <tr>
             <td style="padding: 8px 12px; font-weight: bold; color: #6b7280; font-size: 13px;">Total Amount</td>
@@ -120,28 +139,29 @@ export async function POST(
 
         ${invoice.message ? `<div style="background: #f8fafc; padding: 16px; border-radius: 8px; margin-top: 16px;">
           <p style="margin: 0; font-size: 12px; color: #6b7280; text-transform: uppercase; font-weight: bold;">Payment Terms</p>
-          <p style="margin: 8px 0 0; font-size: 14px; white-space: pre-wrap;">${invoice.message}</p>
+          <p style="margin: 8px 0 0; font-size: 14px; white-space: pre-wrap;">${esc(invoice.message)}</p>
         </div>` : ''}
 
         ${(() => {
           if (!bankAccount) return ''
+          // Each field is escaped on its own, THEN joined with <br/> (escaping the joined text would break the line breaks).
           const fields = [
-            bankAccount.account_holder && `Account Holder: ${bankAccount.account_holder}`,
-            bankAccount.bank_name && `Bank: ${bankAccount.bank_name}`,
-            bankAccount.iban && `IBAN: ${bankAccount.iban}`,
-            bankAccount.swift_bic && `SWIFT/BIC: ${bankAccount.swift_bic}`,
-            bankAccount.account_number && `Account: ${bankAccount.account_number}`,
-            bankAccount.routing_number && `Routing: ${bankAccount.routing_number}`,
-            bankAccount.notes && bankAccount.notes,
+            bankAccount.account_holder && `Account Holder: ${esc(bankAccount.account_holder)}`,
+            bankAccount.bank_name && `Bank: ${esc(bankAccount.bank_name)}`,
+            bankAccount.iban && `IBAN: ${esc(bankAccount.iban)}`,
+            bankAccount.swift_bic && `SWIFT/BIC: ${esc(bankAccount.swift_bic)}`,
+            bankAccount.account_number && `Account: ${esc(bankAccount.account_number)}`,
+            bankAccount.routing_number && `Routing: ${esc(bankAccount.routing_number)}`,
+            bankAccount.notes && esc(bankAccount.notes),
           ].filter(Boolean).join('<br/>')
           return `<div style="background: #f0fdf4; padding: 16px; border-radius: 8px; margin-top: 16px; border: 1px solid #bbf7d0;">
-            <p style="margin: 0; font-size: 12px; color: #15803d; text-transform: uppercase; font-weight: bold;">Bank Details — ${bankAccount.label}</p>
+            <p style="margin: 0; font-size: 12px; color: #15803d; text-transform: uppercase; font-weight: bold;">Bank Details — ${esc(bankAccount.label)}</p>
             <p style="margin: 8px 0 0; font-size: 13px; color: #166534;">${fields}</p>
           </div>`
         })()}
 
         ${paymentLinkUrl ? `<div style="text-align: center; margin-top: 20px;">
-          <a href="${paymentLinkUrl}" style="display: inline-block; padding: 14px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+          <a href="${esc(paymentLinkUrl)}" style="display: inline-block; padding: 14px 32px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
             Pay Now
           </a>
         </div>` : ''}
@@ -153,6 +173,13 @@ export async function POST(
     </div>
   `
 
+  // Double-click / second-tab guard: the same invoice to the same person within a minute is a duplicate. The claim
+  // row below is written BEFORE the email goes out, so the window is milliseconds, not the whole PDF + Gmail round trip.
+  if (await recentlyEmailed(supabaseAdmin, { accountId: invoice.account_id, recipient: customer.email, subjects: [subject], windowSeconds: 60 })) {
+    return NextResponse.json({ error: 'This invoice was just sent to this customer. Please wait a minute before sending it again.' }, { status: 409 })
+  }
+
+  let claimedTrackingId: string | null = null
   try {
     // Generate tracking ID and inject pixel into HTML
     const trackingId = `et_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -162,11 +189,24 @@ export async function POST(
     // Build the PDF as it will look once sent, so the customer never receives a DRAFT-stamped file.
     // Built in-process (no HTTP call back to ourselves). If it cannot be built we stop: an invoice
     // email without its PDF would be reported as sent when it is not what the client meant to send.
+    // Claim the send now (the row doubles as the email tracking record). If the send fails it is removed again,
+    // so a failed attempt never blocks the retry.
+    const { error: claimErr } = await supabaseAdmin.from('email_tracking').insert({
+      tracking_id: trackingId,
+      recipient: customer.email,
+      subject,
+      from_email: 'support@tonydurante.us',
+      account_id: invoice.account_id || null,
+      contact_id: invoice.contact_id || null,
+    })
+    if (!claimErr) claimedTrackingId = trackingId
+
     let pdfBase64: string
     try {
       const pdfBytes = await renderInvoicePdf({ invoice, shownStatus: pdfStatusForSend(invoice.status) })
       pdfBase64 = Buffer.from(pdfBytes).toString('base64')
     } catch (pdfErr) {
+      if (claimedTrackingId) await supabaseAdmin.from('email_tracking').delete().eq('tracking_id', claimedTrackingId)
       console.error('Invoice PDF could not be built; nothing was sent:', pdfErr)
       return NextResponse.json(
         { error: 'The invoice PDF could not be prepared, so nothing was sent. Please try again.' },
@@ -175,7 +215,7 @@ export async function POST(
     }
 
     const rawEmail = createRawEmail({
-      from: `${companyName} <support@tonydurante.us>`,
+      from: fromHeader(companyName, 'support@tonydurante.us'),
       to: customer.email,
       subject,
       html: trackedHtml,
@@ -185,17 +225,12 @@ export async function POST(
 
     const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
 
-    // Store email tracking record
-    await supabaseAdmin.from('email_tracking').insert({
-      tracking_id: trackingId,
-      gmail_message_id: sendResult?.id || null,
-      gmail_thread_id: sendResult?.threadId || null,
-      recipient: customer.email,
-      subject,
-      from_email: 'support@tonydurante.us',
-      account_id: invoice.account_id || null,
-      contact_id: invoice.contact_id || null,
-    })
+    // Complete the tracking record (the claim row written above) with the Gmail ids.
+    if (claimedTrackingId) {
+      await supabaseAdmin.from('email_tracking')
+        .update({ gmail_message_id: sendResult?.id || null, gmail_thread_id: sendResult?.threadId || null })
+        .eq('tracking_id', claimedTrackingId)
+    }
 
     // Standard invoice lifecycle: sending only advances a Draft → Sent. It must
     // NEVER downgrade an already Sent / Overdue / Paid invoice — re-sending a
@@ -219,49 +254,8 @@ export async function POST(
     // The email is out. If the status could not be saved say so, so the client does not send it again.
     return NextResponse.json({ success: true, statusUpdated })
   } catch (err) {
+    if (claimedTrackingId) await supabaseAdmin.from('email_tracking').delete().eq('tracking_id', claimedTrackingId)
     console.error('Failed to send invoice email:', err)
     return NextResponse.json({ error: 'Failed to send email' }, { status: 500 })
   }
-}
-
-function createRawEmail({ from, to, subject, html, replyTo, attachment }: {
-  from: string; to: string; subject: string; html: string
-  replyTo?: string
-  attachment?: { base64: string; filename: string }
-}): string {
-  const boundary = `boundary_${Date.now()}`
-  const contentType = attachment
-    ? `multipart/mixed; boundary="${boundary}"`
-    : `multipart/alternative; boundary="${boundary}"`
-
-  const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-  const parts = [
-    `From: ${from}`,
-    `To: ${to}`,
-    ...(replyTo ? [`Reply-To: ${replyTo}`] : []),
-    `Subject: ${encodedSubject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: ${contentType}`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Buffer.from(html).toString('base64'),
-  ]
-
-  if (attachment) {
-    parts.push(
-      `--${boundary}`,
-      `Content-Type: application/pdf; name="${attachment.filename}"`,
-      `Content-Disposition: attachment; filename="${attachment.filename}"`,
-      'Content-Transfer-Encoding: base64',
-      '',
-      attachment.base64,
-    )
-  }
-
-  parts.push(`--${boundary}--`)
-
-  return Buffer.from(parts.join('\r\n')).toString('base64url')
 }

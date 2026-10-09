@@ -64,7 +64,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   // Invoice fields
   const [currency, setCurrency] = useState<'USD' | 'EUR'>(initialData?.currency ?? 'USD')
   const [discount, setDiscount] = useState(initialData?.discount ?? 0)
-  const [issueDate, setIssueDate] = useState(initialData?.issueDate ?? new Date().toISOString().split('T')[0])
+  const [issueDate, setIssueDate] = useState(initialData?.issueDate ?? new Date().toLocaleDateString('en-CA'))
   const [dueDate, setDueDate] = useState(initialData?.dueDate ?? '')
   const [notes, setNotes] = useState(initialData?.notes ?? '')
   const [message, setMessage] = useState(initialData?.message ?? '')
@@ -82,7 +82,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         const list = Array.isArray(data) ? data : []
         setBankAccounts(list)
         // Auto-select the show_on_invoice account if none selected
-        if (!bankAccountId && list.length > 0) {
+        if (mode === 'create' && !bankAccountId && list.length > 0) {
           const defaultAcc = list.find((a: { show_on_invoice?: boolean }) => a.show_on_invoice) || list[0]
           setBankAccountId(defaultAcc.id)
         }
@@ -164,14 +164,14 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
       if (mode === 'edit' && initialData?.id) {
         const result = await updateInvoice({
           id: initialData.id,
-          account_id: accountId,
           customer_id: customerId,
           currency,
           discount,
           issue_date: issueDate,
-          due_date: dueDate || undefined,
-          notes: notes || undefined,
-          message: message || undefined,
+          // null (not undefined) so a field the client EMPTIED is really cleared; undefined means "no change".
+          due_date: dueDate || null,
+          notes: notes || null,
+          message: message || null,
           bank_account_id: bankAccountId || null,
           items: itemsPayload,
         })
@@ -323,8 +323,8 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           </div>
         </div>
 
-        {/* Recurring */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Recurring: set when the invoice is created. It is not editable afterwards (void it to stop it). */}
+        {mode === 'create' && <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="invoice-recurring">
           <div>
             <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.recurring')}</label>
             <select
@@ -350,7 +350,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               <p className="text-xs text-zinc-400 mt-1">{t('invoices.indefinite')}</p>
             </div>
           )}
-        </div>
+          {recurringFrequency && (
+            <p className="sm:col-span-3 text-xs text-zinc-500" data-testid="invoice-recurring-hint">{t('invoices.recurringHint')}</p>
+          )}
+        </div>}
 
         {/* Line Items */}
         <div>

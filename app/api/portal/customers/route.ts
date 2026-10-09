@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { revalidatePath } from 'next/cache'
 import { NextRequest, NextResponse } from 'next/server'
+import { isSafeRecipient } from '@/lib/portal/invoice-email'
 
 /**
  * POST /api/portal/customers — Create a new customer with full details
@@ -21,6 +22,11 @@ export async function POST(request: NextRequest) {
   // Access control — default-deny (contacts AND teammates; never skipped).
   if (!(await canAccessAccount(user, account_id, 'sales_customers'))) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  // The email is where the invoice is sent: it must be one plain address (no spaces, lists or line breaks).
+  if (email && !isSafeRecipient(email)) {
+    return NextResponse.json({ error: 'That email address does not look valid.' }, { status: 400 })
   }
 
   const { data, error } = await supabaseAdmin

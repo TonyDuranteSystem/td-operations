@@ -14,6 +14,10 @@ import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
 import { InvoiceSendNotices } from '@/components/portal/invoice-send-notices'
 import { sendNotices } from '@/lib/portal/invoice-send-notices'
+import { invoiceStatusRule } from '@/lib/portal/invoice-status'
+
+// The calendar day in the user's own timezone (toISOString() is UTC: after 8pm in New York it is already tomorrow).
+const todayLocal = () => new Date().toLocaleDateString('en-CA')
 
 interface InvoiceDetail {
   id: string
@@ -50,6 +54,8 @@ const STATUS_COLORS: Record<string, string> = {
   Sent: 'bg-blue-100 text-blue-700',
   Paid: 'bg-emerald-100 text-emerald-700',
   Overdue: 'bg-red-100 text-red-700',
+  Partial: 'bg-amber-100 text-amber-700',
+  Split: 'bg-zinc-100 text-zinc-600',
   Cancelled: 'bg-zinc-100 text-zinc-500',
 }
 
@@ -174,9 +180,11 @@ export default function InvoiceDetailPage() {
 
   const handleMarkPaid = () => {
     startTransition(async () => {
-      const result = await markInvoiceAsPaid(invoiceId, new Date().toISOString().split('T')[0])
+      const result = await markInvoiceAsPaid(invoiceId, todayLocal())
       if (result.success) {
-        setInvoice(prev => prev ? { ...prev, status: 'Paid', paid_date: new Date().toISOString().split('T')[0] } : prev)
+        // Reload so the amounts shown (paid / still due) are the ones the server saved.
+        const res = await fetch(`/api/portal/invoices/${invoiceId}`)
+        if (res.ok) setInvoice(await res.json())
         toast.success('Invoice marked as paid')
       } else {
         toast.error(result.error ?? 'Failed to update')
@@ -192,10 +200,14 @@ export default function InvoiceDetailPage() {
     setReminding(true)
     try {
       const res = await fetch(`/api/portal/invoices/${invoiceId}/remind`, { method: 'POST' })
-      if (!res.ok) throw new Error('Failed to send reminder')
+      if (!res.ok) {
+        // Show the real reason (e.g. "already sent in the last 12 hours"), not a generic failure (R099).
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Failed to send reminder')
+      }
       toast.success(`Reminder sent to ${invoice.customer.email}`)
-    } catch {
-      toast.error('Failed to send reminder')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send reminder')
     } finally {
       setReminding(false)
     }
@@ -207,7 +219,7 @@ export default function InvoiceDetailPage() {
     const result = await createTemplate({
       account_id: invoice.account_id ?? '',
       name: templateName.trim(),
-      customer_id: invoice.customer ? undefined : undefined,
+      customer_id: invoice.customer_id ?? undefined,
       currency: invoice.currency as 'USD' | 'EUR',
       items: invoice.items.map(i => ({ description: i.description, quantity: i.quantity, unit_price: i.unit_price })),
       message: invoice.message,
@@ -254,7 +266,7 @@ export default function InvoiceDetailPage() {
       return
     }
     startTransition(async () => {
-      const result = await recordPartialPayment(invoiceId, amount, new Date().toISOString().split('T')[0])
+      const result = await recordPartialPayment(invoiceId, amount, todayLocal())
       if (result.success) {
         setShowPartialModal(false)
         setPartialAmount('')
@@ -307,7 +319,7 @@ export default function InvoiceDetailPage() {
 
         {/* Actions — stack on mobile */}
         <div className="grid grid-cols-2 sm:flex gap-2 sm:flex-wrap">
-          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
+          {invoiceStatusRule(invoice.status)?.editable && (
             <Link
               href={`/portal/invoices/${invoiceId}/edit`}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50"
@@ -340,7 +352,7 @@ export default function InvoiceDetailPage() {
             </button>
           )}
 
-          {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
+          {(invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
             <>
               <button
                 onClick={handleRemind}
@@ -379,11 +391,11 @@ export default function InvoiceDetailPage() {
             Duplicate
           </button>
 
-          {/* Partial Payment — for Sent/Overdue */}
-          {(invoice.status === 'Sent' || invoice.status === 'Overdue') && (
+          {/* Payment — for anything still waiting for money, including a part-paid invoice (it used to dead-end there) */}
+          {(invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
             <button
               onClick={() => {
-                const remaining = Number(invoice.total) - (Number(invoice.amount_paid) || 0)
+                const remaining = Math.max(Number(invoice.total) - (Number(invoice.amount_paid) || 0), 0)
                 setPartialAmount(remaining.toFixed(2))
                 setShowPartialModal(true)
               }}
@@ -394,8 +406,8 @@ export default function InvoiceDetailPage() {
             </button>
           )}
 
-          {/* Void — for Draft/Sent/Overdue */}
-          {['Draft', 'Sent', 'Overdue'].includes(invoice.status) && (
+          {/* Void — whenever the status table allows it */}
+          {invoiceStatusRule(invoice.status)?.voidable && (
             <button
               onClick={() => setShowVoidConfirm(true)}
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
@@ -629,6 +641,18 @@ export default function InvoiceDetailPage() {
               <span>Total</span>
               <span>{currencySymbol}{invoice.total.toFixed(2)}</span>
             </div>
+            {(Number(invoice.amount_paid) || 0) > 0 && (
+              <>
+                <div className="flex justify-between text-emerald-700" data-testid="invoice-amount-paid">
+                  <span>Paid</span>
+                  <span>-{currencySymbol}{(Number(invoice.amount_paid) || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-semibold" data-testid="invoice-amount-due">
+                  <span>Still due</span>
+                  <span>{currencySymbol}{Math.max(Number(invoice.total) - (Number(invoice.amount_paid) || 0), 0).toFixed(2)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

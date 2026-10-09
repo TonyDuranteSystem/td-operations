@@ -12,11 +12,11 @@ describe('invoice status table', () => {
     expect(INVOICE_STATUS.Cancelled.watermark?.text).toBe('CANCELLED')
   })
 
-  it('only a Draft can be sent; only Sent/Overdue can be reminded', () => {
+  it('only a Draft can be sent; only Sent/Overdue/Partial can be reminded', () => {
     const sendable = Object.entries(INVOICE_STATUS).filter(([, r]) => r.sendable).map(([k]) => k)
     const remindable = Object.entries(INVOICE_STATUS).filter(([, r]) => r.remindable).map(([k]) => k).sort()
     expect(sendable).toEqual(['Draft'])
-    expect(remindable).toEqual(['Overdue', 'Sent'])
+    expect(remindable).toEqual(['Overdue', 'Partial', 'Sent'])
   })
 
   it('Cancelled and Split cannot be edited or voided', () => {
@@ -62,7 +62,8 @@ describe('row actions still follow the table', () => {
     expect(availableInvoiceActions('Sent')).toEqual(['edit', 'remind', 'void'])
     expect(availableInvoiceActions('Overdue')).toEqual(['edit', 'remind', 'void'])
     expect(availableInvoiceActions('Paid')).toEqual(['edit', 'void'])
-    expect(availableInvoiceActions('Partial')).toEqual(['edit', 'void'])
+    // A part-paid invoice still has money to collect, so it can be reminded (it was not before 2026-10-09)
+    expect(availableInvoiceActions('Partial')).toEqual(['edit', 'remind', 'void'])
     expect(availableInvoiceActions('Cancelled')).toEqual([])
     expect(availableInvoiceActions('Split')).toEqual([])
     expect(availableInvoiceActions(null)).toEqual([])

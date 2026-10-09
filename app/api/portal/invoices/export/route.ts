@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { isAdmin } from '@/lib/auth'
+import { isSecureAdmin } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -10,7 +10,9 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function GET(request: NextRequest) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isAdmin(user)) {
+  // isSecureAdmin, NOT isAdmin: isAdmin also trusts user_metadata.role, which any logged-in user can write to
+  // themselves, and this route exports EVERY company's invoices (dev job 1a23f5f1, council review 2026-10-09).
+  if (!user || !isSecureAdmin(user)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -19,7 +21,7 @@ export async function GET(request: NextRequest) {
   // Build query
   let query = supabaseAdmin
     .from('client_invoices')
-    .select('id, invoice_number, account_id, customer_id, status, total, amount_paid, amount_due, tax_total, currency, issue_date, due_date, paid_date')
+    .select('id, invoice_number, account_id, customer_id, status, subtotal, total, amount_paid, amount_due, tax_total, currency, issue_date, due_date, paid_date')
     .not('status', 'eq', 'Split')
     .order('issue_date', { ascending: false })
 
@@ -34,7 +36,8 @@ export async function GET(request: NextRequest) {
   const { data: invoices } = await query
 
   if (!invoices?.length) {
-    return new NextResponse('No data', { status: 204 })
+    // A 204 must have no body (a body made this throw, so an empty export was a 500).
+    return new NextResponse(null, { status: 204 })
   }
 
   // Resolve account + customer names
@@ -56,7 +59,9 @@ export async function GET(request: NextRequest) {
   // Build CSV (no external library needed)
   const headers = ['Invoice Number', 'Client', 'Customer', 'Issue Date', 'Due Date', 'Amount', 'Tax', 'Total', 'Amount Paid', 'Balance Due', 'Currency', 'Status', 'Paid Date']
 
-  const escCsv = (val: string) => {
+  const escCsv = (raw: string) => {
+    // A name starting with = + - @ is run as a formula by Excel / Sheets: defuse it with a leading apostrophe.
+    const val = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw
     if (val.includes(',') || val.includes('"') || val.includes('\n')) {
       return `"${val.replace(/"/g, '""')}"`
     }
@@ -71,7 +76,7 @@ export async function GET(request: NextRequest) {
       escCsv(inv.customer_id ? customerMap[inv.customer_id] ?? '' : ''),
       inv.issue_date ?? '',
       inv.due_date ?? '',
-      String(inv.total ?? 0),
+      String(inv.subtotal ?? inv.total ?? 0),
       String(inv.tax_total ?? 0),
       String(inv.total ?? 0),
       String(inv.amount_paid ?? 0),

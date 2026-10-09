@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import { salesTotals, formatMoneyMap, sumExpensesByCurrency } from '@/lib/portal/invoice-totals'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
@@ -184,20 +185,31 @@ export default async function PortalInvoicesPage({
     setupMissing,
   })
 
-  // Sales stats
+  // Sales stats: per currency (euros and dollars are never added together), Drafts / voided / split parents are not
+  // receivables, a part-paid invoice counts its paid part as paid. Worked out from ALL the company's invoices, not
+  // just the 100 shown in the list.
+  const statsRows = selectedAccountId
+    ? ((await supabaseAdmin
+        .from('client_invoices')
+        .select('status, currency, total, amount_paid, amount_due')
+        .eq('account_id', selectedAccountId)
+        .eq('source', 'client')
+        .limit(5000)).data ?? [])
+    : []
+  const sales = salesTotals(statsRows)
   const salesStats = {
     total: invoices.length,
-    totalAmount: invoices.reduce((s, i) => s + Number(i.total), 0),
-    paid: invoices.filter(i => i.status === 'Paid').reduce((s, i) => s + Number(i.total), 0),
-    outstanding: invoices.filter(i => i.status !== 'Paid' && i.status !== 'Cancelled').reduce((s, i) => s + Number(i.total), 0),
+    totalAmount: formatMoneyMap(sales.invoiced),
+    paid: formatMoneyMap(sales.paid),
+    outstanding: formatMoneyMap(sales.outstanding),
   }
 
-  // Expense stats
+  // Expense stats (also per currency)
   const expenseStats = {
     total: expenses.length,
-    totalAmount: expenses.reduce((s, i) => s + Number(i.total), 0),
-    paid: expenses.filter(i => i.status === 'Paid').reduce((s, i) => s + Number(i.total), 0),
-    pending: expenses.filter(i => i.status !== 'Paid' && i.status !== 'Cancelled').reduce((s, i) => s + Number(i.total), 0),
+    totalAmount: formatMoneyMap(sumExpensesByCurrency(expenses, st => st !== 'Cancelled')),
+    paid: formatMoneyMap(sumExpensesByCurrency(expenses, st => st === 'Paid')),
+    pending: formatMoneyMap(sumExpensesByCurrency(expenses, st => st !== 'Paid' && st !== 'Cancelled')),
   }
 
   // Map customer names for sales invoices
@@ -312,18 +324,19 @@ export default async function PortalInvoicesPage({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.totalInvoiced', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">${salesStats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">{salesStats.totalAmount}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.paid', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">${salesStats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">{salesStats.paid}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('invoices.outstanding', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">${salesStats.outstanding.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">{salesStats.outstanding}</p>
             </div>
           </div>
 
+          <div data-tour="sales-list">
           {mapped.length === 0 ? (
             <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
               <Receipt className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
@@ -340,6 +353,7 @@ export default async function PortalInvoicesPage({
           ) : (
             <InvoiceList invoices={mapped} />
           )}
+          </div>
 
           <TemplateList templates={templates} accountId={selectedAccountId!} />
         </>
@@ -360,15 +374,15 @@ export default async function PortalInvoicesPage({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalExpenses', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">${expenseStats.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-zinc-900 mt-1">{expenseStats.totalAmount}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPaid', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">${expenseStats.paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-emerald-600 mt-1">{expenseStats.paid}</p>
             </div>
             <div className="bg-white rounded-xl border shadow-sm p-4">
               <p className="text-xs text-zinc-500 uppercase tracking-wide">{t('expenses.totalPending', locale, translations)}</p>
-              <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">${expenseStats.pending.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+              <p className="text-lg sm:text-xl font-semibold text-amber-600 mt-1">{expenseStats.pending}</p>
             </div>
           </div>
 

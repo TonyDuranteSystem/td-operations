@@ -1,5 +1,6 @@
 'use client'
 
+import { throwIfNotOk, errorMessage } from '@/lib/portal/api-error'
 import { useState, useEffect } from 'react'
 import { Plus, Trash2, Loader2, CheckCircle2, Circle, DollarSign, Euro } from 'lucide-react'
 import { toast } from 'sonner'
@@ -66,7 +67,7 @@ export function BankAccounts({ accountId }: { accountId: string }) {
           show_on_invoice: showOnInvoice || accounts.length === 0, // First account auto-selected
         }),
       })
-      if (!res.ok) throw new Error('Failed')
+      await throwIfNotOk(res, t('bank.failed'))
       const data = await res.json()
       // If new one is show_on_invoice, update local state
       if (data.show_on_invoice) {
@@ -76,28 +77,30 @@ export function BankAccounts({ accountId }: { accountId: string }) {
       }
       resetForm(); setShowAdd(false)
       toast.success(t('bank.saved'))
-    } catch { toast.error(t('bank.failed')) }
+    } catch (err) { toast.error(errorMessage(err, t('bank.failed'))) }
     finally { setSaving(false) }
   }
 
   const handleDelete = async (id: string) => {
     try {
-      await fetch(`/api/portal/bank-accounts?id=${id}&account_id=${accountId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/portal/bank-accounts?id=${id}&account_id=${accountId}`, { method: 'DELETE' })
+      await throwIfNotOk(res, t('bank.failed'))
       setAccounts(prev => prev.filter(a => a.id !== id))
       toast.success(t('bank.removed'))
-    } catch { toast.error(t('bank.failed')) }
+    } catch (err) { toast.error(errorMessage(err, t('bank.failed'))) }
   }
 
   const handleSetInvoice = async (id: string) => {
     try {
-      await fetch('/api/portal/bank-accounts', {
+      const res = await fetch('/api/portal/bank-accounts', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, account_id: accountId, show_on_invoice: true }),
       })
+      await throwIfNotOk(res, t('bank.failed'))
       setAccounts(prev => prev.map(a => ({ ...a, show_on_invoice: a.id === id })))
       toast.success(t('bank.invoiceUpdated'))
-    } catch { toast.error(t('bank.failed')) }
+    } catch (err) { toast.error(errorMessage(err, t('bank.failed'))) }
   }
 
   if (loading) return <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />

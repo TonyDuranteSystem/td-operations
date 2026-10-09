@@ -1,3 +1,4 @@
+import { validatePaymentLinkUrl } from '@/lib/portal/payment-link-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib'
@@ -23,7 +24,7 @@ export async function renderInvoicePdf(opts: {
   const { invoice, shownStatus, langParam = null } = opts
   const id = invoice.id as string
   const { data: customer } = invoice.customer_id
-    ? await supabaseAdmin.from('client_customers').select('name, email, address, vat_number').eq('id', invoice.customer_id).single()
+    ? await supabaseAdmin.from('client_customers').select('name, email, address, vat_number').eq('id', invoice.customer_id).eq('account_id', invoice.account_id).maybeSingle()
     : { data: null }
 
   const { data: items } = await supabaseAdmin
@@ -44,9 +45,12 @@ export async function renderInvoicePdf(opts: {
     .select('url, label')
     .eq('account_id', invoice.account_id)
     .eq('is_default', true)
+    .order('created_at')
+    .limit(1)
     .maybeSingle()
 
-  const paymentLinkUrl = defaultLink?.url || null
+  const linkCheck = defaultLink?.url ? validatePaymentLinkUrl(defaultLink.url) : null
+  const paymentLinkUrl = linkCheck && 'url' in linkCheck ? linkCheck.url : null
 
   // --- Language detection ---
   let lang: InvoiceLang = 'en'
@@ -67,7 +71,7 @@ export async function renderInvoicePdf(opts: {
 
   // Generate PDF
   const pdfDoc = await PDFDocument.create()
-  const page = pdfDoc.addPage([595, 842]) // A4
+  let page = pdfDoc.addPage([595, 842]) // A4
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
 
@@ -81,6 +85,16 @@ export async function renderInvoicePdf(opts: {
 
   let y = 790
   let companyNameX = 50
+
+  // Long invoices continue on a new page instead of drawing off the bottom edge (totals and bank details used to be
+  // lost silently after about 15 lines).
+  const PAGE_BOTTOM = 70
+  const ensureSpace = (needed: number) => {
+    if (y - needed < PAGE_BOTTOM) {
+      page = pdfDoc.addPage([595, 842])
+      y = 790
+    }
+  }
 
   // Embed logo if available — top left, before company name
   if (account?.invoice_logo_url) {
@@ -181,8 +195,9 @@ export async function renderInvoicePdf(opts: {
   const descMaxWidth = 240
   const descLineHeight = 12
   for (const item of (items ?? [])) {
-    const rowTopY = y
     const descLines = wrapPdfText(sanitizePdfLine(item.description), helvetica, 9, descMaxWidth, { maxLines: 6 })
+    ensureSpace(Math.max(descLines.length, 1) * descLineHeight + 12)
+    const rowTopY = y
     page.drawText(String(item.quantity), { x: 305, y: rowTopY, size: 9, font: helvetica, color: black })
     page.drawText(`${csym}${(item.unit_price ?? 0).toFixed(2)}`, { x: 340, y: rowTopY, size: 9, font: helvetica, color: black })
     if (hasTax) {
@@ -200,6 +215,7 @@ export async function renderInvoicePdf(opts: {
   }
 
   // Totals
+  ensureSpace(130)
   y -= 15
   page.drawText(L.subtotal, { x: 400, y, size: 9, font: helvetica, color: gray })
   page.drawText(`${csym}${(invoice.subtotal ?? 0).toFixed(2)}`, { x: 475, y, size: 9, font: helvetica, color: black })
@@ -237,6 +253,7 @@ export async function renderInvoicePdf(opts: {
 
   // Message / payment terms (message content is NOT translated)
   if (invoice.message) {
+    ensureSpace(60)
     y -= 40
     page.drawText(L.paymentTerms, { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
@@ -244,19 +261,20 @@ export async function renderInvoicePdf(opts: {
     const paragraphs = invoice.message.split(/\r?\n/)
     for (const para of paragraphs) {
       const safePara = sanitizePdfLine(para)
+      ensureSpace(14)
       if (!safePara.trim()) { y -= 6; continue } // blank line → small gap
       const words = safePara.split(/\s+/).filter(Boolean)
       let line = ''
       for (const word of words) {
         const test = line ? `${line} ${word}` : word
         if (helvetica.widthOfTextAtSize(test, 9) > 490) {
-          if (line) { page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
+          if (line) { ensureSpace(14); page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
           line = word
         } else {
           line = test
         }
       }
-      if (line) { page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
+      if (line) { ensureSpace(14); page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: black }); y -= 13 }
     }
   }
 
@@ -267,6 +285,7 @@ export async function renderInvoicePdf(opts: {
       .from('client_bank_accounts')
       .select('*')
       .eq('id', invoice.bank_account_id)
+      .eq('account_id', invoice.account_id) // never print another company's bank details
       .maybeSingle()
     bankAccount = data
   }
@@ -276,11 +295,14 @@ export async function renderInvoicePdf(opts: {
       .select('*')
       .eq('account_id', invoice.account_id)
       .eq('show_on_invoice', true)
+      .order('created_at')
+      .limit(1)
       .maybeSingle()
     bankAccount = data
   }
 
   if (bankAccount) {
+    ensureSpace(110)
     y -= 30
     page.drawText(sanitizePdfLine(`${L.bankDetails} - ${bankAccount.label}`), { x: 50, y, size: 9, font: helveticaBold, color: gray })
     y -= 14
@@ -295,6 +317,7 @@ export async function renderInvoicePdf(opts: {
     ]
     for (const [label, value] of bankFields) {
       if (value) {
+        ensureSpace(26)
         const safeValue = sanitizePdfLine(String(value))
         const safeLabel = sanitizePdfLine(String(label))
         const fullText = `${safeLabel}: ${safeValue}`
@@ -313,25 +336,27 @@ export async function renderInvoicePdf(opts: {
       const noteParagraphs = String(bankAccount.notes).split(/\r?\n/)
       for (const para of noteParagraphs) {
         const safePara = sanitizePdfLine(para)
+        ensureSpace(14)
         if (!safePara.trim()) { y -= 4; continue }
         const noteWords = safePara.split(/\s+/).filter(Boolean)
         let noteLine = ''
         for (const word of noteWords) {
           const test = noteLine ? `${noteLine} ${word}` : word
           if (helvetica.widthOfTextAtSize(test, 8) > 490) {
-            if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 11 }
+            if (noteLine) { ensureSpace(14); page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 11 }
             noteLine = word
           } else {
             noteLine = test
           }
         }
-        if (noteLine) { page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 12 }
+        if (noteLine) { ensureSpace(14); page.drawText(noteLine, { x: 50, y, size: 8, font: helvetica, color: gray }); y -= 12 }
       }
     }
   }
 
   // Payment link
   if (paymentLinkUrl && shownStatus !== 'Paid') {
+    ensureSpace(50)
     y -= 20
     page.drawText(L.payOnline, { x: 50, y, size: 9, font: helveticaBold, color: blue })
     y -= 14
@@ -344,9 +369,10 @@ export async function renderInvoicePdf(opts: {
     page.drawText(displayUrl, { x: 50, y, size: 9, font: helvetica, color: blue })
   }
 
-  // Footer
-  page.drawText(L.footer, {
-    x: 50, y: 30, size: 7, font: helvetica, color: rgb(0.7, 0.7, 0.7),
+  // Footer on every page
+  pdfDoc.getPages().forEach((p, i, all) => {
+    p.drawText(L.footer, { x: 50, y: 30, size: 7, font: helvetica, color: rgb(0.7, 0.7, 0.7) })
+    if (all.length > 1) p.drawText(`${i + 1} / ${all.length}`, { x: 510, y: 30, size: 7, font: helvetica, color: rgb(0.7, 0.7, 0.7) })
   })
 
   // --- Watermark (after all content, before save) ---
