@@ -6,10 +6,11 @@ import { ChevronLeft, Loader2, Plus, Search, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
+import { reportDelivered } from '@/lib/talk/report-delivered'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
-  chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, seenByAll, seenState, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
+  chatName, chatThreads, directMessages, groupMemberNames, initials, isGroupThread, matchMessages, membersWithoutChat, mergeSnapshot, messageSignature, otherUserId, parseTypingSignal, tickState, tickStateAll, shouldAnnounceTyping, snippet, startThreadId, timeLabel, dayLabel, typingLabel, TYPING_EXPIRES_MS,
   type TalkAttachment, type TalkMember, type TalkMessage, type TalkReaction, type TalkThread, type TypingKind,
 } from '@/lib/talk/chat-model'
 import { TalkMessages } from '@/components/talk/talk-messages'
@@ -64,6 +65,7 @@ export function TalkApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messages, setMessages] = useState<TalkMessage[]>([])
   const [peerReadAt, setPeerReadAt] = useState<string | null>(null)
+  const [peerDeliveredAt, setPeerDeliveredAt] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [startingWith, setStartingWith] = useState<string | null>(null)
   const [sheetMsg, setSheetMsg] = useState<TalkMessage | null>(null)
@@ -76,6 +78,7 @@ export function TalkApp() {
   // groups: who is in the open group, how far each member has read, and the New-group / Group-info screens
   const [groupMemberIds, setGroupMemberIds] = useState<string[]>([])
   const [memberReads, setMemberReads] = useState<Record<string, string>>({})
+  const [memberDelivered, setMemberDelivered] = useState<Record<string, string>>({})
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const [groupInfoOpen, setGroupInfoOpen] = useState(false)
   const [groupBusy, setGroupBusy] = useState(false)
@@ -100,6 +103,7 @@ export function TalkApp() {
       if (!r.ok) throw new Error('Could not load your chats.')
       const d = await r.json()
       setThreads(d.threads ?? [])
+      reportDelivered(d.threads ?? []) // this device now HAS these messages: tell the sender (grey double tick)
       setMembers((d.members ?? []).map((m: { id: string; name: string }) => ({ id: m.id, name: m.name })))
       setMeId(d.current_user_id ?? null)
       meIdRef.current = d.current_user_id ?? null
@@ -128,11 +132,17 @@ export function TalkApp() {
         return merged
       })
       setPeerReadAt(d.peer_read_at ?? null)
+      setPeerDeliveredAt(d.peer_delivered_at ?? null)
       if (Array.isArray(d.members)) setGroupMemberIds(d.members as string[])
       if (Array.isArray(d.member_reads)) {
         const map: Record<string, string> = {}
         for (const r of d.member_reads as Array<{ user_id: string; last_read_at: string }>) map[r.user_id] = r.last_read_at
         setMemberReads(map)
+      }
+      if (Array.isArray(d.member_delivered)) {
+        const dm: Record<string, string> = {}
+        for (const r of d.member_delivered as Array<{ user_id: string; delivered_at: string }>) dm[r.user_id] = r.delivered_at
+        setMemberDelivered(dm)
       }
     } catch (e) {
       if (!opts.silent) toast.error(e instanceof Error ? e.message : 'Could not load this chat.')
@@ -213,6 +223,14 @@ export function TalkApp() {
           setPeerReadAt(row.last_read_at)
           const at = row.last_read_at
           setMemberReads(prev => ({ ...prev, [row.user_id as string]: at }))
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_thread_delivery' }, payload => {
+        const row = payload.new as { thread_id?: string; user_id?: string; delivered_at?: string } | undefined
+        if (row?.thread_id === selectedIdRef.current && row.user_id && row.user_id !== meIdRef.current && row.delivered_at) {
+          const at = row.delivered_at
+          setPeerDeliveredAt(at)
+          setMemberDelivered(prev => ({ ...prev, [row.user_id as string]: at }))
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_threads' }, refreshList)
@@ -527,10 +545,9 @@ export function TalkApp() {
   const other = group ? selected.id : (otherUserId(selected.dm_key, meId) ?? selected.id)
   const memberIdsNow = group ? (groupMemberIds.length > 0 ? groupMemberIds : (selected.members ?? [])) : []
   const typingWho = group && peerTyping ? members.find(m => m.id === peerTyping.userId)?.name ?? 'Someone' : null
-  const isSeen = (m: TalkMessage): boolean => {
-    if (!group) return seenState(m, peerReadAt) === 'seen'
-    return seenByAll(m, memberIdsNow.filter(id => id !== meId), memberReads)
-  }
+  const tickOf = (m: TalkMessage) => group
+    ? tickStateAll(m, memberIdsNow.filter(id => id !== meId), memberReads, memberDelivered)
+    : tickState(m, peerReadAt, peerDeliveredAt)
   return (
     <div className="flex h-full flex-col bg-white" data-testid="talk-chat">
       <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-2 py-2">
@@ -579,7 +596,7 @@ export function TalkApp() {
       )}
       {meId && !searchOpen && (
         <TalkMessages
-          threadId={selected.id} messages={messages} meId={meId} isSeen={isSeen} showSender={group} loading={loadingMsgs}
+          threadId={selected.id} messages={messages} meId={meId} tickOf={tickOf} showSender={group} loading={loadingMsgs}
           highlightId={highlightId}
           onMenu={setSheetMsg}
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}

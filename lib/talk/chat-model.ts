@@ -16,6 +16,8 @@ export interface TalkThread {
   members?: string[] | null
   archived_at: string | null
   last_activity_at: string | null
+  /** Time of the newest message (the chat list returns it). */
+  last_message_at?: string | null
   unread_count?: number
 }
 
@@ -410,4 +412,33 @@ export function parseTypingSignal(payload: unknown, meId: string | null): { user
   if (typeof p.user_id !== 'string' || !p.user_id || p.user_id === meId) return null
   const kind: TypingKind = p.kind === 'recording' ? 'recording' : 'typing'
   return { userId: p.user_id, kind }
+}
+
+/** WhatsApp-style tick for MY message: ✓ sent · grey ✓✓ delivered (their device has it) · blue ✓✓ seen (they read it). */
+export type Tick = 'sent' | 'delivered' | 'seen'
+
+/**
+ * Direct message. Read implies delivered, so the later of the two pointers decides "delivered".
+ * `readAt` = the other person's read pointer, `deliveredAt` = how far their device has received.
+ */
+export function tickState(
+  m: { created_at: string },
+  readAt: string | null | undefined,
+  deliveredAt: string | null | undefined,
+): Tick {
+  if (seenState(m, readAt) === 'seen') return 'seen'
+  return seenState(m, deliveredAt) === 'seen' ? 'delivered' : 'sent'
+}
+
+/** Group: each tick level needs EVERY other member to have reached it. No other members = just sent. */
+export function tickStateAll(
+  m: { created_at: string },
+  otherMemberIds: readonly string[],
+  reads: Readonly<Record<string, string | null | undefined>>,
+  deliveries: Readonly<Record<string, string | null | undefined>>,
+): Tick {
+  if (otherMemberIds.length === 0) return 'sent'
+  if (seenByAll(m, otherMemberIds, reads)) return 'seen'
+  const allHave = otherMemberIds.every(id => tickState(m, reads[id], deliveries[id]) !== 'sent')
+  return allHave ? 'delivered' : 'sent'
 }
