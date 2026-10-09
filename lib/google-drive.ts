@@ -1512,6 +1512,16 @@ export async function searchFoldersAnyDrive(driveId: string, text: string, limit
   return ((await res.json()) as { files?: DriveListedItem[] }).files ?? []
 }
 
+/** A binary file as a STREAM, never held in memory (for files too big to buffer). `size` is what Drive reports (null if unknown). */
+export async function openBinaryStreamAnyDrive(fileId: string): Promise<{ body: ReadableStream<Uint8Array>; size: number | null }> {
+  const token = await getAccessToken()
+  // identity: the stored bytes must be Drive's bytes, and content-length must be their length (not a compressed length)
+  const res = await fetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}`, "Accept-Encoding": "identity" } })
+  if (!res.ok || !res.body) throw new Error(`Drive download ${res.status}: ${res.statusText}`)
+  const len = Number(res.headers.get("content-length"))
+  return { body: res.body, size: Number.isFinite(len) && len > 0 ? len : null }
+}
+
 /** A binary file's real bytes (never mocked — the caller has checked which drive it is in). */
 export async function downloadBinaryAnyDrive(fileId: string): Promise<Buffer> {
   const token = await getAccessToken()

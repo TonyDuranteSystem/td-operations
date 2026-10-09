@@ -148,13 +148,16 @@ describe("person tax folder, filing status, size and final names", () => {
     expect(PlanSchema.safeParse({ ...a, items: [{ ...a.items[0], filingStatus: "wrong" }] }).success).toBe(false)
   })
 
-  it("refuses a document (with its certificates) over the store's per-file limit", () => {
+  it("refuses a document merged with its certificates over the in-memory merge ceiling, but never a lone file by size", () => {
     const p = basePlan()
     p.items[1].source.size = PLAN_MAX_PART_BYTES
     p.items[1].appended[0].size = 1000
     expect(validatePlan(p).errors.join()).toMatch(/together are over/)
-    const q = basePlan(); q.items[0].source.size = PLAN_MAX_PART_BYTES + 1
-    expect(validatePlan(q).plan).toBeNull()
+    // a lone file has NO size limit: an 80 MB (even a 5 GB) file is a valid plan item — it is streamed
+    const q = basePlan(); q.items[0].source.size = 80 * 1024 * 1024
+    expect(validatePlan(q).errors).toEqual([])
+    const r = basePlan(); r.items[0].source.size = 5 * 1024 ** 3
+    expect(validatePlan(r).errors).toEqual([])
   })
 
   it("finalName adds the file's extension once, and a merged document is always a PDF", () => {

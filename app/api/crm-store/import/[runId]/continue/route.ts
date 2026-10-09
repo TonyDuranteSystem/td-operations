@@ -1,6 +1,8 @@
 /** POST — move the next batch of files of a running move (owners only). Call again while status is "moving". */
 export const dynamic = "force-dynamic"
-export const maxDuration = 60
+// 300 s (the plan-build route has it too): a big file is streamed from Drive in this request (~20 s per 80 MB measured on the sandbox).
+// A normal batch still stops at its own 40 s budget between files.
+export const maxDuration = 300
 
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
