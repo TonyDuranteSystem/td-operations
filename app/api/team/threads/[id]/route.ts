@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
+import { listGroupMemberIds } from '@/lib/team/groups'
+import { isGroupMember } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { isValidWorkStatus } from '@/lib/team/workspace'
@@ -38,6 +40,16 @@ export async function GET(
     .single()
   if (!thread) {
     return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
+  }
+
+  // A GROUP is private to its members (dev job c1e326dd). Everything below — messages, read state — is for members only.
+  let groupMembers: string[] | null = null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ((thread as any).thread_type === 'group') {
+    groupMembers = await listGroupMemberIds(threadId)
+    if (!isGroupMember(groupMembers, user.id)) {
+      return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
+    }
   }
 
   // Load the NEWEST 500 (desc + limit), then flip to oldest→newest for display.
@@ -303,8 +315,22 @@ export async function GET(
     peerReadAt = peerRead?.last_read_at ?? null
   }
 
+  // Group: how far each OTHER member has read (the "seen by everyone" ticks) and who is in it.
+  let memberReads: Array<{ user_id: string; last_read_at: string }> | null = null
+  if (groupMembers) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: reads } = await (supabaseAdmin as any)
+      .from('internal_thread_reads')
+      .select('user_id, last_read_at')
+      .eq('thread_id', threadId)
+      .in('user_id', groupMembers)
+    memberReads = (reads ?? []) as Array<{ user_id: string; last_read_at: string }>
+  }
+
   return NextResponse.json({
     thread,
+    members: groupMembers,
+    member_reads: memberReads,
     peer_read_at: peerReadAt,
     messages: enriched,
     thread_meta: threadMeta,

@@ -1,4 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
+import { listGroupMemberIds } from '@/lib/team/groups'
+import { isGroupMember, otherMembers } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
 import { validateTeamCard } from '@/lib/team/workspace'
@@ -83,6 +85,14 @@ export async function POST(
     .eq('id', threadId)
     .single()
   if (!thread) return NextResponse.json({ error: 'Thread not found' }, { status: 404 })
+  // A GROUP only accepts messages from its members (dev job c1e326dd).
+  let groupMembers: string[] = []
+  if (thread.thread_type === 'group') {
+    groupMembers = await listGroupMemberIds(threadId)
+    if (!isGroupMember(groupMembers, user.id)) {
+      return NextResponse.json({ error: 'You are not in this group.' }, { status: 403 })
+    }
+  }
   // Same signal the Conversations sidebar buckets on (client_bucket ===
   // 'internal' in get_team_threads) — a discussion thread anchored to no
   // client at all is a staff-only TOPIC, not a client conversation.
@@ -216,6 +226,20 @@ export async function POST(
           ...base,
           title: rootId ? `${displayName} replied · #${channelLabel}` : `${displayName} · #${channelLabel}`,
         }, Array.from(mentioned)),
+      ])
+    } else if (thread.thread_type === 'group') {
+      // A GROUP message notifies every OTHER member (mentioned people get the "mentioned you" title). It is a
+      // person-to-person chat, so it carries `dm` — TD Talk receives it, and a person with TD Talk gets it THERE
+      // instead of in the CRM app (lib/push/route-subscriptions.ts).
+      const groupName = thread.title ?? 'Group'
+      const mentionedSet = new Set(mentions.userIds)
+      const others = otherMembers(groupMembers, user.id)
+      const toMentioned = others.filter(id => mentionedSet.has(id))
+      const toRest = others.filter(id => !mentionedSet.has(id))
+      const base = { body: preview, url: threadUrl, tag: `team-group-${threadId}`, dm: true }
+      await Promise.allSettled([
+        toMentioned.length > 0 ? sendPushToAdminUsers(toMentioned, { ...base, title: `${displayName} mentioned you · ${groupName}` }) : Promise.resolve(),
+        toRest.length > 0 ? sendPushToAdminUsers(toRest, { ...base, title: `${displayName} · ${groupName}` }) : Promise.resolve(),
       ])
     } else if (mentions.userIds.length > 0) {
       await sendPushToAdminUsers(mentions.userIds, {

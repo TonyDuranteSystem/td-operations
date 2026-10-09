@@ -10,6 +10,10 @@ export interface TalkThread {
   id: string
   thread_type: string
   dm_key: string | null
+  /** A group's name (the thread title). */
+  title?: string | null
+  /** A group's member ids (the server adds them to the thread list). */
+  members?: string[] | null
   archived_at: string | null
   last_activity_at: string | null
   unread_count?: number
@@ -57,6 +61,17 @@ export interface TalkMessage {
   root_id?: string | null
 }
 
+export function isGroupThread(t: Pick<TalkThread, 'thread_type'>): boolean {
+  return t.thread_type === 'group'
+}
+
+/** Everything TD Talk shows as a chat — direct messages AND groups — newest activity first. Archived ones are hidden. */
+export function chatThreads(threads: TalkThread[]): TalkThread[] {
+  return threads
+    .filter(t => (t.thread_type === 'dm' || t.thread_type === 'group') && !t.archived_at)
+    .sort((a, b) => Date.parse(b.last_activity_at ?? '') - Date.parse(a.last_activity_at ?? '') || 0)
+}
+
 /** Direct-message threads only, newest activity first. Archived ones are hidden. */
 export function directMessages(threads: TalkThread[]): TalkThread[] {
   return threads
@@ -76,6 +91,38 @@ export function dmName(t: TalkThread, me: string | null, members: TalkMember[]):
   return (other && members.find(m => m.id === other)?.name) || 'Teammate'
 }
 
+/** The name shown for a chat: the other person for a direct message, the group's name for a group. */
+export function chatName(t: TalkThread, me: string | null, members: TalkMember[]): string {
+  if (isGroupThread(t)) return (t.title ?? '').trim() || 'Group'
+  return dmName(t, me, members)
+}
+
+/** "Luca, Jodi, You" — a group's members by name, me last. Unknown ids are skipped. */
+export function groupMemberNames(memberIds: readonly string[] | null | undefined, me: string | null, members: TalkMember[]): string {
+  const names: string[] = []
+  for (const id of memberIds ?? []) {
+    if (id === me) continue
+    const n = members.find(m => m.id === id)?.name
+    if (n) names.push(n)
+  }
+  if (me && (memberIds ?? []).includes(me)) names.push('You')
+  return names.join(', ')
+}
+
+/** Teammates NOT yet in a group (who can be added). */
+export function membersNotInGroup(memberIds: readonly string[] | null | undefined, members: TalkMember[]): TalkMember[] {
+  const have = new Set(memberIds ?? [])
+  return members.filter(m => !have.has(m.id))
+}
+
+/** WhatsApp-style colour for a person's name inside a group (stable per id). */
+const NAME_COLORS = ['text-rose-600', 'text-indigo-600', 'text-emerald-700', 'text-amber-700', 'text-sky-700', 'text-violet-700', 'text-teal-700', 'text-fuchsia-700']
+export function nameColorFor(id: string): string {
+  let h = 0
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return NAME_COLORS[h % NAME_COLORS.length]
+}
+
 /**
  * Which chat the app opens on. A valid requested chat (a tapped notification, a link) wins; then the one open last
  * time on this phone; then the chat with the most recent activity. Null when there is no direct message at all.
@@ -87,7 +134,7 @@ export function startThreadId(
   const ids = new Set(dms.map(t => t.id))
   if (opts.wanted && ids.has(opts.wanted)) return opts.wanted
   if (opts.lastOpened && ids.has(opts.lastOpened)) return opts.lastOpened
-  return directMessages(dms)[0]?.id ?? null
+  return chatThreads(dms)[0]?.id ?? null
 }
 
 /** Teammates this person has no direct message with yet (so the list can offer to start one). */
@@ -162,6 +209,25 @@ export function seenState(
   const sent = Date.parse(m.created_at)
   if (Number.isNaN(read) || Number.isNaN(sent)) return 'sent'
   return sent <= read ? 'seen' : 'sent'
+}
+
+/**
+ * Group ticks: my message is "seen" once EVERY other member has read up to it (blue double tick); until then it is just sent.
+ * `reads` maps a member id to when they last read the chat. A member with no read row has not seen anything.
+ */
+export function seenByAll(
+  m: { created_at: string },
+  otherMemberIds: readonly string[],
+  reads: Readonly<Record<string, string | null | undefined>>,
+): boolean {
+  if (otherMemberIds.length === 0) return false
+  const sent = Date.parse(m.created_at)
+  if (Number.isNaN(sent)) return false
+  return otherMemberIds.every(id => {
+    const r = reads[id]
+    const t = r ? Date.parse(r) : NaN
+    return !Number.isNaN(t) && sent <= t
+  })
 }
 
 // ─── Attachments ─────────────────────────────────────────────────────────
@@ -323,10 +389,11 @@ export const TYPING_EXPIRES_MS = 4_000
 /** How often a person's own typing is announced while they keep typing. */
 export const TYPING_SEND_GAP_MS = 2_500
 
-export function typingLabel(kind: TypingKind | null | undefined): string {
-  if (kind === 'recording') return 'recording a voice message…'
-  if (kind === 'typing') return 'typing…'
-  return ''
+export function typingLabel(kind: TypingKind | null | undefined, who?: string | null): string {
+  const base = kind === 'recording' ? 'recording a voice message…' : kind === 'typing' ? 'typing…' : ''
+  if (!base) return ''
+  // in a group the line names the person ("Luca is typing…"); in a direct message the name is already in the header
+  return who ? `${who} is ${base}` : base
 }
 
 /** True when a new "typing" signal should go out: never twice within the gap. */

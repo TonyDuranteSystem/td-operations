@@ -55,6 +55,8 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
   // Refreshed every 60s so a brand-new DM, conversation or channel starts
   // pinging within a minute.
   const myDmThreadIdsRef = useRef<Set<string>>(new Set())
+  // GROUP chats the person is in (the list only ever returns their own groups): they notify like a DM, titled by group name.
+  const myGroupTitlesRef = useRef<Map<string, string>>(new Map())
   const myConversationThreadIdsRef = useRef<Set<string>>(new Set())
   // Internal TOPICS (a discussion thread about no client — client_bucket ===
   // 'internal') tracked separately from client conversations: they notify
@@ -71,7 +73,10 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
         .then((d: { threads?: Array<{ id: string; thread_type?: string; is_participant?: boolean; channel_slug?: string | null; channel_name?: string | null; label?: string | null; client_bucket?: string | null }> }) => {
           if (cancelled || !Array.isArray(d.threads)) return
           myDmThreadIdsRef.current = new Set(
-            d.threads.filter(t => t.thread_type === 'dm').map(t => t.id),
+            d.threads.filter(t => t.thread_type === 'dm' || t.thread_type === 'group').map(t => t.id),
+          )
+          myGroupTitlesRef.current = new Map(
+            d.threads.filter(t => t.thread_type === 'group').map(t => [t.id, t.label ?? 'Group'] as [string, string]),
           )
           myConversationThreadIdsRef.current = new Set(
             d.threads.filter(t => t.thread_type === 'discussion' && t.is_participant && t.client_bucket !== 'internal').map(t => t.id),
@@ -284,6 +289,7 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
 
       toast(
         mentionsMe ? `@mention · ${senderName}`
+          : isMyDm && threadId && myGroupTitlesRef.current.has(threadId) ? `${myGroupTitlesRef.current.get(threadId)} · ${senderName}`
           : isMyDm ? `DM · ${senderName}`
           : isMyTopic ? `Topic · ${senderName}`
           : channelLabel ? `#${channelLabel} · ${senderName}`
