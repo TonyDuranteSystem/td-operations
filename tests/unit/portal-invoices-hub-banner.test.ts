@@ -14,14 +14,25 @@ describe('callout under the invoices menu item', () => {
   it('is drawn under the invoices row only while the NEW state is on (hub on, not a teammate, not yet opened)', () => {
     expect(side).toMatch(/if \(item\.key === 'nav\.invoices' && showInvoicesNew\) \{[\s\S]*<InvoicesMenuCallout/)
   })
-  it('clears the shared memory key and hides on open or close', () => {
-    expect(side).toMatch(/onClear=\{\(\) => \{\s*try \{ localStorage\.setItem\(INVOICES_NEW_KEY, '1'\)/)
+  it('clears the memory on open or close, and only Open closes the phone drawer', () => {
+    const dismiss = side.match(/onDismiss=\{\(\) => \{([\s\S]*?)\n            \}\}/)?.[1] ?? ''
+    expect(dismiss).toContain('setShowInvoicesNew(false)')
+    expect(dismiss).toContain("localStorage.setItem(INVOICES_NEW_KEY, '1')")
+    expect(dismiss).not.toContain('setMobileOpen')
+    expect(side).toMatch(/onOpen=\{\(\) => \{[\s\S]*setMobileOpen\(false\)/)
     expect(callout).toContain('href="/portal/invoices"')
-    expect(callout.match(/onClear/g)?.length).toBeGreaterThanOrEqual(3)
   })
-  it('is green, blinks only when motion is allowed', () => {
+  it('is remembered per company, and the TD Billing redirect (tab=expenses) does not count as seen', () => {
+    expect(side).toMatch(/td-invoices-hub-new-v2:\$\{selectedAccountId\}/)
+    expect(side).toContain("pathname.startsWith('/portal/invoices') && searchParams.get('tab') !== 'expenses'")
+  })
+  it('hides before it writes storage so a storage failure cannot leave it showing', () => {
+    expect(side).toMatch(/setShowInvoicesNew\(false\)\s*window\.localStorage\.setItem\(INVOICES_NEW_KEY, '1'\)/)
+  })
+  it('is green, only the outline blinks (text stays readable), and only when motion is allowed', () => {
     expect(callout).toContain('border-emerald-500')
-    expect(callout).toContain('motion-safe:animate-pulse')
+    expect(callout).toContain('ring-emerald-400/60 motion-safe:animate-pulse')
+    expect(callout).not.toMatch(/className="relative[^"]*animate-pulse/)
   })
   it('has English and Italian text', () => {
     expect(t('nav.invoicesCallout.title', 'en')).toBe('New: Customers & Invoices')

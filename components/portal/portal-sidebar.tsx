@@ -233,18 +233,26 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   // Green blinking "NEW" tag on the "Customers & Invoices" menu item (Antonio 2026-10-09): shown only to companies
   // that have the new invoices screen (hub on), until the person opens that page once on this browser. Same
   // pattern as the Team tag above; green so it is not mistaken for the purple Team tag or the red chat counters.
-  const INVOICES_NEW_KEY = 'td-invoices-hub-new-v1'
+  // Remembered per company (a client who owns two companies sees it again when the second one gets the screen).
+  const INVOICES_NEW_KEY = `td-invoices-hub-new-v2:${selectedAccountId}`
   const [showInvoicesNew, setShowInvoicesNew] = useState(false)
   const invoicesHubOn = !isTeammate && !!navVisibility?.invoiceHub
   useEffect(() => {
     try {
-      const onPage = pathname.startsWith('/portal/invoices')
-      if (onPage && invoicesHubOn) window.localStorage.setItem(INVOICES_NEW_KEY, '1')
+      // /portal/billing redirects to /portal/invoices?tab=expenses (TD's own bills): that is not the new screen,
+      // so landing there must not count as having seen it.
+      const onPage = pathname.startsWith('/portal/invoices') && searchParams.get('tab') !== 'expenses'
+      // Hide first, then remember: a storage failure (private mode, full quota) must not leave it showing on the page itself.
+      if (onPage && invoicesHubOn) {
+        setShowInvoicesNew(false)
+        window.localStorage.setItem(INVOICES_NEW_KEY, '1')
+        return
+      }
       setShowInvoicesNew(invoicesHubOn && !onPage && !window.localStorage.getItem(INVOICES_NEW_KEY))
     } catch {
       // localStorage unavailable: skip the tag
     }
-  }, [invoicesHubOn, pathname])
+  }, [invoicesHubOn, pathname, searchParams, INVOICES_NEW_KEY])
 
   // The count is no longer forced to 0 when the chat page opens (dev job
   // 05d997f2, Phase 2): opening the chat no longer means "read everything" —
@@ -648,9 +656,14 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
             desc={t('nav.invoicesCallout.desc')}
             cta={t('nav.invoicesCallout.cta')}
             dismissLabel={t('nav.invoicesCallout.dismiss')}
-            onClear={() => {
-              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
+            onDismiss={() => {
+              // Closing the callout must leave the menu open (on a phone the drawer holds the whole menu).
               setShowInvoicesNew(false)
+              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
+            }}
+            onOpen={() => {
+              setShowInvoicesNew(false)
+              try { localStorage.setItem(INVOICES_NEW_KEY, '1') } catch { /* no-op */ }
               setMobileOpen(false)
             }}
           />
