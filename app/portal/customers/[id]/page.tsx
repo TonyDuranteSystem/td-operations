@@ -158,7 +158,7 @@ export default function CustomerDetailPage() {
             <EditField label={t('customers.city')} value={editData.city ?? ''} onChange={v => setEditData({ ...editData, city: v })} />
             <EditField label={t('customers.region')} value={editData.region ?? ''} onChange={v => setEditData({ ...editData, region: v })} />
             <EditField label={t('customers.country')} value={editData.country ?? ''} onChange={v => setEditData({ ...editData, country: v })} />
-            <EditField label={t('customers.vat')} value={editData.vat_number ?? ''} onChange={v => setEditData({ ...editData, vat_number: v })} />
+            <EditField label={t('customers.vat')} value={editData.vat_number ?? ''} onChange={v => setEditData({ ...editData, vat_number: v })} hint={t('customers.vatHint')} />
             <div className="sm:col-span-2">
               <EditField label={t('customers.notes')} value={editData.notes ?? ''} onChange={v => setEditData({ ...editData, notes: v })} />
             </div>
@@ -221,11 +221,12 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   )
 }
 
-function EditField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function EditField({ label, value, onChange, hint }: { label: string; value: string; onChange: (v: string) => void; hint?: string }) {
   return (
     <div>
       <label className="block text-xs text-zinc-500 mb-1">{label}</label>
       <input type="text" value={value} onChange={e => onChange(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      {hint && <p className="mt-1 text-xs text-zinc-500">{hint}</p>}
     </div>
   )
 }
