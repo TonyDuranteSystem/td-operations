@@ -23,6 +23,7 @@ import { createHash } from "crypto"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { ImportItem, RunView } from "./drive-import"
+import { MERGE_MAX_BYTES, mergeTooLarge, transferMode } from "./stream-import"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -31,8 +32,8 @@ export const PLAN_MARK = "PLAN"
 export const PLAN_MAX_ITEMS = 300
 const COMPANY_FOLDER_KINDS = ["company", "tax", "banking", "correspondence"] as const
 const PERSON_FOLDER_KINDS = ["personal", "itin", "person_tax"] as const
-/** one Drive file (or the sum of a merged document) may not pass the store's per-file limit */
-export const PLAN_MAX_PART_BYTES = 50 * 1024 * 1024
+/** the ceiling for a document MERGED with its signing certificates (the merge is built in memory); a lone file has no size limit — big ones are streamed (stream-import.ts) */
+export const PLAN_MAX_PART_BYTES = MERGE_MAX_BYTES
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9 .&'()-]{0,39}$/
 
 export class PlanError extends Error {
@@ -45,7 +46,7 @@ const PartSchema = z.object({
   driveFileId: z.string().min(8).max(120),
   /** what Drive says today — the build refuses a file whose bytes or size differ */
   md5: z.string().regex(/^[0-9a-f]{32}$/, "md5 must be 32 hex characters"),
-  size: z.number().int().positive().max(PLAN_MAX_PART_BYTES),
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 })
 const OwnerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("company"), accountId: z.string().uuid(), companyName: z.string().min(1).max(160) }),
@@ -128,7 +129,7 @@ export function validatePlan(raw: unknown): { plan: Plan | null; errors: string[
     seenKeys.add(it.key)
     claim(it.source.driveFileId, `item ${it.key}`)
     for (const a of it.appended) claim(a.driveFileId, `certificate of item ${it.key}`)
-    if (it.source.size + it.appended.reduce((n, a) => n + a.size, 0) > PLAN_MAX_PART_BYTES) errors.push(`Item ${it.key}: the document and its certificates together are over ${PLAN_MAX_PART_BYTES / 1048576} MB.`)
+    if (mergeTooLarge(it.source.size + it.appended.reduce((n, a) => n + a.size, 0), it.appended.length)) errors.push(`Item ${it.key}: the document and its certificates together are over ${PLAN_MAX_PART_BYTES / 1048576} MB — a document merged with certificates is built in memory. Store the document alone and leave the certificates in Drive.`)
     const allowed: readonly string[] = it.owner.kind === "company" ? COMPANY_FOLDER_KINDS : PERSON_FOLDER_KINDS
     if (!allowed.includes(it.folder.kind)) errors.push(`Item ${it.key}: a ${it.owner.kind}'s storage has no "${it.folder.kind}" folder.`)
     if (/[\\/\u0000-\u001f]/.test(it.name)) errors.push(`Item ${it.key}: the name contains a slash or control character.`)
@@ -508,20 +509,25 @@ async function buildOne(it: ImportItem, runId: string, actorId: string | null): 
   if (personal && item.owner.kind !== "person") return { status: "failed", reason: "A personal document can only go in a person's storage." }
   if (!personal && item.documentType && item.owner.kind === "person") return { status: "failed", reason: "A person's storage takes only personal documents." }
 
-  // bytes: the document, checked against the plan; certificates appended into ONE deterministic PDF
-  const main = await downloadChecked(item.source)
-  let bytes = main
+  // bytes: the document, checked against the plan; certificates appended into ONE deterministic PDF.
+  // A lone file over the stream threshold is NEVER held in memory: it flows Drive → staging (stream-import.ts).
+  const streamed = transferMode(item.source.size, item.appended.length) === "stream"
+  let bytes: Buffer | null = null
   let mime = it.mime_type
-  const parts: Array<{ id: string; sha: string }> = [{ id: item.source.driveFileId, sha: sha256Hex(main) }]
-  if (item.appended.length) {
-    const certs: Buffer[] = []
-    for (const a of item.appended) { const b = await downloadChecked(a); certs.push(b); parts.push({ id: a.driveFileId, sha: sha256Hex(b) }) }
-    const { mergePdfs } = await import("./pdf-merge")
-    bytes = (await mergePdfs([main, ...certs])).bytes
-    mime = "application/pdf"
+  let sourceSha = ""
+  if (!streamed) {
+    const main = await downloadChecked(item.source)
+    bytes = main
+    sourceSha = sha256Hex(main)
+    if (item.appended.length) {
+      const certs: Buffer[] = []
+      for (const a of item.appended) { certs.push(await downloadChecked(a)) }
+      const { mergePdfs } = await import("./pdf-merge")
+      bytes = (await mergePdfs([main, ...certs])).bytes
+      mime = "application/pdf"
+    }
+    if (mergeTooLarge(bytes.length, item.appended.length)) return { status: "failed", reason: `Too large to merge with its certificates (${Math.round(bytes.length / 1048576)} MB).` }
   }
-  const { IMPORT_MAX_FILE_BYTES } = await import("./drive-import")
-  if (bytes.length > IMPORT_MAX_FILE_BYTES) return { status: "failed", reason: `Too large for the new storage (${Math.round(bytes.length / 1048576)} MB).` }
 
   // the folder (sub-folders are made on the spot; a year inside Tax becomes a real tax-year folder)
   const base = await folderOfKindIn(ownerId, item.folder.kind)
@@ -536,12 +542,39 @@ async function buildOne(it: ImportItem, runId: string, actorId: string | null): 
   const clash = ((live ?? []) as { name: string; caller_key: string | null }[]).find((f) => f.caller_key !== callerKey && storeNameKey(f.name) === storeNameKey(finalNm))
   if (clash) return { status: "failed", reason: `A file named "${finalNm}" is already in that folder.` }
 
-  const { saveBytesToStore } = await import("./writer")
-  const w = await saveBytesToStore({
-    ownerId, folderId, name: finalNm, mimeType: mime, bytes, callerKey, contentChanged: true,
-    documentType: item.documentType, published: false, actor: actorId, ...(item.year ? { periodYear: item.year } : {}),
+  const meta = {
+    documentType: item.documentType, published: false, ...(item.year ? { periodYear: item.year } : {}),
     ...(item.filingStatus ? { filingStatus: item.filingStatus } : {}),
-  })
+  }
+  let w: Awaited<ReturnType<typeof import("./writer").saveBytesToStore>>
+  let finalSha: string
+  if (streamed || !bytes) {
+    // big file: a server-side upload slot, Drive streamed into staging (size + md5 proven), then the browser-upload registration
+    if (!actorId) return { status: "failed", reason: "A big file can only be built by a signed-in staff member." }
+    const { createServerUploadIntent, registerNow, discardUploadIntentObjects } = await import("./writer")
+    const { streamDriveToStaging, streamTooLarge, STREAM_MAX_BYTES } = await import("./stream-import")
+    if (streamTooLarge(item.source.size, item.appended.length)) {
+      return { status: "failed", reason: `Too big to copy from Drive in one build step (${Math.round(item.source.size / 1048576)} MB; the most is ${STREAM_MAX_BYTES / 1048576} MB) — upload it by hand with the upload button in the CRM, which has no limit.` }
+    }
+    const intent = await createServerUploadIntent({ ownerId, folderId, fileName: finalNm, mimeType: mime, callerKey, actor: actorId })
+    try {
+      const d = await streamDriveToStaging({
+        driveFileId: item.source.driveFileId, expectedSize: item.source.size, expectedMd5: item.source.md5,
+        bucket: intent.bucket, path: intent.stagingPath, contentType: mime ?? "application/octet-stream",
+      })
+      sourceSha = d.sha256
+      finalSha = d.sha256
+      w = await registerNow({ intentId: intent.intentId, actor: actorId, ...meta })
+    } catch (e) {
+      // no big object is left behind by a failed attempt (a retry makes a fresh slot)
+      await discardUploadIntentObjects(intent.intentId).catch(() => undefined)
+      throw e
+    }
+  } else {
+    const { saveBytesToStore } = await import("./writer")
+    w = await saveBytesToStore({ ownerId, folderId, name: finalNm, mimeType: mime, bytes, callerKey, contentChanged: true, actor: actorId, ...meta })
+    finalSha = sha256Hex(bytes)
+  }
   if (w.status === "versioned") return { status: "failed", reason: "An earlier attempt saved different content under this plan item — undo the build and run it again.", store_file_id: w.fileId }
   if (w.status !== "created" && w.status !== "unchanged") return { status: "failed", reason: `The new storage refused it (${w.status}).`, store_file_id: w.fileId }
   // it must really be where the plan put it (a retry of an edited plan must not report success for a file elsewhere)
@@ -549,11 +582,10 @@ async function buildOne(it: ImportItem, runId: string, actorId: string | null): 
   if (!placed || placed.owner_id !== ownerId || placed.folder_id !== folderId || placed.name !== finalNm) {
     return { status: "failed", reason: "The file is not where the plan puts it (an earlier attempt left it elsewhere) — undo the build and run it again.", store_file_id: w.fileId }
   }
-  const finalSha = sha256Hex(bytes)
   // the backup records the Drive original this file came from (one record per file: the DOCUMENT; the certificates' Drive
   // ids stay in the ledger row, which keeps the whole plan item). Everything on Drive is untouched.
   const merged = item.appended.length ? `Merged with ${item.appended.length} signing certificate(s) into one document (Drive originals: ${item.appended.map((a) => a.driveFileId).join(", ")}).` : null
-  const { error: refErr } = await db().rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: parts[0].id, p_sha256: parts[0].sha, p_drive_path: { area: "plan", key: item.key } })
+  const { error: refErr } = await db().rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: item.source.driveFileId, p_sha256: sourceSha, p_drive_path: { area: "plan", key: item.key } })
   const note = [merged, refErr ? `The backup could not record the Drive original (${refErr.message}).` : null].filter(Boolean).join(" ") || null
   return { status: "done", store_file_id: w.fileId, sha256: finalSha, landed_in: await landedIn(folderId, ownerId), repointed: [], reason: note }
 }

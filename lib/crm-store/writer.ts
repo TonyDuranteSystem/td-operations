@@ -238,6 +238,23 @@ export async function createUploadIntent(p: {
   callerKey?: string | null; actor: string; actorRole: unknown
 }): Promise<UploadIntent> {
   if (!isStoreStaffRole(p.actorRole)) throw new Error("store: only staff (admin/team) can upload to the store")
+  return insertUploadIntent(p)
+}
+
+/**
+ * The same slot for SERVER code that already runs behind a staff check (the plan build streams a big Drive file
+ * into the staging area and registers it through the same slot, so size, hash and move are the ones the browser
+ * upload uses). Never call this from a route that has not checked the staff member itself.
+ */
+export async function createServerUploadIntent(p: {
+  ownerId: string; folderId: string; fileName: string; mimeType?: string | null; callerKey?: string | null; actor: string
+}): Promise<UploadIntent> {
+  return insertUploadIntent(p)
+}
+
+async function insertUploadIntent(p: {
+  ownerId: string; folderId: string; fileName: string; mimeType?: string | null; callerKey?: string | null; actor: string
+}): Promise<UploadIntent> {
   const { data: folder } = await db().from("store_folders").select("owner_id, trashed_at").eq("id", p.folderId).maybeSingle()
   if (!folder || folder.owner_id !== p.ownerId || folder.trashed_at) {
     throw new Error("store: upload into a live folder of the same client only")
@@ -252,6 +269,17 @@ export async function createUploadIntent(p: {
   })
   if (error) throw new Error(`store: could not create the upload slot — ${error.message}`)
   return { intentId: id, bucket: STORE_STAGING_BUCKET, stagingPath, expiresAt }
+}
+
+/**
+ * Clean up after a SERVER-side registration failed (the plan build's big-file path): the staged object, and the moved
+ * object only if no saved version refers to it. Safe to repeat; the slot itself is closed by the sweep when it expires.
+ */
+export async function discardUploadIntentObjects(intentId: string): Promise<void> {
+  const { data } = await db().from("store_upload_intents").select("staging_path, dest_path").eq("id", intentId).maybeSingle()
+  if (!data) return
+  await removeObject(STORE_STAGING_BUCKET, data.staging_path as string)
+  if (data.dest_path) await removeIfUnreferenced(data.dest_path as string)
 }
 
 /** Hash an object by streaming it (no whole-file buffer). */

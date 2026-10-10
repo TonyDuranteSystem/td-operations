@@ -190,7 +190,7 @@ _Regenerated 2026-10-10. Every subsystem doc under `docs/systems/` (47 docs), wi
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-05)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-06)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-02)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-09)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-07)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
@@ -215,7 +215,7 @@ _Regenerated 2026-10-10. Every subsystem doc under `docs/systems/` (47 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-18)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-07)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-09)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-09)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-04)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
