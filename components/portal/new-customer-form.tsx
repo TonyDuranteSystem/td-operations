@@ -5,9 +5,11 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useLocale } from '@/lib/portal/use-locale'
 
 export function NewCustomerForm({ accountId }: { accountId: string }) {
   const router = useRouter()
+  const { t } = useLocale()
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
     first_name: '',
@@ -96,7 +98,7 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
           <Field label="Region/State" value={form.region} onChange={v => update('region', v)} />
           <Field label="Country" value={form.country} onChange={v => update('country', v)} />
         </div>
-        <Field label="VAT Number" value={form.vat_number} onChange={v => update('vat_number', v)} />
+        <Field label={t('customers.vat')} value={form.vat_number} onChange={v => update('vat_number', v)} hint={t('customers.vatHint')} />
         <div>
           <label className="block text-sm font-medium text-zinc-700 mb-1.5">Notes</label>
           <textarea value={form.notes} onChange={e => update('notes', e.target.value)} rows={2}
@@ -116,14 +118,15 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
   )
 }
 
-function Field({ label, value, onChange, type = 'text', placeholder }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string
+function Field({ label, value, onChange, type = 'text', placeholder, hint }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string; hint?: string
 }) {
   return (
     <div>
       <label className="block text-sm font-medium text-zinc-700 mb-1.5">{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      {hint && <p className="mt-1 text-xs text-zinc-500">{hint}</p>}
     </div>
   )
 }
