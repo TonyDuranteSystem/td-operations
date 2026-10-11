@@ -42,7 +42,8 @@ vi.mock("@/lib/supabase-admin", () => ({
 import {
   normalizeSuiteNumber,
   suiteNumericPart,
-  largoAddressForSuite,
+  officialAddressLine,
+  mailingAddressLineForSuite,
   getCompanySuite,
   companyCmraAddressLine,
   allocateCompanySuite,
@@ -87,8 +88,12 @@ describe("suite format helpers", () => {
     expect(suiteNumericPart("Suite 3D-318")).toBeNull()
     expect(suiteNumericPart(null)).toBeNull()
   })
-  it("builds the Largo address for a suite", () => {
-    expect(largoAddressForSuite("3D-318")).toBe("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771")
+  it("builds the OFFICIAL address — the same for every company, no company number", () => {
+    expect(officialAddressLine()).toBe("10225 Ulmerton Rd 3D, Largo, FL 33771")
+  })
+  it("builds the MAILING address — official address + the company's own PMB", () => {
+    expect(mailingAddressLineForSuite("3D-318")).toBe("10225 Ulmerton Rd 3D PMB 318, Largo, FL 33771")
+    expect(() => mailingAddressLineForSuite("TBD")).toThrow("not a numbered TD suite")
   })
 })
 
@@ -111,9 +116,9 @@ describe("getCompanySuite", () => {
 
 describe("companyCmraAddressLine — what the Operating Agreement prints", () => {
   const FALLBACK = "10225 Ulmerton Rd, Suite 3D, Largo, FL 33771"
-  it("is ALWAYS Largo + the company's own suite when it has one", async () => {
+  it("is ALWAYS the official address (no company number) when the company has a number", async () => {
     accountRow = { suite_number: "3D-318" }
-    expect(await companyCmraAddressLine("a1", "99 Old St, Town")).toBe("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771")
+    expect(await companyCmraAddressLine("a1", "99 Old St, Town")).toBe("10225 Ulmerton Rd 3D, Largo, FL 33771")
   })
   it("uses the caller's fallback when the company has no suite yet", async () => {
     accountRow = { suite_number: null }
@@ -200,7 +205,7 @@ describe("syncPhysicalAddressToSuite", () => {
   it("writes the Largo address when the account has none", async () => {
     accountRow = { physical_address: null }
     await syncPhysicalAddressToSuite("a1", "3D-318")
-    expect(accountUpdates).toEqual([{ physical_address: "10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771" }])
+    expect(accountUpdates).toEqual([{ physical_address: "10225 Ulmerton Rd 3D, Largo, FL 33771" }])
   })
   it("refreshes an address our own lease flow wrote before", async () => {
     accountRow = { physical_address: "10225 Ulmerton Rd, Suite 3D-205, Largo, FL 33771" }

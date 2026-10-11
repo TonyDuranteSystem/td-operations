@@ -5,6 +5,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { FileText, PenLine, CheckCircle2, Clock, ChevronRight, PartyPopper, FileSignature } from 'lucide-react'
 import { interpolateString } from '@/lib/template-interpolation'
 import type { SignableDocument } from './page'
+import { pmbNumberFromSuite } from '@/lib/addresses'
 
 const DOC_INFO: Record<string, { key: string; icon: typeof FileText }> = {
   oa: { key: 'oa', icon: FileText },
@@ -53,7 +54,7 @@ function DocCard({ doc, locale, t }: { doc: SignableDocument; locale: 'en' | 'it
           </h3>
           {doc.suiteNumber && (
             <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">
-              {t('signDocs.suite')} {doc.suiteNumber}
+              {t('signDocs.pmb')} {pmbNumberFromSuite(doc.suiteNumber) ?? doc.suiteNumber}
             </span>
           )}
         </div>

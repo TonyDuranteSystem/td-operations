@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { formatAddressString, withCompanyCmra, type MailingAddressRow } from "@/lib/addresses"
+import { formatAddressString, companyMailingRow, type MailingAddressRow } from "@/lib/addresses"
 
 /** Cap + flatten a client-typed value so it can't inject structure or rules. */
 export function sanitizeCardValue(v: string | null | undefined, max = 140): string | null {
@@ -183,9 +183,9 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       d.registeredAgentProvider = sanitizeCardValue(acct.registered_agent_provider)
       // Prefer the structured, labeled addresses row; fall back to the legacy
       // free-text physical_address column.
-      // A company with a suite: the CMRA address is ALWAYS Largo + its suite (no saved CMRA link is read).
+      // A company with a number: the mailing address is ALWAYS the official address + its PMB (no saved link is read).
       if (acct.suite_number) {
-        d.mailingAddress = sanitizeCardValue(formatAddressString(withCompanyCmra(null, acct.suite_number) as MailingAddressRow))
+        d.mailingAddress = sanitizeCardValue(formatAddressString(companyMailingRow(acct.suite_number) as MailingAddressRow | null))
       } else if (acct.business_mailing_address_id) {
         const { data: addr } = await db
           .from("addresses")

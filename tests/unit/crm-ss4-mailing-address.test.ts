@@ -4,11 +4,18 @@ import { resolveMailing } from '@/lib/operations/ss4-refresh'
 
 // Found by the 2026-10-01 production QA: the CRM "Generate SS-4" button (generate-document route) inserted the SS-4 row
 // with NO mailing address, so the PDF fell back to the Seminole mailbox instead of Largo + the company's own suite.
-describe('SS-4 mailing address (Largo + the company\'s own suite)', () => {
-  it('a company with a suite prints the Largo office and its own suite, whatever address row is saved', () => {
-    const m = resolveMailing({ physical_address: null, suite_number: '3D-433', mailing_address: null } as Parameters<typeof resolveMailing>[0])
-    expect(m.street).toBe('10225 Ulmerton Rd, Suite 3D-433')
-    expect(m.cityStateZip).toContain('Largo')
+describe('SS-4 line 4a (the OFFICIAL address — Antonio 2026-10-10, "option 2")', () => {
+  it('a company with a number prints the official address on line 4a — no PMB, no company number — whatever address row is saved', () => {
+    const m = resolveMailing({ physical_address: null, suite_number: '3D-433', mailing_address: { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' } } as Parameters<typeof resolveMailing>[0])
+    expect(m.street).toBe('10225 Ulmerton Rd 3D')
+    expect(m.street).not.toContain('PMB')
+    expect(m.street).not.toContain('433')
+    expect(m.cityStateZip).toBe('Largo, FL, 33771')
+  })
+  it('every company with a number gets the identical line 4a (so the EIN letter matches the Articles exactly)', () => {
+    const a = resolveMailing({ physical_address: null, suite_number: '3D-433', mailing_address: null } as Parameters<typeof resolveMailing>[0])
+    const b = resolveMailing({ physical_address: null, suite_number: '3D-205', mailing_address: null } as Parameters<typeof resolveMailing>[0])
+    expect(a).toEqual(b)
   })
   it('the CRM generate-document SS-4 insert stores the mailing address (regression guard)', () => {
     const src = readFileSync('app/api/crm/admin-actions/generate-document/route.ts', 'utf8')

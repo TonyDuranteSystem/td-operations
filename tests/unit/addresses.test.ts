@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, withCompanyCmra, isTdLargoAddressRow } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, isTdLargoAddressRow, pmbNumberFromSuite, companyOfficialRow, companyMailingRow, mailingStreetForSuite } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -217,10 +217,10 @@ describe('resolveMailingAddress', () => {
   })
 })
 
-// ── withCompanySuite — a Largo office row shows THIS company's own suite ──────
+// ── The four addresses (Antonio 2026-10-10) ───────────────────────────────────
 
 describe('withCompanySuite / isTdLargoAddressRow', () => {
-  const largo = { address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-205', city: 'Largo', state: 'FL', zip: '33771' }
+  const largo = { address_line1: '10225 Ulmerton Rd', address_line2: '3D', city: 'Largo', state: 'FL', zip: '33771' }
   const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
 
   it('recognises our Largo office row (and only it)', () => {
@@ -230,52 +230,65 @@ describe('withCompanySuite / isTdLargoAddressRow', () => {
     expect(isTdLargoAddressRow(null)).toBe(false)
   })
 
-  it("replaces the shared row's suite text with the company's own suite", () => {
-    expect(withCompanySuite(largo, '3D-318')).toEqual({ ...largo, address_line2: 'Suite 3D-318' })
+  it('a Largo row picked as the Articles / principal address shows the OFFICIAL address — no company number', () => {
+    expect(withCompanySuite(largo, '3D-318', 'business_legal')).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D', address_line2: null, city: 'Largo' })
+    expect(withCompanySuite(largo, '3D-318')).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D' })
   })
 
-  it('leaves every other address (Seminole UPS box, registered agent) untouched', () => {
-    expect(withCompanySuite(seminole, '3D-318')).toBe(seminole)
+  it('a Largo row picked as the mailing address shows the official address + the company\'s PMB', () => {
+    expect(withCompanySuite(largo, '3D-318', 'business_mailing')).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D PMB 318', address_line2: null })
   })
 
-  it('a company with no suite keeps whatever the row says', () => {
+  it('leaves every other address (Seminole, registered agent) and the other roles untouched', () => {
+    expect(withCompanySuite(seminole, '3D-318', 'business_mailing')).toBe(seminole)
+    expect(withCompanySuite(largo, '3D-318', 'shipping')).toBe(largo)
+    expect(withCompanySuite(largo, '3D-318', 'registered_agent')).toBe(largo)
+  })
+
+  it('a company with no number keeps whatever the row says', () => {
     expect(withCompanySuite(largo, null)).toBe(largo)
     expect(withCompanySuite(largo, undefined)).toBe(largo)
     expect(withCompanySuite(null, '3D-318')).toBeNull()
   })
 
-  it('resolveMailingAddress: a company WITH a suite always gets Largo + its suite, whatever row is saved', () => {
-    expect(resolveMailingAddress(largo, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
-    // a wrongly linked Seminole row (or no row at all) no longer matters
-    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
-    expect(resolveMailingAddress(null, '99 Some St, Town', '3D-318')).toBe('10225 Ulmerton Rd, Suite 3D-318, Largo FL 33771')
+  it('resolveMailingAddress: a company WITH a number always gets official address + its PMB, whatever row is saved', () => {
+    expect(resolveMailingAddress(largo, null, '3D-318')).toBe('10225 Ulmerton Rd 3D PMB 318, Largo FL 33771')
+    expect(resolveMailingAddress(seminole, null, '3D-318')).toBe('10225 Ulmerton Rd 3D PMB 318, Largo FL 33771')
+    expect(resolveMailingAddress(null, '99 Some St, Town', '3D-318')).toBe('10225 Ulmerton Rd 3D PMB 318, Largo FL 33771')
   })
 
-  it('resolveMailingAddress: a company with NO suite keeps today\'s behaviour (saved row, then legacy text)', () => {
-    expect(resolveMailingAddress(largo, null)).toBe('10225 Ulmerton Rd, Suite 3D-205, Largo FL 33771')
+  it('resolveMailingAddress: a company with NO number keeps today\'s behaviour (saved row, then legacy text)', () => {
     expect(resolveMailingAddress(seminole, null, null)).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
     expect(resolveMailingAddress(null, '99 Some St, Town', null)).toBe('99 Some St, Town')
     expect(resolveMailingAddress(null, null, null)).toBeNull()
   })
 })
 
-describe('withCompanyCmra — the CMRA address is always Largo + the company\'s own suite', () => {
-  const seminole = { address_line1: '11125 Park Blvd', address_line2: 'Suite 104-153', city: 'Seminole', state: 'FL', zip: '33772' }
-  it('replaces ANY saved row (even a client\'s own address) with Largo + the suite when the company has a suite', () => {
-    const out = withCompanyCmra(seminole, '3D-212')
-    expect(out).toMatchObject({ address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-212', city: 'Largo', state: 'FL', zip: '33771' })
-    expect(withCompanyCmra(null, '3D-212')).toMatchObject({ address_line2: 'Suite 3D-212', city: 'Largo' })
+describe('pmbNumberFromSuite / companyOfficialRow / companyMailingRow', () => {
+  it('derives the PMB number from the stored company number', () => {
+    expect(pmbNumberFromSuite('3D-318')).toBe('318')
+    expect(pmbNumberFromSuite('3D-101')).toBe('101')
+    expect(pmbNumberFromSuite(' 3d-1042 ')).toBe('1042')
   })
-  it('carries nothing of the saved row onto the Largo address (no name, provider or agent leaks)', () => {
-    const saved = { ...seminole, name: 'Northwest Registered Agent', provider: 'NWRA', agent_name: 'Some Agent', is_td_provided: false }
-    const out = withCompanyCmra(saved, '3D-212') as Record<string, unknown>
-    expect(out.name).toBeUndefined()
-    expect(out.provider).toBeUndefined()
-    expect(out.agent_name).toBeUndefined()
-    expect(out.address_line1).toBe('10225 Ulmerton Rd')
+  it('rejects anything that is not a numbered TD suite', () => {
+    for (const bad of ['3D', 'Suite 3D-318', '318', '3D-1', '3D-12345', '', null, undefined]) {
+      expect(pmbNumberFromSuite(bad as string | null | undefined)).toBeNull()
+    }
   })
-  it('a company with no suite keeps the saved row untouched', () => {
-    expect(withCompanyCmra(seminole, null)).toBe(seminole)
-    expect(withCompanyCmra(null, undefined)).toBeNull()
+  it('the OFFICIAL address is the same for every company with a number and has no company number on it', () => {
+    const a = companyOfficialRow('3D-318')
+    const b = companyOfficialRow('3D-205')
+    expect(a).toEqual(b)
+    expect(a).toEqual({ address_line1: '10225 Ulmerton Rd 3D', address_line2: null, city: 'Largo', state: 'FL', zip: '33771', country: 'US' })
+    expect(formatAddressString(a)).toBe('10225 Ulmerton Rd 3D, Largo FL 33771')
+  })
+  it('the MAILING address is the official address + the company\'s own PMB on the street line', () => {
+    expect(companyMailingRow('3D-318')).toEqual({ address_line1: '10225 Ulmerton Rd 3D PMB 318', address_line2: null, city: 'Largo', state: 'FL', zip: '33771', country: 'US' })
+    expect(mailingStreetForSuite('3D-205')).toBe('10225 Ulmerton Rd 3D PMB 205')
+  })
+  it('a company with no number has neither: Largo is not its address', () => {
+    expect(companyOfficialRow(null)).toBeNull()
+    expect(companyMailingRow(undefined)).toBeNull()
+    expect(companyMailingRow('3D')).toBeNull()
   })
 })

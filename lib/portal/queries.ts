@@ -2,7 +2,7 @@ import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
 import { getInvoiceHubSetting } from '@/lib/settings'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString, withCompanyCmra, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, principalOfficeForClient, mailingForClient, shippingForClient } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -611,16 +611,19 @@ export async function getPortalAccountDetail(accountId: string) {
     .single()
 
   if (!data) return data
-  // The client sees THREE addresses (Antonio 2026-10-01): Principal Office, Mailing Address (Seminole) and Registered
-  // Agent. The Principal Office is ALWAYS our Largo office + THIS company's own suite (the address on the lease, the EIN
-  // application, the Operating Agreement and the invoices) — whatever address row is saved. A company with no suite yet
-  // keeps its saved row. The address on the Articles of Organization stays inside the CRM (checked at each annual report).
+  // The client sees FOUR addresses (Antonio 2026-10-10): Principal Office (official: 10225 Ulmerton Rd 3D, the same for every
+  // client), Mailing Address (the same + the company's own PMB), Registered Agent, and Shipping Address (our Seminole office).
+  // The first two are computed from the company's number (accounts.suite_number), whatever address rows are saved; a company
+  // with no number yet keeps its saved Principal Office (else "not on file"). The address on the Articles of Organization
+  // stays inside the CRM (checked at each annual report).
   const suite = (data.suite_number as string | null) ?? null
-  data.mailing_address = withCompanyCmra(data.mailing_address, suite) ?? data.mailing_address // feeds the document address below, not a client card
-  // No suite yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
+  const mailingCard = mailingForClient(suite)
+  // The Mailing card: official address + PMB; no number yet -> "not on file"
+  data.mailing_address = mailingCard ?? data.mailing_address // feeds the document address below
+  // No number yet: keep today's behaviour — the saved Principal Office, else the saved office (CMRA) link, never an empty card
   data.legal_address = principalOfficeForClient(data.legal_address, data.mailing_address, suite)
-  // The Mailing card: our Seminole mailbox for everyone (was blank for 236 of 248)
-  data.shipping_address = mailingForClient()
+  // The Shipping card: our Seminole office for everyone
+  data.shipping_address = shippingForClient()
   return {
     ...data,
     // physical_address stays the resolved MAILING address for existing callers
@@ -628,6 +631,9 @@ export async function getPortalAccountDetail(accountId: string) {
     physical_address: resolveMailingAddress(data.mailing_address, data.physical_address),
     legal_address: formatAddressString(data.legal_address),
     shipping_address: formatAddressString(data.shipping_address),
+    // The Mailing card text/parts: only a company with a number has one (the saved mailing row is never shown as a card)
+    mailing_card_address: mailingCard ? formatAddressString(mailingCard) : null,
+    mailing_card_parts: mailingCard ?? null,
     // The CRM's RA picker (components/shared/ra-picker.tsx) only ever writes
     // registered_agent_id, never the legacy free-text columns below — so an
     // account set up through it has a real, verified RA the CRM can see, but

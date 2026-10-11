@@ -14,6 +14,7 @@
  * renewal, SS-4, Operating Agreement, invoice, portal page and CRM screen shows THAT value.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { TD_LARGO_STREET_3D, mailingStreetForSuite } from "@/lib/addresses"
 
 /** Our Largo office street line (the suite is appended). */
 export const TD_LARGO_STREET = "10225 Ulmerton Rd"
@@ -34,9 +35,19 @@ export function suiteNumericPart(suite: string | null | undefined): number | nul
   return m ? parseInt(m[1], 10) : null
 }
 
-/** "10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771" */
-export function largoAddressForSuite(suite: string): string {
-  return `${TD_LARGO_STREET}, Suite ${suite}, ${TD_LARGO_CITY_STATE_ZIP}`
+/**
+ * The company's OFFICIAL address as one line: "10225 Ulmerton Rd 3D, Largo, FL 33771" — the same for every company (the 3D is
+ * part of our building's address; no company number). Antonio 2026-10-10.
+ */
+export function officialAddressLine(): string {
+  return `${TD_LARGO_STREET_3D}, ${TD_LARGO_CITY_STATE_ZIP}`
+}
+
+/** The company's MAILING address as one line: "10225 Ulmerton Rd 3D PMB 318, Largo, FL 33771". */
+export function mailingAddressLineForSuite(suite: string): string {
+  const street = mailingStreetForSuite(suite)
+  if (!street) throw new Error(`"${suite}" is not a numbered TD suite`)
+  return `${street}, ${TD_LARGO_CITY_STATE_ZIP}`
 }
 
 // ─── database function calls ────────────────────────────────────────────────
@@ -65,14 +76,14 @@ export async function getCompanySuite(accountId: string): Promise<string | null>
 }
 
 /**
- * The CMRA address the Operating Agreement prints: ALWAYS Largo + the company's own suite
- * ("10225 Ulmerton Rd, Suite 3D-318, Largo, FL 33771"); with no suite yet, the caller's fallback.
- * A failed READ throws: a saved Operating Agreement must never print a bare "Suite 3D" because of a transient error.
- * The fallback is used only when the read succeeded and the company has no suite.
+ * The address the Operating Agreement prints as the company's principal address: the OFFICIAL address
+ * ("10225 Ulmerton Rd 3D, Largo, FL 33771") for a company that has a number; with no number yet, the caller's fallback.
+ * A failed READ throws: a saved Operating Agreement must never print the fallback because of a transient error.
+ * The fallback is used only when the read succeeded and the company has no number.
  */
 export async function companyCmraAddressLine(accountId: string, fallback: string | null): Promise<string | null> {
   const suite = await getCompanySuite(accountId)
-  return suite ? largoAddressForSuite(suite) : fallback
+  return suite ? officialAddressLine() : fallback
 }
 
 /**
@@ -255,10 +266,10 @@ export async function releaseEndedSuites(actor = "cron"): Promise<number> {
 
 /**
  * Keep accounts.physical_address (what the Operating Agreement prints) in step with the company's
- * suite. Only writes when the address is empty or is one our own lease flow wrote before
+ * official address. Only writes when the address is empty or is one our own lease flow wrote before
  * ("10225 Ulmerton Rd…") — a manually entered address is never clobbered. Best-effort: never throws.
  */
-export async function syncPhysicalAddressToSuite(accountId: string, suite: string): Promise<void> {
+export async function syncPhysicalAddressToSuite(accountId: string, _suite: string): Promise<void> {
   try {
     const { data } = await supabaseAdmin
       .from("accounts")
@@ -269,7 +280,7 @@ export async function syncPhysicalAddressToSuite(accountId: string, suite: strin
     if (current === "" || current.toLowerCase().startsWith(TD_LARGO_STREET.toLowerCase())) {
       await supabaseAdmin
         .from("accounts")
-        .update({ physical_address: largoAddressForSuite(suite) })
+        .update({ physical_address: officialAddressLine() })
         .eq("id", accountId)
     }
   } catch {

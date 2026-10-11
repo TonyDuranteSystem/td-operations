@@ -1162,6 +1162,17 @@ export default async function PortalDashboardPage() {
               translations={translations}
             />
             <AddressInfoRow
+              icon={Mail}
+              accent="blue"
+              label={t('dashboard.mailingAddress', locale, translations)}
+              description={t('addresses.mailingSubtitle', locale, translations)}
+              parts={account.mailing_card_parts}
+              legacyValue={account.mailing_card_address}
+              emptyText={t('dashboard.addressNotOnFile', locale, translations)}
+              locale={locale}
+              translations={translations}
+            />
+            <AddressInfoRow
               icon={Package}
               accent="rose"
               label={t('dashboard.shippingAddress', locale, translations)}

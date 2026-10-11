@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
- * The client sees THREE addresses (Antonio 2026-10-01): Principal Office, Mailing Address (Seminole), Registered Agent.
- * The Principal Office is ALWAYS our Largo office + the company's own suite whatever address row is saved; a company with
- * no suite yet keeps its saved row. There is no CMRA card.
+ * The client sees FOUR addresses (Antonio 2026-10-10): Principal Office (official: 10225 Ulmerton Rd 3D, Largo — the same for
+ * every client), Mailing Address (official + the company's own PMB), Registered Agent, Shipping Address (Seminole).
+ * The first two are computed from the company's number whatever address row is saved; a company with no number yet keeps its
+ * saved row.
  */
 
 let account: Record<string, unknown>
@@ -34,20 +35,33 @@ beforeEach(() => {
 })
 
 describe('getPortalAccountDetail — the Principal Office card', () => {
-  it('shows Largo + the company\'s own suite, even when the saved address is somewhere else', async () => {
+  it('shows the OFFICIAL address (no company number), even when the saved address is somewhere else', async () => {
     const d = await getPortalAccountDetail('a1')
-    expect(d.legal_address).toBe('10225 Ulmerton Rd, Suite 3D-212, Largo FL 33771')
-    expect(d.legal_address_parts).toMatchObject({ address_line1: '10225 Ulmerton Rd', address_line2: 'Suite 3D-212', city: 'Largo', state: 'FL', zip: '33771' })
+    expect(d.legal_address).toBe('10225 Ulmerton Rd 3D, Largo FL 33771')
+    expect(d.legal_address_parts).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D', address_line2: null, city: 'Largo', state: 'FL', zip: '33771' })
+  })
+
+  it('the Mailing Address card is the official address + the company\'s own PMB', async () => {
+    const d = await getPortalAccountDetail('a1')
+    expect(d.mailing_card_address).toBe('10225 Ulmerton Rd 3D PMB 212, Largo FL 33771')
+    expect(d.mailing_card_parts).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D PMB 212', city: 'Largo' })
   })
 
   it('a wrongly linked Seminole mailing row no longer reaches any client card or the document address', async () => {
     const d = await getPortalAccountDetail('a1')
-    expect(d.physical_address).toBe('10225 Ulmerton Rd, Suite 3D-212, Largo FL 33771')
+    expect(d.physical_address).toBe('10225 Ulmerton Rd 3D PMB 212, Largo FL 33771')
   })
 
-  it('the Mailing Address (Seminole) card is untouched', async () => {
+  it('the Shipping Address card is our Seminole office, whatever row the CRM has linked', async () => {
     const d = await getPortalAccountDetail('a1')
     expect(d.shipping_address).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
+  })
+
+  it('a company with no number yet has no Mailing card ("not on file")', async () => {
+    account.suite_number = null
+    const d = await getPortalAccountDetail('a1')
+    expect(d.mailing_card_address).toBeNull()
+    expect(d.mailing_card_parts).toBeNull()
   })
 
   it('no suite and no saved Principal Office: the saved office (CMRA) link is shown instead of an empty card', async () => {

@@ -105,6 +105,11 @@ export default async function PortalProfilePage() {
                 <InfoField label={t('dashboard.principalOffice', locale)} value={account.legal_address} />
               </div>
             )}
+            {account.mailing_card_address && (
+              <div className="sm:col-span-2">
+                <InfoField label={t('dashboard.mailingAddress', locale)} value={account.mailing_card_address} />
+              </div>
+            )}
             {account.shipping_address && (
               <div className="sm:col-span-2">
                 <InfoField label={t('dashboard.shippingAddress', locale)} value={account.shipping_address} />
