@@ -436,6 +436,7 @@ describe("client card rendering", () => {
       accountStatus: "Active",
       registeredAgentAddress: "30 N Gould St, STE R, Sheridan, WY 82801",
       registeredAgentProvider: "Harbor Compliance",
+      officialAddress: null,
       mailingAddress: null,
       contactName: "Adam Marra",
       contactLanguage: "Italian",
@@ -455,7 +456,8 @@ describe("client card rendering", () => {
     expect(card).toContain("Registered Agent address")
     expect(card).toContain("service-of-process ONLY")
     expect(card).toContain("Harbor Compliance")
-    expect(card).toContain("Principal Office (our Largo office with the client's OWN suite")
+    expect(card).toContain("Official address / Principal Office (our Largo office, the same for every client with a company number")
+    expect(card).toContain("Mailing address (the official address + the client's OWN PMB number")
     expect(card).toContain("not on file")
     expect(card).toContain("language on file: Italian")
     expect(card).toContain("PDF NOT generated yet")

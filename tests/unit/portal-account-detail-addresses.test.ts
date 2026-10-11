@@ -47,9 +47,18 @@ describe('getPortalAccountDetail — the Principal Office card', () => {
     expect(d.mailing_card_parts).toMatchObject({ address_line1: '10225 Ulmerton Rd 3D PMB 212', city: 'Largo' })
   })
 
-  it('a wrongly linked Seminole mailing row no longer reaches any client card or the document address', async () => {
+  it('a wrongly linked Seminole mailing row no longer reaches any client card or the document address — documents the portal generates (Operating Agreement principal address) get the OFFICIAL address, no PMB', async () => {
     const d = await getPortalAccountDetail('a1')
-    expect(d.physical_address).toBe('10225 Ulmerton Rd 3D PMB 212, Largo FL 33771')
+    expect(d.physical_address).toBe('10225 Ulmerton Rd 3D, Largo FL 33771')
+    expect(d.physical_address).not.toContain('PMB')
+  })
+
+  it('a company with no number keeps its saved/legacy address for generated documents', async () => {
+    account.suite_number = null
+    account.physical_address = '99 Some St, Town'
+    account.mailing_address = null
+    const d = await getPortalAccountDetail('a1')
+    expect(d.physical_address).toBe('99 Some St, Town')
   })
 
   it('the Shipping Address card is our Seminole office, whatever row the CRM has linked', async () => {
