@@ -91,6 +91,7 @@ export function driveIsMocked(): boolean {
  * My Drive). See lib/google-drive-guard.ts. Called right after each write's mock check.
  */
 const driveIdCache = new Map<string, string | null>()
+const driveParentsCache = new Map<string, string[]>()
 async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
   await assertDriveWriteAllowed(target, async (id) => {
     if (driveIdCache.has(id)) return driveIdCache.get(id) ?? null
@@ -99,6 +100,21 @@ async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
     driveIdCache.set(id, driveId)
     return driveId
   })
+  // A company whose files live in the new storage (or are being moved there) is never written to in Drive,
+  // whichever code path asks — fail closed (lib/crm-store/switched-drive-guard.ts; dev job ad09ea91).
+  if (target.kind === "shared") {
+    const g = await import("@/lib/crm-store/switched-drive-guard")
+    await g.assertTargetsNotSwitched(target.ids, {
+      lockedFolderIds: () => g.lockedFolderIdsCached(),
+      parentsOf: async (id) => {
+        if (driveParentsCache.has(id)) return driveParentsCache.get(id) ?? []
+        const meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+        const parents = meta.parents ?? []
+        driveParentsCache.set(id, parents)
+        return parents
+      },
+    })
+  }
 }
 
 // ─── Token Management ───────────────────────────────────────

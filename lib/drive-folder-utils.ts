@@ -228,15 +228,17 @@ export async function ensureCompanyFolder(
     .eq('id', accountId)
     .single()
 
+  // A company whose files live in the new store never gets a Drive folder — and never has Drive subfolders
+  // made in an existing one — whichever flow asks (tax intake, onboarding, RA switch, place-client …).
+  // Checked BEFORE the existing-folder shortcut: a switched company keeps its old folder id (Drive stays
+  // visible), so the shortcut would otherwise hand it back and the caller would write into Drive.
+  const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
+  await assertNotStoreOwnedAccount(accountId)
+
   if (account?.drive_folder_id) {
     const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
     return { folderId: account.drive_folder_id, created: false, subfolders }
   }
-
-  // CRM Store pilot (sandbox only): a company whose files live in the new store never gets a Drive
-  // folder, whichever flow asks (tax intake, onboarding, RA switch, place-client …). Inert on production.
-  const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
-  await assertNotStoreOwnedAccount(accountId)
 
   // Determine parent folder by state
   const { createFolder, listFiles } = await getDriveHelpers()

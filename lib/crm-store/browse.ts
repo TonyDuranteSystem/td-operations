@@ -399,8 +399,8 @@ export async function storeFilesShownForAccount(accountId: string, ownerId: stri
  * so a store-owned company can never be given a Drive folder because the lookup failed.
  */
 export async function assertNotStoreOwnedAccount(accountId: string): Promise<void> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return
+  // No environment gate: the answer is exact data (a live, not study-only, storage). Production has none yet, so this
+  // refuses nothing there today — but the day a company is switched it protects it without another deploy.
   const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()
   if (error) throw new Error("Could not check where this company's files live — please try again.")
   const { StoreOwnedAccountError } = await import("./account-uploads")

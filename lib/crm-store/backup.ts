@@ -24,6 +24,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import * as drive from "@/lib/google-drive"
+import { runAsStoreBackup } from "./switched-drive-guard"
 import type { DriveTaggedItem } from "@/lib/google-drive"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,10 +209,11 @@ export const backupIO: BackupIO = {
   find: (k, v, driveIds) => drive.findByAppProperty(k, v, driveIds),
   get: (id) => drive.getTaggedItem(id),
   childFolders: (id, driveId) => drive.listChildFolders(id, driveId),
-  createFolder: (parent, name, tags) => drive.createTaggedFolder(parent, name, tags),
-  patch: (id, p) => drive.patchTaggedItem(id, p),
-  upload: (p) => drive.uploadStreamToDrive(p),
-  trash: async (id) => { await drive.trashFile(id) },
+  // The one-way backup is the ONLY writer allowed into a switched company's Drive folder (switched-drive-guard.ts).
+  createFolder: (parent, name, tags) => runAsStoreBackup(() => drive.createTaggedFolder(parent, name, tags)),
+  patch: (id, p) => runAsStoreBackup(() => drive.patchTaggedItem(id, p)),
+  upload: (p) => runAsStoreBackup(() => drive.uploadStreamToDrive(p)),
+  trash: async (id) => { await runAsStoreBackup(() => drive.trashFile(id)) },
 }
 
 // ─────────────────────────────────────────────────────────────── one owner
