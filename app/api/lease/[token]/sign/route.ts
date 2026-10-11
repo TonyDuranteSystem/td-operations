@@ -33,6 +33,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const code = typeof body.code === "string" ? body.code : ""
   const pdfPath = typeof body.pdf_storage_path === "string" ? body.pdf_storage_path : ""
   const operatingAddress = typeof body.operating_address === "string" ? body.operating_address.trim().slice(0, 300) : ""
+  // template v2: the date the page printed next to both signatures — must still be today in New York when the signature lands
+  const printedDate = typeof body.signing_date === "string" ? body.signing_date : ""
 
   if (!pdfPath) {
     return NextResponse.json({ error: "pdf_storage_path required" }, { status: 400 })
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: lease } = await db
     .from("lease_agreements")
-    .select("id, access_code, status, template_version")
+    .select("*")
     .eq("token", token)
     .maybeSingle()
   if (!lease) {
@@ -63,6 +65,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const isV2 = (lease.template_version ?? 1) === 2
   if (isV2 && operatingAddress.length < 5) {
     return NextResponse.json({ error: "Please enter your Operating Address (where your business is run day to day) before signing." }, { status: 400 })
+  }
+
+  // The signed PDF carries the date the page printed; the record carries today's date in New York. They must be the same day —
+  // otherwise (a tab left open past midnight) the PDF and the record would disagree about the Effective Date.
+  if (isV2 && printedDate !== newYorkToday()) {
+    return NextResponse.json(
+      { error: "The date changed while this page was open, so the printed date is out of date. The page will reload — please sign again.", code: "date_changed" },
+      { status: 409 },
+    )
   }
 
   // Confirm the PDF this request claims to point at actually exists before

@@ -33,8 +33,6 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
     error?: string
   } | null>(null)
 
-  const [monthlyRent, setMonthlyRent] = useState('100')
-  const [securityDeposit, setSecurityDeposit] = useState('150')
 
   // Pre-fill the start with the company's formation date ONLY when the company
   // was formed THIS year (the mid-year-formation case). A years-old formation
@@ -81,8 +79,6 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
             account_id: accountId,
             // suite_number omitted — the lease takes the company's own suite (it must already be issued)
             // Number.isFinite preserves an intentional 0 (|| would rewrite it).
-            monthly_rent: Number.isFinite(parseInt(monthlyRent)) ? parseInt(monthlyRent) : 100,
-            security_deposit: Number.isFinite(parseInt(securityDeposit)) ? parseInt(securityDeposit) : 150,
             term_start_date: startDate,
             term_end_date: endDate,
             effective_date: startDate,
@@ -160,32 +156,12 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Monthly Rent ($)</label>
-                    <input
-                      type="number"
-                      value={monthlyRent}
-                      onChange={e => setMonthlyRent(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Security Deposit ($)</label>
-                    <input
-                      type="number"
-                      value={securityDeposit}
-                      onChange={e => setSecurityDeposit(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
               </div>
 
               <div className="text-xs text-muted-foreground bg-zinc-50 rounded-lg p-3 space-y-1">
                 <p>Premises: 10225 Ulmerton Rd, Largo, FL 33771</p>
                 <p>Term: {startDate || '—'} → {endDate || '—'}</p>
-                <p>Yearly rent: ${(parseInt(monthlyRent) || 100) * 12}</p>
+                <p>Office Lease and Services Agreement — no separate rent or deposit; the 12-month term runs from the date the client signs.</p>
               </div>
             </>
           ) : (

@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { formatAddressString, companyMailingRow, type MailingAddressRow } from "@/lib/addresses"
+import { formatAddressString, companyMailingRow, companyOfficialRow, isTdLargoAddressRow, type MailingAddressRow } from "@/lib/addresses"
 
 /** Cap + flatten a client-typed value so it can't inject structure or rules. */
 export function sanitizeCardValue(v: string | null | undefined, max = 140): string | null {
@@ -39,6 +39,7 @@ interface CardData {
   accountStatus: string | null
   registeredAgentAddress: string | null
   registeredAgentProvider: string | null
+  officialAddress: string | null
   mailingAddress: string | null
   contactName: string | null
   contactLanguage: string | null
@@ -90,7 +91,8 @@ Company: ${d.companyName ?? NOT_ON_FILE}${d.entityType ? ` (${d.entityType}` + (
 Primary contact: ${contactBits}
 ADDRESSES — these are DIFFERENT things and NEVER interchangeable:
 ${line("Registered Agent address (state service-of-process ONLY — never a business, mailing, or bank/broker address)", d.registeredAgentAddress && d.registeredAgentProvider ? `${d.registeredAgentAddress} (provider: ${d.registeredAgentProvider})` : d.registeredAgentAddress)}
-${line("Principal Office (our Largo office with the client's OWN suite — the address on their lease, EIN application, Operating Agreement and invoices)", d.mailingAddress)}
+${line("Official address / Principal Office (our Largo office, the same for every client with a company number — the address on their Articles, EIN application, Operating Agreement and lease)", d.officialAddress)}
+${line("Mailing address (the official address + the client's OWN PMB number — where their mail and packages are received; on invoices)", d.mailingAddress)}
 ${line("Client residential address (CRM record — flag it if another source shows a different one)", d.contactAddress)}
 Active services: ${services}
 Lease: ${lease}
@@ -157,6 +159,7 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       accountStatus: null,
       registeredAgentAddress: null,
       registeredAgentProvider: null,
+      officialAddress: null,
       mailingAddress: null,
       contactName: null,
       contactLanguage: null,
@@ -185,6 +188,7 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
       // free-text physical_address column.
       // A company with a number: the mailing address is ALWAYS the official address + its PMB (no saved link is read).
       if (acct.suite_number) {
+        d.officialAddress = sanitizeCardValue(formatAddressString(companyOfficialRow(acct.suite_number) as MailingAddressRow | null))
         d.mailingAddress = sanitizeCardValue(formatAddressString(companyMailingRow(acct.suite_number) as MailingAddressRow | null))
       } else if (acct.business_mailing_address_id) {
         const { data: addr } = await db
@@ -192,9 +196,12 @@ export async function buildClientCardSuffix(clientKey: string): Promise<string> 
           .select("address_line1, address_line2, city, state, zip")
           .eq("id", acct.business_mailing_address_id)
           .maybeSingle()
-        d.mailingAddress = sanitizeCardValue(formatAddressString((addr ?? null) as MailingAddressRow | null))
+        // no company number: the shared Largo office row is not this company's address (a bare "3D") — never report it
+        d.mailingAddress = isTdLargoAddressRow(addr as { address_line1?: string | null } | null)
+          ? null
+          : sanitizeCardValue(formatAddressString((addr ?? null) as MailingAddressRow | null))
       }
-      if (!d.mailingAddress) d.mailingAddress = sanitizeCardValue(acct.physical_address)
+      if (!d.mailingAddress && !acct.suite_number && !isTdLargoAddressRow({ address_line1: acct.physical_address })) d.mailingAddress = sanitizeCardValue(acct.physical_address)
 
       if (!contactId) {
         const { data: link } = await db

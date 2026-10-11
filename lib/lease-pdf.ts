@@ -765,6 +765,21 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
 }
 
 
+/**
+ * The server PDF uses a standard (WinAnsi) font. The client types their own Operating Address, which may contain letters that
+ * font cannot draw (Cyrillic, Romanian ș, Polish ł, ...). Strip accents, and replace what is still undrawable with "?", for
+ * THIS rendering only — the stored text and the browser-captured signed PDF keep the original characters.
+ */
+export function toWinAnsi(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '?')
+}
+
 // ─── Office Lease and Services Agreement (template v2) ──────────────────────────────────────────────────────────────
 // Prints the SAME blocks the signing page shows (lib/lease/agreement-v2.ts) — one text, three renderings.
 async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ bytes: Uint8Array; pages: number }> {
@@ -792,31 +807,32 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   for (const b of agreement.blocks) {
     switch (b.t) {
       case 'title':
-        pw.title(b.text, 17)
+        pw.title(toWinAnsi(b.text), 17)
         pw.rule()
         break
       case 'center': {
-        const w = pw.font.widthOfTextAtSize(b.text, 10.5)
+        const centered = toWinAnsi(b.text)
+        const w = pw.font.widthOfTextAtSize(centered, 10.5)
         pw.checkSpace(20)
-        pw.page.drawText(b.text, { x: (pw.pageWidth - w) / 2, y: pw.y, size: 10.5, font: pw.font, color: C.medium })
+        pw.page.drawText(centered, { x: (pw.pageWidth - w) / 2, y: pw.y, size: 10.5, font: pw.font, color: C.medium })
         pw.y -= 22
         break
       }
       case 'heading':
         pw.checkSpace(40)
         pw.space(4)
-        pw.para(b.text, { font: pw.fontBold, size: 12, spaceAfter: 6 })
+        pw.para(toWinAnsi(b.text), { font: pw.fontBold, size: 12, spaceAfter: 6 })
         break
       case 'address':
-        for (const line of b.lines) pw.para(line, { indent: 28, font: pw.fontBold, spaceAfter: 0 })
+        for (const line of b.lines) pw.para(toWinAnsi(line), { indent: 28, font: pw.fontBold, spaceAfter: 0 })
         pw.space(10)
         break
       case 'party':
-        pw.labelPara(`${b.role}: `, b.lines.join(' '))
+        pw.labelPara(`${b.role}: `, toWinAnsi(b.lines.join(' ')))
         break
       case 'para':
-        if (b.label) pw.labelPara(`${b.label}  `, b.text)
-        else pw.para(b.text)
+        if (b.label) pw.labelPara(`${b.label}  `, toWinAnsi(b.text))
+        else pw.para(toWinAnsi(b.text))
         break
     }
   }
@@ -830,7 +846,8 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   const rightX = pw.pageWidth / 2 + 20
   const sigW = 200
   const signed = data.signedDate ? longDate(data.signedDate) : null
-  const col = (x: number, role: string, company: string, name: string, title: string) => {
+  const col = (x: number, role: string, rawCompany: string, rawName: string, rawTitle: string) => {
+    const company = toWinAnsi(rawCompany), name = toWinAnsi(rawName), title = toWinAnsi(rawTitle)
     let y = pw.y
     pw.page.drawText(role, { x, y, size: 10, font: pw.fontBold, color: C.dark })
     y -= 16

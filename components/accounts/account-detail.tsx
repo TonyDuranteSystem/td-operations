@@ -2488,7 +2488,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
+              <p className="text-xs text-zinc-500 mb-1">Shipping Address (CRM record — the client portal always shows our Seminole office)</p>
               <AddressPicker
                 accountId={account.id}
                 accountUpdatedAt={account.updated_at}

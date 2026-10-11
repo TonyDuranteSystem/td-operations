@@ -33,7 +33,7 @@ Prerequisites:
 
 New leases are the Office Lease and Services Agreement (template v2): no separate rent or deposit (included in the annual service agreement), fixed 12-month term from the date of signing, premises 10225 Ulmerton Rd 3D, Largo FL 33771. The rent/deposit/term parameters are ignored.
 
-The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, this issues it. It is locked: one company = one suite, one suite = one company.
+The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, the lease is NOT created — issue the suite first (workspace Suite step or the "Issue suite" button on the account page). It is locked: one company = one suite, one suite = one company.
 
 The lease is created as 'draft'. Clients sign in their PORTAL, not by email: staff press Send Lease on the account in the CRM, which puts the lease in the client's portal and emails nobody. (lease_send is a manual email of the bare link — an exception, only when Antonio explicitly asks.)
 
@@ -366,7 +366,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
   <ul style="line-height: 1.8;">
 ${isV2Lease
   ? `    <li><strong>Official address:</strong> 10225 Ulmerton Rd 3D, Largo, FL 33771</li>
-    <li><strong>Mailing address:</strong> ${mailingStreetForSuite(lease.suite_number)}, Largo, FL 33771</li>
+    <li><strong>Mailing address:</strong> ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771</li>
     <li><strong>Term:</strong> 12 months from the date of signing. No separate rent or deposit.</li>`
   : `    <li><strong>Premises:</strong> 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771</li>
     <li><strong>Term:</strong> ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}</li>
@@ -391,7 +391,7 @@ You will be asked to verify your email address (${lease.tenant_email}) to access
 The agreement covers:
 ${isV2Lease
   ? `- Official address: 10225 Ulmerton Rd 3D, Largo, FL 33771
-- Mailing address: ${mailingStreetForSuite(lease.suite_number)}, Largo, FL 33771
+- Mailing address: ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771
 - Term: 12 months from the date of signing. No separate rent or deposit.`
   : `- Premises: 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771
 - Term: ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}
@@ -407,7 +407,7 @@ support@tonydurante.us`
         const boundary = `boundary_${Date.now()}`
 
         // RFC 2047: encode subject as base64 if it contains non-ASCII chars (e.g. em dash —)
-        const leaseSubject = `Office Lease Agreement — ${lease.tenant_company}`
+        const leaseSubject = subject
         const hasNonAscii = /[^\x00-\x7F]/.test(leaseSubject)
         const encodedSubject = hasNonAscii
           ? `=?UTF-8?B?${Buffer.from(leaseSubject, "utf-8").toString("base64")}?=`

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildAgreementV2, newYorkToday, addMonthsIso, longDate, agreementAddresses, AGREEMENT_V2_TITLE } from '@/lib/lease/agreement-v2'
-import { generateLeasePDF } from '@/lib/lease-pdf'
+import { inflateSync } from 'node:zlib'
+import { generateLeasePDF, toWinAnsi } from '@/lib/lease-pdf'
 import { toPublicLease, LEASE_SELECT } from '@/lib/lease/public-view'
 
 const INPUT = {
@@ -13,6 +14,19 @@ const INPUT = {
   clientRepTitle: 'Manager',
   suiteNumber: '3D-318',
   operatingAddress: null as string | null,
+}
+/** All text drawn in a pdf-lib PDF: inflate every content stream and decode its <hex> Tj strings (WinAnsi ~ latin1). */
+function pdfText(bytes: Uint8Array): string {
+  const raw = Buffer.from(bytes).toString('latin1')
+  let out = ''
+  const re = /stream\r?\n([\s\S]*?)\r?\nendstream/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    let content = ''
+    try { content = inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1') } catch { continue }
+    for (const t of content.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) out += Buffer.from(t[1], 'hex').toString('latin1') + '\n'
+  }
+  return out
 }
 const allText = (doc: ReturnType<typeof buildAgreementV2>) =>
   doc.blocks.map(b => ('text' in b ? b.text : 'lines' in b ? b.lines.join(' ') : '')).join('\n')
@@ -98,24 +112,28 @@ describe('public lease payload and the server PDF', () => {
     expect(toPublicLease({ id: '1', token: 't' }).template_version).toBe(1)
   })
 
-  it('generates a v2 PDF (a real PDF with the new text and several pages), unsigned and signed', async () => {
-    const base = {
-      tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', tenantTitle: 'Manager', suiteNumber: '3D-318',
-      effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10',
-      templateVersion: 2, agreementNo: 'acme-llc-2026', operatingAddress: 'Via Roma 1, Milano, Italy',
-    }
-    const unsigned = await generateLeasePDF(base)
-    const signed = await generateLeasePDF({ ...base, signedDate: '2026-10-10' })
-    expect(Buffer.from(unsigned.slice(0, 5)).toString()).toBe('%PDF-')
-    expect(unsigned.length).toBeGreaterThan(5000)
-    expect(signed.length).toBeGreaterThan(5000)
+  it('the v2 PDF carries the new agreement text and addresses; the v1 PDF still carries the original text (frozen)', async () => {
+    const common = { tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', tenantTitle: 'Manager', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10' }
+    const v2 = pdfText(await generateLeasePDF({ ...common, templateVersion: 2, agreementNo: 'acme-llc-2026', operatingAddress: 'Via Roma 1, Milano, Italy', signedDate: '2026-10-10' }))
+    expect(v2).toContain('OFFICE LEASE AND SERVICES AGREEMENT')
+    expect(v2).toContain('10225 Ulmerton Rd 3D PMB 318')
+    expect(v2).toContain('Via Roma 1, Milano, Italy')
+    expect(v2).toContain('October 10, 2026')
+    expect(v2).not.toContain('Monthly Rent')
+    const v1 = pdfText(await generateLeasePDF(common))
+    expect(v1).toContain('OFFICE LEASE AGREEMENT')
+    expect(v1).toContain('Suite 3D-318')
+    expect(v1).toContain('Monthly Rent')
+    expect(v1).not.toContain('SERVICES AGREEMENT')
   })
 
-  it('a v1 lease still renders the original PDF (frozen text)', async () => {
+  it('a non-Latin Operating Address does not break the server PDF (accents stripped, undrawable letters become "?")', async () => {
+    expect(toWinAnsi('București, Łódź')).toBe('Bucuresti, ?odz')
+    expect(toWinAnsi('Москва')).toBe('??????')
     const bytes = await generateLeasePDF({
-      tenantCompany: 'Old LLC', tenantContactName: 'A B', suiteNumber: '3D-107',
-      effectiveDate: '2026-01-02', termStartDate: '2026-01-02', termEndDate: '2026-12-31',
+      tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10',
+      templateVersion: 2, operatingAddress: 'Str. Eminescu 5, București, Москва',
     })
-    expect(Buffer.from(bytes.slice(0, 5)).toString()).toBe('%PDF-')
+    expect(pdfText(bytes)).toContain('Bucuresti')
   })
 })

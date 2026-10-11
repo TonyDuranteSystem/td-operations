@@ -267,10 +267,15 @@ export default function LeasePageWithCode() {
       const signRes = await fetch(`/api/lease/${token}/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined }),
+        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined }),
       })
       if (!signRes.ok) {
         const d = await signRes.json().catch(() => ({}))
+        if (d.code === 'date_changed') {
+          alert(d.error)
+          window.location.reload()
+          return
+        }
         throw new Error(d.error || 'Failed to record signature')
       }
 
@@ -285,6 +290,10 @@ export default function LeasePageWithCode() {
         // Non-blocking — signing is already saved
       }
 
+      // v2: show what the server recorded (the date printed at signing, the Operating Address), not the draft's placeholders
+      if (lease.template_version === 2) {
+        setLease({ ...lease, signed_at: new Date().toISOString(), effective_date: serverToday || lease.effective_date, operating_address: operatingAddress.trim() })
+      }
       setSigned(true)
 
       // Notify portal parent when embedded in iframe
@@ -633,7 +642,7 @@ export default function LeasePageWithCode() {
 
         {/* Signature Section */}
         <p style={{ fontWeight: 700, fontSize: 15, marginBottom: 24 }}>
-          IN WITNESS WHEREOF, the Parties have executed this Agreement as of the Effective Date written above.
+          {isV2 ? 'IN WITNESS WHEREOF, the parties have signed this Agreement on the dates written below.' : 'IN WITNESS WHEREOF, the Parties have executed this Agreement as of the Effective Date written above.'}
         </p>
 
         {isV2 && !signed && (
@@ -659,10 +668,10 @@ export default function LeasePageWithCode() {
         <div className="lease-sig-block" style={{ display: 'flex', gap: 40, marginBottom: 24, pageBreakInside: 'avoid' }}>
           {/* Landlord */}
           <div style={{ flex: 1 }}>
-            <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>Landlord</p>
+            <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>{isV2 ? 'Provider' : 'Landlord'}</p>
             <p style={{ fontWeight: 700, marginBottom: 8 }}>{lease.landlord_name}</p>
             <div style={{ marginBottom: 8 }}>
-              <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>Landlord Signature:</p>
+              <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{isV2 ? 'Provider Signature:' : 'Landlord Signature:'}</p>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/images/antonio-signature.svg" alt="Antonio Durante signature" style={{ height: 50, opacity: 0.9 }} />
             </div>
@@ -673,7 +682,7 @@ export default function LeasePageWithCode() {
 
           {/* Tenant */}
           <div style={{ flex: 1 }}>
-            <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>Tenant</p>
+            <p style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, textTransform: 'uppercase', color: '#555' }}>{isV2 ? 'Client' : 'Tenant'}</p>
             <p style={{ fontWeight: 700, marginBottom: 12 }}>{lease.tenant_company}</p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{lease.tenant_contact_name}</strong></p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: {isV2 ? (lease.tenant_title || 'Manager') : 'Owner/Member'}</p>
@@ -681,15 +690,15 @@ export default function LeasePageWithCode() {
 
             {/* Signature — canvas when signing, attestation when already signed */}
             {signed ? (
-              <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>Tenant Signature:</p>
+              <div key="sig-attestation" style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{isV2 ? 'Client Signature:' : 'Tenant Signature:'}</p>
                 <p style={{ fontSize: 13, fontStyle: 'italic', color: '#444', margin: 0 }}>
                   ✓ Electronically signed on {isV2 ? sigDate : new Date(lease.signed_at!).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
                 </p>
               </div>
             ) : (
-              <div style={{ marginTop: 16 }}>
-                <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Tenant Signature:</p>
+              <div key="sig-pad" style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>{isV2 ? 'Client Signature:' : 'Tenant Signature:'}</p>
                 <canvas
                   ref={sigCanvasRef}
                   style={{ width: '100%', height: 100, border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'crosshair' }}

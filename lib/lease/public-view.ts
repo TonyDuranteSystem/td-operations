@@ -14,7 +14,8 @@
  * address (`tenant_email`). Then anon SELECT on the table is revoked.
  */
 
-// Columns the server READS (service key). Includes the two secrets so the route
+// Columns the server READS (service key) — kept as documentation of what the public view needs; the fetch route selects "*"
+// (so a not-yet-migrated database cannot break the page) and relies on toPublicLease() below for what leaves the server. Includes the two secrets so the route
 // can check the code and evaluate the email gate — they are stripped before the
 // browser ever sees them (see toPublicLease + SECRET_LEASE_FIELDS).
 export const LEASE_SELECT = [

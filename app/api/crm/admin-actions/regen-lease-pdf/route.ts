@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // a lease nobody signed, or with dates that differ from the executed terms.
     const { data: lease } = await supabaseAdmin
       .from('lease_agreements')
-      .select('id, token, tenant_company, tenant_ein, tenant_state, tenant_contact_name, landlord_name, landlord_address, landlord_signer, landlord_title, suite_number, square_feet, monthly_rent, yearly_rent, security_deposit, late_fee, late_fee_per_day, account_id, status, signed_at, effective_date, term_start_date, term_end_date, template_version, operating_address, tenant_title')
+      .select('*')
       .eq('id', lease_id)
       .single()
 

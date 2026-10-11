@@ -22,7 +22,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
-import { LEASE_SELECT, toPublicLease, assertNoLeaseSecrets, leaseEmailMatches } from "@/lib/lease/public-view"
+import { toPublicLease, assertNoLeaseSecrets, leaseEmailMatches } from "@/lib/lease/public-view"
 import { newYorkToday } from "@/lib/lease/agreement-v2"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -37,7 +37,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 
   const { data: lease } = await db
     .from("lease_agreements")
-    .select(LEASE_SELECT)
+    // "*" on purpose: it works whether or not the template_version / operating_address columns exist yet (a named column that
+    // does not exist makes the whole query fail and every lease page 404). The browser still only ever gets toPublicLease().
+    .select("*")
     .eq("token", token)
     .maybeSingle()
 

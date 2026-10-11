@@ -2,7 +2,7 @@ import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
 import { getInvoiceHubSetting } from '@/lib/settings'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
-import { resolveMailingAddress, formatAddressString, principalOfficeForClient, mailingForClient, shippingForClient } from '@/lib/addresses'
+import { resolveMailingAddress, formatAddressString, principalOfficeForClient, mailingForClient, shippingForClient, companyOfficialRow } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
 import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
@@ -626,9 +626,11 @@ export async function getPortalAccountDetail(accountId: string) {
   data.shipping_address = shippingForClient()
   return {
     ...data,
-    // physical_address stays the resolved MAILING address for existing callers
-    // (Operating Agreement generation, invoices, SS-4) — do not repurpose it.
-    physical_address: resolveMailingAddress(data.mailing_address, data.physical_address),
+    // physical_address is the company's address for documents the portal generates itself (Operating Agreement principal
+    // address + letterhead, tax statement, distribution resolution): the OFFICIAL address (no PMB) for a company with a number —
+    // the same one the server-side Operating Agreement paths print — else the saved/legacy address as before. Invoices do NOT
+    // read this field (they resolve the MAILING address themselves with resolveMailingAddress + the suite).
+    physical_address: formatAddressString(companyOfficialRow(suite)) ?? resolveMailingAddress(data.mailing_address, data.physical_address),
     legal_address: formatAddressString(data.legal_address),
     shipping_address: formatAddressString(data.shipping_address),
     // The Mailing card text/parts: only a company with a number has one (the saved mailing row is never shown as a card)
