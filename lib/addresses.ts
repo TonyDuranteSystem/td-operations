@@ -133,9 +133,9 @@ export function principalOfficeForClient<T extends MailingAddressRow>(
 }
 
 /** The Mailing Address card a CLIENT sees: official address + their own PMB. No number yet -> null ("not on file"). */
-export function mailingForClient(companySuite: string | null | undefined): (MailingAddressRow & { name: string; country: string }) | null {
-  const row = companyMailingRow(companySuite)
-  return row ? { name: TD_OFFICE.company, ...row } : null
+export function mailingForClient(companySuite: string | null | undefined): (MailingAddressRow & { country: string }) | null {
+  // no `name`: the card prints the COMPANY's own name above its mailing address (the Shipping card is the one in TD's name)
+  return companyMailingRow(companySuite)
 }
 
 /**
