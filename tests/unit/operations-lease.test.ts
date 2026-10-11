@@ -387,9 +387,12 @@ describe("createLease — happy path", () => {
     expect(insert.tenant_company).toBe("Example LLC")
     expect(insert.tenant_ein).toBe("12-3456789")
     expect(insert.tenant_state).toBe("FL")
-    expect(insert.monthly_rent).toBe(100)
-    expect(insert.yearly_rent).toBe(1200)
-    expect(insert.security_deposit).toBe(150)
+    // Office Lease and Services Agreement (2026-10-10): template v2, no separate rent or deposit
+    expect(insert.template_version).toBe(2)
+    expect(insert.monthly_rent).toBe(0)
+    expect(insert.yearly_rent).toBe(0)
+    expect(insert.security_deposit).toBe(0)
+    expect(insert.landlord_address).toBe("10225 Ulmerton Rd 3D, Largo, FL 33771")
     expect(insert.square_feet).toBe(120)
     expect(insert.term_months).toBe(12)
     expect(insert.premises_address).toBe("10225 Ulmerton Rd, Largo, FL 33771")
@@ -530,19 +533,14 @@ describe("createLease — happy path", () => {
     expect(insert.language).toBe("en")
   })
 
-  it("computes yearly_rent from monthly_rent when not supplied", async () => {
+  it("ignores rent parameters — a new lease has no separate rent or deposit", async () => {
     const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", monthly_rent: 250 })
+    await createLease({ account_id: "acct-1", monthly_rent: 250, yearly_rent: 999, security_deposit: 500, term_months: 24 })
     const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.monthly_rent).toBe(250)
-    expect(insert.yearly_rent).toBe(3000)
-  })
-
-  it("honors explicit yearly_rent override", async () => {
-    const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", monthly_rent: 100, yearly_rent: 999 })
-    const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.yearly_rent).toBe(999)
+    expect(insert.monthly_rent).toBe(0)
+    expect(insert.yearly_rent).toBe(0)
+    expect(insert.security_deposit).toBe(0)
+    expect(insert.term_months).toBe(12)
   })
 
   it("defaults tenant_title to 'Manager'", async () => {
@@ -559,11 +557,11 @@ describe("createLease — happy path", () => {
     expect(insert.tenant_title).toBe("Member")
   })
 
-  it("defaults term_end_date to {contract_year}-12-31", async () => {
+  it("defaults term_end_date to 12 months after the start (the real term runs from signing)", async () => {
     const { createLease } = await import("@/lib/operations/lease")
-    await createLease({ account_id: "acct-1", contract_year: 2027 })
+    await createLease({ account_id: "acct-1", contract_year: 2027, term_start_date: "2027-03-15" })
     const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.term_end_date).toBe("2027-12-31")
+    expect(insert.term_end_date).toBe("2028-03-15")
     expect(insert.contract_year).toBe(2027)
   })
 

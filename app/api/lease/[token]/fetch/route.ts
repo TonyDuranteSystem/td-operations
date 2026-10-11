@@ -23,6 +23,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { LEASE_SELECT, toPublicLease, assertNoLeaseSecrets, leaseEmailMatches } from "@/lib/lease/public-view"
+import { newYorkToday } from "@/lib/lease/agreement-v2"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -74,7 +75,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
     }
   }
 
-  const payload = { requiresEmail: false, isPreview, lease: toPublicLease(lease) }
+  // server_today: the date written next to both signatures (New York time, issued here — never the browser's clock)
+  const payload = { requiresEmail: false, isPreview, server_today: newYorkToday(), lease: toPublicLease(lease) }
   assertNoLeaseSecrets(payload)
   return NextResponse.json(payload)
 }

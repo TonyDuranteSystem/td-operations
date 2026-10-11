@@ -7559,6 +7559,8 @@ export type Database = {
           tenant_email: string | null
           tenant_state: string | null
           tenant_title: string
+          template_version: number
+          operating_address: string | null
           term_end_date: string
           term_months: number
           term_start_date: string
@@ -7600,6 +7602,8 @@ export type Database = {
           tenant_email?: string | null
           tenant_state?: string | null
           tenant_title?: string
+          template_version?: number
+          operating_address?: string | null
           term_end_date: string
           term_months?: number
           term_start_date: string
@@ -7641,6 +7645,8 @@ export type Database = {
           tenant_email?: string | null
           tenant_state?: string | null
           tenant_title?: string
+          template_version?: number
+          operating_address?: string | null
           term_end_date?: string
           term_months?: number
           term_start_date?: string

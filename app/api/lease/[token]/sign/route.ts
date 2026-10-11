@@ -22,6 +22,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { newYorkToday, addMonthsIso } from "@/lib/lease/agreement-v2"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const body = await req.json().catch(() => ({}))
   const code = typeof body.code === "string" ? body.code : ""
   const pdfPath = typeof body.pdf_storage_path === "string" ? body.pdf_storage_path : ""
+  const operatingAddress = typeof body.operating_address === "string" ? body.operating_address.trim().slice(0, 300) : ""
 
   if (!pdfPath) {
     return NextResponse.json({ error: "pdf_storage_path required" }, { status: 400 })
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: lease } = await db
     .from("lease_agreements")
-    .select("id, access_code, status")
+    .select("id, access_code, status, template_version")
     .eq("token", token)
     .maybeSingle()
   if (!lease) {
@@ -56,6 +58,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   if (lease.status === "signed") {
     return NextResponse.json({ error: "Already signed" }, { status: 409 })
+  }
+  // template v2: the client states where the business is really run (Section 1.1) — it is part of what they sign
+  const isV2 = (lease.template_version ?? 1) === 2
+  if (isV2 && operatingAddress.length < 5) {
+    return NextResponse.json({ error: "Please enter your Operating Address (where your business is run day to day) before signing." }, { status: 400 })
   }
 
   // Confirm the PDF this request claims to point at actually exists before
@@ -76,12 +83,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // Double-predicate write guard, same shape as every other signing route
   // converted today: the read-time check above can't stop two near-simultaneous
   // submits, so the same condition is repeated on the UPDATE itself.
+  // v2: the Effective Date is the date of the last signature, and the 12-month term runs from it — set here, on the server,
+  // in New York time (the same date the page printed next to both signatures).
+  const signedDay = newYorkToday()
+  const v2Fields = isV2
+    ? { operating_address: operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: addMonthsIso(signedDay, 12), term_months: 12 }
+    : {}
   const { data: updated, error } = await db
     .from("lease_agreements")
     .update({
       status: "signed",
       signed_at: new Date().toISOString(),
       pdf_storage_path: pdfPath,
+      ...v2Fields,
     })
     .eq("id", lease.id)
     .neq("status", "signed")

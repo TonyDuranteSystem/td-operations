@@ -26,6 +26,7 @@ export const LEASE_SELECT = [
   "effective_date", "term_start_date", "term_end_date", "term_months", "contract_year",
   "monthly_rent", "yearly_rent", "security_deposit", "late_fee", "late_fee_per_day",
   "status", "language", "view_count", "signed_at", "pdf_storage_path", "account_id",
+  "template_version", "operating_address",
 ].join(", ")
 
 // NEVER sent to the browser.
@@ -63,6 +64,8 @@ export function toPublicLease(row: any) {
     view_count: row.view_count ?? 0,
     signed_at: row.signed_at ?? null,
     pdf_storage_path: row.pdf_storage_path ?? null,
+    template_version: row.template_version ?? 1,
+    operating_address: row.operating_address ?? null,
   }
 }
 

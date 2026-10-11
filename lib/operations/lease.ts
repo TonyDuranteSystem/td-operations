@@ -31,8 +31,10 @@ import {
   assignSpecificCompanySuite,
   getCompanySuite,
   normalizeSuiteNumber,
+  officialAddressLine,
   syncPhysicalAddressToSuite,
 } from "@/lib/operations/suite"
+import { addMonthsIso } from "@/lib/lease/agreement-v2"
 
 // Kept for existing importers — the canonical home is lib/operations/suite.ts.
 export { normalizeSuiteNumber, suiteNumericPart } from "@/lib/operations/suite"
@@ -71,15 +73,15 @@ export interface CreateLeaseParams {
   effective_date?: string
   /** Default: today. */
   term_start_date?: string
-  /** Default: {contract_year}-12-31. */
+  /** Default: 12 months after the start date (the real term runs from the date of signing — set by the sign route). */
   term_end_date?: string
-  /** Default: 12. */
+  /** IGNORED since the Office Lease and Services Agreement (2026-10-10): the term is always 12 months. */
   term_months?: number
-  /** Default: 100. */
+  /** IGNORED since 2026-10-10: no separate rent — the lease is included in the annual service agreement. */
   monthly_rent?: number
-  /** Default: monthly_rent * 12. */
+  /** IGNORED since 2026-10-10 (see monthly_rent). */
   yearly_rent?: number
-  /** Default: 150. */
+  /** IGNORED since 2026-10-10: no security deposit. */
   security_deposit?: number
   /** Default: 120. */
   square_feet?: number
@@ -263,14 +265,14 @@ export async function createLease(
       }
     }
 
-    // 5. Token + dates + rent defaults
+    // 5. Token + dates. New leases are the Office Lease and Services Agreement (template v2, Antonio 2026-10-10): no separate rent
+    // or deposit (those are included in the annual service agreement), a fixed 12-month term from the date of the last signature
+    // — the sign route sets the real Effective Date and term end at signing; the values here are only the starting placeholders.
     const today = new Date().toISOString().slice(0, 10)
     const token = `${buildCompanySlug(account.company_name)}-${year}`
     const effectiveDate = params.effective_date || today
     const termStartDate = params.term_start_date || today
-    const termEndDate = params.term_end_date || `${year}-12-31`
-    const monthlyRent = params.monthly_rent ?? 100
-    const yearlyRent = params.yearly_rent ?? monthlyRent * 12
+    const termEndDate = params.term_end_date || addMonthsIso(termStartDate, 12)
     const language =
       params.language ||
       (contact.language?.toLowerCase()?.startsWith("it") ? "it" : "en")
@@ -288,17 +290,21 @@ export async function createLease(
         tenant_contact_name: contact.full_name,
         tenant_email: contact.email || null,
         tenant_title: params.tenant_title ?? 'Manager',
+        landlord_address: officialAddressLine(),
         premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
         suite_number: suiteNumber,
         square_feet: params.square_feet ?? 120,
         effective_date: effectiveDate,
         term_start_date: termStartDate,
         term_end_date: termEndDate,
-        term_months: params.term_months ?? 12,
+        term_months: 12,
         contract_year: year,
-        monthly_rent: monthlyRent,
-        yearly_rent: yearlyRent,
-        security_deposit: params.security_deposit ?? 150,
+        template_version: 2,
+        monthly_rent: 0,
+        yearly_rent: 0,
+        security_deposit: 0,
+        late_fee: 0,
+        late_fee_per_day: 0,
         language,
         status: "draft",
       })
