@@ -91,7 +91,14 @@ export function driveIsMocked(): boolean {
  * My Drive). See lib/google-drive-guard.ts. Called right after each write's mock check.
  */
 const driveIdCache = new Map<string, string | null>()
-const driveParentsCache = new Map<string, string[]>()
+// Where a Drive item sits (its parent folders) — only used by the switched-company guard. A short life and a size cap,
+// and an item's entry is dropped whenever it is moved (below): a stale lineage must never let a write dodge the guard.
+const DRIVE_PARENTS_TTL_MS = 60_000
+const DRIVE_PARENTS_MAX = 2000
+const driveParentsCache = new Map<string, { at: number; parents: string[] }>()
+function forgetDriveParents(id: string): void {
+  driveParentsCache.delete(id)
+}
 async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
   await assertDriveWriteAllowed(target, async (id) => {
     if (driveIdCache.has(id)) return driveIdCache.get(id) ?? null
@@ -107,10 +114,18 @@ async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
     await g.assertTargetsNotSwitched(target.ids, {
       lockedFolderIds: () => g.lockedFolderIdsCached(),
       parentsOf: async (id) => {
-        if (driveParentsCache.has(id)) return driveParentsCache.get(id) ?? []
-        const meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+        const hit = driveParentsCache.get(id)
+        if (hit && Date.now() - hit.at < DRIVE_PARENTS_TTL_MS) return hit.parents
+        let meta: { parents?: string[] }
+        try {
+          meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+        } catch {
+          // one retry: a passing Drive hiccup must not refuse a legitimate write (a second failure still refuses — fail closed)
+          meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+        }
         const parents = meta.parents ?? []
-        driveParentsCache.set(id, parents)
+        if (driveParentsCache.size >= DRIVE_PARENTS_MAX) driveParentsCache.clear()
+        driveParentsCache.set(id, { at: Date.now(), parents })
         return parents
       },
     })
@@ -577,6 +592,7 @@ export async function moveFile(
     return { id: fileId }
   }
   await guardDriveWrite({ kind: "shared", ids: [fileId, newParentId] })
+  forgetDriveParents(fileId)
   const token = await getAccessToken()
 
   // Get current parents
@@ -602,6 +618,7 @@ export async function moveFile(
     )
   }
 
+  forgetDriveParents(fileId)
   return res.json()
 }
 
@@ -1335,6 +1352,7 @@ export async function patchTaggedItem(
     return { id: fileId, name: p.name ?? "" }
   }
   await guardDriveWrite({ kind: "shared", ids: p.newParentId ? [fileId, p.newParentId] : [fileId] })
+  forgetDriveParents(fileId)
   const token = await getAccessToken()
   const url = new URL(`${DRIVE_API}/files/${fileId}`)
   url.searchParams.set("supportsAllDrives", "true")
@@ -1357,6 +1375,7 @@ export async function patchTaggedItem(
     const err = await res.json().catch(() => ({}))
     throw new Error(`Drive patch ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
   }
+  forgetDriveParents(fileId)
   return res.json()
 }
 

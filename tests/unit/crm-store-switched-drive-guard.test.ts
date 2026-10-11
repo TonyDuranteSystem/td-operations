@@ -65,6 +65,11 @@ describe("assertTargetsNotSwitched — Drive writes for a switched company are r
     await expect(assertTargetsNotSwitched(["a"], loop)).resolves.toBeUndefined()
   })
 
+  it("fails CLOSED when a folder sits deeper than the proof limit (never lets a very deep path through)", async () => {
+    const deep = { lockedFolderIds: async () => new Set(["zzz"]), parentsOf: async (id: string) => [id + "x"] }
+    await expect(assertTargetsNotSwitched(["a"], deep)).rejects.toThrow(/nested too deeply/)
+  })
+
   it("the one-way backup is the only way through, and only inside its own scope", async () => {
     await expect(runAsStoreBackup(() => assertTargetsNotSwitched(["file"], deps(["companyA"])))).resolves.toBeUndefined()
     await expect(assertTargetsNotSwitched(["file"], deps(["companyA"]))).rejects.toBeInstanceOf(SwitchedCompanyDriveWriteError)

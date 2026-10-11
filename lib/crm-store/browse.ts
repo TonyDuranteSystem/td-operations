@@ -411,7 +411,7 @@ export async function assertNotStoreOwnedAccount(accountId: string): Promise<voi
   if (sdErr) throw new Error("Could not check where this company's files live — please try again.")
   const sdIds = (sds ?? []).map((x: { id: string }) => x.id)
   if (sdIds.length > 0) {
-    const { data: fo, error: foErr } = await db().from("store_owners").select("id").eq("kind", "formation").in("service_delivery_id", sdIds).limit(1)
+    const { data: fo, error: foErr } = await db().from("store_owners").select("id").eq("kind", "formation").eq("study_only", false).in("service_delivery_id", sdIds).limit(1)
     if (foErr) throw new Error("Could not check where this company's files live — please try again.")
     if (fo && fo.length > 0) throw new StoreOwnedAccountError("This company's formation files live in the new CRM storage (their hand-over to the company is pending) — it does not get a Google Drive folder.")
   }

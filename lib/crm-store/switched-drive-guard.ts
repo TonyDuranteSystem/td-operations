@@ -76,6 +76,8 @@ export async function assertTargetsNotSwitched(ids: string[], deps: GuardDeps): 
       }
       frontier = next
     }
+    // Still climbing after the depth limit: the lineage is deeper than we can prove safe — refuse (fail closed).
+    if (frontier.length > 0) throw new SwitchedCompanyDriveWriteError("Could not verify where this Drive folder sits (it is nested too deeply) — the write was refused.")
   }
 }
 
@@ -83,6 +85,18 @@ export async function assertTargetsNotSwitched(ids: string[], deps: GuardDeps): 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = async () => (await import("@/lib/supabase-admin")).supabaseAdmin as any
+
+const PAGE = 1000
+async function readAllPages<T>(what: string, page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const all: T[] = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await page(from, from + PAGE - 1)
+    if (error) throw new Error(`store guard: could not read the ${what} — ${error.message}`)
+    const rows = data ?? []
+    all.push(...rows)
+    if (rows.length < PAGE) return all
+  }
+}
 
 /** Ids go in the URL of a database request: a long list must be sent in small batches or the request fails. */
 const CHUNK = 100
@@ -95,10 +109,12 @@ function chunks<T>(items: T[]): T[][] {
 /** One read of the live state for every company/person; strict (throws on any read error). */
 export async function readLockedFolderIds(): Promise<Set<string>> {
   const d = await db()
-  const { data: owners, error } = await d.from("store_owners").select("account_id, contact_id, kind, service_delivery_id, study_only")
-  if (error) throw new Error(`store guard: could not read the storage owners — ${error.message}`)
-  const { data: runs, error: rErr } = await d.from("store_import_runs").select("account_id").in("status", ["scanning", "moving", "undoing"]).eq("mode", "move")
-  if (rErr) throw new Error(`store guard: could not read the move runs — ${rErr.message}`)
+  // Only the LIVE owners matter (study copies are not a state), and every page is read: the database sends at most
+  // 1,000 rows per request, and a row silently left unread would be a switched company left unprotected.
+  const owners = await readAllPages("storage owners", (from, to) =>
+    d.from("store_owners").select("account_id, contact_id, kind, service_delivery_id, study_only").eq("study_only", false).order("id").range(from, to))
+  const runs = await readAllPages("move runs", (from, to) =>
+    d.from("store_import_runs").select("account_id").in("status", ["scanning", "moving", "undoing"]).eq("mode", "move").order("id").range(from, to))
 
   const accountIds = new Set<string>()
   const contactIds = new Set<string>()
@@ -117,33 +133,56 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
   }
 
   const folders = new Set<string>()
+  // A folder id is on the record in two forms: `drive_folder_id`, or only inside the older `gdrive_folder_url` link.
+  const folderIdsOf = (r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null }): string[] => {
+    const out: string[] = []
+    if (r.drive_folder_id) out.push(r.drive_folder_id)
+    const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(r.gdrive_folder_url ?? "")
+    if (m) out.push(m[1])
+    return out
+  }
   for (const part of chunks(Array.from(accountIds))) {
-    const { data, error: aErr } = await d.from("accounts").select("drive_folder_id").in("id", part)
+    const { data, error: aErr } = await d.from("accounts").select("drive_folder_id, gdrive_folder_url").in("id", part)
     if (aErr) throw new Error(`store guard: could not read the company folders — ${aErr.message}`)
-    for (const a of (data ?? []) as Array<{ drive_folder_id: string | null }>) if (a.drive_folder_id) folders.add(a.drive_folder_id)
+    for (const a of (data ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(a)) folders.add(f)
   }
+  const personFolders = new Set<string>()
   for (const part of chunks(Array.from(contactIds))) {
-    const { data, error: cErr } = await d.from("contacts").select("drive_folder_id").in("id", part)
+    const { data, error: cErr } = await d.from("contacts").select("drive_folder_id, gdrive_folder_url").in("id", part)
     if (cErr) throw new Error(`store guard: could not read the person folders — ${cErr.message}`)
-    for (const c of (data ?? []) as Array<{ drive_folder_id: string | null }>) if (c.drive_folder_id) folders.add(c.drive_folder_id)
+    for (const c of (data ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(c)) personFolders.add(f)
   }
+  // A person's folder can be one folder shared with other people (a company's "2. Contacts"): locking it would also stop
+  // people who are still on Drive. Only a folder that belongs to that person alone is locked (the move itself refuses a shared one).
+  const shared = new Set<string>()
+  for (const part of chunks(Array.from(personFolders))) {
+    const { data, error: sErr } = await d.from("contacts").select("drive_folder_id").in("drive_folder_id", part)
+    if (sErr) throw new Error(`store guard: could not read the shared person folders — ${sErr.message}`)
+    const seen = new Map<string, number>()
+    for (const c of (data ?? []) as Array<{ drive_folder_id: string | null }>) if (c.drive_folder_id) seen.set(c.drive_folder_id, (seen.get(c.drive_folder_id) ?? 0) + 1)
+    seen.forEach((n, f) => { if (n > 1) shared.add(f) })
+  }
+  personFolders.forEach((f) => { if (!shared.has(f)) folders.add(f) })
   return folders
 }
 
-let lockedCache: { at: number; ids: Set<string> } | null = null
-const LOCKED_TTL_MS = 15_000
+let lockedInFlight: Promise<Set<string>> | null = null
 
-/** Cached for a few seconds (every Drive write asks); a failed read is never cached and always refuses. */
-export async function lockedFolderIdsCached(now: number = Date.now()): Promise<Set<string>> {
-  if (lockedCache && now - lockedCache.at < LOCKED_TTL_MS) return lockedCache.ids
-  const ids = await readLockedFolderIds()
-  lockedCache = { at: now, ids }
-  return ids
+/**
+ * No cache: a company that switches must be protected at once, on every server instance (a cached answer would
+ * leave a window where another instance still writes to Drive). Concurrent calls share ONE read; the next call
+ * after it finishes reads again. A failed read is never kept and always refuses the write.
+ */
+export function lockedFolderIdsCached(): Promise<Set<string>> {
+  if (!lockedInFlight) {
+    lockedInFlight = readLockedFolderIds().finally(() => { lockedInFlight = null })
+  }
+  return lockedInFlight
 }
 
-/** Tests / the switch itself: forget the cached answer so the next write sees the new state at once. */
+/** Kept for callers and tests: nothing is cached any more, so there is nothing to forget. */
 export function forgetLockedFolderCache(): void {
-  lockedCache = null
+  lockedInFlight = null
 }
 
 /** The strict state of ONE company, read live (used by writers that must route, and by the move itself). */
