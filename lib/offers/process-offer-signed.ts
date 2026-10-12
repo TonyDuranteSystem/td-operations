@@ -456,15 +456,31 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         }
       }
 
-      if (contract?.pdf_path && driveFolderId) {
-        const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+      // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed contract
+      // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+      let docAccountId: string | null = offer.account_id || null
+      if (!docAccountId && offer.lead_id) {
+        const { data: leadForAcct } = await supabase.from("leads").select("converted_to_account_id").eq("id", offer.lead_id).maybeSingle()
+        docAccountId = (leadForAcct?.converted_to_account_id as string | null) || null
+      }
+      let inStorage = false
+      if (docAccountId) {
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        inStorage = (await companyDocState(docAccountId)) !== "drive"
+      }
 
-        // Find "1. Company" subfolder
-        const folderResult = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-        const companyFolder = folderResult.files?.find(
-          (f: { name: string; mimeType: string }) => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-        )
-        const targetFolderId = companyFolder?.id || driveFolderId
+      if (contract?.pdf_path && (driveFolderId || inStorage)) {
+        let targetFolderId = ""
+        if (!inStorage && driveFolderId) {
+          const { listFolder } = await import("@/lib/google-drive")
+
+          // Find "1. Company" subfolder
+          const folderResult = await listFolder(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
+          const companyFolder = folderResult.files?.find(
+            (f: { name: string; mimeType: string }) => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+          )
+          targetFolderId = companyFolder?.id || driveFolderId
+        }
 
         // Download signed PDF from Storage
         const { data: blob } = await supabase.storage
@@ -476,6 +492,17 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
           const fileData = Buffer.from(arrayBuffer)
           const fileName = `Contract - ${offer.client_name} (Signed).pdf`
 
+          if (inStorage && docAccountId) {
+            // the same key on a retry is a new VERSION of the same file, never a second copy
+            const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+            const routed = await saveSignedPdfForAccount({
+              accountId: docAccountId, fileName, bytes: fileData, label: "Signed Contract", category: 5, callerKey: `offer-signed:${offer.id}`,
+            })
+            if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its contract was being saved — nothing was saved.")
+            driveUploadResult = `ok: ${routed.pointer}`
+            console.warn(`[offer-signed] Saved contract PDF to the new storage: ${routed.pointer}`)
+          } else {
+          const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
           // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
           const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
           driveUploadResult = `ok: ${driveResult.id}`
@@ -503,6 +530,7 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
               driveFileId: driveResult.id,
               portalVisible: true,
             })
+          }
           }
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
