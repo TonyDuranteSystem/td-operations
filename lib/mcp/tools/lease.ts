@@ -31,7 +31,7 @@ Prerequisites:
 - Account must exist with company_name
 - Account must have at least one linked contact
 
-New leases are the Office Lease and Services Agreement (template v2): no separate rent or deposit (included in the annual service agreement), fixed 12-month term from the date of signing, premises 10225 Ulmerton Rd 3D, Largo FL 33771. The rent/deposit/term parameters are ignored.
+New leases are the Office Lease and Services Agreement (template v2): no separate rent or deposit (included in the annual service agreement), fixed term from the date of signing to December 31 of that year (a new agreement is issued each January), premises 10225 Ulmerton Rd 3D, Largo FL 33771. The rent/deposit/term parameters are ignored.
 
 The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, the lease is NOT created — issue the suite first (workspace Suite step or the "Issue suite" button on the account page). It is locked: one company = one suite, one suite = one company.
 
@@ -44,9 +44,9 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
       account_id: z.string().uuid().describe("CRM account UUID"),
       effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
       term_start_date: z.string().optional().describe("Lease start date YYYY-MM-DD (default: today)"),
-      term_end_date: z.string().optional().describe("Ignored for the 12-month term — the real term runs from the signing date (default shown before signing: 12 months from today)"),
+      term_end_date: z.string().optional().describe("Ignored — the real term runs from the signing date to December 31 of that year (default shown before signing: December 31 of this year)"),
       contract_year: z.number().optional().describe("Contract year e.g. 2026 (default: current year)"),
-      term_months: z.number().optional().describe("Term in months (default: 12)"),
+      term_months: z.number().optional().describe("Ignored — the term runs from the signing date to December 31 of that year"),
       monthly_rent: z.number().optional().describe("IGNORED — no separate rent since the Office Lease and Services Agreement (2026-10-10)"),
       yearly_rent: z.number().optional().describe("IGNORED — no separate rent since 2026-10-10"),
       security_deposit: z.number().optional().describe("IGNORED — no security deposit since 2026-10-10"),
@@ -89,7 +89,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
           ``,
           `Token: ${lease.token}`,
           `Company number: ${lease.suite_number} (PMB ${pmbNumberFromSuite(lease.suite_number) ?? "?"})`,
-          `Agreement: Office Lease and Services Agreement — no separate rent or deposit; fixed 12-month term from the date of signing`,
+          `Agreement: Office Lease and Services Agreement — no separate rent or deposit; fixed term from the date of signing to December 31 of that year`,
           `Status: draft`,
           ``,
           `👁️ Admin Preview: ${adminPreviewUrl}`,
@@ -160,14 +160,14 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
                 `**Official address:** 10225 Ulmerton Rd 3D, Largo, FL 33771`,
                 `**Mailing address:** ${mailingStreetForSuite(data.suite_number) ?? "?"}, Largo, FL 33771`,
                 ``,
-                `**Agreement:** Office Lease and Services Agreement (template v2) — no separate rent or deposit; 12-month fixed term from the date of the last signature${data.signed_at ? ` (${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)})` : ""}`,
+                `**Agreement:** Office Lease and Services Agreement (template v2) — no separate rent or deposit; fixed term from the date of the last signature to December 31 of that year${data.signed_at ? ` (${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)})` : ""}`,
                 data.operating_address ? `**Operating Address (stated by the client at signing):** ${data.operating_address}` : null,
               ]
             : [
                 `**Premises:** ${data.premises_address}, Suite ${data.suite_number}`,
                 `Square Feet: ${data.square_feet}`,
                 ``,
-                `**Term:** ${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)} (${data.term_months} months)`,
+                `**Term:** ${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)}`,
                 `**Rent:** $${data.monthly_rent}/month ($${data.yearly_rent}/year)`,
                 `**Deposit:** $${data.security_deposit}`,
               ]),
@@ -372,7 +372,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 ${isV2Lease
   ? `    <li><strong>Official address:</strong> 10225 Ulmerton Rd 3D, Largo, FL 33771</li>
     <li><strong>Mailing address:</strong> ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771</li>
-    <li><strong>Term:</strong> 12 months from the date of signing. No separate rent or deposit.</li>`
+    <li><strong>Term:</strong> from the date of signing to December 31 of that year; a new agreement is issued each January. No separate rent or deposit.</li>`
   : `    <li><strong>Premises:</strong> 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771</li>
     <li><strong>Term:</strong> ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}</li>
     <li><strong>Monthly Rent:</strong> $${lease.monthly_rent}</li>`}
@@ -397,7 +397,7 @@ The agreement covers:
 ${isV2Lease
   ? `- Official address: 10225 Ulmerton Rd 3D, Largo, FL 33771
 - Mailing address: ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771
-- Term: 12 months from the date of signing. No separate rent or deposit.`
+- Term: from the date of signing to December 31 of that year; a new agreement is issued each January. No separate rent or deposit.`
   : `- Premises: 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771
 - Term: ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}
 - Monthly Rent: $${lease.monthly_rent}`}

@@ -6,8 +6,8 @@
  * here, so the wording can never drift between them. Leases with template_version 1 keep the original text untouched.
  *
  * What it says, in short: Tony Durante LLC is a consulting firm and a CMRA; the client (owners abroad) gets the right to
- * use the office by appointment and Provider handles the client's mail; no separate rent or deposit; fixed 12-month term from
- * the date of the last signature; the official address (10225 Ulmerton Rd 3D) and the mailing address (the same + the
+ * use the office by appointment and Provider handles the client's mail; no separate rent or deposit; fixed term from the date
+ * of the last signature to December 31 of that year (a new agreement is issued each January); the official address (10225 Ulmerton Rd 3D) and the mailing address (the same + the
  * client's own PMB number).
  */
 import { companyOfficialRow, companyMailingRow, formatAddressString, pmbNumberFromSuite } from '@/lib/addresses'
@@ -129,8 +129,8 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'para', label: '3.6', text: 'On Client\'s written request, Provider will confirm to a bank or other institution that this Agreement is genuine and in force.' })
 
   b.push({ t: 'heading', text: '4. Term' })
-  b.push({ t: 'para', label: '4.1', text: 'The term is fixed. It begins on the Effective Date and ends twelve (12) months after the Effective Date (the "Term").' })
-  b.push({ t: 'para', label: '4.2', text: 'This Agreement does not renew automatically. Any renewal requires a new written agreement signed by both parties with new dates.' })
+  b.push({ t: 'para', label: '4.1', text: 'The term is fixed. It begins on the Effective Date and ends on December 31 of the year in which the Effective Date falls (the "Term").' })
+  b.push({ t: 'para', label: '4.2', text: 'This Agreement does not renew automatically. While Client\'s Annual Service Agreement continues, Provider will issue a new agreement each January for that calendar year, for Client to sign. Until the new agreement is signed, Provider continues to provide the same services and to handle Client\'s mail on the same terms.' })
 
   b.push({ t: 'heading', text: '5. Consideration' })
   b.push({ t: 'para', text: 'In consideration of the fees Client pays under the Annual Service Agreement, Provider grants the rights in this Agreement and provides the mail handling in Section 3.4 other than forwarding. No separate rent and no security deposit are payable.' })
@@ -144,8 +144,8 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'heading', text: '8. Termination and What Happens After' })
   b.push({ t: 'para', label: '8.1', text: 'Provider may end this Agreement immediately by written notice if the address or the Premises is used unlawfully or deceptively, if Client gives false identity information, if the U.S. Postal Service or the law requires it, or if the Annual Service Agreement ends or is unpaid.' })
   b.push({ t: 'para', label: '8.2', text: 'Otherwise either party may end this Agreement before the end of the Term only if the other party materially breaches it and does not correct the breach within thirty (30) days after written notice.' })
-  b.push({ t: 'para', label: '8.3', text: 'When this Agreement ends, Client will stop using the addresses in Section 1.2 as its office and mailing addresses and will update its records with the state, the IRS, its banks and other institutions.' })
-  b.push({ t: 'para', label: '8.4', text: 'As the postal rules require, Provider will remail Client\'s mail for at least six (6) months after the end of this Agreement, with new postage paid by Client. Client may waive remailing of all or specified types of mail in writing, but may not instruct Provider to refuse, return or discard it. Provider will record the termination date on Client\'s PS Form 1583.' })
+  b.push({ t: 'para', label: '8.3', text: 'When this Agreement ends and is not replaced by a new agreement, Client will stop using the addresses in Section 1.2 as its office and mailing addresses and will update its records with the state, the IRS, its banks and other institutions.' })
+  b.push({ t: 'para', label: '8.4', text: 'As the postal rules require, Provider will remail Client\'s mail for at least six (6) months after this Agreement ends and is not replaced by a new agreement, with new postage paid by Client. Client may waive remailing of all or specified types of mail in writing, but may not instruct Provider to refuse, return or discard it. Provider will record the termination date on Client\'s PS Form 1583.' })
 
   b.push({ t: 'heading', text: '9. General' })
   b.push({ t: 'para', label: '9.1', text: 'Accuracy. Client confirms that the information it gives Provider, including its Operating Address and the identity of its owners, is true and complete. Client is responsible for the information it gives to banks and other third parties. Provider does not guarantee that any bank, broker or other institution will accept Client\'s address or documents.' })
@@ -175,6 +175,20 @@ export function longDate(iso: string): string {
   if (!m) return iso
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
   return `${months[parseInt(m[2], 10) - 1]} ${parseInt(m[3], 10)}, ${m[1]}`
+}
+
+/** "2026-10-10" -> "2026-12-31" (the term ends on December 31 of the year it starts). */
+export function endOfYearIso(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) throw new Error(`bad date ${iso}`)
+  return `${m[1]}-12-31`
+}
+
+/** Calendar months from the start date's month through December, counting both ("2026-10-10" -> 3). Shown only as a rough length. */
+export function termMonthsThroughYearEnd(iso: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) throw new Error(`bad date ${iso}`)
+  return 13 - parseInt(m[2], 10)
 }
 
 /** "2026-10-10" + 12 months -> "2027-10-10" (the same day next year; Feb 29 -> Feb 28). */

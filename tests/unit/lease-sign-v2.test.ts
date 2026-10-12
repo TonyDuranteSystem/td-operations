@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
-import { newYorkToday, addMonthsIso } from '@/lib/lease/agreement-v2'
+import { newYorkToday, endOfYearIso, termMonthsThroughYearEnd } from '@/lib/lease/agreement-v2'
 
 /**
  * Signing the Office Lease and Services Agreement (template v2): the client's Operating Address is required, the printed
  * signing date must still be today in New York (a tab left open past midnight is refused), and the server — not the
- * browser — writes the Effective Date and the 12-month term. A v1 lease signs exactly as before.
+ * browser — writes the Effective Date and the term to December 31. A v1 lease signs exactly as before.
  */
 
 let leaseRow: Record<string, unknown>
@@ -84,7 +84,7 @@ describe('lease sign route — template v2', () => {
     expect(updates[0].operating_address).toBe('Via Roma 1  Milano , Italy')
   })
 
-  it('records the Effective Date, a 12-month term and the Operating Address, set by the server', async () => {
+  it('records the Effective Date, a term to December 31 and the Operating Address, set by the server', async () => {
     const today = newYorkToday()
     const res = await sign({ operating_address: '  Via Roma 1, Milano, Italy ', signing_date: today })
     expect(res.status).toBe(200)
@@ -94,8 +94,8 @@ describe('lease sign route — template v2', () => {
       operating_address: 'Via Roma 1, Milano, Italy',
       effective_date: today,
       term_start_date: today,
-      term_end_date: addMonthsIso(today, 12),
-      term_months: 12,
+      term_end_date: endOfYearIso(today),
+      term_months: termMonthsThroughYearEnd(today),
     })
   })
 })

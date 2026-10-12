@@ -34,7 +34,7 @@ import {
   officialAddressLine,
   syncPhysicalAddressToSuite,
 } from "@/lib/operations/suite"
-import { addMonthsIso, newYorkToday } from "@/lib/lease/agreement-v2"
+import { endOfYearIso, termMonthsThroughYearEnd, newYorkToday } from "@/lib/lease/agreement-v2"
 
 // Kept for existing importers — the canonical home is lib/operations/suite.ts.
 export { normalizeSuiteNumber, suiteNumericPart } from "@/lib/operations/suite"
@@ -73,9 +73,9 @@ export interface CreateLeaseParams {
   effective_date?: string
   /** Default: today. */
   term_start_date?: string
-  /** Default: 12 months after the start date (the real term runs from the date of signing — set by the sign route). */
+  /** Default: December 31 of the start year (the real term runs from the date of signing to December 31 — set by the sign route). */
   term_end_date?: string
-  /** IGNORED since the Office Lease and Services Agreement (2026-10-10): the term is always 12 months. */
+  /** IGNORED since the Office Lease and Services Agreement (2026-10-10): the term always runs to December 31 of the signing year. */
   term_months?: number
   /** IGNORED since 2026-10-10: no separate rent — the lease is included in the annual service agreement. */
   monthly_rent?: number
@@ -266,13 +266,14 @@ export async function createLease(
     }
 
     // 5. Token + dates. New leases are the Office Lease and Services Agreement (template v2, Antonio 2026-10-10): no separate rent
-    // or deposit (those are included in the annual service agreement), a fixed 12-month term from the date of the last signature
-    // — the sign route sets the real Effective Date and term end at signing; the values here are only the starting placeholders.
+    // or deposit (those are included in the annual service agreement), a fixed term from the date of the last signature to
+    // December 31 of that year (a new lease is issued each January) — the sign route sets the real Effective Date and term end at
+    // signing; the values here are only the starting placeholders.
     const today = newYorkToday() // New York calendar day (the UTC day is already tomorrow after 8pm in New York)
     const token = `${buildCompanySlug(account.company_name)}-${year}`
     const effectiveDate = params.effective_date || today
     const termStartDate = params.term_start_date || today
-    const termEndDate = params.term_end_date || addMonthsIso(termStartDate, 12)
+    const termEndDate = params.term_end_date || endOfYearIso(termStartDate)
     const language =
       params.language ||
       (contact.language?.toLowerCase()?.startsWith("it") ? "it" : "en")
@@ -297,7 +298,7 @@ export async function createLease(
         effective_date: effectiveDate,
         term_start_date: termStartDate,
         term_end_date: termEndDate,
-        term_months: 12,
+        term_months: termMonthsThroughYearEnd(termStartDate),
         contract_year: year,
         template_version: 2,
         monthly_rent: 0,

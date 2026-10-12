@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildAgreementV2, newYorkToday, addMonthsIso, longDate, agreementAddresses, AGREEMENT_V2_TITLE } from '@/lib/lease/agreement-v2'
+import { buildAgreementV2, newYorkToday, addMonthsIso, endOfYearIso, termMonthsThroughYearEnd, longDate, agreementAddresses, AGREEMENT_V2_TITLE } from '@/lib/lease/agreement-v2'
 import { generateLeasePDF, printable } from '@/lib/lease-pdf'
 import { toPublicLease, LEASE_SELECT } from '@/lib/lease/public-view'
 
@@ -93,6 +93,26 @@ describe('server-issued dates', () => {
     expect(newYorkToday(new Date('2026-10-11T02:30:00Z'))).toBe('2026-10-10')
     expect(newYorkToday(new Date('2026-10-11T05:00:00Z'))).toBe('2026-10-11')
   })
+  it('the term runs from the last signature to December 31 of that year, and the January renewal is explained', () => {
+    const t = allText(buildAgreementV2(INPUT))
+    expect(t).toContain('ends on December 31 of the year in which the Effective Date falls')
+    expect(t).not.toContain('twelve (12) months after the Effective Date')
+    expect(t).toContain('Provider will issue a new agreement each January for that calendar year')
+    expect(t).toContain('Until the new agreement is signed, Provider continues to provide the same services and to handle Client\'s mail on the same terms')
+    // the address / remailing duties start only when the agreement ends WITHOUT a replacement — a yearly expiry is not an exit
+    expect(t).toContain('When this Agreement ends and is not replaced by a new agreement, Client will stop using')
+    expect(t).toContain('after this Agreement ends and is not replaced by a new agreement')
+  })
+
+  it('endOfYearIso / termMonthsThroughYearEnd', () => {
+    expect(endOfYearIso('2026-10-12')).toBe('2026-12-31')
+    expect(endOfYearIso('2027-01-01')).toBe('2027-12-31')
+    expect(endOfYearIso('2026-12-31')).toBe('2026-12-31')
+    expect(termMonthsThroughYearEnd('2026-10-12')).toBe(3)
+    expect(termMonthsThroughYearEnd('2027-01-01')).toBe(12)
+    expect(termMonthsThroughYearEnd('2026-12-31')).toBe(1)
+  })
+
   it('addMonthsIso adds a calendar year without drifting (and clamps Feb 29)', () => {
     expect(addMonthsIso('2026-10-10', 12)).toBe('2027-10-10')
     expect(addMonthsIso('2028-02-29', 12)).toBe('2029-02-28')
