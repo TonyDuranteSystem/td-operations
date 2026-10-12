@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { downloadFileBinary } from "@/lib/google-drive"
+import { openDocument } from "@/lib/documents/open-document"
 
 export async function GET(
   _req: NextRequest,
@@ -23,7 +23,7 @@ export async function GET(
   // Prefer Drive if drive_file_id is set, fall back to Supabase Storage
   if (sigReq.drive_file_id) {
     try {
-      const result = await downloadFileBinary(sigReq.drive_file_id)
+      const result = await openDocument(sigReq.drive_file_id)
       buffer = result.buffer
     } catch (driveErr) {
       console.error("[signature-pdf] Drive download failed:", driveErr)

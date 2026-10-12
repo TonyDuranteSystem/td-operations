@@ -284,10 +284,10 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: f.name }
 }
 
-/** The company's owner in the NEW store (only in the pilot environment; anything else → null). */
+/** The company's owner in the NEW store (a live, not study-only storage; anything else → null). */
 export async function storeOwnerForAccount(accountId: string): Promise<string | null> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return null
+  // No environment gate (Drive cutover, dev job ad09ea91): the answer is exact data — a live, not study-only, storage.
+  // Production has none yet, so this still answers null there today; the day a company is switched it answers.
   try {
     // a storage made by a study copy is not the company's storage yet (the CRM keeps using Drive for it)
     const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()

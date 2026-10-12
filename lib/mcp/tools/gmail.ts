@@ -552,7 +552,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
 
         if (attachments && attachments.length > 0) {
           // ─── Multipart MIME with attachments ───
-          const { downloadFileBinary } = await import("@/lib/google-drive")
+          const { openDocument } = await import("@/lib/documents/open-document")
           const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`
           headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`)
 
@@ -569,7 +569,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
           // Attachment parts
           const attachedNames: string[] = []
           for (const att of attachments) {
-            const file = await downloadFileBinary(att.drive_file_id)
+            const file = await openDocument(att.drive_file_id)
             const name = att.filename || file.fileName || `attachment_${attachedNames.length + 1}`
             const mimeType = file.mimeType || "application/octet-stream"
             const b64 = file.buffer.toString("base64")

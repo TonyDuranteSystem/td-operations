@@ -389,7 +389,7 @@ export function rankFiledReturnCandidates(docs: FiledReturnDoc[], priorYear: num
 export interface LocateFiledReturnOptions extends ExtractPriorReturnOptions {
   /** How many candidate PDFs to try before giving up (cost bound). Default 3. */
   maxCandidates?: number
-  /** Injectable for tests — defaults to google-drive downloadFileBinary. */
+  /** Injectable for tests — defaults to the standard document reader (openDocument). */
   downloadImpl?: (fileId: string) => Promise<{ buffer: Buffer }>
   /** Injectable for tests — defaults to a `documents` query. */
   fetchCandidates?: (accountId: string) => Promise<FiledReturnDoc[]>
@@ -425,8 +425,9 @@ export async function locateAndExtractOurFiledReturn(
   if (ranked.length === 0) return null
 
   const download = opts?.downloadImpl ?? (async (id: string) => {
-    const { downloadFileBinary } = await import("@/lib/google-drive")
-    return downloadFileBinary(id)
+    // the standard reader: a filed return can sit in Drive, in the older bucket, or in the new storage
+    const { openDocument } = await import("@/lib/documents/open-document")
+    return openDocument(id)
   })
 
   const extract = opts?.extractImpl ?? extractPriorReturn

@@ -23,7 +23,6 @@
   "app/api/portal/documents/[id]/route.ts",
   "app/api/portal/documents/upload/route.ts",
   "app/api/signature-request-signed/route.ts",
-  "app/api/signature-request/[token]/pdf/route.ts",
   "app/api/ss4-signed/route.ts",
   "app/api/tools/fax/send/route.ts",
   "app/api/workflows/upload-task-file/route.ts",
@@ -48,10 +47,8 @@
   "lib/mcp/tools/harbor-compliance.ts",
   "lib/mcp/tools/itin-form.ts",
   "lib/mcp/tools/portal.ts",
-  "lib/mcp/tools/signature.ts",
   "lib/mcp/tools/tax.ts",
   "lib/offers/process-offer-signed.ts",
-  "lib/operations/email.ts",
   "lib/operations/esign.ts",
   "lib/operations/file-renewal.ts",
   "lib/operations/formation-materialize.ts",
@@ -60,7 +57,6 @@
   "lib/portal/save-generated-document.ts",
   "lib/ss4/resolve-articles-pdf.ts",
   "lib/tasks/workflow-handlers/chain-upload-document.ts",
-  "lib/tax/attest-handoff.ts",
-  "lib/tax/prior-return-extract.ts"
+  "lib/tax/attest-handoff.ts"
  ]
 }
