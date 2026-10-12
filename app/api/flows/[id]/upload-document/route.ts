@@ -197,6 +197,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mimeType: fileMime,
     })
 
+    // 3-cutover. A company whose files live in the new storage (Drive cutover, dev job ad09ea91): every flow upload is saved
+    //    there, internal unless it is the ITIN approval letter. Drive is read-only for it, so the Drive branch below would be
+    //    refused. A company on Drive, or a flow with no company yet, carries on exactly as before.
+    let routed: { pointer: string } | null = null
+    if (pilot.status !== 'saved' && accountId) {
+      const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
+      if ((await companyDocState(accountId)) !== 'drive') {
+        const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+        const { folderKindForDriveSubfolder } = await import('@/lib/crm-store/save-form')
+        const { storeNameKey } = await import('@/lib/crm-store/rules')
+        const { FORMATION_UPLOAD_TYPES } = await import('@/lib/crm-store/formation-pilot')
+        try {
+          const r = await saveDocumentForAccount({
+            accountId,
+            name: effectiveName,
+            bytes: buffer,
+            mimeType: fileMime,
+            folder: (targetSubfolder ? folderKindForDriveSubfolder(targetSubfolder, { kind: 'account' }) : 'company') as 'company' | 'tax' | 'banking' | 'correspondence',
+            documentType: sd.service_type === 'Company Formation' && flowStage ? (FORMATION_UPLOAD_TYPES[flowStage] ?? null) : null,
+            callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
+            portalVisible: isItinApprovalUpload,
+            row: { contact_id: contactId, service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
+          })
+          if (r.route === 'store') routed = { pointer: r.pointer }
+        } catch (e) {
+          if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+          return NextResponse.json({ success: false, detail: `Could not save the file in the company's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
+        }
+      }
+    }
+
     // 3b. Decide where the canonical copy lives.
     //    Production, account-scoped SD: the account's Drive folder (400 if the
     //    account has none — staff must link one first).
@@ -210,7 +241,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    Storage (onboarding-uploads). The documents row + stage advance happen
     //    identically, so the flow works end-to-end in sandbox.
     let driveFolderId: string | null = null
-    if (process.env.SANDBOX_MODE !== '1') {
+    if (process.env.SANDBOX_MODE !== '1' && !routed) {
       if (accountId) {
         driveFolderId = extractDriveFolderId(accountRow)
         if (!driveFolderId) {
@@ -244,7 +275,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let docFileId: string
     let docLink: string
 
-    if (pilot.status === 'saved') {
+    if (routed) {
+      // Saved in the company's new storage (3-cutover above); its documents row is written, the insert below adds nothing.
+      docFileId = routed.pointer
+      docLink = ''
+    } else if (pilot.status === 'saved') {
       // Saved in the CRM Store; its documents row is already written (deduplicated on the pointer),
       // so the insert below finds it and adds nothing.
       docFileId = pilot.pointer
@@ -454,7 +489,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    so it must be kept.
     //    Also once the CRM Store holds it (pilot) — only here, at the very end of the request (after
     //    the advance / company creation), never before the store copy is the one that counts.
-    if (!useStorageFallback || pilot.status === 'saved') {
+    if (!useStorageFallback || pilot.status === 'saved' || routed) {
       supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
     }
 
