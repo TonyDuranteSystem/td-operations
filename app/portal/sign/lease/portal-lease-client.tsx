@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { FileText, CheckCircle, Clock, PenLine } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useLocale } from '@/lib/portal/use-locale'
+import { pmbNumberFromSuite } from '@/lib/addresses'
 
 interface PortalLeaseClientProps {
   leaseUrl: string
@@ -51,7 +52,7 @@ export function PortalLeaseClient({ leaseUrl, status, companyName, suiteNumber }
           <p className="text-xs text-zinc-500">
             {subtitle}
             {suiteNumber && currentStatus !== 'signed' && (
-              <span className="ml-2 text-zinc-400">{t('signDocs.suite')} {suiteNumber}</span>
+              <span className="ml-2 text-zinc-400">{t('signDocs.pmb')} {pmbNumberFromSuite(suiteNumber) ?? suiteNumber}</span>
             )}
           </p>
         </div>

@@ -1,12 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { MapPin, ShieldCheck, FileText, Package } from 'lucide-react'
+import { MapPin, ShieldCheck, FileText, Package, Mail } from 'lucide-react'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { type MailingAddressRow, principalOfficeForClient, mailingForClient } from '@/lib/addresses'
+import { type MailingAddressRow, principalOfficeForClient, mailingForClient, shippingForClient } from '@/lib/addresses'
 import { t, getLocale, type Locale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 
@@ -20,18 +20,15 @@ type AddrRow = MailingAddressRow & {
 }
 
 /**
- * Portal Addresses — the client's key addresses in one place, exactly THREE
- * (Antonio, 2026-10-01: "there will be only three addresses"):
+ * Portal Addresses — the client's key addresses in one place, exactly FOUR (Antonio, 2026-10-10):
  *   1. Registered Agent address (registered_agent_address/_provider).
- *   2. Principal Office — ALWAYS Tony Durante's Largo office plus the company's
- *      own suite (accounts.suite_number), computed: the address on the lease,
- *      the EIN application, the Operating Agreement and the invoices. A company
- *      with no suite yet shows its saved Principal Office link, else "not on
- *      file". (The address on the Articles of Organization is kept inside the
- *      CRM and checked at each annual report — it is not shown here.) There is
- *      no CMRA card any more.
- *   3. Mailing address — always Tony Durante's Seminole mailbox (a constant,
- *      TD_MAILING_ROW; the CRM's saved shipping link is not read) — also where
+ *   2. Principal Office — the OFFICIAL address "10225 Ulmerton Rd 3D, Largo", the same for every client that has a
+ *      company number (accounts.suite_number): the address on the Articles, the EIN application, the Operating Agreement
+ *      and the lease. A company with no number yet shows its saved Principal Office link, else "not on file". (The
+ *      address on the Articles of Organization is kept inside the CRM and checked at each annual report.)
+ *   3. Mailing Address — the official address plus the company's own PMB ("10225 Ulmerton Rd 3D PMB 318"), computed
+ *      from its number; "not on file" until a number is issued.
+ *   4. Shipping Address — always Tony Durante's Seminole office (a constant, TD_SHIPPING_ROW) — also where
  *      clients mail original documents to TD.
  *
  * None of these fall back to the account's legacy free-text `physical_address`
@@ -74,6 +71,7 @@ export default async function PortalAddressesPage() {
   let raLegacyAddress: string | null = null
   let raProvider: string | null = null
   let legal: AddrRow | null = null
+  let mailing: AddrRow | null = null
   let shipping: AddrRow | null = null
   let companyName: string | null = null
   let companySuiteForCard: string | null = null
@@ -96,10 +94,12 @@ export default async function PortalAddressesPage() {
     // company's own suite (no saved CMRA link is read when the company has one).
     const companySuite = (acct?.suite_number as string | null) ?? null
     companySuiteForCard = companySuite
-    // with a suite: Largo + the company's own suite; no suite yet: the saved Principal Office (never the shared Largo row, which has no suite)
+    // with a number: the official address; no number yet: the saved Principal Office (never the shared Largo row)
     legal = principalOfficeForClient((acct?.legal as AddrRow | null) ?? null, (acct?.mailing as AddrRow | null) ?? null, companySuite) as AddrRow | null
-    // the Mailing card is our Seminole mailbox for everyone
-    shipping = mailingForClient() as AddrRow
+    // the Mailing card: official address + the company's own PMB (none until a number is issued)
+    mailing = mailingForClient(companySuite) as AddrRow | null
+    // the Shipping card is our Seminole office for everyone
+    shipping = shippingForClient() as AddrRow
     companyName = (acct?.company_name as string | null) ?? null
   }
 
@@ -140,6 +140,21 @@ export default async function PortalAddressesPage() {
         legacyText={null}
         country={(legal?.country as string | null) ?? null}
         empty={t('addresses.principalEmpty', locale, translations)}
+        locale={locale}
+        translations={translations}
+      />
+
+      {/* Mailing address (official address + own PMB) */}
+      <AddressCard
+        icon={Mail}
+        accent="blue"
+        title={t('addresses.mailingTitle', locale, translations)}
+        subtitle={t('addresses.mailingSubtitle', locale, translations)}
+        name={(mailing?.name as string | null) ?? companyName}
+        addr={mailing}
+        legacyText={null}
+        country={(mailing?.country as string | null) ?? null}
+        empty={t('addresses.mailingEmpty', locale, translations)}
         locale={locale}
         translations={translations}
       />

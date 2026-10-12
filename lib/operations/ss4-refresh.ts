@@ -38,7 +38,7 @@
 import { randomBytes } from "crypto"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAction } from "@/lib/mcp/action-log"
-import { formatCountyAndState, withCompanyCmra, isTdLargoAddressRow } from "@/lib/addresses"
+import { formatCountyAndState, companyOfficialRow, isTdLargoAddressRow } from "@/lib/addresses"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import {
   decideSs4Signer,
@@ -128,17 +128,27 @@ export function resolveStateCode(raw: string | null | undefined): string {
 }
 
 export function resolveMailing(account: Ss4AccountSnapshot): { street: string; cityStateZip: string } {
-  const withSuite = withCompanyCmra(account.mailing_address, account.suite_number ?? null) ?? null
-  // no suite yet: the shared Largo row has no suite on it ("3D" alone is not an address) — treat it as not saved and fall through
-  const ma = !account.suite_number && isTdLargoAddressRow(withSuite) ? null : withSuite
+  // A company with a number: Line 4a is the OFFICIAL address — "10225 Ulmerton Rd 3D, Largo, FL 33771", no PMB — so the EIN
+  // letter (which the IRS addresses to line 4) carries exactly the address on the Articles. Line 5a is left blank: the IRS asks
+  // for it only when it differs from line 4 (Antonio 2026-10-10, "option 2").
+  const official = companyOfficialRow(account.suite_number ?? null)
+  if (official) {
+    return {
+      street: official.address_line1,
+      cityStateZip: `${official.city}, ${official.state} ${official.zip}`,
+    }
+  }
+  // no number yet: the shared Largo row is not this company's address — treat it as not saved and fall through
+  const saved = account.mailing_address
+  const ma = isTdLargoAddressRow(saved) ? null : saved
   if (ma && (ma.address_line1 || ma.city)) {
     return {
       street: [ma.address_line1, ma.address_line2].filter(Boolean).join(", "),
       cityStateZip: [ma.city, ma.state, ma.zip].filter(Boolean).join(", "),
     }
   }
-  // same rule for the saved free-text address: a Largo office line with no suite issued is only a bare "3D"
-  if (account.physical_address && !(!account.suite_number && isTdLargoAddressRow({ address_line1: account.physical_address }))) {
+  // same rule for the saved free-text address: with no number issued, a Largo office line is not this company's address
+  if (account.physical_address && !isTdLargoAddressRow({ address_line1: account.physical_address })) {
     const raw = account.physical_address
     const commaIdx = raw.indexOf(",")
     if (commaIdx > -1) {

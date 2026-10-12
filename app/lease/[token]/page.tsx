@@ -129,13 +129,21 @@ export default function LeasePage() {
     const data = await res.json()
     if (data.requiresEmail) { setLoading(false); return 'requires-email' }
 
+    // the Office Lease and Services Agreement (template v2) is rendered and signed only on the coded page — one text, one place
+    if (data.lease.template_version === 2) {
+      const rest = new URLSearchParams(searchParams.toString())
+      rest.delete('c')
+      const q = rest.toString()
+      router.replace(`/lease/${token}/${accessCode || 'view'}${q ? `?${q}` : ''}`)
+      return 'ok'
+    }
     setIsAdmin(!!data.isPreview)
     setLease(data.lease)
     setSigned(!!data.lease.signed_at)
     setVerified(true)
     setLoading(false)
     return 'ok'
-  }, [token, accessCode, searchParams])
+  }, [token, accessCode, searchParams, router])
 
   useEffect(() => { loadLease() }, [loadLease])
 

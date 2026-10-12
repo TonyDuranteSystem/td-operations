@@ -14,6 +14,7 @@ import { logAction } from "@/lib/mcp/action-log"
 import { getGreeting } from "@/lib/greeting"
 import { safeSend } from "@/lib/mcp/safe-send"
 import { APP_BASE_URL } from "@/lib/config"
+import { pmbNumberFromSuite, mailingStreetForSuite } from "@/lib/addresses"
 
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
 
@@ -30,9 +31,9 @@ Prerequisites:
 - Account must exist with company_name
 - Account must have at least one linked contact
 
-Defaults: premises=10225 Ulmerton Rd, Largo FL 33771, monthly_rent=$100, deposit=$150, term=12 months, sq_ft=120.
+New leases are the Office Lease and Services Agreement (template v2): no separate rent or deposit (included in the annual service agreement), fixed 12-month term from the date of signing, premises 10225 Ulmerton Rd 3D, Largo FL 33771. The rent/deposit/term parameters are ignored.
 
-The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, this issues it. It is locked: one company = one suite, one suite = one company.
+The suite is the COMPANY's and is issued by the system (next free number) at the start of formation/onboarding — you never type one. If the company has none yet, the lease is NOT created — issue the suite first (workspace Suite step or the "Issue suite" button on the account page). It is locked: one company = one suite, one suite = one company.
 
 The lease is created as 'draft'. Clients sign in their PORTAL, not by email: staff press Send Lease on the account in the CRM, which puts the lease in the client's portal and emails nobody. (lease_send is a manual email of the bare link — an exception, only when Antonio explicitly asks.)
 
@@ -43,12 +44,12 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
       account_id: z.string().uuid().describe("CRM account UUID"),
       effective_date: z.string().optional().describe("Effective date YYYY-MM-DD (default: today)"),
       term_start_date: z.string().optional().describe("Lease start date YYYY-MM-DD (default: today)"),
-      term_end_date: z.string().optional().describe("Lease end date YYYY-MM-DD (default: December 31 of current year)"),
+      term_end_date: z.string().optional().describe("Ignored for the 12-month term — the real term runs from the signing date (default shown before signing: 12 months from today)"),
       contract_year: z.number().optional().describe("Contract year e.g. 2026 (default: current year)"),
       term_months: z.number().optional().describe("Term in months (default: 12)"),
-      monthly_rent: z.number().optional().describe("Monthly rent in USD (default: 100)"),
-      yearly_rent: z.number().optional().describe("Yearly rent in USD (default: 1200)"),
-      security_deposit: z.number().optional().describe("Security deposit in USD (default: 150)"),
+      monthly_rent: z.number().optional().describe("IGNORED — no separate rent since the Office Lease and Services Agreement (2026-10-10)"),
+      yearly_rent: z.number().optional().describe("IGNORED — no separate rent since 2026-10-10"),
+      security_deposit: z.number().optional().describe("IGNORED — no security deposit since 2026-10-10"),
       square_feet: z.number().optional().describe("Office square footage (default: 120)"),
       language: z.string().optional().describe("Language: 'en' or 'it' (default: 'en')"),
       tenant_title: z.string().optional().describe("Tenant signature title (default: 'Manager'). Use 'Member' or 'Owner' when applicable."),
@@ -82,20 +83,13 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
         const lease = result.lease
         const leaseUrl = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
         const adminPreviewUrl = `${LEASE_BASE_URL}/${lease.token}?preview=td`
-        const year = lease.contract_year
-        const termStartDate = params.term_start_date || new Date().toISOString().slice(0, 10)
-        const termEndDate = params.term_end_date || `${year}-12-31`
-        const monthlyRent = params.monthly_rent ?? 100
-        const yearlyRent = params.yearly_rent ?? monthlyRent * 12
 
         const lines = [
           `✅ Lease Agreement created for **${lease.token.split("-").slice(0, -1).join("-")}**`,
           ``,
           `Token: ${lease.token}`,
-          `Suite: ${lease.suite_number}`,
-          `Term: ${fmtDate(termStartDate)} → ${fmtDate(termEndDate)}`,
-          `Rent: $${monthlyRent}/month ($${yearlyRent}/year)`,
-          `Deposit: $${params.security_deposit ?? 150}`,
+          `Company number: ${lease.suite_number} (PMB ${pmbNumberFromSuite(lease.suite_number) ?? "?"})`,
+          `Agreement: Office Lease and Services Agreement — no separate rent or deposit; fixed 12-month term from the date of signing`,
           `Status: draft`,
           ``,
           `👁️ Admin Preview: ${adminPreviewUrl}`,
@@ -161,12 +155,22 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
           `Contact: ${data.tenant_contact_name}`,
           data.tenant_email ? `Email: ${data.tenant_email}` : null,
           ``,
-          `**Premises:** ${data.premises_address}, Suite ${data.suite_number}`,
-          `Square Feet: ${data.square_feet}`,
-          ``,
-          `**Term:** ${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)} (${data.term_months} months)`,
-          `**Rent:** $${data.monthly_rent}/month ($${data.yearly_rent}/year)`,
-          `**Deposit:** $${data.security_deposit}`,
+          ...((data.template_version ?? 1) === 2
+            ? [
+                `**Official address:** 10225 Ulmerton Rd 3D, Largo, FL 33771`,
+                `**Mailing address:** ${mailingStreetForSuite(data.suite_number) ?? "?"}, Largo, FL 33771`,
+                ``,
+                `**Agreement:** Office Lease and Services Agreement (template v2) — no separate rent or deposit; 12-month fixed term from the date of the last signature${data.signed_at ? ` (${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)})` : ""}`,
+                data.operating_address ? `**Operating Address (stated by the client at signing):** ${data.operating_address}` : null,
+              ]
+            : [
+                `**Premises:** ${data.premises_address}, Suite ${data.suite_number}`,
+                `Square Feet: ${data.square_feet}`,
+                ``,
+                `**Term:** ${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)} (${data.term_months} months)`,
+                `**Rent:** $${data.monthly_rent}/month ($${data.yearly_rent}/year)`,
+                `**Deposit:** $${data.security_deposit}`,
+              ]),
           ``,
           `Views: ${data.view_count}${data.viewed_at ? ` (last: ${data.viewed_at})` : ''}`,
           data.signed_at ? `✅ Signed: ${data.signed_at}` : '⏳ Not signed yet',
@@ -319,6 +323,11 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 
         // Build URL
         const url = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
+        // a signed lease is final — emailing the link and setting it back to "sent" would let it be signed a second time
+        if (lease.status === "signed") {
+          return { content: [{ type: "text" as const, text: `❌ Lease "${params.token}" is already signed — it cannot be sent again.` }], isError: true }
+        }
+
         const { gmailPost } = await import("@/lib/gmail")
 
         // Look up contact gender
@@ -334,7 +343,9 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
           language: contactRow?.language,
         })
 
-        const subject = `Office Lease Agreement — ${lease.tenant_company}`
+        const isV2Lease = ((lease as { template_version?: number }).template_version ?? 1) === 2
+        const leaseTitle = isV2Lease ? "Office Lease and Services Agreement" : "Office Lease Agreement"
+        const subject = `${leaseTitle} — ${lease.tenant_company}`
         const fromEmail = "support@tonydurante.us"
 
         // Generate tracking ID
@@ -346,7 +357,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
   <p>${greeting},</p>
 
-  <p>Please find your Office Lease Agreement for <strong>${lease.tenant_company}</strong> at the link below.</p>
+  <p>Please find your ${leaseTitle} for <strong>${lease.tenant_company}</strong> at the link below.</p>
 
   <p style="margin: 24px 0;">
     <a href="${url}" style="display: inline-block; background: #1a1a1a; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">
@@ -356,11 +367,15 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 
   <p>You will be asked to verify your email address (<strong>${lease.tenant_email}</strong>) to access the document.</p>
 
-  <p>The lease covers:</p>
+  <p>The agreement covers:</p>
   <ul style="line-height: 1.8;">
-    <li><strong>Premises:</strong> 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771</li>
+${isV2Lease
+  ? `    <li><strong>Official address:</strong> 10225 Ulmerton Rd 3D, Largo, FL 33771</li>
+    <li><strong>Mailing address:</strong> ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771</li>
+    <li><strong>Term:</strong> 12 months from the date of signing. No separate rent or deposit.</li>`
+  : `    <li><strong>Premises:</strong> 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771</li>
     <li><strong>Term:</strong> ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}</li>
-    <li><strong>Monthly Rent:</strong> $${lease.monthly_rent}</li>
+    <li><strong>Monthly Rent:</strong> $${lease.monthly_rent}</li>`}
   </ul>
 
   <p>If you have any questions, please reply to this email or contact us on WhatsApp.</p>
@@ -371,17 +386,21 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 
         const plainText = `${greeting},
 
-Please find your Office Lease Agreement for ${lease.tenant_company} at the link below.
+Please find your ${leaseTitle} for ${lease.tenant_company} at the link below.
 
 Review and sign the agreement online:
 ${url}
 
 You will be asked to verify your email address (${lease.tenant_email}) to access the document.
 
-The lease covers:
-- Premises: 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771
+The agreement covers:
+${isV2Lease
+  ? `- Official address: 10225 Ulmerton Rd 3D, Largo, FL 33771
+- Mailing address: ${mailingStreetForSuite(lease.suite_number) ?? "(company number missing)"}, Largo, FL 33771
+- Term: 12 months from the date of signing. No separate rent or deposit.`
+  : `- Premises: 10225 Ulmerton Rd, Suite ${lease.suite_number}, Largo, FL 33771
 - Term: ${fmtDate(lease.term_start_date)} through ${fmtDate(lease.term_end_date)}
-- Monthly Rent: $${lease.monthly_rent}
+- Monthly Rent: $${lease.monthly_rent}`}
 
 If you have any questions, please reply to this email or contact us on WhatsApp.
 
@@ -393,7 +412,7 @@ support@tonydurante.us`
         const boundary = `boundary_${Date.now()}`
 
         // RFC 2047: encode subject as base64 if it contains non-ASCII chars (e.g. em dash —)
-        const leaseSubject = `Office Lease Agreement — ${lease.tenant_company}`
+        const leaseSubject = subject
         const hasNonAscii = /[^\x00-\x7F]/.test(leaseSubject)
         const encodedSubject = hasNonAscii
           ? `=?UTF-8?B?${Buffer.from(leaseSubject, "utf-8").toString("base64")}?=`

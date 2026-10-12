@@ -22,6 +22,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
+import { newYorkToday, addMonthsIso } from "@/lib/lease/agreement-v2"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -31,6 +32,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const body = await req.json().catch(() => ({}))
   const code = typeof body.code === "string" ? body.code : ""
   const pdfPath = typeof body.pdf_storage_path === "string" ? body.pdf_storage_path : ""
+  // one line of plain text: control characters / line breaks become spaces (it is read back by staff tools)
+  const operatingAddress = typeof body.operating_address === "string" ? body.operating_address.replace(/[\u0000-\u001F\u007F]/g, " ").trim().slice(0, 300) : ""
+  // template v2: the date the page printed next to both signatures — must still be today in New York when the signature lands
+  const printedDate = typeof body.signing_date === "string" ? body.signing_date : ""
+  // template v2: the company number and name the page showed (the PMB and the parties are printed in the agreement)
+  const printedSuite = typeof body.suite_number === "string" ? body.suite_number : ""
+  const printedCompany = typeof body.tenant_company === "string" ? body.tenant_company : ""
+  const printedSigner = typeof body.tenant_contact_name === "string" ? body.tenant_contact_name : ""
+  const printedTitle = typeof body.tenant_title === "string" ? body.tenant_title : ""
 
   if (!pdfPath) {
     return NextResponse.json({ error: "pdf_storage_path required" }, { status: 400 })
@@ -44,7 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: lease } = await db
     .from("lease_agreements")
-    .select("id, access_code, status")
+    .select("*")
     .eq("token", token)
     .maybeSingle()
   if (!lease) {
@@ -56,6 +66,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   if (lease.status === "signed") {
     return NextResponse.json({ error: "Already signed" }, { status: 409 })
+  }
+  // template v2: the client states where the business is really run (Section 1.1) — it is part of what they sign
+  const isV2 = (lease.template_version ?? 1) === 2
+  if (isV2 && operatingAddress.length < 5) {
+    return NextResponse.json({ error: "Please enter your Operating Address (where your business is run day to day) before signing." }, { status: 400 })
+  }
+
+  // The signed PDF carries the company number and name the page printed. If staff changed either while the page was open (a number
+  // change moves every unsigned lease), the PDF would contradict the record — refuse and make the client reload.
+  if (isV2 && (printedSuite !== lease.suite_number || printedCompany !== lease.tenant_company ||
+    printedSigner !== lease.tenant_contact_name || printedTitle !== (lease.tenant_title ?? ""))) {
+    return NextResponse.json(
+      { error: "This agreement was updated while you had it open. The page will reload — please review it and sign again.", code: "lease_changed" },
+      { status: 409 },
+    )
+  }
+
+  // The signed PDF carries the date the page printed; the record carries today's date in New York. They must be the same day —
+  // otherwise (a tab left open past midnight) the PDF and the record would disagree about the Effective Date.
+  if (isV2 && printedDate !== newYorkToday()) {
+    return NextResponse.json(
+      { error: "The date changed while this page was open, so the printed date is out of date. The page will reload — please sign again.", code: "date_changed" },
+      { status: 409 },
+    )
   }
 
   // Confirm the PDF this request claims to point at actually exists before
@@ -76,12 +110,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // Double-predicate write guard, same shape as every other signing route
   // converted today: the read-time check above can't stop two near-simultaneous
   // submits, so the same condition is repeated on the UPDATE itself.
+  // v2: the Effective Date is the date of the last signature, and the 12-month term runs from it — set here, on the server,
+  // in New York time (the same date the page printed next to both signatures).
+  const signedDay = isV2 ? printedDate : newYorkToday() // v2: already checked equal to today in New York above — no second clock read
+  const v2Fields = isV2
+    ? { operating_address: operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: addMonthsIso(signedDay, 12), term_months: 12 }
+    : {}
   const { data: updated, error } = await db
     .from("lease_agreements")
     .update({
       status: "signed",
       signed_at: new Date().toISOString(),
       pdf_storage_path: pdfPath,
+      ...v2Fields,
     })
     .eq("id", lease.id)
     .neq("status", "signed")

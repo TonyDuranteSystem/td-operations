@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // a lease nobody signed, or with dates that differ from the executed terms.
     const { data: lease } = await supabaseAdmin
       .from('lease_agreements')
-      .select('id, token, tenant_company, tenant_ein, tenant_state, tenant_contact_name, landlord_name, landlord_address, landlord_signer, landlord_title, suite_number, square_feet, monthly_rent, yearly_rent, security_deposit, late_fee, late_fee_per_day, account_id, status, signed_at, effective_date, term_start_date, term_end_date')
+      .select('*')
       .eq('id', lease_id)
       .single()
 
@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
     }
 
     const signedDate = (lease.signed_at as string).split('T')[0]
+    const isV2 = (lease.template_version ?? 1) === 2
 
     // Regenerate from the lease's OWN recorded data — the real signed date and the
     // agreed term dates. No caller-supplied dates.
@@ -66,7 +67,8 @@ export async function POST(req: NextRequest) {
       securityDeposit: lease.security_deposit ?? undefined,
       lateFee: lease.late_fee ?? undefined,
       lateFeePerDay: lease.late_fee_per_day ?? undefined,
-      signedDate,
+      signedDate: isV2 ? ((lease.effective_date as string) ?? signedDate) : signedDate,
+      ...(isV2 ? { templateVersion: 2, operatingAddress: lease.operating_address ?? null, tenantTitle: lease.tenant_title ?? undefined, agreementNo: lease.token } : {}),
     })
 
     // Upload to Supabase Storage

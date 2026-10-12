@@ -18,8 +18,8 @@ describe('wording that used to contradict how suites work today', () => {
   })
   it('the portal Principal Office subtitle no longer promises a lease the company may not have (EN + IT)', () => {
     const i = readFileSync('lib/portal/i18n.ts', 'utf8')
-    expect(i).toContain('"Our Largo office, with your own suite number."')
-    expect(i).toContain('"Il nostro ufficio di Largo, con il tuo numero di suite."')
+    expect(i).toContain("Your company's official address: our Largo office.")
+    expect(i).toContain("L'indirizzo ufficiale della tua azienda: il nostro ufficio di Largo.")
     expect(i).not.toContain('This is the address on your lease agreement')
   })
   it('the lease tool no longer tells staff to set a sent lease back to draft (the database refuses it)', () => {

@@ -18,6 +18,8 @@ export interface SignableDocument {
   href: string
   companyName?: string
   suiteNumber?: string
+  /** lease only: 2 = Office Lease and Services Agreement (the card shows its own title) */
+  templateVersion?: number
   signedAt?: string
   contractYear?: number
   driveLink?: string // set for legacy docs pulled from documents table
@@ -56,7 +58,8 @@ export async function getSignableDocuments(params: GetSignableDocumentsParams): 
       .maybeSingle(),
     supabaseAdmin
       .from('lease_agreements')
-      .select('token, status, tenant_company, suite_number, signed_at')
+      // '*' so a database that has not got the template_version column yet cannot break this page
+      .select('*')
       .eq('account_id', selectedAccountId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -180,6 +183,7 @@ export async function getSignableDocuments(params: GetSignableDocumentsParams): 
       companyName: lease.tenant_company,
       suiteNumber: lease.suite_number,
       signedAt: lease.signed_at,
+      templateVersion: (lease as { template_version?: number }).template_version ?? 1,
     })
   }
 
