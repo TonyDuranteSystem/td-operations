@@ -235,7 +235,7 @@ interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPi
 interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[]; left?: boolean }
 interface TreeNode { root?: Fold | null; folders: Fold[] }
 
-export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company' }: { ownerId?: string; scopedKind?: string } = {}) {
+export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company', openOwnerId, openFolderId }: { ownerId?: string; scopedKind?: string; openOwnerId?: string; openFolderId?: string } = {}) {
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwnerId ?? null)
@@ -486,6 +486,17 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.error(errMsg(e, 'Could not open the folder.'))
     }
   }
+
+  // A link can open the new storage straight on one folder (e.g. the Bank application list's "Open in Storage").
+  // Once, after the first load; a later pick by hand is never overridden.
+  const selectFolderRef = useRef(selectFolder)
+  selectFolderRef.current = selectFolder
+  const deepLinkDone = useRef(false)
+  useEffect(() => {
+    if (scopedOwnerId || !openOwnerId || !openFolderId || deepLinkDone.current) return
+    deepLinkDone.current = true
+    void selectFolderRef.current(openOwnerId, openFolderId)
+  }, [scopedOwnerId, openOwnerId, openFolderId])
 
   /** load a folder (or a person branch) into `loaded` */
   const loadKey = useCallback(async (key: string) => {
