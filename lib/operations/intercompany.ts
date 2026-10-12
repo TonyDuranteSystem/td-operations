@@ -214,11 +214,47 @@ export async function generateIntercompanyForAccount(
 
   const pdfBytes = await generateIntercompanyAgreementPDF(assembled.input)
 
+  const fileName = `Intercompany Transfer Agreement - ${account.company_name} - ${assembled.input.treasuryCompanyName}.pdf`
+
+  // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its agreement saved
+  // in the new storage (and listed in its documents) and needs no Drive folder; a company still on Drive carries on below.
+  {
+    const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+    let routed
+    try {
+      routed = await saveSignedPdfForAccount({
+        accountId, fileName, bytes: Buffer.from(pdfBytes), label: "Intercompany Transfer Agreement", category: 1,
+        // regenerating the same agreement for the same two companies is a new VERSION of one file, not a second copy
+        callerKey: `intercompany:${accountId}:${assembled.input.treasuryCompanyName}`,
+      })
+    } catch (err) {
+      return { error: `Saving to the new storage failed: ${err instanceof Error ? err.message : String(err)}` }
+    }
+    if (routed.route === "store") {
+      logAction({
+        actor: opts.actor ?? "crm-admin",
+        action_type: "create",
+        table_name: "documents",
+        record_id: routed.documentRowId,
+        account_id: accountId,
+        summary: `Generated Intercompany Transfer Agreement for ${account.company_name} ↔ ${assembled.input.treasuryCompanyName} (${assembled.input.treasuryOwnershipPct}%) from CRM data — saved in the new storage`,
+        details: { drive_file_id: routed.pointer, effective_date: effectiveDate, source: "crm-button" },
+      })
+      return {
+        success: true,
+        file_name: fileName,
+        drive_file_id: routed.pointer,
+        document_id: routed.documentRowId,
+        treasury_company: assembled.input.treasuryCompanyName,
+        ownership_pct: assembled.input.treasuryOwnershipPct,
+      }
+    }
+  }
+
   if (!account.drive_folder_id) {
     return { error: `"${account.company_name}" has no Drive folder (drive_folder_id) — cannot file the PDF.` }
   }
 
-  const fileName = `Intercompany Transfer Agreement - ${account.company_name} - ${assembled.input.treasuryCompanyName}.pdf`
   let driveFileId: string | undefined
   try {
     const uploaded = await uploadBinaryToDrive(fileName, Buffer.from(pdfBytes), "application/pdf", account.drive_folder_id)

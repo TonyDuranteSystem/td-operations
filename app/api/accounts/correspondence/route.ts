@@ -59,11 +59,42 @@ export async function POST(req: NextRequest) {
 
   // Upload to Drive if account has a folder
   if (accountId) {
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, company_name')
-      .eq('id', accountId)
-      .single()
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage keeps
+    // its correspondence there: the file is stored, and the client opens it through the portal's own download route
+    // (the portal checks the client's access) — never a Drive link. A company still on Drive carries on as before.
+    let savedInStorage = false
+    try {
+      const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { createHash } = await import('crypto')
+      try {
+        const routed = await saveDocumentForAccount({
+          accountId, name: fileName, bytes: buffer, mimeType, folder: 'correspondence', documentType: null,
+          callerKey: `correspondence:${accountId}:${createHash('sha256').update(buffer).digest('hex')}`,
+          // listed under Correspondence (client_correspondence), not a second time under Documents
+          portalVisible: false,
+          row: { document_type_name: 'Correspondence', category: 5, status: 'classified' },
+        })
+        if (routed.route === 'store') {
+          savedInStorage = true
+          driveFileId = routed.pointer
+          driveFileUrl = `/api/portal/documents/${routed.documentRowId}`
+        }
+      } catch (e) {
+        if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+        throw e
+      }
+    } catch (e) {
+      console.error('[correspondence] storage save failed:', e)
+      return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not save the file — please try again.' }, { status: 500 })
+    }
+
+    const { data: account } = savedInStorage
+      ? { data: null }
+      : await supabaseAdmin
+          .from('accounts')
+          .select('drive_folder_id, company_name')
+          .eq('id', accountId)
+          .single()
 
     if (account?.drive_folder_id) {
       // Get or create Correspondence subfolder
