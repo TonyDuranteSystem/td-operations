@@ -304,7 +304,7 @@ function FileUploadField({
       />
       {uploading && (
         <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <Loader2 className="h-3 w-3 animate-spin" /> Uploading to Drive…
+          <Loader2 className="h-3 w-3 animate-spin" /> Uploading…
         </div>
       )}
       {uploadedName && currentValue && !uploading && (

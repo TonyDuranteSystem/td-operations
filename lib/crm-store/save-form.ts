@@ -191,3 +191,77 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
   }
   return out
 }
+
+// ─── Files that are not form summaries: the confirmed tax workbook, workflow task files ───────────────────
+
+/** A sub-folder named `name` directly inside `parentId`: found if it exists, created if not (concurrent runs agree). */
+export async function ensureChildFolder(parentId: string, name: string): Promise<string> {
+  const { cleanFolderName } = await import("./names")
+  const clean = cleanFolderName(name)
+  const find = async () => {
+    const { data, error } = await db().from("store_folders").select("id").eq("parent_id", parentId).eq("name", clean).is("trashed_at", null).limit(1)
+    if (error) throw new Error(`store: could not read folders — ${error.message}`)
+    return ((data ?? [])[0]?.id as string | undefined) ?? null
+  }
+  const hit = await find()
+  if (hit) return hit
+  const { createFolder } = await import("./structure")
+  try {
+    return (await createFolder(parentId, clean, null)).id
+  } catch (e) {
+    const again = await find()
+    if (again) return again
+    throw e
+  }
+}
+
+/** Pure: where a workflow's "Drive sub-folder" path ("3. Tax/2025", "ITIN/IRS Letters") goes in a company's storage. */
+export function splitStorePath(path: string): { topKind: string; segments: string[] } {
+  const parts = path.split("/").map((p) => p.trim()).filter(Boolean)
+  const m = /^([1-5])\.\s/.exec(parts[0] ?? "")
+  if (!m) return { topKind: "company", segments: parts }
+  // "2. Contacts" shows each person's own storage: not a place to file, so it falls back to the company folder
+  const kind = m[1] === "3" ? "tax" : m[1] === "4" ? "banking" : m[1] === "5" ? "correspondence" : "company"
+  return { topKind: kind, segments: parts.slice(1) }
+}
+
+export type SavedElsewhere = { route: "drive" } | { route: "store"; fileId: string; pointer: string; status: WriteResult["status"] }
+
+async function switchedOwner(accountId: string): Promise<string | null> {
+  const { companyDocState, liveOwnerOfAccount } = await import("./switched-drive-guard")
+  const { CompanyMovingError } = await import("./save-for-account")
+  const state = await companyDocState(accountId)
+  if (state === "drive") return null
+  if (state === "moving") throw new CompanyMovingError()
+  const ownerId = await liveOwnerOfAccount(accountId)
+  if (!ownerId) throw new Error("This company's files live in the new storage, but its storage could not be found — nothing was saved.")
+  return ownerId
+}
+
+async function saveInto(ownerId: string, topKind: string, segments: string[], f: { name: string; bytes: Buffer; mimeType: string | null; documentType: string | null; callerKey: string }): Promise<SavedElsewhere> {
+  const pilot = await import("./formation-pilot")
+  const { storePointer } = await import("./document-pointer")
+  let folderId = await pilot.folderOfKind(ownerId, topKind)
+  for (const seg of segments) folderId = await ensureChildFolder(folderId, seg)
+  const w = await pilot.savePilotFile({ ownerId, folderKind: topKind, folderId, name: f.name, bytes: f.bytes, mimeType: f.mimeType, documentType: f.documentType, callerKey: f.callerKey, published: false })
+  return { route: "store", fileId: w.fileId, pointer: storePointer(w.fileId), status: w.status }
+}
+
+/** The client-confirmed tax workbook: a switched company keeps it in 3. Tax › <year> (never Drive); others → { route: "drive" }. */
+export async function saveTaxFileForAccount(p: { accountId: string; year: number | string; name: string; bytes: Buffer; mimeType: string | null; callerKey: string }): Promise<SavedElsewhere> {
+  const ownerId = await switchedOwner(p.accountId)
+  if (!ownerId) return { route: "drive" }
+  const pilot = await import("./formation-pilot")
+  const yearFolder = await ensureYearFolder(await pilot.folderOfKind(ownerId, "tax"), String(p.year))
+  const { storePointer } = await import("./document-pointer")
+  const w = await pilot.savePilotFile({ ownerId, folderKind: "tax", folderId: yearFolder, name: p.name, bytes: p.bytes, mimeType: p.mimeType, documentType: "other_document", callerKey: p.callerKey, published: false })
+  return { route: "store", fileId: w.fileId, pointer: storePointer(w.fileId), status: w.status }
+}
+
+/** A file uploaded in a workflow action on a task (kept internal until a step publishes it); sub-folder path as in Drive. */
+export async function saveTaskFileForAccount(p: { accountId: string; subfolder: string; name: string; bytes: Buffer; mimeType: string | null; callerKey: string }): Promise<SavedElsewhere> {
+  const ownerId = await switchedOwner(p.accountId)
+  if (!ownerId) return { route: "drive" }
+  const { topKind, segments } = splitStorePath(p.subfolder)
+  return saveInto(ownerId, topKind, segments, { name: p.name, bytes: p.bytes, mimeType: p.mimeType, documentType: "other_document", callerKey: p.callerKey })
+}

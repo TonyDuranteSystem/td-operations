@@ -28,9 +28,27 @@ async function main() {
   console.log("saved:", r)
 
   if (r.summaryFileId) {
-    const { data: f } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: { folder_id: string } | null }> } } } }).from("store_files").select("folder_id").eq("id", r.summaryFileId).single()
+    const { data: f } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: { folder_id: string } | null }> } } } }).from("store_files").select("folder_id").eq("id", r.summaryFileId.replace("store:", "")).single()
     const { data: fo } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: unknown }> } } } }).from("store_folders").select("name, kind, parent_id").eq("id", f!.folder_id).single()
     console.log("the file sits in folder:", fo)
+  }
+
+  // the client-confirmed tax workbook and a workflow task file (same company)
+  const { saveTaxFileForAccount, saveTaskFileForAccount } = await import("../../lib/crm-store/save-form")
+  const sheet = Buffer.from(`PK QA Test workbook ${Date.now()}`)
+  const wb = await saveTaxFileForAccount({ accountId: STORE_COMPANY, year: 2025, name: "QA Test PnL + Balance Sheet 2025 (client-confirmed).xlsx", bytes: sheet, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", callerKey: "qa-attest-workbook:2025" })
+  console.log("confirmed workbook:", wb)
+  const wb2 = await saveTaxFileForAccount({ accountId: STORE_COMPANY, year: 2025, name: "QA Test PnL + Balance Sheet 2025 (client-confirmed).xlsx", bytes: Buffer.concat([sheet, Buffer.from(" v2")]), mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", callerKey: "qa-attest-workbook:2025" })
+  console.log("re-confirmed (same key) → same file, new version:", wb2.route === "store" && wb.route === "store" ? { sameFile: wb2.fileId === wb.fileId, status: wb2.status } : wb2)
+  const task = await saveTaskFileForAccount({ accountId: STORE_COMPANY, subfolder: "ITIN/IRS Letters", name: "QA Test task file.pdf", bytes: Buffer.from(`%PDF QA Test task ${Date.now()}`), mimeType: "application/pdf", callerKey: `qa-task-file:${Date.now()}` })
+  console.log("task file:", task)
+  for (const [label, r] of [["workbook", wb], ["task file", task]] as const) {
+    if (r.route !== "store") continue
+    const sb = supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: Record<string, unknown> | null }> } } } }
+    const { data: f } = await sb.from("store_files").select("folder_id, document_type, published").eq("id", r.fileId).single()
+    const { data: fo } = await sb.from("store_folders").select("name, kind, parent_id").eq("id", f!.folder_id as string).single()
+    const { data: po } = await sb.from("store_folders").select("name, kind").eq("id", fo!.parent_id as string).single()
+    console.log(`${label} sits in:`, `${po?.name} › ${fo?.name}`, "| type:", f?.document_type, "| published:", f?.published)
   }
 
   const { data: accts } = await supabaseAdmin.from("accounts").select("id, company_name, drive_folder_id").not("drive_folder_id", "is", null).limit(60)

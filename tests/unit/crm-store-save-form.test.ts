@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { folderKindForDriveSubfolder, saveFormToStore, type FormStoreDeps, type FormStoreSpec } from "@/lib/crm-store/save-form"
+import { folderKindForDriveSubfolder, saveFormToStore, splitStorePath, type FormStoreDeps, type FormStoreSpec } from "@/lib/crm-store/save-form"
 
 const account = { kind: "account" as const, id: "acc-1", ownerId: "owner-1" }
 const contact = { kind: "contact" as const, id: "c-1", ownerId: "person-1" }
@@ -15,6 +15,26 @@ describe("folderKindForDriveSubfolder — the storage folder that matches the Dr
     expect(folderKindForDriveSubfolder("ITIN", account)).toBe("company")
     expect(folderKindForDriveSubfolder("ITIN", contact)).toBe("personal")
     expect(folderKindForDriveSubfolder("3. Tax", contact)).toBe("personal")
+  })
+})
+
+describe("splitStorePath — a workflow's sub-folder path in a company's storage", () => {
+  it("numbered top folders map to their storage folders; the rest of the path is nested folders", () => {
+    expect(splitStorePath("3. Tax/2025")).toEqual({ topKind: "tax", segments: ["2025"] })
+    expect(splitStorePath("4. Banking")).toEqual({ topKind: "banking", segments: [] })
+    expect(splitStorePath("5. Correspondence/IRS")).toEqual({ topKind: "correspondence", segments: ["IRS"] })
+    expect(splitStorePath("1. Company/Leases/2026")).toEqual({ topKind: "company", segments: ["Leases", "2026"] })
+  })
+  it("any other path (the usual 'Workflow Uploads', 'ITIN/IRS Letters') goes under the company folder", () => {
+    expect(splitStorePath("Workflow Uploads")).toEqual({ topKind: "company", segments: ["Workflow Uploads"] })
+    expect(splitStorePath("ITIN/IRS Letters")).toEqual({ topKind: "company", segments: ["ITIN", "IRS Letters"] })
+  })
+  it("'2. Contacts' is each person's own storage — not a place to file, so it falls back to the company folder", () => {
+    expect(splitStorePath("2. Contacts/Passports")).toEqual({ topKind: "company", segments: ["Passports"] })
+  })
+  it("ignores blanks, extra slashes and spaces", () => {
+    expect(splitStorePath(" / 3. Tax / /2025/ ")).toEqual({ topKind: "tax", segments: ["2025"] })
+    expect(splitStorePath("")).toEqual({ topKind: "company", segments: [] })
   })
 })
 

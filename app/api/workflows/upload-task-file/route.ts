@@ -97,6 +97,36 @@ export async function POST(request: NextRequest) {
   if (acctErr || !account) {
     return json({ error: `Account ${task.account_id} not found` }, 404)
   }
+  const fileName = (file as File).name || `upload-${Date.now()}.bin`
+  const mimeType = (file as File).type || "application/octet-stream"
+  const arrayBuffer = await (file as File).arrayBuffer()
+  const buffer = Buffer.from(arrayBuffer)
+
+  // ── Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company keeps the file in its
+  // new storage (same sub-folder path); the value handed back is a storage pointer that email, documents and OCR open
+  // through the standard reader. A company still on Drive carries on exactly as before, below. ──
+  try {
+    const { saveTaskFileForAccount } = await import("@/lib/crm-store/save-form")
+    const { CompanyMovingError } = await import("@/lib/crm-store/save-for-account")
+    const { createHash } = await import("crypto")
+    try {
+      const routed = await saveTaskFileForAccount({
+        accountId: account.id as string,
+        subfolder: typeof subfolderRaw === "string" && subfolderRaw.trim() ? subfolderRaw : "Workflow Uploads",
+        name: fileName, bytes: buffer, mimeType,
+        callerKey: `task-file:${taskId}:${createHash("sha256").update(buffer).digest("hex")}`,
+      })
+      if (routed.route === "store") {
+        return json({ file_id: routed.pointer, file_name: fileName, mime_type: mimeType, drive_url: null })
+      }
+    } catch (err) {
+      if (err instanceof CompanyMovingError) return json({ error: err.message }, 409)
+      throw err
+    }
+  } catch (err) {
+    return json({ error: `Saving to the new storage failed: ${err instanceof Error ? err.message : String(err)}` }, 500)
+  }
+
   if (!account.drive_folder_id) {
     return json(
       {
@@ -108,10 +138,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Upload to Drive ─────────────────────────────────────────────────
-  const fileName = (file as File).name || `upload-${Date.now()}.bin`
-  const mimeType = (file as File).type || "application/octet-stream"
-  const arrayBuffer = await (file as File).arrayBuffer()
-  const buffer = Buffer.from(arrayBuffer)
 
   let destinationFolderId = account.drive_folder_id
   if (typeof subfolderRaw === "string" && subfolderRaw.trim()) {
