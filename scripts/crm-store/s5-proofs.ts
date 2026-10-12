@@ -142,7 +142,9 @@ async function main() {
     console.log("CHECK 4 passed — rename, new version (content replaced), move and a re-home to another client all propagate to OUR copies")
 
     // ── 5. a copy deleted by hand is recreated; a fixed folder deleted by hand is re-created too
-    await drive.trashFile(aRef.external_id)
+    // a person deleting the copy by hand in Drive happens OUTSIDE the app, so the app's Drive guard does not apply to it
+    const { runAsStoreBackup } = await import("@/lib/crm-store/switched-drive-guard")
+    await runAsStoreBackup(() => drive.trashFile(aRef.external_id))
     const r5 = await run(owner, { fullCheck: true })
     if (r5.recreated < 1 || (await refOf(a.fileId)).external_id === aRef.external_id) fail(`CHECK 5 FAILED: ${JSON.stringify(r5)}`)
     console.log("CHECK 5 passed — a copy someone deleted in Drive is recreated on the next run")
@@ -190,7 +192,7 @@ async function main() {
     console.log(`CHECK 7 passed — a run stops cleanly before the time limit (not a failure); the alarm counts gaps and clears; one worker per owner; the kill switch stops everything${prod ? "; a real production folder is refused" : ""}`)
     console.log("ALL S5 BACKUP CHECKS PASSED")
   } finally {
-    await drive.trashFile(top).catch(() => undefined)
+    await (await import("@/lib/crm-store/switched-drive-guard")).runAsStoreBackup(() => drive.trashFile(top)).catch(() => undefined)
   }
 }
 

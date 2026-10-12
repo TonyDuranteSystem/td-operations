@@ -91,6 +91,9 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/irs-tracking-check": "0 9 * * *",
   // Suite release — a Closed/Cancelled company whose last lease has ended gives its suite back to the pool (daily sweep).
   "/api/cron/release-ended-suites": "30 8 * * *",
+  // CRM storage -> Google Drive backup (Drive cutover Phase 4, dev job ad09ea91): queues the per-storage backup jobs and runs the
+  // alarm. Does nothing while the kill switch STORE_BACKUP_ENABLED is off.
+  "/api/cron/store-backup": "*/10 * * * *",
   "/api/cron/workflow-sla-check": "0 * * * *",
   // Team-chat @claude rescue scan (ccf1a0ec) — self-auths via CRON_SECRET.
   "/api/team/claude/process": "*/2 * * * *",
