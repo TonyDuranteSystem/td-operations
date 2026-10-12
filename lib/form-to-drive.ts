@@ -1146,6 +1146,40 @@ export async function saveFormToDrive(
   }
   const bucket = opts?.bucket || config.bucket
 
+  // Where do these files live? (Drive cutover, dev job ad09ea91.) This is the ONE place every form flow files its
+  // summary and uploads. The Drive folder tells us whose they are: a switched company/person gets them in the new
+  // storage (same top folder) and Drive is never touched; anyone else carries on with Drive exactly as before, below.
+  {
+    const { switchedTargetForFolder, saveFormToStore } = await import("@/lib/crm-store/save-form")
+    let switched
+    try {
+      switched = await switchedTargetForFolder(driveFolderId)
+    } catch (e) {
+      return { summaryFileId: null, copied: [], failed: [], skipped: [], errors: [e instanceof Error ? e.message : String(e)] }
+    }
+    if (switched) {
+      const storeErrors: string[] = []
+      let summaryBytes: Buffer | null = null
+      try {
+        summaryBytes = Buffer.from(await generateFormSummaryPDF(config, submittedData, { ...meta, uploadCount: uploadPaths.length }))
+      } catch (e) {
+        storeErrors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      const slug = (meta.companyName || meta.token).replace(/\s+/g, "_")
+      const res = await saveFormToStore({
+        target: switched,
+        subfolder: config.driveSubfolder,
+        year: formType === "tax_return" ? meta.year ?? null : null,
+        // the Formation Summary holds every member's personal data: staff-only, never shown to a client
+        summary: summaryBytes ? { name: `${config.filePrefix}_${slug}.pdf`, bytes: summaryBytes, documentType: formType === "formation" ? "formation_summary" : null, callerKey: `form-summary:${switched.id}:${formType}:${meta.token}` } : null,
+        uploadPaths,
+        bucketOf: (path) => (opts?.resolveBucket ? opts.resolveBucket(path) : bucket),
+        submissionKey: `${switched.id}:${formType}:${meta.token}`,
+      })
+      return { ...res, errors: [...storeErrors, ...res.errors] }
+    }
+  }
+
   const { listFolder, createFolder, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
   const errors: string[] = []
 

@@ -116,6 +116,8 @@ export async function folderOfKind(ownerId: string, kind: string): Promise<strin
 export interface PilotSave {
   ownerId: string
   folderKind: string
+  /** a specific folder (e.g. a tax-year folder) instead of the owner's top folder of `folderKind` */
+  folderId?: string
   name: string
   bytes: Buffer
   mimeType: string | null
@@ -138,7 +140,7 @@ export interface PilotSave {
  * unchanged is a failure.
  */
 export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
-  const folderId = await folderOfKind(p.ownerId, p.folderKind)
+  const folderId = p.folderId ?? (await folderOfKind(p.ownerId, p.folderKind))
   const save = (callerKey: string) => saveBytesToStore({
     ownerId: p.ownerId, folderId, name: p.name, mimeType: p.mimeType, bytes: p.bytes,
     callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
