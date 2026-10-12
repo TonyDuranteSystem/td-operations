@@ -38,29 +38,48 @@ export interface BackupConfig {
   /** the existing client Drive: its id and its "Companies" folder (state folders live under it) */
   mainDriveId: string
   companiesRoot: string
-  /** the separate private Shared Drive (#63): people / Unfiled under restrictedRoot, trashed copies under protectedRoot */
-  privateDriveId: string
-  restrictedRoot: string
-  protectedRoot: string
+  /**
+   * SIMPLE MODE (Antonio 2026-10-13: "passports and IDs go where they went until today"): one Drive, no private area. A person's
+   * files are copied into their existing Drive contact folder (adopted, like a company's folder) or, when they have none, into
+   * a new folder under `peopleRoot` (the existing "Contacts" folder); a copy of a file trashed in the CRM moves to "_Trashed in CRM"
+   * under the Companies folder; unfiled storages go to "_Unfiled" there.
+   */
+  peopleRoot?: string
+  /** OLD DESIGN (kept for the proofs): a separate private Shared Drive — people / Unfiled under restrictedRoot, trashed copies under protectedRoot. */
+  privateDriveId?: string
+  restrictedRoot?: string
+  protectedRoot?: string
 }
 
 export function backupEnabled(env: Record<string, string | undefined> = process.env): boolean {
   return env.STORE_BACKUP_ENABLED === "1"
 }
 
+/** True when the old private-Drive design is configured (all three private settings present). */
+export function usesPrivateArea(c: BackupConfig): boolean {
+  return !!(c.privateDriveId && c.restrictedRoot && c.protectedRoot)
+}
+
 export function backupConfig(env: Record<string, string | undefined> = process.env): BackupConfig {
   const c: BackupConfig = {
     mainDriveId: (env.GOOGLE_SHARED_DRIVE_ID ?? "").trim(),
     companiesRoot: (env.STORE_BACKUP_COMPANIES_ROOT ?? "").trim(),
-    privateDriveId: (env.STORE_BACKUP_PRIVATE_DRIVE_ID ?? "").trim(),
-    restrictedRoot: (env.STORE_BACKUP_RESTRICTED_ROOT ?? "").trim(),
-    protectedRoot: (env.STORE_BACKUP_PROTECTED_ROOT ?? "").trim(),
+    peopleRoot: (env.STORE_BACKUP_PEOPLE_ROOT ?? "").trim() || undefined,
+    privateDriveId: (env.STORE_BACKUP_PRIVATE_DRIVE_ID ?? "").trim() || undefined,
+    restrictedRoot: (env.STORE_BACKUP_RESTRICTED_ROOT ?? "").trim() || undefined,
+    protectedRoot: (env.STORE_BACKUP_PROTECTED_ROOT ?? "").trim() || undefined,
   }
-  if (Object.values(c).some((v) => !v)) {
-    throw new Error("store backup: GOOGLE_SHARED_DRIVE_ID, STORE_BACKUP_COMPANIES_ROOT, STORE_BACKUP_PRIVATE_DRIVE_ID, STORE_BACKUP_RESTRICTED_ROOT and STORE_BACKUP_PROTECTED_ROOT must all be set")
+  const anyPrivate = !!(c.privateDriveId || c.restrictedRoot || c.protectedRoot)
+  if (!c.mainDriveId || !c.companiesRoot || (!c.peopleRoot && !anyPrivate)) {
+    throw new Error("store backup: GOOGLE_SHARED_DRIVE_ID, STORE_BACKUP_COMPANIES_ROOT and STORE_BACKUP_PEOPLE_ROOT must all be set (the private-area settings are no longer needed)")
   }
-  if (new Set([c.companiesRoot, c.restrictedRoot, c.protectedRoot]).size !== 3) {
-    throw new Error("store backup: the companies, restricted and protected roots must be three different folders")
+  if (anyPrivate) {
+    if (!usesPrivateArea(c)) throw new Error("store backup: STORE_BACKUP_PRIVATE_DRIVE_ID, STORE_BACKUP_RESTRICTED_ROOT and STORE_BACKUP_PROTECTED_ROOT must all be set together (or none of them)")
+    if (new Set([c.companiesRoot, c.restrictedRoot, c.protectedRoot]).size !== 3) {
+      throw new Error("store backup: the companies, restricted and protected roots must be three different folders")
+    }
+  } else if (c.peopleRoot === c.companiesRoot) {
+    throw new Error("store backup: the people root and the companies root must be two different folders")
   }
   return c
 }
@@ -139,7 +158,7 @@ export const backupIO: BackupIO = {
   },
   async noteError(ownerId, error) { await rpc("store_backup_note_error", { p_owner_id: ownerId, p_error: error }) },
   async load(ownerId) {
-    const { data: o, error } = await db().from("store_owners").select("id, kind, account_id").eq("id", ownerId).single()
+    const { data: o, error } = await db().from("store_owners").select("id, kind, account_id, contact_id").eq("id", ownerId).single()
     if (error || !o) throw new Error(`store backup: owner ${ownerId} not found (${error?.message ?? "no row"})`)
     let state: string | null = null
     let accountFolderId: string | null = null
@@ -148,6 +167,12 @@ export const backupIO: BackupIO = {
       if (aErr) throw new Error(`store backup: could not read the account: ${aErr.message}`)
       state = a?.state_of_formation ?? null
       accountFolderId = a?.drive_folder_id ?? null
+    }
+    if (o.kind === "person" && o.contact_id) {
+      // the person's existing Drive contact folder (where their documents have always been) — adopted when no other storage uses it
+      const { data: c, error: cErr } = await db().from("contacts").select("drive_folder_id").eq("id", o.contact_id).maybeSingle()
+      if (cErr) throw new Error(`store backup: could not read the contact: ${cErr.message}`)
+      accountFolderId = c?.drive_folder_id ?? null
     }
     const folders = await allRows<OwnerSnap["folders"][number]>(
       () => db().from("store_folders").select("id, parent_id, name, trashed_at").eq("owner_id", ownerId).order("id"), "folders")
@@ -247,7 +272,8 @@ export async function backupOwner(
     await io.noteError(ownerId, msg).catch(() => undefined)
     return { ...rep, status: "failed", error: msg }
   }
-  const drives = [cfg.mainDriveId, cfg.privateDriveId]
+  const privateArea = usesPrivateArea(cfg)
+  const drives = privateArea ? [cfg.mainDriveId, cfg.privateDriveId as string] : [cfg.mainDriveId]
   // a storage made by a study copy is never backed up: its company still lives in Drive (writing there would mix
   // study folders into the client's real folder)
   if (!opts.io) {
@@ -290,7 +316,12 @@ export async function backupOwner(
       places.set(key, id)
       return id
     }
-    const protectedArea = () => place(`protected:${ownerId}`, cfg.protectedRoot, `${rootFolder.name} — trashed in CRM`, cfg.privateDriveId)
+    const protectedArea = async () => {
+      if (privateArea) return place(`protected:${ownerId}`, cfg.protectedRoot as string, `${rootFolder.name} — trashed in CRM`, cfg.privateDriveId as string)
+      // simple mode: one "_Trashed in CRM" folder under the Companies folder, one sub-folder per storage
+      const trashRoot = await place("trash_root", cfg.companiesRoot, "_Trashed in CRM", cfg.mainDriveId)
+      return place(`protected:${ownerId}`, trashRoot, rootFolder.name, cfg.mainDriveId)
+    }
 
     // the owner's root in Drive
     const byParent = new Map<string | null, OwnerSnap["folders"]>()
@@ -327,7 +358,7 @@ export async function backupOwner(
 
     let rootDrive: string
     let rootAdopted = false
-    if (snap.kind === "company" && snap.accountFolderId && !snap.accountFolderTakenByOther
+    if ((snap.kind === "company" || (snap.kind === "person" && !privateArea)) && snap.accountFolderId && !snap.accountFolderTakenByOther
         && (await io.get(snap.accountFolderId).then((x) => !!x && !x.trashed))) {
       rootDrive = await adoptFolder(rootFolder.id, snap.accountFolderId, null)
       rootAdopted = true
@@ -340,9 +371,10 @@ export async function backupOwner(
       } else if (snap.kind === "formation") {
         parent = await place("in_formation", cfg.companiesRoot, "_In formation", cfg.mainDriveId)
       } else if (snap.kind === "person") {
-        parent = await place("people", cfg.restrictedRoot, "People", cfg.privateDriveId)
+        // simple mode: the existing "Contacts" folder itself (the person's folder is created inside it)
+        parent = privateArea ? await place("people", cfg.restrictedRoot as string, "People", cfg.privateDriveId as string) : (cfg.peopleRoot as string)
       } else {
-        parent = await place("unfiled", cfg.restrictedRoot, "Unfiled", cfg.privateDriveId)
+        parent = privateArea ? await place("unfiled", cfg.restrictedRoot as string, "Unfiled", cfg.privateDriveId as string) : await place("unfiled", cfg.companiesRoot, "_Unfiled", cfg.mainDriveId)
       }
       rootDrive = await ensureOurFolder(rootFolder.id, parent, rootFolder.name)
     }
