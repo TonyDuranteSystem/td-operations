@@ -24,8 +24,6 @@ export interface ExhibitPhoto { url: string; caption: string }
 export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = []
 
 export interface AgreementV2Input {
-  /** Printed as "Agreement No." — the lease token. */
-  agreementNo: string
   providerName: string
   clientCompany: string
   clientState: string | null
@@ -91,7 +89,6 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
 
   const b: AgreementBlock[] = []
   b.push({ t: 'title', text: AGREEMENT_V2_TITLE })
-  b.push({ t: 'center', text: `Agreement No. ${input.agreementNo}` })
   b.push({ t: 'para', text: 'This Office Lease and Services Agreement ("Agreement") is made and effective on the date of the last signature below (the "Effective Date"). It is made as part of, and depends on, the annual service agreement between the parties (the "Annual Service Agreement"). The parties are:' })
   b.push({ t: 'party', role: 'PROVIDER', lines: [`${input.providerName}, a Florida limited liability company, ${PROVIDER_ADDRESS_V2}, notices to ${PROVIDER_NOTICE_EMAIL} ("Provider").`] })
   b.push({ t: 'party', role: 'CLIENT', lines: [`${client}, ${article(input.clientState)} ${entityWord(client)}${ein}, address of record as stated in Section 1.2 ("Client"), represented by ${rep}.`] })

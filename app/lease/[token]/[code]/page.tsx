@@ -457,7 +457,6 @@ export default function LeasePageWithCode() {
   const isV2 = lease.template_version === 2
   const doc = isV2
     ? buildAgreementV2({
-        agreementNo: lease.token,
         providerName: lease.landlord_name,
         clientCompany: lease.tenant_company,
         clientState: lease.tenant_state,

@@ -4,7 +4,6 @@ import { generateLeasePDF, printable } from '@/lib/lease-pdf'
 import { toPublicLease, LEASE_SELECT } from '@/lib/lease/public-view'
 
 const INPUT = {
-  agreementNo: 'acme-llc-2026',
   providerName: 'Tony Durante LLC',
   clientCompany: 'Acme LLC',
   clientState: 'Wyoming',
@@ -104,6 +103,15 @@ describe('server-issued dates', () => {
     expect(t).toContain('after this Agreement ends and is not replaced by a new agreement')
   })
 
+  it('there is no "Agreement No." line (page text and PDF), and the server PDF carries the logo banner at the top', async () => {
+    expect(allText(buildAgreementV2(INPUT))).not.toMatch(/Agreement No/i)
+    const bytes = await generateLeasePDF({ tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', templateVersion: 2 })
+    expect(await pdfText(bytes)).not.toMatch(/Agreement No/i)
+    // the banner is a JPEG image on page 1 (pdf-lib writes it as a DCTDecode image XObject)
+    const raw = Buffer.from(bytes).toString('latin1')
+    expect(raw).toContain('/DCTDecode')
+  })
+
   it('endOfYearIso / termMonthsThroughYearEnd', () => {
     expect(endOfYearIso('2026-10-12')).toBe('2026-12-31')
     expect(endOfYearIso('2027-01-01')).toBe('2027-12-31')
@@ -135,7 +143,7 @@ describe('public lease payload and the server PDF', () => {
 
   it('the v2 PDF carries the new agreement text and addresses; the v1 PDF still carries the original text (frozen)', async () => {
     const common = { tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', tenantTitle: 'Manager', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10' }
-    const v2 = await pdfText(await generateLeasePDF({ ...common, templateVersion: 2, agreementNo: 'acme-llc-2026', operatingAddress: 'Via Roma 1, Milano, Italy', signedDate: '2026-10-10' }))
+    const v2 = await pdfText(await generateLeasePDF({ ...common, templateVersion: 2, operatingAddress: 'Via Roma 1, Milano, Italy', signedDate: '2026-10-10' }))
     expect(v2).toContain('OFFICE LEASE AND SERVICES AGREEMENT')
     expect(v2).toContain('10225 Ulmerton Rd 3D PMB 318')
     expect(v2).toContain('Via Roma 1, Milano, Italy')
