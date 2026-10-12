@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
+import { pmbLabel, pmbNumberFromSuite, suiteFromPmbInput } from '@/lib/addresses'
 import { useRouter } from 'next/navigation'
 import {
   X, Loader2, CheckCircle2, AlertCircle, FolderOpen,
@@ -114,7 +115,7 @@ export function PlaceClientWizard({
             }))
             // If lease exists, grab its suite number
             if (ex.lease?.suite_number) {
-              setSuiteNumber(ex.lease.suite_number)
+              setSuiteNumber(pmbNumberFromSuite(ex.lease.suite_number) ?? ex.lease.suite_number)
             }
           }
         })
@@ -143,7 +144,7 @@ export function PlaceClientWizard({
             stage: selectedStage,
             service_type: serviceCategory === 'formation' ? 'Company Formation' : 'Client Onboarding',
             actions,
-            suite_number: suiteNumber || undefined,
+            suite_number: suiteNumber ? suiteFromPmbInput(suiteNumber) : undefined,
             reason,
           }),
         })
@@ -348,16 +349,16 @@ export function PlaceClientWizard({
                         icon={<Shield className="h-4 w-4" />}
                         label="Lease Agreement (draft)"
                         exists={!!existing?.lease}
-                        existsLabel={existing?.lease ? `${existing.lease.token} (${existing.lease.status}), Suite ${existing.lease.suite_number}` : undefined}
+                        existsLabel={existing?.lease ? `${existing.lease.token} (${existing.lease.status}), ${pmbLabel(existing.lease.suite_number) ?? ''}` : undefined}
                       />
                       {actions.lease && !existing?.lease && (
                         <div className="ml-9">
-                          <label className="text-xs text-muted-foreground">Suite Number (optional — leave blank to use the company&apos;s own suite)</label>
+                          <label className="text-xs text-muted-foreground">PMB number (optional — leave blank to use the company&apos;s own PMB number)</label>
                           <input
                             type="text"
                             value={suiteNumber}
                             onChange={e => setSuiteNumber(e.target.value)}
-                            placeholder="e.g., 3D-107"
+                            placeholder="e.g., 107"
                             className="mt-0.5 w-48 text-sm px-3 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-indigo-500"
                           />
                         </div>
@@ -420,7 +421,7 @@ export function PlaceClientWizard({
                         actions.drive_folder && 'Drive folder',
                         actions.service_delivery && 'Service Delivery',
                         actions.oa && 'OA (draft)',
-                        actions.lease && `Lease (draft, Suite ${suiteNumber || '?'})`,
+                        actions.lease && `Lease (draft, ${suiteNumber ? `PMB ${pmbNumberFromSuite(suiteFromPmbInput(suiteNumber)) ?? suiteNumber}` : 'PMB ?'})`,
                         actions.banking_relay && 'Relay form',
                         actions.banking_payset && 'Payset form',
                         actions.tax_return && 'Tax Return record',

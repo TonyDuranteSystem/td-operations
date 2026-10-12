@@ -6,6 +6,7 @@ import { MapPin, Lock, Loader2, Plus, Pencil } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { toast } from 'sonner'
 import { issueCompanySuite, changeCompanySuite } from '@/app/(dashboard)/accounts/actions'
+import { pmbNumberFromSuite, suiteFromPmbInput } from '@/lib/addresses'
 
 interface Props {
   accountId: string
@@ -14,7 +15,7 @@ interface Props {
 }
 
 /**
- * "Suite Assigned" in Company Info. The suite is issued by the system (next free number) and LOCKED:
+ * "PMB Number" in Company Info (stored as "3D-NNN"; staff only ever see the digits). The number is issued by the system (next free number) and LOCKED:
  * nobody types a number. No suite yet -> "Issue suite". Changing or removing a locked suite is the
  * owner's admin action (reason required, logged) — the server refuses anyone else.
  */
@@ -31,29 +32,29 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
     const result = await issueCompanySuite(accountId)
     setBusy(false)
     if (result.success) {
-      toast.success(`Suite ${result.suite} issued`)
+      toast.success(`PMB number ${pmbNumberFromSuite(result.suite) ?? result.suite} issued`)
       router.refresh()
     } else {
-      toast.error(result.error ?? 'Could not issue the suite')
+      toast.error(result.error ?? 'Could not issue the PMB number')
     }
   }
 
   const change = async () => {
     setBusy(true)
     setError(null)
-    const result = await changeCompanySuite(accountId, newSuite.trim() === '' ? null : newSuite.trim(), reason)
+    const result = await changeCompanySuite(accountId, newSuite.trim() === '' ? null : suiteFromPmbInput(newSuite), reason)
     setBusy(false)
     if (result.success) {
-      toast.success('Suite changed')
+      toast.success('PMB number changed')
       if ((result.signedLeasesToReplace ?? 0) > 0) {
-        toast.warning(`${result.signedLeasesToReplace} signed lease(s) still show the old suite — use Delete lease in Documents, then create a corrected lease.`)
+        toast.warning(`${result.signedLeasesToReplace} signed lease(s) still show the old PMB number — use Delete lease in Documents, then create a corrected lease.`)
       }
       setChanging(false)
       setNewSuite('')
       setReason('')
       router.refresh()
     } else {
-      setError(result.error ?? 'Could not change the suite')
+      setError(result.error ?? 'Could not change the PMB number')
     }
   }
 
@@ -61,10 +62,10 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
     <div className="space-y-1">
       <div className="flex items-center gap-2 group">
         <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
-        <span className="text-muted-foreground min-w-[100px] text-sm">Suite Assigned</span>
+        <span className="text-muted-foreground min-w-[100px] text-sm">PMB Number</span>
         {suite ? (
           <span className="font-medium text-sm flex-1 flex items-center gap-1.5">
-            {suite}
+            {pmbNumberFromSuite(suite) ?? suite}
             <Lock className="h-3 w-3 text-muted-foreground" aria-label="Locked" />
           </span>
         ) : (
@@ -78,16 +79,16 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
             className="flex items-center gap-1 px-2 py-1 text-xs rounded border hover:bg-zinc-50 disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            Issue suite
+            Issue PMB number
           </button>
         )}
         {suite && isAdmin && !changing && (
-          <FastTooltip label="Change suite (owner only)">
+          <FastTooltip label="Change PMB number (owner only)">
             <button
               type="button"
               onClick={() => setChanging(true)}
               className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-100 transition-opacity"
-              aria-label="Change suite (owner only)"
+              aria-label="Change PMB number (owner only)"
             >
               <Pencil className="h-3 w-3 text-muted-foreground" />
             </button>
@@ -97,12 +98,12 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
       {changing && (
         <div className="ml-6 space-y-1.5 rounded border p-2">
           <p className="text-xs text-muted-foreground">
-            Owner only. The suite is locked — this is the one logged way to change it. Leave the suite empty to take it off the company.
+            Owner only. The PMB number is locked — this is the one logged way to change it. Leave it empty to take it off the company.
           </p>
           <input
             value={newSuite}
             onChange={e => setNewSuite(e.target.value)}
-            placeholder="New suite, e.g. 3D-318"
+            placeholder="New PMB number, e.g. 318"
             className="w-full px-2 py-1 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <input
@@ -119,7 +120,7 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
               disabled={busy || reason.trim() === ''}
               className="px-2 py-1 text-xs rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 disabled:opacity-50"
             >
-              {busy ? 'Saving…' : 'Change suite'}
+              {busy ? 'Saving…' : 'Change PMB number'}
             </button>
             <button
               type="button"

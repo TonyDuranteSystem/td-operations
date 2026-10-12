@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { pmbLabel } from '@/lib/addresses'
 import { useRouter } from 'next/navigation'
 import { Home, Loader2, X, CheckCircle2, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
@@ -83,7 +84,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
         }
 
         setResult({ success: true, token: data.token, admin_preview: data.admin_preview, suite_number: data.suite_number })
-        toast.success(`Lease created for ${companyName} — Suite ${data.suite_number}`)
+        toast.success(`Lease created for ${companyName} — ${pmbLabel(data.suite_number) ?? 'PMB number'}`)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Error')
@@ -116,7 +117,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
 
               <div className="space-y-3">
                 <div className="text-xs text-muted-foreground bg-blue-50 rounded-lg p-3">
-                  The lease uses this company&apos;s own suite. It must already be issued (the workspace Suite step, or the “Issue suite” button on the account page).
+                  The lease uses this company&apos;s own PMB number. It must already be issued (the workspace PMB number step, or the “Issue PMB number” button on the account page).
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -144,7 +145,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
                 <CheckCircle2 className={`h-5 w-5 mt-0.5 ${result.success ? 'text-emerald-600' : 'text-red-600'}`} />
                 <div className="space-y-2">
                   <p className="text-sm font-medium">
-                    {result.error || `Lease created — Suite ${result.suite_number}`}
+                    {result.error || `Lease created — ${pmbLabel(result.suite_number) ?? ''}`}
                   </p>
                   {result.admin_preview && (
                     <a

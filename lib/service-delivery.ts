@@ -320,7 +320,7 @@ export async function advanceServiceDelivery(
         if (!suiteState.satisfied) {
           return {
             success: false,
-            error: `Issue the company's suite (or tick "No suite for this client") in the Suite step before moving this case past "${gateName}".`,
+            error: `Issue the company's PMB number (or tick "No PMB number for this client") in the PMB number step before moving this case past "${gateName}".`,
             from_stage: delivery.stage || "New",
             to_stage: targetStage.stage_name,
             to_order: targetStage.stage_order,
