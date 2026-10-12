@@ -26,8 +26,8 @@ export async function GET(
       const result = await openDocument(sigReq.drive_file_id)
       buffer = result.buffer
     } catch (driveErr) {
-      console.error("[signature-pdf] Drive download failed:", driveErr)
-      return NextResponse.json({ error: "PDF not found on Drive" }, { status: 404 })
+      console.error("[signature-pdf] document read failed:", driveErr)
+      return NextResponse.json({ error: "PDF not found" }, { status: 404 })
     }
   } else {
     const { data: fileData, error: dlError } = await supabaseAdmin.storage
