@@ -17,6 +17,16 @@ import type { WriteResult } from "./writer"
 
 export type StoreFolderKind = "company" | "tax" | "banking" | "correspondence" | "contacts" | "personal"
 
+/**
+ * The storage treats a file with NO type as closed — never shown to a client, never shareable (staffOnlyStorePointers).
+ * So a document that is meant for the client must carry a catalogued, non-staff-only type: when the caller did not name
+ * a more specific one it gets this plain one (staff can re-type it). An internal file (not shown) may stay untyped.
+ */
+export const GENERIC_CLIENT_TYPE = "other_document"
+function typeFor(documentType: string | null, portalVisible: boolean | undefined): string | null {
+  return documentType ?? (portalVisible ? GENERIC_CLIENT_TYPE : null)
+}
+
 export class CompanyMovingError extends Error {
   constructor() {
     super("This company's files are being moved to the new storage right now — please try again in a few minutes.")
@@ -31,7 +41,7 @@ export interface SaveForAccountInput {
   mimeType: string | null
   /** Where in the company's storage: the top folders of the standard layout (1. Company, 3. Tax, 4. Banking, 5. Correspondence …). */
   folder: StoreFolderKind
-  /** null = not classified yet (staff choose the type later; such a file cannot be shared until then) */
+  /** null = not classified yet. A file meant for the CLIENT then gets the generic `other_document` type (an untyped file is closed to clients); an internal one may stay untyped. */
   documentType: string | null
   /** The same value on a retry or a double click: the save is idempotent on it. */
   callerKey: string
@@ -92,7 +102,7 @@ export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: 
 
   const w = await d.save({
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
-    documentType: input.documentType, callerKey: input.callerKey, published: input.portalVisible ?? false,
+    documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false,
     periodYear: input.periodYear ?? null, actor: input.actor ?? null,
   })
   const listed = await d.upsertRow(w.fileId, {
@@ -114,6 +124,13 @@ export interface SaveForContactInput {
   callerKey: string
   /** The company this document is also listed under, when the person's file belongs to one (the CRM list keeps both links). */
   accountId?: string | null
+  /**
+   * The company this person belongs to, and the person's name. When that company is switched but the person has no live
+   * storage yet, the person's own storage is opened for this document — the same as the portal does — so a staff upload and
+   * a client upload of the same passport land in the same place (never in Drive, never in the company's storage).
+   */
+  viaAccountId?: string | null
+  contactName?: string | null
   portalVisible?: boolean
   actor?: string | null
   row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id" | "contact_id">>
@@ -124,20 +141,29 @@ export interface SaveForContactInput {
  * live gets the file in their own "Personal documents" folder (listed against them in the CRM); anyone else carries on with
  * Drive exactly as before. Personal documents never go to a company's storage.
  */
-export async function saveDocumentForContact(input: SaveForContactInput, deps?: Pick<SaveDeps, "save" | "upsertRow" | "pointer"> & { liveOwnerOfContact: (contactId: string) => Promise<string | null> }): Promise<SaveForAccountResult> {
+export type ContactDeps = Pick<SaveDeps, "save" | "upsertRow" | "pointer"> & {
+  liveOwnerOfContact: (contactId: string) => Promise<string | null>
+  companyState?: (accountId: string) => Promise<CompanyDocState>
+  ensurePerson?: (contactId: string, name: string) => Promise<string>
+}
+
+export async function saveDocumentForContact(input: SaveForContactInput, deps?: ContactDeps): Promise<SaveForAccountResult> {
   let d = deps
   if (!d) {
     const guard = await import("./switched-drive-guard")
     const pilot = await import("./formation-pilot")
     const ptr = await import("./document-pointer")
-    d = { liveOwnerOfContact: guard.liveOwnerOfContact, save: pilot.savePilotFile, upsertRow: pilot.upsertStoreDocumentRow, pointer: ptr.storePointer }
+    d = { liveOwnerOfContact: guard.liveOwnerOfContact, save: pilot.savePilotFile, upsertRow: pilot.upsertStoreDocumentRow, pointer: ptr.storePointer, companyState: guard.companyDocState, ensurePerson: pilot.ensurePersonOwner }
   }
-  const ownerId = await d.liveOwnerOfContact(input.contactId)
+  let ownerId = await d.liveOwnerOfContact(input.contactId)
+  if (!ownerId && input.viaAccountId && d.companyState && d.ensurePerson) {
+    if ((await d.companyState(input.viaAccountId)) !== "drive") ownerId = await d.ensurePerson(input.contactId, input.contactName || "Member")
+  }
   if (!ownerId) return { route: "drive" }
 
   const w = await d.save({
     ownerId, folderKind: "personal", name: input.name, bytes: input.bytes, mimeType: input.mimeType,
-    documentType: input.documentType, callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
+    documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
   })
   const listed = await d.upsertRow(w.fileId, {
     ...(input.row ?? {}),

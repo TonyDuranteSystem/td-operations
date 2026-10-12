@@ -348,7 +348,7 @@ export async function POST(req: NextRequest) {
             // the same key on a re-run is a new VERSION of the same file, never a second copy
             routedDocs.push(await saveDocumentForContact({
               contactId, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: null,
-              callerKey: `itin-form-doc:${contactId}:${doc.name}`, accountId: sub.account_id ?? null, portalVisible: true,
+              callerKey: `itin-form-doc:${contactId}:${deliveryId ?? token}:${doc.name}`, accountId: sub.account_id ?? null, portalVisible: true,
               row: { document_type_name: doc.label, category: 3, status: "classified", service_delivery_id: deliveryId },
             }))
           }

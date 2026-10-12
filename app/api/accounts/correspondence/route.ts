@@ -70,14 +70,15 @@ export async function POST(req: NextRequest) {
         const routed = await saveDocumentForAccount({
           accountId, name: fileName, bytes: buffer, mimeType, folder: 'correspondence', documentType: null,
           callerKey: `correspondence:${accountId}:${createHash('sha256').update(buffer).digest('hex')}`,
-          // listed under Correspondence (client_correspondence), not a second time under Documents
+          // listed under Correspondence (client_correspondence), not a second time under Documents; the client
+          // opens it through /api/portal/correspondence/<item>/file (access is checked on the correspondence item)
           portalVisible: false,
           row: { document_type_name: 'Correspondence', category: 5, status: 'classified' },
         })
         if (routed.route === 'store') {
           savedInStorage = true
           driveFileId = routed.pointer
-          driveFileUrl = `/api/portal/documents/${routed.documentRowId}`
+          driveFileUrl = null // set below, once the correspondence item has its id
         }
       } catch (e) {
         if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
@@ -139,6 +140,12 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  if (driveFileId?.startsWith('store:') && record?.id) {
+    const link = `/api/portal/correspondence/${record.id}/file`
+    await supabaseAdmin.from('client_correspondence').update({ drive_file_url: link }).eq('id', record.id)
+    record.drive_file_url = link
+  }
 
   // Send portal chat message
   const chatMessage = `📬 You have new correspondence available. Please check your Documents → Correspondence section.`

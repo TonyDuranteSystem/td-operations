@@ -121,7 +121,7 @@ export async function POST(
     try {
       routed = await saveDocumentForAccount({
         accountId, name: fileName, bytes: buffer, mimeType: fileMime, folder: 'company', documentType: null,
-        callerKey: `dba-upload:${dbaId}:${fileName}`, portalVisible: true,
+        callerKey: `dba-upload:${dbaId}:${(await import('crypto')).createHash('sha256').update(buffer).digest('hex')}`, portalVisible: true,
         row: { document_type_name: 'DBA Application', category: 1, category_name: 'Company', status: 'classified', contact_id: null },
       })
     } catch (e) {

@@ -27,12 +27,16 @@ async function main() {
   console.log("second save (same bytes):", second.route === "store" ? { status: second.status, sameFile: second.fileId === (first as { fileId: string }).fileId, sameRow: second.documentRowId === (first as { documentRowId: string }).documentRowId } : second)
 
   // shown to the client: an untyped file may be published (only staff-only types and "Needs review" files are refused)
-  const shownBytes = Buffer.from(`QA Test cutover proof shown ${new Date().toISOString().slice(0, 10)}`)
-  const shown = await saveDocumentForAccount({ ...input, name: "QA Test cutover proof shown.txt", bytes: shownBytes, callerKey: `qa-cutover-proof-shown:${shownBytes.toString("hex").slice(0, 24)}`, portalVisible: true })
+  const shownBytes = Buffer.from(`QA Test cutover proof shown ${Date.now()}`)
+  const shown = await saveDocumentForAccount({ ...input, name: "QA Test cutover proof shown.txt", bytes: shownBytes, callerKey: `qa-cutover-proof-shown:${Date.now()}`, portalVisible: true })
   if (shown.route === "store") {
     const { data: r2 } = await supabaseAdmin.from("documents").select("portal_visible").eq("id", shown.documentRowId).single()
     const { data: f2 } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: unknown }> } } } }).from("store_files").select("published, needs_review_at, document_type").eq("id", shown.fileId).single()
     console.log("client-visible untyped save → documents.portal_visible:", r2?.portal_visible, "| store file:", f2)
+    // the portal serves a store file unless the storage calls it closed (staff-only or untyped): this one must be OPEN
+    const { staffOnlyStorePointers } = await import("../../lib/crm-store/document-pointer")
+    const closed = await staffOnlyStorePointers([shown.pointer])
+    console.log("closed to the client?", closed.has(shown.pointer) ? "YES (broken)" : "no — the client can open it")
     await supabaseAdmin.from("documents").delete().eq("id", shown.documentRowId)
   }
 

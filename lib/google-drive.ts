@@ -113,23 +113,26 @@ async function guardDriveWrite(target: DriveWriteTarget): Promise<void> {
     const g = await import("@/lib/crm-store/switched-drive-guard")
     await g.assertTargetsNotSwitched(target.ids, {
       lockedFolderIds: () => g.lockedFolderIdsCached(),
-      parentsOf: async (id) => {
-        const hit = driveParentsCache.get(id)
-        if (hit && Date.now() - hit.at < DRIVE_PARENTS_TTL_MS) return hit.parents
-        let meta: { parents?: string[] }
-        try {
-          meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
-        } catch {
-          // one retry: a passing Drive hiccup must not refuse a legitimate write (a second failure still refuses — fail closed)
-          meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
-        }
-        const parents = meta.parents ?? []
-        if (driveParentsCache.size >= DRIVE_PARENTS_MAX) driveParentsCache.clear()
-        driveParentsCache.set(id, { at: Date.now(), parents })
-        return parents
-      },
+      parentsOf: driveParentIds,
     })
   }
+}
+
+/** The parent folder ids of a Drive file or folder (read-only; short-lived cache, one retry). */
+export async function driveParentIds(id: string): Promise<string[]> {
+  const hit = driveParentsCache.get(id)
+  if (hit && Date.now() - hit.at < DRIVE_PARENTS_TTL_MS) return hit.parents
+  let meta: { parents?: string[] }
+  try {
+    meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+  } catch {
+    // one retry: a passing Drive hiccup must not refuse a legitimate write (a second failure still refuses — fail closed)
+    meta = (await driveGet(`/files/${id}`, { fields: "id,parents" })) as { parents?: string[] }
+  }
+  const parents = meta.parents ?? []
+  if (driveParentsCache.size >= DRIVE_PARENTS_MAX) driveParentsCache.clear()
+  driveParentsCache.set(id, { at: Date.now(), parents })
+  return parents
 }
 
 // ─── Token Management ───────────────────────────────────────

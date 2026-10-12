@@ -206,6 +206,7 @@ export async function POST(req: NextRequest) {
                   callerKey: `ss4-signed-company:${ss4.id}`, portalVisible: false, documentType: "form_ss_4", serviceDeliveryId: formationSdId,
                 })
                 if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its SS-4 was being saved — nothing was saved.")
+                signedDocLinked = true // saved: never save it again through the fallback below, whatever happens next
                 await supabaseAdmin
                   .from("ss4_applications")
                   .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
@@ -446,7 +447,7 @@ export async function POST(req: NextRequest) {
               const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
               const routed = await saveSignedPdfForAccount({
                 accountId: ss4.account_id, fileName: mergedFileName, bytes: Buffer.from(mergedPdfBytes), label: "SS-4 + Articles (IRS Package)", category: 1,
-                callerKey: `ss4-irs-package:${ss4.id}`, portalVisible: false, serviceDeliveryId: formationSdId,
+                callerKey: `ss4-irs-package:${ss4.id}`, portalVisible: false, serviceDeliveryId: formationSdId, documentType: "irs_fax",
               })
               if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the IRS package was being saved — nothing was saved.")
               results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles saved to the new storage (${articlesSource}): ${routed.pointer} (${ss4Pages.length + articlesPages.length} pages)` })

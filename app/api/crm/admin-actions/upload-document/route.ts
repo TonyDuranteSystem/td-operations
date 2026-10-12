@@ -68,15 +68,16 @@ export async function POST(req: NextRequest) {
     {
       const { saveDocumentForContact, saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
       const { createHash } = await import('crypto')
-      const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(1)
-      const linkedAccountId = (acLinkEarly?.[0]?.account_id as string | undefined) ?? null
+      // the person's company: only when there is exactly one (a person in several companies has no single "linked" one)
+      const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(3)
+      const linkedAccountId = acLinkEarly?.length === 1 ? ((acLinkEarly[0].account_id as string | undefined) ?? null) : null
       const dt = (documentType as string).toLowerCase()
-      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : dt.includes('ein') ? 'ein_letter_irs' : null
-      const callerKey = `staff-contact-upload:${contactId}:${createHash('sha256').update(buffer).digest('hex')}`
+      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
+      const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
       const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
       try {
         const routed = catInfo.num === 2
-          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, portalVisible: true, row })
+          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row })
           : linkedAccountId
             ? await saveDocumentForAccount({
                 accountId: linkedAccountId, name: fileName, bytes: buffer, mimeType: fileMime,

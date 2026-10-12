@@ -21,7 +21,7 @@ describe("folderKindForDriveSubfolder — the storage folder that matches the Dr
 const mk = (over: Partial<FormStoreDeps> = {}) => {
   const saved: Array<Record<string, unknown>> = []
   const deps: FormStoreDeps = {
-    saveFile: vi.fn(async (p) => { saved.push(p); return { status: "created", fileId: `f-${saved.length}` } as never }),
+    saveFile: vi.fn(async (p) => { saved.push(p); return { status: "created", fileId: `0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f${saved.length}` } as never }),
     download: vi.fn(async () => ({ bytes: Buffer.from("x"), mimeType: "application/pdf" })),
     yearFolder: vi.fn(async (_t, y) => `year-${y}`),
     taxFolder: vi.fn(async () => "tax-folder"),
@@ -39,7 +39,7 @@ describe("saveFormToStore — a switched company's form summary and uploads", ()
   it("saves the summary and every upload into the matching top folder, never into Drive", async () => {
     const { deps, saved } = mk()
     const r = await saveFormToStore(base(), deps)
-    expect(r.summaryFileId).toBe("f-1")
+    expect(r.summaryFileId).toBe("store:0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f1") // a POINTER, never a raw store id
     expect(r.copied).toEqual(["passport.pdf", "ein.pdf"])
     expect(r.failed).toEqual([])
     expect(saved.map((s) => s.folderKind)).toEqual(["company", "company", "company"])
@@ -70,7 +70,7 @@ describe("saveFormToStore — a switched company's form summary and uploads", ()
   })
 
   it("an identical re-run counts as skipped (a new version of the same file, never a copy)", async () => {
-    const { deps } = mk({ saveFile: async () => ({ status: "unchanged", fileId: "f" }) as never })
+    const { deps } = mk({ saveFile: async () => ({ status: "unchanged", fileId: "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0" }) as never })
     const r = await saveFormToStore(base(), deps)
     expect(r.skipped).toEqual(["passport.pdf", "ein.pdf"])
     expect(r.copied).toEqual([])
@@ -89,7 +89,7 @@ describe("saveFormToStore — a switched company's form summary and uploads", ()
 
   it("a failing summary save is reported as an error, the uploads still go in", async () => {
     let first = true
-    const { deps } = mk({ saveFile: async () => { if (first) { first = false; throw new Error("store down") } return { status: "created", fileId: "f" } as never } })
+    const { deps } = mk({ saveFile: async () => { if (first) { first = false; throw new Error("store down") } return { status: "created", fileId: "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0" } as never } })
     const r = await saveFormToStore(base(), deps)
     expect(r.errors[0]).toMatch(/Summary PDF error: store down/)
     expect(r.copied).toHaveLength(2)

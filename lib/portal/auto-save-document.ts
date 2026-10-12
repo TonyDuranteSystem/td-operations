@@ -11,7 +11,9 @@
  * own an LLC. Exactly one of accountId / contactId must be set.
  */
 
+import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { parseStorePointer, storeDocumentLink } from '@/lib/crm-store/document-pointer'
 
 interface AutoSaveDocumentParams {
   /** Set when the document belongs to a company account. */
@@ -50,7 +52,22 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       }
     }
 
+    // A pointer to a file in the new storage: the CRM row gets its own preview link (never a fabricated Drive URL, never a
+    // dead "No link"), and the store's "shown to the client" flag is set to say the same as the row (hidden if refused).
+    const storeFileId = parseStorePointer(driveFileId)
+    const rowId = storeFileId ? randomUUID() : null
+    let portalVisible = params.portalVisible ?? false
+    if (storeFileId) {
+      const { error: pubErr } = await (supabaseAdmin as unknown as { rpc: (fn: string, a: Record<string, unknown>) => Promise<{ error: { message: string } | null }> })
+        .rpc('store_set_published', { p_file_id: storeFileId, p_published: portalVisible, p_actor: null })
+      if (pubErr) {
+        console.error('[auto-save-doc] the storage refused to show this file to the client — listed hidden:', pubErr.message)
+        portalVisible = false
+      }
+    }
+
     const record: Record<string, unknown> = {
+      ...(rowId ? { id: rowId } : {}),
       account_id: accountId ?? null,
       contact_id: contactId ?? null,
       file_name: fileName,
@@ -63,9 +80,11 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       // Drive view URL is derived from the file id. Sentinel ids (they carry
       // a ':', e.g. "storage:<path>" / "ss4-live:<token>") are NOT Drive
       // files — never fabricate a drive.google.com URL for them.
-      drive_link: driveFileId && !driveFileId.includes(':')
-        ? `https://drive.google.com/file/d/${driveFileId}/view`
-        : null,
+      drive_link: rowId
+        ? storeDocumentLink(rowId)
+        : driveFileId && !driveFileId.includes(':')
+          ? `https://drive.google.com/file/d/${driveFileId}/view`
+          : null,
       status: 'classified',
       // Must be one of 'high' | 'medium' | 'low' — the production `documents`
       // table has a CHECK constraint (documents_confidence_check) enforcing
@@ -77,7 +96,7 @@ export async function autoSaveDocument(params: AutoSaveDocumentParams): Promise<
       // these are deterministically-generated/known docs (full confidence).
       confidence: 'high',
       processed_at: new Date().toISOString(),
-      portal_visible: params.portalVisible ?? false,
+      portal_visible: portalVisible,
       // service_delivery_id isn't in the generated DB types yet; included in the
       // untyped record (insert is cast `as never`).
       ...(params.serviceDeliveryId ? { service_delivery_id: params.serviceDeliveryId } : {}),

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { saveDocumentForAccount, saveDocumentForContact, saveSignedPdfForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
+import { saveDocumentForAccount, saveDocumentForContact, saveSignedPdfForAccount, CompanyMovingError, GENERIC_CLIENT_TYPE, type SaveDeps } from "@/lib/crm-store/save-for-account"
 import type { CompanyDocState } from "@/lib/crm-store/switched-drive-guard"
 
 const FILE = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
@@ -43,6 +43,19 @@ describe("saveDocumentForAccount — where do this company's files live?", () =>
     expect(r).toEqual({ route: "store", fileId: FILE, pointer: `store:${FILE}`, documentRowId: "row-1", status: "created" })
     expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "company-owner", folderKind: "company", documentType: "office_lease", callerKey: "lease:acc-1:1", published: false }))
     expect(d.calls.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ file_name: "Lease.pdf", account_id: "acc-1", portal_visible: false, category: 1, file_size: 3 }), "created")
+  })
+
+  it("an untyped file meant for the CLIENT gets the generic type (an untyped store file is closed to clients); an internal one may stay untyped", async () => {
+    const shown = mk("store")
+    await saveDocumentForAccount({ ...base, documentType: null, portalVisible: true }, shown)
+    expect(shown.calls.save).toHaveBeenCalledWith(expect.objectContaining({ documentType: GENERIC_CLIENT_TYPE, published: true }))
+    expect(GENERIC_CLIENT_TYPE).toBe("other_document")
+    const hidden = mk("store")
+    await saveDocumentForAccount({ ...base, documentType: null, portalVisible: false }, hidden)
+    expect(hidden.calls.save).toHaveBeenCalledWith(expect.objectContaining({ documentType: null, published: false }))
+    const named = mk("store")
+    await saveDocumentForAccount({ ...base, documentType: "office_lease", portalVisible: true }, named)
+    expect(named.calls.save).toHaveBeenCalledWith(expect.objectContaining({ documentType: "office_lease" }))
   })
 
   it("shown to the client only when the caller says so", async () => {
@@ -98,6 +111,29 @@ describe("saveDocumentForContact — a person's own documents", () => {
     expect(r).toEqual({ route: "store", fileId: FILE, pointer: `store:${FILE}`, documentRowId: "row-p", status: "created" })
     expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "person-owner", folderKind: "personal", documentType: "passport", published: false }))
     expect(m.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ contact_id: "c-1", account_id: "acc-1", portal_visible: false, category: 2 }), "created")
+  })
+})
+
+describe("saveDocumentForContact — a person of a switched company", () => {
+  const pass = { contactId: "c-1", name: "Passport.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", documentType: "passport", callerKey: "pass:c-1:2" }
+  const mkC = (owner: string | null, companyState: "drive" | "store" | "moving") => {
+    const save = vi.fn(async () => ({ status: "created", fileId: FILE }))
+    const ensurePerson = vi.fn(async () => "person-owner-new")
+    return { save, ensurePerson, deps: { liveOwnerOfContact: async () => owner, save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: true })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}`, companyState: async () => companyState, ensurePerson } }
+  }
+
+  it("the company is switched but the person has no live storage yet: their own storage is opened for the document (same as the portal)", async () => {
+    const m = mkC(null, "store")
+    const r = await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)
+    expect(r.route).toBe("store")
+    expect(m.ensurePerson).toHaveBeenCalledWith("c-1", "Mario Rossi")
+    expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "person-owner-new", folderKind: "personal" }))
+  })
+
+  it("the company is still on Drive and the person has no live storage: Drive as before", async () => {
+    const m = mkC(null, "drive")
+    expect(await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)).toEqual({ route: "drive" })
+    expect(m.ensurePerson).not.toHaveBeenCalled()
   })
 })
 

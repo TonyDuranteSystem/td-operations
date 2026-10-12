@@ -381,10 +381,12 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
       // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed document
       // saved in the new storage (listed in its documents) — never Drive, and never the storage-served fallback below.
       let switched = false
+      let stateKnown = false
       if (!filedToDrive) {
         try {
           const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
           switched = (await companyDocState(env.owner_account_id)) !== "drive"
+          stateKnown = true
           if (switched) {
             const { data: pdfData } = await supabaseAdmin.storage.from(SIGNED_BUCKET).download(env.signed_pdf_path)
             if (pdfData) {
@@ -396,11 +398,17 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
               if (routed.route === "store") {
                 await db.from("esign_envelopes").update({ signed_pdf_drive_id: routed.pointer }).eq("id", env.id)
                 filedToDrive = true
+                // the client is told about the new document exactly as when the Drive path flips it visible
+                const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
+                notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
+                  console.warn("[esign] new-document alert failed:", e instanceof Error ? e.message : String(e)))
               }
             }
           }
         } catch (e) {
           console.error("[esign] saving the signed document to the new storage failed:", e instanceof Error ? e.message : String(e))
+          // could not even tell where the files live: file NOTHING (never guess Drive) — the re-run retries
+          if (!stateKnown) switched = true
         }
       }
       const inSandbox = process.env.SANDBOX_MODE === "1"

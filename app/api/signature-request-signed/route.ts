@@ -57,10 +57,12 @@ export async function POST(req: NextRequest) {
     //    document saved in the new storage (listed in its documents, stamped with the flow) — never Drive, and never
     //    the storage-served fallback below. A company still on Drive carries on exactly as before.
     let switched = false
+    let stateKnown = false
     if (sigReq.signed_pdf_path && sigReq.account_id) {
       try {
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         switched = (await companyDocState(sigReq.account_id)) !== "drive"
+        stateKnown = true
         if (switched) {
           const { data: pdfData } = await supabaseAdmin.storage.from("signed-documents").download(sigReq.signed_pdf_path)
           if (!pdfData) throw new Error("signed PDF not found in Storage")
@@ -77,10 +79,16 @@ export async function POST(req: NextRequest) {
               await supabaseAdmin.from("documents").update({ flow_stage: "Signed" } as never).eq("id", routed.documentRowId)
             }
             results.push("storage_save: ok")
+            // the client is told about the new document exactly as when the Drive path makes it visible
+            const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
+            notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
+              console.warn("[signature-request-signed] new-document alert failed:", e instanceof Error ? e.message : String(e)))
           }
         }
       } catch (err) {
         results.push(`storage_save: error - ${err instanceof Error ? err.message : "unknown"}`)
+        // could not even tell where the files live: file NOTHING (never guess Drive)
+        if (!stateKnown) switched = true
       }
     }
 

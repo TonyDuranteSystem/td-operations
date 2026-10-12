@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
       const routed = await saveDocumentForAccount({
         accountId, name: fileName, bytes: fileBuffer, mimeType: mimeType || null, folder, documentType: null,
         // the same file uploaded twice is ONE stored file
-        callerKey: `portal-upload:${accountId}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
+        callerKey: `portal-upload:${accountId}:${person ? person.contactId : 'company'}:${categoryNum}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
         person,
         row: { category: categoryNum, document_type_name: typeName, status: 'classified' },
       })

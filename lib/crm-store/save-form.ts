@@ -24,32 +24,66 @@ export interface SwitchedFolderTarget {
 
 /**
  * The switched company or person that owns this Drive folder; null = the folder belongs to someone still on Drive (or to
- * nobody we know). A company being MOVED right now throws CompanyMovingError (the caller reports it; archive jobs retry).
- * Strict: a read error throws. Two records claiming one folder throws (never guess whose it is).
+ * nobody we know). "Owns" means the folder is — or sits anywhere below — the company's/person's folder (an ITIN or
+ * "2. Contacts" sub-folder is not the account root). A company being MOVED right now throws CompanyMovingError.
+ * Strict: a read error throws. Several records may claim one folder (people sharing a company's "2. Contacts"): that only
+ * matters when one of them is switched — then we cannot tell whose file it is and nothing is filed; if none is switched
+ * it is simply a Drive folder.
  */
 export async function switchedTargetForFolder(driveFolderId: string): Promise<SwitchedFolderTarget | null> {
-  const { companyDocState, liveOwnerOfAccount, liveOwnerOfContact } = await import("./switched-drive-guard")
+  const { companyDocState, liveOwnerOfAccount, liveOwnerOfContact, lockedFolderIdsCached } = await import("./switched-drive-guard")
   const { CompanyMovingError } = await import("./save-for-account")
 
-  const { data: accts, error: aErr } = await db().from("accounts").select("id").eq("drive_folder_id", driveFolderId).limit(3)
-  if (aErr) throw new Error("Could not check where this company's files live — please try again.")
-  const { data: contacts, error: cErr } = await db().from("contacts").select("id").eq("drive_folder_id", driveFolderId).limit(3)
-  if (cErr) throw new Error("Could not check where this person's files live — please try again.")
-  const a = (accts ?? []) as Array<{ id: string }>
-  const c = (contacts ?? []) as Array<{ id: string }>
-  if (a.length + c.length === 0) return null
-  if (a.length + c.length > 1) throw new Error("More than one record claims this Drive folder — nothing was filed (fix the folder link first).")
+  // Nothing switched anywhere: no lookups, no Drive calls.
+  const locked = await lockedFolderIdsCached()
+  if (locked.size === 0) return null
 
-  if (a.length === 1) {
-    const state = await companyDocState(a[0].id)
-    if (state === "drive") return null
-    if (state === "moving") throw new CompanyMovingError()
-    const ownerId = await liveOwnerOfAccount(a[0].id)
-    if (!ownerId) throw new Error("This company's files live in the new storage, but its storage could not be found — nothing was filed.")
-    return { kind: "account", id: a[0].id, ownerId }
+  // the folder itself, then (only if nothing claims it) its ancestors
+  let claimFolder: string | null = null
+  let accounts: Array<{ id: string }> = []
+  let contacts: Array<{ id: string }> = []
+  let cursor: string[] = [driveFolderId]
+  const seen = new Set<string>()
+  for (let depth = 0; depth < 12 && cursor.length > 0 && !claimFolder; depth++) {
+    const next: string[] = []
+    for (const id of cursor) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const link = `%/folders/${id}%`
+      const { data: a, error: aErr } = await db().from("accounts").select("id").or(`drive_folder_id.eq.${id},gdrive_folder_url.like.${link}`).limit(5)
+      if (aErr) throw new Error("Could not check where this company's files live — please try again.")
+      const { data: c, error: cErr } = await db().from("contacts").select("id").or(`drive_folder_id.eq.${id},gdrive_folder_url.like.${link}`).limit(5)
+      if (cErr) throw new Error("Could not check where this person's files live — please try again.")
+      if ((a ?? []).length + (c ?? []).length > 0) {
+        claimFolder = id
+        accounts = (a ?? []) as Array<{ id: string }>
+        contacts = (c ?? []) as Array<{ id: string }>
+        break
+      }
+      const { driveParentIds } = await import("@/lib/google-drive")
+      next.push(...(await driveParentIds(id)))
+    }
+    cursor = next
   }
-  const ownerId = await liveOwnerOfContact(c[0].id)
-  return ownerId ? { kind: "contact", id: c[0].id, ownerId } : null
+  if (!claimFolder) return null
+
+  const switched: SwitchedFolderTarget[] = []
+  for (const a of accounts) {
+    const state = await companyDocState(a.id)
+    if (state === "moving") throw new CompanyMovingError()
+    if (state === "store") {
+      const ownerId = await liveOwnerOfAccount(a.id)
+      if (!ownerId) throw new Error("This company's files live in the new storage, but its storage could not be found — nothing was filed.")
+      switched.push({ kind: "account", id: a.id, ownerId })
+    }
+  }
+  for (const c of contacts) {
+    const ownerId = await liveOwnerOfContact(c.id)
+    if (ownerId) switched.push({ kind: "contact", id: c.id, ownerId })
+  }
+  if (switched.length === 0) return null
+  if (accounts.length + contacts.length > 1) throw new Error("More than one record claims this Drive folder and one of them is in the new storage — nothing was filed (fix the folder link first).")
+  return switched[0]
 }
 
 /** The top folder of the storage that matches the Drive sub-folder a form type used. */
@@ -131,7 +165,9 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
   if (spec.summary?.bytes) {
     try {
       const w = await d.saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name: spec.summary.name, bytes: spec.summary.bytes, mimeType: "application/pdf", documentType: spec.summary.documentType, callerKey: spec.summary.callerKey })
-      out.summaryFileId = w.fileId
+      // a store POINTER, never the raw id: callers hand this to code that expects a Drive id or a pointer
+      const { storePointer } = await import("./document-pointer")
+      out.summaryFileId = storePointer(w.fileId)
     } catch (e) {
       out.errors.push(`Summary PDF error: ${e instanceof Error ? e.message : String(e)}`)
     }
