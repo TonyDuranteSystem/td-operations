@@ -242,69 +242,90 @@ export async function fileRenewal(
       // (senior-engineer blocker: filing an old year through the next
       // cycle's cron SD used to leave that SD corroborating the NEXT cycle).
       const cycleDueDate = storedDate ? anniversaryForYear(storedDate, year) : params.filed_date
-      if (!account.drive_folder_id) {
-        throw new Error(
-          `Account "${account.company_name}" has no Drive folder — cannot save receipt.`,
-        )
-      }
-
-      // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)
-      const complianceFolderId = await ensureDrivePath(account.drive_folder_id, [
-        "Compliance",
-      ])
-
-      // 3. Upload receipt with SOP filename
       const targetFilename = buildRenewalFilename(params.kind, year)
-      // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-      const upload = (await uploadBinaryToDriveUpsert(
-        targetFilename,
-        params.receipt.data,
-        params.receipt.mime_type || "application/pdf",
-        complianceFolderId,
-      )) as { id: string; name: string }
-      const driveLink = `https://drive.google.com/file/d/${upload.id}/view`
 
-      // 4. Record the documents row — UPSERT by drive_file_id. The Drive
-      // upload upserts by filename and returns the SAME file id when the
-      // receipt was stored by an earlier filing, so a plain insert hit the
-      // unique constraint and failed the whole action AFTER the upload
-      // (prod error on DeP Consulting, 2026-08-07). Refresh the existing
-      // row instead.
-      const docFields = {
-        file_name: targetFilename,
-        mime_type: params.receipt.mime_type || "application/pdf",
-        drive_link: driveLink,
-        drive_parent_folder_id: complianceFolderId,
-        document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind],
-        category_name: "Compliance",
-        account_id: account.id,
-        portal_visible: true,
-        status: "processed",
-        processed_at: new Date().toISOString(),
-      }
-      const { data: existingDoc } = await supabaseAdmin
-        .from("documents")
-        .select("id")
-        .eq("drive_file_id", upload.id)
-        .maybeSingle()
+      // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has the receipt saved
+      // in the new storage (listed in its documents) and needs no Drive folder; a company still on Drive carries on below.
+      const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+      const routed = await saveDocumentForAccount({
+        accountId: account.id, name: targetFilename, bytes: Buffer.from(params.receipt.data), mimeType: params.receipt.mime_type || "application/pdf",
+        folder: "company", documentType: "receipt",
+        // refiling the same cycle is a new VERSION of one receipt, never a second copy
+        callerKey: `renewal-receipt:${account.id}:${params.kind}:${year}`,
+        portalVisible: true,
+        row: { document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind], category_name: "Compliance", status: "processed" },
+      })
+      let receiptFileId: string
+      let driveLink: string
       let docRowId: string
-      if (existingDoc) {
-        const { error: updErr } = await supabaseAdmin
-          .from("documents")
-          .update(docFields)
-          .eq("id", existingDoc.id)
-        if (updErr) throw new Error(`Failed to update documents row: ${updErr.message}`)
-        docRowId = existingDoc.id
+      if (routed.route === "store") {
+        receiptFileId = routed.pointer
+        docRowId = routed.documentRowId
+        driveLink = `/api/documents/${routed.documentRowId}/preview`
       } else {
-        const { data: docRow, error: docErr } = await supabaseAdmin
-          .from("documents")
-          .insert({ drive_file_id: upload.id, ...docFields })
-          .select("id")
-          .single()
-        if (docErr || !docRow) {
-          throw new Error(`Failed to insert documents row: ${docErr?.message ?? "unknown"}`)
+        if (!account.drive_folder_id) {
+          throw new Error(
+            `Account "${account.company_name}" has no Drive folder — cannot save receipt.`,
+          )
         }
-        docRowId = docRow.id
+
+        // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)
+        const complianceFolderId = await ensureDrivePath(account.drive_folder_id, [
+          "Compliance",
+        ])
+
+        // 3. Upload receipt with SOP filename
+        // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+        const upload = (await uploadBinaryToDriveUpsert(
+          targetFilename,
+          params.receipt.data,
+          params.receipt.mime_type || "application/pdf",
+          complianceFolderId,
+        )) as { id: string; name: string }
+        receiptFileId = upload.id
+        driveLink = `https://drive.google.com/file/d/${upload.id}/view`
+
+        // 4. Record the documents row — UPSERT by drive_file_id. The Drive
+        // upload upserts by filename and returns the SAME file id when the
+        // receipt was stored by an earlier filing, so a plain insert hit the
+        // unique constraint and failed the whole action AFTER the upload
+        // (prod error on DeP Consulting, 2026-08-07). Refresh the existing
+        // row instead.
+        const docFields = {
+          file_name: targetFilename,
+          mime_type: params.receipt.mime_type || "application/pdf",
+          drive_link: driveLink,
+          drive_parent_folder_id: complianceFolderId,
+          document_type_name: DOC_TYPE_NAME_BY_KIND[params.kind],
+          category_name: "Compliance",
+          account_id: account.id,
+          portal_visible: true,
+          status: "processed",
+          processed_at: new Date().toISOString(),
+        }
+        const { data: existingDoc } = await supabaseAdmin
+          .from("documents")
+          .select("id")
+          .eq("drive_file_id", upload.id)
+          .maybeSingle()
+        if (existingDoc) {
+          const { error: updErr } = await supabaseAdmin
+            .from("documents")
+            .update(docFields)
+            .eq("id", existingDoc.id)
+          if (updErr) throw new Error(`Failed to update documents row: ${updErr.message}`)
+          docRowId = existingDoc.id
+        } else {
+          const { data: docRow, error: docErr } = await supabaseAdmin
+            .from("documents")
+            .insert({ drive_file_id: upload.id, ...docFields })
+            .select("id")
+            .single()
+          if (docErr || !docRow) {
+            throw new Error(`Failed to insert documents row: ${docErr?.message ?? "unknown"}`)
+          }
+          docRowId = docRow.id
+        }
       }
 
       // 5. Resolve / create the SD, then complete it.
@@ -461,9 +482,9 @@ export async function fileRenewal(
 
       return {
         delivery_id: deliveryId,
-        drive_file_id: upload.id,
+        drive_file_id: receiptFileId,
         drive_link: driveLink,
-        document_id: docRowId as string,
+        document_id: docRowId,
         ...(principalOffice ? { principal_office: principalOffice } : {}),
         ...(principalOfficeWarning ? { principal_office_warning: principalOfficeWarning } : {}),
       }

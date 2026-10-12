@@ -224,51 +224,62 @@ export async function POST(req: NextRequest) {
         results.push({ step: "task_form_1583", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
 
-      // ─── 5. AUTO-UPLOAD SIGNED PDF TO DRIVE ───
+      // ─── 5. SAVE THE SIGNED PDF — the new storage for a switched company, Drive otherwise (dev job ad09ea91) ───
       try {
-        const { data: acct } = await supabaseAdmin
-          .from("accounts")
-          .select("drive_folder_id")
-          .eq("id", lease.account_id)
-          .single()
+        // Download signed PDF from Storage
+        const pdfPath = lease.pdf_storage_path || `${lease.token}/lease-signed.pdf`
+        const { data: blob } = await supabaseAdmin.storage
+          .from("signed-leases")
+          .download(pdfPath)
 
-        if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-          const companyFolder = folderResult.files?.find(f =>
-            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          const targetFolderId = companyFolder?.id || acct.drive_folder_id
-
-          // Download signed PDF from Storage
-          const pdfPath = lease.pdf_storage_path || `${lease.token}/lease-signed.pdf`
-          const { data: blob } = await supabaseAdmin.storage
-            .from("signed-leases")
-            .download(pdfPath)
-
-          if (blob) {
-            const arrayBuffer = await blob.arrayBuffer()
-            const fileData = Buffer.from(arrayBuffer)
-            const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
-
-            // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-            const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-            results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
-
-            // Auto-save to documents table for portal
-            await autoSaveDocument({
-              accountId: lease.account_id,
-              fileName,
-              documentType: 'Lease Agreement',
-              category: 1, // Company
-              driveFileId: driveResult.id,
-              portalVisible: true,
-            })
-          } else {
-            results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
-          }
+        if (!blob) {
+          results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
         } else {
-          results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
+          const arrayBuffer = await blob.arrayBuffer()
+          const fileData = Buffer.from(arrayBuffer)
+          const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
+
+          // Where do this company's files live? A switched company saves here and never touches Drive; the same
+          // key on a re-run is a new VERSION of the same file, never a second copy.
+          const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveSignedPdfForAccount({
+            accountId: lease.account_id, fileName, bytes: fileData, label: "Lease Agreement", category: 1, callerKey: `lease-signed:${lease.id}`, documentType: "office_lease",
+          })
+
+          if (routed.route === "store") {
+            results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
+          } else {
+            const { data: acct } = await supabaseAdmin
+              .from("accounts")
+              .select("drive_folder_id")
+              .eq("id", lease.account_id)
+              .single()
+
+            if (acct?.drive_folder_id) {
+              const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+              const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+              const companyFolder = folderResult.files?.find(f =>
+                f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+              )
+              const targetFolderId = companyFolder?.id || acct.drive_folder_id
+
+              // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+              const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+
+              // Auto-save to documents table for portal
+              await autoSaveDocument({
+                accountId: lease.account_id,
+                fileName,
+                documentType: 'Lease Agreement',
+                category: 1, // Company
+                driveFileId: driveResult.id,
+                portalVisible: true,
+              })
+            } else {
+              results.push({ step: "drive_upload", status: "skipped", detail: "No drive_folder_id on account" })
+            }
+          }
         }
       } catch (e) {
         results.push({ step: "drive_upload", status: "error", detail: e instanceof Error ? e.message : String(e) })

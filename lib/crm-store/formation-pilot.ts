@@ -116,6 +116,8 @@ export async function folderOfKind(ownerId: string, kind: string): Promise<strin
 export interface PilotSave {
   ownerId: string
   folderKind: string
+  /** a specific folder (e.g. a tax-year folder) instead of the owner's top folder of `folderKind` */
+  folderId?: string
   name: string
   bytes: Buffer
   mimeType: string | null
@@ -138,7 +140,7 @@ export interface PilotSave {
  * unchanged is a failure.
  */
 export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
-  const folderId = await folderOfKind(p.ownerId, p.folderKind)
+  const folderId = p.folderId ?? (await folderOfKind(p.ownerId, p.folderKind))
   const save = (callerKey: string) => saveBytesToStore({
     ownerId: p.ownerId, folderId, name: p.name, mimeType: p.mimeType, bytes: p.bytes,
     callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
@@ -436,6 +438,7 @@ export type PilotAlarmKind =
   | "formation_owner_failed"       // a pilot formation's store owner could not be set up
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after
+  | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**
  * An alarm: an event in the store's history (owner-scoped when known) + the system error log.

@@ -393,6 +393,16 @@ export async function POST(req: NextRequest) {
         const wizData = wizard.data as Record<string, unknown>
         const contactName = [docContact.first_name, docContact.last_name].filter(Boolean).join(" ") || "Unknown"
 
+        // Drive cutover (dev job ad09ea91): this action rebuilds a person's DRIVE folder. A person whose files live in the
+        // new storage has none — the passport belongs in their storage (Documents tab upload), not here.
+        {
+          const { liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
+          if (await liveOwnerOfContact(contact_id)) {
+            result = { success: false, detail: "This person's files live in the new storage, so there is no Drive folder to rebuild. Upload the passport from their Documents tab instead." }
+            break
+          }
+        }
+
         // Get linked account (if any)
         const { data: acLinks } = await supabaseAdmin
           .from("account_contacts")

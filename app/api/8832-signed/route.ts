@@ -71,13 +71,21 @@ export async function POST(req: NextRequest) {
           .eq("id", form.account_id)
           .single()
 
-        if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-          const companyFolder = folderResult.files?.find(f =>
-            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          const targetFolderId = companyFolder?.id || acct.drive_folder_id
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed 8832
+        // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = (await companyDocState(form.account_id)) !== "drive"
+
+        if (acct?.drive_folder_id || inStorage) {
+          let targetFolderId = ""
+          if (!inStorage && acct?.drive_folder_id) {
+            const { listFolder } = await import("@/lib/google-drive")
+            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const companyFolder = folderResult.files?.find(f =>
+              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+            )
+            targetFolderId = companyFolder?.id || acct.drive_folder_id
+          }
 
           // Download signed PDF from Storage
           const { data: files } = await supabaseAdmin.storage
@@ -95,25 +103,44 @@ export async function POST(req: NextRequest) {
               attachmentBytes = new Uint8Array(arrayBuffer)
               const fileData = Buffer.from(arrayBuffer)
 
-              // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-              const driveResult = await uploadBinaryToDriveUpsert(attachmentName, fileData, "application/pdf", targetFolderId) as { id: string }
+              if (inStorage) {
+                // the same key on a re-run is a new VERSION of the same file, never a second copy
+                const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+                const routed = await saveSignedPdfForAccount({
+                  accountId: form.account_id, fileName: attachmentName, bytes: fileData, label: "Form 8832", category: 1, callerKey: `8832-signed:${form.id}`,
+                })
+                if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Form 8832 was being saved — nothing was saved.")
+                await supabaseAdmin
+                  .from("form_8832_applications")
+                  .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
+                  .eq("id", form.id)
+                results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
+              } else {
+                const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+                // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+                const driveResult = await uploadBinaryToDriveUpsert(attachmentName, fileData, "application/pdf", targetFolderId) as { id: string }
 
-              await supabaseAdmin
-                .from("form_8832_applications")
-                .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
-                .eq("id", form.id)
+                await supabaseAdmin
+                  .from("form_8832_applications")
+                  .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
+                  .eq("id", form.id)
 
-              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded: ${driveResult.id}` })
+                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded: ${driveResult.id}` })
 
-              await autoSaveDocument({
-                accountId: form.account_id,
-                fileName: attachmentName,
-                documentType: "Form 8832",
-                category: 1,
-                driveFileId: driveResult.id,
-                portalVisible: true,
-              })
+                await autoSaveDocument({
+                  accountId: form.account_id,
+                  fileName: attachmentName,
+                  documentType: "Form 8832",
+                  category: 1,
+                  driveFileId: driveResult.id,
+                  portalVisible: true,
+                })
+              }
+            } else {
+              results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF could not be downloaded from Storage — nothing was filed" })
             }
+          } else {
+            results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF was not found in Storage — nothing was filed" })
           }
         }
       } catch (e) {

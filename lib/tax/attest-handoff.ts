@@ -57,9 +57,12 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   //    year subfolder is the target, and the upsert REPLACES the year's file in
   //    place so exactly one client-confirmed workbook exists per year.
   try {
-    if (acct?.drive_folder_id) {
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company keeps the confirmed
+    // workbook in its new storage (3. Tax › <year>) — Drive is not touched; a company still on Drive carries on below.
+    const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+    const inStorage = (await companyDocState(accountId)) !== "drive"
+    if (acct?.drive_folder_id || inStorage) {
       const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
-      const { findTaxFolder, findOrCreateYearFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
       const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
       if (!result) {
         // No transactions at all (dormant / first year). Nothing failed — there
@@ -67,17 +70,25 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
         outcome = "nothing_to_archive"
         console.warn(`[attest-handoff] no transactions for account ${accountId} ${taxYear} — Excel not archived`)
       } else {
-        const taxFolderId = await findTaxFolder(acct.drive_folder_id)
-        // Fall back to the Drive root only when there is no '3. Tax' folder at all.
-        const target = taxFolderId
-          ? await findOrCreateYearFolder(taxFolderId, taxYear)
-          : acct.drive_folder_id
-        await uploadBinaryToDriveUpsert(
-          `${companyName} - PnL + Balance Sheet ${taxYear} (client-confirmed).xlsx`,
-          result.buffer,
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          target,
-        )
+        const workbookName = `${companyName} - PnL + Balance Sheet ${taxYear} (client-confirmed).xlsx`
+        const workbookMime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if (inStorage) {
+          // the same key on a re-confirm is a new VERSION of the year's one workbook, never a second copy
+          const { saveTaxFileForAccount } = await import("@/lib/crm-store/save-form")
+          const routed = await saveTaxFileForAccount({
+            accountId, year: taxYear, name: workbookName, bytes: Buffer.from(result.buffer), mimeType: workbookMime,
+            callerKey: `attest-workbook:${accountId}:${taxYear}`,
+          })
+          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the workbook was being saved — nothing was saved.")
+        } else {
+          const { findTaxFolder, findOrCreateYearFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+          const taxFolderId = await findTaxFolder(acct!.drive_folder_id as string)
+          // Fall back to the Drive root only when there is no '3. Tax' folder at all.
+          const target = taxFolderId
+            ? await findOrCreateYearFolder(taxFolderId, taxYear)
+            : (acct!.drive_folder_id as string)
+          await uploadBinaryToDriveUpsert(workbookName, result.buffer, workbookMime, target)
+        }
         outcome = "archived"
       }
     } else {

@@ -565,9 +565,17 @@ export function registerITINFormTools(server: McpServer) {
           folderId = acc?.drive_folder_id || undefined
         }
 
+        // Drive cutover (dev job ad09ea91): the ITIN belongs to the PERSON. A person whose storage is live — or who belongs to a
+        // switched company — keeps these documents in their own storage; nothing is written to Drive for them.
+        const { liveOwnerOfContact, companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const personInStorage = !!sub.contact_id && (
+          !!(await liveOwnerOfContact(sub.contact_id as string)) ||
+          (!!sub.account_id && (await companyDocState(sub.account_id as string)) !== "drive")
+        )
+
         // Create ITIN subfolder
         let itinFolderId: string | undefined
-        if (folderId) {
+        if (folderId && !personInStorage) {
           const { listFolder, createFolder } = await import("@/lib/google-drive")
           const contents = await listFolder(folderId)
           const existing = contents?.files?.find(
@@ -630,9 +638,36 @@ export function registerITINFormTools(server: McpServer) {
         const oiPdf = await fillScheduleOI(nrData)
         results.push(`✅ Schedule OI generated (${oiPdf.length} bytes)`)
 
-        // 6. Upload to Drive
+        // 6. Save the documents
         const uploadedIds: { name: string; id: string }[] = []
-        if (itinFolderId) {
+        if (personInStorage) {
+          const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
+          const { storeNameKey } = await import("@/lib/crm-store/rules")
+          const slug = clientName.replace(/\s+/g, "_")
+          const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null) => {
+            const routed = await saveDocumentForContact({
+              contactId: sub.contact_id as string, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
+              contactName: clientName, name: fileName, bytes, mimeType: mime, documentType,
+              callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
+              row: { document_type_name: label, category: 1, status: "classified" },
+            })
+            if (routed.route !== "store") throw new Error("this person's files moved back to Drive while saving — nothing more was saved")
+            uploadedIds.push({ name: label, id: routed.pointer })
+            results.push(`📤 ${label} saved in ${clientName}'s new storage`)
+          }
+          await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7")
+          await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr")
+          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", null)
+          const uploads = sub.upload_paths as string[] | null
+          for (const path of uploads ?? []) {
+            try {
+              const { data: fileData } = await supabaseAdmin.storage.from("onboarding-uploads").download(path)
+              if (fileData) await saveOne(path.split("/").pop() || "passport.pdf", path.split("/").pop() || "passport.pdf", Buffer.from(await fileData.arrayBuffer()), fileData.type || "application/octet-stream", "passport")
+            } catch (e) {
+              results.push(`⚠️ Failed to copy ${path}: ${e instanceof Error ? e.message : String(e)}`)
+            }
+          }
+        } else if (itinFolderId) {
           const { uploadBinaryToDrive, uploadBinaryToDriveUpsert, folderFileNameMap } = await import("@/lib/google-drive")
           const slug = clientName.replace(/\s+/g, "_")
 
@@ -739,10 +774,10 @@ support@tonydurante.us
                 const { gmailPost } = await import("@/lib/gmail")
 
                 // Download PDFs from Drive for attachment
-                const { downloadFileBinary } = await import("@/lib/google-drive")
-                const { buffer: w7Buf } = await downloadFileBinary(w7FileId)
-                const { buffer: nrBuf } = await downloadFileBinary(nrFileId)
-                const { buffer: oiBuf } = await downloadFileBinary(oiFileId)
+                const { openDocument } = await import("@/lib/documents/open-document")
+                const { buffer: w7Buf } = await openDocument(w7FileId)
+                const { buffer: nrBuf } = await openDocument(nrFileId)
+                const { buffer: oiBuf } = await openDocument(oiFileId)
 
                 const boundary = "boundary_" + Date.now()
                 const slug2 = clientName.replace(/\s+/g, "_")

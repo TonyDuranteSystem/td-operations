@@ -284,14 +284,14 @@ export async function readFileForStaff(fileId: string): Promise<{ bytes: Buffer;
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: f.name }
 }
 
-/** The company's owner in the NEW store (only in the pilot environment; anything else → null). */
+/** The company's owner in the NEW store (a live, not study-only storage; anything else → null). */
 export async function storeOwnerForAccount(accountId: string): Promise<string | null> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return null
+  // No environment gate (Drive cutover, dev job ad09ea91): the answer is exact data — a live, not study-only, storage.
+  // Production has none yet, so this still answers null there today; the day a company is switched it answers.
   try {
     // a storage made by a study copy is not the company's storage yet (the CRM keeps using Drive for it)
-    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()
-    return (data?.id as string | undefined) ?? null
+    const { data } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
+    return ((data ?? [])[0]?.id as string | undefined) ?? null
   } catch {
     return null
   }
@@ -399,19 +399,19 @@ export async function storeFilesShownForAccount(accountId: string, ownerId: stri
  * so a store-owned company can never be given a Drive folder because the lookup failed.
  */
 export async function assertNotStoreOwnedAccount(accountId: string): Promise<void> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return
-  const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).maybeSingle()
+  // No environment gate: the answer is exact data (a live, not study-only, storage). Production has none yet, so this
+  // refuses nothing there today — but the day a company is switched it protects it without another deploy.
+  const { data, error } = await db().from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
   if (error) throw new Error("Could not check where this company's files live — please try again.")
   const { StoreOwnedAccountError } = await import("./account-uploads")
-  if (data) throw new StoreOwnedAccountError("This company's files live in the new CRM storage — it does not get a Google Drive folder.")
+  if ((data ?? []).length > 0) throw new StoreOwnedAccountError("This company's files live in the new CRM storage — it does not get a Google Drive folder.")
   // The window after company creation when the hand-over has not happened (or failed): the company's
   // formation case is store-owned, so its files belong in the store too — still no Drive folder.
   const { data: sds, error: sdErr } = await db().from("service_deliveries").select("id").eq("account_id", accountId)
   if (sdErr) throw new Error("Could not check where this company's files live — please try again.")
   const sdIds = (sds ?? []).map((x: { id: string }) => x.id)
   if (sdIds.length > 0) {
-    const { data: fo, error: foErr } = await db().from("store_owners").select("id").eq("kind", "formation").in("service_delivery_id", sdIds).limit(1)
+    const { data: fo, error: foErr } = await db().from("store_owners").select("id").eq("kind", "formation").eq("study_only", false).in("service_delivery_id", sdIds).limit(1)
     if (foErr) throw new Error("Could not check where this company's files live — please try again.")
     if (fo && fo.length > 0) throw new StoreOwnedAccountError("This company's formation files live in the new CRM storage (their hand-over to the company is pending) — it does not get a Google Drive folder.")
   }

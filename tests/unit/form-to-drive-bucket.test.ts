@@ -15,6 +15,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Capture every bucket passed to supabaseAdmin.storage.from(...)
 let bucketsUsed: string[] = []
 
+// The company is still on Drive in these tests (the storage route has its own tests: crm-store-save-form.test.ts).
+vi.mock('@/lib/crm-store/save-form', () => ({
+  switchedTargetForFolder: vi.fn(async () => null),
+  saveFormToStore: vi.fn(),
+}))
+
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     storage: {

@@ -44,6 +44,19 @@ export async function POST(req: NextRequest) {
 
     if (!blob) return NextResponse.json({ error: 'PDF not found in storage' }, { status: 404 })
 
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company gets the signed lease in
+    // the new storage — the same file key as the original signing, so this is a new VERSION of that file, never a copy.
+    {
+      const regenFileData = Buffer.from(await blob.arrayBuffer())
+      const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
+      const routed = await saveSignedPdfForAccount({
+        accountId: lease.account_id,
+        fileName: `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`,
+        bytes: regenFileData, label: 'Lease Agreement', category: 1, callerKey: `lease-signed:${lease.id}`, documentType: 'office_lease',
+      })
+      if (routed.route === 'store') return NextResponse.json({ ok: true, driveFileId: routed.pointer })
+    }
+
     const { data: acct } = await supabaseAdmin
       .from('accounts')
       .select('drive_folder_id')

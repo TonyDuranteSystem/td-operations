@@ -24,6 +24,13 @@ vi.mock('jose', () => ({
   }),
 }))
 
+// These tests run the production upload path with a pretend production URL; the cutover guard (a database read
+// of which companies live in the new storage) is not what they test, so it answers "none switched".
+vi.mock('@/lib/crm-store/switched-drive-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/crm-store/switched-drive-guard')>()),
+  lockedFolderIdsCached: vi.fn().mockResolvedValue(new Set<string>()),
+}))
+
 const ORIGINAL_SANDBOX = process.env.SANDBOX_MODE
 const ORIGINAL_SA_KEY = process.env.GOOGLE_SA_KEY
 const ORIGINAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL

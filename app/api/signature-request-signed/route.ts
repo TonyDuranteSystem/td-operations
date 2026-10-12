@@ -53,8 +53,47 @@ export async function POST(req: NextRequest) {
 
     const results: string[] = []
 
+    // 0. Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed
+    //    document saved in the new storage (listed in its documents, stamped with the flow) — never Drive, and never
+    //    the storage-served fallback below. A company still on Drive carries on exactly as before.
+    let switched = false
+    let stateKnown = false
+    if (sigReq.signed_pdf_path && sigReq.account_id) {
+      try {
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        switched = (await companyDocState(sigReq.account_id)) !== "drive"
+        stateKnown = true
+        if (switched) {
+          const { data: pdfData } = await supabaseAdmin.storage.from("signed-documents").download(sigReq.signed_pdf_path)
+          if (!pdfData) throw new Error("signed PDF not found in Storage")
+          const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveSignedPdfForAccount({
+            accountId: sigReq.account_id, fileName: `${sigReq.document_name} - Signed.pdf`, bytes: Buffer.from(await pdfData.arrayBuffer()),
+            label: sigReq.document_name, category: 5, callerKey: `signature-signed:${sigReq.id}`,
+            contactId: sigReq.contact_id ?? null, serviceDeliveryId: sigReq.service_delivery_id ?? null,
+          })
+          if (routed.route === "store") {
+            await supabaseAdmin.from("signature_requests").update({ signed_pdf_drive_id: routed.pointer } as never).eq("id", sigReq.id)
+            if (sigReq.service_delivery_id) {
+              // eslint-disable-next-line no-restricted-syntax -- same stamp as the Drive path below (deferred migration, dev_task 7ebb1e0c)
+              await supabaseAdmin.from("documents").update({ flow_stage: "Signed" } as never).eq("id", routed.documentRowId)
+            }
+            results.push("storage_save: ok")
+            // the client is told about the new document exactly as when the Drive path makes it visible
+            const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
+            notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
+              console.warn("[signature-request-signed] new-document alert failed:", e instanceof Error ? e.message : String(e)))
+          }
+        }
+      } catch (err) {
+        results.push(`storage_save: error - ${err instanceof Error ? err.message : "unknown"}`)
+        // could not even tell where the files live: file NOTHING (never guess Drive)
+        if (!stateKnown) switched = true
+      }
+    }
+
     // 1. Upload signed PDF to Google Drive + register in documents table
-    if (sigReq.signed_pdf_path && account?.drive_folder_id) {
+    if (!switched && sigReq.signed_pdf_path && account?.drive_folder_id) {
       try {
         const { data: pdfData } = await supabaseAdmin.storage
           .from("signed-documents")
@@ -135,7 +174,7 @@ export async function POST(req: NextRequest) {
     // stamped with the SD + flow_stage="Signed". Idempotent: skips if the Drive
     // path already created the Signed doc for this SD, so production (where Drive
     // works) does not get a duplicate.
-    if (sigReq.signed_pdf_path && sigReq.service_delivery_id) {
+    if (!switched && sigReq.signed_pdf_path && sigReq.service_delivery_id) {
       try {
         const fileName = `${sigReq.document_name} - Signed.pdf`
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,7 +224,7 @@ export async function POST(req: NextRequest) {
         `Company: ${account?.company_name || "Unknown"}`,
         `Signed at: ${new Date().toISOString()}`,
         ``,
-        `The signed document has been uploaded to the client's Drive folder.`,
+        switched ? `The signed document has been saved in the client's new storage.` : `The signed document has been uploaded to the client's Drive folder.`,
       ].join("\r\n")
       const rawEmail = [
         `From: support@tonydurante.us`,

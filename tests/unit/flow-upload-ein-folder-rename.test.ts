@@ -90,6 +90,9 @@ vi.mock("@/lib/google-drive", () => ({
   }),
 }))
 
+// The route asks where the company's files live (Drive cutover); these scenarios are about a company still on Drive.
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => "drive") }))
+
 vi.mock("@/lib/service-delivery", () => ({
   advanceServiceDelivery: vi.fn(async () => {
     advanceCalled = true

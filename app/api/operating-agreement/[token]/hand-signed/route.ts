@@ -285,15 +285,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       .eq("id", agreement.account_id)
       .maybeSingle()
 
-    if (agreement.account_id && acct?.drive_folder_id) {
-      const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-      const folderResult = (await listFolder(acct.drive_folder_id)) as {
-        files?: { id: string; name: string; mimeType: string }[]
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has both documents
+    // saved in the new storage and needs no Drive folder; a company still on Drive carries on exactly as before.
+    let inStorage = false
+    if (agreement.account_id) {
+      const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+      inStorage = (await companyDocState(agreement.account_id)) !== "drive"
+    }
+
+    if (agreement.account_id && (acct?.drive_folder_id || inStorage)) {
+      let targetFolderId = ""
+      if (!inStorage && acct?.drive_folder_id) {
+        const { listFolder } = await import("@/lib/google-drive")
+        const folderResult = (await listFolder(acct.drive_folder_id)) as {
+          files?: { id: string; name: string; mimeType: string }[]
+        }
+        const companyFolder = folderResult.files?.find(
+          f => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder",
+        )
+        targetFolderId = companyFolder?.id || acct.drive_folder_id
       }
-      const companyFolder = folderResult.files?.find(
-        f => f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder",
-      )
-      const targetFolderId = companyFolder?.id || acct.drive_folder_id
 
       // 1. The draft the client printed. Named so nobody mistakes it for an
       //    executed agreement when they find it in six months.
@@ -321,20 +332,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       }
       const draftPdf = await generateOperatingAgreementPDF({ data, draft: true })
       const draftName = `Operating Agreement - ${agreement.company_name} (Unsigned Copy - client signed by hand).pdf`
-      const draftFile = (await uploadBinaryToDriveUpsert(
-        draftName,
-        Buffer.from(draftPdf),
-        "application/pdf",
-        targetFolderId,
-      )) as { id: string }
-      await autoSaveDocument({
-        accountId: agreement.account_id,
-        fileName: draftName,
-        documentType: "Operating Agreement",
-        category: 1,
-        driveFileId: draftFile.id,
-        portalVisible: true,
-      })
+      if (inStorage) {
+        const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+        const routed = await saveSignedPdfForAccount({
+          accountId: agreement.account_id, fileName: draftName, bytes: Buffer.from(draftPdf), label: "Operating Agreement", category: 1,
+          callerKey: `oa-handsigned-draft:${agreement.id}`, documentType: "operating_agreement",
+        })
+        if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
+      } else {
+        const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+        const draftFile = (await uploadBinaryToDriveUpsert(
+          draftName,
+          Buffer.from(draftPdf),
+          "application/pdf",
+          targetFolderId,
+        )) as { id: string }
+        await autoSaveDocument({
+          accountId: agreement.account_id,
+          fileName: draftName,
+          documentType: "Operating Agreement",
+          category: 1,
+          driveFileId: draftFile.id,
+          portalVisible: true,
+        })
+      }
       filed.push("draft")
 
       // 2. The client's scan, when they gave us one. THIS is the executed
@@ -343,20 +364,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       if (file) {
         const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".pdf"
         const scanName = `Operating Agreement - ${agreement.company_name} (Signed - hand-signed scan)${ext}`
-        const scanFile = (await uploadBinaryToDriveUpsert(
-          scanName,
-          Buffer.from(await file.arrayBuffer()),
-          file.type || "application/pdf",
-          targetFolderId,
-        )) as { id: string }
-        await autoSaveDocument({
-          accountId: agreement.account_id,
-          fileName: scanName,
-          documentType: "Operating Agreement",
-          category: 1,
-          driveFileId: scanFile.id,
-          portalVisible: true,
-        })
+        if (inStorage) {
+          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveDocumentForAccount({
+            accountId: agreement.account_id, name: scanName, bytes: Buffer.from(await file.arrayBuffer()), mimeType: file.type || "application/pdf",
+            folder: "company", documentType: "operating_agreement", callerKey: `oa-handsigned-scan:${agreement.id}`, portalVisible: true,
+            row: { document_type_name: "Operating Agreement", category: 1, status: "classified" },
+          })
+          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the signed scan was being saved — nothing was saved.")
+        } else {
+          const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+          const scanFile = (await uploadBinaryToDriveUpsert(
+            scanName,
+            Buffer.from(await file.arrayBuffer()),
+            file.type || "application/pdf",
+            targetFolderId,
+          )) as { id: string }
+          await autoSaveDocument({
+            accountId: agreement.account_id,
+            fileName: scanName,
+            documentType: "Operating Agreement",
+            category: 1,
+            driveFileId: scanFile.id,
+            portalVisible: true,
+          })
+        }
         filed.push("scan")
       }
     }

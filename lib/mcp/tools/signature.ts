@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { logAction } from "@/lib/mcp/action-log"
-import { downloadFileBinary } from "@/lib/google-drive"
+import { openDocument } from "@/lib/documents/open-document"
 
 export function registerSignatureTools(server: McpServer) {
   server.tool(
@@ -67,7 +67,9 @@ export function registerSignatureTools(server: McpServer) {
         // Try uploading to Supabase Storage, fall back to Drive-only
         let storagePath = ""
         try {
-          const { buffer, fileName } = await downloadFileBinary(drive_file_id)
+          const opened = await openDocument(drive_file_id)
+          const buffer = opened.buffer
+          const fileName = opened.fileName || "document.pdf"
           storagePath = `${token}/${fileName}`
           const { error: uploadError } = await supabaseAdmin.storage
             .from("signature-requests")

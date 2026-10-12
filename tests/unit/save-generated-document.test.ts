@@ -10,6 +10,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }))
 
+// The company is still on Drive here (the storage route has its own tests: crm-store-save-for-account.test.ts).
+vi.mock('@/lib/crm-store/save-for-account', () => ({
+  saveDocumentForAccount: vi.fn(async () => ({ route: 'drive' })),
+}))
+
 // ─── Mock state ──────────────────────────────────────────
 let accountRow: { drive_folder_id: string | null; company_name: string } | null = null
 let autoSaveResult: { id?: string; error?: string } = { id: 'doc-1' }
@@ -152,6 +157,29 @@ describe('saveSignedGeneratedDocument', () => {
     expect(r.success).toBe(true)
     expect(r.coOwnersAlerted).toBe(0)
     expect(notifyCalls.length).toBe(0)
+  })
+
+  it('a company that lives in the new storage: saved there (file + record), Drive and the Drive-record path are never touched', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'store', fileId: 'f-1', pointer: 'store:f-1', documentRowId: 'doc-store-1', status: 'created' })
+    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const r = await saveSignedGeneratedDocument({ ...baseParams(), category: 1 })
+    expect(r.success).toBe(true)
+    expect(r.documentId).toBe('doc-store-1')
+    expect(r.driveFileId).toBe('store:f-1')
+    expect(driveUploads.length).toBe(0)
+    expect(autoSaveCalls.length).toBe(0)
+    expect(vi.mocked(saveDocumentForAccount)).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acct-1', portalVisible: true, folder: 'company' }))
+  })
+
+  it('a storage save that fails is an error — it never falls back to Drive', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    vi.mocked(saveDocumentForAccount).mockRejectedValueOnce(new Error('store down'))
+    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const r = await saveSignedGeneratedDocument(baseParams())
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('store down')
+    expect(driveUploads.length).toBe(0)
   })
 
   it('returns an error + the orphan drive id when the record save fails', async () => {

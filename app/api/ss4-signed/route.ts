@@ -165,13 +165,21 @@ export async function POST(req: NextRequest) {
           .eq("id", ss4.account_id)
           .single()
 
-        if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-          const companyFolder = folderResult.files?.find(f =>
-            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          const targetFolderId = companyFolder?.id || acct.drive_folder_id
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed SS-4
+        // saved in the new storage (still internal, never shown to the client) and needs no Drive folder at all.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = (await companyDocState(ss4.account_id)) !== "drive"
+
+        if (acct?.drive_folder_id || inStorage) {
+          let targetFolderId = ""
+          if (!inStorage && acct?.drive_folder_id) {
+            const { listFolder } = await import("@/lib/google-drive")
+            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const companyFolder = folderResult.files?.find(f =>
+              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+            )
+            targetFolderId = companyFolder?.id || acct.drive_folder_id
+          }
 
           // Find the signed PDF in Storage
           const { data: files } = await supabaseAdmin.storage
@@ -189,33 +197,52 @@ export async function POST(req: NextRequest) {
               const fileData = Buffer.from(arrayBuffer)
               const fileName = `Form SS-4 - ${ss4.company_name} - Signed.pdf`
 
-              // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
-              const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+              if (inStorage) {
+                // portalVisible:false — INTERNAL tax document, never shown to the client (see below). The same key on a
+                // webhook retry is a new VERSION of the same file, never a second copy.
+                const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+                const routed = await saveSignedPdfForAccount({
+                  accountId: ss4.account_id, fileName, bytes: fileData, label: "Form SS-4 (Signed)", category: 1,
+                  callerKey: `ss4-signed-company:${ss4.id}`, portalVisible: false, documentType: "form_ss_4", serviceDeliveryId: formationSdId,
+                })
+                if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its SS-4 was being saved — nothing was saved.")
+                signedDocLinked = true // saved: never save it again through the fallback below, whatever happens next
+                await supabaseAdmin
+                  .from("ss4_applications")
+                  .update({ pdf_signed_drive_id: routed.pointer, updated_at: new Date().toISOString() })
+                  .eq("id", ss4.id)
+                results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
+                signedDocLinked = true
+              } else {
+                const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+                // Stable name -> UPSERT: webhook retry refreshes in place, no copies.
+                const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
 
-              // Update ss4_applications with Drive file ID
-              await supabaseAdmin
-                .from("ss4_applications")
-                .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
-                .eq("id", ss4.id)
+                // Update ss4_applications with Drive file ID
+                await supabaseAdmin
+                  .from("ss4_applications")
+                  .update({ pdf_signed_drive_id: driveResult.id, updated_at: new Date().toISOString() })
+                  .eq("id", ss4.id)
 
-              results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
 
-              // Auto-save to documents table — stamped with the formation SD so
-              // the signed SS-4 shows in the flow workspace Documents section
-              // (which queries by service_delivery_id). portalVisible:false —
-              // the signed SS-4 is an INTERNAL tax document (responsible party's
-              // tax ID) and must NEVER be shared with the client per Antonio.
-              // The client opens a bank account with the EIN + Articles only.
-              const saved = await autoSaveDocument({
-                accountId: ss4.account_id,
-                fileName,
-                documentType: "Form SS-4 (Signed)",
-                category: 1, // Company
-                driveFileId: driveResult.id,
-                portalVisible: false,
-                serviceDeliveryId: formationSdId,
-              })
-              if (saved.id) signedDocLinked = true
+                // Auto-save to documents table — stamped with the formation SD so
+                // the signed SS-4 shows in the flow workspace Documents section
+                // (which queries by service_delivery_id). portalVisible:false —
+                // the signed SS-4 is an INTERNAL tax document (responsible party's
+                // tax ID) and must NEVER be shared with the client per Antonio.
+                // The client opens a bank account with the EIN + Articles only.
+                const saved = await autoSaveDocument({
+                  accountId: ss4.account_id,
+                  fileName,
+                  documentType: "Form SS-4 (Signed)",
+                  category: 1, // Company
+                  driveFileId: driveResult.id,
+                  portalVisible: false,
+                  serviceDeliveryId: formationSdId,
+                })
+                if (saved.id) signedDocLinked = true
+              }
             } else {
               results.push({ step: "drive_upload", status: "error", detail: "Could not download PDF from Storage" })
             }
@@ -356,11 +383,16 @@ export async function POST(req: NextRequest) {
           : { data: null }
         const ss4Bytes = ss4Blob ? new Uint8Array(await ss4Blob.arrayBuffer()) : null
 
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its Articles in the
+        // new storage (found through the documents list below) and gets the IRS package saved there; Drive is not touched.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const pkgInStorage = (await companyDocState(ss4.account_id)) !== "drive"
+
         // Resolve the Articles PDF — Drive folder scan first, then documents table.
         let articlesBuffer: Buffer | null = null
         let articlesSource = ""
         let companyFolderId: string | null = null
-        if (acct?.drive_folder_id) {
+        if (!pkgInStorage && acct?.drive_folder_id) {
           const { listFolder, downloadFileBinary } = await import("@/lib/google-drive")
           const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
           const companyFolder = folderResult.files?.find(f =>
@@ -408,7 +440,22 @@ export async function POST(req: NextRequest) {
           // name -> UPSERT: webhook retry refreshes in place, no copies. When
           // there is no Drive folder we still produced the merged bytes for the
           // email attachment, so staff get the complete package regardless.
-          if (acct?.drive_folder_id) {
+          if (pkgInStorage) {
+            // INTERNAL workspace document (SD-scoped), never client-visible. The same key on a re-sign is a new VERSION of
+            // the same file, so the fax panel always reflects the latest signed package.
+            try {
+              const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+              const routed = await saveSignedPdfForAccount({
+                accountId: ss4.account_id, fileName: mergedFileName, bytes: Buffer.from(mergedPdfBytes), label: "SS-4 + Articles (IRS Package)", category: 1,
+                callerKey: `ss4-irs-package:${ss4.id}`, portalVisible: false, serviceDeliveryId: formationSdId, documentType: "irs_fax",
+              })
+              if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the IRS package was being saved — nothing was saved.")
+              results.push({ step: "irs_package", status: "ok", detail: `Combined SS-4 + Articles saved to the new storage (${articlesSource}): ${routed.pointer} (${ss4Pages.length + articlesPages.length} pages)` })
+              results.push({ step: "irs_package_doc", status: "ok", detail: "Combined package registered in workspace" })
+            } catch (e) {
+              results.push({ step: "irs_package", status: "error", detail: e instanceof Error ? e.message : String(e) })
+            }
+          } else if (acct?.drive_folder_id) {
             const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
             const targetFolderId = companyFolderId || acct.drive_folder_id
             const driveResult = await uploadBinaryToDriveUpsert(mergedFileName, Buffer.from(mergedPdfBytes), "application/pdf", targetFolderId) as { id: string }

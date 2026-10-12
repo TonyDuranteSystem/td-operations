@@ -173,6 +173,16 @@ export async function ensureContactFolder(
     }
   }
 
+  // Drive cutover (dev job ad09ea91): a person whose files live in the new storage never gets a NEW Drive folder.
+  // (An existing folder above is still returned: Drive stays visible and read-only.)
+  {
+    const { liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
+    if (await liveOwnerOfContact(contactId)) {
+      const { SwitchedCompanyDriveWriteError } = await import('@/lib/crm-store/switched-drive-guard')
+      throw new SwitchedCompanyDriveWriteError("This person's files live in the new storage - no Drive folder is created for them.")
+    }
+  }
+
   // No folder linked — check Drive for existing folder with same name (dedup)
   const rootId = await ensureContactsRoot()
   const { createFolder, listFiles } = await getDriveHelpers()
@@ -228,15 +238,17 @@ export async function ensureCompanyFolder(
     .eq('id', accountId)
     .single()
 
+  // A company whose files live in the new store never gets a Drive folder — and never has Drive subfolders
+  // made in an existing one — whichever flow asks (tax intake, onboarding, RA switch, place-client …).
+  // Checked BEFORE the existing-folder shortcut: a switched company keeps its old folder id (Drive stays
+  // visible), so the shortcut would otherwise hand it back and the caller would write into Drive.
+  const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
+  await assertNotStoreOwnedAccount(accountId)
+
   if (account?.drive_folder_id) {
     const subfolders = await ensureSubfoldersOn(account.drive_folder_id)
     return { folderId: account.drive_folder_id, created: false, subfolders }
   }
-
-  // CRM Store pilot (sandbox only): a company whose files live in the new store never gets a Drive
-  // folder, whichever flow asks (tax intake, onboarding, RA switch, place-client …). Inert on production.
-  const { assertNotStoreOwnedAccount } = await import('@/lib/crm-store/browse')
-  await assertNotStoreOwnedAccount(accountId)
 
   // Determine parent folder by state
   const { createFolder, listFiles } = await getDriveHelpers()

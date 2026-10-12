@@ -51,12 +51,13 @@ async function main() {
   const legacySubs: Record<string, string> = {}
   for (const n of ["1. Company", "2. Contacts", "3. Tax", "4. Banking", "5. Correspondence"]) legacySubs[n] = await mk(legacyCo, n)
   const original = (await drive.uploadBinaryToDrive("Original OA.pdf", Buffer.from("ORIGINAL"), "application/pdf", legacySubs["1. Company"])) as { id: string }
-  const cfg: BackupConfig = {
-    mainDriveId: TEST_DRIVE, companiesRoot: companies,
-    privateDriveId: TEST_DRIVE, restrictedRoot: await mk(top, "Private - Restricted"), protectedRoot: await mk(top, "Private - Protected"),
-  }
+  // SIMPLE=1 (the production design, Antonio 2026-10-13): one Drive — people into the Contacts folder, trashed copies into "_Trashed in CRM"
+  const simple = process.env.SIMPLE === "1"
+  const cfg: BackupConfig = simple
+    ? { mainDriveId: TEST_DRIVE, companiesRoot: companies, peopleRoot: await mk(top, "Contacts") }
+    : { mainDriveId: TEST_DRIVE, companiesRoot: companies, privateDriveId: TEST_DRIVE, restrictedRoot: await mk(top, "Private - Restricted"), protectedRoot: await mk(top, "Private - Protected") }
   await db.from("store_backup_places").delete().like("place_key", "state:%")      // sandbox: forget places from earlier proof runs
-  await db.from("store_backup_places").delete().in("place_key", ["people", "unfiled", "in_formation", "unplaced"])
+  await db.from("store_backup_places").delete().in("place_key", ["people", "unfiled", "in_formation", "unplaced", "trash_root"])
   const run = (ownerId: string, extra: Record<string, unknown> = {}) => backupOwner(ownerId, { config: cfg, force: true, ...extra })
   const kids = async (folderId: string) => (await drive.listChildFolders(folderId, TEST_DRIVE)).map((x) => x.name).sort()
   const refOf = async (id: string) => (await db.from("store_external_refs").select("external_id, backed_up_sha256, drive_path, status").eq("object_id", id).eq("direction", "backup").maybeSingle()).data
@@ -108,7 +109,7 @@ async function main() {
     await run(ownerNM); await run(ownerP); await run(owner2)
     if (!(await kids(companies)).includes("New Mexico") || (await kids(companies)).includes("NM")) fail("CHECK 2 FAILED: NM not placed under New Mexico")
     const passCopy = await drive.getTaggedItem((await refOf(pass.fileId)).external_id)
-    const people = (await drive.listChildFolders(cfg.restrictedRoot, TEST_DRIVE)).find((x) => x.name === "People")
+    const people = simple ? { id: cfg.peopleRoot as string } : (await drive.listChildFolders(cfg.restrictedRoot as string, TEST_DRIVE)).find((x) => x.name === "People")
     if (!people) fail("CHECK 2 FAILED: no People place in the private area")
     const personRoot = (await drive.listChildFolders(people!.id, TEST_DRIVE)).find((x) => x.name === `ZZ S5 Person ${tag}`)
     const personalSub = personRoot ? (await drive.listChildFolders(personRoot.id, TEST_DRIVE)).find((x) => x.name === "Personal documents") : undefined
@@ -142,7 +143,9 @@ async function main() {
     console.log("CHECK 4 passed — rename, new version (content replaced), move and a re-home to another client all propagate to OUR copies")
 
     // ── 5. a copy deleted by hand is recreated; a fixed folder deleted by hand is re-created too
-    await drive.trashFile(aRef.external_id)
+    // a person deleting the copy by hand in Drive happens OUTSIDE the app, so the app's Drive guard does not apply to it
+    const { runAsStoreBackup } = await import("@/lib/crm-store/switched-drive-guard")
+    await runAsStoreBackup(() => drive.trashFile(aRef.external_id))
     const r5 = await run(owner, { fullCheck: true })
     if (r5.recreated < 1 || (await refOf(a.fileId)).external_id === aRef.external_id) fail(`CHECK 5 FAILED: ${JSON.stringify(r5)}`)
     console.log("CHECK 5 passed — a copy someone deleted in Drive is recreated on the next run")
@@ -151,7 +154,9 @@ async function main() {
     const batch = await storeTrash(staff, b.fileId, "proof")
     await run(owner)
     const bT = await refOf(b.fileId)
-    const prot = (await drive.listChildFolders(cfg.protectedRoot, TEST_DRIVE)).find((x) => x.name.includes(`ZZ S5 Co ${tag}`))
+    const protRoot = simple ? (await drive.listChildFolders(companies, TEST_DRIVE)).find((x) => x.name === "_Trashed in CRM")?.id : cfg.protectedRoot
+    if (!protRoot) fail("CHECK 6 FAILED: no protected area")
+    const prot = (await drive.listChildFolders(protRoot as string, TEST_DRIVE)).find((x) => x.name.includes(`ZZ S5 Co ${tag}`))
     if (bT.drive_path.area !== "protected" || !prot || !((await drive.getTaggedItem(bT.external_id))?.parents ?? []).includes(prot.id)) fail("CHECK 6 FAILED: not in the private protected area")
     await restoreBatch(staff, batch)
     await run(owner)
@@ -190,7 +195,7 @@ async function main() {
     console.log(`CHECK 7 passed — a run stops cleanly before the time limit (not a failure); the alarm counts gaps and clears; one worker per owner; the kill switch stops everything${prod ? "; a real production folder is refused" : ""}`)
     console.log("ALL S5 BACKUP CHECKS PASSED")
   } finally {
-    await drive.trashFile(top).catch(() => undefined)
+    await (await import("@/lib/crm-store/switched-drive-guard")).runAsStoreBackup(() => drive.trashFile(top)).catch(() => undefined)
   }
 }
 

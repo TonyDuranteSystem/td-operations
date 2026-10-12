@@ -16,8 +16,10 @@ export class StoreOwnedAccountError extends Error {
   }
 }
 
+/** "This company lives in the new storage": the folder refusal AND the Drive-write guard (switched-drive-guard.ts) — both mean "save it in the storage". */
 export function isStoreOwnedRefusal(e: unknown): boolean {
-  return e instanceof StoreOwnedAccountError || (e instanceof Error && e.name === "StoreOwnedAccountError")
+  return e instanceof StoreOwnedAccountError
+    || (e instanceof Error && (e.name === "StoreOwnedAccountError" || e.name === "SwitchedCompanyDriveWriteError"))
 }
 
 export interface FallbackResult {

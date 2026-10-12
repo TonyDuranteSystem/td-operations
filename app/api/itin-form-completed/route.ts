@@ -188,7 +188,8 @@ export async function POST(req: NextRequest) {
       if (driveFolderId) {
         const driveResult = await saveFormToDrive(
           "itin", sd, uploadPaths, driveFolderId,
-          { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName }
+          { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName },
+          { person: contactId ? { contactId, viaAccountId: driveAccountId || null, name: clientName || displayName } : undefined },
         )
         results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.` })
 
@@ -331,8 +332,37 @@ export async function POST(req: NextRequest) {
         const nrBuffer = await generate1040NRPdf(sd)
         const oiBuffer = await generateScheduleOIPdf(sd)
 
+        // Where do this person's files live? (Drive cutover, dev job ad09ea91.) An ITIN belongs to the PERSON: when their
+        // own storage is live the three PDFs are saved there (listed in the CRM exactly as below, same visibility) and
+        // Drive is never touched; anyone else carries on with Drive exactly as before.
+        let itinSavedInStorage = false
+        if (contactId) {
+          const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
+          const itinSlug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
+          const itinDocs = [
+            { name: `W-7_${itinSlug}.pdf`, label: "ITIN W-7", bytes: w7Buffer },
+            { name: `1040-NR_${itinSlug}.pdf`, label: "ITIN 1040-NR", bytes: nrBuffer },
+            { name: `Schedule_OI_${itinSlug}.pdf`, label: "ITIN Schedule OI", bytes: oiBuffer },
+          ]
+          const routedDocs = []
+          for (const doc of itinDocs) {
+            // the same key on a re-run is a new VERSION of the same file, never a second copy
+            routedDocs.push(await saveDocumentForContact({
+              contactId, viaAccountId: driveAccountId || null, contactName: clientName || undefined, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: null,
+              callerKey: `itin-form-doc:${contactId}:${deliveryId ?? token}:${doc.name}`, accountId: sub.account_id ?? null, portalVisible: true,
+              row: { document_type_name: doc.label, category: 3, status: "classified", service_delivery_id: deliveryId },
+            }))
+          }
+          if (routedDocs.every(r => r.route === "store")) {
+            itinSavedInStorage = true
+            docsGenerated = true
+            results.push({ step: "docs_generated", status: "ok", detail: "W-7 + 1040-NR + Schedule OI generated and saved in the new storage" })
+            results.push({ step: "docs_registered", status: "ok", detail: `3/3 registered in portal documents (${sub.account_id ? "account-scoped" : "contact-scoped"})` })
+          }
+        }
+
         // Upload all 3 to Drive
-        if (driveFolderId) {
+        if (!itinSavedInStorage && driveFolderId) {
           const { uploadBinaryToDriveUpsert, folderFileNameMap, listFolder: lf, createFolder: cf } = await import("@/lib/google-drive")
 
           // Find or create ITIN subfolder

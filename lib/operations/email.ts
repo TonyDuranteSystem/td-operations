@@ -300,11 +300,12 @@ export async function sendEmail(
     const allAttachments: SendEmailAttachment[] = [...(params.attachments || [])]
     const driveIds = params.drive_file_ids || []
     if (driveIds.length > 0) {
-      const { downloadFileBinary } = await import("@/lib/google-drive")
+      // the standard reader: an attachment can sit in Drive, in the older bucket, or in the new storage
+      const { openDocument } = await import("@/lib/documents/open-document")
       for (const fileId of driveIds) {
-        const { buffer, mimeType, fileName } = await downloadFileBinary(fileId)
+        const { buffer, mimeType, fileName } = await openDocument(fileId)
         allAttachments.push({
-          filename: fileName,
+          filename: fileName || "attachment",
           content: buffer.toString("base64"),
           content_type: mimeType || "application/octet-stream",
         })

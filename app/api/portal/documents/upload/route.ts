@@ -91,55 +91,97 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
-  // Get account's Drive folder
-  const { data: account } = await supabaseAdmin
-    .from('accounts')
-    .select('drive_folder_id, company_name')
-    .eq('id', accountId)
-    .single()
+  // Auto-classify (worked out first: the storage route below needs them too)
+  const categoryNum = category ? parseInt(category) : 5
+  const typeName = taxYear
+    ? `${docType || 'Tax Document'} - ${taxYear}`
+    : docType || 'Client Upload'
 
-  if (!account?.drive_folder_id) {
-    return NextResponse.json({ error: 'No Drive folder configured for this account. Please contact support.' }, { status: 400 })
+  // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
+  // saves HERE and never touches Drive; a company still on Drive carries on exactly as before, below.
+  let stored: { documentRowId: string } | null = null
+  try {
+    const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+    const { createHash } = await import('crypto')
+    const uploaderContactId = getClientContactId(user)
+    let person: { contactId: string; name: string } | null = null
+    if (categoryNum === PERSONAL_CATEGORY && uploaderContactId) {
+      // a personal document (passport / ID) belongs to the member who uploaded it, in THEIR own storage
+      const { data: c } = await supabaseAdmin.from('contacts').select('full_name').eq('id', uploaderContactId).maybeSingle()
+      person = { contactId: uploaderContactId, name: (c?.full_name as string | undefined) || 'Member' }
+    }
+    const folder = categoryNum === 1 ? 'company' : categoryNum === 3 ? 'tax' : categoryNum === 4 ? 'banking' : categoryNum === PERSONAL_CATEGORY ? 'contacts' : 'correspondence'
+    try {
+      const routed = await saveDocumentForAccount({
+        accountId, name: fileName, bytes: fileBuffer, mimeType: mimeType || null, folder, documentType: null,
+        // the same file uploaded twice is ONE stored file
+        callerKey: `portal-upload:${accountId}:${person ? person.contactId : 'company'}:${categoryNum}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
+        person,
+        row: { category: categoryNum, document_type_name: typeName, status: 'classified' },
+      })
+      if (routed.route === 'store') stored = { documentRowId: routed.documentRowId }
+    } catch (e) {
+      if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+      throw e
+    }
+  } catch (err) {
+    console.error('Upload error (storage route):', err)
+    return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
+  }
+
+  // A company still on Drive: get its Drive folder
+  let driveFolderId: string | null = null
+  if (!stored) {
+    const { data: account } = await supabaseAdmin
+      .from('accounts')
+      .select('drive_folder_id, company_name')
+      .eq('id', accountId)
+      .single()
+
+    if (!account?.drive_folder_id) {
+      return NextResponse.json({ error: 'No Drive folder configured for this account. Please contact support.' }, { status: 400 })
+    }
+    driveFolderId = account.drive_folder_id as string
   }
 
   try {
-    // Upload to Google Drive
-    const driveFile = await uploadBinaryToDrive(
-      fileName,
-      fileBuffer,
-      mimeType,
-      account.drive_folder_id
-    )
+    let docId: string
+    if (stored) {
+      docId = stored.documentRowId
+    } else {
+      // Upload to Google Drive
+      const driveFile = await uploadBinaryToDrive(
+        fileName,
+        fileBuffer,
+        mimeType,
+        driveFolderId as string
+      )
 
-    // Auto-classify
-    const categoryNum = category ? parseInt(category) : 5
-    const typeName = taxYear
-      ? `${docType || 'Tax Document'} - ${taxYear}`
-      : docType || 'Client Upload'
+      const { data: doc, error: insertError } = await supabaseAdmin
+        .from('documents')
+        .insert({
+          file_name: fileName,
+          drive_file_id: driveFile.id,
+          account_id: accountId,
+          // A personal document (category 2 — passport/ID…) belongs to the member who
+          // uploaded it; without an owner nobody (not even the uploader) can see it.
+          // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
+          ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
+          category: categoryNum,
+          document_type_name: typeName,
+          status: 'classified',
+          confidence: 'high',
+          mime_type: mimeType,
+          file_size: fileSize,
+        })
+        .select('id')
+        .single()
 
-    const { data: doc, error: insertError } = await supabaseAdmin
-      .from('documents')
-      .insert({
-        file_name: fileName,
-        drive_file_id: driveFile.id,
-        account_id: accountId,
-        // A personal document (category 2 — passport/ID…) belongs to the member who
-        // uploaded it; without an owner nobody (not even the uploader) can see it.
-        // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
-        ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
-        category: categoryNum,
-        document_type_name: typeName,
-        status: 'classified',
-        confidence: 'high',
-        mime_type: mimeType,
-        file_size: fileSize,
-      })
-      .select('id')
-      .single()
-
-    if (insertError) {
-      console.error('Document insert error:', insertError)
-      return NextResponse.json({ error: 'File uploaded to Drive but failed to save record. Please contact support.' }, { status: 500 })
+      if (insertError) {
+        console.error('Document insert error:', insertError)
+        return NextResponse.json({ error: 'File uploaded to Drive but failed to save record. Please contact support.' }, { status: 500 })
+      }
+      docId = doc.id as string
     }
 
     // Clean up Supabase Storage (async, don't block response)
@@ -154,7 +196,7 @@ export async function POST(request: NextRequest) {
       const { emitDocumentUploadedEvent } = await import('@/lib/portal/chat-events')
       const { getClientContactId } = await import('@/lib/portal-auth')
       await emitDocumentUploadedEvent({
-        document_id: doc.id as string,
+        document_id: docId,
         // Tag the authenticated uploader so the note reaches their person
         // thread's What's New feed too (2026-07-06 fix). Staff uploads have
         // no client contact → stays account-only, as before.
@@ -200,7 +242,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      document_id: doc?.id,
+      document_id: docId,
       file_name: fileName,
     })
   } catch (err) {

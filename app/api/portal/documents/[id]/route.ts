@@ -26,11 +26,17 @@ export async function GET(
   // Get the document
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, account_id, contact_id, category, drive_file_id')
+    .select('id, file_name, account_id, contact_id, category, drive_file_id, portal_visible')
     .eq('id', params.id)
     .single()
 
   if (!doc || !doc.drive_file_id) {
+    return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+  }
+
+  // A file in the NEW storage is served to a client only when its CRM row says it is shown to them (an internal file —
+  // the signed SS-4, the IRS package — is never reachable by guessing its id). Drive rows keep today's behaviour.
+  if (doc.drive_file_id.startsWith('store:') && doc.portal_visible !== true) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 

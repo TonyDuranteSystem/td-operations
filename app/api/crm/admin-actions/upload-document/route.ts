@@ -61,6 +61,56 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: 'Contact not found' }, { status: 404 })
     }
 
+    // Where do these files live? (Drive cutover, dev job ad09ea91.) A person's OWN documents (category Contacts) go to
+    // their personal storage when it is live; a company document goes to the linked company's storage when that company
+    // is switched. Anything else carries on with Drive exactly as before, below.
+    let stored: { pointer: string; documentRowId: string } | null = null
+    {
+      const { saveDocumentForContact, saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { createHash } = await import('crypto')
+      // the person's company: only when there is exactly one (a person in several companies has no single "linked" one)
+      const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
+      const linkIds = ((acLinkEarly ?? []) as Array<{ account_id: string }>).map((l) => l.account_id)
+      const linkedAccountId = linkIds.length === 1 ? linkIds[0] : null
+      // A PERSON's own documents follow the person: if ANY company they belong to has been switched to the new storage,
+      // their personal storage is used (never Drive, never an arbitrary one of their companies).
+      let switchedViaAccountId: string | null = null
+      if (catInfo.num === 2) {
+        const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
+        for (const id of linkIds) {
+          if ((await companyDocState(id)) !== 'drive') { switchedViaAccountId = id; break }
+        }
+      }
+      const dt = (documentType as string).toLowerCase()
+      const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
+      const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
+      const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
+      try {
+        const routed = catInfo.num === 2
+          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row })
+          : linkedAccountId
+            ? await saveDocumentForAccount({
+                accountId: linkedAccountId, name: fileName, bytes: buffer, mimeType: fileMime,
+                folder: catInfo.num === 1 ? 'company' : catInfo.num === 3 ? 'tax' : catInfo.num === 4 ? 'banking' : 'correspondence',
+                documentType: storeType, callerKey, portalVisible: true, row: { ...row, contact_id: contactId },
+              })
+            : ({ route: 'drive' } as const)
+        if (routed.route === 'store') stored = { pointer: routed.pointer, documentRowId: routed.documentRowId }
+      } catch (e) {
+        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+        throw e
+      }
+    }
+
+    let driveFile: { id: string; name: string }
+    if (stored) {
+      driveFile = { id: stored.pointer, name: fileName }
+      // the client is told about the new document exactly as for a Drive upload (the record already exists, so the
+      // Drive-path insert below is skipped)
+      const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+      notifyClientsOfNewDocument(stored.documentRowId).catch((e) =>
+        console.warn('[upload-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+    } else {
     // Resolve Drive folder
     let driveFolderId: string | null = null
 
@@ -96,9 +146,10 @@ export async function POST(req: NextRequest) {
     const uploadFolderId = targetFolder?.id || driveFolderId
 
     // Upload to Drive
-    const driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
+    driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
+    }
 
-    const sideEffects: string[] = [`Uploaded to Drive: ${fileName}`]
+    const sideEffects: string[] = [stored ? `Saved to the new storage: ${fileName}` : `Uploaded to Drive: ${fileName}`]
 
     // Get linked account
     const { data: acLink } = await supabaseAdmin
@@ -169,8 +220,8 @@ export async function POST(req: NextRequest) {
 
     if ((isPassport || isItinLetter || isEinLetter) && ocrSupported.includes(fileMime)) {
       try {
-        const { ocrDriveFile } = await import('@/lib/docai')
-        const ocrResult = await ocrDriveFile(driveFile.id)
+        const { ocrByPointer } = await import('@/lib/crm-store/ocr')
+        const ocrResult = await ocrByPointer(driveFile.id)
 
         if (ocrResult.fullText) {
           if (isPassport) {

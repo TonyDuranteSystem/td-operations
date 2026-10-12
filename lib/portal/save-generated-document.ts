@@ -67,43 +67,64 @@ export async function saveSignedGeneratedDocument(
   const mimeType = params.mimeType || 'application/pdf'
   const category = params.category ?? 1 // Company
 
-  const { data: account } = await db
-    .from('accounts')
-    .select('drive_folder_id, company_name')
-    .eq('id', accountId)
-    .single()
-
-  if (!account?.drive_folder_id) {
-    return { success: false, error: 'Account has no Drive folder' }
-  }
-
-  // 1. Drive
+  // 0. Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
+  //    saves HERE (the file AND its portal-visible CRM record) and never touches Drive; a company still on Drive
+  //    carries on exactly as before, below.
   let driveFileId: string
+  let documentId: string
   try {
-    const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, account.drive_folder_id)
-    driveFileId = driveFile.id as string
-  } catch (err) {
-    return { success: false, error: `Drive upload failed: ${err instanceof Error ? err.message : String(err)}` }
-  }
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    const { createHash } = await import('crypto')
+    const routed = await saveDocumentForAccount({
+      accountId, name: fileName, bytes: fileBuffer, mimeType, folder: category === 3 ? 'tax' : 'company', documentType: null,
+      callerKey: `generated-doc:${accountId}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
+      portalVisible: true,
+      row: { category, document_type_name: documentType, status: 'classified', contact_id: contactId },
+    })
+    if (routed.route === 'store') {
+      driveFileId = routed.pointer
+      documentId = routed.documentRowId
+    } else {
+      const { data: account } = await db
+        .from('accounts')
+        .select('drive_folder_id, company_name')
+        .eq('id', accountId)
+        .single()
 
-  // 2. Portal-visible document record via the canonical path (sets drive_link,
-  //    confidence, and dedups on drive_file_id).
-  const saved = await autoSaveDocument({
-    accountId,
-    contactId,
-    fileName,
-    documentType,
-    category,
-    driveFileId,
-    portalVisible: true,
-  })
-  if (saved.error || !saved.id) {
-    // The Drive file may be orphaned (upload succeeded, record didn't) — the
-    // caller surfaces this so ops can see it; per-file dedup means a retry with
-    // the same id won't double-insert.
-    return { success: false, error: `Document record failed: ${saved.error || 'no id'}`, driveFileId }
+      if (!account?.drive_folder_id) {
+        return { success: false, error: 'Account has no Drive folder' }
+      }
+
+      // 1. Drive
+      try {
+        const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, account.drive_folder_id)
+        driveFileId = driveFile.id as string
+      } catch (err) {
+        return { success: false, error: `Drive upload failed: ${err instanceof Error ? err.message : String(err)}` }
+      }
+
+      // 2. Portal-visible document record via the canonical path (sets drive_link,
+      //    confidence, and dedups on drive_file_id).
+      const saved = await autoSaveDocument({
+        accountId,
+        contactId,
+        fileName,
+        documentType,
+        category,
+        driveFileId,
+        portalVisible: true,
+      })
+      if (saved.error || !saved.id) {
+        // The Drive file may be orphaned (upload succeeded, record didn't) — the
+        // caller surfaces this so ops can see it; per-file dedup means a retry with
+        // the same id won't double-insert.
+        return { success: false, error: `Document record failed: ${saved.error || 'no id'}`, driveFileId }
+      }
+      documentId = saved.id
+    }
+  } catch (err) {
+    return { success: false, error: `Save failed: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const documentId = saved.id
 
   // 3. Stamp it "new" (client_notified_at) so it is pulse-eligible for co-owners,
   //    and keep notify_client on. autoSaveDocument doesn't set these.

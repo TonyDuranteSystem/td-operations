@@ -394,7 +394,11 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
           return { content: [{ type: "text" as const, text: `Account not found: ${accErr?.message || "no data"}` }] }
         }
 
-        if (!account.drive_folder_id) {
+        // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) has no Drive folder to write to.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = (await companyDocState(params.account_id)) !== "drive"
+
+        if (!account.drive_folder_id && !inStorage) {
           return { content: [{ type: "text" as const, text: `Account "${account.company_name}" has no Drive folder. Set drive_folder_id first.` }] }
         }
 
@@ -410,6 +414,24 @@ The file is saved to the client's "5. Correspondence" subfolder on Drive.`,
 
         // Download PDF
         const pdfBuffer = await harborCompliance.downloadDeliveryFile(params.delivery_id)
+
+        if (inStorage) {
+          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+          const storeName = `HC_${delivery.document_type?.name || "Document"}_${delivery.name || params.delivery_id}.pdf`
+          // the same delivery again is a new version of the same file, never a second copy
+          const routed = await saveDocumentForAccount({
+            accountId: params.account_id, name: storeName, bytes: pdfBuffer, mimeType: "application/pdf",
+            folder: "correspondence", documentType: "registered_agent", callerKey: `hc-delivery:${params.delivery_id}`, portalVisible: false,
+            row: { document_type_name: "Registered Agent document", category: 5, status: "classified" },
+          })
+          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the document was being saved — nothing was saved.")
+          await logAction({
+            action_type: "process", table_name: "hc_deliveries", record_id: params.delivery_id, account_id: params.account_id,
+            summary: `Downloaded HC delivery "${delivery.name}" to the new storage for ${account.company_name}`,
+            details: { delivery_id: params.delivery_id, file_name: storeName, pointer: routed.pointer },
+          })
+          return { content: [{ type: "text" as const, text: [`Document downloaded and saved in the company's new storage`, `  Delivery: ${delivery.name}`, `  Company: ${account.company_name}`, `  File: ${storeName}`, `  Folder: 5. Correspondence (internal)`].join("\n") }] }
+        }
 
         // Find "5. Correspondence" subfolder
         const { listFolder } = await import("@/lib/google-drive")

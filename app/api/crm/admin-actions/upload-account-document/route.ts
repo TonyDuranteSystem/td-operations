@@ -65,6 +65,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: 'Account not found' }, { status: 404 })
     }
 
+    // Choose the final filename — prefer explicit display_name (preserving
+    // the extension from the original file), else keep the original name.
+    const ext = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : ''
+    const sanitizedDisplay = (displayName || '').trim()
+    const finalFileName = sanitizedDisplay
+      ? sanitizedDisplay.toLowerCase().endsWith(ext.toLowerCase())
+        ? sanitizedDisplay
+        : `${sanitizedDisplay}${ext}`
+      : fileName
+
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
+    // saves HERE (file + CRM record) and never touches Drive; a company still on Drive carries on as before, below.
+    {
+      const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { createHash } = await import('crypto')
+      let routed
+      try {
+        routed = await saveDocumentForAccount({
+          accountId, name: finalFileName, bytes: buffer, mimeType: fileMime,
+          folder: catInfo.num === 1 ? 'company' : catInfo.num === 3 ? 'tax' : catInfo.num === 4 ? 'banking' : 'correspondence',
+          documentType: null,
+          callerKey: `staff-account-upload:${accountId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`,
+          portalVisible: true,
+          row: { document_type_name: documentType, category: catInfo.num, category_name: category, status: 'classified', contact_id: null },
+        })
+      } catch (e) {
+        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+        throw e
+      }
+      if (routed.route === 'store') {
+        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
+        notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
+          console.warn('[upload-account-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
+        await supabaseAdmin.from('action_log').insert({
+          actor: 'crm-admin',
+          action_type: 'upload_account_document',
+          table_name: 'documents',
+          record_id: routed.pointer,
+          account_id: accountId,
+          summary: `Account document uploaded to the new storage: ${finalFileName} (${documentType})`,
+          details: { file_name: finalFileName, document_type: documentType, category, account_id: accountId, store_file_id: routed.fileId },
+        })
+        supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
+        return NextResponse.json({
+          success: true,
+          detail: `${finalFileName} saved to ${catInfo.subfolder}`,
+          driveFileId: routed.pointer,
+          side_effects: [`Saved to the new storage: ${finalFileName}`, 'Document record created'],
+        })
+      }
+    }
+
     let driveFolderId: string | null = account.drive_folder_id
     if (!driveFolderId && account.gdrive_folder_url) {
       const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
@@ -83,16 +135,6 @@ export async function POST(req: NextRequest) {
       (f: { name: string; mimeType: string }) => f.name === catInfo.subfolder && f.mimeType === 'application/vnd.google-apps.folder',
     )
     const uploadFolderId = targetFolder?.id || driveFolderId
-
-    // Choose the final filename — prefer explicit display_name (preserving
-    // the extension from the original file), else keep the original name.
-    const ext = fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : ''
-    const sanitizedDisplay = (displayName || '').trim()
-    const finalFileName = sanitizedDisplay
-      ? sanitizedDisplay.toLowerCase().endsWith(ext.toLowerCase())
-        ? sanitizedDisplay
-        : `${sanitizedDisplay}${ext}`
-      : fileName
 
     // Upload to Drive
     const driveFile = await uploadBinaryToDrive(finalFileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }

@@ -552,7 +552,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
 
         if (attachments && attachments.length > 0) {
           // ─── Multipart MIME with attachments ───
-          const { downloadFileBinary } = await import("@/lib/google-drive")
+          const { openDocument } = await import("@/lib/documents/open-document")
           const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`
           headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`)
 
@@ -569,7 +569,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
           // Attachment parts
           const attachedNames: string[] = []
           for (const att of attachments) {
-            const file = await downloadFileBinary(att.drive_file_id)
+            const file = await openDocument(att.drive_file_id)
             const name = att.filename || file.fileName || `attachment_${attachedNames.length + 1}`
             const mimeType = file.mimeType || "application/octet-stream"
             const b64 = file.buffer.toString("base64")
@@ -800,10 +800,11 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
     {
       message_id: z.string().describe("Gmail message ID (from gmail_search or gmail_read)"),
       attachment_id: z.string().optional().describe("Specific attachment ID to download (from gmail_read). If omitted, lists all attachments with metadata."),
+      save_to_account_id: z.string().uuid().optional().describe("CRM account UUID: save the attachment in this company's NEW STORAGE (5. Correspondence, internal) — use this for a company whose files live in the new storage (its Drive folder is read-only). A company still on Drive is refused here: use save_to_drive_folder_id."),
       save_to_drive_folder_id: z.string().optional().describe("Google Drive folder ID to save the attachment to. If provided, the file is downloaded from Gmail and uploaded to Drive automatically. Use crm_get_client_summary → drive_folder_id to find the client's folder, then drive_list_folder to pick a subfolder."),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },
-    async ({ message_id, attachment_id, save_to_drive_folder_id, as_user }) => {
+    async ({ message_id, attachment_id, save_to_drive_folder_id, save_to_account_id, as_user }) => {
       try {
         // First, get the message to find attachments
         const msg = await gmailGet(`/messages/${message_id}`, {
@@ -895,6 +896,30 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
         const filename = attInfo?.filename || "attachment"
         const mimeType = attInfo?.mimeType || "application/octet-stream"
         const sizeKb = Math.round(buffer.length / 1024)
+
+        // Drive cutover (dev job ad09ea91): a company whose files live in the new storage gets the attachment there.
+        if (save_to_account_id) {
+          try {
+            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+            const { storeNameKey } = await import("@/lib/crm-store/rules")
+            const routed = await saveDocumentForAccount({
+              accountId: save_to_account_id, name: filename, bytes: buffer, mimeType,
+              folder: "correspondence", documentType: null, callerKey: `gmail-attachment:${message_id}:${attachment_id}:${storeNameKey(filename)}`, portalVisible: false,
+              row: { document_type_name: "Email attachment", category: 5, status: "classified" },
+            })
+            if (routed.route !== "store") {
+              return { content: [{ type: "text" as const, text: `❌ This company's files are still on Google Drive — call again with save_to_drive_folder_id. Nothing was saved.\n\nFile: ${filename} (${sizeKb} KB).` }] }
+            }
+            logAction({
+              action_type: "upload", table_name: "documents", record_id: routed.documentRowId, account_id: save_to_account_id,
+              summary: `Gmail attachment → new storage: ${filename} (${sizeKb} KB)`,
+              details: { gmail_message_id: message_id, filename, mimeType, pointer: routed.pointer },
+            })
+            return { content: [{ type: "text" as const, text: [`✅ Attachment saved in the company's new storage`, "", `📄 ${filename} (${mimeType}, ${sizeKb} KB)`, `📂 5. Correspondence (internal)`, "", `Source: Gmail message ${message_id}`].join("\n") }] }
+          } catch (storeErr) {
+            return { content: [{ type: "text" as const, text: `❌ Downloaded attachment but the storage save failed: ${storeErr instanceof Error ? storeErr.message : String(storeErr)}\n\nFile: ${filename} (${sizeKb} KB).` }] }
+          }
+        }
 
         // If save_to_drive_folder_id provided, upload to Drive automatically
         if (save_to_drive_folder_id) {
