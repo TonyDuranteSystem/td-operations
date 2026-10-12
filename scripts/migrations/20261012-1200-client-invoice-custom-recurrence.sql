@@ -10,10 +10,11 @@ ALTER TABLE client_invoices DROP CONSTRAINT IF EXISTS client_invoices_recurring_
 ALTER TABLE client_invoices ADD CONSTRAINT client_invoices_recurring_frequency_check
   CHECK (recurring_frequency IS NULL OR recurring_frequency = ANY (ARRAY['monthly'::text, 'quarterly'::text, 'yearly'::text, 'custom'::text]));
 
--- Shape rule: a custom schedule must carry 1..36 months; any other schedule must carry none.
+-- Shape rule: a custom schedule must carry 1..36 months (IS NOT NULL is explicit: a NULL would otherwise make the
+-- check 'unknown', which a CHECK lets through); any other schedule must carry none.
 ALTER TABLE client_invoices DROP CONSTRAINT IF EXISTS client_invoices_recurring_interval_check;
 ALTER TABLE client_invoices ADD CONSTRAINT client_invoices_recurring_interval_check
   CHECK (
-    (recurring_frequency = 'custom' AND recurring_interval_months BETWEEN 1 AND 36)
+    (recurring_frequency = 'custom' AND recurring_interval_months IS NOT NULL AND recurring_interval_months BETWEEN 1 AND 36)
     OR (recurring_frequency IS DISTINCT FROM 'custom' AND recurring_interval_months IS NULL)
   );
