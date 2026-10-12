@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { pmbNumberFromSuite } from '@/lib/addresses'
 import { MapPin, Loader2, CheckCircle2, AlertCircle, Lock } from 'lucide-react'
 
 interface SuitePanelProps {
@@ -17,7 +18,7 @@ interface SuiteState {
 }
 
 /**
- * The required "Suite" step. Staff either press "Issue suite" (the next free 3D-NNN — reserved on the case while the
+ * The required "PMB number" step. Staff either press "Issue PMB number" (the next free number — reserved on the case while the
  * company does not exist yet, put on the company when it does) or tick "No suite for this client" with a reason. The
  * case cannot move past this stage until one of the two is done — the server refuses the move (and so does the database).
  * Server errors are shown verbatim (R099).
@@ -34,10 +35,10 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/suite`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || !data.success) throw new Error(data.error || 'Could not read the suite step.')
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not read the PMB number step.')
       setState(data.state as SuiteState)
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not read the suite step.')
+      setError(err instanceof Error && err.message ? err.message : 'Could not read the PMB number step.')
     } finally {
       setLoaded(true)
     }
@@ -74,7 +75,7 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
     <div className="rounded-xl border border-zinc-200 bg-white p-4">
       <div className="mb-2 flex items-center gap-2">
         <MapPin className="h-4 w-4 text-zinc-400" />
-        <h3 className="text-sm font-semibold text-zinc-900">Suite (required)</h3>
+        <h3 className="text-sm font-semibold text-zinc-900">PMB number (required)</h3>
         {state?.satisfied ? (
           <span className="ml-auto inline-flex items-center gap-1 text-xs text-emerald-700">
             <CheckCircle2 className="h-3.5 w-3.5" /> Done
@@ -94,7 +95,7 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
         <div className="space-y-3">
           {suite ? (
             <p className="flex items-center gap-2 text-sm text-zinc-800">
-              <span className="font-semibold">{suite}</span>
+              <span className="font-semibold">PMB {pmbNumberFromSuite(suite) ?? suite}</span>
               <Lock className="h-3.5 w-3.5 text-zinc-400" aria-label="Locked" />
               <span className="text-xs text-zinc-500">
                 {state?.account_suite ? 'assigned to the company' : 'reserved for this company — goes onto it when it is created'}
@@ -102,24 +103,24 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
             </p>
           ) : state?.waived ? (
             <p className="text-sm text-zinc-700">
-              <span className="font-medium">No suite for this client</span>
+              <span className="font-medium">No PMB number for this client</span>
               {state.waived_reason ? <span className="text-zinc-500"> — {state.waived_reason}</span> : null}
               {state.waived_by ? <span className="text-xs text-zinc-400"> ({state.waived_by})</span> : null}
             </p>
           ) : (
-            <p className="text-sm text-zinc-500">No suite yet. Issue one, or tick “No suite for this client”.</p>
+            <p className="text-sm text-zinc-500">No PMB number yet. Issue one, or tick “No PMB number for this client”.</p>
           )}
 
           {!suite && (
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => act({ action: 'issue' }, 'Could not issue the suite.')}
+                onClick={() => act({ action: 'issue' }, 'Could not issue the PMB number.')}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
-                {state?.waived ? 'Issue a suite instead' : 'Issue suite'}
+                {state?.waived ? 'Issue a PMB number instead' : 'Issue PMB number'}
               </button>
               {state?.waived && (
                 <button
@@ -143,7 +144,7 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
                   onChange={e => setWaiveTicked(e.target.checked)}
                   className="h-4 w-4 rounded border-zinc-300"
                 />
-                No suite for this client
+                No PMB number for this client
               </label>
               {waiveTicked && (
                 <div className="mt-2 space-y-2">
@@ -159,7 +160,7 @@ export function SuitePanel({ serviceDeliveryId }: SuitePanelProps) {
                     disabled={busy || reason.trim() === ''}
                     className="rounded-lg bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-200 disabled:opacity-50"
                   >
-                    Confirm: no suite for this client
+                    Confirm: no PMB number for this client
                   </button>
                 </div>
               )}

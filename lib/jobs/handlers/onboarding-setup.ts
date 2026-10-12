@@ -421,7 +421,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       const { allocateCompanySuite, syncPhysicalAddressToSuite } = await import("@/lib/operations/suite")
       const suite = await allocateCompanySuite({ accountId: account_id, actor: "system:onboarding-setup" })
       await syncPhysicalAddressToSuite(account_id, suite)
-      result.steps.push(step("suite", "ok", `${suite} issued (staff chose "Issue suite" on Confirm)`))
+      result.steps.push(step("suite", "ok", `${suite} issued (staff chose "Issue PMB number" on Confirm)`))
     } catch (e) {
       result.steps.push(step("suite", "error", e instanceof Error ? e.message : String(e)))
     }
@@ -429,7 +429,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
   } else if (!account_id && p.suite_choice === "issue") {
     // Staff chose "Issue suite" but there is no company to put it on. This used to be skipped without a word, so the choice
     // vanished (found by the 2026-10-01 production QA). Say so — the workspace Suite step will still ask before onboarding moves on.
-    result.steps.push(step("suite", "error", "Staff chose \"Issue suite\" but there is no company yet — the suite was NOT issued. Issue it from the account page once the company exists."))
+    result.steps.push(step("suite", "error", "Staff chose \"Issue PMB number\" but there is no company yet — the PMB number was NOT issued. Issue it from the account page once the company exists."))
     await updateJobProgress(job.id, result)
   }
 

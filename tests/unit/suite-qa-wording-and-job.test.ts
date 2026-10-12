@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 // Small fixes from the 2026-10-01 production QA of the suite lock.
 describe('onboarding setup job — a suite choice it cannot apply must be reported, not dropped', () => {
   const job = readFileSync('lib/jobs/handlers/onboarding-setup.ts', 'utf8')
-  it('says so when staff chose "Issue suite" but there is no company', () => {
+  it('says so when staff chose "Issue PMB number" but there is no company', () => {
     expect(job).toContain('else if (!account_id && p.suite_choice === "issue")')
-    expect(job).toContain('the suite was NOT issued')
+    expect(job).toContain('the PMB number was NOT issued')
   })
 })
 

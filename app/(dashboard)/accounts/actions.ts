@@ -211,7 +211,7 @@ export async function changeCompanySuite(
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!isOwnerOnly(user)) {
-      return { success: false, error: 'Only the owner can change a locked suite.' }
+      return { success: false, error: 'Only the owner can change a locked PMB number.' }
     }
     if (!reason || !reason.trim()) return { success: false, error: 'A reason is required.' }
     const result = await adminChangeCompanySuite({

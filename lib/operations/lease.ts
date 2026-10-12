@@ -252,7 +252,7 @@ export async function createLease(
           return {
             success: false,
             outcome: "error",
-            error: "This company has no suite yet — issue it first (workspace Suite step or the \"Issue suite\" button on the account page), then create the lease. If this client is not getting a suite, no lease can be created.",
+            error: "This company has no PMB number yet — issue it first (workspace PMB number step or the \"Issue PMB number\" button on the account page), then create the lease. If this client is not getting a PMB number, no lease can be created.",
           }
         }
         suiteNumber = existing

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, isTdLargoAddressRow, pmbNumberFromSuite, companyOfficialRow, companyMailingRow, mailingStreetForSuite } from '@/lib/addresses'
+import { isValidKind, linkedAccountCount, nearDupeCheck, formatAddressString, resolveMailingAddress, withCompanySuite, isTdLargoAddressRow, pmbNumberFromSuite, pmbLabel, suiteFromPmbInput, companyOfficialRow, companyMailingRow, mailingStreetForSuite } from '@/lib/addresses'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/lib/database.types'
 
@@ -297,5 +297,21 @@ describe('pmbNumberFromSuite / companyOfficialRow / companyMailingRow', () => {
     expect(companyOfficialRow(null)).toBeNull()
     expect(companyMailingRow(undefined)).toBeNull()
     expect(companyMailingRow('3D')).toBeNull()
+  })
+})
+
+describe('what staff see and type for a company number (CRM, 2026-10-12)', () => {
+  it('shows only "PMB 328" — never the stored "3D-328"', () => {
+    expect(pmbLabel('3D-328')).toBe('PMB 328')
+    expect(pmbLabel(null)).toBeNull()
+    expect(pmbLabel('TBD')).toBeNull()
+  })
+  it('accepts the digits alone and turns them into the stored form', () => {
+    expect(suiteFromPmbInput('328')).toBe('3D-328')
+    expect(suiteFromPmbInput(' 28 ')).toBe('3D-028')
+    expect(suiteFromPmbInput('3D-318')).toBe('3D-318')
+    expect(suiteFromPmbInput('3d 205')).toBe('3D-205')
+    expect(suiteFromPmbInput('PMB 328')).toBe('PMB 328') // not a number shape: the server rejects it with its normal message
+    expect(suiteFromPmbInput('')).toBe('')
   })
 })

@@ -482,7 +482,7 @@ describe("createLease — happy path", () => {
     const { createLease } = await import("@/lib/operations/lease")
     const result = await createLease({ account_id: "acct-1" })
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/no suite yet/i)
+    expect(result.error).toMatch(/no PMB number yet/i)
     expect(allocateCalls).toHaveLength(0)
     expect(insertCalls).toHaveLength(0)
   })

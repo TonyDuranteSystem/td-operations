@@ -81,6 +81,22 @@ export function pmbNumberFromSuite(suite: string | null | undefined): string | n
 
 type LargoRow = { address_line1: string; address_line2: null; city: string; state: string; zip: string; country: string }
 
+/** What staff and clients see for a company's number: "PMB 328" — never the stored "3D-328". Null when it has no number. */
+export function pmbLabel(suite: string | null | undefined): string | null {
+  const pmb = pmbNumberFromSuite(suite)
+  return pmb ? `PMB ${pmb}` : null
+}
+
+/**
+ * What staff type for a number -> the stored form. "328" / "3D-328" / "3d328" -> "3D-328". Anything else comes back trimmed, so
+ * the server's own validation still rejects it with its normal message.
+ */
+export function suiteFromPmbInput(input: string): string {
+  const t = input.trim()
+  const m = /^(?:3D\s*-?\s*)?(\d{2,4})$/i.exec(t)
+  return m ? `3D-${m[1].padStart(3, '0')}` : t
+}
+
 /** Street line of the mailing address: "10225 Ulmerton Rd 3D PMB 318"; null when the company has no number. */
 export function mailingStreetForSuite(suite: string | null | undefined): string | null {
   const pmb = pmbNumberFromSuite(suite)
