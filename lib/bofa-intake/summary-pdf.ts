@@ -69,7 +69,7 @@ export async function buildSummaryPdf(p: { data: Record<string, string>; partner
   line("Bank account application", bold, 18)
   y -= 4
   line(`Submitted: ${p.submittedAt ? p.submittedAt.replace("T", " ").slice(0, 16) + " UTC" : "—"}`, font, 10, M, rgb(0.35, 0.35, 0.35))
-  line(`Partner: ${p.partner || "—"}`, font, 10, M, rgb(0.35, 0.35, 0.35))
+  line(`Partner: ${p.partner || "none (direct)"}`, font, 10, M, rgb(0.35, 0.35, 0.35))
   line(`Reference: ${p.requestId}`, font, 10, M, rgb(0.35, 0.35, 0.35))
   y -= 8
 
