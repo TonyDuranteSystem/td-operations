@@ -69,15 +69,25 @@ export async function POST(req: NextRequest) {
       const { saveDocumentForContact, saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
       const { createHash } = await import('crypto')
       // the person's company: only when there is exactly one (a person in several companies has no single "linked" one)
-      const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(3)
-      const linkedAccountId = acLinkEarly?.length === 1 ? ((acLinkEarly[0].account_id as string | undefined) ?? null) : null
+      const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
+      const linkIds = ((acLinkEarly ?? []) as Array<{ account_id: string }>).map((l) => l.account_id)
+      const linkedAccountId = linkIds.length === 1 ? linkIds[0] : null
+      // A PERSON's own documents follow the person: if ANY company they belong to has been switched to the new storage,
+      // their personal storage is used (never Drive, never an arbitrary one of their companies).
+      let switchedViaAccountId: string | null = null
+      if (catInfo.num === 2) {
+        const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
+        for (const id of linkIds) {
+          if ((await companyDocState(id)) !== 'drive') { switchedViaAccountId = id; break }
+        }
+      }
       const dt = (documentType as string).toLowerCase()
       const storeType = dt.includes('passport') ? 'passport' : dt.includes('itin') ? 'itin_letter' : /\bein\b/.test(dt) ? 'ein_letter_irs' : null
       const callerKey = `staff-contact-upload:${contactId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`
       const row = { document_type_name: documentType as string, category: catInfo.num, category_name: category as string, status: 'classified' }
       try {
         const routed = catInfo.num === 2
-          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row })
+          ? await saveDocumentForContact({ contactId, name: fileName, bytes: buffer, mimeType: fileMime, documentType: storeType, callerKey, accountId: linkedAccountId, viaAccountId: switchedViaAccountId ?? linkedAccountId, contactName: (contact.full_name as string | null) ?? null, portalVisible: true, row })
           : linkedAccountId
             ? await saveDocumentForAccount({
                 accountId: linkedAccountId, name: fileName, bytes: buffer, mimeType: fileMime,
