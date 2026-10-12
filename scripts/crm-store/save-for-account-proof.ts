@@ -26,6 +26,16 @@ async function main() {
   const second = await saveDocumentForAccount(input)
   console.log("second save (same bytes):", second.route === "store" ? { status: second.status, sameFile: second.fileId === (first as { fileId: string }).fileId, sameRow: second.documentRowId === (first as { documentRowId: string }).documentRowId } : second)
 
+  // shown to the client: an untyped file may be published (only staff-only types and "Needs review" files are refused)
+  const shownBytes = Buffer.from(`QA Test cutover proof shown ${new Date().toISOString().slice(0, 10)}`)
+  const shown = await saveDocumentForAccount({ ...input, name: "QA Test cutover proof shown.txt", bytes: shownBytes, callerKey: `qa-cutover-proof-shown:${shownBytes.toString("hex").slice(0, 24)}`, portalVisible: true })
+  if (shown.route === "store") {
+    const { data: r2 } = await supabaseAdmin.from("documents").select("portal_visible").eq("id", shown.documentRowId).single()
+    const { data: f2 } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: unknown }> } } } }).from("store_files").select("published, needs_review_at, document_type").eq("id", shown.fileId).single()
+    console.log("client-visible untyped save → documents.portal_visible:", r2?.portal_visible, "| store file:", f2)
+    await supabaseAdmin.from("documents").delete().eq("id", shown.documentRowId)
+  }
+
   if (first.route === "store") {
     const { data: row } = await supabaseAdmin.from("documents").select("id, file_name, drive_file_id, account_id, portal_visible, drive_link").eq("id", first.documentRowId).single()
     console.log("CRM documents row:", row)
