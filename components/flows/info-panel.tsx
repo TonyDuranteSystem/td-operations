@@ -1,4 +1,4 @@
-import { Building2, Contact, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink, MapPin, Hash, Landmark, Home } from 'lucide-react'
+import { Building2, Contact, Flag, Clock, CalendarClock, UserRound, CheckCircle2, CalendarCheck, Receipt, ExternalLink, MapPin, Hash, Landmark } from 'lucide-react'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { daysSince, formatUploadDate } from '@/lib/flows/workspace-format'
 
@@ -81,9 +81,6 @@ export function InfoPanel({ serviceDelivery: sd, account, secondInstallment }: I
         )}
         {account.registered_agent_address && (
           <Row icon={<Landmark className="h-4 w-4" />} label="Registered Agent" value={account.registered_agent_address} />
-        )}
-        {account.mailing_address && (
-          <Row icon={<Home className="h-4 w-4" />} label="Mailing address (Largo + the PMB number once issued)" value={account.mailing_address} />
         )}
         <Row
           icon={<Flag className="h-4 w-4" />}
