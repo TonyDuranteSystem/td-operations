@@ -1,0 +1,79 @@
+import { describe, it, expect, vi } from "vitest"
+import { saveDocumentForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
+import type { CompanyDocState } from "@/lib/crm-store/switched-drive-guard"
+
+const FILE = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
+const mk = (state: CompanyDocState, over: Partial<SaveDeps> = {}): SaveDeps & { calls: Record<string, ReturnType<typeof vi.fn>> } => {
+  const calls = {
+    save: vi.fn(async () => ({ status: "created", fileId: FILE })),
+    upsertRow: vi.fn(async () => ({ id: "row-1", inserted: true })),
+    personOwner: vi.fn(async () => "person-owner"),
+    liveOwner: vi.fn(async () => "company-owner"),
+  }
+  return {
+    state: async () => state,
+    liveOwner: calls.liveOwner,
+    personOwner: calls.personOwner,
+    save: calls.save as unknown as SaveDeps["save"],
+    upsertRow: calls.upsertRow as unknown as SaveDeps["upsertRow"],
+    pointer: (id: string) => `store:${id}`,
+    calls,
+    ...over,
+  }
+}
+const base = { accountId: "acc-1", name: "Lease.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", folder: "company" as const, documentType: "office_lease", callerKey: "lease:acc-1:1" }
+
+describe("saveDocumentForAccount — where do this company's files live?", () => {
+  it("a company still on Drive: nothing is saved here, the caller carries on with Drive", async () => {
+    const d = mk("drive")
+    expect(await saveDocumentForAccount(base, d)).toEqual({ route: "drive" })
+    expect(d.calls.save).not.toHaveBeenCalled()
+    expect(d.calls.upsertRow).not.toHaveBeenCalled()
+  })
+
+  it("a company being moved: refused with a plain message, nothing saved", async () => {
+    const d = mk("moving")
+    await expect(saveDocumentForAccount(base, d)).rejects.toBeInstanceOf(CompanyMovingError)
+    expect(d.calls.save).not.toHaveBeenCalled()
+  })
+
+  it("a switched company: saved in its storage and listed in the CRM documents list, hidden from the client by default", async () => {
+    const d = mk("store")
+    const r = await saveDocumentForAccount({ ...base, row: { category: 1 } }, d)
+    expect(r).toEqual({ route: "store", fileId: FILE, pointer: `store:${FILE}`, documentRowId: "row-1", status: "created" })
+    expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "company-owner", folderKind: "company", documentType: "office_lease", callerKey: "lease:acc-1:1", published: false }))
+    expect(d.calls.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ file_name: "Lease.pdf", account_id: "acc-1", portal_visible: false, category: 1, file_size: 3 }), "created")
+  })
+
+  it("shown to the client only when the caller says so", async () => {
+    const d = mk("store")
+    await saveDocumentForAccount({ ...base, portalVisible: true }, d)
+    expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ published: true }))
+    expect(d.calls.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ portal_visible: true }), "created")
+  })
+
+  it("a personal document (passport) goes to the PERSON's own storage, listed against the person, never the company", async () => {
+    const d = mk("store")
+    await saveDocumentForAccount({ ...base, folder: "contacts", documentType: "passport", person: { contactId: "c-1", name: "Mario Rossi" } }, d)
+    expect(d.calls.personOwner).toHaveBeenCalledWith("c-1", "Mario Rossi")
+    expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "person-owner", folderKind: "personal" }))
+    expect(d.calls.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ account_id: null, contact_id: "c-1" }), "created")
+  })
+
+  it("a switched company with no storage found is an error — never a silent fallback to Drive", async () => {
+    const d = mk("store", { liveOwner: async () => null })
+    await expect(saveDocumentForAccount(base, d)).rejects.toThrow(/could not be found/)
+    expect(d.calls.save).not.toHaveBeenCalled()
+  })
+
+  it("a failed storage save for a switched company is an error — never a silent fallback to Drive", async () => {
+    const d = mk("store", { save: async () => { throw new Error("store down") } })
+    await expect(saveDocumentForAccount(base, d)).rejects.toThrow("store down")
+  })
+
+  it("an unreadable state refuses (fail closed): the lookup error is raised, nothing is saved", async () => {
+    const d = mk("store", { state: async () => { throw new Error("Could not check where this company's files live — please try again.") } })
+    await expect(saveDocumentForAccount(base, d)).rejects.toThrow(/Could not check/)
+    expect(d.calls.save).not.toHaveBeenCalled()
+  })
+})

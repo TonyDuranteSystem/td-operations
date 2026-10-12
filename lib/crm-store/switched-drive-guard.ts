@@ -203,3 +203,11 @@ export async function companyDocState(accountId: string): Promise<CompanyDocStat
   }
   return stateFrom({ hasLiveOwner: (live ?? []).length > 0, hasLiveFormationOwner, openMoveRun: (run ?? []).length > 0 })
 }
+
+/** The live (not study-only) storage of a company, any environment — null when it has none. Strict: a read error throws. */
+export async function liveOwnerOfAccount(accountId: string): Promise<string | null> {
+  const d = await db()
+  const { data, error } = await d.from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
+  if (error) throw new Error("Could not check where this company's files live — please try again.")
+  return ((data ?? [])[0]?.id as string | undefined) ?? null
+}
