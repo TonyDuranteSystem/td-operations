@@ -323,14 +323,14 @@ export function ConfirmPanel({ entry }: { entry: OnboardingReviewEntry }) {
         <span>I checked the submitted information and every uploaded document, and it looks correct.</span>
       </label>
       <fieldset className="rounded border p-2.5 space-y-1.5" disabled={confirming}>
-        <legend className="px-1 text-xs font-medium text-zinc-600">Suite (required)</legend>
+        <legend className="px-1 text-xs font-medium text-zinc-600">PMB number (required)</legend>
         <label className="flex items-center gap-2 text-sm">
           <input type="radio" name={`suite-${entry.id}`} checked={suiteChoice === 'issue'} onChange={() => setSuiteChoice('issue')} />
-          <span>Issue a suite for this company</span>
+          <span>Issue a PMB number for this company</span>
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="radio" name={`suite-${entry.id}`} checked={suiteChoice === 'waive'} onChange={() => setSuiteChoice('waive')} />
-          <span>No suite for this client</span>
+          <span>No PMB number for this client</span>
         </label>
         {suiteChoice === 'waive' && (
           <input

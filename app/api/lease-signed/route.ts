@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // Fetch lease record
     const { data: lease, error: leaseErr } = await supabaseAdmin
       .from("lease_agreements")
-      .select("id, token, tenant_company, account_id, contact_id, suite_number, status, pdf_storage_path, access_code, premises_address")
+      .select("*")
       .eq("id", lease_id)
       .eq("token", token)
       .single()
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
         ``,
         `Next steps:`,
         `- Upload signed PDF to Drive (Company folder → 1. Company)`,
-        `- Confirm security deposit payment`,
+        ...(((lease as { template_version?: number }).template_version ?? 1) === 2 ? [] : [`- Confirm security deposit payment`]),
       ].join("\n")
 
       const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`

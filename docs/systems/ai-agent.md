@@ -1,4 +1,6 @@
 # AI Agent (in-dashboard assistant)
+_Last verified against code: 2026-10-10b — Claude (dev job `803c2410`, sandbox): the AI client card's lease line reads "company number 3D-NNN (PMB NNN)"; no-number companies never report the shared Largo row. See `lease-oa.md` (2026-10-10c).
+_Last verified against code: 2026-10-10 — Claude (dev job `803c2410`, sandbox): the AI client card (`lib/ai-agent/client-card.ts`) prints a company's MAILING address as official address + its PMB (`companyMailingRow`) instead of "Suite 3D-NNN". See `lease-oa.md` (2026-10-10).
 
 _Last verified against code: 2026-10-12 — Claude (dev job ad09ea91, Drive cutover Phase 3, sandbox). `drive_upload_file` and `gmail_get_attachments` take an optional `account_id`: for a company whose files live in the new storage the file is saved there (5. Correspondence, internal); a company still on Drive is refused with 'give folder_id'. `folder_id` is no longer required by the schema when `account_id` is given. Details: `storage.md`._
 

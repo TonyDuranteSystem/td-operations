@@ -182,7 +182,7 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
   // refuses anyone but the owner.
   const handleAdminDeleteLease = async (token: string, status: string) => {
     const reason = window.prompt(
-      `Delete this ${status} lease? The client already has it. A copy is kept in the audit log and its signed PDF is hidden from the client's portal; the company keeps its suite.\n\nReason (required):`,
+      `Delete this ${status} lease? The client already has it. A copy is kept in the audit log and its signed PDF is hidden from the client's portal; the company keeps its PMB number.\n\nReason (required):`,
     )
     if (!reason || !reason.trim()) return
     setCancellingDoc('lease')

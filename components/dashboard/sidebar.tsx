@@ -47,6 +47,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   HardDrive,
+  ClipboardList,
 } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
@@ -125,6 +126,7 @@ const defaultNavigation: NavItem[] = [
   { id: 'team-chat', name: 'Team Chat', href: '/team-chat', icon: MessageSquare, tooltip: 'Internal chat between team members. Messages are identified by sender with unique sounds per person.' },
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
+  { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admin only.' },
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
@@ -571,9 +573,19 @@ export function Sidebar({
   // needed once a real saved order is loaded and doesn't yet contain it.
   const researchIdx = navOrder.length > 0 ? missingFromSaved.indexOf('research') : -1
   if (researchIdx !== -1) missingFromSaved.splice(researchIdx, 1)
-  const mergedOrder = researchIdx === -1
+  // 'forms' (2026-10-12) is also new: for a returning user with a saved order, put it right after
+  // 'storage' instead of at the very bottom of the long list where it would not be seen.
+  const formsIdx = navOrder.length > 0 ? missingFromSaved.indexOf('forms') : -1
+  if (formsIdx !== -1) missingFromSaved.splice(formsIdx, 1)
+  const baseOrder = researchIdx === -1
     ? [...navOrder, ...missingFromSaved]
     : [...navOrder.slice(0, 1), 'research', ...navOrder.slice(1), ...missingFromSaved]
+  const storagePos = baseOrder.indexOf('storage')
+  const mergedOrder = formsIdx === -1
+    ? baseOrder
+    : storagePos === -1
+      ? [...baseOrder, 'forms']
+      : [...baseOrder.slice(0, storagePos + 1), 'forms', ...baseOrder.slice(storagePos + 1)]
 
   // Build ordered nav with badges applied
   const orderedNav = mergedOrder

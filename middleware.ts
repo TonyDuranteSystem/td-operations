@@ -103,6 +103,11 @@ const PUBLIC_PREFIXES = [
   '/invitation/',
   // Referral click counter — anonymous landing visitors POST here to log a click
   '/api/referral/track',
+  // One-time bank-account application link (dev job 11d484a4): the page and its token-gated API
+  // routes. Each route checks the link's one-time lock itself. Staff routes live under
+  // /api/bofa-intake-admin and stay behind the session gate.
+  '/bank-application/',
+  '/api/bank-application/',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
@@ -468,7 +473,7 @@ export async function middleware(request: NextRequest) {
     }
 
     // Admin-only paths: team users redirected to home
-    const ADMIN_ONLY_PATHS = ['/dev-tools', '/team-management', '/research']
+    const ADMIN_ONLY_PATHS = ['/dev-tools', '/team-management', '/research', '/bofa-intake', '/forms']
     const isAdminEmail = user.email && ['antonio.durante@tonydurante.us'].includes(user.email)
     const isAdminRole = user.app_metadata?.role === 'admin' || user.user_metadata?.role === 'admin'
     if (ADMIN_ONLY_PATHS.some(p => pathname === p || pathname.startsWith(p + '/')) && !isAdminEmail && !isAdminRole) {

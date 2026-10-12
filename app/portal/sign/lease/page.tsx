@@ -76,7 +76,8 @@ export default async function PortalSignLeasePage() {
     .limit(1)
     .maybeSingle()
 
-  if (!lease) {
+  // a draft (or voided) lease was never sent to the client — the Sign Documents list hides it, and so does this page
+  if (!lease || lease.status === 'draft' || lease.status === 'voided') {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-2">

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { companyMailingRow, formatAddressString } from '@/lib/addresses'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { WorkflowIssuesLink } from '@/components/accounts/workflow-issues-link'
@@ -2488,7 +2489,17 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
               />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 mb-1">Mailing Address</p>
+              <p className="text-xs text-zinc-500 mb-1">Mailing Address (calculated from the PMB number — not editable)</p>
+              <div className="rounded-lg border border-dashed bg-zinc-50 px-3 py-2 text-sm" data-testid="crm-mailing-address">
+                {companyMailingRow(account.suite_number ?? null) ? (
+                  <span className="text-zinc-800">{formatAddressString(companyMailingRow(account.suite_number ?? null))}</span>
+                ) : (
+                  <span className="text-zinc-400">Issued together with the PMB number</span>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500 mb-1">Shipping Address (CRM record — the client portal always shows our Seminole office)</p>
               <AddressPicker
                 accountId={account.id}
                 accountUpdatedAt={account.updated_at}

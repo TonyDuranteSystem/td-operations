@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { pmbLabel } from '@/lib/addresses'
 import { useRouter } from 'next/navigation'
 import { Home, Loader2, X, CheckCircle2, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
@@ -33,8 +34,6 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
     error?: string
   } | null>(null)
 
-  const [monthlyRent, setMonthlyRent] = useState('100')
-  const [securityDeposit, setSecurityDeposit] = useState('150')
 
   // Pre-fill the start with the company's formation date ONLY when the company
   // was formed THIS year (the mid-year-formation case). A years-old formation
@@ -45,30 +44,15 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
     ? fmtStart
     : todayISO()
   const [startDate, setStartDate] = useState(initialStart)
-  const [endDate, setEndDate] = useState(`${initialStart.slice(0, 4)}-12-31`)
-  const [endEdited, setEndEdited] = useState(false)
 
-  const handleStartChange = (v: string) => {
-    setStartDate(v)
-    // Keep the end on Dec 31 of the chosen start year — but only while staff
-    // haven't hand-edited the end themselves (don't clobber a custom term).
-    if (isISODate(v) && !endEdited) setEndDate(`${v.slice(0, 4)}-12-31`)
-  }
-
-  const handleEndChange = (v: string) => {
-    setEndDate(v)
-    setEndEdited(true)
-  }
+  // The agreement's 12-month term runs from the day the client signs (set on the server) — only the start date is chosen here, because it fixes the contract year.
+  const handleStartChange = (v: string) => setStartDate(v)
 
   if (!open) return null
 
   const handleGenerate = () => {
-    if (!startDate || !endDate) {
-      toast.error('Please set both a start and end date.')
-      return
-    }
-    if (endDate < startDate) {
-      toast.error('End date cannot be before the start date.')
+    if (!startDate) {
+      toast.error('Please set the start date.')
       return
     }
     startTransition(async () => {
@@ -81,10 +65,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
             account_id: accountId,
             // suite_number omitted — the lease takes the company's own suite (it must already be issued)
             // Number.isFinite preserves an intentional 0 (|| would rewrite it).
-            monthly_rent: Number.isFinite(parseInt(monthlyRent)) ? parseInt(monthlyRent) : 100,
-            security_deposit: Number.isFinite(parseInt(securityDeposit)) ? parseInt(securityDeposit) : 150,
             term_start_date: startDate,
-            term_end_date: endDate,
             effective_date: startDate,
           }),
         })
@@ -103,7 +84,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
         }
 
         setResult({ success: true, token: data.token, admin_preview: data.admin_preview, suite_number: data.suite_number })
-        toast.success(`Lease created for ${companyName} — Suite ${data.suite_number}`)
+        toast.success(`Lease created for ${companyName} — ${pmbLabel(data.suite_number) ?? 'PMB number'}`)
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Error')
@@ -136,7 +117,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
 
               <div className="space-y-3">
                 <div className="text-xs text-muted-foreground bg-blue-50 rounded-lg p-3">
-                  The lease uses this company&apos;s own suite. It must already be issued (the workspace Suite step, or the “Issue suite” button on the account page).
+                  The lease uses this company&apos;s own PMB number. It must already be issued (the workspace PMB number step, or the “Issue PMB number” button on the account page).
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -149,43 +130,13 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
                       className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">End Date</label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={e => handleEndChange(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Monthly Rent ($)</label>
-                    <input
-                      type="number"
-                      value={monthlyRent}
-                      onChange={e => setMonthlyRent(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Security Deposit ($)</label>
-                    <input
-                      type="number"
-                      value={securityDeposit}
-                      onChange={e => setSecurityDeposit(e.target.value)}
-                      className="mt-1 w-full text-sm px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
               </div>
 
               <div className="text-xs text-muted-foreground bg-zinc-50 rounded-lg p-3 space-y-1">
                 <p>Premises: 10225 Ulmerton Rd, Largo, FL 33771</p>
-                <p>Term: {startDate || '—'} → {endDate || '—'}</p>
-                <p>Yearly rent: ${(parseInt(monthlyRent) || 100) * 12}</p>
+                <p>Office Lease and Services Agreement — no separate rent or deposit; the 12-month term runs from the date the client signs.</p>
               </div>
             </>
           ) : (
@@ -194,7 +145,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
                 <CheckCircle2 className={`h-5 w-5 mt-0.5 ${result.success ? 'text-emerald-600' : 'text-red-600'}`} />
                 <div className="space-y-2">
                   <p className="text-sm font-medium">
-                    {result.error || `Lease created — Suite ${result.suite_number}`}
+                    {result.error || `Lease created — ${pmbLabel(result.suite_number) ?? ''}`}
                   </p>
                   {result.admin_preview && (
                     <a

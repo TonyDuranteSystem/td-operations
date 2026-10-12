@@ -5,6 +5,7 @@ import { useLocale } from '@/lib/portal/use-locale'
 import { FileText, PenLine, CheckCircle2, Clock, ChevronRight, PartyPopper, FileSignature } from 'lucide-react'
 import { interpolateString } from '@/lib/template-interpolation'
 import type { SignableDocument } from './page'
+import { pmbNumberFromSuite } from '@/lib/addresses'
 
 const DOC_INFO: Record<string, { key: string; icon: typeof FileText }> = {
   oa: { key: 'oa', icon: FileText },
@@ -22,6 +23,8 @@ interface Props {
 
 function DocCard({ doc, locale, t }: { doc: SignableDocument; locale: 'en' | 'it'; t: (key: string) => string }) {
   const info = DOC_INFO[doc.type] ?? DOC_INFO.document
+  // the new lease agreement has its own title and description
+  const textKey = doc.type === 'lease' && doc.templateVersion === 2 ? 'lease2' : info.key
   const isSigned = doc.status === 'signed'
   // Legacy docs from documents table: show as signed but non-interactive
   // (clients view the actual file in the Documents tab, not here)
@@ -49,16 +52,16 @@ function DocCard({ doc, locale, t }: { doc: SignableDocument; locale: 'en' | 'it
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h3 className={`font-semibold ${isSigned ? 'text-green-800' : 'text-zinc-900'}`}>
-            {doc.type === 'document' && doc.documentName ? doc.documentName : t(`signDocs.docType.${info.key}.title`)}
+            {doc.type === 'document' && doc.documentName ? doc.documentName : t(`signDocs.docType.${textKey}.title`)}
           </h3>
           {doc.suiteNumber && (
             <span className="text-xs bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full">
-              {t('signDocs.suite')} {doc.suiteNumber}
+              {t('signDocs.pmb')} {pmbNumberFromSuite(doc.suiteNumber) ?? doc.suiteNumber}
             </span>
           )}
         </div>
         <p className={`text-sm mt-0.5 ${isSigned ? 'text-green-600' : 'text-zinc-500'}`}>
-          {t(`signDocs.docType.${info.key}.desc`)}
+          {t(`signDocs.docType.${textKey}.desc`)}
         </p>
 
         {/* Status */}

@@ -188,6 +188,15 @@ export const NOT_A_VOCABULARY = new Set([
   "store_import_runs_status_check",
   "store_import_items_source_check",
   "store_import_items_status_check",
+  // TEMPORARY (2026-10-12, bank application intake — dev job 11d484a4): these two ARE value lists, not shape rules.
+  // `bofa_intake_requests_status_check` = pending / opened / completed / revoked (LinkStatus in lib/bofa-intake/lock.ts);
+  // `bofa_intake_requests_email_status_check` = sending / sent / failed (lib/bofa-intake/deliver.ts). They cannot be
+  // registered in CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not hold them until it is next fully
+  // regenerated (production DOES have them — Antonio ran migrations 20261009-2200 / 20261012-1200 on 2026-10-12), and
+  // registering them first makes "PRODUCTION accepts every value the code can write" fail. At the NEXT full
+  // `npm run snapshot:constraints`, MOVE both into CONSTRAINT_CONTRACTS and delete these lines.
+  "bofa_intake_requests_status_check",
+  "bofa_intake_requests_email_status_check",
 ])
 
 /**

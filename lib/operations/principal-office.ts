@@ -1,7 +1,7 @@
 /**
  * Principal office — the address on the company's Articles of Organization (the state-filed address; it can be
- * anywhere). It is NOT what the EIN, lease or Operating Agreement print — those always use Largo + the company's own
- * suite (lib/addresses.ts → withCompanyCmra). It can change, and the State Annual Report is where the state shows it:
+ * anywhere). It is NOT what the client portal's Principal Office card, the EIN, lease or Operating Agreement print — those
+ * use the OFFICIAL address, 10225 Ulmerton Rd 3D, Largo (lib/addresses.ts → companyOfficialRow). It can change, and the State Annual Report is where the state shows it:
  * when an annual report is filed, staff answer "did the principal address change?" (Antonio 2026-10-01) and, if it did,
  * the new address replaces the saved Principal Office in the same step.
  */

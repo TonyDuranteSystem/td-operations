@@ -16,6 +16,8 @@
  */
 
 import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib'
+import { buildAgreementV2, longDate } from '@/lib/lease/agreement-v2'
+import { embedUnicodeFonts } from '@/lib/pdf/unicode-fonts'
 
 // ─── Colors ──────────────────────────────────────────────
 const C = {
@@ -61,6 +63,11 @@ export interface LeaseData {
 
   // Signed copy — when set, fills in signature dates and adds electronic attestation
   signedDate?: string              // YYYY-MM-DD — makes this a signed copy
+
+  // Template version: 1 = the original Office Lease Agreement (default), 2 = Office Lease and Services Agreement (lib/lease/agreement-v2.ts)
+  templateVersion?: number
+  operatingAddress?: string | null // v2: the client's Operating Address typed at signing
+  agreementNo?: string             // v2: printed as Agreement No. (the lease token)
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -74,7 +81,16 @@ function fmtCurrency(n: number): string {
 }
 
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
-  const words = text.split(' ')
+  // a single "word" longer than the line (a client-typed address with no spaces) is broken at the line width, not left to run off the page
+  const words: string[] = []
+  for (const w of text.split(' ')) {
+    if (font.widthOfTextAtSize(w, size) <= maxWidth) { words.push(w); continue }
+    let chunk = ''
+    for (const ch of Array.from(w)) {
+      if (font.widthOfTextAtSize(chunk + ch, size) > maxWidth && chunk) { words.push(chunk); chunk = ch } else chunk += ch
+    }
+    if (chunk) words.push(chunk)
+  }
   const lines: string[] = []
   let current = ''
 
@@ -253,6 +269,7 @@ class PageWriter {
 
 // ─── Main Generator ─────────────────────────────────────
 export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
+  if (data.templateVersion === 2) return generateLeaseV2PDF(data)
   const landlordName = data.landlordName ?? 'Tony Durante LLC'
   const landlordAddress = data.landlordAddress ?? '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771'
   const landlordSigner = data.landlordSigner ?? 'Antonio Noel Durante'
@@ -755,4 +772,135 @@ export async function generateLeasePDF(data: LeaseData): Promise<Uint8Array> {
   pw.drawPageFooter()
 
   return doc.save()
+}
+
+
+/**
+ * The v2 server PDF embeds a Unicode font (DejaVu Sans: Latin incl. accents, Greek, Cyrillic, Hebrew, Arabic), so names and the
+ * client-typed Operating Address print as typed (Niccolò, Łódź, Москва). What that font cannot draw (emoji and other characters
+ * outside the basic plane) becomes "?", and line breaks/tabs become spaces.
+ */
+export function printable(text: string): string {
+  return text.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '?')
+}
+
+// ─── Office Lease and Services Agreement (template v2) ──────────────────────────────────────────────────────────────
+// Prints the SAME blocks the signing page shows (lib/lease/agreement-v2.ts) — one text, three renderings.
+async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ bytes: Uint8Array; pages: number }> {
+  const landlordName = data.landlordName ?? 'Tony Durante LLC'
+  const landlordSigner = data.landlordSigner ?? 'Antonio Durante'
+  const landlordTitle = data.landlordTitle ?? 'Managing Member'
+  const tenantTitle = data.tenantTitle ?? 'Manager'
+  const agreement = buildAgreementV2({
+    agreementNo: data.agreementNo ?? '',
+    providerName: landlordName,
+    clientCompany: data.tenantCompany,
+    clientState: data.tenantState ?? null,
+    clientEin: data.tenantEin ?? null,
+    clientRepName: data.tenantContactName,
+    clientRepTitle: data.tenantTitle ?? null,
+    suiteNumber: data.suiteNumber,
+    operatingAddress: data.operatingAddress ?? null,
+  })
+
+  const doc = await PDFDocument.create()
+  const pw = new PageWriter(doc)
+  pw.totalPages = totalPages
+  await pw.init()
+  {
+    const f = await embedUnicodeFonts(doc, { oblique: true })
+    pw.font = f.regular
+    pw.fontBold = f.bold
+    pw.fontItalic = f.oblique ?? f.regular
+  }
+
+  for (const b of agreement.blocks) {
+    switch (b.t) {
+      case 'title':
+        pw.title(printable(b.text), 17)
+        pw.rule()
+        break
+      case 'center': {
+        const centered = printable(b.text)
+        const w = pw.font.widthOfTextAtSize(centered, 10.5)
+        pw.checkSpace(20)
+        pw.page.drawText(centered, { x: (pw.pageWidth - w) / 2, y: pw.y, size: 10.5, font: pw.font, color: C.medium })
+        pw.y -= 22
+        break
+      }
+      case 'heading':
+        pw.checkSpace(40)
+        pw.space(4)
+        pw.para(printable(b.text), { font: pw.fontBold, size: 12, spaceAfter: 6 })
+        break
+      case 'address':
+        for (const line of b.lines) pw.para(printable(line), { indent: 28, font: pw.fontBold, spaceAfter: 0 })
+        pw.space(10)
+        break
+      case 'party':
+        pw.labelPara(`${b.role}: `, printable(b.lines.join(' ')))
+        break
+      case 'para':
+        if (b.label) pw.labelPara(`${b.label}  `, printable(b.text))
+        else pw.para(printable(b.text))
+        break
+    }
+  }
+
+  // ─── Signature block ───
+  pw.checkSpace(230)
+  pw.rule()
+  pw.space(8)
+  pw.para('IN WITNESS WHEREOF, the parties have signed this Agreement on the dates written below.', { font: pw.fontBold, size: 11, spaceAfter: 26 })
+  const leftX = pw.margin
+  const rightX = pw.pageWidth / 2 + 20
+  const sigW = 200
+  const signed = data.signedDate ? longDate(data.signedDate) : null
+  const colRight = pw.pageWidth - pw.margin
+  // a long name shrinks (down to 6.5pt) to stay inside the page instead of running off the right edge
+  const fitSize = (text: string, font: PDFFont, size: number, maxW: number) => {
+    let sz = size
+    while (sz > 6.5 && font.widthOfTextAtSize(text, sz) > maxW) sz -= 0.5
+    return sz
+  }
+  const col = (x: number, role: string, rawCompany: string, rawName: string, rawTitle: string) => {
+    const company = printable(rawCompany), name = printable(rawName), title = printable(rawTitle)
+    let y = pw.y
+    pw.page.drawText(role, { x, y, size: 10, font: pw.fontBold, color: C.dark })
+    y -= 16
+    // the company name wraps onto at most two lines (the gap below it is 30pt)
+    const companyLines = wrapText(company, pw.fontBold, 11, colRight - x).slice(0, 2)
+    companyLines.forEach((line, i) => pw.page.drawText(line, { x, y: y - i * 12, size: 11, font: pw.fontBold, color: C.dark }))
+    y -= 30
+    pw.page.drawText('By:', { x, y, size: 10, font: pw.font, color: C.medium })
+    const sigText = `/s/ ${name}`
+    if (signed) pw.page.drawText(sigText, { x: x + 20, y, size: fitSize(sigText, pw.fontItalic, 10, colRight - x - 20), font: pw.fontItalic, color: C.dark })
+    else pw.page.drawRectangle({ x: x + 20, y: y - 2, width: sigW - 20, height: 0.5, color: C.rule })
+    y -= 28
+    pw.page.drawText('Print Name:', { x, y, size: 9, font: pw.font, color: C.light })
+    pw.page.drawText(name, { x: x + 62, y, size: fitSize(name, pw.fontBold, 10, colRight - x - 62), font: pw.fontBold, color: C.dark })
+    y -= 20
+    pw.page.drawText('Title:', { x, y, size: 9, font: pw.font, color: C.light })
+    pw.page.drawText(title, { x: x + 30, y, size: fitSize(title, pw.font, 10, colRight - x - 30), font: pw.font, color: C.dark })
+    y -= 20
+    pw.page.drawText('Date:', { x, y, size: 9, font: pw.font, color: C.light })
+    if (signed) pw.page.drawText(signed, { x: x + 30, y, size: 10, font: pw.font, color: C.dark })
+    else pw.page.drawRectangle({ x: x + 30, y: y - 2, width: sigW - 30, height: 0.5, color: C.rule })
+    return y
+  }
+  const yEnd = col(leftX, 'PROVIDER', landlordName, landlordSigner, landlordTitle)
+  col(rightX, 'CLIENT', data.tenantCompany, data.tenantContactName, tenantTitle)
+  pw.y = yEnd - 20
+
+  // Exhibit A — only when photos exist (none until the photographer delivers). Photos are not embedded server-side:
+  // the signed copy a client downloads is the browser capture of the signing page, which includes them.
+  pw.drawPageFooter()
+  return { bytes: await doc.save(), pages: pw.pageNum }
+}
+
+export async function generateLeaseV2PDF(data: LeaseData): Promise<Uint8Array> {
+  // first pass counts the pages so every footer can say "Page X of N"
+  const first = await renderLeaseV2(data, 1)
+  const second = await renderLeaseV2(data, first.pages)
+  return second.bytes
 }

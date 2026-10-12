@@ -51,73 +51,114 @@ export function formatAddressString(addr: MailingAddressRow | null | undefined):
   return parts.join(', ')
 }
 
-// Our Largo office line. A company's client suite (the number after 3D) lives on the COMPANY
-// (accounts.suite_number), never on a shared address row — so wherever a Largo office row is
-// shown or printed for a company, the company's own suite is what appears.
+// ─── The four addresses (Antonio 2026-10-10, applies to every client now) ─────────────────────────────────────────
+//   a) OFFICIAL / legal / physical address — "10225 Ulmerton Rd 3D, Largo, FL 33771". The 3D is part of OUR building's address:
+//      the same for every client, no company number on it. This is what the Articles, the EIN application (SS-4 line 4a),
+//      the Operating Agreement and the lease premises show.
+//   b) MAILING address — the same address plus the client's own box: "10225 Ulmerton Rd 3D PMB 318, Largo, FL 33771".
+//      Only the PMB number changes per client. The company's number is stored as "3D-318" (accounts.suite_number, locked by
+//      the database); the PMB number is derived from it here — nothing else builds this string.
+//   c) REGISTERED AGENT — as usual (the company's own saved row).
+//   d) SHIPPING address — our Seminole office, shown to every client in the portal.
+// A company with NO number yet (for example a One-Time company with no TD office service) has neither a), nor b): Largo is not
+// its address. It keeps what it had before (a saved real address, else "not on file").
 const TD_LARGO_LINE1 = /^\s*10225\s+ulmerton\s+r(?:oa)?d\b/i
 
 export function isTdLargoAddressRow(row: { address_line1?: string | null } | null | undefined): boolean {
   return !!row?.address_line1 && TD_LARGO_LINE1.test(row.address_line1)
 }
 
+export const TD_LARGO_STREET_3D = '10225 Ulmerton Rd 3D'
+export const TD_LARGO_CITY = 'Largo'
+export const TD_LARGO_STATE = 'FL'
+export const TD_LARGO_ZIP = '33771'
+
+/** "3D-318" -> "318" (the PMB number). Anything not shaped like a numbered TD suite -> null. */
+export function pmbNumberFromSuite(suite: string | null | undefined): string | null {
+  const m = /^\s*3D-(\d{3,4})\s*$/i.exec(suite ?? '')
+  return m ? m[1] : null
+}
+
+type LargoRow = { address_line1: string; address_line2: null; city: string; state: string; zip: string; country: string }
+
+/** What staff and clients see for a company's number: "PMB 328" — never the stored "3D-328". Null when it has no number. */
+export function pmbLabel(suite: string | null | undefined): string | null {
+  const pmb = pmbNumberFromSuite(suite)
+  return pmb ? `PMB ${pmb}` : null
+}
+
 /**
- * The address row as it should be shown for THIS company: a Largo office row gets the company's own
- * suite ("Suite 3D-318") in line 2; every other address (Seminole, registered agent, …) is returned
- * untouched, and a company with no suite yet keeps whatever the row says.
+ * What staff type for a number -> the stored form. "328" / "3D-328" / "3d328" -> "3D-328". Anything else comes back trimmed, so
+ * the server's own validation still rejects it with its normal message.
+ */
+export function suiteFromPmbInput(input: string): string {
+  const t = input.trim()
+  const m = /^(?:3D\s*-?\s*)?(\d{2,4})$/i.exec(t)
+  return m ? `3D-${m[1].padStart(3, '0')}` : t
+}
+
+/** Street line of the mailing address: "10225 Ulmerton Rd 3D PMB 318"; null when the company has no number. */
+export function mailingStreetForSuite(suite: string | null | undefined): string | null {
+  const pmb = pmbNumberFromSuite(suite)
+  return pmb ? `${TD_LARGO_STREET_3D} PMB ${pmb}` : null
+}
+
+/** The OFFICIAL address row — same for every company that has a number; null when it has none. */
+export function companyOfficialRow(suite: string | null | undefined): LargoRow | null {
+  if (!pmbNumberFromSuite(suite)) return null
+  return { address_line1: TD_LARGO_STREET_3D, address_line2: null, city: TD_LARGO_CITY, state: TD_LARGO_STATE, zip: TD_LARGO_ZIP, country: 'US' }
+}
+
+/** The MAILING address row — official address + this company's PMB; null when it has no number. */
+export function companyMailingRow(suite: string | null | undefined): LargoRow | null {
+  const street = mailingStreetForSuite(suite)
+  if (!street) return null
+  return { address_line1: street, address_line2: null, city: TD_LARGO_CITY, state: TD_LARGO_STATE, zip: TD_LARGO_ZIP, country: 'US' }
+}
+
+/**
+ * The address row as it should be shown for THIS company when a Largo office row is picked for a role. Official roles
+ * (Articles / principal office) get the bare 3D address, the mailing role gets 3D + the company's PMB; every other
+ * address (Seminole, registered agent, ...) and a company with no number come back untouched.
  */
 export function withCompanySuite<T extends { address_line1?: string | null; address_line2?: string | null }>(
   row: T | null | undefined,
   companySuite: string | null | undefined,
+  kind: AddressKind = 'business_legal',
 ): T | null | undefined {
-  if (!row || !companySuite || !isTdLargoAddressRow(row)) return row
-  return { ...row, address_line2: `Suite ${companySuite}` }
-}
-
-// Our Largo office (the CMRA building). No saved CMRA field exists any more (Antonio 2026-10-01): a company's CMRA address
-// is ALWAYS this office plus the company's own suite — "10225 Ulmerton Rd, Suite 3D-212, Largo, FL 33771" — on the EIN
-// application, the lease, the Operating Agreement, invoices and the portal.
-export const TD_LARGO_OFFICE = {
-  address_line1: '10225 Ulmerton Rd',
-  city: 'Largo',
-  state: 'FL',
-  zip: '33771',
-  country: 'US',
-} as const
-
-/**
- * The company's CMRA address. A company WITH a suite always gets Largo + its suite (whatever address row is saved —
- * the saved CMRA link is no longer used). A company with no suite yet keeps the saved row untouched (today's behaviour).
- */
-export function withCompanyCmra<T extends MailingAddressRow>(
-  row: T | null | undefined,
-  companySuite: string | null | undefined,
-): T | MailingAddressRow | null | undefined {
-  if (!companySuite) return row
-  // Only the Largo address + the suite: nothing of the saved row (its name, provider, agent) may leak onto it.
-  return { ...TD_LARGO_OFFICE, address_line2: `Suite ${companySuite}` }
+  if (!row || !pmbNumberFromSuite(companySuite) || !isTdLargoAddressRow(row)) return row
+  if (kind === 'business_mailing') return { ...row, ...companyMailingRow(companySuite)! }
+  if (kind === 'business_legal') return { ...row, ...companyOfficialRow(companySuite)! }
+  return row
 }
 
 /**
- * The Principal Office card a CLIENT sees. A company with a suite: our Largo office + its own suite (computed). A company with
- * no suite yet: its saved Principal Office — but NEVER the shared Largo row, which has no suite on it ("3D" alone is not an
- * address the client can use; found by the 2026-10-01 production QA) — so a suite-less company sees "not on file" instead.
+ * The Principal Office card a CLIENT sees. A company with a number: the OFFICIAL address (computed, whatever row is saved).
+ * A company with no number yet: its saved Principal Office — but NEVER the shared Largo row (a bare "3D" is not its address
+ * when it has no TD office service), so it sees "not on file".
  */
 export function principalOfficeForClient<T extends MailingAddressRow>(
   legal: T | null | undefined,
   mailing: T | null | undefined,
   companySuite: string | null | undefined,
 ): T | MailingAddressRow | null {
-  if (companySuite) return withCompanyCmra(legal, companySuite) ?? null
-  // no suite yet: the first saved row that is NOT the shared Largo office (it has no suite on it)
+  const official = companyOfficialRow(companySuite)
+  if (official) return official
+  // no number yet: the first saved row that is NOT the shared Largo office
   return [legal, mailing].find(r => !!r?.address_line1 && !isTdLargoAddressRow(r)) ?? null
 }
 
+/** The Mailing Address card a CLIENT sees: official address + their own PMB. No number yet -> null ("not on file"). */
+export function mailingForClient(companySuite: string | null | undefined): (MailingAddressRow & { country: string }) | null {
+  // no `name`: the card prints the COMPANY's own name above its mailing address (the Shipping card is the one in TD's name)
+  return companyMailingRow(companySuite)
+}
+
 /**
- * The Mailing Address card a CLIENT sees: where they post documents to us — our Seminole mailbox, the same for everyone
- * (Antonio 2026-10-01: "Mailing address in Seminole"). It read "not on file" for 236 of 248 active clients; the other 12 had a
- * saved row and every one of them is the same Seminole box, so no client keeps a row of their own.
+ * The Shipping Address card a CLIENT sees: our Seminole office, the same for every client (Antonio 2026-10-10). It is also
+ * where clients post original documents to us.
  */
-export const TD_MAILING_ROW: MailingAddressRow & { name: string; country: string } = {
+export const TD_SHIPPING_ROW: MailingAddressRow & { name: string; country: string } = {
   name: TD_OFFICE.company,
   address_line1: TD_OFFICE.streetNoSuite,
   address_line2: TD_OFFICE.street.slice(TD_OFFICE.streetNoSuite.length).replace(/^,\s*/, ''),
@@ -127,19 +168,23 @@ export const TD_MAILING_ROW: MailingAddressRow & { name: string; country: string
   country: 'US',
 }
 
-export function mailingForClient(): typeof TD_MAILING_ROW {
-  return TD_MAILING_ROW
+export function shippingForClient(): typeof TD_SHIPPING_ROW {
+  return TD_SHIPPING_ROW
 }
 
-// The company's CMRA address as one line: Largo + its suite when it has one, else the saved FK row, else the legacy
-// physical_address text column.
+// The company's MAILING address as one line (invoices, the AI card): official address + its PMB when it has a number, else the
+// saved FK row, else the legacy physical_address text column. A company with NO number is not at our Largo office, so the shared
+// Largo row (a bare "3D") and a Largo-formatted legacy text are ignored for it — it keeps a real saved address or has none.
 export function resolveMailingAddress(
   mailingRow: MailingAddressRow | null | undefined,
   legacyPhysical: string | null | undefined,
   companySuite?: string | null,
 ): string | null {
-  const formatted = formatAddressString(withCompanyCmra(mailingRow, companySuite))
-  return formatted ?? legacyPhysical ?? null
+  const mailing = companyMailingRow(companySuite)
+  if (mailing) return formatAddressString(mailing)
+  const realRow = isTdLargoAddressRow(mailingRow) ? null : mailingRow
+  const realLegacy = isTdLargoAddressRow({ address_line1: legacyPhysical }) ? null : legacyPhysical
+  return formatAddressString(realRow) ?? realLegacy ?? null
 }
 
 const STATE_NAMES: Record<string, string> = {

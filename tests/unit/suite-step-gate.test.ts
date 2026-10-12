@@ -89,8 +89,8 @@ describe('advanceServiceDelivery §4d — the required Suite step', () => {
     const writes = installFrom()
     const res = await advanceServiceDelivery({ delivery_id: 'sd-1', target_stage: 'Filed with State' })
     expect(res.success).toBe(false)
-    expect(res.error).toMatch(/Suite step/)
-    expect(res.error).toMatch(/No suite for this client/)
+    expect(res.error).toMatch(/PMB number step/)
+    expect(res.error).toMatch(/No PMB number for this client/)
     expect(writes.filter(w => w.table === 'service_deliveries' && w.op === 'update')).toHaveLength(0)
   })
 
