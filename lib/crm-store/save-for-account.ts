@@ -157,7 +157,10 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
   }
   let ownerId = await d.liveOwnerOfContact(input.contactId)
   if (!ownerId && input.viaAccountId && d.companyState && d.ensurePerson) {
-    if ((await d.companyState(input.viaAccountId)) !== "drive") ownerId = await d.ensurePerson(input.contactId, input.contactName || "Member")
+    const viaState = await d.companyState(input.viaAccountId)
+    // a company in the middle of its move opens no new storage for anyone: wait for the move to finish
+    if (viaState === "moving") throw new CompanyMovingError()
+    if (viaState !== "drive") ownerId = await d.ensurePerson(input.contactId, input.contactName || "Member")
   }
   if (!ownerId) return { route: "drive" }
 

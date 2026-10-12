@@ -190,7 +190,7 @@ export async function companyDocState(accountId: string): Promise<CompanyDocStat
   const d = await db()
   const { data: live, error } = await d.from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
   if (error) throw new Error("Could not check where this company's files live — please try again.")
-  const { data: run, error: rErr } = await d.from("store_import_runs").select("id").eq("account_id", accountId).eq("mode", "move").in("status", ["scanning", "moving", "undoing"]).limit(1)
+  const { data: run, error: rErr } = await d.from("store_import_runs").select("id, updated_at").eq("account_id", accountId).eq("mode", "move").in("status", ["scanning", "moving", "undoing"]).limit(1)
   if (rErr) throw new Error("Could not check where this company's files live — please try again.")
   let hasLiveFormationOwner = false
   const { data: sds, error: sErr } = await d.from("service_deliveries").select("id").eq("account_id", accountId)
@@ -201,7 +201,29 @@ export async function companyDocState(accountId: string): Promise<CompanyDocStat
     if (foErr) throw new Error("Could not check where this company's files live — please try again.")
     hasLiveFormationOwner = (fo ?? []).length > 0
   }
-  return stateFrom({ hasLiveOwner: (live ?? []).length > 0, hasLiveFormationOwner, openMoveRun: (run ?? []).length > 0 })
+  const state = stateFrom({ hasLiveOwner: (live ?? []).length > 0, hasLiveFormationOwner, openMoveRun: (run ?? []).length > 0 })
+  if (state === "moving") await alertIfMoveStale(accountId, ((run ?? [])[0] ?? {}) as { id?: string; updated_at?: string | null })
+  return state
+}
+
+/** A move that has shown no sign of life for this long is stuck: every save for that company is refused until staff look at it. */
+export const STALE_MOVE_MINUTES = 30
+
+/** Pure: is an open move run stale? (no heartbeat for STALE_MOVE_MINUTES; a missing timestamp counts as stale) */
+export function moveRunIsStale(updatedAt: string | null | undefined, now: Date = new Date()): boolean {
+  if (!updatedAt) return true
+  const t = Date.parse(updatedAt)
+  if (Number.isNaN(t)) return true
+  return now.getTime() - t > STALE_MOVE_MINUTES * 60_000
+}
+
+/** Best-effort alarm (never throws, never changes the answer): the company is refusing saves because of a stuck move. */
+async function alertIfMoveStale(accountId: string, run: { id?: string; updated_at?: string | null }): Promise<void> {
+  try {
+    if (!moveRunIsStale(run.updated_at)) return
+    const { raisePilotAlarm } = await import("./formation-pilot")
+    await raisePilotAlarm("store_move_stale", { accountId, runId: run.id ?? null, lastSignOfLife: run.updated_at ?? null, minutes: STALE_MOVE_MINUTES })
+  } catch { /* an alarm never breaks a save */ }
 }
 
 /** The live (not study-only) storage of a company, any environment — null when it has none. Strict: a read error throws. */
@@ -209,7 +231,17 @@ export async function liveOwnerOfAccount(accountId: string): Promise<string | nu
   const d = await db()
   const { data, error } = await d.from("store_owners").select("id").eq("account_id", accountId).eq("study_only", false).limit(1)
   if (error) throw new Error("Could not check where this company's files live — please try again.")
-  return ((data ?? [])[0]?.id as string | undefined) ?? null
+  const own = ((data ?? [])[0]?.id as string | undefined) ?? null
+  if (own) return own
+  // A company that was formed through the workspace can still have its live storage keyed to the FORMATION case (the same
+  // fact companyDocState reads): the company's files are in it, so that is where its documents go.
+  const { data: sds, error: sErr } = await d.from("service_deliveries").select("id").eq("account_id", accountId)
+  if (sErr) throw new Error("Could not check where this company's files live — please try again.")
+  const sdIds = ((sds ?? []) as Array<{ id: string }>).map((x) => x.id)
+  if (sdIds.length === 0) return null
+  const { data: fo, error: foErr } = await d.from("store_owners").select("id").eq("kind", "formation").eq("study_only", false).in("service_delivery_id", sdIds).limit(1)
+  if (foErr) throw new Error("Could not check where this company's files live — please try again.")
+  return ((fo ?? [])[0]?.id as string | undefined) ?? null
 }
 
 /** The live (not study-only) storage of a PERSON, any environment — null when they have none. Strict: a read error throws. */

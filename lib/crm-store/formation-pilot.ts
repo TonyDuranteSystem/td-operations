@@ -438,6 +438,7 @@ export type PilotAlarmKind =
   | "formation_owner_failed"       // a pilot formation's store owner could not be set up
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after
+  | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**
  * An alarm: an event in the store's history (owner-scoped when known) + the system error log.

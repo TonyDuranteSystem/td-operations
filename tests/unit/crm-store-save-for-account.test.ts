@@ -130,6 +130,18 @@ describe("saveDocumentForContact — a person of a switched company", () => {
     expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "person-owner-new", folderKind: "personal" }))
   })
 
+  it("the company is mid-move and the person has no live storage: nothing is opened or saved until the move ends", async () => {
+    const m = mkC(null, "moving")
+    await expect(saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)).rejects.toThrow(/being moved/)
+    expect(m.ensurePerson).not.toHaveBeenCalled()
+    expect(m.save).not.toHaveBeenCalled()
+  })
+
+  it("the company is mid-move but the person already has a live storage: it is saved there as usual", async () => {
+    const m = mkC("person-owner-1", "moving")
+    expect((await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)).route).toBe("store")
+  })
+
   it("the company is still on Drive and the person has no live storage: Drive as before", async () => {
     const m = mkC(null, "drive")
     expect(await saveDocumentForContact({ ...pass, viaAccountId: "acc-1", contactName: "Mario Rossi" }, m.deps)).toEqual({ route: "drive" })
