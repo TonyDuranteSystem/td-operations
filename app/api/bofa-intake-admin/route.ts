@@ -43,13 +43,12 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   const body = await req.json().catch(() => ({}))
   const partner = typeof body.partner_name === "string" ? body.partner_name.trim().slice(0, 120) : ""
-  if (!partner) return NextResponse.json({ error: "Enter the partner's name." }, { status: 400 })
   const parsed = parseRecipients(body.recipients)
   if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
 
   const token = randomBytes(24).toString("base64url")
   const { data, error } = await table()
-    .insert({ token, label: partner, partner_name: partner, recipients: parsed.emails, created_by: user.email ?? null })
+    .insert({ token, label: partner || "Direct", partner_name: partner || null, recipients: parsed.emails, created_by: user.email ?? null })
     .select("id, token, label, partner_name, recipients, status, created_at")
     .single()
   if (error || !data) return NextResponse.json({ error: "Could not create the link." }, { status: 500 })

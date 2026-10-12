@@ -21,7 +21,7 @@ describe("bofa intake archive naming", () => {
   })
 
   it("falls back for a missing partner, name or date", () => {
-    expect(folderPath({ id: "abcdef12-0000-4000-8000-000000000000" })).toEqual(["BofA", "No partner", "undated Applicant (abcdef)"])
+    expect(folderPath({ id: "abcdef12-0000-4000-8000-000000000000" })).toEqual(["BofA", "Direct", "undated Applicant (abcdef)"])
   })
 
   it("names stored files after the box they came from, keeping the extension", () => {

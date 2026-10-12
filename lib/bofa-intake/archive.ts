@@ -53,7 +53,7 @@ export async function archiveSubmission(id: string): Promise<ArchiveResult> {
 
     const path = folderPath({
       id,
-      partner: row.partner_name ?? row.label,
+      partner: row.partner_name,
       fullName: data.full_name,
       company: data.company_name,
       submittedAt: row.completed_at,
@@ -90,7 +90,7 @@ export async function archiveSubmission(id: string): Promise<ArchiveResult> {
     }
 
     // the answers, as a PDF next to them
-    const pdf = await buildSummaryPdf({ data, partner: row.partner_name ?? row.label ?? null, submittedAt: row.completed_at, requestId: id })
+    const pdf = await buildSummaryPdf({ data, partner: row.partner_name ?? null, submittedAt: row.completed_at, requestId: id })
     await saveBytesToStore({
       ownerId,
       folderId: folderId as string,

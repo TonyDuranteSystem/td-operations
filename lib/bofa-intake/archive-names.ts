@@ -1,6 +1,6 @@
 /**
  * Bank application intake — naming for the CRM Storage archive (pure, no database).
- * Layout: Business › BofA › <partner> › <date applicant - company (id)> › the documents + "Application answers.pdf".
+ * Layout: Business › BofA › <partner, or "Direct" when no third party brought the client> › <date applicant - company (id)> › the documents + "Application answers.pdf".
  * The folder name carries the request id so two applicants with the same name can never merge into one folder
  * (a merge would make a re-submission look "unchanged" and hide files).
  */
@@ -26,7 +26,7 @@ export function applicantFolderName(p: { id: string; fullName?: string | null; c
 }
 
 export function folderPath(p: { id: string; partner?: string | null; fullName?: string | null; company?: string | null; submittedAt?: string | null }): string[] {
-  return [BOFA_ROOT_FOLDER, safePart(p.partner, "No partner"), applicantFolderName(p)]
+  return [BOFA_ROOT_FOLDER, safePart(p.partner, "Direct"), applicantFolderName(p)]
 }
 
 const MIME_BY_EXT: Record<string, string> = {

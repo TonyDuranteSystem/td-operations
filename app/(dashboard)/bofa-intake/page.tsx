@@ -188,7 +188,7 @@ function BofaIntakeInner() {
             )}
             {links.map((l) => (
               <tr key={l.id} className="align-top">
-                <td className="p-3 font-medium min-w-[90px]">{l.partner_name || l.label}</td>
+                <td className="p-3 min-w-[90px]">{l.partner_name ? <span className="font-medium">{l.partner_name}</span> : <span className="text-muted-foreground">No partner (direct)</span>}</td>
                 <td className="p-3">
                   {l.client_name ? (
                     <>
@@ -240,7 +240,7 @@ function BofaIntakeInner() {
             <h2 className="text-base font-medium">{detail.form_data?.full_name || detail.label}{detail.form_data?.company_name ? ` — ${detail.form_data.company_name}` : ""}</h2>
             <button className="text-xs underline" onClick={() => setDetail(null)}>Close</button>
           </div>
-          <p className="text-xs text-muted-foreground mb-1">Partner: {detail.partner_name || detail.label} · Submitted {fmt(detail.completed_at)}</p>
+          <p className="text-xs text-muted-foreground mb-1">Partner: {detail.partner_name || "none (direct)"} · Submitted {fmt(detail.completed_at)}</p>
           <p className="text-xs text-muted-foreground mb-1">
             {detail.store_archived_at && detail.store_folder_id ? (
               <>Saved in Storage (Business › BofA) on {fmt(detail.store_archived_at)}. <Link href={storageHref(detail.store_owner_id, detail.store_folder_id)} className="underline">Open the folder</Link></>

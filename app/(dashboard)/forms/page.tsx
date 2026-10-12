@@ -6,12 +6,11 @@
  * Admin only (side-menu item + middleware). The list lives in lib/forms-hub/registry.ts.
  */
 
-import { useRef, useState } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { STANDALONE_FORMS, type StandaloneForm } from "@/lib/forms-hub/registry"
 
 function FormCard({ form }: { form: StandaloneForm }) {
-  const partnerRef = useRef<HTMLInputElement>(null)
   const [partner, setPartner] = useState("")
   const [recipients, setRecipients] = useState("")
   const [busy, setBusy] = useState(false)
@@ -22,11 +21,6 @@ function FormCard({ form }: { form: StandaloneForm }) {
   async function createLink() {
     setError("")
     setCopied(false)
-    if (!partner.trim()) {
-      setError("Enter the partner's name in the first box before creating the link.")
-      partnerRef.current?.focus()
-      return
-    }
     setBusy(true)
     try {
       const res = await fetch(form.createLinkApi, {
@@ -36,7 +30,7 @@ function FormCard({ form }: { form: StandaloneForm }) {
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || "Could not create the link.")
-      setCreated({ label: d.link.partner_name || d.link.label, url: d.link.url })
+      setCreated({ label: d.link.partner_name || "Direct link (no partner)", url: d.link.url })
       setPartner("")
       setRecipients("")
       try {
@@ -73,14 +67,13 @@ function FormCard({ form }: { form: StandaloneForm }) {
       </div>
 
       <h3 className="text-sm font-medium mb-3">Make a new one-time link</h3>
-      <label className="text-sm font-medium block mb-1">Partner name <span className="text-xs font-normal text-red-600">Required</span></label>
-      <p className="text-xs text-muted-foreground mb-2">Who this link is for. The person the partner shares it with fills in on the list once they submit.</p>
+      <label className="text-sm font-medium block mb-1">Partner name <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
+      <p className="text-xs text-muted-foreground mb-2">Only when a third party brings the client. Leave it empty to send the link straight to our own client or anyone else. The person who fills the form appears on the list once they submit.</p>
       <input
-        ref={partnerRef}
         className="w-full h-9 rounded-md border px-3 text-sm mb-4"
         value={partner}
         onChange={(e) => { setPartner(e.target.value); setError("") }}
-        placeholder="Type the partner's name"
+        placeholder="Type the partner's name, or leave empty"
       />
       <label className="text-sm font-medium block mb-1">Send the submitted form to <span className="text-xs font-normal text-muted-foreground">(optional)</span></label>
       <p className="text-xs text-muted-foreground mb-2">One or more email addresses, separated by commas. When the form is submitted, the answers and documents are emailed to them. Leave empty to keep it only with us.</p>
