@@ -267,7 +267,7 @@ export default function LeasePageWithCode() {
       const signRes = await fetch(`/api/lease/${token}/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined, suite_number: lease.template_version === 2 ? lease.suite_number : undefined, tenant_company: lease.template_version === 2 ? lease.tenant_company : undefined }),
+        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined, suite_number: lease.template_version === 2 ? lease.suite_number : undefined, tenant_company: lease.template_version === 2 ? lease.tenant_company : undefined, tenant_contact_name: lease.template_version === 2 ? lease.tenant_contact_name : undefined, tenant_title: lease.template_version === 2 ? (lease.tenant_title ?? '') : undefined }),
       })
       if (!signRes.ok) {
         const d = await signRes.json().catch(() => ({}))

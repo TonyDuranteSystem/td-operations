@@ -856,22 +856,32 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   const rightX = pw.pageWidth / 2 + 20
   const sigW = 200
   const signed = data.signedDate ? longDate(data.signedDate) : null
+  const colRight = pw.pageWidth - pw.margin
+  // a long name shrinks (down to 6.5pt) to stay inside the page instead of running off the right edge
+  const fitSize = (text: string, font: PDFFont, size: number, maxW: number) => {
+    let sz = size
+    while (sz > 6.5 && font.widthOfTextAtSize(text, sz) > maxW) sz -= 0.5
+    return sz
+  }
   const col = (x: number, role: string, rawCompany: string, rawName: string, rawTitle: string) => {
     const company = printable(rawCompany), name = printable(rawName), title = printable(rawTitle)
     let y = pw.y
     pw.page.drawText(role, { x, y, size: 10, font: pw.fontBold, color: C.dark })
     y -= 16
-    pw.page.drawText(company, { x, y, size: 11, font: pw.fontBold, color: C.dark })
+    // the company name wraps onto at most two lines (the gap below it is 30pt)
+    const companyLines = wrapText(company, pw.fontBold, 11, colRight - x).slice(0, 2)
+    companyLines.forEach((line, i) => pw.page.drawText(line, { x, y: y - i * 12, size: 11, font: pw.fontBold, color: C.dark }))
     y -= 30
     pw.page.drawText('By:', { x, y, size: 10, font: pw.font, color: C.medium })
-    if (signed) pw.page.drawText(`/s/ ${name}`, { x: x + 20, y, size: 10, font: pw.fontItalic, color: C.dark })
+    const sigText = `/s/ ${name}`
+    if (signed) pw.page.drawText(sigText, { x: x + 20, y, size: fitSize(sigText, pw.fontItalic, 10, colRight - x - 20), font: pw.fontItalic, color: C.dark })
     else pw.page.drawRectangle({ x: x + 20, y: y - 2, width: sigW - 20, height: 0.5, color: C.rule })
     y -= 28
     pw.page.drawText('Print Name:', { x, y, size: 9, font: pw.font, color: C.light })
-    pw.page.drawText(name, { x: x + 62, y, size: 10, font: pw.fontBold, color: C.dark })
+    pw.page.drawText(name, { x: x + 62, y, size: fitSize(name, pw.fontBold, 10, colRight - x - 62), font: pw.fontBold, color: C.dark })
     y -= 20
     pw.page.drawText('Title:', { x, y, size: 9, font: pw.font, color: C.light })
-    pw.page.drawText(title, { x: x + 30, y, size: 10, font: pw.font, color: C.dark })
+    pw.page.drawText(title, { x: x + 30, y, size: fitSize(title, pw.font, 10, colRight - x - 30), font: pw.font, color: C.dark })
     y -= 20
     pw.page.drawText('Date:', { x, y, size: 9, font: pw.font, color: C.light })
     if (signed) pw.page.drawText(signed, { x: x + 30, y, size: 10, font: pw.font, color: C.dark })

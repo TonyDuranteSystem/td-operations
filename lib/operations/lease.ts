@@ -338,7 +338,9 @@ export async function createLease(
       return {
         success: false,
         outcome: "error",
-        error: insertErr?.message || "Insert returned no data",
+        error: /template_version|operating_address/i.test(insertErr?.message ?? "")
+          ? "The database is missing the lease template-version column — run scripts/migrations/20261010-1200-lease-template-version.sql first, then create the lease again."
+          : insertErr?.message || "Insert returned no data",
       }
     }
 

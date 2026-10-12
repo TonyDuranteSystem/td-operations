@@ -128,6 +128,17 @@ describe('public lease payload and the server PDF', () => {
     expect(v1).not.toContain('SERVICES AGREEMENT')
   })
 
+  it('a very long company and signer name stay on the page in the signature block (wrapped / shrunk, nothing cut off)', async () => {
+    const bytes = await generateLeasePDF({
+      tenantCompany: 'Mediterranean Ventures Holdings International Group LLC', tenantContactName: 'Maria Fernanda Rodriguez de la Cruz y Montenegro', suiteNumber: '3D-318',
+      effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10', templateVersion: 2, signedDate: '2026-10-10',
+    })
+    const text = await pdfText(bytes)
+    expect(text).toContain('Mediterranean Ventures Holdings')
+    expect(text).toContain('Group LLC')
+    expect(text).toContain('Maria Fernanda Rodriguez de la Cruz y Montenegro')
+  })
+
   it('names and a non-Latin Operating Address print as typed in the server PDF (accents, Cyrillic), never "?"-mangled; emoji become "?"', async () => {
     expect(printable('București 🙂\nx')).toBe('București ? x')
     const bytes = await generateLeasePDF({

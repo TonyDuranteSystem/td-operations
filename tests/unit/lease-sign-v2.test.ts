@@ -29,7 +29,7 @@ vi.mock('@/lib/supabase-admin', () => {
   return { supabaseAdmin: { from, storage: { from: () => ({ list: async () => ({ data: [{ name: 'lease.pdf' }], error: null }) }) } } }
 })
 
-const PAGE = { suite_number: '3D-318', tenant_company: 'Acme LLC' }
+const PAGE = { suite_number: '3D-318', tenant_company: 'Acme LLC', tenant_contact_name: 'Jane Rossi', tenant_title: 'Manager' }
 async function sign(body: Record<string, unknown>, withPage = true) {
   const { POST } = await import('@/app/api/lease/[token]/sign/route')
   const req = new NextRequest('http://localhost/api/lease/acme-2026/sign', {
@@ -43,7 +43,7 @@ describe('lease sign route — template v2', () => {
   beforeEach(() => {
     vi.resetModules()
     updates = []
-    leaseRow = { id: 'l1', access_code: null, status: 'viewed', template_version: 2, suite_number: '3D-318', tenant_company: 'Acme LLC' }
+    leaseRow = { id: 'l1', access_code: null, status: 'viewed', template_version: 2, suite_number: '3D-318', tenant_company: 'Acme LLC', tenant_contact_name: 'Jane Rossi', tenant_title: 'Manager' }
   })
 
   it('refuses a signature with no Operating Address', async () => {
@@ -71,6 +71,8 @@ describe('lease sign route — template v2', () => {
     expect(res.status).toBe(409)
     expect((await res.json()).code).toBe('lease_changed')
     res = await sign({ operating_address: 'Via Roma 1, Milano', signing_date: today, tenant_company: 'Old Name LLC' })
+    expect(res.status).toBe(409)
+    res = await sign({ operating_address: 'Via Roma 1, Milano', signing_date: today, tenant_contact_name: 'Someone Else' })
     expect(res.status).toBe(409)
     expect(updates).toHaveLength(0)
   })

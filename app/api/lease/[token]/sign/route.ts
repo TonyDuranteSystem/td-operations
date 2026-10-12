@@ -39,6 +39,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // template v2: the company number and name the page showed (the PMB and the parties are printed in the agreement)
   const printedSuite = typeof body.suite_number === "string" ? body.suite_number : ""
   const printedCompany = typeof body.tenant_company === "string" ? body.tenant_company : ""
+  const printedSigner = typeof body.tenant_contact_name === "string" ? body.tenant_contact_name : ""
+  const printedTitle = typeof body.tenant_title === "string" ? body.tenant_title : ""
 
   if (!pdfPath) {
     return NextResponse.json({ error: "pdf_storage_path required" }, { status: 400 })
@@ -73,7 +75,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   // The signed PDF carries the company number and name the page printed. If staff changed either while the page was open (a number
   // change moves every unsigned lease), the PDF would contradict the record — refuse and make the client reload.
-  if (isV2 && (printedSuite !== lease.suite_number || printedCompany !== lease.tenant_company)) {
+  if (isV2 && (printedSuite !== lease.suite_number || printedCompany !== lease.tenant_company ||
+    printedSigner !== lease.tenant_contact_name || printedTitle !== (lease.tenant_title ?? ""))) {
     return NextResponse.json(
       { error: "This agreement was updated while you had it open. The page will reload — please review it and sign again.", code: "lease_changed" },
       { status: 409 },

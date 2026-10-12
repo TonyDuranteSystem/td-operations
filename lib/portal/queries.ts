@@ -643,7 +643,8 @@ export async function getPortalAccountDetail(accountId: string) {
     // these text columns stay null. Same fallback shape as the other three
     // addresses: prefer the linked row, fall back to the legacy text only
     // for accounts never migrated to the FK. Dev job 254834cc, 2026-09-18.
-    registered_agent_address: resolveMailingAddress(data.registered_agent, data.registered_agent_address),
+    // the registered agent is its own role: no Largo filtering (that rule is for the company's own mailing/principal addresses)
+    registered_agent_address: formatAddressString(data.registered_agent) ?? data.registered_agent_address ?? null,
     registered_agent_provider: data.registered_agent?.provider ?? data.registered_agent_provider,
     // Structured rows, kept alongside the plain-string fields above, so the
     // Overview page's Addresses card can render one labeled line per field
