@@ -64,7 +64,7 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
   }
 
   return safeAction(async () => {
-    const { items, recurring_frequency, recurring_end_date, ...invoiceData } = parsed.data
+    const { items, recurring_frequency, recurring_interval_months, recurring_end_date, ...invoiceData } = parsed.data
     const { createUnifiedInvoice } = await import('@/lib/portal/unified-invoice')
 
     const result = await createUnifiedInvoice({
@@ -84,6 +84,7 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<ActionRe
       notes: invoiceData.notes || undefined,
       message: invoiceData.message || undefined,
       recurring_frequency: recurring_frequency || null,
+      recurring_interval_months: recurring_frequency === 'custom' ? (recurring_interval_months ?? null) : null,
       recurring_end_date: recurring_end_date || null,
     })
 

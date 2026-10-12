@@ -40,7 +40,8 @@ export interface UnifiedInvoiceInput {
   message?: string     // payment terms visible to client's customer
   mark_as_paid?: boolean
   paid_date?: string
-  recurring_frequency?: 'monthly' | 'quarterly' | 'yearly' | null
+  recurring_frequency?: 'monthly' | 'quarterly' | 'yearly' | 'custom' | null
+  recurring_interval_months?: number | null // only with recurring_frequency 'custom'
   recurring_end_date?: string | null
   recurring_parent_id?: string | null
   amount_paid?: number
@@ -144,7 +145,7 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
   // looks at invoices whose next date has arrived, so without this the schedule never produced anything.
   // Generated copies (recurring_parent_id set) never carry a schedule of their own.
   const recurringNextDate = recurring_frequency && !recurring_parent_id
-    ? nextRecurringDate(issueDate, recurring_frequency)
+    ? nextRecurringDate(issueDate, recurring_frequency, undefined, input.recurring_interval_months)
     : null
   if (recurring_frequency && !recurring_parent_id && !recurringNextDate) {
     throw new Error('createUnifiedInvoice: could not work out the next recurring date from the issue date')
@@ -187,6 +188,7 @@ export async function createUnifiedInvoice(input: UnifiedInvoiceInput): Promise<
         notes: notes || null,
         message: message || null,
         recurring_frequency: recurring_frequency || null,
+        recurring_interval_months: recurring_frequency === 'custom' ? (input.recurring_interval_months ?? null) : null,
         recurring_end_date: recurring_end_date || null,
         recurring_next_date: recurringNextDate,
         recurring_parent_id: recurring_parent_id || null,

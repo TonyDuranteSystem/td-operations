@@ -28,10 +28,19 @@ export const createInvoiceSchema = z.object({
   due_date: z.string().optional(),
   notes: z.string().optional(),
   message: z.string().optional(),
-  recurring_frequency: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
+  recurring_frequency: z.enum(['monthly', 'quarterly', 'yearly', 'custom']).nullable().optional(),
+  // only for 'custom': how many months between invoices (1 to 36)
+  recurring_interval_months: z.number().int().min(1, 'Choose between 1 and 36 months').max(36, 'Choose between 1 and 36 months').nullable().optional(),
   recurring_end_date: z.string().nullable().optional(),
   bank_account_id: z.string().uuid().nullable().optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item is required'),
+}).superRefine((v, ctx) => {
+  if (v.recurring_frequency === 'custom' && !v.recurring_interval_months) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['recurring_interval_months'], message: 'Enter how many months between invoices (1 to 36)' })
+  }
+  if (v.recurring_frequency !== 'custom' && v.recurring_interval_months) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['recurring_interval_months'], message: 'A number of months only applies to a custom schedule' })
+  }
 })
 
 // What an edit may change. `status`, `paid_date`, `account_id` and every amount are deliberately NOT here: zod

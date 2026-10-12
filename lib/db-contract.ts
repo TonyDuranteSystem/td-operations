@@ -139,6 +139,7 @@ export const NOT_A_VOCABULARY = new Set([
   "invoice_has_owner",
   "payments_bank_preference_check", // regex + enum hybrid
   "client_invoices_recurring_frequency_check",
+  "client_invoices_recurring_interval_check", // shape rule: custom schedule carries 1..36 months, any other carries none
   "td_books_transactions_transaction_ref_check", // shape rule: non-blank ref, not a value list
   // Shape rule, not a vocabulary: an email row must carry mailbox/to_address/subject, a PORTAL
   // row must carry none of them. This is what makes "a portal message dispatched down the Gmail

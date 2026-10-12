@@ -6,6 +6,8 @@ import { Plus, Trash2, ArrowLeft, Loader2, Save, Landmark } from 'lucide-react'
 import { toast } from 'sonner'
 import { createInvoice, updateInvoice, createCustomer } from '@/app/portal/invoices/actions'
 import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
+import { nextRecurringDate, isValidCustomMonths, CUSTOM_MONTHS_MIN, CUSTOM_MONTHS_MAX } from '@/lib/portal/recurring-date'
 import Link from 'next/link'
 
 interface Customer {
@@ -71,6 +73,11 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   const [message, setMessage] = useState(initialData?.message ?? '')
   const [recurringFrequency, setRecurringFrequency] = useState<string>('')
   const [recurringEndDate, setRecurringEndDate] = useState('')
+  // 'Custom' schedule: the client says how many months between invoices (kept as text so the box can be emptied)
+  const [customMonths, setCustomMonths] = useState('')
+  const customMonthsNumber = Number(customMonths)
+  const customMonthsValid = isValidCustomMonths(customMonths === '' ? null : customMonthsNumber)
+  const nextCustomDate = recurringFrequency === 'custom' && customMonthsValid ? nextRecurringDate(issueDate, 'custom', undefined, customMonthsNumber) : null
 
   // Bank account
   const [bankAccountId, setBankAccountId] = useState<string>(initialData?.bankAccountId ?? '')
@@ -154,6 +161,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
       toast.error('All line items need a description')
       return
     }
+    if (mode === 'create' && recurringFrequency === 'custom' && !customMonthsValid) {
+      toast.error(t('invoices.customInvalid'))
+      return
+    }
 
     startTransition(async () => {
       const itemsPayload = items.map((item, i) => ({
@@ -194,7 +205,8 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           due_date: dueDate || undefined,
           notes: notes || undefined,
           message: message || undefined,
-          recurring_frequency: (recurringFrequency as 'monthly' | 'quarterly' | 'yearly') || null,
+          recurring_frequency: (recurringFrequency as 'monthly' | 'quarterly' | 'yearly' | 'custom') || null,
+          recurring_interval_months: recurringFrequency === 'custom' ? customMonthsNumber : null,
           recurring_end_date: recurringEndDate || null,
           bank_account_id: bankAccountId || null,
           items: itemsPayload,
@@ -339,8 +351,35 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
               <option value="monthly">{t('invoices.monthly')}</option>
               <option value="quarterly">{t('invoices.quarterly')}</option>
               <option value="yearly">{t('invoices.yearly')}</option>
+              <option value="custom">{t('invoices.custom')}</option>
             </select>
           </div>
+          {recurringFrequency === 'custom' && (
+            <div className="sm:col-span-2" data-testid="invoice-recurring-custom">
+              <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.customEvery')}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={CUSTOM_MONTHS_MIN}
+                  max={CUSTOM_MONTHS_MAX}
+                  step={1}
+                  value={customMonths}
+                  onChange={e => setCustomMonths(e.target.value)}
+                  placeholder="6"
+                  className="w-24 px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-zinc-600">{t('invoices.customMonths')}</span>
+              </div>
+              <p className="text-xs text-zinc-500 mt-1" data-testid="invoice-recurring-custom-next">
+                {customMonths !== '' && !customMonthsValid
+                  ? t('invoices.customInvalid')
+                  : nextCustomDate
+                    ? interpolateString(t('invoices.customNext'), { date: nextCustomDate })
+                    : t('invoices.customRange')}
+              </p>
+            </div>
+          )}
           {recurringFrequency && (
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('invoices.endDate')}</label>
