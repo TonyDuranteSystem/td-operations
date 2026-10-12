@@ -193,13 +193,21 @@ export async function POST(req: NextRequest) {
           .eq("id", oa.account_id)
           .single()
 
-        if (acct?.drive_folder_id) {
-          const { listFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-          const companyFolder = folderResult.files?.find(f =>
-            f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          const targetFolderId = companyFolder?.id || acct.drive_folder_id
+        // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its OA saved in
+        // the new storage and needs no Drive folder at all; a company still on Drive carries on exactly as before.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = (await companyDocState(oa.account_id)) !== "drive"
+
+        if (acct?.drive_folder_id || inStorage) {
+          let targetFolderId = ""
+          if (!inStorage && acct?.drive_folder_id) {
+            const { listFolder } = await import("@/lib/google-drive")
+            const folderResult = await listFolder(acct.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+            const companyFolder = folderResult.files?.find(f =>
+              f.name.includes("Company") && f.mimeType === "application/vnd.google-apps.folder"
+            )
+            targetFolderId = companyFolder?.id || acct.drive_folder_id
+          }
 
           // File the document the SERVER recorded — never "whatever is newest in
           // the folder", which is what this used to do. The storage bucket
@@ -222,19 +230,30 @@ export async function POST(req: NextRequest) {
                 const fileData = Buffer.from(arrayBuffer)
                 const fileName = `Operating Agreement - ${oa.company_name} (Signed).pdf`
 
-                // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-                const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
-                results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
-
-                if (oa.account_id) {
-                  await autoSaveDocument({
-                    accountId: oa.account_id,
-                    fileName,
-                    documentType: 'Operating Agreement',
-                    category: 1,
-                    driveFileId: driveResult.id,
-                    portalVisible: true,
+                if (inStorage) {
+                  // the same key on a re-run is a new VERSION of the same file, never a second copy
+                  const { saveSignedPdfForAccount } = await import("@/lib/crm-store/save-for-account")
+                  const routed = await saveSignedPdfForAccount({
+                    accountId: oa.account_id, fileName, bytes: fileData, label: "Operating Agreement", category: 1, callerKey: `oa-signed:${oa.id}`, documentType: "operating_agreement",
                   })
+                  if (routed.route !== "store") throw new Error("This company's files moved back to Drive while its Operating Agreement was being saved — nothing was saved.")
+                  results.push({ step: "drive_upload", status: "ok", detail: `Saved to the new storage: ${routed.pointer}` })
+                } else {
+                  const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+                  // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
+                  const driveResult = await uploadBinaryToDriveUpsert(fileName, fileData, "application/pdf", targetFolderId) as { id: string }
+                  results.push({ step: "drive_upload", status: "ok", detail: `Uploaded to Drive: ${driveResult.id}` })
+
+                  if (oa.account_id) {
+                    await autoSaveDocument({
+                      accountId: oa.account_id,
+                      fileName,
+                      documentType: 'Operating Agreement',
+                      category: 1,
+                      driveFileId: driveResult.id,
+                      portalVisible: true,
+                    })
+                  }
                 }
               } else {
                 const detail = `Recorded PDF not found in Storage: ${resolved.path}`

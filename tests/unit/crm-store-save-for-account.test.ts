@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { saveDocumentForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
+import { saveDocumentForAccount, saveSignedPdfForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
 import type { CompanyDocState } from "@/lib/crm-store/switched-drive-guard"
 
 const FILE = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
@@ -75,5 +75,29 @@ describe("saveDocumentForAccount — where do this company's files live?", () =>
     const d = mk("store", { state: async () => { throw new Error("Could not check where this company's files live — please try again.") } })
     await expect(saveDocumentForAccount(base, d)).rejects.toThrow(/Could not check/)
     expect(d.calls.save).not.toHaveBeenCalled()
+  })
+})
+
+describe("saveSignedPdfForAccount — the shape most automatic flows share", () => {
+  const signed = { accountId: "acc-1", fileName: "Lease - Acme (Signed).pdf", bytes: Buffer.from("%PDF"), label: "Lease Agreement", callerKey: "lease-signed:L1" }
+
+  it("a company still on Drive: the flow carries on with Drive", async () => {
+    const d = mk("drive")
+    expect(await saveSignedPdfForAccount(signed, d)).toEqual({ route: "drive" })
+    expect(d.calls.save).not.toHaveBeenCalled()
+  })
+
+  it("a switched company: the PDF goes to 1. Company, visible in the portal, listed with its label; the same key is the same file", async () => {
+    const d = mk("store")
+    const r = await saveSignedPdfForAccount(signed, d)
+    expect(r.route).toBe("store")
+    expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ folderKind: "company", mimeType: "application/pdf", callerKey: "lease-signed:L1", published: true }))
+    expect(d.calls.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ document_type_name: "Lease Agreement", category: 1, status: "classified", portal_visible: true }), "created")
+  })
+
+  it("category 3 goes to 3. Tax", async () => {
+    const d = mk("store")
+    await saveSignedPdfForAccount({ ...signed, category: 3 }, d)
+    expect(d.calls.save).toHaveBeenCalledWith(expect.objectContaining({ folderKind: "tax" }))
   })
 })

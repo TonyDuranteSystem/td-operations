@@ -104,3 +104,34 @@ export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: 
   }, w.status)
   return { route: "store", fileId: w.fileId, pointer: d.pointer(w.fileId), documentRowId: listed.id, status: w.status }
 }
+
+/**
+ * The one shape most automatic flows share: a SIGNED (or generated) PDF for a company, listed in the portal.
+ * Same question first (see saveDocumentForAccount). `callerKey` must be stable per document (e.g. "lease-signed:<lease id>")
+ * so a retry or a re-sign becomes a new VERSION of the same file, never a second copy.
+ */
+export async function saveSignedPdfForAccount(p: {
+  accountId: string
+  fileName: string
+  bytes: Buffer
+  /** the label shown in the documents list, e.g. "Lease Agreement" */
+  label: string
+  /** 1 = Company (default), 3 = Tax, 4 = Banking, 5 = Correspondence */
+  category?: number
+  callerKey: string
+  portalVisible?: boolean
+  contactId?: string | null
+  actor?: string | null
+  /** the storage's document-type slug when one exists (office_lease, operating_agreement, form_ss_4 …); null = staff choose later */
+  documentType?: string | null
+  /** stamps the CRM record with the service it belongs to (the flow workspace lists documents by it) */
+  serviceDeliveryId?: string | null
+}, deps?: SaveDeps): Promise<SaveForAccountResult> {
+  const category = p.category ?? 1
+  return saveDocumentForAccount({
+    accountId: p.accountId, name: p.fileName, bytes: p.bytes, mimeType: "application/pdf",
+    folder: category === 3 ? "tax" : category === 4 ? "banking" : category === 5 ? "correspondence" : "company",
+    documentType: p.documentType ?? null, callerKey: p.callerKey, portalVisible: p.portalVisible ?? true, actor: p.actor ?? null,
+    row: { document_type_name: p.label, category, status: "classified", contact_id: p.contactId ?? null, service_delivery_id: p.serviceDeliveryId ?? null },
+  }, deps)
+}

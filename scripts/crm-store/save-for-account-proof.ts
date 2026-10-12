@@ -43,6 +43,19 @@ async function main() {
     console.log("test documents row removed (the stored file stays in the sandbox storage: stored files are never deleted)")
   }
 
+  // the signed-PDF shape the automatic flows use: lease (client sees it) and SS-4 (internal — never shown)
+  const { saveSignedPdfForAccount } = await import("../../lib/crm-store/save-for-account")
+  const pdf = Buffer.from(`%PDF-1.4 QA Test cutover proof ${Date.now()}`)
+  const lease = await saveSignedPdfForAccount({ accountId: STORE_COMPANY, fileName: "QA Test lease signed.pdf", bytes: pdf, label: "Lease Agreement", callerKey: `qa-lease:${Date.now()}`, documentType: "office_lease" })
+  const ss4 = await saveSignedPdfForAccount({ accountId: STORE_COMPANY, fileName: "QA Test ss4 signed.pdf", bytes: Buffer.concat([pdf, Buffer.from("ss4")]), label: "Form SS-4 (Signed)", callerKey: `qa-ss4:${Date.now()}`, portalVisible: false, documentType: "form_ss_4" })
+  for (const [name, r] of [["lease", lease], ["ss4", ss4]] as const) {
+    if (r.route !== "store") { console.log(name, "→", r); continue }
+    const { data: row } = await supabaseAdmin.from("documents").select("document_type_name, portal_visible, category, status").eq("id", r.documentRowId).single()
+    const { data: f } = await (supabaseAdmin as unknown as { from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { single: () => Promise<{ data: unknown }> } } } }).from("store_files").select("document_type, published").eq("id", r.fileId).single()
+    console.log(`${name} signed PDF → documents row:`, row, "| store file:", f)
+    await supabaseAdmin.from("documents").delete().eq("id", r.documentRowId)
+  }
+
   // a company still on Drive
   const { data: accts } = await supabaseAdmin.from("accounts").select("id, company_name").not("drive_folder_id", "is", null).limit(60)
   for (const a of (accts ?? []) as Array<{ id: string; company_name: string }>) {
