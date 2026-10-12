@@ -180,7 +180,7 @@ _Regenerated 2026-10-12. Every subsystem doc under `docs/systems/` (48 docs), wi
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-29)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-10)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-09)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-12)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-09)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
@@ -221,7 +221,7 @@ _Regenerated 2026-10-12. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-04)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
-- [td-communication.md](td-communication.md) — TD Communication _(verified 2026-10-09)_
+- [td-communication.md](td-communication.md) — TD Communication _(verified 2026-10-12)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-10-09)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
