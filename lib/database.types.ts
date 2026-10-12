@@ -3313,6 +3313,7 @@ export type Database = {
           parent_invoice_id: string | null
           recurring_end_date: string | null
           recurring_frequency: string | null
+          recurring_interval_months: number | null
           recurring_next_date: string | null
           recurring_parent_id: string | null
           source: string | null
@@ -3345,6 +3346,7 @@ export type Database = {
           parent_invoice_id?: string | null
           recurring_end_date?: string | null
           recurring_frequency?: string | null
+          recurring_interval_months?: number | null
           recurring_next_date?: string | null
           recurring_parent_id?: string | null
           source?: string | null
@@ -3377,6 +3379,7 @@ export type Database = {
           parent_invoice_id?: string | null
           recurring_end_date?: string | null
           recurring_frequency?: string | null
+          recurring_interval_months?: number | null
           recurring_next_date?: string | null
           recurring_parent_id?: string | null
           source?: string | null
