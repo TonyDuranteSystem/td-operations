@@ -179,7 +179,7 @@ _Regenerated 2026-10-12 from the R-rule list in CLAUDE.md — **42 rules**, high
 _Regenerated 2026-10-12. Every subsystem doc under `docs/systems/` (48 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-09-29)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-10)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-12)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-12)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-09-18)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-09)_
@@ -187,22 +187,22 @@ _Regenerated 2026-10-12. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-10)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-10-12)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-05)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-12)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-09)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-12)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
-- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-07)_
+- [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-12)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-12)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-12)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-12)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-09)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-12)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-10)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-12)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-09)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-05)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-12)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-12)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-08)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
@@ -216,14 +216,14 @@ _Regenerated 2026-10-12. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-09-18)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-12)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-13)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-09)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-04)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-12)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-09-14)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-10-12)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-10-09)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-09-25)_
-- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-04)_
+- [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-10-12)_
 <!-- /GENERATED:deep-docs -->
