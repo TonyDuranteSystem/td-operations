@@ -188,7 +188,8 @@ export async function POST(req: NextRequest) {
       if (driveFolderId) {
         const driveResult = await saveFormToDrive(
           "itin", sd, uploadPaths, driveFolderId,
-          { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName }
+          { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName },
+          { person: contactId ? { contactId, viaAccountId: driveAccountId || null, name: clientName || displayName } : undefined },
         )
         results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.` })
 
@@ -347,7 +348,7 @@ export async function POST(req: NextRequest) {
           for (const doc of itinDocs) {
             // the same key on a re-run is a new VERSION of the same file, never a second copy
             routedDocs.push(await saveDocumentForContact({
-              contactId, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: null,
+              contactId, viaAccountId: driveAccountId || null, contactName: clientName || undefined, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: null,
               callerKey: `itin-form-doc:${contactId}:${deliveryId ?? token}:${doc.name}`, accountId: sub.account_id ?? null, portalVisible: true,
               row: { document_type_name: doc.label, category: 3, status: "classified", service_delivery_id: deliveryId },
             }))

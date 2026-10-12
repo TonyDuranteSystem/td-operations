@@ -413,24 +413,43 @@ export function registerBankStatementTools(server: McpServer) {
         let driveLink = ""
         let documentVisibleToClient = false
         let clientNotified = false
-        if (upload_to_drive && ctx.driveFolderId) {
-          const taxFolderId = await findTaxFolder(ctx.driveFolderId)
-          const targetFolder = taxFolderId || ctx.driveFolderId
+        // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) gets the workbook there — the same
+        // file (a new version) on every re-run; a company on Drive carries on exactly as before.
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const pnlInStorage = upload_to_drive && (await companyDocState(account_id)) !== "drive"
+        if (upload_to_drive && (ctx.driveFolderId || pnlInStorage)) {
+          let uploaded: { id: string; name: string }
+          let storeRowId: string | null = null
+          if (pnlInStorage) {
+            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+            const routed = await saveDocumentForAccount({
+              accountId: account_id, name: fileName, bytes: buffer,
+              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              folder: "tax", documentType: "profit_loss_statement", callerKey: `pnl:${account_id}:${tax_year}`, portalVisible: true, periodYear: tax_year,
+              row: { document_type_name: "Profit & Loss Statement", category: 3, status: "classified" },
+            })
+            if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the P&L was being saved — nothing was saved.")
+            uploaded = { id: routed.pointer, name: fileName }
+            storeRowId = routed.documentRowId
+            driveLink = "saved in the company's new storage"
+          } else {
+            const taxFolderId = await findTaxFolder(ctx.driveFolderId)
+            const targetFolder = taxFolderId || ctx.driveFolderId
 
-          // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-          const uploaded = (await uploadBinaryToDriveUpsert(
-            fileName, buffer,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            targetFolder,
-          )) as { id: string; name: string }
-
-          driveLink = `https://drive.google.com/file/d/${uploaded.id}/view`
+            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
+            uploaded = (await uploadBinaryToDriveUpsert(
+              fileName, buffer,
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              targetFolder,
+            )) as { id: string; name: string }
+            driveLink = `https://drive.google.com/file/d/${uploaded.id}/view`
+          }
 
           logAction({
             action_type: "bank_statement_pnl",
             table_name: "bank_transactions",
             record_id: account_id,
-            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), uploaded to Drive`,
+            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), uploaded to ${pnlInStorage ? "the new storage" : "Drive"}`,
             details: { drive_file_id: uploaded.id, net_income: netIncome },
           })
 
@@ -442,14 +461,16 @@ export function registerBankStatementTools(server: McpServer) {
           // drive_file_id, so re-running this tool for the same account/year
           // (the upload above is itself an upsert to the same file) never
           // creates a duplicate document row or re-fires the notification.
-          const saved = await autoSaveDocument({
-            accountId: account_id,
-            fileName,
-            documentType: "Profit & Loss Statement",
-            category: 3, // Tax
-            driveFileId: uploaded.id,
-            portalVisible: true,
-          })
+          const saved = storeRowId
+            ? { id: storeRowId, error: null as string | null }
+            : await autoSaveDocument({
+              accountId: account_id,
+              fileName,
+              documentType: "Profit & Loss Statement",
+              category: 3, // Tax
+              driveFileId: uploaded.id,
+              portalVisible: true,
+            })
           if (saved.id) {
             documentVisibleToClient = true
             // autoSaveDocument's dedupe-on-drive_file_id is correct for every

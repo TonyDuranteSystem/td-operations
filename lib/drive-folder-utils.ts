@@ -173,6 +173,16 @@ export async function ensureContactFolder(
     }
   }
 
+  // Drive cutover (dev job ad09ea91): a person whose files live in the new storage never gets a NEW Drive folder.
+  // (An existing folder above is still returned: Drive stays visible and read-only.)
+  {
+    const { liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
+    if (await liveOwnerOfContact(contactId)) {
+      const { SwitchedCompanyDriveWriteError } = await import('@/lib/crm-store/switched-drive-guard')
+      throw new SwitchedCompanyDriveWriteError("This person's files live in the new storage - no Drive folder is created for them.")
+    }
+  }
+
   // No folder linked — check Drive for existing folder with same name (dedup)
   const rootId = await ensureContactsRoot()
   const { createFolder, listFiles } = await getDriveHelpers()

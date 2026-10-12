@@ -106,7 +106,12 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
       // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
       // bucket resolver so BOTH origins download from the right bucket. plan.bucket
       // is the default for forms with a single origin.
-      { bucket: plan.bucket, resolveBucket: recipe.resolveBucket },
+      {
+        bucket: plan.bucket,
+        resolveBucket: recipe.resolveBucket,
+        // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
+        person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
+      },
     )
   } catch (e) {
     await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)

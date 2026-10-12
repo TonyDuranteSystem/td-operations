@@ -219,3 +219,17 @@ export async function liveOwnerOfContact(contactId: string): Promise<string | nu
   if (error) throw new Error("Could not check where this person's files live — please try again.")
   return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
+
+/**
+ * Do this PERSON's files live in the new storage? Their own live storage — or, when the company they belong to is named,
+ * that company being switched or mid-move (the person's storage is opened for them on first use). Strict: a read error throws.
+ */
+export async function personFilesInStorage(
+  contactId: string,
+  viaAccountId?: string | null,
+  deps: { liveOwner: (id: string) => Promise<string | null>; companyState: (id: string) => Promise<CompanyDocState> } = { liveOwner: liveOwnerOfContact, companyState: companyDocState },
+): Promise<boolean> {
+  if (await deps.liveOwner(contactId)) return true
+  if (viaAccountId && (await deps.companyState(viaAccountId)) !== "drive") return true
+  return false
+}

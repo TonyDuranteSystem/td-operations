@@ -1132,7 +1132,7 @@ export async function saveFormToDrive(
    * turn left step 7's bank-statement parse with nothing to read and produced
    * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
    */
-  opts?: { bucket?: string; resolveBucket?: (path: string) => string },
+  opts?: { bucket?: string; resolveBucket?: (path: string) => string; person?: { contactId: string; viaAccountId?: string | null; name?: string | null } },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; skipped: string[]; errors: string[] }> {
   // Tax wizard payloads arrive with flattened repeater keys and alias
   // duplicates — normalize them for the accountant PDF (fold member/RPT
@@ -1153,7 +1153,17 @@ export async function saveFormToDrive(
     const { switchedTargetForFolder, saveFormToStore } = await import("@/lib/crm-store/save-form")
     let switched
     try {
-      switched = await switchedTargetForFolder(driveFolderId)
+      // A person-keyed form (ITIN): the person's own storage when their files live there — no Drive folder is involved at all.
+      const { personFilesInStorage, liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
+      if (opts?.person && (await personFilesInStorage(opts.person.contactId, opts.person.viaAccountId))) {
+        const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
+        const ownerId = (await liveOwnerOfContact(opts.person.contactId)) ?? (await ensurePersonOwner(opts.person.contactId, opts.person.name || "Member"))
+        switched = { kind: "contact" as const, id: opts.person.contactId, ownerId }
+      } else if (driveFolderId.startsWith("person-storage:")) {
+        throw new Error("This person's files live in the new storage but their storage could not be found — nothing was saved.")
+      } else {
+        switched = await switchedTargetForFolder(driveFolderId)
+      }
     } catch (e) {
       return { summaryFileId: null, copied: [], failed: [], skipped: [], errors: [e instanceof Error ? e.message : String(e)] }
     }

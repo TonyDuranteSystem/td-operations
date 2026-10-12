@@ -136,7 +136,11 @@ export async function POST(req: NextRequest) {
                   portalVisible: true,
                 })
               }
+            } else {
+              results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF could not be downloaded from Storage — nothing was filed" })
             }
+          } else {
+            results.push({ step: "drive_upload", status: "error", detail: "The signed Form 8832 PDF was not found in Storage — nothing was filed" })
           }
         }
       } catch (e) {

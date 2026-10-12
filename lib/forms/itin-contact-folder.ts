@@ -131,6 +131,14 @@ export async function resolveItinContactFolder(params: {
     accountId = link?.account_id ?? null
   }
 
+  // Drive cutover (dev job ad09ea91): a person whose files live in the new storage has no Drive folder at all — the caller
+  // passes the person to saveFormToDrive, which files the package in their storage. The marker below is not a Drive id, so
+  // if that override were ever missing the Drive call fails loudly instead of writing somewhere.
+  if (contactId) {
+    const { personFilesInStorage } = await import("@/lib/crm-store/switched-drive-guard")
+    if (await personFilesInStorage(contactId, accountId)) return `person-storage:${contactId}`
+  }
+
   // Company-owner → the company's "2. Contacts" subfolder.
   if (accountId) {
     const { data: acc, error } = await supabaseAdmin
