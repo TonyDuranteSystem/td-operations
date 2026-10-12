@@ -157,14 +157,18 @@ export function shippingForClient(): typeof TD_SHIPPING_ROW {
 }
 
 // The company's MAILING address as one line (invoices, the AI card): official address + its PMB when it has a number, else the
-// saved FK row, else the legacy physical_address text column.
+// saved FK row, else the legacy physical_address text column. A company with NO number is not at our Largo office, so the shared
+// Largo row (a bare "3D") and a Largo-formatted legacy text are ignored for it — it keeps a real saved address or has none.
 export function resolveMailingAddress(
   mailingRow: MailingAddressRow | null | undefined,
   legacyPhysical: string | null | undefined,
   companySuite?: string | null,
 ): string | null {
-  const formatted = formatAddressString(companyMailingRow(companySuite) ?? mailingRow)
-  return formatted ?? legacyPhysical ?? null
+  const mailing = companyMailingRow(companySuite)
+  if (mailing) return formatAddressString(mailing)
+  const realRow = isTdLargoAddressRow(mailingRow) ? null : mailingRow
+  const realLegacy = isTdLargoAddressRow({ address_line1: legacyPhysical }) ? null : legacyPhysical
+  return formatAddressString(realRow) ?? realLegacy ?? null
 }
 
 const STATE_NAMES: Record<string, string> = {

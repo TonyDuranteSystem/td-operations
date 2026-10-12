@@ -135,7 +135,7 @@ export function resolveMailing(account: Ss4AccountSnapshot): { street: string; c
   if (official) {
     return {
       street: official.address_line1,
-      cityStateZip: [official.city, official.state, official.zip].filter(Boolean).join(", "),
+      cityStateZip: `${official.city}, ${official.state} ${official.zip}`,
     }
   }
   // no number yet: the shared Largo row is not this company's address — treat it as not saved and fall through

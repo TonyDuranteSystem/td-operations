@@ -29,11 +29,12 @@ vi.mock('@/lib/supabase-admin', () => {
   return { supabaseAdmin: { from, storage: { from: () => ({ list: async () => ({ data: [{ name: 'lease.pdf' }], error: null }) }) } } }
 })
 
-async function sign(body: Record<string, unknown>) {
+const PAGE = { suite_number: '3D-318', tenant_company: 'Acme LLC' }
+async function sign(body: Record<string, unknown>, withPage = true) {
   const { POST } = await import('@/app/api/lease/[token]/sign/route')
   const req = new NextRequest('http://localhost/api/lease/acme-2026/sign', {
     method: 'POST',
-    body: JSON.stringify({ code: 'x', pdf_storage_path: 'acme-2026/lease.pdf', ...body }),
+    body: JSON.stringify({ code: 'x', pdf_storage_path: 'acme-2026/lease.pdf', ...(withPage ? PAGE : {}), ...body }),
   })
   return POST(req, { params: Promise.resolve({ token: 'acme-2026' }) })
 }
@@ -42,7 +43,7 @@ describe('lease sign route — template v2', () => {
   beforeEach(() => {
     vi.resetModules()
     updates = []
-    leaseRow = { id: 'l1', access_code: null, status: 'viewed', template_version: 2 }
+    leaseRow = { id: 'l1', access_code: null, status: 'viewed', template_version: 2, suite_number: '3D-318', tenant_company: 'Acme LLC' }
   })
 
   it('refuses a signature with no Operating Address', async () => {
@@ -62,6 +63,23 @@ describe('lease sign route — template v2', () => {
   it('refuses a v2 signature that carries no printed date at all', async () => {
     const res = await sign({ operating_address: 'Via Roma 1, Milano, Italy' })
     expect(res.status).toBe(409)
+  })
+
+  it('refuses a signature when staff changed the company number or name while the page was open (the PDF would contradict the record)', async () => {
+    const today = newYorkToday()
+    let res = await sign({ operating_address: 'Via Roma 1, Milano', signing_date: today, suite_number: '3D-205' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('lease_changed')
+    res = await sign({ operating_address: 'Via Roma 1, Milano', signing_date: today, tenant_company: 'Old Name LLC' })
+    expect(res.status).toBe(409)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('strips line breaks and control characters from the Operating Address', async () => {
+    const today = newYorkToday()
+    const res = await sign({ operating_address: 'Via Roma 1\n\tMilano\u0000, Italy', signing_date: today })
+    expect(res.status).toBe(200)
+    expect(updates[0].operating_address).toBe('Via Roma 1  Milano , Italy')
   })
 
   it('records the Effective Date, a 12-month term and the Operating Address, set by the server', async () => {

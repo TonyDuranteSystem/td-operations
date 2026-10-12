@@ -72,6 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
           status: ["draft", "sent"].includes(lease.status) ? "viewed" : lease.status,
         })
         .eq("id", lease.id)
+        .neq("status", "signed") // a refresh racing a signature must never turn a signed lease back into "viewed"
     } catch {
       // Tracking is not worth failing a signing session over.
     }

@@ -267,11 +267,11 @@ export default function LeasePageWithCode() {
       const signRes = await fetch(`/api/lease/${token}/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined }),
+        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined, suite_number: lease.template_version === 2 ? lease.suite_number : undefined, tenant_company: lease.template_version === 2 ? lease.tenant_company : undefined }),
       })
       if (!signRes.ok) {
         const d = await signRes.json().catch(() => ({}))
-        if (d.code === 'date_changed') {
+        if (d.code === 'date_changed' || d.code === 'lease_changed') {
           alert(d.error)
           window.location.reload()
           return
@@ -290,9 +290,11 @@ export default function LeasePageWithCode() {
         // Non-blocking — signing is already saved
       }
 
-      // v2: show what the server recorded (the date printed at signing, the Operating Address), not the draft's placeholders
+      // show what the server recorded, not the draft's placeholders (v1 printed "December 31, 1969" here: signed_at was never set locally)
       if (lease.template_version === 2) {
         setLease({ ...lease, signed_at: new Date().toISOString(), effective_date: serverToday || lease.effective_date, operating_address: operatingAddress.trim() })
+      } else {
+        setLease({ ...lease, signed_at: new Date().toISOString() })
       }
       setSigned(true)
 

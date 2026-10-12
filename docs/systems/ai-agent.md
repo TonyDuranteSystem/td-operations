@@ -1,4 +1,5 @@
 # AI Agent (in-dashboard assistant)
+_Last verified against code: 2026-10-10b — Claude (dev job `803c2410`, sandbox): the AI client card's lease line reads "company number 3D-NNN (PMB NNN)"; no-number companies never report the shared Largo row. See `lease-oa.md` (2026-10-10c).
 _Last verified against code: 2026-10-10 — Claude (dev job `803c2410`, sandbox): the AI client card (`lib/ai-agent/client-card.ts`) prints a company's MAILING address as official address + its PMB (`companyMailingRow`) instead of "Suite 3D-NNN". See `lease-oa.md` (2026-10-10).
 
 _Last verified against code: 2026-09-30b — Claude (dev job `803c2410`, sandbox — Antonio ships: the client card's mailing address (`lib/ai-agent/client-card.ts`) shows a Largo office row with the company's own suite (`withCompanySuite`). No other AI-agent behavior changed.)_

@@ -56,8 +56,15 @@ export interface AgreementV2Doc {
   exhibitPhotos: ExhibitPhoto[]
 }
 
+/** "a Wyoming" / "an Illinois" / "a Utah" (the sound, not the letter, decides). */
 function article(state: string | null): string {
-  return state ? `a ${state}` : 'a'
+  if (!state) return 'a'
+  return /^[aeio]/i.test(state.trim()) ? `an ${state}` : `a ${state}`
+}
+
+/** "limited liability company" unless the name says it is a corporation (Inc / Corp / Corporation). */
+function entityWord(companyName: string): string {
+  return /\b(inc|incorporated|corp|corporation)\.?\s*$/i.test(companyName.trim()) ? 'corporation' : 'limited liability company'
 }
 
 /** Both company addresses exactly as they print in Section 1.2. Throws if the number is not a numbered TD suite. */
@@ -87,7 +94,7 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'center', text: `Agreement No. ${input.agreementNo}` })
   b.push({ t: 'para', text: 'This Office Lease and Services Agreement ("Agreement") is made and effective on the date of the last signature below (the "Effective Date"). It is made as part of, and depends on, the annual service agreement between the parties (the "Annual Service Agreement"). The parties are:' })
   b.push({ t: 'party', role: 'PROVIDER', lines: [`${input.providerName}, a Florida limited liability company, ${PROVIDER_ADDRESS_V2}, notices to ${PROVIDER_NOTICE_EMAIL} ("Provider").`] })
-  b.push({ t: 'party', role: 'CLIENT', lines: [`${client}, ${article(input.clientState)} limited liability company${ein}, address of record as stated in Section 1.2 ("Client"), represented by ${rep}.`] })
+  b.push({ t: 'party', role: 'CLIENT', lines: [`${client}, ${article(input.clientState)} ${entityWord(client)}${ein}, address of record as stated in Section 1.2 ("Client"), represented by ${rep}.`] })
 
   b.push({ t: 'heading', text: 'Background' })
   b.push({ t: 'para', label: 'A.', text: 'Provider is a consulting firm. Its principal, Antonio Durante, is an IRS Certified Acceptance Agent, a tax return preparer, a notary public and a business consultant.' })

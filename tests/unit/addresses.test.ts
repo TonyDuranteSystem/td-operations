@@ -191,9 +191,9 @@ describe('formatAddressString', () => {
 describe('resolveMailingAddress', () => {
   it('returns formatted address from mailingRow when present', () => {
     expect(resolveMailingAddress(
-      { address_line1: '10225 Ulmerton Rd', city: 'Largo', state: 'FL', zip: '33771' },
+      { address_line1: '30 N Gould St', city: 'Sheridan', state: 'WY', zip: '82801' },
       '456 Old St, Miami, FL 33101',
-    )).toBe('10225 Ulmerton Rd, Largo FL 33771')
+    )).toBe('30 N Gould St, Sheridan WY 82801')
   })
 
   it('falls back to legacyPhysical when mailingRow is null', () => {
@@ -261,6 +261,13 @@ describe('withCompanySuite / isTdLargoAddressRow', () => {
     expect(resolveMailingAddress(seminole, null, null)).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
     expect(resolveMailingAddress(null, '99 Some St, Town', null)).toBe('99 Some St, Town')
     expect(resolveMailingAddress(null, null, null)).toBeNull()
+  })
+
+  it('resolveMailingAddress: a company with NO number never gets our Largo office — not the shared row, not a Largo-formatted legacy text', () => {
+    expect(resolveMailingAddress(largo, null, null)).toBeNull()
+    expect(resolveMailingAddress(largo, '10225 Ulmerton Rd, Suite 3D, Largo, FL 33771', null)).toBeNull()
+    expect(resolveMailingAddress(largo, '99 Some St, Town', null)).toBe('99 Some St, Town')
+    expect(resolveMailingAddress(seminole, null, undefined)).toBe('11125 Park Blvd, Suite 104-153, Seminole FL 33772')
   })
 })
 

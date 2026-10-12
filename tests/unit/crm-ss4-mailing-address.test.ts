@@ -10,7 +10,7 @@ describe('SS-4 line 4a (the OFFICIAL address — Antonio 2026-10-10, "option 2")
     expect(m.street).toBe('10225 Ulmerton Rd 3D')
     expect(m.street).not.toContain('PMB')
     expect(m.street).not.toContain('433')
-    expect(m.cityStateZip).toBe('Largo, FL, 33771')
+    expect(m.cityStateZip).toBe('Largo, FL 33771')
   })
   it('every company with a number gets the identical line 4a (so the EIN letter matches the Articles exactly)', () => {
     const a = resolveMailing({ physical_address: null, suite_number: '3D-433', mailing_address: null } as Parameters<typeof resolveMailing>[0])

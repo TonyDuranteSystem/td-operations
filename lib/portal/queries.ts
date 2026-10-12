@@ -167,7 +167,8 @@ export async function getFormationAccount(contactId: string) {
     .maybeSingle()
 
   if (!data) return data
-  return { ...data, physical_address: resolveMailingAddress(data.mailing_address, data.physical_address, data.suite_number) }
+  // same rule as getPortalAccountDetail: a numbered company's address for documents is the OFFICIAL address (no PMB)
+  return { ...data, physical_address: formatAddressString(companyOfficialRow(data.suite_number)) ?? resolveMailingAddress(data.mailing_address, data.physical_address) }
 }
 
 /**

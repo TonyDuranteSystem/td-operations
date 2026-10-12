@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildAgreementV2, newYorkToday, addMonthsIso, longDate, agreementAddresses, AGREEMENT_V2_TITLE } from '@/lib/lease/agreement-v2'
-import { inflateSync } from 'node:zlib'
-import { generateLeasePDF, toWinAnsi } from '@/lib/lease-pdf'
+import { generateLeasePDF, printable } from '@/lib/lease-pdf'
 import { toPublicLease, LEASE_SELECT } from '@/lib/lease/public-view'
 
 const INPUT = {
@@ -15,18 +14,11 @@ const INPUT = {
   suiteNumber: '3D-318',
   operatingAddress: null as string | null,
 }
-/** All text drawn in a pdf-lib PDF: inflate every content stream and decode its <hex> Tj strings (WinAnsi ~ latin1). */
-function pdfText(bytes: Uint8Array): string {
-  const raw = Buffer.from(bytes).toString('latin1')
-  let out = ''
-  const re = /stream\r?\n([\s\S]*?)\r?\nendstream/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw))) {
-    let content = ''
-    try { content = inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1') } catch { continue }
-    for (const t of content.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) out += Buffer.from(t[1], 'hex').toString('latin1') + '\n'
-  }
-  return out
+/** The text of a PDF, extracted the way a reader would (handles the embedded Unicode font too). */
+async function pdfText(bytes: Uint8Array): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string }>
+  return (await parse(Buffer.from(bytes))).text
 }
 const allText = (doc: ReturnType<typeof buildAgreementV2>) =>
   doc.blocks.map(b => ('text' in b ? b.text : 'lines' in b ? b.lines.join(' ') : '')).join('\n')
@@ -47,6 +39,15 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     const d = buildAgreementV2({ ...INPUT, suiteNumber: '3D-205' })
     expect(allText(d)).toContain('10225 Ulmerton Rd 3D PMB 205')
     expect(allText(d)).not.toContain('PMB 318')
+  })
+
+  it('the parties line reads correctly: a/an by sound, corporation vs limited liability company', () => {
+    const line = (o: Partial<typeof INPUT>) => allText(buildAgreementV2({ ...INPUT, ...o }))
+    expect(line({ clientState: 'Wyoming' })).toContain('a Wyoming limited liability company')
+    expect(line({ clientState: 'Illinois' })).toContain('an Illinois limited liability company')
+    expect(line({ clientState: 'Ohio' })).toContain('an Ohio limited liability company')
+    expect(line({ clientState: 'Delaware', clientCompany: 'Atlas Compliance INC' })).toContain('a Delaware corporation')
+    expect(line({ clientState: null })).toContain('a limited liability company')
   })
 
   it('a company without a numbered suite cannot get this agreement (no PMB to print)', () => {
@@ -114,26 +115,31 @@ describe('public lease payload and the server PDF', () => {
 
   it('the v2 PDF carries the new agreement text and addresses; the v1 PDF still carries the original text (frozen)', async () => {
     const common = { tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', tenantTitle: 'Manager', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10' }
-    const v2 = pdfText(await generateLeasePDF({ ...common, templateVersion: 2, agreementNo: 'acme-llc-2026', operatingAddress: 'Via Roma 1, Milano, Italy', signedDate: '2026-10-10' }))
+    const v2 = await pdfText(await generateLeasePDF({ ...common, templateVersion: 2, agreementNo: 'acme-llc-2026', operatingAddress: 'Via Roma 1, Milano, Italy', signedDate: '2026-10-10' }))
     expect(v2).toContain('OFFICE LEASE AND SERVICES AGREEMENT')
     expect(v2).toContain('10225 Ulmerton Rd 3D PMB 318')
     expect(v2).toContain('Via Roma 1, Milano, Italy')
     expect(v2).toContain('October 10, 2026')
     expect(v2).not.toContain('Monthly Rent')
-    const v1 = pdfText(await generateLeasePDF(common))
+    const v1 = await pdfText(await generateLeasePDF(common))
     expect(v1).toContain('OFFICE LEASE AGREEMENT')
     expect(v1).toContain('Suite 3D-318')
     expect(v1).toContain('Monthly Rent')
     expect(v1).not.toContain('SERVICES AGREEMENT')
   })
 
-  it('a non-Latin Operating Address does not break the server PDF (accents stripped, undrawable letters become "?")', async () => {
-    expect(toWinAnsi('București, Łódź')).toBe('Bucuresti, ?odz')
-    expect(toWinAnsi('Москва')).toBe('??????')
+  it('names and a non-Latin Operating Address print as typed in the server PDF (accents, Cyrillic), never "?"-mangled; emoji become "?"', async () => {
+    expect(printable('București 🙂\nx')).toBe('București ? x')
     const bytes = await generateLeasePDF({
-      tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10',
-      templateVersion: 2, operatingAddress: 'Str. Eminescu 5, București, Москва',
+      tenantCompany: 'Società Niccolò Città LLC', tenantContactName: 'Józef Łukasz', suiteNumber: '3D-318', effectiveDate: '2026-10-10', termStartDate: '2026-10-10', termEndDate: '2027-10-10',
+      templateVersion: 2, operatingAddress: 'Str. Eminescu 5, București, Москва ' + 'x'.repeat(300),
     })
-    expect(pdfText(bytes)).toContain('Bucuresti')
+    const text = await pdfText(bytes)
+    expect(text).toContain('Società Niccolò Città LLC')
+    expect(text).toContain('Józef Łukasz')
+    expect(text).toContain('București')
+    expect(text).toContain('Москва')
+    // an unbroken 300-character string is wrapped onto several lines, not left to run off the page
+    expect(text.split('\n').some(l => l.length > 150)).toBe(false)
   })
 })

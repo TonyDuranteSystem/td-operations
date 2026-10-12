@@ -323,6 +323,11 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
 
         // Build URL
         const url = `${LEASE_BASE_URL}/${lease.token}/${lease.access_code}`
+        // a signed lease is final — emailing the link and setting it back to "sent" would let it be signed a second time
+        if (lease.status === "signed") {
+          return { content: [{ type: "text" as const, text: `❌ Lease "${params.token}" is already signed — it cannot be sent again.` }], isError: true }
+        }
+
         const { gmailPost } = await import("@/lib/gmail")
 
         // Look up contact gender

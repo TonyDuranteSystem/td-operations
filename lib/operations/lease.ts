@@ -34,7 +34,7 @@ import {
   officialAddressLine,
   syncPhysicalAddressToSuite,
 } from "@/lib/operations/suite"
-import { addMonthsIso } from "@/lib/lease/agreement-v2"
+import { addMonthsIso, newYorkToday } from "@/lib/lease/agreement-v2"
 
 // Kept for existing importers — the canonical home is lib/operations/suite.ts.
 export { normalizeSuiteNumber, suiteNumericPart } from "@/lib/operations/suite"
@@ -268,7 +268,7 @@ export async function createLease(
     // 5. Token + dates. New leases are the Office Lease and Services Agreement (template v2, Antonio 2026-10-10): no separate rent
     // or deposit (those are included in the annual service agreement), a fixed 12-month term from the date of the last signature
     // — the sign route sets the real Effective Date and term end at signing; the values here are only the starting placeholders.
-    const today = new Date().toISOString().slice(0, 10)
+    const today = newYorkToday() // New York calendar day (the UTC day is already tomorrow after 8pm in New York)
     const token = `${buildCompanySlug(account.company_name)}-${year}`
     const effectiveDate = params.effective_date || today
     const termStartDate = params.term_start_date || today

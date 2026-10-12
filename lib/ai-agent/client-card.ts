@@ -20,7 +20,7 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { formatAddressString, companyMailingRow, companyOfficialRow, isTdLargoAddressRow, type MailingAddressRow } from "@/lib/addresses"
+import { formatAddressString, companyMailingRow, companyOfficialRow, isTdLargoAddressRow, pmbNumberFromSuite, type MailingAddressRow } from "@/lib/addresses"
 
 /** Cap + flatten a client-typed value so it can't inject structure or rules. */
 export function sanitizeCardValue(v: string | null | undefined, max = 140): string | null {
@@ -77,7 +77,7 @@ export function renderClientCard(d: CardData): string {
     ? [
         `created ${d.lease.createdAt ?? "?"}`,
         `status ${d.lease.status ?? "?"}`,
-        `suite ${d.lease.suite ?? NOT_ON_FILE}`,
+        `company number ${d.lease.suite ?? NOT_ON_FILE}${pmbNumberFromSuite(d.lease.suite) ? ` (PMB ${pmbNumberFromSuite(d.lease.suite)})` : ""}`,
         `premises ${d.lease.premises ?? NOT_ON_FILE}`,
         d.lease.pdfGenerated ? "PDF generated" : "PDF NOT generated yet",
         d.lease.signedAt ? `signed ${d.lease.signedAt}` : "not signed",
