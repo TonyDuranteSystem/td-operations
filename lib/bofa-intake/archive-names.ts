@@ -1,13 +1,20 @@
 /**
  * Bank application intake — naming for the CRM Storage archive (pure, no database).
- * Layout: Business › BofA › <partner, or "Direct" when no third party brought the client> › <date applicant - company (id)> › the documents + "Application answers.pdf".
- * The folder name carries the request id so two applicants with the same name can never merge into one folder
- * (a merge would make a re-submission look "unchanged" and hide files).
+ *
+ * Antonio's layout (2026-10-12), inside the Business area:
+ *   Business › BofA › Standalone Applications › <client name>                 (no third party)
+ *   Business › BofA › Partner › <partner name> › <client name>                (a partner brought the client)
+ * with the six documents and "Application answers.pdf" inside the client folder. The folders "BofA", "Partner" and
+ * "Standalone Applications" are his own; `store_ensure_folder_path` finds them by name (any letter case) and only creates
+ * one that is missing. The client folder is named with the client's name ONLY: a second application from someone with the
+ * same name lands in the same folder and its files get " (2)" (the writer never overwrites).
  */
 
 import { BOFA_DOC_SLOTS } from "./schema"
 
 export const BOFA_ROOT_FOLDER = "BofA"
+export const BOFA_PARTNER_FOLDER = "Partner"
+export const BOFA_STANDALONE_FOLDER = "Standalone Applications"
 export const BOFA_ANSWERS_FILE = "Application answers.pdf"
 
 /** A name the store accepts: no / \ or control characters, whitespace collapsed, bounded. Never throws. */
@@ -18,15 +25,17 @@ export function safePart(input: string | null | undefined, fallback: string, max
   return cut && cut !== "." && cut !== ".." ? cut : fallback
 }
 
-export function applicantFolderName(p: { id: string; fullName?: string | null; company?: string | null; submittedAt?: string | null }): string {
-  const date = (p.submittedAt ?? "").slice(0, 10) || "undated"
-  const who = safePart(p.fullName, "Applicant", 60)
-  const company = p.company ? ` - ${safePart(p.company, "", 60)}` : ""
-  return `${date} ${who}${company} (${p.id.replace(/-/g, "").slice(0, 6)})`
+/** The client's folder: just their name (never empty, never carrying a character the store refuses). */
+export function clientFolderName(fullName: string | null | undefined): string {
+  return safePart(fullName, "Applicant", 120)
 }
 
-export function folderPath(p: { id: string; partner?: string | null; fullName?: string | null; company?: string | null; submittedAt?: string | null }): string[] {
-  return [BOFA_ROOT_FOLDER, safePart(p.partner, "Direct"), applicantFolderName(p)]
+export function folderPath(p: { partner?: string | null; fullName?: string | null }): string[] {
+  const client = clientFolderName(p.fullName)
+  const partner = (p.partner ?? "").trim()
+  return partner
+    ? [BOFA_ROOT_FOLDER, BOFA_PARTNER_FOLDER, safePart(partner, "Partner", 120), client]
+    : [BOFA_ROOT_FOLDER, BOFA_STANDALONE_FOLDER, client]
 }
 
 const MIME_BY_EXT: Record<string, string> = {
