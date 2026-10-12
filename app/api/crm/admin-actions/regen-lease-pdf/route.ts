@@ -79,6 +79,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Storage upload failed: ${uploadErr.message}` }, { status: 500 })
     }
 
+    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company gets the regenerated
+    // lease in the new storage — the same file key as the original signing, so it is a new VERSION of that file.
+    {
+      const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
+      const routed = await saveSignedPdfForAccount({
+        accountId: lease.account_id,
+        fileName: `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`,
+        bytes: Buffer.from(pdfBytes), label: 'Lease Agreement', category: 1, callerKey: `lease-signed:${lease.id}`, documentType: 'office_lease',
+      })
+      if (routed.route === 'store') {
+        await supabaseAdmin
+          .from('lease_agreements')
+          .update({ pdf_storage_path: storagePath, pdf_drive_file_id: routed.pointer, updated_at: new Date().toISOString() })
+          .eq('id', lease_id)
+        return NextResponse.json({ ok: true, driveFileId: routed.pointer, storagePath })
+      }
+    }
+
     // Get account Drive folder
     const { data: acct } = await supabaseAdmin
       .from('accounts')
