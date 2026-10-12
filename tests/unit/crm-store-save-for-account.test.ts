@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { saveDocumentForAccount, saveSignedPdfForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
+import { saveDocumentForAccount, saveDocumentForContact, saveSignedPdfForAccount, CompanyMovingError, type SaveDeps } from "@/lib/crm-store/save-for-account"
 import type { CompanyDocState } from "@/lib/crm-store/switched-drive-guard"
 
 const FILE = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
@@ -75,6 +75,29 @@ describe("saveDocumentForAccount — where do this company's files live?", () =>
     const d = mk("store", { state: async () => { throw new Error("Could not check where this company's files live — please try again.") } })
     await expect(saveDocumentForAccount(base, d)).rejects.toThrow(/Could not check/)
     expect(d.calls.save).not.toHaveBeenCalled()
+  })
+})
+
+describe("saveDocumentForContact — a person's own documents", () => {
+  const mkP = (owner: string | null) => {
+    const save = vi.fn(async () => ({ status: "created", fileId: FILE }))
+    const upsertRow = vi.fn(async () => ({ id: "row-p", inserted: true }))
+    return { save, upsertRow, deps: { liveOwnerOfContact: async () => owner, save: save as unknown as SaveDeps["save"], upsertRow: upsertRow as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` } }
+  }
+  const pass = { contactId: "c-1", name: "Passport.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", documentType: "passport", callerKey: "pass:c-1:1" }
+
+  it("a person still on Drive: the caller carries on with Drive", async () => {
+    const m = mkP(null)
+    expect(await saveDocumentForContact(pass, m.deps)).toEqual({ route: "drive" })
+    expect(m.save).not.toHaveBeenCalled()
+  })
+
+  it("a person with a live storage: saved in THEIR personal folder, listed against them, hidden from the client by default", async () => {
+    const m = mkP("person-owner")
+    const r = await saveDocumentForContact({ ...pass, accountId: "acc-1", row: { category: 2 } }, m.deps)
+    expect(r).toEqual({ route: "store", fileId: FILE, pointer: `store:${FILE}`, documentRowId: "row-p", status: "created" })
+    expect(m.save).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "person-owner", folderKind: "personal", documentType: "passport", published: false }))
+    expect(m.upsertRow).toHaveBeenCalledWith(FILE, expect.objectContaining({ contact_id: "c-1", account_id: "acc-1", portal_visible: false, category: 2 }), "created")
   })
 })
 

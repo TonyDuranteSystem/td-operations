@@ -211,3 +211,11 @@ export async function liveOwnerOfAccount(accountId: string): Promise<string | nu
   if (error) throw new Error("Could not check where this company's files live — please try again.")
   return ((data ?? [])[0]?.id as string | undefined) ?? null
 }
+
+/** The live (not study-only) storage of a PERSON, any environment — null when they have none. Strict: a read error throws. */
+export async function liveOwnerOfContact(contactId: string): Promise<string | null> {
+  const d = await db()
+  const { data, error } = await d.from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).limit(1)
+  if (error) throw new Error("Could not check where this person's files live — please try again.")
+  return ((data ?? [])[0]?.id as string | undefined) ?? null
+}

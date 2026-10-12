@@ -105,6 +105,49 @@ export async function saveDocumentForAccount(input: SaveForAccountInput, deps?: 
   return { route: "store", fileId: w.fileId, pointer: d.pointer(w.fileId), documentRowId: listed.id, status: w.status }
 }
 
+export interface SaveForContactInput {
+  contactId: string
+  name: string
+  bytes: Buffer
+  mimeType: string | null
+  documentType: string | null
+  callerKey: string
+  /** The company this document is also listed under, when the person's file belongs to one (the CRM list keeps both links). */
+  accountId?: string | null
+  portalVisible?: boolean
+  actor?: string | null
+  row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id" | "contact_id">>
+}
+
+/**
+ * A PERSON's own document (passport, ID, ITIN letter …): the same question, asked of the person. A person whose storage is
+ * live gets the file in their own "Personal documents" folder (listed against them in the CRM); anyone else carries on with
+ * Drive exactly as before. Personal documents never go to a company's storage.
+ */
+export async function saveDocumentForContact(input: SaveForContactInput, deps?: Pick<SaveDeps, "save" | "upsertRow" | "pointer"> & { liveOwnerOfContact: (contactId: string) => Promise<string | null> }): Promise<SaveForAccountResult> {
+  let d = deps
+  if (!d) {
+    const guard = await import("./switched-drive-guard")
+    const pilot = await import("./formation-pilot")
+    const ptr = await import("./document-pointer")
+    d = { liveOwnerOfContact: guard.liveOwnerOfContact, save: pilot.savePilotFile, upsertRow: pilot.upsertStoreDocumentRow, pointer: ptr.storePointer }
+  }
+  const ownerId = await d.liveOwnerOfContact(input.contactId)
+  if (!ownerId) return { route: "drive" }
+
+  const w = await d.save({
+    ownerId, folderKind: "personal", name: input.name, bytes: input.bytes, mimeType: input.mimeType,
+    documentType: input.documentType, callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
+  })
+  const listed = await d.upsertRow(w.fileId, {
+    ...(input.row ?? {}),
+    file_name: input.name, mime_type: input.mimeType, file_size: input.bytes.length,
+    account_id: input.accountId ?? null, contact_id: input.contactId,
+    portal_visible: input.portalVisible ?? false,
+  }, w.status)
+  return { route: "store", fileId: w.fileId, pointer: d.pointer(w.fileId), documentRowId: listed.id, status: w.status }
+}
+
 /**
  * The one shape most automatic flows share: a SIGNED (or generated) PDF for a company, listed in the portal.
  * Same question first (see saveDocumentForAccount). `callerKey` must be stable per document (e.g. "lease-signed:<lease id>")
