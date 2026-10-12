@@ -52,6 +52,14 @@ export function pdf(label: string): Buffer {
   return Buffer.from(`%PDF-1.4\n% QA Test ${label} ${Date.now()}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF`)
 }
 
+/** A real, parseable one-page PDF (pdf-lib) for flows that merge or read the file. */
+export async function realPdf(label: string): Promise<Buffer> {
+  const { PDFDocument } = await import("pdf-lib")
+  const doc = await PDFDocument.create()
+  doc.addPage([612, 792]).drawText(`QA Test ${label} ${Date.now()}`, { x: 50, y: 700, size: 14 })
+  return Buffer.from(await doc.save())
+}
+
 export function form(fields: Record<string, string>, file?: { name: string; data: Buffer; type: string }): FormData {
   const f = new FormData()
   for (const [k, v] of Object.entries(fields)) f.append(k, v)
