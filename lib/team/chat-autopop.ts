@@ -79,6 +79,15 @@ export interface AutoPopInput {
   alreadyRefreshed?: boolean
 }
 
+/**
+ * The saved choice behind the floating window's speaker icon. Since TD Talk (dev job c1e326dd) direct messages live in TD Talk, so the
+ * window no longer opens BY ITSELF unless the person switched it on: only an explicit '0' (turned pop-ups back on) means "on";
+ * nothing saved, '1' or anything else means off. (Before, nothing saved meant on.)
+ */
+export function quietFromStored(stored: string | null | undefined): boolean {
+  return stored !== '0'
+}
+
 /** Pathnames that own the incoming-message job themselves. */
 const SURFACES_THAT_HANDLE_THEMSELVES = ['/team-chat', '/td-talk']
 

@@ -45,7 +45,7 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
 import { createClient as createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { usePathname } from 'next/navigation'
-import { decideAutoPop } from '@/lib/team/chat-autopop'
+import { decideAutoPop, quietFromStored } from '@/lib/team/chat-autopop'
 import {
   clampChatWindowPos, readStoredChatWindowPos, serializeChatWindowPos,
   CHAT_WINDOW_POS_KEY, CHAT_WINDOW_DEFAULT_POS, type FracPos,
@@ -177,7 +177,9 @@ function FloatingChatInner() {
   const [minimized, setMinimized] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
-  const [quiet, setQuiet] = useState(false)
+  // Pop-ups are OFF until the person switches them on (TD Talk is where direct messages live) — start quiet so nothing can pop
+  // before the saved choice is read.
+  const [quiet, setQuiet] = useState(true)
   // Antonio moves this himself — desktop and phone. Double-click resets it.
   const launcher = useDraggableFab(FAB_KEYS.chat)
   // Docks toward the LEFT edge — SAME side as the notes launcher (Antonio,
@@ -189,13 +191,13 @@ function FloatingChatInner() {
   const launcherDock = useEdgeDock(launcher.ref, { defaultEdge: 'left', pos: launcher.pos })
   // Read after mount, never during render — reading storage while rendering
   // desyncs hydration.
-  useEffect(() => { setQuiet(store.get(QUIET_KEY) === '1') }, [])
+  useEffect(() => { setQuiet(quietFromStored(store.get(QUIET_KEY))) }, [])
   const toggleQuiet = () => setQuiet((q) => { store.set(QUIET_KEY, q ? '0' : '1'); return !q })
 
   // Refs so the realtime callback never reads a stale closure.
   const openThreadIdRef = useRef<string | null>(null)
   const minimizedRef = useRef(false)
-  const quietRef = useRef(false)
+  const quietRef = useRef(true)
   const myIdRef = useRef<string | null>(null)
   const dmIdsRef = useRef<Set<string>>(new Set())
   const pathnameRef = useRef(pathname)
