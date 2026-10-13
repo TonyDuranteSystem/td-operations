@@ -113,7 +113,9 @@ export async function POST(request: NextRequest) {
     const folder = categoryNum === 1 ? 'company' : categoryNum === 3 ? 'tax' : categoryNum === 4 ? 'banking' : categoryNum === PERSONAL_CATEGORY ? 'contacts' : 'correspondence'
     try {
       const routed = await saveDocumentForAccount({
-        accountId, name: fileName, bytes: fileBuffer, mimeType: mimeType || null, folder, documentType: null,
+        // a client's own upload stays HIDDEN until staff review it (same as on a Drive company, where portal_visible defaults to false) — but it
+        // carries the generic client type, so the day staff choose "show to client" it opens (an untyped stored file is closed to clients)
+        accountId, name: fileName, bytes: fileBuffer, mimeType: mimeType || null, folder, documentType: 'other_document',
         // the same file uploaded twice is ONE stored file
         callerKey: `portal-upload:${accountId}:${person ? person.contactId : 'company'}:${categoryNum}:${createHash('sha256').update(fileBuffer).digest('hex')}`,
         person,

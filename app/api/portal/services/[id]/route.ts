@@ -123,17 +123,20 @@ export async function GET(
   const { data: rawDocuments } = accountId
     ? await supabaseAdmin
         .from('documents')
-        .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at')
+        .select('id, file_name, document_type_name, category, contact_id, drive_file_id, created_at, portal_visible, service_delivery_id, flow_stage')
         .eq('account_id', accountId)
         .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
         .order('created_at', { ascending: false })
-        .limit(20)
+        .limit(60)
     : { data: [] }
   // Never list another member's personal document (passport/ID/ITIN…), not even by name.
-  const documents = (rawDocuments ?? [])
-    .filter(d => !isPersonalDocumentHiddenFrom(d, contactId))
+  // A document in the NEW storage is listed only when the client could open it (hidden / internal files are not named here);
+  // Drive rows are untouched (lib/portal/client-store-docs.ts).
+  const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
+  const openable = await dropStoreRowsClientCannotOpen((rawDocuments ?? []).filter(d => !isPersonalDocumentHiddenFrom(d, contactId)))
+  const documents = openable
     .slice(0, 20)
-    .map(({ contact_id: _omit, ...d }) => d)
+    .map(({ contact_id: _omit, portal_visible: _pv, service_delivery_id: _sd, flow_stage: _fs, ...d }) => d)
 
   // Build stage timeline
   const stageHistory = (sdForHistory?.stage_history as Array<{ stage: string; entered_at: string; exited_at?: string }> | null) ?? []

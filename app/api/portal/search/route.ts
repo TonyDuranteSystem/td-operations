@@ -38,17 +38,21 @@ export async function GET(request: NextRequest) {
   async function searchDocuments(): Promise<EnhancedSearchResult[]> {
     const { data } = await supabaseAdmin
       .from('documents')
-      .select('id, file_name, document_type_name, category, contact_id')
+      .select('id, file_name, document_type_name, category, contact_id, drive_file_id, portal_visible, service_delivery_id, flow_stage')
       .eq('account_id', accountId)
       .or(`file_name.ilike.${pattern},document_type_name.ilike.${pattern}`)
       .or(`category.neq.2,category.is.null,contact_id.eq.${contactId}`)
       .order('created_at', { ascending: false })
-      .limit(limit)
+      .limit(limit * 4)
 
     const catLabels: Record<number, string> = { 1: 'Company', 2: 'Contacts', 3: 'Tax', 4: 'Banking', 5: 'Correspondence' }
-    // Never surface another member's personal document (passport/ID/ITIN…), not even by name.
+    // Never surface another member's personal document (passport/ID/ITIN…), not even by name; and a document in the NEW storage
+    // only when the client could open it (hidden / internal files are not named). Drive rows are untouched.
+    const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (data ?? []).filter((d: any) => !isPersonalDocumentHiddenFrom(d, contactId)).slice(0, limit).map((d: any) => ({
+    const visibleToThisClient = await dropStoreRowsClientCannotOpen(((data ?? []) as any[]).filter((d: any) => !isPersonalDocumentHiddenFrom(d, contactId)))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return visibleToThisClient.slice(0, limit).map((d: any) => ({
       id: d.id,
       title: d.file_name,
       subtitle: d.document_type_name ?? 'Document',

@@ -216,6 +216,16 @@ export default async function PortalDocumentsPage() {
     myDocs = (data ?? []) as unknown as DocRow[]
   }
 
+  // A document that lives in the NEW storage and that this client could not open (a closed file — no type or a staff-only type —
+  // or a personal document filed outside a person's own storage) is not listed: no dead link. Drive rows are untouched
+  // (lib/portal/client-store-docs.ts — the same rule the download route applies).
+  {
+    const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
+    companyDocs = await dropStoreRowsClientCannotOpen(companyDocs, { applyRowRule: false })
+    myDocs = await dropStoreRowsClientCannotOpen(myDocs, { applyRowRule: false })
+    flowGroups = await Promise.all(flowGroups.map(async (g) => ({ ...g, docs: await dropStoreRowsClientCannotOpen(g.docs, { applyRowRule: false }) })))
+  }
+
   // Fetch correspondence (contact-centric for clients: direct + linked accounts;
   // teammates: account-scoped only — they have no contact id).
   const orFilter = [

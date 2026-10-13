@@ -26,7 +26,7 @@ export async function GET(
   // Get the document
   const { data: doc } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, account_id, contact_id, category, drive_file_id, portal_visible')
+    .select('id, file_name, account_id, contact_id, category, drive_file_id, portal_visible, service_delivery_id, flow_stage')
     .eq('id', params.id)
     .single()
 
@@ -34,10 +34,15 @@ export async function GET(
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 
-  // A file in the NEW storage is served to a client only when its CRM row says it is shown to them (an internal file —
-  // the signed SS-4, the IRS package — is never reachable by guessing its id). Drive rows keep today's behaviour.
-  if (doc.drive_file_id.startsWith('store:') && doc.portal_visible !== true) {
-    return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+  // A file in the NEW storage is served to a client only when the SAME rule that lists it says so: the CRM row shows it to
+  // them (flag, or a flow document at a client-safe stage), its stored file is not closed (untyped / staff-only), and it is
+  // not a personal document filed outside a person's own storage. An internal file — the signed SS-4, the IRS package —
+  // is never reachable by guessing its id. Drive rows keep today's behaviour (lib/portal/client-store-docs.ts).
+  if (doc.drive_file_id.startsWith('store:')) {
+    const { clientMayOpen } = await import('@/lib/portal/client-store-docs')
+    if (!(await clientMayOpen(doc))) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+    }
   }
 
   // Verify access — allow if EITHER (a) the document belongs to one of the
