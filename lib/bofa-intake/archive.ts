@@ -2,7 +2,9 @@
  * Bank application intake — saves a SUBMITTED application in CRM Storage (Antonio, 2026-10-12: "every
  * application must be saved in storage, under Business, BofA").
  *
- *   Business › BofA › <partner> › <date applicant - company (id)> › 6 documents + "Application answers.pdf"
+ *   Business › BofA › Standalone Applications › <client name>            (no third party)
+ *   Business › BofA › Partner › <partner name> › <client name>           (a partner brought the client)
+ *   …each holding the 6 documents + "Application answers.pdf"
  *
  * Idempotent: every file has a caller key `bofa:<request id>:<slot>`, so a retry never duplicates. The
  * applicant's browser still uploads to the intake's own private bucket first (a public visitor cannot
@@ -51,13 +53,7 @@ export async function archiveSubmission(id: string): Promise<ArchiveResult> {
       .maybeSingle()
     if (rootErr || !root) throw new Error("The Business top folder was not found in CRM Storage.")
 
-    const path = folderPath({
-      id,
-      partner: row.partner_name,
-      fullName: data.full_name,
-      company: data.company_name,
-      submittedAt: row.completed_at,
-    })
+    const path = folderPath({ partner: row.partner_name, fullName: data.full_name })
     const { data: folderId, error: fErr } = await db().rpc("store_ensure_folder_path", {
       p_owner: ownerId,
       p_parent: root.id,
