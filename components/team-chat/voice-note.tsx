@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
 
@@ -9,11 +9,18 @@ import { transcriptLines, type VoiceTranscript } from '@/lib/team/voice-text'
  * Team Chat page so both show the same thing. Nothing is sent to the speech service until the button is tapped; the result
  * is saved on the message, so after the first tap both people see the words straight away.
  */
-export function VoiceNote({ messageId, index, url, transcript: saved, tone = 'light', onBroken }: {
+/** Notes already asked about in this browser session — one repair check per note, however often it re-renders. */
+const repairAsked = new Set<string>()
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function VoiceNote({ messageId, index, url, transcript: saved, flat, flattenedAt, tone = 'light', onBroken }: {
   messageId: string
   index: number
   url: string
   transcript?: VoiceTranscript | null
+  /** Stored as an ordinary MP4 already (recorded that way, or repaired once). Otherwise the server checks it the first time it is opened. */
+  flat?: boolean
+  flattenedAt?: string | null
   /** 'dark' = text sits on a dark bubble. */
   tone?: 'light' | 'dark'
   onBroken?: () => void
@@ -23,6 +30,21 @@ export function VoiceNote({ messageId, index, url, transcript: saved, tone = 'li
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const transcript = saved ?? fetched
+  const [repairedAt, setRepairedAt] = useState<string | null>(null)
+
+  // Safari plays the fragmented MP4 an older note may be stored as badly (cut short / double length). The first time such a note is
+  // opened the server converts it in place (keeping the original) and marks it; after that nobody asks again.
+  useEffect(() => {
+    const key = `${messageId}:${index}`
+    if (flat || repairAsked.has(key) || !UUID.test(messageId)) return
+    repairAsked.add(key)
+    fetch(`/api/team/messages/${messageId}/flatten`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index }),
+    }).then(r => r.json()).then(d => { if (d?.ok && d.flattened_at) setRepairedAt(d.flattened_at as string) }).catch(() => {})
+  }, [messageId, index, flat])
+  // a new address after the repair makes the browser load the corrected file instead of its cached copy
+  const stamp = repairedAt ?? flattenedAt ?? null
+  const src = stamp ? `${url}?v=${encodeURIComponent(stamp)}` : url
 
   const show = async () => {
     setError(null)
@@ -44,7 +66,7 @@ export function VoiceNote({ messageId, index, url, transcript: saved, tone = 'li
   const muted = tone === 'dark' ? 'text-white/70' : 'text-zinc-500'
   return (
     <div className="flex flex-col gap-1" data-testid="voice-note">
-      <audio controls preload="metadata" src={url} className="h-10 w-60 max-w-full" onError={onBroken} data-testid="talk-voice-note" />
+      <audio key={src} controls preload="metadata" src={src} className="h-10 w-60 max-w-full" onError={onBroken} data-testid="talk-voice-note" />
       <button
         type="button"
         onClick={show}

@@ -13,7 +13,7 @@ import {
 function Attachment({ a, messageId, index }: { a: TalkAttachment; messageId: string; index: number }) {
   const [broken, setBroken] = useState(false)
   if (isAudio(a) && !broken) {
-    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} onBroken={() => setBroken(true)} />
+    return <VoiceNote messageId={messageId} index={index} url={a.url} transcript={a.transcript} flat={a.flat} flattenedAt={a.flattened_at} onBroken={() => setBroken(true)} />
   }
   if (isImage(a) && !broken) {
     return (

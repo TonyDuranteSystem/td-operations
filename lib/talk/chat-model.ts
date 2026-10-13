@@ -33,6 +33,9 @@ export interface TalkAttachment {
   size?: number
   /** Written by the "Show text" button on a voice note (lib/team/voice-text.ts). */
   transcript?: import('@/lib/team/voice-text').VoiceTranscript | null
+  /** Voice notes: stored as an ordinary MP4 (see lib/team/voice-flatten.ts). */
+  flat?: boolean
+  flattened_at?: string | null
 }
 
 export interface TalkReaction {

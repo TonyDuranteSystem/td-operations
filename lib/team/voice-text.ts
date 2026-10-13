@@ -17,7 +17,7 @@ export interface VoiceTranscript {
 /** Whisper's own cap on a single upload. */
 export const VOICE_MAX_BYTES = 25 * 1024 * 1024
 
-type Att = { url?: string; name?: string; mime_type?: string; transcript?: VoiceTranscript | null } & Record<string, unknown>
+type Att = { url?: string; name?: string; mime_type?: string; transcript?: VoiceTranscript | null; flat?: boolean; flattened_at?: string | null } & Record<string, unknown>
 
 /** The attachment at `index` — only if it exists and is audio. Null otherwise. */
 export function pickVoiceAttachment(attachments: unknown, index: unknown): Att | null {
