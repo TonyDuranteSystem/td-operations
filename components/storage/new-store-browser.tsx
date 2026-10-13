@@ -272,7 +272,8 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const [upPerson, setUpPerson] = useState('')
   const [upType, setUpType] = useState('')
   const [upName, setUpName] = useState('')
-  const [upVisible, setUpVisible] = useState(true)
+  // Antonio 2026-10-13: every file is HIDDEN from the client by default; staff tick "Show to client" on purpose
+  const [upVisible, setUpVisible] = useState(false)
   const [customName, setCustomName] = useState('')
   const [addingType, setAddingType] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -1309,7 +1310,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const openUpload = async (folderId?: string) => {
     setUploadOpen(true)
     setUpFolder(folderId ?? '')
-    setUpPerson(''); setUpType(''); setUpName(''); setUpVisible(true)
+    setUpPerson(''); setUpType(''); setUpName(''); setUpVisible(false)
     await loadTypes()
   }
 
@@ -2217,7 +2218,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                   // a staff-only type is never shown: the box says so instead of looking ticked
                   const neverShown = (types ?? []).find((t) => t.slug === upType)?.staffOnly === true
                   return (
-                    <FastTooltip label={neverShown ? 'Staff only — this type is never shown to a client' : 'Show the file to the client straight away'}>
+                    <FastTooltip label={neverShown ? 'Staff only — this type is never shown to a client' : 'Hidden from the client unless you tick this'}>
                       <label className={`inline-flex items-center gap-1.5 text-xs ${neverShown ? 'text-zinc-400' : 'text-zinc-700'}`}>
                         <input type="checkbox" checked={upVisible && !neverShown} onChange={(e) => setUpVisible(e.target.checked)} disabled={uploading || neverShown} />
                         Show to client

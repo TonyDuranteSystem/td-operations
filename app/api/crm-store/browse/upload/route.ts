@@ -15,7 +15,8 @@ export async function POST(req: NextRequest) {
   if (denied) return denied
   const body = await req.json().catch(() => ({}))
   const { ownerId, folderId, storagePath, fileName, mimeType, documentType, personContactId, displayName, viaCompanyOwnerId } = body as Record<string, string | undefined>
-  const visible = (body as { visible?: unknown }).visible === false ? false : true
+  // hidden from the client unless the caller says so on purpose (Antonio 2026-10-13)
+  const visible = (body as { visible?: unknown }).visible === true
   const extra = body as { periodYear?: unknown; filingAnswer?: unknown; needsReview?: unknown }
   const periodYear = typeof extra.periodYear === "number" && Number.isInteger(extra.periodYear) && extra.periodYear >= 1990 && extra.periodYear <= 2100 ? extra.periodYear : null
   const filingAnswer = extra.filingAnswer === "filed" || extra.filingAnswer === "draft" ? extra.filingAnswer : null
