@@ -304,8 +304,11 @@ export async function runGoLive(accountId: string, actorId: string | null, opts:
       const have = await readStoreVersionFacts(s.id)
       const want = f.ledger.find((l) => l.storeFileId === s.id)
       if (!have) problems.push(`"${s.name}": the stored file is missing`)
-      else if (want?.sha256 && have.sha256 && have.sha256 !== want.sha256) problems.push(`"${s.name}": the stored copy is not the bytes that were approved`)
-      else if (want?.size != null && have.size !== want.size) problems.push(`"${s.name}": the stored copy is ${have.size} bytes, the original was ${want.size}`)
+      else if (want?.sha256 && have.sha256) {
+        // the exact fingerprint decides (a merged document — a signing certificate folded in — is rightly bigger than the Drive original the
+        // copy recorded the size of); the size is only the fallback when no fingerprint was recorded
+        if (have.sha256 !== want.sha256) problems.push(`"${s.name}": the stored copy is not the bytes that were approved`)
+      } else if (want?.size != null && have.size !== want.size) problems.push(`"${s.name}": the stored copy is ${have.size} bytes, the original was ${want.size}`)
     }
     const stageRows = verdicts.filter((x) => x.action === "repoint").map((x) => x.rowId)
     if (stageRows.length) {

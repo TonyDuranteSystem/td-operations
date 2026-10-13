@@ -78,6 +78,17 @@ async function main() {
   check("13 undo made the company and its people hidden study copies again", after.owner[0]?.study_only === true && JSON.stringify(after.people) === JSON.stringify(before.people))
   check("14 the company reads as 'drive' again", (await companyDocState(acct.id)) === "drive")
 
+  // a MERGED document is rightly bigger than the Drive original the copy recorded: the exact fingerprint decides, not the size
+  await q("update store_import_items i set size_bytes = size_bytes + 1 where i.size_bytes is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
+  try {
+    const merged = await runGoLive(acct.id, actor)
+    check("14b a different recorded size does not stop the switch when the fingerprint matches", merged.ok, merged.message)
+    if (merged.ok) await undoGoLive(merged.runId as string, actor)
+  } finally {
+    await q("update store_import_items i set size_bytes = size_bytes - 1 where i.size_bytes is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
+  }
+  check("14c ...and undo again leaves every record exactly as it was", JSON.stringify((await snapshot()).docs) === JSON.stringify(before.docs))
+
   // failure path: a stored copy that is not the bytes the approved copy recorded (its fingerprint differs)
   await q("update store_import_items i set sha256 = reverse(sha256) where i.sha256 is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
   try {
