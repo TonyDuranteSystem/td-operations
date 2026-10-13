@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
           folder: catInfo.num === 1 ? 'company' : catInfo.num === 3 ? 'tax' : catInfo.num === 4 ? 'banking' : 'correspondence',
           documentType: null,
           callerKey: `staff-account-upload:${accountId}:${catInfo.num}:${createHash('sha256').update(buffer).digest('hex')}`,
-          portalVisible: true,
+          portalVisible: body.visible === true,   // hidden from the client unless chosen on purpose (Antonio 2026-10-13)
           row: { document_type_name: documentType, category: catInfo.num, category_name: category, status: 'classified', contact_id: null },
         })
       } catch (e) {

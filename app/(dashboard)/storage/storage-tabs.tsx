@@ -11,13 +11,14 @@ const TAB_KEY = 'td-storage-tab'
 export function StorageTabs() {
   const [tab, setTab] = useState<'current' | 'new' | 'types'>('current')
   // a link can open the NEW storage on one folder: /storage?store=new&owner=<id>&folder=<id>
-  const [deepLink, setDeepLink] = useState<{ ownerId: string; folderId: string } | null>(null)
+  const [deepLink, setDeepLink] = useState<{ ownerId: string; folderId: string | null } | null>(null)
   // the last tab used on this computer (a convenience only — read after the first render, never required)
   useEffect(() => {
     const q = new URLSearchParams(window.location.search)
     const owner = q.get('owner')
     const folder = q.get('folder')
-    if (q.get('store') === 'new' && owner && folder) {
+    if (q.get('store') === 'new' && owner) {
+      // with a folder: that folder; without one: the company's storage from the top (the company page's "Open in Storage")
       setDeepLink({ ownerId: owner, folderId: folder })
       setTab('new')
       return
@@ -44,7 +45,7 @@ export function StorageTabs() {
         {btn('new', 'New storage (pilot)')}
         {btn('types', 'Type questions')}
       </div>
-      {tab === 'current' ? <StorageBrowserClient /> : tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId} /> : <TypeQuestionsPanel />}
+      {tab === 'current' ? <StorageBrowserClient /> : tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId ?? undefined} /> : <TypeQuestionsPanel />}
     </>
   )
 }

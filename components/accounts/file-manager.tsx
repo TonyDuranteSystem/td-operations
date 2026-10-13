@@ -15,7 +15,8 @@ import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ResolvePersonalDocument } from '@/components/documents/resolve-personal-document'
 import { isUnresolvedPersonalDocument } from '@/lib/documents/visibility-guard'
-import { NewStoreBrowser, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
+import { useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
+import { StoreReadOnlyPanel } from './store-readonly-panel'
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -635,7 +636,7 @@ const ACCOUNT_UPLOAD_BASE_TYPES = [
 
 const ACCOUNT_UPLOAD_CATEGORIES = ['Company', 'Tax', 'Banking', 'Correspondence'] as const
 
-export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: {
+export function FileManager({ accountId, driveFolderId }: {
   accountId: string; driveFolderId: string | null; isAdmin?: boolean
   /** The account lists new-store (`store:`) documents — then look for its store view even with a Drive folder. */
   hasStoreRows?: boolean
@@ -669,7 +670,8 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
 
   // A company whose files live in the NEW store (Formation pilot, sandbox only) gets the store view
   // instead of "Create / Link Drive folder". The route answers null outside the pilot environment.
-  const storeOwner = useStoreOwnerForAccount(accountId, !driveFolderId || hasStoreRows)
+  // always asked (one light, cached request): whether a company's files live in the new storage must not depend on which of its documents the page happened to load first
+  const storeOwner = useStoreOwnerForAccount(accountId, true)
 
   const { data, isLoading, error } = useQuery<FilesResponse>({
     queryKey: ['account-files', accountId],
@@ -797,10 +799,7 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
 
   if (!driveFolderId && storeOwner.data?.ownerId) {
     return (
-      <div className="space-y-2">
-        <p className="text-xs text-zinc-500">This company&apos;s files live in the new CRM storage (pilot).</p>
-        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
-      </div>
+      <StoreReadOnlyPanel ownerId={storeOwner.data.ownerId} />
     )
   }
 
@@ -887,10 +886,10 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
       <div className="space-y-2">
         <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
           {m.status === 'moving' ? 'Being moved to the new storage — files are still arriving.' : m.status === 'incomplete' ? 'Moved to the new storage WITH PROBLEMS — some files did not come over (see the report above).' : `Moved to the new storage on ${new Date(m.finishedAt ?? m.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`}{' '}
-          The Drive folder stays as a backup — work here.{' '}
+          The Drive folder stays as a backup — work in Storage.{' '}
           {driveFolderId && <a href={`https://drive.google.com/drive/folders/${driveFolderId}`} target="_blank" rel="noreferrer" className="underline">Open the old Drive folder (backup)</a>}
         </p>
-        <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+        <StoreReadOnlyPanel ownerId={storeOwner.data.ownerId} />
       </div>
     )
   }
@@ -900,8 +899,8 @@ export function FileManager({ accountId, driveFolderId, hasStoreRows = false }: 
   // Drive error, loaded), because the flat list above hides them
   const storeSection = storeOwner.data?.ownerId ? (
     <div className="mb-4 space-y-2 rounded-lg border border-amber-200 bg-amber-50/40 p-3">
-      <p className="text-xs text-amber-800">This company also has files in the new CRM storage (pilot):</p>
-      <NewStoreBrowser ownerId={storeOwner.data.ownerId} />
+      <p className="text-xs text-amber-800">This company also has files in the new CRM storage:</p>
+      <StoreReadOnlyPanel ownerId={storeOwner.data.ownerId} />
     </div>
   ) : null
 
