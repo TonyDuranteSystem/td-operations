@@ -9,7 +9,10 @@ export async function denyUnlessStoreStaff(): Promise<NextResponse | null> {
   return null
 }
 
-/** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run. `study: true` = an
+/** For the routes that CHANGE the new store (upload, show/hide): only where the pilot may run — OR on a storage that is LIVE.
+ *  Drive cutover (Antonio 2026-10-13: "we are working on the storage"): a company/person storage that has really been switched
+ *  (`study_only = false`) is the place staff work, so staff may change it in every environment, production included. The caller
+ *  has already checked that the user is staff; a hidden study copy keeps the stricter rules below. `study: true` = an
  *  action that only organises files staff study (type, rename, move, folders, trash) — it also runs where the
  *  STUDY copy is switched on (production, STORE_STUDY_COPY=1); nothing the client could see is ever allowed there. */
 export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: string | null; folderId?: string | null; ownerId?: string | null } = {}): Promise<NextResponse | null> {
@@ -24,9 +27,10 @@ export async function denyUnlessStorePilotEnv(opts: { study?: boolean; fileId?: 
       if (oid) {
         const { supabaseAdmin } = await import("@/lib/supabase-admin")
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
-        const { data: o } = await (supabaseAdmin as any).from("store_owners").select("kind").eq("id", oid).maybeSingle()
+        const { data: o } = await (supabaseAdmin as any).from("store_owners").select("kind, study_only").eq("id", oid).maybeSingle()
         const { isInternalOwnerKind } = await import("@/lib/crm-store/plain-drop")
         if (isInternalOwnerKind(o?.kind)) return null
+        if (o && o.study_only === false) return null   // a LIVE (switched) storage: staff work in it everywhere
       }
     } catch { /* an unreadable owner is never treated as internal — fall through to the strict rules */ }
   }

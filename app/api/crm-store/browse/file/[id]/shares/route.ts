@@ -32,7 +32,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const pilot = await denyUnlessStorePilotEnv()
+  const pilot = await denyUnlessStorePilotEnv({ fileId: params.id })
   if (pilot) return pilot
   const { denied, userId } = await ownersOnly(params.id)
   if (denied) return denied
