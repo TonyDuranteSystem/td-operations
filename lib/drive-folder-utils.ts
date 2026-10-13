@@ -114,6 +114,12 @@ export async function ensureContactFolder(
   contactId: string,
   contactName: string,
 ): Promise<{ folderId: string; created: boolean; subfolders: Record<string, string> }> {
+  // A person whose files live in the new CRM storage must not get a Drive folder (cutover, dev job ad09ea91) — one
+  // central check so every caller (contact page, onboarding rebuild, formation job, uploads) is covered.
+  {
+    const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
+    await assertPersonFilesStillOnDrive(contactId)
+  }
   // A contact who already has a materialized company may have had
   // drive_folder_id repointed at the COMPANY's own "2. Contacts" leaf by
   // migrateContactToCompany() — a leaf folder, not a root with its own

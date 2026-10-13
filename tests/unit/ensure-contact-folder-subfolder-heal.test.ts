@@ -7,6 +7,11 @@ vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: { from: vi.fn() },
 }))
 
+// The cutover guard (person's files in the new storage) is tested on its own; here the person is on Drive.
+vi.mock('@/lib/crm-store/person-drive-guard', () => ({
+  assertPersonFilesStillOnDrive: vi.fn(async () => undefined),
+}))
+
 const mockCreateFolder = vi.fn()
 const mockListFolderAnyDrive = vi.fn()
 vi.mock('@/lib/google-drive', () => ({
