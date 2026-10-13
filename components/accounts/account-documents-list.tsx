@@ -66,7 +66,10 @@ export function AccountDocumentsList({
   // A company whose files live in the new store: the files its store view below shows (with preview +
   // sharing) are never listed twice here (the double-listing Luca reported, 2026-07-20). Only THOSE are
   // hidden — the server says which; a store file the view would not show stays listed here.
-  const shown = new Set((storeOwner.data?.ownerId ? storeOwner.data.shownFileIds ?? [] : []).map((id) => `store:${id}`))
+  // The account page no longer embeds the editable storage view (Antonio 2026-10-13: staff work in Storage; this page only reads),
+  // so every file of the company is listed here — nothing is "already shown below".
+  const shown = new Set<string>()
+  void storeOwner
   // while it is still being worked out whether the store view shows them, hold the store rows back (no
   // flash of a double listing); an error answers "no store view" and they are listed
   const pendingStore = storeOwner.isLoading

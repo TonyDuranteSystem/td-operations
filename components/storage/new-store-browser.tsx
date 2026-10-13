@@ -493,10 +493,14 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const selectFolderRef = useRef(selectFolder)
   selectFolderRef.current = selectFolder
   const deepLinkDone = useRef(false)
+  const openOwnerRef = useRef(openOwner)
+  openOwnerRef.current = openOwner
   useEffect(() => {
-    if (scopedOwnerId || !openOwnerId || !openFolderId || deepLinkDone.current) return
+    if (scopedOwnerId || !openOwnerId || deepLinkDone.current) return
     deepLinkDone.current = true
-    void selectFolderRef.current(openOwnerId, openFolderId)
+    // a folder when the link names one; otherwise the company's storage from the top (the company page's "Open in Storage")
+    if (openFolderId) void selectFolderRef.current(openOwnerId, openFolderId)
+    else void openOwnerRef.current(openOwnerId, true)
   }, [scopedOwnerId, openOwnerId, openFolderId])
 
   /** load a folder (or a person branch) into `loaded` */
