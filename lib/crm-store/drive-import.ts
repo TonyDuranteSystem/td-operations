@@ -338,6 +338,9 @@ interface Ctx {
   members: Array<{ contactId: string; name: string }>
   types: Map<string, { slug: string; display: string; personal: boolean; staffOnly: boolean; draftNeverVisible: boolean; legacyId: number | null }>
   folderByKind: Map<string, string>
+  /** go-live catch-up: a record the CRM made AFTER the approved copy is brought in one file at a time; its folder follows the
+   *  record's category (there is no Drive path to read it from) */
+  catchUp?: boolean
 }
 
 type TypeInfo = Ctx["types"] extends Map<string, infer V> ? V : never
@@ -374,6 +377,10 @@ export async function continueDriveImport(runId: string, actorId: string | null,
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run) throw new Error("Move not found.")
   if (run.status !== "moving") return runView(runId)
+  {
+    const { data: gl } = await db().from("store_import_runs").select("report").eq("id", runId).maybeSingle()
+    if ((gl?.report as { goLive?: boolean } | null)?.goLive === true) return runView(runId) // closed by the go-live code only
+  }
   // a plan-driven build (hand-approved placement per file) is continued by its own module
   {
     const { isPlanRun, continuePlanBuild } = await import("./plan-build")
@@ -399,6 +406,29 @@ export async function continueDriveImport(runId: string, actorId: string | null,
   const { count } = await db().from("store_import_items").select("id", { count: "exact", head: true }).eq("run_id", runId).in("status", ["pending", "working"])
   if ((count ?? 0) === 0) await finishRun(runId, run.owner_id, ctx.mode)
   return runView(runId)
+}
+
+/**
+ * Go-live catch-up (master plan Part 33): bring ONE Drive file the CRM recorded after the approved copy into the company's
+ * storage, with the same rules as a move (type, visibility, year, re-pointing its record). The item is written to the run's
+ * ledger first, so the run's undo knows the old link. Never throws for a file problem — returns the item's final status.
+ */
+export async function bringInOneFile(p: {
+  runId: string; accountId: string; ownerId: string; actorId: string | null
+  file: { driveFileId: string; name: string; mimeType: string | null; sizeBytes: number | null; md5?: string | null }
+}): Promise<{ status: ItemStatus; reason: string | null; storeFileId: string | null; repointed: number }> {
+  const { data: ins, error: iErr } = await db().from("store_import_items")
+    .insert({ run_id: p.runId, source: "drive", source_id: p.file.driveFileId, drive_path: [], name: p.file.name, mime_type: p.file.mimeType, size_bytes: p.file.sizeBytes, source_md5: p.file.md5 ?? null, status: "working" })
+    .select("*").maybeSingle()
+  if (iErr || !ins) return { status: "failed", reason: `could not record the file in the ledger (${iErr?.message ?? "no row"})`, storeFileId: null, repointed: 0 }
+  const it = ins as ImportItem
+  const ctx = { ...(await loadCtx(p.runId, p.accountId, p.ownerId, p.actorId, "move")), catchUp: true }
+  const saved: { fileId: string | null } = { fileId: null }
+  let patch: Partial<ImportItem>
+  try { patch = await moveOne(it, ctx, saved) } catch (e) { patch = { status: "failed", reason: e instanceof Error ? e.message : String(e), ...(saved.fileId ? { store_file_id: saved.fileId } : {}) } }
+  const { error: wErr } = await db().from("store_import_items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", it.id)
+  if (wErr) console.error(`[crm-store] go-live catch-up: the ledger entry for "${p.file.name}" could not be updated (${wErr.message})`)
+  return { status: (patch.status ?? "failed") as ItemStatus, reason: patch.reason ?? null, storeFileId: patch.store_file_id ?? saved.fileId, repointed: (patch.repointed ?? []).length }
 }
 
 async function loadCtx(runId: string, accountId: string, ownerId: string, actorId: string | null, mode: ImportMode = "move"): Promise<Ctx> {
@@ -469,7 +499,7 @@ async function moveOne(it: ImportItem, ctx: Ctx, saved: { fileId: string | null 
 
   // where it lands
   const top = it.source === "drive" ? it.drive_path[0] ?? null : null
-  const topKind = it.source === "drive" ? (top ? kindForTopFolder(top) : null) : kindForCategory(row0?.category ?? null)
+  const topKind = it.source === "drive" && !ctx.catchUp ? (top ? kindForTopFolder(top) : null) : kindForCategory(row0?.category ?? null)
   const personalish = type?.personal === true || topKind === "contacts" || (it.source === "storage" && row0?.category === 2)
   let ownerId = ctx.companyOwner
   let folderId: string

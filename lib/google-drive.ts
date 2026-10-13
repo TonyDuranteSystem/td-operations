@@ -434,6 +434,12 @@ export async function listFolder(folderId: string, maxResults = 50) {
 /**
  * Get file metadata
  */
+/** Read-only: a Drive file's content checksum and size (null when Drive has none, e.g. a Google Doc). Used to prove two records are the same bytes. */
+export async function getDriveFileChecksum(fileId: string): Promise<{ md5: string | null; size: number | null; mimeType: string | null }> {
+  const m = (await driveGet(`/files/${fileId}`, { fields: "md5Checksum,size,mimeType" })) as { md5Checksum?: string; size?: string; mimeType?: string }
+  return { md5: m.md5Checksum ?? null, size: m.size ? Number(m.size) : null, mimeType: m.mimeType ?? null }
+}
+
 export async function getFileMetadata(fileId: string) {
   return driveGet(`/files/${fileId}`, {
     fields: "id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink,description,owners,sharingUser",
