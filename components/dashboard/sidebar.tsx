@@ -12,6 +12,7 @@ import type { TeamNotifItem } from '@/lib/team/workspace'
 import {
   LayoutDashboard,
   MessageSquare,
+  MessageCircle,
   FileText,
   Building2,
   TrendingUp,
@@ -107,8 +108,13 @@ interface SidebarProps {
   isAdmin?: boolean
   /** True only for the code-level owner account (see lib/auth). */
   isOwner?: boolean
-  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; devBoard?: number }
+  badgeCounts?: { inbox: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; devBoard?: number }
   enabledFeatures?: string[]
+}
+
+/** The two pages that ARE the team chat: opening either one reads it, so the dot must not be held up while you are on it. */
+function isChatTab(pathname: string | null | undefined): boolean {
+  return pathname === '/team-chat' || pathname === '/td-talk'
 }
 
 const STORAGE_KEY = 'td-sidebar-order'
@@ -118,6 +124,7 @@ const STORAGE_KEY = 'td-sidebar-order'
 const STORAGE_KEY_V2 = 'td-sidebar-order-v3'
 
 const defaultNavigation: NavItem[] = [
+  { id: 'td-talk', name: 'TD Talk', href: '/td-talk', icon: MessageCircle, tooltip: 'TD Talk — the simple WhatsApp-style chat with Luca, Jodi and your groups. The same messages as the TD Talk phone app and Team Chat.' },
   { id: 'home', name: 'Home', href: '/', icon: LayoutDashboard, tooltip: 'Dashboard overview — urgent tasks, unread messages, deadlines, and action items at a glance.' },
   { id: 'research', name: 'Research', href: '/research', icon: SlidersHorizontal, adminOnly: true, tooltip: 'Build a filter, search across companies, contacts, leads, deals, services, payments, tasks, offers, leases, and operating agreements. Admin only.' },
   { id: 'notes', name: 'Notes', href: '/notes', icon: StickyNote, tooltip: 'Your post-its — active, snoozed (with when they come back), and done. Private by default; share one with a teammate or the whole team.' },
@@ -257,7 +264,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
           </span>
         )}
       </Link>
-      {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} />}
+      {item.dotBadge && <TeamNotifDot onNavigate={onMobileClose} only={item.id === 'td-talk' ? 'talk' : undefined} />}
       {/* ⋯ menu (dev job f3f3e237 step 1): a SIBLING of the Link, placed last so it
           never sits on top of the count badges or the Team Chat dot; hidden in
           reorder mode where the drag grip owns the left edge. */}
@@ -272,7 +279,7 @@ function SortableNavItem({ item, isActive, onMobileClose, editMode }: {
  * triage priority without opening Team Chat. Fixed-positioned popover (measured
  * off the dot) so the narrow scrollable sidebar can't clip it.
  */
-function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
+function TeamNotifDot({ onNavigate, only }: { onNavigate?: () => void; /** 'talk' = the TD Talk tab's dot: only DMs and groups, each linking into the tab. */ only?: 'talk' }) {
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<TeamNotifItem[] | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: 60, top: 100 })
@@ -289,7 +296,12 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
       setItems(null)
       fetch('/api/team/notifications')
         .then(res => res.json())
-        .then(d => setItems(Array.isArray(d.items) ? d.items : []))
+        .then(d => {
+          const all: TeamNotifItem[] = Array.isArray(d.items) ? d.items : []
+          setItems(only === 'talk'
+            ? all.filter(i => i.kind === 'dm' || i.kind === 'group').map(i => ({ ...i, url: i.url.replace('/team-chat', '/td-talk') }))
+            : all)
+        })
         .catch(() => setItems([]))
     }
   }
@@ -301,7 +313,7 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
           ref={btnRef}
           onClick={toggle}
           className="w-2.5 h-2.5 mr-1 rounded-full bg-red-500 animate-pulse"
-          aria-label="Team chat notifications"
+          aria-label={only === 'talk' ? 'TD Talk notifications' : 'Team chat notifications'}
         />
       </FastTooltip>
       {open && (
@@ -329,7 +341,7 @@ function TeamNotifDot({ onNavigate }: { onNavigate?: () => void }) {
                     : it.kind === 'thread' ? 'bg-sky-100 text-sky-700'
                     : 'bg-violet-100 text-violet-700',
                 )}>
-                  {it.kind === 'dm' ? 'DM' : it.kind === 'conversation' ? 'Client' : it.kind === 'thread' ? 'Thread' : '@'}
+                  {it.kind === 'dm' ? 'DM' : it.kind === 'group' ? 'Group' : it.kind === 'conversation' ? 'Client' : it.kind === 'thread' ? 'Thread' : '@'}
                 </span>
                 <span className="flex-1 truncate text-sm text-zinc-800">{it.label}</span>
                 {it.count > 1 && <span className="text-[10px] text-zinc-400 shrink-0">{it.count}</span>}
@@ -358,6 +370,8 @@ export function Sidebar({
   const [mfaDialogOpen, setMfaDialogOpen] = useState(false)
   const [livePortalChats, setLivePortalChats] = useState(badgeCounts?.portalChats ?? 0)
   const [liveTeamChat, setLiveTeamChat] = useState(badgeCounts?.teamChat ?? 0)
+  // The TD Talk tab's own signal: unread DMs + group messages only (no @mentions, channels or client conversations).
+  const [liveTalk, setLiveTalk] = useState(badgeCounts?.talk ?? 0)
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
@@ -384,8 +398,11 @@ export function Sidebar({
           if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
             setLivePortalChats(data.portalChats)
           }
-          if (typeof data.teamChat === 'number' && pathnameRef.current !== '/team-chat') {
+          if (typeof data.teamChat === 'number' && !isChatTab(pathnameRef.current)) {
             setLiveTeamChat(data.teamChat)
+          }
+          if (typeof data.talk === 'number' && !isChatTab(pathnameRef.current)) {
+            setLiveTalk(data.talk)
           }
           if (typeof data.inbox === 'number' && pathnameRef.current !== '/inbox') {
             setLiveInbox(data.inbox)
@@ -427,7 +444,7 @@ export function Sidebar({
   // When entering a page, refetch badges instead of resetting to 0
   // The badge disappears naturally when messages are actually read
   useEffect(() => {
-    if (pathname === '/portal-chats' || pathname === '/inbox' || pathname === '/team-chat') {
+    if (pathname === '/portal-chats' || pathname === '/inbox' || isChatTab(pathname)) {
       // Refetch after a short delay to allow read-marking to happen
       const timer = setTimeout(() => {
         fetch('/api/dashboard/badges')
@@ -436,6 +453,7 @@ export function Sidebar({
             if (!data) return
             if (typeof data.portalChats === 'number') setLivePortalChats(data.portalChats)
             if (typeof data.teamChat === 'number') setLiveTeamChat(data.teamChat)
+            if (typeof data.talk === 'number') setLiveTalk(data.talk)
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
             if (typeof data.devBoard === 'number') setLiveDevBoard(data.devBoard)
           })
@@ -481,7 +499,10 @@ export function Sidebar({
       teamDebounce = setTimeout(() => {
         fetch('/api/dashboard/badges')
           .then(r => r.json())
-          .then(d => { if (typeof d.teamChat === 'number') setLiveTeamChat(d.teamChat) })
+          .then(d => {
+            if (typeof d.teamChat === 'number') setLiveTeamChat(d.teamChat)
+            if (typeof d.talk === 'number') setLiveTalk(d.talk)
+          })
           .catch(() => {})
       }, 1000)
     }
@@ -509,7 +530,7 @@ export function Sidebar({
           table: 'internal_messages',
         },
         () => {
-          if (pathnameRef.current !== '/team-chat') refetchTeamChat()
+          if (!isChatTab(pathnameRef.current)) refetchTeamChat()
         }
       )
       .subscribe()
@@ -571,15 +592,20 @@ export function Sidebar({
   // navOrder still []), everything is "missing" and plain append already
   // reproduces the correct default order — the special-case splice is only
   // needed once a real saved order is loaded and doesn't yet contain it.
+  // 'td-talk' (2026-10-13) is new and Antonio asked for it at the VERY TOP, above Home: a returning user with a saved
+  // order gets it put first, once; a fresh user already has it first in the default order.
+  const talkIdx = navOrder.length > 0 ? missingFromSaved.indexOf('td-talk') : -1
+  if (talkIdx !== -1) missingFromSaved.splice(talkIdx, 1)
   const researchIdx = navOrder.length > 0 ? missingFromSaved.indexOf('research') : -1
   if (researchIdx !== -1) missingFromSaved.splice(researchIdx, 1)
   // 'forms' (2026-10-12) is also new: for a returning user with a saved order, put it right after
   // 'storage' instead of at the very bottom of the long list where it would not be seen.
   const formsIdx = navOrder.length > 0 ? missingFromSaved.indexOf('forms') : -1
   if (formsIdx !== -1) missingFromSaved.splice(formsIdx, 1)
-  const baseOrder = researchIdx === -1
+  const withResearch = researchIdx === -1
     ? [...navOrder, ...missingFromSaved]
     : [...navOrder.slice(0, 1), 'research', ...navOrder.slice(1), ...missingFromSaved]
+  const baseOrder = talkIdx === -1 ? withResearch : ['td-talk', ...withResearch]
   const storagePos = baseOrder.indexOf('storage')
   const mergedOrder = formsIdx === -1
     ? baseOrder
@@ -598,6 +624,9 @@ export function Sidebar({
       if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
       // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
       if (item.id === 'team-chat' && liveTeamChat > 0) return { ...item, dotBadge: true }
+      // TD Talk (the tab above Home) lights the same plain dot: a new direct message / group message / @mention.
+      // Not while you are ON the tab: you are looking at the chat (it reads itself), so a dot there would only flicker.
+      if (item.id === 'td-talk' && liveTalk > 0 && pathname !== '/td-talk') return { ...item, dotBadge: true }
       if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }

@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { createClient as createServerClient } from '@/lib/supabase/server'
-import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
+import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { gmailGet } from '@/lib/gmail'
 import { NextResponse } from 'next/server'
 
@@ -83,8 +83,10 @@ export async function GET() {
     // Team chat signal — unread DMs, participant conversations, @mentions, AND
     // work channels (counted as bugs-with-something-new since 2026-07-24).
     let teamChat = 0
+    let talk = 0 // the TD Talk tab's own signal: unread DMs + groups only
     if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
       teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
+      talk = countTalkNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
     // NOTE (2026-07-24): the followed-unread-threads count used to be ADDED here.
     // It no longer is, and must not be re-added: a channel's unread_count is now
@@ -141,7 +143,7 @@ export async function GET() {
       devBoard = Array.isArray(newCards) ? newCards.length : 0
     }
 
-    return NextResponse.json({ portalChats, teamChat, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, _debug: { supportUnread, antonioUnread } })
+    return NextResponse.json({ portalChats, teamChat, talk, inbox, tasks, overdueInvoices, reconciliationReview, devBoard, _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })

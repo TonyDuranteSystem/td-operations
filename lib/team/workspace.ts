@@ -265,6 +265,18 @@ export function countTeamNotifications(threads: TeamThreadCountRow[] | null | un
   return n
 }
 
+/**
+ * The TD Talk tab's signal (dev job c1e326dd): ONLY unread direct messages and group messages — what the TD Talk screen
+ * shows. No @mentions, channels or client conversations (those belong to Team Chat's own dot).
+ */
+export function countTalkNotifications(threads: TeamThreadCountRow[] | null | undefined): number {
+  let n = 0
+  for (const t of threads ?? []) {
+    if (t.thread_type === 'dm' || t.thread_type === 'group') n += Number(t.unread_count) || 0
+  }
+  return n
+}
+
 export interface TeamNotifThreadRow {
   id: string
   thread_type?: string | null

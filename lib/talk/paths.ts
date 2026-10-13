@@ -12,6 +12,9 @@
 /** The app's one address (start_url, manifest scope and service-worker scope). */
 export const TALK_BASE = '/talk'
 
+/** The TD Talk TAB inside the CRM (left menu, above Home): the same simple chat, shown inside the CRM frame. */
+export const TD_TALK_TAB = '/td-talk'
+
 /** The CRM's own Team Chat page — what the server's notifications and links point at. */
 export const TEAM_CHAT_BASE = '/team-chat'
 
@@ -19,6 +22,17 @@ export const TEAM_CHAT_BASE = '/team-chat'
 export function isTalkPath(pathname: string | null | undefined): boolean {
   if (typeof pathname !== 'string') return false
   return pathname === TALK_BASE || pathname.startsWith(`${TALK_BASE}/`)
+}
+
+/** True for the CRM's TD Talk tab (`/td-talk`) and anything under it. */
+export function isTdTalkTabPath(pathname: string | null | undefined): boolean {
+  if (typeof pathname !== 'string') return false
+  return pathname === TD_TALK_TAB || pathname.startsWith(`${TD_TALK_TAB}/`)
+}
+
+/** The TD Talk chat in either place it lives: the standalone app (`/talk`) or the CRM tab (`/td-talk`). */
+export function isTalkSurfacePath(pathname: string | null | undefined): boolean {
+  return isTalkPath(pathname) || isTdTalkTabPath(pathname)
 }
 
 /** True for `/team-chat` and anything under it. */
@@ -29,6 +43,7 @@ export function isTeamChatPath(pathname: string | null | undefined): boolean {
 
 /** The base address of "the chat" for whichever app the person is in — used to build deep links. */
 export function teamChatBase(pathname: string | null | undefined): string {
+  if (isTdTalkTabPath(pathname)) return TD_TALK_TAB
   return isTalkPath(pathname) ? TALK_BASE : TEAM_CHAT_BASE
 }
 

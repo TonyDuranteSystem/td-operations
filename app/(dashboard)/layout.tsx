@@ -9,7 +9,7 @@ import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
 import { isAdmin, isDashboardUser, isProtectedAdminEmail } from '@/lib/auth'
-import { countTeamNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
+import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
 import { RealtimeNotifications } from '@/components/dashboard/realtime-notifications'
 import { ClearAllToasts } from '@/components/dashboard/clear-all-toasts'
@@ -72,8 +72,10 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>, userId:
     // Team-chat signal — its OWN badge now, and ONLY unread DMs + @mentions
     // (not channel chatter). Old code folded ALL internal unread into portalChats.
     let teamChat = 0
+    let talk = 0 // the TD Talk tab's own signal: unread DMs + groups only
     if (teamThreadsResult.status === 'fulfilled' && !teamThreadsResult.value.error) {
       teamChat = countTeamNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
+      talk = countTalkNotifications((teamThreadsResult.value.data ?? []) as TeamThreadCountRow[])
     }
 
     // Inbox unread count — WhatsApp/Telegram from Supabase view
@@ -117,9 +119,9 @@ async function getBadgeCounts(supabase: ReturnType<typeof createClient>, userId:
       commUnread = count ?? 0
     } catch { /* ignore */ }
 
-    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, teamChat, overdueInvoices, reconciliationReview, commUnread }
+    return { inbox: inboxUnread, tasks: taskCount, portalChats: portalChatsCount, teamChat, talk, overdueInvoices, reconciliationReview, commUnread }
   } catch {
-    return { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
+    return { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
   }
 }
 
@@ -153,7 +155,7 @@ export default async function DashboardLayout({
   const windowsEnabled = await windowsEnabledPromise
   const embedded = framed && windowsEnabled
   const badgeCounts = embedded
-    ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, reconciliationReview: 0, commUnread: 0 }
+    ? { inbox: 0, tasks: 0, portalChats: 0, teamChat: 0, talk: 0, reconciliationReview: 0, commUnread: 0 }
     : await (badgeCountsPromise ?? getBadgeCounts(supabase, user.id))
 
   // Check if AI agent is enabled for this user

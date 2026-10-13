@@ -80,7 +80,7 @@ export interface AutoPopInput {
 }
 
 /** Pathnames that own the incoming-message job themselves. */
-const SURFACES_THAT_HANDLE_THEMSELVES = ['/team-chat']
+const SURFACES_THAT_HANDLE_THEMSELVES = ['/team-chat', '/td-talk']
 
 export function decideAutoPop(input: AutoPopInput): AutoPopDecision {
   const {
