@@ -365,7 +365,7 @@ function FloatingChatInner() {
       // We render null on the full chat page — let the dispatcher navigate there
       // instead, rather than claiming to handle it and showing nothing.
       const p = pathnameRef.current
-      if (p === '/team-chat' || p.startsWith('/team-chat/')) return
+      if (p === '/team-chat' || p.startsWith('/team-chat/') || p === '/td-talk' || p.startsWith('/td-talk/')) return
       e.preventDefault() // tell the dispatcher we've got it
       // Seed the composer draft, but never clobber a message already half-typed.
       if (typeof detail.draft === 'string' && detail.draft && !drafts.get(threadId)) {
@@ -479,7 +479,7 @@ function FloatingChatInner() {
     : conversationLabel(openThread)
   // The window is redundant on the full chat page, and two panes fighting over
   // one read pointer is how unread state gets corrupted.
-  const onChatPage = pathname === '/team-chat' || pathname.startsWith('/team-chat/')
+  const onChatPage = pathname === '/team-chat' || pathname.startsWith('/team-chat/') || pathname === '/td-talk' || pathname.startsWith('/td-talk/')
   if (onChatPage) return null
 
   return (

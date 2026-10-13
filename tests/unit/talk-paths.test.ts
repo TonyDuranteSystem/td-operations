@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isTalkPath, isTeamChatPath, teamChatBase, safeTalkNext, withTalkNext, talkUrlFor, TALK_BASE } from '@/lib/talk/paths'
+import { isTalkPath, isTeamChatPath, isTdTalkTabPath, isTalkSurfacePath, TD_TALK_TAB, teamChatBase, safeTalkNext, withTalkNext, talkUrlFor, TALK_BASE } from '@/lib/talk/paths'
 
 const ORIGIN = 'https://app.example.com'
 
@@ -79,5 +79,26 @@ describe('talkUrlFor — where a notification tap lands', () => {
     for (const other of ['/portal-chats', '/accounts/123', 'https://evil.com/team-chat', '//evil.com', 'javascript:x', '', null, undefined]) {
       expect(talkUrlFor(other, ORIGIN), String(other)).toBe(TALK_BASE)
     }
+  })
+})
+
+describe('the TD Talk tab inside the CRM (/td-talk)', () => {
+  it('is its own address, not the app and not Team Chat', () => {
+    expect(TD_TALK_TAB).toBe('/td-talk')
+    expect(isTdTalkTabPath('/td-talk')).toBe(true)
+    expect(isTdTalkTabPath('/td-talk/')).toBe(true)
+    expect(isTdTalkTabPath('/td-talking')).toBe(false)
+    expect(isTdTalkTabPath('/talk')).toBe(false)
+    expect(isTdTalkTabPath('/team-chat')).toBe(false)
+    expect(isTdTalkTabPath(null)).toBe(false)
+    expect(isTalkPath('/td-talk')).toBe(false) // the standalone app's rules (manifest scope, service worker) never apply to the tab
+  })
+  it('counts as a TD Talk surface together with the app, and deep links stay on the tab', () => {
+    expect(isTalkSurfacePath('/talk')).toBe(true)
+    expect(isTalkSurfacePath('/td-talk')).toBe(true)
+    expect(isTalkSurfacePath('/team-chat')).toBe(false)
+    expect(teamChatBase('/td-talk')).toBe('/td-talk')
+    expect(teamChatBase('/talk')).toBe('/talk')
+    expect(teamChatBase('/team-chat')).toBe('/team-chat')
   })
 })

@@ -64,6 +64,7 @@ export function describeOrigin(path: string): string {
     ["/inbox", "Inbox"],
     ["/portal-chats", "Portal chats"],
     ["/team-chat", "Team chat"],
+    ["/td-talk", "TD Talk"],
     ["/accounts/", "Client page"],
     ["/contacts/", "Contact page"],
     ["/leads", "Leads"],

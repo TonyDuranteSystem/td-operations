@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { MessageSquare, CreditCard, PenTool, FileText } from 'lucide-react'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
-import { isTalkPath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
+import { isTalkSurfacePath, isTeamChatPath, teamChatBase } from '@/lib/talk/paths'
 
 /**
  * Global realtime notification listener for the CRM dashboard.
@@ -231,7 +231,7 @@ export function RealtimeNotifications({ teamOnly = false }: { /** TD Talk (dev j
       // TD Talk (/talk) IS the chat — but, like WhatsApp, only the chat you are LOOKING AT is silent: a message
       // in another chat (or while you are on the chat list) still sounds and pops up. The open chat is in the
       // address (?thread=…), kept there by the page itself (use-selection-history).
-      if (isTalkPath(p)) {
+      if (isTalkSurfacePath(p)) {
         const viewing = new URLSearchParams(window.location.search).get('thread')
         if (viewing && viewing === row?.thread_id) return
       }

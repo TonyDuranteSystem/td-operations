@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { isBeingViewed } from '@/lib/talk/window-front'
 import { reportDelivered } from '@/lib/talk/report-delivered'
+import { TALK_BASE } from '@/lib/talk/paths'
 import { cn } from '@/lib/utils'
 import { uploadTeamAttachment } from '@/lib/team/attachment'
 import {
@@ -53,7 +54,7 @@ function writeLastOpened(id: string | null) {
  * READ RULE: opening a conversation marks it read (the server does that on GET). Nothing marks anything read while the
  * app is in the background — a notification is how you learn about a message then.
  */
-export function TalkApp() {
+export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/talk` (the app) or `/td-talk` (the CRM tab) — the address it keeps the open chat in. */ base?: string } = {}) {
   const searchParams = useSearchParams()
   const urlThread = searchParams.get('thread')
 
@@ -161,9 +162,9 @@ export function TalkApp() {
     try {
       // The open chat lives in the address (?thread=…): a refresh reopens it, and the pop-up rule ("silent only for
       // the chat you are looking at") reads it.
-      window.history.replaceState(null, '', id ? `/talk?thread=${id}` : '/talk')
+      window.history.replaceState(null, '', id ? `${base}?thread=${id}` : base)
     } catch { /* ignore */ }
-  }, [])
+  }, [base])
 
   // first load: threads, then straight into a conversation
   useEffect(() => {
