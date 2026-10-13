@@ -1,4 +1,5 @@
 # AI Agent (in-dashboard assistant)
+_Last verified against code: 2026-10-13 — Claude (dev job ad09ea91, PHASE A3 of master plan Part 33, sandbox). **The assistant can read files in the new storage:** `read_drive_file` (`readDriveFileForWorker`) skips the Drive-only text export for a `store:` / `storage:` pointer and opens it through `openDocument`; `read_scanned_document` reaches storage files through the OCR download step. Drive ids behave as before. Test: `tests/unit/worker-read-store-file.test.ts`.)_
 _Last verified against code: 2026-10-10b — Claude (dev job `803c2410`, sandbox): the AI client card's lease line reads "company number 3D-NNN (PMB NNN)"; no-number companies never report the shared Largo row. See `lease-oa.md` (2026-10-10c).
 _Last verified against code: 2026-10-10 — Claude (dev job `803c2410`, sandbox): the AI client card (`lib/ai-agent/client-card.ts`) prints a company's MAILING address as official address + its PMB (`companyMailingRow`) instead of "Suite 3D-NNN". See `lease-oa.md` (2026-10-10).
 
