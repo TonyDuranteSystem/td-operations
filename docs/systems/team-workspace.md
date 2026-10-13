@@ -1,5 +1,6 @@
 # Team Workspace (internal Slack-replacement chat)
 
+_Last verified against code: 2026-10-13c — Claude (dev job `c1e326dd`: new `POST /api/team/messages/[id]/flatten` repairs a stored voice note once (converts the fragmented MP4 Safari plays badly to an ordinary MP4, keeps the original under `team-chat-originals/`); the shared voice-note player calls it on first open; new `flat` / `flattened_at` fields on a voice-note attachment. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-13b — Claude (dev job `c1e326dd`: pop-ups, floating windows and auto-pop now treat the CRM's TD Talk tab (`/td-talk`) like a chat page; new `countTalkNotifications` (DM + group only) feeds the TD Talk menu dot. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-09h — Claude (dev job `c1e326dd`: delivered ticks — new table `internal_thread_delivery`, `POST /api/team/delivered`, thread GET returns `peer_delivered_at`/`member_delivered`; the CRM page reports delivery after loading its chat list. See `docs/systems/talk.md`.)_
 _Last verified against code: 2026-10-09g — Claude (dev job `c1e326dd`: the thread fetch's "don't mark read" rule is now fail-open via `lib/talk/window-front.ts` (blur = behind another window; any tap/click/key = back) instead of `document.hasFocus()`, which broke read marking on phone/installed apps. See `docs/systems/talk.md`.)_

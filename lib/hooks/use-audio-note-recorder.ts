@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { patchFragmentedMp4Duration } from '@/lib/media/fmp4-duration'
+import { fragmentedMp4ToFlat } from '@/lib/media/fmp4-to-flat'
 
 interface UseAudioNoteRecorderOptions {
   /** Called with the finished recording, ready to attach and send like any other file. */
@@ -115,11 +115,13 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         const ext = mimeType.includes('webm') ? 'webm' : 'm4a'
         const finish = (blob: Blob) => onRecordedRef.current?.(new File([blob], `voice-note.${ext}`, { type: mimeType.split(';')[0] }))
         if (!mp4Wanted) { finish(audioBlob); return }
-        // TD Talk: write the real length into the MP4 header before it uploads (lib/media/fmp4-duration.ts). A recording
-        // with an "unknown" length can be cut short on the listener's iPhone. Fail-safe: any problem sends the original.
+        // TD Talk: turn the fragmented MP4 into an ordinary one before it uploads (lib/media/fmp4-to-flat.ts). Safari plays the
+        // fragmented kind badly — a note could be cut short, and our earlier "fill in the length" patch made Safari report DOUBLE
+        // the length (a 43 s note showed 1:26 and stopped halfway). A normal MP4 is read exactly right. Same audio bytes, nothing
+        // re-encoded. Fail-safe: any problem sends the original recording unchanged.
         void audioBlob.arrayBuffer().then(buf => {
-          const fixed = patchFragmentedMp4Duration(new Uint8Array(buf))
-          finish(fixed ? new Blob([fixed.data as BlobPart], { type: audioBlob.type }) : audioBlob)
+          const flat = fragmentedMp4ToFlat(new Uint8Array(buf))
+          finish(flat ? new Blob([flat.data as BlobPart], { type: audioBlob.type }) : audioBlob)
         }).catch(() => finish(audioBlob))
       }
 
