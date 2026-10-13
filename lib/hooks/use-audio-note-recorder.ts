@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { patchFragmentedMp4Duration } from '@/lib/media/fmp4-duration'
 
 interface UseAudioNoteRecorderOptions {
   /** Called with the finished recording, ready to attach and send like any other file. */
@@ -13,6 +14,9 @@ interface UseAudioNoteRecorderOptions {
    */
   preferMp4?: boolean
 }
+
+/** Speech needs far less than the ~190 kbps an iPhone records by default: 48 kbps mono is clear for voice and a 3-minute note drops from ~4.7 MB to ~1 MB (faster upload, less to download). TD Talk only. */
+const VOICE_BITS_PER_SECOND = 48_000
 
 interface UseAudioNoteRecorderReturn {
   isRecording: boolean
@@ -88,7 +92,7 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
             ? 'audio/webm'
             : 'audio/mp4'
 
-      const recorder = new MediaRecorder(stream, { mimeType })
+      const recorder = new MediaRecorder(stream, mp4Wanted ? { mimeType, audioBitsPerSecond: VOICE_BITS_PER_SECOND } : { mimeType })
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
 
       recorder.onstop = () => {
@@ -109,8 +113,14 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         // buildOutboundPath (lib/messaging/wabridge-attachment.ts) picks the real extension from the
         // mime type the browser reports — the file NAME here is cosmetic, never used for that decision.
         const ext = mimeType.includes('webm') ? 'webm' : 'm4a'
-        const file = new File([audioBlob], `voice-note.${ext}`, { type: mimeType.split(';')[0] })
-        onRecordedRef.current?.(file)
+        const finish = (blob: Blob) => onRecordedRef.current?.(new File([blob], `voice-note.${ext}`, { type: mimeType.split(';')[0] }))
+        if (!mp4Wanted) { finish(audioBlob); return }
+        // TD Talk: write the real length into the MP4 header before it uploads (lib/media/fmp4-duration.ts). A recording
+        // with an "unknown" length can be cut short on the listener's iPhone. Fail-safe: any problem sends the original.
+        void audioBlob.arrayBuffer().then(buf => {
+          const fixed = patchFragmentedMp4Duration(new Uint8Array(buf))
+          finish(fixed ? new Blob([fixed.data as BlobPart], { type: audioBlob.type }) : audioBlob)
+        }).catch(() => finish(audioBlob))
       }
 
       mediaRecorderRef.current = recorder
