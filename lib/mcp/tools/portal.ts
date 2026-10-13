@@ -1049,10 +1049,21 @@ Requires account_id or contact_id — whichever thread the file is headed to —
           // another client's chat thread. No equivalent check for a
           // contact-only thread (no Drive folder of its own) — mandatory
           // human review before portal_chat_send is the only guard there.
-          if (account_id && !(await driveFileBelongsToAccount(file_id, account_id))) {
+          const { classifyPointer, openDocument } = await import("@/lib/documents/open-document")
+          const inDrive = classifyPointer(file_id) === "drive"
+          // A file in the new storage is not a Drive id: it must be one of THIS account's own recorded documents.
+          if (!inDrive && account_id) {
+            const { data: own } = await supabaseAdmin.from("documents").select("id").eq("drive_file_id", file_id).eq("account_id", account_id).limit(1)
+            if (!own || own.length === 0) {
+              return { content: [{ type: "text" as const, text: "Error: this stored file isn't one of that account's own documents. Double-check the file_id and account_id — if this is intentional, flag it to Antonio rather than attaching it directly." }] }
+            }
+          }
+          if (inDrive && account_id && !(await driveFileBelongsToAccount(file_id, account_id))) {
             return { content: [{ type: "text" as const, text: "Error: this file doesn't appear to be inside that account's own Drive folder. Double-check the file_id and account_id — if this is intentional (e.g. a document from outside the client's own folder), flag it to Antonio rather than attaching it directly." }] }
           }
-          const result = await downloadFileBinaryForSend(file_id)
+          const result = inDrive
+            ? await downloadFileBinaryForSend(file_id)
+            : await openDocument(file_id).then((d) => ({ buffer: d.buffer, mimeType: d.mimeType || "application/octet-stream", fileName: d.fileName || "document" }))
           buffer = result.buffer
           mimeType = result.mimeType
           finalFilename = filename || result.fileName

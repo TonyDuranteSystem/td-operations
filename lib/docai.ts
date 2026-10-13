@@ -233,6 +233,31 @@ async function downloadFileAsBinary(
   opts: { maxBytes?: number } = {},
 ): Promise<{ data: ArrayBuffer | Buffer; mimeType: string; name: string; wasShrunk?: boolean }> {
   const maxBytes = opts.maxBytes ?? DOCAI_INLINE_MAX_BYTES
+
+  // A document in the new CRM storage (or the older bucket) is not a Drive id — open it through the one
+  // pointer-aware reader (cutover, dev job ad09ea91), then apply the same size and iPhone-photo rules.
+  {
+    const { classifyPointer, openDocument } = await import("@/lib/documents/open-document")
+    if (classifyPointer(fileId) !== "drive") {
+      const doc = await openDocument(fileId)
+      const name = doc.fileName || fileId
+      const mime = doc.mimeType || "application/octet-stream"
+      const size = doc.buffer.length
+      const shrinkable = SHRINKABLE_IMAGE_MIMES.has(mime) && size <= DOCAI_IMAGE_SHRINK_MAX_BYTES
+      if (size > maxBytes && !shrinkable) {
+        throw new Error(`File too large for inline processing: ${(size / (1024 * 1024)).toFixed(1)}MB (max ${Math.round(maxBytes / (1024 * 1024))}MB)`)
+      }
+      const { looksLikeHeic, heicToJpeg } = await import("@/lib/image-heic")
+      if (looksLikeHeic(name, mime, doc.buffer)) {
+        return { data: await heicToJpeg(doc.buffer), mimeType: "image/jpeg", name }
+      }
+      if (size > maxBytes && shrinkable) {
+        return { data: await shrinkImageToFit(doc.buffer, maxBytes), mimeType: "image/jpeg", name, wasShrunk: true }
+      }
+      return { data: doc.buffer, mimeType: mime, name }
+    }
+  }
+
   const token = await getDriveToken()
 
   // Get metadata first

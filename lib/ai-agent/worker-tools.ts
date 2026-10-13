@@ -1377,10 +1377,17 @@ export async function readDriveFileForWorker(params: Record<string, unknown>): P
   }
 
   try {
+    // A file in the new CRM storage / older bucket is not a Drive id: skip the Drive-only text export and
+    // open it through the one pointer-aware reader (cutover, dev job ad09ea91).
+    const { classifyPointer, openDocument } = await import("@/lib/documents/open-document")
+    const inDrive = classifyPointer(fileId) === "drive"
+
     // 1) Text export path (Google Docs/Sheets/Slides + plain text).
-    const { downloadFileContent } = await import("@/lib/google-drive")
-    const content = await downloadFileContent(fileId)
-    if (content && content.trim()) return await cap(content)
+    if (inDrive) {
+      const { downloadFileContent } = await import("@/lib/google-drive")
+      const content = await downloadFileContent(fileId)
+      if (content && content.trim()) return await cap(content)
+    }
 
     // 2) Binary path — read PDF/Office text (WS3.3, council): most client
     // documents in Drive are PDFs, which downloadFileContent returns empty for.
@@ -1388,7 +1395,9 @@ export async function readDriveFileForWorker(params: Record<string, unknown>): P
     // pulls the text layer (pdf-parse for PDF, exceljs/mammoth for xlsx/docx).
     const { downloadFileBinary } = await import("@/lib/google-drive")
     const { classifySlackFile, extractTextFromBuffer } = await import("@/lib/ai-agent/slack-file-reader")
-    const bin = await downloadFileBinary(fileId)
+    const bin = inDrive
+      ? await downloadFileBinary(fileId)
+      : await openDocument(fileId).then((d) => ({ buffer: d.buffer, mimeType: d.mimeType || "application/octet-stream", fileName: d.fileName || fileId }))
     const kind = classifySlackFile(bin.mimeType, bin.fileName)
     if (kind === "image") {
       return storedOr(
