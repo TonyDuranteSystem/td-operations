@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { renameFile } from '@/lib/google-drive'
 import { updateDocument } from '@/lib/operations/document'
+import { SwitchedCompanyDriveWriteError } from '@/lib/crm-store/switched-drive-guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -43,6 +44,7 @@ export async function POST(
     return NextResponse.json({ success: true, file: result })
   } catch (err) {
     console.error('[files/rename] Error:', err)
+    if (err instanceof SwitchedCompanyDriveWriteError) return NextResponse.json({ error: err.message }, { status: 409 })
     return NextResponse.json({ error: 'Failed to rename file' }, { status: 500 })
   }
 }

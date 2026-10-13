@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { moveFile, listFolder } from '@/lib/google-drive'
 import { updateDocument } from '@/lib/operations/document'
+import { SwitchedCompanyDriveWriteError } from '@/lib/crm-store/switched-drive-guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 // Map folder names to document categories
@@ -107,6 +108,8 @@ export async function POST(
     return NextResponse.json({ success: true, file: result })
   } catch (err) {
     console.error('[files/move] Error:', err)
+    // a company whose files live in the new storage can't be changed in its Drive folder: say so plainly (409), not a vague 500
+    if (err instanceof SwitchedCompanyDriveWriteError) return NextResponse.json({ error: err.message }, { status: 409 })
     return NextResponse.json({ error: 'Failed to move file' }, { status: 500 })
   }
 }

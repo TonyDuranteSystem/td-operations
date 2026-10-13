@@ -72,6 +72,17 @@ export async function POST(req: NextRequest) {
       const { data: acLinkEarly } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).limit(30)
       const linkIds = ((acLinkEarly ?? []) as Array<{ account_id: string }>).map((l) => l.account_id)
       const linkedAccountId = linkIds.length === 1 ? linkIds[0] : null
+      // A COMPANY document for a person who belongs to SEVERAL companies has no single company to go to: once any of those
+      // companies lives in the new storage it would land in an arbitrary one (or fail on its locked Drive folder). Say so plainly
+      // and ask for the upload to be made from the right company (Drive cutover Phase A2, dev job ad09ea91). All on Drive: unchanged.
+      if (catInfo.num !== 2 && linkIds.length > 1) {
+        const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
+        for (const id of linkIds) {
+          if ((await companyDocState(id)) !== 'drive') {
+            return NextResponse.json({ success: false, detail: 'This person belongs to several companies and one of them has moved to the new storage — upload a company document from that company in Storage, so it lands in the right place.' }, { status: 409 })
+          }
+        }
+      }
       // A PERSON's own documents follow the person: if ANY company they belong to has been switched to the new storage,
       // their personal storage is used (never Drive, never an arbitrary one of their companies).
       let switchedViaAccountId: string | null = null

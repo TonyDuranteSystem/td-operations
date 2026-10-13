@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { trashFile } from '@/lib/google-drive'
 import { logAction } from '@/lib/mcp/action-log'
+import { SwitchedCompanyDriveWriteError } from '@/lib/crm-store/switched-drive-guard'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -70,6 +71,7 @@ export async function POST(
     return NextResponse.json({ success: true, fileName })
   } catch (err) {
     console.error('[files/delete] Error:', err)
+    if (err instanceof SwitchedCompanyDriveWriteError) return NextResponse.json({ error: err.message }, { status: 409 })
     return NextResponse.json({ error: 'Failed to delete file' }, { status: 500 })
   }
 }

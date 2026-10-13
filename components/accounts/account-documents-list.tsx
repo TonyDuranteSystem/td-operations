@@ -61,8 +61,9 @@ export function AccountDocumentsList({
   /** The account — to know whether its files live in the NEW CRM store (then the store view shows them). */
   accountId?: string
 }) {
-  const hasStoreRows = (documents ?? []).some((d) => (d.drive_file_id ?? '').startsWith('store:'))
-  const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId && hasStoreRows)
+  // always asked (one cached request, shared with the Files tab): whether the company has MOVED to the new storage decides whether
+  // the Drive folder tree is still shown below — Drive-linked rows must appear in this list when it is not (Phase A2, dev job ad09ea91)
+  const storeOwner = useStoreOwnerForAccount(accountId ?? '', !!accountId)
   // A company whose files live in the new store: the files its store view below shows (with preview +
   // sharing) are never listed twice here (the double-listing Luca reported, 2026-07-20). Only THOSE are
   // hidden — the server says which; a store file the view would not show stays listed here.
@@ -73,7 +74,10 @@ export function AccountDocumentsList({
   // while it is still being worked out whether the store view shows them, hold the store rows back (no
   // flash of a double listing); an error answers "no store view" and they are listed
   const pendingStore = storeOwner.isLoading
-  const homeless = filterDocumentsNeedingFlatListing(documents, accountHasDriveFolder)
+  // a MOVED company shows only the read-only storage panel below (its Drive tree is hidden), so a record that still points at a
+  // Drive file has no other place to appear: list it here too (it used to vanish from both views)
+  const driveTreeShown = accountHasDriveFolder && !storeOwner.data?.moved
+  const homeless = filterDocumentsNeedingFlatListing(documents, driveTreeShown)
     .filter((d) => !shown.has(d.drive_file_id ?? ''))
     .filter((d) => !(pendingStore && (d.drive_file_id ?? '').startsWith('store:')))
   if (homeless.length === 0) return null

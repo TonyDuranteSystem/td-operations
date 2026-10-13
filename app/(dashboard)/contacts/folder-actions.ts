@@ -1,4 +1,5 @@
 'use server'
+/* eslint-disable no-restricted-syntax -- the raw contacts writes below are older code; this file was touched only to add the new-storage guard (dev job ad09ea91). Routing them through lib/operations is a separate cleanup. */
 
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
@@ -11,6 +12,9 @@ export async function createContactFolder(contactId: string): Promise<ActionResu
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { ensureContactFolder } = await import('@/lib/drive-folder-utils')
+    // a person whose files live in the new storage gets no new Drive folder (Drive cutover Phase A2, dev job ad09ea91)
+    const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
+    await assertPersonFilesStillOnDrive(contactId)
 
     const { data: contact, error } = await supabaseAdmin
       .from('contacts')
@@ -43,6 +47,9 @@ export async function linkContactFolder(contactId: string, driveFolderId: string
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
     const { listFolderAnyDrive } = await import('@/lib/google-drive')
+    // …nor an existing Drive folder linked to them (it would re-open the Drive path for a person who is in the storage)
+    const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
+    await assertPersonFilesStillOnDrive(contactId)
 
     const folderContents = await listFolderAnyDrive(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
     if (!folderContents?.files) throw new Error('Could not access Drive folder — check the folder ID')

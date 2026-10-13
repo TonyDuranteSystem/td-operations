@@ -158,11 +158,11 @@ function FileRow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileId: file.id, newName: newName.trim() }),
       })
-      if (!res.ok) throw new Error('Rename failed')
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as { error?: string }).error || 'Rename failed') }
       toast.success(`Renamed to "${newName.trim()}"`)
       onRefresh()
-    } catch {
-      toast.error('Failed to rename file')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message && err.message !== 'Rename failed' ? err.message : 'Failed to rename file')
     } finally {
       setSaving(false)
       setRenaming(false)
@@ -182,11 +182,11 @@ function FileRow({
           targetFolderName: targetFolder.name,
         }),
       })
-      if (!res.ok) throw new Error('Move failed')
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as { error?: string }).error || 'Move failed') }
       toast.success(`Moved "${file.name}" to ${targetFolder.name}`)
       onRefresh()
-    } catch {
-      toast.error('Failed to move file')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message && err.message !== 'Move failed' ? err.message : 'Failed to move file')
     }
   }
 
@@ -198,11 +198,11 @@ function FileRow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileId: file.id }),
       })
-      if (!res.ok) throw new Error('Delete failed')
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error((d as { error?: string }).error || 'Delete failed') }
       toast.success(`"${file.name}" moved to trash`)
       onRefresh()
-    } catch {
-      toast.error('Failed to delete file')
+    } catch (err) {
+      toast.error(err instanceof Error && err.message && err.message !== 'Delete failed' ? err.message : 'Failed to delete file')
     } finally {
       setDeleting(false)
       setConfirmDelete(false)
@@ -959,12 +959,16 @@ export function FileManager({ accountId, driveFolderId }: {
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-500">{totalFiles} files</p>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => setShowUpload(v => !v)}
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
-          >
-            <Upload className="h-3.5 w-3.5" /> Upload Document
-          </button>
+          {/* A company whose files live in the new storage is changed ONLY in Storage (Open in Storage above): this old Drive-folder
+              form has no "show to client" choice, so it is not offered there (Drive cutover Phase A2, dev job ad09ea91). */}
+          {!storeOwner.data?.ownerId && (
+            <button
+              onClick={() => setShowUpload(v => !v)}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
+            >
+              <Upload className="h-3.5 w-3.5" /> Upload Document
+            </button>
+          )}
           <FastTooltip label="Validate folder structure">
             <button
               onClick={async () => {
@@ -1001,7 +1005,7 @@ export function FileManager({ accountId, driveFolderId }: {
       </div>
 
       {/* Upload panel */}
-      {showUpload && (
+      {showUpload && !storeOwner.data?.ownerId && (
         <div className="rounded-lg border bg-white p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex flex-col gap-1 text-xs font-medium text-zinc-600">
