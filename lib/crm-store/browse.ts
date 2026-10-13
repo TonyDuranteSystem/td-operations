@@ -332,13 +332,14 @@ export async function readVersionForStaff(fileId: string, versionId: string): Pr
   return { bytes: Buffer.from(await data.arrayBuffer()), mimeType: v.mime_type ?? data.type ?? null, name: `v${v.version_no} - ${f.name}` }
 }
 
-/** A person's own storage in the NEW store (pilot environment only), or null. */
+/** A person's own LIVE (not study-only) storage in the NEW store, or null. */
 export async function storeOwnerForContact(contactId: string): Promise<string | null> {
-  const { pilotEnvironmentAllowed } = await import("./formation-pilot")
-  if (!pilotEnvironmentAllowed()) return null
+  // No environment gate (Drive cutover Phase A2, dev job ad09ea91): like storeOwnerForAccount the answer is exact data — a live,
+  // not study-only, storage. Production has none yet, so it still answers null there today; the day a person is switched it
+  // answers, and the contact page shows the storage instead of the Drive upload form.
   try {
-    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).maybeSingle()
-    return (data?.id as string | undefined) ?? null
+    const { data } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).limit(1)
+    return ((data ?? [])[0]?.id as string | undefined) ?? null
   } catch {
     return null
   }
