@@ -45,7 +45,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
     : todayISO()
   const [startDate, setStartDate] = useState(initialStart)
 
-  // The agreement's 12-month term runs from the day the client signs (set on the server) — only the start date is chosen here, because it fixes the contract year.
+  // The agreement's term runs from the day the client signs to December 31 of that year (set on the server) — only the start date is chosen here, because it fixes the contract year.
   const handleStartChange = (v: string) => setStartDate(v)
 
   if (!open) return null
@@ -136,7 +136,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
 
               <div className="text-xs text-muted-foreground bg-zinc-50 rounded-lg p-3 space-y-1">
                 <p>Premises: 10225 Ulmerton Rd, Largo, FL 33771</p>
-                <p>Office Lease and Services Agreement — no separate rent or deposit; the 12-month term runs from the date the client signs.</p>
+                <p>Office Lease and Services Agreement — no separate rent or deposit; the term runs from the date the client signs to December 31 of that year.</p>
               </div>
             </>
           ) : (
