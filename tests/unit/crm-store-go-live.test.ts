@@ -70,8 +70,9 @@ describe("report + holds", () => {
     const v = mapRows(rows, [file("drive-a", "F1")], new Map(), none)
     const r = buildGoLiveReport("acc", [], rows, v)
     expect(r.mayGoLive).toBe(true)
-    expect(r.rows).toMatchObject({ total: 3, exact: 1, twin: 0, leftOnDrive: 2, clientSeesTotal: 2, clientSeesLeftOnDrive: 1 })
-    expect(r.clientStillOnDrive.map((x) => x.rowId)).toEqual(["b"])
+    // 'b' is seen by the client with no stored copy → brought in (not left on Drive); only the hidden old 'c' stays
+    expect(r.rows).toMatchObject({ total: 3, exact: 1, twin: 0, catchUp: 1, leftOnDrive: 1, clientSeesTotal: 2, clientSeesLeftOnDrive: 0 })
+    expect(r.clientStillOnDrive).toEqual([])
   })
   it("mustStayOnDrive only for records the client sees that storage would hide", () => {
     expect(mustStayOnDrive({ clientSees: true, closedToClients: true, personalOutsidePerson: false })).toBe(true)

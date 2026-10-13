@@ -30,7 +30,7 @@ async function main() {
   console.log("      test Drive file:", up.id)
   const row = (await q(
     `insert into documents (drive_file_id, file_name, mime_type, file_size, account_id, account_name, category, category_name, document_type_id, document_type_name, portal_visible, status, created_at)
-     values ($1,$2,'application/pdf',$3,$4,$5,$6,$7,$8,$9,true,'classified', now()) returning id`,
+     values ($1,$2,'application/pdf',$3,$4,$5,$6,$7,$8,$9,true,'classified', '2025-01-01T00:00:00Z') returning id`,
     [up.id, `QA catchup ${stamp}.pdf`, bytes.length, acct.id, acct.company_name, model?.category ?? 1, model?.category_name ?? "Company", model?.document_type_id ?? null, model?.document_type_name ?? null],
   ))[0]
   console.log("      record:", row.id, "type:", model?.document_type_name)

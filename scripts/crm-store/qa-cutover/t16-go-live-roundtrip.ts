@@ -59,18 +59,18 @@ async function main() {
   check("9b undo put the people's storages back as they were", JSON.stringify(after.people) === JSON.stringify(before.people), JSON.stringify(after.people))
   check("10 the company reads as 'drive' again", (await companyDocState(acct.id)) === "drive")
 
-  // failure path: a stored copy whose size differs from what the approved copy recorded must stop the switch and leave everything as it was
+  // failure path: a stored copy that is not the bytes the approved copy recorded (its fingerprint differs) must stop the switch and leave everything as it was
   const ownerId = before.owner[0].id as string
-  await q("update store_import_items i set size_bytes = size_bytes + 1 where i.size_bytes is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
+  await q("update store_import_items i set sha256 = reverse(sha256) where i.sha256 is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
   try {
     const bad = await runGoLive(acct.id, actor)
     console.log("      bad run:", bad.ok, bad.message.slice(0, 160))
-    check("11 a size difference stops the switch", !bad.ok && /Nothing was switched/.test(bad.message), bad.message)
+    check("11 a stored copy that is not the approved bytes stops the switch", !bad.ok && /Nothing was switched/.test(bad.message), bad.message)
     const after2 = await snapshot()
     check("12 and leaves every record exactly as it was", JSON.stringify(after2.docs) === JSON.stringify(before.docs))
     check("13 and the company stays a hidden study copy", after2.owner[0]?.study_only === true && (await companyDocState(acct.id)) === "drive")
   } finally {
-    await q("update store_import_items i set size_bytes = size_bytes - 1 where i.size_bytes is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
+    await q("update store_import_items i set sha256 = reverse(sha256) where i.sha256 is not null and i.run_id in (select id from store_import_runs where owner_id=$1 and mode='copy')", [ownerId])
   }
   await db.end()
   summary()

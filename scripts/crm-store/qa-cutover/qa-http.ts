@@ -70,7 +70,7 @@ export function form(fields: Record<string, string>, file?: { name: string; data
 let pass = 0
 let fail = 0
 export const results: Array<{ id: string; ok: boolean; note: string }> = []
-export function check(id: string, ok: boolean, note: string) {
+export function check(id: string, ok: boolean, note = "") {
   results.push({ id, ok, note })
   if (ok) pass++; else fail++
   console.log(`${ok ? "PASS" : "FAIL"}  ${id} — ${note}`)

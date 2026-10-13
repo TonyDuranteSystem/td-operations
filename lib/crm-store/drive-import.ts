@@ -377,6 +377,10 @@ export async function continueDriveImport(runId: string, actorId: string | null,
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run) throw new Error("Move not found.")
   if (run.status !== "moving") return runView(runId)
+  {
+    const { data: gl } = await db().from("store_import_runs").select("report").eq("id", runId).maybeSingle()
+    if ((gl?.report as { goLive?: boolean } | null)?.goLive === true) return runView(runId) // closed by the go-live code only
+  }
   // a plan-driven build (hand-approved placement per file) is continued by its own module
   {
     const { isPlanRun, continuePlanBuild } = await import("./plan-build")
@@ -411,10 +415,10 @@ export async function continueDriveImport(runId: string, actorId: string | null,
  */
 export async function bringInOneFile(p: {
   runId: string; accountId: string; ownerId: string; actorId: string | null
-  file: { driveFileId: string; name: string; mimeType: string | null; sizeBytes: number | null }
+  file: { driveFileId: string; name: string; mimeType: string | null; sizeBytes: number | null; md5?: string | null }
 }): Promise<{ status: ItemStatus; reason: string | null; storeFileId: string | null; repointed: number }> {
   const { data: ins, error: iErr } = await db().from("store_import_items")
-    .insert({ run_id: p.runId, source: "drive", source_id: p.file.driveFileId, drive_path: [], name: p.file.name, mime_type: p.file.mimeType, size_bytes: p.file.sizeBytes, status: "working" })
+    .insert({ run_id: p.runId, source: "drive", source_id: p.file.driveFileId, drive_path: [], name: p.file.name, mime_type: p.file.mimeType, size_bytes: p.file.sizeBytes, source_md5: p.file.md5 ?? null, status: "working" })
     .select("*").maybeSingle()
   if (iErr || !ins) return { status: "failed", reason: `could not record the file in the ledger (${iErr?.message ?? "no row"})`, storeFileId: null, repointed: 0 }
   const it = ins as ImportItem
@@ -422,7 +426,8 @@ export async function bringInOneFile(p: {
   const saved: { fileId: string | null } = { fileId: null }
   let patch: Partial<ImportItem>
   try { patch = await moveOne(it, ctx, saved) } catch (e) { patch = { status: "failed", reason: e instanceof Error ? e.message : String(e), ...(saved.fileId ? { store_file_id: saved.fileId } : {}) } }
-  await db().from("store_import_items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", it.id)
+  const { error: wErr } = await db().from("store_import_items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", it.id)
+  if (wErr) console.error(`[crm-store] go-live catch-up: the ledger entry for "${p.file.name}" could not be updated (${wErr.message})`)
   return { status: (patch.status ?? "failed") as ItemStatus, reason: patch.reason ?? null, storeFileId: patch.store_file_id ?? saved.fileId, repointed: (patch.repointed ?? []).length }
 }
 

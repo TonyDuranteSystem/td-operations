@@ -2,7 +2,8 @@
  * "Go live" — switch a company to the new storage (owners only; master plan Part 33, dev job ad09ea91).
  *   GET  ?account=<id>            — DRY RUN: what would happen (reads only)
  *   GET  ?night=1                 — how many companies are ready for the night run (reads only)
- *   POST { accountId }            — switch ONE company (checks everything; any difference undoes it)
+ *   POST { accountId, planHash }  — switch ONE company: planHash is the value the preview gave; if the company changed since, it refuses
+ *   POST { sweep: true }          — undo any switch that stopped answering (a killed request)
  *   POST { undoRunId }            — undo a switch
  *   POST { night: true, limit? }  — switch the next group of companies, skipping and listing any that fail a check
  * Every write needs STORE_GO_LIVE=1 in this environment (default OFF).
@@ -41,11 +42,15 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Owners only." }, { status: 403 })
   const { goLiveAllowed } = await import("@/lib/crm-store/go-live")
   if (!goLiveAllowed()) return NextResponse.json({ error: "Going live is switched off in this environment." }, { status: 403 })
-  const body = (await req.json().catch(() => ({}))) as { accountId?: string; undoRunId?: string; night?: boolean; limit?: number }
+  const body = (await req.json().catch(() => ({}))) as { accountId?: string; planHash?: string; undoRunId?: string; night?: boolean; limit?: number; sweep?: boolean }
   try {
     if (body.undoRunId) {
       const { undoGoLive } = await import("@/lib/crm-store/go-live-run")
       return NextResponse.json(await undoGoLive(body.undoRunId, user.id))
+    }
+    if (body.sweep) {
+      const { sweepStaleGoLiveRuns } = await import("@/lib/crm-store/go-live-run")
+      return NextResponse.json(await sweepStaleGoLiveRuns(user.id))
     }
     if (body.night) {
       const { runNightBatch } = await import("@/lib/crm-store/go-live-batch")
@@ -53,7 +58,8 @@ export async function POST(req: NextRequest) {
     }
     if (!body.accountId) return NextResponse.json({ error: "accountId is required" }, { status: 400 })
     const { runGoLive } = await import("@/lib/crm-store/go-live-run")
-    const r = await runGoLive(body.accountId, user.id)
+    if (!body.planHash) return NextResponse.json({ error: "Run the preview first, then switch with its planHash." }, { status: 400 })
+    const r = await runGoLive(body.accountId, user.id, { expectedPlanHash: body.planHash })
     return NextResponse.json(r, { status: r.ok ? 200 : 409 })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "The switch could not run." }, { status: 400 })

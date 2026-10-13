@@ -40,11 +40,18 @@ export function isExcludedCompany(a: { id: string; status: string | null; name?:
   return a.status !== "Active"
 }
 
-export interface LedgerFile { sourceId: string; storeFileId: string; md5: string | null; size: number | null }
+export interface LedgerFile {
+  sourceId: string; storeFileId: string; md5: string | null; size: number | null
+  /** sha-256 of the bytes the copy saved (what the stored file must still hold) */
+  sha256?: string | null
+  /** when the copy run that made this entry started — a source id in two runs uses the NEWEST */
+  runStartedAt?: string | null
+}
 export interface CrmDocRow {
   id: string
   drive_file_id: string
   file_name: string | null
+  mime_type?: string | null
   contact_id: string | null
   portal_visible: boolean | null
   service_delivery_id: string | null
@@ -95,7 +102,8 @@ export function mapRows(
   /** records the CRM made AFTER the approved copy (created later than this) are brought in one file at a time */
   catchUpAfter: string | null = null,
 ): RowVerdict[] {
-  const bySource = new Map(ledger.map((l) => [l.sourceId, l]))
+  // a Drive file copied in more than one run: the NEWEST copy wins (oldest first, later entries overwrite)
+  const bySource = new Map([...ledger].sort((a, b) => (a.runStartedAt ?? "").localeCompare(b.runStartedAt ?? "")).map((l) => [l.sourceId, l]))
   const verdicts = new Map<string, RowVerdict>()
   const candidates: Array<{ row: CrmDocRow; file: LedgerFile; via: Via; clientSees: boolean }> = []
 
@@ -110,9 +118,14 @@ export function mapRows(
     if (exact) { candidates.push({ row, file: exact, via: "exact", clientSees }); continue }
     const twin = twins.get(row.id)
     if (twin) { candidates.push({ row, file: twin, via: "twin", clientSees }); continue }
-    // a person's own record can be linked to the person's stored file (exact/twin), but is never "caught up" here
-    if (!row.contact_id && catchUpAfter && row.created_at && row.created_at > catchUpAfter) {
-      verdicts.set(row.id, { ...base, action: "catchup", reason: "recorded after the approved copy — brought in one file at a time" })
+    // Antonio's rule: what the client sees today must be in the storage and open to them. So a record the client sees whose
+    // file has NO stored equivalent (no exact, no same-bytes twin) is brought in, whenever it was made; a record the client
+    // does NOT see is brought in only if the CRM made it after the approved copy (older hidden ones are his 'leave' decisions).
+    // (A synthetic id such as an SS-4 record is not a Drive file and cannot be brought in.)
+    const isDriveFile = !row.drive_file_id.startsWith("ss4-")
+    const newerThanCopy = !row.contact_id && !!catchUpAfter && !!row.created_at && row.created_at > catchUpAfter
+    if (isDriveFile && (clientSees || newerThanCopy)) {
+      verdicts.set(row.id, { ...base, action: "catchup", reason: clientSees ? "the client sees it and no stored copy exists — brought in one file at a time" : "recorded after the approved copy — brought in one file at a time" })
       continue
     }
     verdicts.set(row.id, { ...base, action: "leave", reason: "not in the approved copy — stays on Drive" })
@@ -139,6 +152,8 @@ export function mapRows(
 export interface GoLiveReport {
   accountId: string
   mayGoLive: boolean
+  /** fingerprint of this plan: the real switch must be given the same value */
+  planHash?: string
   blockers: string[]
   rows: { total: number; exact: number; twin: number; catchUp: number; leftOnDrive: number; clientSeesTotal: number; clientSeesLeftOnDrive: number }
   /** records the client sees today that would NOT be in the new storage (they still open from Drive) */
@@ -175,6 +190,14 @@ export function buildGoLiveReport(accountId: string, blockers: string[], rows: C
  */
 export function mustStayOnDrive(p: { clientSees: boolean; closedToClients: boolean; personalOutsidePerson: boolean }): boolean {
   return p.clientSees && (p.closedToClients || p.personalOutsidePerson)
+}
+
+/** Pure: a short fingerprint of what a switch would do (record id + action + target). The real run refuses if it changed since the dry run. */
+export function planFingerprint(verdicts: RowVerdict[]): string {
+  const text = verdicts.map((v) => `${v.rowId}:${v.action}:${v.storeFileId ?? ""}`).sort().join("|")
+  let h = 5381
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0
+  return `${verdicts.length}-${(h >>> 0).toString(36)}`
 }
 
 export { storePointer, storeDocumentLink }
