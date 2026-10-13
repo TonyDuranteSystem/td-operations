@@ -112,6 +112,19 @@ describe('server-issued dates', () => {
     expect(raw).toContain('/DCTDecode')
   })
 
+  it('a normal agreement is four pages and the signature block shares the last page with the final clauses', async () => {
+    const bytes = await generateLeasePDF({ tenantCompany: 'Example Holdings LLC', tenantContactName: 'Maria Rossi', tenantTitle: 'Manager', tenantState: 'Wyoming', tenantEin: '12-3456789', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, operatingAddress: 'Via Roma 1, 20121 Milano, Italy' })
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string; numpages: number }>
+    const out = await parse(Buffer.from(bytes))
+    expect(out.numpages).toBe(4)
+    expect(out.text).toContain('Page 4 of 4')
+    // the last page holds both a numbered clause and the signature block
+    const lastPage = out.text.slice(out.text.indexOf('Page 3 of 4'))
+    expect(lastPage).toContain('9.10')
+    expect(lastPage).toContain('IN WITNESS WHEREOF')
+  })
+
   it('endOfYearIso / termMonthsThroughYearEnd', () => {
     expect(endOfYearIso('2026-10-12')).toBe('2026-12-31')
     expect(endOfYearIso('2027-01-01')).toBe('2027-12-31')

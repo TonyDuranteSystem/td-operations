@@ -124,6 +124,12 @@ class PageWriter {
   pageHeight = 792
   pageWidth = 612
   bottomMargin = 65
+  // body text metrics: the original agreement (v1) keeps these defaults; the v2 renderer tightens them so the whole agreement
+  // and its signature block fit on four pages
+  paraSize = 10.5
+  paraLineHeight = 15
+  paraSpaceAfter = 10
+  labelGap = 8
 
   constructor(doc: PDFDocument) {
     this.doc = doc
@@ -176,12 +182,12 @@ class PageWriter {
   }
 
   para(text: string, {
-    size = 10.5,
+    size = this.paraSize,
     indent = 0,
     font,
     color = C.dark,
-    lineHeight = 15,
-    spaceAfter = 10,
+    lineHeight = this.paraLineHeight,
+    spaceAfter = this.paraSpaceAfter,
   }: {
     size?: number
     indent?: number
@@ -209,8 +215,8 @@ class PageWriter {
   }
 
   labelPara(label: string, text: string, indent = 0) {
-    const size = 10.5
-    const lh = 15
+    const size = this.paraSize
+    const lh = this.paraLineHeight
     const labelW = this.fontBold.widthOfTextAtSize(label, size)
     const maxW = this.contentWidth - indent
 
@@ -250,7 +256,7 @@ class PageWriter {
         this.y -= lh
       }
     }
-    this.y -= 8
+    this.y -= this.labelGap
   }
 
   rule() {
@@ -855,6 +861,12 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
     pw.fontItalic = f.oblique ?? f.regular
   }
 
+  // A little tighter than the original agreement so the text and the signature block fit on four pages.
+  pw.paraSize = 10
+  pw.paraLineHeight = 14
+  pw.paraSpaceAfter = 7
+  pw.labelGap = 6
+
   // The logo banner (Tony Durante LLC + our certifications) at the top of the first page — the same image the signing page shows.
   await drawLogoBanner(doc, pw)
 
@@ -892,10 +904,10 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   }
 
   // ─── Signature block ───
-  pw.checkSpace(230)
+  pw.checkSpace(185)
   pw.rule()
-  pw.space(8)
-  pw.para('IN WITNESS WHEREOF, the parties have signed this Agreement on the dates written below.', { font: pw.fontBold, size: 11, spaceAfter: 26 })
+  pw.space(6)
+  pw.para('IN WITNESS WHEREOF, the parties have signed this Agreement on the dates written below.', { font: pw.fontBold, size: 11, spaceAfter: 20 })
   const leftX = pw.margin
   const rightX = pw.pageWidth / 2 + 20
   const sigW = 200
