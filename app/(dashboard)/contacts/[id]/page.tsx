@@ -62,6 +62,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .from('documents')
       .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible, contact_id, confidence, updated_at')
       .eq('contact_id', params.id)
+      // an old Drive record the storage switch archived is kept for staff but not listed (dev job ad09ea91)
+      .or('status.is.null,status.neq.archived')
       .order('category', { ascending: true })
       .order('file_name', { ascending: true }),
     // Offers — by contact_id OR client_email (dev job b1e0cb99: contact_id is
@@ -156,6 +158,7 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
       .from('documents')
       .select('id, file_name, document_type_name, category_name, category, drive_file_id, drive_link, status, processed_at, mime_type, file_size, account_id, portal_visible, contact_id, confidence, updated_at')
       .in('account_id', accountIds)
+      .or('status.is.null,status.neq.archived')
       .order('category', { ascending: true })
       .order('file_name', { ascending: true })
     accountDocs = (accDocsData ?? []) as DocRecord[]

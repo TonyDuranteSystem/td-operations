@@ -1,24 +1,25 @@
 /**
- * CRM Store — "Go live" for ONE company (master plan Part 33, dev job ad09ea91).
+ * CRM Store — "Go live" for ONE company (master plan Part 33, dev job ad09ea91) — CLEAN LISTING (Antonio 2026-10-13).
  *
- * The company already has its reviewed, approved COPY in the new storage (a "study" storage, hidden). Going live does
- * NOT copy or review anything again. It links the CRM to that copy and then flips the company to "storage":
+ * The company already has its reviewed, approved, CLEANED copy in the new storage (a hidden "study" storage). The old CRM
+ * document records came from Drive and are messy (a tax questionnaire labelled "EIN Letter", duplicates, unsigned versions).
+ * Going live makes the CRM list under the company (and its people) be exactly what is in the storage:
  *
  *   1. checks the company may switch (a copy exists, nothing mid-move, nobody mid-signing);
  *   2. takes a short lock (an open "move" run — every Drive write for the company is refused while it is open);
- *   3. maps each CRM document record to its stored file: EXACT (the record's Drive id is in the copy ledger) or TWIN
- *      (a different Drive file with the same bytes — same checksum + size); anything else stays on Drive;
- *   4. re-points each mapped record (the OLD link is written to the ledger first, so a stopped run can always be undone).
- *      One record per stored file (a database rule): the record the CLIENT sees wins; a duplicate record stays on Drive;
- *   5. proves the client can still open everything they could open before — any difference undoes everything;
- *   6. only then flips the company to storage (study_only = false) and closes the lock.
+ *   3. every stored file gets ONE CRM record pointing at it, with the storage's clean name, type and year: an old record that
+ *      already pointed at the same Drive file is reused (re-pointed and relabelled), otherwise a new one is made;
+ *   4. every other old Drive record is ARCHIVED — kept for staff (nothing deleted), not shown in the CRM list, never shown to the
+ *      client. A record made AFTER the copy, a workspace document and an SS-4 record are left exactly as they are;
+ *   5. the client sees NOTHING from the stored files until the owner decides (file by file, in Storage) — so every record is hidden;
+ *   6. proves each stored file is the approved bytes and has exactly one record — any difference undoes everything;
+ *   7. only then flips the company to storage (study_only = false) and closes the lock.
  *
- * Nothing in Drive is changed or deleted. The whole thing is one idempotent, per-company operation and is undone by
- * `undoGoLive` (records put back, company back to hidden study copy). Switched off unless STORE_GO_LIVE=1.
+ * Every old value is saved to the ledger BEFORE a record changes, so `undoGoLive` puts every record, label, visibility and status
+ * back and deletes the records it created. Nothing in Drive or in storage is ever deleted. Switched off unless STORE_GO_LIVE=1.
  */
 
 import { storePointer, storeDocumentLink, isStorePointer } from "./document-pointer"
-import { shownToClientByRow } from "@/lib/portal/client-store-docs"
 
 export function goLiveAllowed(env: Record<string, string | undefined> = process.env): boolean {
   return env.STORE_GO_LIVE === "1"
@@ -41,7 +42,7 @@ export function isExcludedCompany(a: { id: string; status: string | null; name?:
 }
 
 export interface LedgerFile {
-  sourceId: string; storeFileId: string; md5: string | null; size: number | null
+  sourceId: string; storeFileId: string; md5?: string | null; size?: number | null
   /** sha-256 of the bytes the copy saved (what the stored file must still hold) */
   sha256?: string | null
   /** when the copy run that made this entry started — a source id in two runs uses the NEWEST */
@@ -58,13 +59,27 @@ export interface CrmDocRow {
   flow_stage: string | null
   created_at: string | null
 }
-export type Via = "exact" | "twin"
+/** A live file in the company's (or a member's) storage, with what the CRM record must say about it. */
+export interface StoredFileInfo {
+  id: string
+  name: string
+  /** the catalog document-type slug ("ein_letter_irs"), null when untyped */
+  typeSlug: string | null
+  typeDisplay: string | null
+  legacyTypeId: number | null
+  periodYear: number | null
+  ownerKind: string
+  ownerContactId: string | null
+  categoryNum: number | null
+  categoryName: string | null
+  mimeType: string | null
+  sizeBytes: number | null
+}
+export type VerdictAction = "repoint" | "archive" | "leave"
 export interface RowVerdict {
   rowId: string
-  action: "repoint" | "leave" | "catchup"
-  via: Via | null
+  action: VerdictAction
   storeFileId: string | null
-  clientSees: boolean
   reason: string
 }
 
@@ -91,62 +106,52 @@ export function goLiveBlockers(f: {
 }
 
 /**
- * Pure: decide every record. `twins` = rows whose bytes match a different ledger file (computed from Drive checksums).
- * One record per stored file: the client-visible record wins, then an exact match over a twin, then the oldest.
+ * Pure: decide every old CRM record.
+ *   · already points at a stored file / is an SS-4 record / is a workspace document (has a service delivery or stage) → untouched;
+ *   · its Drive id is in the copy ledger → it is the listing of that stored file (ONE per file: the earliest exact record wins);
+ *   · made after the approved copy started → untouched (new work, staff see it as it is);
+ *   · anything else (an old record the cleaning did not keep) → archived.
+ * `stored` = the files that must each get a record; a file with no old record gets a new one (see `filesWithoutRecord`).
  */
-export function mapRows(
-  rows: CrmDocRow[],
-  ledger: LedgerFile[],
-  twins: Map<string, LedgerFile>,
-  serviceTypeOf: (serviceDeliveryId: string | null) => string | null,
-  /** records the CRM made AFTER the approved copy (created later than this) are brought in one file at a time */
-  catchUpAfter: string | null = null,
-): RowVerdict[] {
+export function mapRows(rows: CrmDocRow[], ledger: LedgerFile[], copyStartedAt: string | null): RowVerdict[] {
   // a Drive file copied in more than one run: the NEWEST copy wins (oldest first, later entries overwrite)
   const bySource = new Map([...ledger].sort((a, b) => (a.runStartedAt ?? "").localeCompare(b.runStartedAt ?? "")).map((l) => [l.sourceId, l]))
   const verdicts = new Map<string, RowVerdict>()
-  const candidates: Array<{ row: CrmDocRow; file: LedgerFile; via: Via; clientSees: boolean }> = []
+  const candidates: Array<{ row: CrmDocRow; storeFileId: string }> = []
 
   for (const row of rows) {
-    const clientSees = shownToClientByRow({ portalVisible: row.portal_visible, serviceType: serviceTypeOf(row.service_delivery_id), flowStage: row.flow_stage })
-    const base = { rowId: row.id, clientSees, via: null as Via | null, storeFileId: null as string | null }
-    if (isStorePointer(row.drive_file_id) || row.drive_file_id.startsWith("storage:")) {
-      verdicts.set(row.id, { ...base, action: "leave", reason: "already points at a stored file" })
-      continue
-    }
-    const exact = bySource.get(row.drive_file_id)
-    if (exact) { candidates.push({ row, file: exact, via: "exact", clientSees }); continue }
-    const twin = twins.get(row.id)
-    if (twin) { candidates.push({ row, file: twin, via: "twin", clientSees }); continue }
-    // Antonio's rule: what the client sees today must be in the storage and open to them. So a record the client sees whose
-    // file has NO stored equivalent (no exact, no same-bytes twin) is brought in, whenever it was made; a record the client
-    // does NOT see is brought in only if the CRM made it after the approved copy (older hidden ones are his 'leave' decisions).
-    // (A synthetic id such as an SS-4 record is not a Drive file and cannot be brought in.)
-    const isDriveFile = !row.drive_file_id.startsWith("ss4-")
-    const newerThanCopy = !row.contact_id && !!catchUpAfter && !!row.created_at && row.created_at > catchUpAfter
-    if (isDriveFile && (clientSees || newerThanCopy)) {
-      verdicts.set(row.id, { ...base, action: "catchup", reason: clientSees ? "the client sees it and no stored copy exists — brought in one file at a time" : "recorded after the approved copy — brought in one file at a time" })
-      continue
-    }
-    verdicts.set(row.id, { ...base, action: "leave", reason: "not in the approved copy — stays on Drive" })
+    const base = { rowId: row.id, storeFileId: null as string | null }
+    if (isStorePointer(row.drive_file_id) || row.drive_file_id.startsWith("storage:")) { verdicts.set(row.id, { ...base, action: "leave", reason: "already points at a stored file" }); continue }
+    if (row.drive_file_id.startsWith("ss4-")) { verdicts.set(row.id, { ...base, action: "leave", reason: "an SS-4 record (not a Drive file) — untouched" }); continue }
+    const hit = bySource.get(row.drive_file_id)
+    if (hit) { candidates.push({ row, storeFileId: hit.storeFileId }); continue }
+    if (row.flow_stage || row.service_delivery_id) { verdicts.set(row.id, { ...base, action: "leave", reason: "a workspace document — found by its stage, untouched" }); continue }
+    if (copyStartedAt && row.created_at && row.created_at > copyStartedAt) { verdicts.set(row.id, { ...base, action: "leave", reason: "made after the approved copy — stays as it is, for staff to handle" }); continue }
+    verdicts.set(row.id, { ...base, action: "archive", reason: "an old record the cleaning did not keep — archived (kept for staff, not shown)" })
   }
 
-  // one record per stored file
+  // one record per stored file: the earliest record of it is reused, any other record of the same file is archived
   const byFile = new Map<string, typeof candidates>()
-  for (const c of candidates) byFile.set(c.file.storeFileId, [...(byFile.get(c.file.storeFileId) ?? []), c])
+  for (const c of candidates) byFile.set(c.storeFileId, [...(byFile.get(c.storeFileId) ?? []), c])
   for (const group of Array.from(byFile.values())) {
     const ranked = [...group].sort((a, b) =>
-      Number(b.clientSees) - Number(a.clientSees)
-      || Number(b.via === "exact") - Number(a.via === "exact")
+      // a workspace document (found by its stage) is the one that must keep pointing at the file
+      Number(!!b.row.flow_stage || !!b.row.service_delivery_id) - Number(!!a.row.flow_stage || !!a.row.service_delivery_id)
       || (a.row.created_at ?? "").localeCompare(b.row.created_at ?? "")
       || a.row.id.localeCompare(b.row.id))
     ranked.forEach((c, i) => {
       verdicts.set(c.row.id, i === 0
-        ? { rowId: c.row.id, action: "repoint", via: c.via, storeFileId: c.file.storeFileId, clientSees: c.clientSees, reason: c.via === "exact" ? "in the approved copy" : "same file as one in the approved copy" }
-        : { rowId: c.row.id, action: "leave", via: c.via, storeFileId: c.file.storeFileId, clientSees: c.clientSees, reason: "a second record of a file whose record already points to storage — stays on Drive" })
+        ? { rowId: c.row.id, action: "repoint", storeFileId: c.storeFileId, reason: "the record of this stored file" }
+        : { rowId: c.row.id, action: "archive", storeFileId: c.storeFileId, reason: "a second old record of the same file — archived" })
     })
   }
   return rows.map((r) => verdicts.get(r.id) as RowVerdict)
+}
+
+/** Pure: the stored files that no old record covers (they get a new record each). `taken` = pointers some other record already uses. */
+export function filesWithoutRecord(stored: StoredFileInfo[], verdicts: RowVerdict[], taken: Set<string>): StoredFileInfo[] {
+  const covered = new Set(verdicts.filter((v) => v.action === "repoint" && v.storeFileId).map((v) => v.storeFileId as string))
+  return stored.filter((s) => !covered.has(s.id) && !taken.has(storePointer(s.id)))
 }
 
 export interface GoLiveReport {
@@ -155,49 +160,40 @@ export interface GoLiveReport {
   /** fingerprint of this plan: the real switch must be given the same value */
   planHash?: string
   blockers: string[]
-  rows: { total: number; exact: number; twin: number; catchUp: number; leftOnDrive: number; clientSeesTotal: number; clientSeesLeftOnDrive: number }
-  /** records the client sees today that would NOT be in the new storage (they still open from Drive) */
-  clientStillOnDrive: Array<{ rowId: string; name: string | null; reason: string }>
+  /** what the CRM list under the company becomes */
+  listing: { storedFiles: number; reusedRecords: number; newRecords: number; archivedRecords: number; untouched: number }
+  /** the stored files with the name/type the client-facing listing will carry (for the owner to read) */
+  files: Array<{ name: string; type: string | null; year: number | null; owner: string; newRecord: boolean }>
+  /** old records archived, with the reason */
+  archived: Array<{ name: string | null; reason: string }>
+  /** old records left exactly as they are, with the reason */
+  untouched: Array<{ name: string | null; reason: string }>
 }
 
-/** Pure: the dry-run report from the verdicts. */
-export function buildGoLiveReport(accountId: string, blockers: string[], rows: CrmDocRow[], verdicts: RowVerdict[]): GoLiveReport {
+/** Pure: the dry-run report. */
+export function buildGoLiveReport(accountId: string, blockers: string[], rows: CrmDocRow[], verdicts: RowVerdict[], stored: StoredFileInfo[], newRecords: StoredFileInfo[]): GoLiveReport {
   const nameOf = new Map(rows.map((r) => [r.id, r.file_name]))
-  const cand = verdicts.filter((v) => !v.reason.startsWith("already points"))
-  const left = cand.filter((v) => v.action === "leave")
-  const seen = cand.filter((v) => v.clientSees)
-  const seenLeft = seen.filter((v) => v.action === "leave")
+  const reused = verdicts.filter((v) => v.action === "repoint")
+  const archived = verdicts.filter((v) => v.action === "archive")
+  const untouched = verdicts.filter((v) => v.action === "leave" && !v.reason.startsWith("already points"))
+  const isNew = new Set(newRecords.map((n) => n.id))
   return {
     accountId,
     mayGoLive: blockers.length === 0,
     blockers,
-    rows: {
-      total: cand.length,
-      exact: verdicts.filter((v) => v.action === "repoint" && v.via === "exact").length,
-      twin: verdicts.filter((v) => v.action === "repoint" && v.via === "twin").length,
-      catchUp: verdicts.filter((v) => v.action === "catchup").length,
-      leftOnDrive: left.length,
-      clientSeesTotal: seen.length,
-      clientSeesLeftOnDrive: seenLeft.length,
-    },
-    clientStillOnDrive: seenLeft.map((v) => ({ rowId: v.rowId, name: nameOf.get(v.rowId) ?? null, reason: v.reason })),
+    listing: { storedFiles: stored.length, reusedRecords: reused.length, newRecords: newRecords.length, archivedRecords: archived.length, untouched: untouched.length },
+    files: stored.map((s) => ({ name: s.name, type: s.typeDisplay, year: s.periodYear, owner: s.ownerKind === "person" ? "person" : "company", newRecord: isNew.has(s.id) })),
+    archived: archived.map((v) => ({ name: nameOf.get(v.rowId) ?? null, reason: v.reason })),
+    untouched: untouched.map((v) => ({ name: nameOf.get(v.rowId) ?? null, reason: v.reason })),
   }
 }
 
-/**
- * Pure: after re-pointing, may this client-visible record stay re-pointed? (stored file typed, not closed, not someone's
- * personal file) — the same answer the portal gives. A record the client could not open from storage keeps its Drive link.
- */
-export function mustStayOnDrive(p: { clientSees: boolean; closedToClients: boolean; personalOutsidePerson: boolean }): boolean {
-  return p.clientSees && (p.closedToClients || p.personalOutsidePerson)
-}
-
-/** Pure: a short fingerprint of what a switch would do (record id + action + target). The real run refuses if it changed since the dry run. */
-export function planFingerprint(verdicts: RowVerdict[]): string {
-  const text = verdicts.map((v) => `${v.rowId}:${v.action}:${v.storeFileId ?? ""}`).sort().join("|")
+/** Pure: a short fingerprint of what a switch would do. The real run refuses if it changed since the dry run. */
+export function planFingerprint(verdicts: RowVerdict[], newRecords: StoredFileInfo[]): string {
+  const text = [...verdicts.map((v) => `${v.rowId}:${v.action}:${v.storeFileId ?? ""}`), ...newRecords.map((n) => `new:${n.id}`)].sort().join("|")
   let h = 5381
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0
-  return `${verdicts.length}-${(h >>> 0).toString(36)}`
+  return `${verdicts.length + newRecords.length}-${(h >>> 0).toString(36)}`
 }
 
 export { storePointer, storeDocumentLink }
