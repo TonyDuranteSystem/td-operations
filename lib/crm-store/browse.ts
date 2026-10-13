@@ -587,7 +587,7 @@ export async function staffUploadToStore(p: {
   const bytes = Buffer.from(await blob.arrayBuffer())
   const mimeType = p.mimeType || blob.type || "application/octet-stream"
   const filedReturn = typeRow.metadata?.draft_never_visible === true && p.filingAnswer === "filed" && !p.needsReview
-  const wantVisible = !p.needsReview && p.visible !== false && typeRow.metadata?.staff_only !== true
+  const wantVisible = !p.needsReview && p.visible === true && typeRow.metadata?.staff_only !== true
     && (typeRow.metadata?.draft_never_visible !== true || filedReturn)
   // replacing a file the client sees with an answer of "hidden": hide it BEFORE the new copy is saved, so the
   // client never sees the new copy, not even for a moment (and not at all if a later step fails)
