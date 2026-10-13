@@ -634,7 +634,7 @@ export default function LeasePageWithCode() {
             <div style={{ textAlign: 'center', marginBottom: 16 }}>
               {/* The agreement's logo banner comes from the app's own files (the same picture as the PDF's banner), not from a storage bucket: it shows in every environment and is same-origin, so the signed-PDF capture can always draw it. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/logo.jpg" alt="Tony Durante LLC" style={{ height: 48 }} />
+              <img src="/images/logo.jpg" alt="Tony Durante LLC" style={{ width: '100%', height: 'auto', display: 'block' }} />
             </div>
             <AgreementV2Body blocks={doc.blocks} />
             <AgreementV2Exhibit photos={doc.exhibitPhotos} />

@@ -818,9 +818,9 @@ async function drawLogoBanner(doc: PDFDocument, pw: PageWriter): Promise<void> {
   if (!bytes) return
   try {
     const img = await doc.embedJpg(bytes)
-    const size = img.scaleToFit(pw.contentWidth * 0.78, 60)
+    const size = img.scaleToFit(pw.contentWidth, 90)
     pw.page.drawImage(img, { x: (pw.pageWidth - size.width) / 2, y: pw.y - size.height + 14, width: size.width, height: size.height })
-    pw.y -= size.height + 6
+    pw.y -= size.height + 4
   } catch (e) {
     console.error('[lease-pdf] logo could not be drawn — printing without it:', e instanceof Error ? e.message : e)
   }
