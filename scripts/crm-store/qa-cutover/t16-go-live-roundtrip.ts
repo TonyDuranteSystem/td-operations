@@ -24,6 +24,7 @@ async function main() {
   const snapshot = async () => ({
     docs: await q("select id, drive_file_id, drive_link from documents where account_id=$1 order by id", [acct.id]),
     owner: await q("select id, study_only from store_owners where account_id=$1 and kind='company'", [acct.id]),
+    people: await q("select o.id, o.study_only from store_owners o where o.kind='person' and o.contact_id in (select contact_id from account_contacts where account_id=$1) order by o.id", [acct.id]),
   })
   const before = await snapshot()
 
@@ -49,11 +50,13 @@ async function main() {
   const second = await runGoLive(acct.id, actor)
   check("7  a second switch is refused", !second.ok)
 
+  check("6b a member whose only company is this one went live with it", mid.people.every((p: { study_only: boolean }) => p.study_only === false), JSON.stringify(mid.people))
   const un = await undoGoLive(res.runId as string, actor)
   console.log("      undo:", JSON.stringify(un))
   const after = await snapshot()
   check("8  undo put every record back exactly", JSON.stringify(after.docs) === JSON.stringify(before.docs))
   check("9  undo made the company a hidden study copy again", after.owner[0]?.study_only === true)
+  check("9b undo put the people's storages back as they were", JSON.stringify(after.people) === JSON.stringify(before.people), JSON.stringify(after.people))
   check("10 the company reads as 'drive' again", (await companyDocState(acct.id)) === "drive")
 
   // failure path: a stored copy whose size differs from what the approved copy recorded must stop the switch and leave everything as it was

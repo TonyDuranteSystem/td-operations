@@ -31,7 +31,7 @@ describe("mapRows", () => {
     const by = Object.fromEntries(v.map((x) => [x.rowId, x]))
     expect(by.a).toMatchObject({ action: "repoint", via: "exact", storeFileId: "F1" })
     expect(by.b).toMatchObject({ action: "leave", reason: expect.stringMatching(/not in the approved copy/) })
-    expect(by.c).toMatchObject({ action: "leave", reason: expect.stringMatching(/person/) })
+    expect(by.c).toMatchObject({ action: "leave", reason: expect.stringMatching(/not in the approved copy/) })
     expect(by.d.action).toBe("leave")
     expect(by.e.action).toBe("leave")
   })

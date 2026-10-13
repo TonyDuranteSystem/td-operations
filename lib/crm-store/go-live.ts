@@ -54,7 +54,7 @@ export interface CrmDocRow {
 export type Via = "exact" | "twin"
 export interface RowVerdict {
   rowId: string
-  action: "repoint" | "leave"
+  action: "repoint" | "leave" | "catchup"
   via: Via | null
   storeFileId: string | null
   clientSees: boolean
@@ -92,6 +92,8 @@ export function mapRows(
   ledger: LedgerFile[],
   twins: Map<string, LedgerFile>,
   serviceTypeOf: (serviceDeliveryId: string | null) => string | null,
+  /** records the CRM made AFTER the approved copy (created later than this) are brought in one file at a time */
+  catchUpAfter: string | null = null,
 ): RowVerdict[] {
   const bySource = new Map(ledger.map((l) => [l.sourceId, l]))
   const verdicts = new Map<string, RowVerdict>()
@@ -104,14 +106,15 @@ export function mapRows(
       verdicts.set(row.id, { ...base, action: "leave", reason: "already points at a stored file" })
       continue
     }
-    if (row.contact_id) {
-      verdicts.set(row.id, { ...base, action: "leave", reason: "a person's own record — handled with the person's storage" })
-      continue
-    }
     const exact = bySource.get(row.drive_file_id)
     if (exact) { candidates.push({ row, file: exact, via: "exact", clientSees }); continue }
     const twin = twins.get(row.id)
     if (twin) { candidates.push({ row, file: twin, via: "twin", clientSees }); continue }
+    // a person's own record can be linked to the person's stored file (exact/twin), but is never "caught up" here
+    if (!row.contact_id && catchUpAfter && row.created_at && row.created_at > catchUpAfter) {
+      verdicts.set(row.id, { ...base, action: "catchup", reason: "recorded after the approved copy — brought in one file at a time" })
+      continue
+    }
     verdicts.set(row.id, { ...base, action: "leave", reason: "not in the approved copy — stays on Drive" })
   }
 
@@ -137,7 +140,7 @@ export interface GoLiveReport {
   accountId: string
   mayGoLive: boolean
   blockers: string[]
-  rows: { total: number; exact: number; twin: number; leftOnDrive: number; clientSeesTotal: number; clientSeesLeftOnDrive: number }
+  rows: { total: number; exact: number; twin: number; catchUp: number; leftOnDrive: number; clientSeesTotal: number; clientSeesLeftOnDrive: number }
   /** records the client sees today that would NOT be in the new storage (they still open from Drive) */
   clientStillOnDrive: Array<{ rowId: string; name: string | null; reason: string }>
 }
@@ -157,6 +160,7 @@ export function buildGoLiveReport(accountId: string, blockers: string[], rows: C
       total: cand.length,
       exact: verdicts.filter((v) => v.action === "repoint" && v.via === "exact").length,
       twin: verdicts.filter((v) => v.action === "repoint" && v.via === "twin").length,
+      catchUp: verdicts.filter((v) => v.action === "catchup").length,
       leftOnDrive: left.length,
       clientSeesTotal: seen.length,
       clientSeesLeftOnDrive: seenLeft.length,

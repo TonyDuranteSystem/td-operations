@@ -23,6 +23,8 @@ interface Facts {
   excluded: boolean
   owners: Array<{ id: string; study_only: boolean }>
   doneCopyRunIds: string[]
+  /** when the latest approved copy started: records the CRM made after this are "recorded after the copy" */
+  copyStartedAt: string | null
   openMoveRun: boolean
   openSigning: boolean
   state: "drive" | "moving" | "store"
@@ -42,7 +44,7 @@ async function loadFacts(accountId: string): Promise<Facts> {
   const owners = must(await d.from("store_owners").select("id, study_only").eq("account_id", accountId).eq("kind", "company"), "the company's storage") as Array<{ id: string; study_only: boolean }>
   const ownerIds = owners.map((o) => o.id)
   const copyRuns = ownerIds.length
-    ? (must(await d.from("store_import_runs").select("id").in("owner_id", ownerIds).eq("mode", "copy").eq("status", "done"), "the copy runs") as Array<{ id: string }>)
+    ? (must(await d.from("store_import_runs").select("id, started_at").in("owner_id", ownerIds).eq("mode", "copy").eq("status", "done").order("started_at", { ascending: false }), "the copy runs") as Array<{ id: string; started_at: string }>)
     : []
   const openRuns = must(await d.from("store_import_runs").select("id").eq("account_id", accountId).eq("mode", "move").in("status", ["scanning", "moving", "undoing"]), "open moves") as Array<{ id: string }>
   const { companyDocState } = await import("./switched-drive-guard")
@@ -58,7 +60,13 @@ async function loadFacts(accountId: string): Promise<Facts> {
     for (const i of items) ledger.push({ sourceId: i.source_id, storeFileId: i.store_file_id, md5: i.source_md5, size: i.size_bytes })
   }
 
-  const rows = must(await d.from("documents").select("id, drive_file_id, file_name, contact_id, portal_visible, service_delivery_id, flow_stage, created_at").eq("account_id", accountId), "the company's documents") as CrmDocRow[]
+  const rows: CrmDocRow[] = must(await d.from("documents").select("id, drive_file_id, file_name, mime_type, contact_id, portal_visible, service_delivery_id, flow_stage, created_at").eq("account_id", accountId), "the company's documents") as CrmDocRow[]
+  // a member's own records (no company on them) belong to the same move — the same rule the move uses
+  const memberIds = (must(await d.from("account_contacts").select("contact_id").eq("account_id", accountId), "the company's people") as Array<{ contact_id: string }>).map((m) => m.contact_id)
+  if (memberIds.length) {
+    const personRows = must(await d.from("documents").select("id, drive_file_id, file_name, mime_type, contact_id, portal_visible, service_delivery_id, flow_stage, created_at").is("account_id", null).in("contact_id", memberIds), "the people's documents") as CrmDocRow[]
+    for (const pr of personRows) if (!rows.some((r) => r.id === pr.id)) rows.push(pr)
+  }
   const sdIds = Array.from(new Set(rows.map((r) => r.service_delivery_id).filter((x): x is string => !!x)))
   const serviceTypes = new Map<string, string | null>()
   if (sdIds.length) {
@@ -68,7 +76,7 @@ async function loadFacts(accountId: string): Promise<Facts> {
 
   return {
     accountId, companyName: acct.company_name as string, excluded: isExcludedCompany({ id: accountId, status: (acct.status as string | null) ?? null, name: acct.company_name as string }),
-    owners, doneCopyRunIds: copyRuns.map((r) => r.id), openMoveRun: openRuns.length > 0,
+    owners, doneCopyRunIds: copyRuns.map((r) => r.id), copyStartedAt: (copyRuns[0] as { started_at?: string } | undefined)?.started_at ?? null, openMoveRun: openRuns.length > 0,
     openSigning: openEsign.length + openSs4.length + openSig.length > 0, state, ledger, rows, serviceTypes,
   }
 }
@@ -95,14 +103,21 @@ async function findTwins(f: Facts): Promise<Map<string, LedgerFile>> {
 }
 
 /** A record the client sees must open from storage: typed (not closed) and not someone's personal file. Else it stays on Drive. */
-async function holdBackWhatClientCouldNotOpen(verdicts: RowVerdict[]): Promise<RowVerdict[]> {
+async function holdBackWhatClientCouldNotOpen(verdicts: RowVerdict[], ownRowIds: Set<string>): Promise<RowVerdict[]> {
   const pointers = verdicts.filter((v) => v.action === "repoint" && v.storeFileId).map((v) => storePointer(v.storeFileId as string))
   if (pointers.length === 0) return verdicts
   const { staffOnlyStorePointers, personalStoreFilesOutsidePerson } = await import("./document-pointer")
   const [closed, personal] = await Promise.all([staffOnlyStorePointers(pointers), personalStoreFilesOutsidePerson(pointers)])
+  // the database allows ONE record per stored file: a file another record (another company's, for a person in two companies)
+  // already points at cannot be pointed at again — this record stays on Drive and is listed
+  const d = await db()
+  const { data: usedRows, error: uErr } = await d.from("documents").select("id, drive_file_id").in("drive_file_id", pointers)
+  if (uErr) throw new Error(`Could not check which stored files already have a record (${uErr.message}) — nothing was changed.`)
+  const taken = new Set(((usedRows ?? []) as Array<{ id: string; drive_file_id: string }>).filter((u) => !ownRowIds.has(u.id)).map((u) => u.drive_file_id))
   return verdicts.map((v) => {
     if (v.action !== "repoint" || !v.storeFileId) return v
     const p = storePointer(v.storeFileId)
+    if (taken.has(p)) return { ...v, action: "leave" as const, reason: "another record (another company's) already points at this stored file — stays on Drive" }
     return mustStayOnDrive({ clientSees: v.clientSees, closedToClients: closed.has(p), personalOutsidePerson: personal.has(p) })
       ? { ...v, action: "leave" as const, reason: personal.has(p) ? "a personal file filed under the company — stays on Drive" : "the stored file has no type yet, so the client could not open it — stays on Drive" }
       : v
@@ -115,8 +130,8 @@ async function plan(f: Facts): Promise<{ blockers: string[]; verdicts: RowVerdic
     hasDoneCopy: f.doneCopyRunIds.length > 0, openMoveRun: f.openMoveRun, openSigning: f.openSigning, state: f.state,
   })
   const twins = blockers.length ? new Map<string, LedgerFile>() : await findTwins(f)
-  const first = mapRows(f.rows, f.ledger, twins, (sd) => (sd ? f.serviceTypes.get(sd) ?? null : null))
-  const verdicts = blockers.length ? first : await holdBackWhatClientCouldNotOpen(first)
+  const first = mapRows(f.rows, f.ledger, twins, (sd) => (sd ? f.serviceTypes.get(sd) ?? null : null), f.copyStartedAt)
+  const verdicts = blockers.length ? first : await holdBackWhatClientCouldNotOpen(first, new Set(f.rows.map((r) => r.id)))
   return { blockers, verdicts, report: buildGoLiveReport(f.accountId, blockers, f.rows, verdicts) }
 }
 
@@ -159,29 +174,61 @@ export async function runGoLive(accountId: string, actorId: string | null): Prom
       if (uErr) throw new Error(`could not re-point "${row.file_name}" (${uErr.message})`)
     }
 
-    // 3) prove it: every record the client could see before can still be opened, from storage or Drive
+    // 3) catch-up: records the CRM made after the approved copy are brought in ONE FILE AT A TIME (same rules as a move).
+    //    A file that cannot come over keeps its Drive link (the client still opens it from Drive) and is listed — it never blocks the switch.
+    const catchUp = { brought: 0, stayedOnDrive: [] as string[] }
+    {
+      const { bringInOneFile } = await import("./drive-import")
+      for (const v of verdicts.filter((x) => x.action === "catchup")) {
+        const row = byId.get(v.rowId) as CrmDocRow
+        const r = await bringInOneFile({ runId, accountId, ownerId: owner.id, actorId, file: { driveFileId: row.drive_file_id, name: row.file_name ?? "document", mimeType: (row as { mime_type?: string | null }).mime_type ?? null, sizeBytes: null } })
+        if (r.status === "done" && r.repointed > 0) catchUp.brought += 1
+        else catchUp.stayedOnDrive.push(`${row.file_name ?? "document"}: ${r.reason ?? r.status}`)
+      }
+    }
+
+    // 4) prove it: every record the client could see before can still be opened — read back from the database as it is NOW
     const { clientMayOpen } = await import("@/lib/portal/client-store-docs")
     const { readStoreVersionSize } = await import("./go-live-verify")
-    for (const v of verdicts.filter((x) => x.clientSees)) {
-      const row = byId.get(v.rowId) as CrmDocRow
-      if (v.action === "repoint" && v.storeFileId) {
-        const pointer = storePointer(v.storeFileId)
-        const ok = await clientMayOpen({ id: row.id, drive_file_id: pointer, portal_visible: row.portal_visible, service_delivery_id: row.service_delivery_id, flow_stage: row.flow_stage })
-        if (!ok) problems.push(`"${row.file_name}": the client could not open it from storage`)
-        const want = f.ledger.find((l) => l.storeFileId === v.storeFileId)?.size ?? null
-        const have = await readStoreVersionSize(v.storeFileId)
-        if (have == null) problems.push(`"${row.file_name}": the stored file is missing`)
-        else if (want != null && have !== want) problems.push(`"${row.file_name}": the stored copy is ${have} bytes, the original was ${want}`)
+    const seen = verdicts.filter((x) => x.clientSees).map((x) => x.rowId)
+    if (seen.length) {
+      const { data: nowRows, error: nErr } = await d.from("documents").select("id, drive_file_id, file_name, portal_visible, service_delivery_id, flow_stage").in("id", seen)
+      if (nErr) throw new Error(`could not re-read the records to check them (${nErr.message})`)
+      for (const r of (nowRows ?? []) as Array<{ id: string; drive_file_id: string; file_name: string | null; portal_visible: boolean | null; service_delivery_id: string | null; flow_stage: string | null }>) {
+        if (!r.drive_file_id.startsWith("store:")) continue // still a Drive link: unchanged for the client
+        const ok = await clientMayOpen({ id: r.id, drive_file_id: r.drive_file_id, portal_visible: r.portal_visible, service_delivery_id: r.service_delivery_id, flow_stage: r.flow_stage })
+        if (!ok) problems.push(`"${r.file_name}": the client could not open it from storage`)
+        const fileId = r.drive_file_id.slice("store:".length)
+        const have = await readStoreVersionSize(fileId)
+        const want = f.ledger.find((l) => l.storeFileId === fileId)?.size ?? null
+        if (have == null) problems.push(`"${r.file_name}": the stored file is missing`)
+        else if (want != null && have !== want) problems.push(`"${r.file_name}": the stored copy is ${have} bytes, the original was ${want}`)
       }
     }
     if (problems.length) throw new Error(`the check found differences: ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? ` (+${problems.length - 5} more)` : ""}`)
 
-    // 4) flip — only now
+    // 5) flip — only now
     const { error: fErr } = await d.from("store_owners").update({ study_only: false }).eq("id", owner.id).eq("study_only", true)
     if (fErr) throw new Error(`the company could not be switched (${fErr.message})`)
-    await d.from("store_import_runs").update({ status: "done", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { goLive: true, repointed: toMove.length, studyWas: true } }).eq("id", runId)
+    // the company's people: a person's storage goes live once EVERY company they belong to is in the new storage
+    const personFlipped: string[] = []
+    try {
+      const { companyDocState } = await import("./switched-drive-guard")
+      const { data: members } = await d.from("account_contacts").select("contact_id").eq("account_id", accountId)
+      for (const m of (members ?? []) as Array<{ contact_id: string }>) {
+        const { data: po } = await d.from("store_owners").select("id, study_only").eq("kind", "person").eq("contact_id", m.contact_id).maybeSingle()
+        if (!po || po.study_only !== true) continue
+        const { data: links } = await d.from("account_contacts").select("account_id").eq("contact_id", m.contact_id)
+        let all = true
+        for (const l of (links ?? []) as Array<{ account_id: string }>) if ((await companyDocState(l.account_id)) !== "store") { all = false; break }
+        if (!all) continue
+        const { error: pErr } = await d.from("store_owners").update({ study_only: false }).eq("id", po.id).eq("study_only", true)
+        if (!pErr) personFlipped.push(po.id as string)
+      }
+    } catch (e) { catchUp.stayedOnDrive.push(`(a person's storage could not be switched yet: ${e instanceof Error ? e.message : String(e)})`) }
+    await d.from("store_import_runs").update({ status: "done", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { goLive: true, repointed: toMove.length, caughtUp: catchUp.brought, stayedOnDrive: catchUp.stayedOnDrive, personOwnersFlipped: personFlipped, studyWas: true } }).eq("id", runId)
     await d.rpc("store_backup_mark_switched", { p_owner_id: owner.id })
-    return { ok: true, runId, message: `${f.companyName} is now in the new storage (${toMove.length} records linked).`, report, repointed: toMove.length, problems: [] }
+    return { ok: true, runId, message: `${f.companyName} is now in the new storage (${toMove.length} records linked${catchUp.brought ? `, ${catchUp.brought} newer file(s) brought in` : ""}${catchUp.stayedOnDrive.length ? `; ${catchUp.stayedOnDrive.length} newer file(s) stay on Drive` : ""}).`, report, repointed: toMove.length + catchUp.brought, problems: catchUp.stayedOnDrive }
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e)
     const undone = await undoGoLive(runId, actorId, { reason: why })
@@ -193,7 +240,7 @@ export async function runGoLive(accountId: string, actorId: string | null): Prom
 export async function undoGoLive(runId: string, actorId: string | null, opts: { reason?: string } = {}): Promise<{ restored: number; problems: string[]; filesAddedSince: number }> {
   if (!actorId) throw new Error("Only a signed-in owner can undo a switch.")
   const d = await db()
-  const { data: run, error } = await d.from("store_import_runs").select("id, owner_id, status, finished_at").eq("id", runId).maybeSingle()
+  const { data: run, error } = await d.from("store_import_runs").select("id, owner_id, status, finished_at, report").eq("id", runId).maybeSingle()
   if (error || !run) throw new Error("Switch not found.")
   const problems: string[] = []
   await d.from("store_import_runs").update({ status: "undoing", updated_at: new Date().toISOString() }).eq("id", runId).in("status", ["moving", "done", "incomplete", "failed", "undoing"])
@@ -214,6 +261,8 @@ export async function undoGoLive(runId: string, actorId: string | null, opts: { 
       if (filesAddedSince > 0) problems.push(`${filesAddedSince} file(s) were added to the new storage after the switch — they stay there and are not in Drive`)
     }
     await d.from("store_owners").update({ study_only: true }).eq("id", run.owner_id).eq("study_only", false)
+    const flipped = ((run.report as { personOwnersFlipped?: string[] } | null)?.personOwnersFlipped ?? []).filter(Boolean)
+    if (flipped.length) await d.from("store_owners").update({ study_only: true }).in("id", flipped).eq("study_only", false)
     await d.from("store_backup_state").update({ switched_at: null, updated_at: new Date().toISOString() }).eq("owner_id", run.owner_id)
   }
   await d.from("store_import_runs").update({ status: "rolled_back", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { goLive: true, undone: true, reason: opts.reason ?? null, problems } }).eq("id", runId)
