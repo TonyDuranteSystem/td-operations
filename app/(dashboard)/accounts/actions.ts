@@ -206,7 +206,7 @@ export async function changeCompanySuite(
   accountId: string,
   newSuite: string | null,
   reason: string,
-): Promise<ActionResult & { signedLeasesToReplace?: number }> {
+): Promise<ActionResult & { signedLeasesToReplace?: number; returnedToPool?: boolean; oldPmb?: string | null }> {
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -222,7 +222,7 @@ export async function changeCompanySuite(
     })
     if (result.new) await syncPhysicalAddressToSuite(accountId, result.new)
     revalidatePath(`/accounts/${accountId}`)
-    return { success: true, signedLeasesToReplace: result.signed_leases_to_replace ?? 0 }
+    return { success: true, signedLeasesToReplace: result.signed_leases_to_replace ?? 0, returnedToPool: result.returned_to_pool, oldPmb: result.old ?? null }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Could not change the suite' }
   }
