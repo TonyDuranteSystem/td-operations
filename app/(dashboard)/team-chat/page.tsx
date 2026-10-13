@@ -2364,7 +2364,7 @@ function MessageRow({ m, isMe, isClaude, canDelete, currentUserId, onReply, onEd
                         // Voice notes play right here (no new page). "Show text" needs the stored attachments list; the
                         // old single-file shape has none, so it gets the plain player.
                         return m.attachments?.length
-                          ? <VoiceNote key={i} messageId={m.id} index={i} url={a.url} transcript={(a as ChatAttachment).transcript} tone={isMe ? 'dark' : 'light'} />
+                          ? <VoiceNote key={i} messageId={m.id} index={i} url={a.url} transcript={(a as ChatAttachment).transcript} flat={(a as ChatAttachment).flat} flattenedAt={(a as ChatAttachment).flattened_at} tone={isMe ? 'dark' : 'light'} />
                           // eslint-disable-next-line jsx-a11y/media-has-caption
                           : <audio key={i} controls preload="metadata" src={a.url} className="h-10 w-60 max-w-full" />
                       }

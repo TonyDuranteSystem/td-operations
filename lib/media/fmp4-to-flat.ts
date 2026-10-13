@@ -196,3 +196,18 @@ export function fragmentedMp4ToFlat(input: Uint8Array): FlatAudio | null {
     return null
   }
 }
+
+/** Cheap check on the first bytes of a file: is it the fragmented kind (a movie-extends box inside moov)? */
+export function looksFragmented(head: Uint8Array): boolean {
+  try {
+    const view = new DataView(head.buffer, head.byteOffset, head.byteLength)
+    const moov = readBoxes(view, 0, head.byteLength).find(b => b.type === 'moov')
+    if (!moov) {
+      // the index may extend past what we were given: fall back to a plain search for the marker
+      return Array.from(head.subarray(0, Math.min(head.length, 4096))).join(',').includes('109,118,101,120') // "mvex"
+    }
+    return readBoxes(view, moov.start + moov.header, moov.start + moov.size).some(b => b.type === 'mvex')
+  } catch {
+    return false
+  }
+}

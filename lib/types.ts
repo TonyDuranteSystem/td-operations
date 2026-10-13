@@ -480,6 +480,9 @@ export interface ChatAttachment {
   size?: number
   /** Team Chat voice notes: written by the "Show text" button (lib/team/voice-text.ts). */
   transcript?: import('@/lib/team/voice-text').VoiceTranscript | null
+  /** Team Chat voice notes: stored as an ordinary MP4 (set when recorded flat or after the one-time repair). */
+  flat?: boolean
+  flattened_at?: string | null
 }
 
 export interface PortalMessage {
