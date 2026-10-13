@@ -249,7 +249,18 @@ export function registerDriveTools(server: McpServer) {
     },
     async ({ file_id, max_chars }) => {
       try {
-        const content = await downloadFileContent(file_id)
+        let content: string
+        const { classifyPointer, openDocument } = await import("@/lib/documents/open-document")
+        if (classifyPointer(file_id) === "drive") {
+          content = await downloadFileContent(file_id)
+        } else {
+          // A file in the new CRM storage: read it as text only if it is a text type; otherwise point to OCR.
+          const d = await openDocument(file_id)
+          if (!/^text\/|json|csv|xml/.test(d.mimeType || "")) {
+            return { content: [{ type: "text" as const, text: `This stored file (${d.mimeType || "unknown type"}) isn't plain text. Use docai_ocr_file to read it.` }] }
+          }
+          content = d.buffer.toString("utf8")
+        }
         const truncated = content.length > (max_chars || 10000)
         const text = truncated ? content.slice(0, max_chars || 10000) : content
 

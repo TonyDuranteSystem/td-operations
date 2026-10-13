@@ -16,7 +16,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { downloadFileBinary, listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
+import { listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
@@ -93,7 +93,10 @@ export function registerBankStatementTools(server: McpServer) {
 
         if (file_id) {
           // Process specific file
-          const { mimeType, fileName } = await downloadFileBinary(file_id)
+          const { openDocument } = await import("@/lib/documents/open-document")
+          const opened = await openDocument(file_id)
+          const mimeType = opened.mimeType || "application/octet-stream"
+          const fileName = opened.fileName || file_id
           filesToProcess = [{ id: file_id, name: fileName, mimeType }]
         } else {
           // Find Tax folder
@@ -183,7 +186,10 @@ export function registerBankStatementTools(server: McpServer) {
             }
 
             // Download and parse
-            const { buffer, mimeType } = await downloadFileBinary(file.id)
+            const { openDocument } = await import("@/lib/documents/open-document")
+            const opened = await openDocument(file.id)
+            const buffer = opened.buffer
+            const mimeType = opened.mimeType || file.mimeType
             const result = await parseBankStatement(buffer, file.name, mimeType)
 
             if (result.errors.length > 0) {
