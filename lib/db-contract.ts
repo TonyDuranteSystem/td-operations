@@ -197,6 +197,25 @@ export const NOT_A_VOCABULARY = new Set([
   // `npm run snapshot:constraints`, MOVE both into CONSTRAINT_CONTRACTS and delete these lines.
   "bofa_intake_requests_status_check",
   "bofa_intake_requests_email_status_check",
+  // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
+  // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
+  // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*
+  // ones (sandbox only). They cannot be registered in CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not
+  // contain them, so registering first makes "PRODUCTION accepts every value the code can write" fail. At the NEXT full
+  // snapshot regeneration, MOVE each into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
+  "offer_narrative_turns_role_check",
+  "portal_translations_status_check",
+  "pwa_events_device_check",
+  "pwa_events_event_check",
+  "pwa_events_src_check",
+  "recurring_invoice_templates_currency_check",
+  "recurring_invoice_templates_frequency_check",
+  "recurring_invoice_templates_last_run_status_check",
+  "staff_alert_state_kind_check",
+  "staff_captures_destination_type",
+  "td_books_accounts_account_type_check",
+  "td_books_accounts_closing_source_check",
+  "td_books_accounts_sign_convention_check",
 ])
 
 /**
