@@ -30,8 +30,10 @@ async function main() {
     let existing: { id: string } | null = null
     for (let page = 1; page <= 20 && !existing; page++) {
       const { data } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 })
-      existing = data.users.find((x) => x.email === u.email) ?? null
-      if (data.users.length < 200) break
+      // `data` is a union whose failure branch has an empty `users` tuple, which TypeScript reads as `never` — name the shape.
+      const users: { id: string; email?: string }[] = data.users
+      existing = users.find((x) => x.email === u.email) ?? null
+      if (users.length < 200) break
     }
     if (existing) {
       const { error } = await supabaseAdmin.auth.admin.updateUserById(existing.id, { password, app_metadata: u.app_metadata, email_confirm: true })
