@@ -18,6 +18,9 @@
 import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib'
 import { buildAgreementV2, longDate } from '@/lib/lease/agreement-v2'
 import { embedUnicodeFonts } from '@/lib/pdf/unicode-fonts'
+import { readFile } from 'fs/promises'
+import { existsSync } from 'fs'
+import { join } from 'path'
 
 // ─── Colors ──────────────────────────────────────────────
 const C = {
@@ -67,7 +70,6 @@ export interface LeaseData {
   // Template version: 1 = the original Office Lease Agreement (default), 2 = Office Lease and Services Agreement (lib/lease/agreement-v2.ts)
   templateVersion?: number
   operatingAddress?: string | null // v2: the client's Operating Address typed at signing
-  agreementNo?: string             // v2: printed as Agreement No. (the lease token)
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -784,6 +786,46 @@ export function printable(text: string): string {
   return text.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '?')
 }
 
+// ─── The logo banner ─────────────────────────────────────────────────────────────────────────────────────────────────
+let logoBytesCache: Uint8Array | null = null
+
+/**
+ * public/images/logo.jpg (the same picture the signing page loads as its logo). Same loading pattern as the fonts
+ * (lib/pdf/unicode-fonts.ts): the local file first, then the app's own static-asset URL (on Vercel public/ is served by the CDN
+ * but is not always inside the function bundle). A logo that cannot be loaded never stops the agreement from being made.
+ */
+async function loadLogoBytes(): Promise<Uint8Array | null> {
+  if (logoBytesCache) return logoBytesCache
+  try {
+    const localPath = join(process.cwd(), 'public', 'images', 'logo.jpg')
+    if (existsSync(localPath)) {
+      logoBytesCache = new Uint8Array(await readFile(localPath))
+    } else {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.tonydurante.us'
+      const res = await fetch(`${baseUrl}/images/logo.jpg`)
+      if (!res.ok) throw new Error(`logo ${res.status}`)
+      logoBytesCache = new Uint8Array(await res.arrayBuffer())
+    }
+  } catch (e) {
+    console.error('[lease-pdf] logo could not be loaded — printing without it:', e instanceof Error ? e.message : e)
+    return null
+  }
+  return logoBytesCache
+}
+
+async function drawLogoBanner(doc: PDFDocument, pw: PageWriter): Promise<void> {
+  const bytes = await loadLogoBytes()
+  if (!bytes) return
+  try {
+    const img = await doc.embedJpg(bytes)
+    const size = img.scaleToFit(pw.contentWidth, 90)
+    pw.page.drawImage(img, { x: (pw.pageWidth - size.width) / 2, y: pw.y - size.height + 14, width: size.width, height: size.height })
+    pw.y -= size.height + 4
+  } catch (e) {
+    console.error('[lease-pdf] logo could not be drawn — printing without it:', e instanceof Error ? e.message : e)
+  }
+}
+
 // ─── Office Lease and Services Agreement (template v2) ──────────────────────────────────────────────────────────────
 // Prints the SAME blocks the signing page shows (lib/lease/agreement-v2.ts) — one text, three renderings.
 async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ bytes: Uint8Array; pages: number }> {
@@ -792,7 +834,6 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   const landlordTitle = data.landlordTitle ?? 'Managing Member'
   const tenantTitle = data.tenantTitle ?? 'Manager'
   const agreement = buildAgreementV2({
-    agreementNo: data.agreementNo ?? '',
     providerName: landlordName,
     clientCompany: data.tenantCompany,
     clientState: data.tenantState ?? null,
@@ -813,6 +854,9 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
     pw.fontBold = f.bold
     pw.fontItalic = f.oblique ?? f.regular
   }
+
+  // The logo banner (Tony Durante LLC + our certifications) at the top of the first page — the same image the signing page shows.
+  await drawLogoBanner(doc, pw)
 
   for (const b of agreement.blocks) {
     switch (b.t) {

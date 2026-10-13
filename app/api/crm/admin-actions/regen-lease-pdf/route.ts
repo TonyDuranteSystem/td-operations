@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       lateFee: lease.late_fee ?? undefined,
       lateFeePerDay: lease.late_fee_per_day ?? undefined,
       signedDate: isV2 ? ((lease.effective_date as string) ?? signedDate) : signedDate,
-      ...(isV2 ? { templateVersion: 2, operatingAddress: lease.operating_address ?? null, tenantTitle: lease.tenant_title ?? undefined, agreementNo: lease.token } : {}),
+      ...(isV2 ? { templateVersion: 2, operatingAddress: lease.operating_address ?? null, tenantTitle: lease.tenant_title ?? undefined } : {}),
     })
 
     // Upload to Supabase Storage

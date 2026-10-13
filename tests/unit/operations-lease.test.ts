@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { newYorkToday, termMonthsThroughYearEnd } from "@/lib/lease/agreement-v2"
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }))
 
@@ -394,7 +395,7 @@ describe("createLease — happy path", () => {
     expect(insert.security_deposit).toBe(0)
     expect(insert.landlord_address).toBe("10225 Ulmerton Rd 3D, Largo, FL 33771")
     expect(insert.square_feet).toBe(120)
-    expect(insert.term_months).toBe(12)
+    expect(insert.term_months).toBe(termMonthsThroughYearEnd(newYorkToday()))
     expect(insert.premises_address).toBe("10225 Ulmerton Rd, Largo, FL 33771")
     expect(insert.status).toBe("draft")
     expect(insert.suite_number).toBe("3D-151") // 150 + 1
@@ -540,7 +541,7 @@ describe("createLease — happy path", () => {
     expect(insert.monthly_rent).toBe(0)
     expect(insert.yearly_rent).toBe(0)
     expect(insert.security_deposit).toBe(0)
-    expect(insert.term_months).toBe(12)
+    expect(insert.term_months).toBe(termMonthsThroughYearEnd(newYorkToday())) // the term parameter (24) is ignored
   })
 
   it("defaults tenant_title to 'Manager'", async () => {
@@ -557,11 +558,12 @@ describe("createLease — happy path", () => {
     expect(insert.tenant_title).toBe("Member")
   })
 
-  it("defaults term_end_date to 12 months after the start (the real term runs from signing)", async () => {
+  it("defaults term_end_date to December 31 of the start year (the real term runs from signing to December 31)", async () => {
     const { createLease } = await import("@/lib/operations/lease")
     await createLease({ account_id: "acct-1", contract_year: 2027, term_start_date: "2027-03-15" })
     const insert = insertCalls[0].payload as Record<string, unknown>
-    expect(insert.term_end_date).toBe("2028-03-15")
+    expect(insert.term_end_date).toBe("2027-12-31")
+    expect(insert.term_months).toBe(10) // March through December
     expect(insert.contract_year).toBe(2027)
   })
 

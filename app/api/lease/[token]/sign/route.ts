@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
-import { newYorkToday, addMonthsIso } from "@/lib/lease/agreement-v2"
+import { newYorkToday, endOfYearIso, termMonthsThroughYearEnd } from "@/lib/lease/agreement-v2"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -110,11 +110,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // Double-predicate write guard, same shape as every other signing route
   // converted today: the read-time check above can't stop two near-simultaneous
   // submits, so the same condition is repeated on the UPDATE itself.
-  // v2: the Effective Date is the date of the last signature, and the 12-month term runs from it — set here, on the server,
-  // in New York time (the same date the page printed next to both signatures).
+  // v2: the Effective Date is the date of the last signature, and the term runs from it to December 31 of that year — set here,
+  // on the server, in New York time (the same date the page printed next to both signatures).
   const signedDay = isV2 ? printedDate : newYorkToday() // v2: already checked equal to today in New York above — no second clock read
   const v2Fields = isV2
-    ? { operating_address: operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: addMonthsIso(signedDay, 12), term_months: 12 }
+    ? { operating_address: operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: endOfYearIso(signedDay), term_months: termMonthsThroughYearEnd(signedDay) }
     : {}
   const { data: updated, error } = await db
     .from("lease_agreements")
