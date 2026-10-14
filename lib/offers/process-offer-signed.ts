@@ -109,6 +109,13 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
       .select()
       .single()
 
+    // Two requests at the same moment both pass the "already pending?" check above; the unique index on offer_token
+    // lets only one insert win. The loser stops here — it must NOT go on to create a second contact / invoice / filing.
+    if (actErr && (actErr as { code?: string }).code === "23505") {
+      console.warn("[offer-signed] Pending activation created by a simultaneous request for:", offer_token)
+      return { status: 200, body: { ok: true, message: "Already pending" } }
+    }
+
     if (actErr) {
       console.error("[offer-signed] Failed to create pending_activation:", actErr.message)
       return { status: 500, body: { error: "Failed to create activation" } }
