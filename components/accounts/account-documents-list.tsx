@@ -1,8 +1,9 @@
 'use client'
 
-import { FileText, ExternalLink, Globe, EyeOff } from 'lucide-react'
+import { FileText, ExternalLink, Globe, EyeOff, FolderOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { filterDocumentsNeedingFlatListing } from '@/lib/documents/list-visibility'
+import { groupByStorageFolder } from '@/lib/documents/group-by-storage-folder'
 import { useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 
 interface AccountDocument {
@@ -10,6 +11,8 @@ interface AccountDocument {
   file_name: string
   document_type_name: string | null
   category_name: string | null
+  category?: number | null
+  tax_year?: number | null
   drive_file_id: string | null
   drive_link: string | null
   mime_type: string | null
@@ -83,6 +86,50 @@ export function AccountDocumentsList({
   if (homeless.length === 0) return null
   const allStore = homeless.every((d) => (d.drive_file_id ?? '').startsWith('store:'))
 
+  // Organised like the Storage: the five folders (1. Company … 5. Correspondence) and, inside Tax, the years — each folder opens and closes.
+  const groups = groupByStorageFolder(homeless)
+
+  const renderRow = (doc: AccountDocument) => {
+    const meta = [
+      doc.document_type_name,
+      formatDate(doc.processed_at),
+      formatBytes(doc.file_size),
+    ].filter(Boolean).join(' · ')
+    return (
+      <li key={doc.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+          <div className="min-w-0">
+            <div className="truncate text-zinc-900">{doc.file_name || 'Untitled document'}</div>
+            {meta && <div className="truncate text-xs text-muted-foreground">{meta}</div>}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            title={doc.portal_visible ? 'Visible to client' : 'Hidden from client'}
+            className={cn('inline-flex', doc.portal_visible ? 'text-green-600' : 'text-zinc-300')}
+          >
+            {doc.portal_visible ? <Globe className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+          </span>
+          {doc.drive_link ? (
+            <a
+              href={doc.drive_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-blue-700 hover:bg-blue-50"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              View
+            </a>
+          ) : (
+            <span className="text-xs text-muted-foreground">No link</span>
+          )}
+        </div>
+      </li>
+    )
+  }
+
   return (
     <div className="rounded-lg border bg-white">
       <div className="flex items-center gap-2 px-4 py-3 border-b">
@@ -91,49 +138,23 @@ export function AccountDocumentsList({
         <span className="text-xs text-muted-foreground">{homeless.length}</span>
       </div>
 
-      <ul className="divide-y">
-        {homeless.map(doc => {
-          const meta = [
-            doc.document_type_name,
-            formatDate(doc.processed_at),
-            formatBytes(doc.file_size),
-          ].filter(Boolean).join(' · ')
-
-          return (
-            <li key={doc.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-              <div className="flex items-center gap-2 min-w-0">
-                <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
-                <div className="min-w-0">
-                  <div className="truncate text-zinc-900">{doc.file_name || 'Untitled document'}</div>
-                  {meta && <div className="truncate text-xs text-muted-foreground">{meta}</div>}
-                </div>
+      <div className="divide-y">
+        {groups.map((g) => (
+          <details key={g.key} open className="group">
+            <summary className="flex cursor-pointer select-none items-center gap-2 bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-800">
+              <FolderOpen className="h-4 w-4 text-amber-500" />
+              {g.title}
+              <span className="text-xs font-normal text-muted-foreground">{g.count}</span>
+            </summary>
+            {g.sections.map((sec) => (
+              <div key={sec.key}>
+                {sec.title && <div className="border-t bg-white px-6 py-1.5 text-xs font-medium text-zinc-500">{sec.title}</div>}
+                <ul className="divide-y">{sec.docs.map(renderRow)}</ul>
               </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <span
-                  title={doc.portal_visible ? 'Visible to client' : 'Hidden from client'}
-                  className={cn('inline-flex', doc.portal_visible ? 'text-green-600' : 'text-zinc-300')}
-                >
-                  {doc.portal_visible ? <Globe className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                </span>
-                {doc.drive_link ? (
-                  <a
-                    href={doc.drive_link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-blue-700 hover:bg-blue-50"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    View
-                  </a>
-                ) : (
-                  <span className="text-xs text-muted-foreground">No link</span>
-                )}
-              </div>
-            </li>
-          )
-        })}
-      </ul>
+            ))}
+          </details>
+        ))}
+      </div>
     </div>
   )
 }

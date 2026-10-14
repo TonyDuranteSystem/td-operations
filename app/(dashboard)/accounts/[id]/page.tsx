@@ -103,7 +103,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Documents
     supabase
       .from('documents')
-      .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size, portal_visible')
+      .select('id, file_name, document_type_name, category_name, category, confidence, drive_file_id, drive_link, status, processed_at, mime_type, file_size, portal_visible, tax_year')
       .eq('account_id', params.id)
       // an old Drive record the storage switch archived is kept for staff but not listed (dev job ad09ea91)
       .or('status.is.null,status.neq.archived')
