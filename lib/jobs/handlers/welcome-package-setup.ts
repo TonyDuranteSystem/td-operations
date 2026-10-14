@@ -450,34 +450,42 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   await updateJobProgress(job.id, result)
 
-  // ─── 7. FIND DRIVE DOCUMENTS (EIN + Articles) ───
-  if (account.drive_folder_id) {
-    try {
-      const { listFolder } = await import("@/lib/google-drive")
-      const folderResult = await listFolder(account.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
-      const folderContents = folderResult.files || []
-      const companyFolder = folderContents.find(f =>
-        f.name === "Company" && f.mimeType === "application/vnd.google-apps.folder"
-      )
+  // ─── 7. FIND THE EIN LETTER + ARTICLES ───
+  // CRM document records first (they point at the new storage for a company that switched). The Drive
+  // folder is a backup for such a company and is only a fallback for a company still in Drive.
+  try {
+    const { findWelcomeDocsFromRecords } = await import("@/lib/operations/welcome-docs")
+    const found = await findWelcomeDocsFromRecords(p.account_id)
+    let einFound = !!found.ein
+    let articlesFound = !!found.articles
+    if (found.ein) result.steps.push(step("ein_letter", "ok", `Found in CRM records: ${found.ein.pointer}`))
+    if (found.articles) result.steps.push(step("articles", "ok", `Found in CRM records: ${found.articles.pointer}`))
 
-      const searchFolderId = companyFolder?.id || account.drive_folder_id
-      const filesResult = await listFolder(searchFolderId) as { files?: { id: string; name: string }[] }
-      const files = filesResult.files || []
+    if ((!einFound || !articlesFound) && account.drive_folder_id) {
+      const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+      if ((await companyDocState(p.account_id)) === "drive") {
+        const { listFolder } = await import("@/lib/google-drive")
+        const folderResult = await listFolder(account.drive_folder_id) as { files?: { id: string; name: string; mimeType: string }[] }
+        const folderContents = folderResult.files || []
+        const companyFolder = folderContents.find(f =>
+          f.name === "Company" && f.mimeType === "application/vnd.google-apps.folder"
+        )
 
-      let einFound = false
-      let articlesFound = false
-      for (const f of files) {
-        const name = (f.name || "").toLowerCase()
-        if (name.includes("ein") && !einFound) { einFound = true; result.steps.push(step("ein_letter", "ok", `Found: ${f.id}`)) }
-        if (name.includes("articles") && !articlesFound) { articlesFound = true; result.steps.push(step("articles", "ok", `Found: ${f.id}`)) }
+        const searchFolderId = companyFolder?.id || account.drive_folder_id
+        const filesResult = await listFolder(searchFolderId) as { files?: { id: string; name: string }[] }
+        const files = filesResult.files || []
+
+        for (const f of files) {
+          const name = (f.name || "").toLowerCase()
+          if (name.includes("ein") && !einFound) { einFound = true; result.steps.push(step("ein_letter", "ok", `Found on Drive: ${f.id}`)) }
+          if (name.includes("articles") && !articlesFound) { articlesFound = true; result.steps.push(step("articles", "ok", `Found on Drive: ${f.id}`)) }
+        }
       }
-      if (!einFound) result.steps.push(step("ein_letter", "skipped", "Not found on Drive"))
-      if (!articlesFound) result.steps.push(step("articles", "skipped", "Not found on Drive"))
-    } catch {
-      result.steps.push(step("drive_search", "skipped", "Drive search failed (non-fatal)"))
     }
-  } else {
-    result.steps.push(step("drive_search", "skipped", "No drive_folder_id on account"))
+    if (!einFound) result.steps.push(step("ein_letter", "skipped", "Not found in the CRM records"))
+    if (!articlesFound) result.steps.push(step("articles", "skipped", "Not found in the CRM records"))
+  } catch {
+    result.steps.push(step("document_search", "skipped", "Document search failed (non-fatal)"))
   }
 
   // ─── 8. UPDATE ACCOUNT STATUS ───

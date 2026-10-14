@@ -181,7 +181,7 @@ _Regenerated 2026-10-14. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-10-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-12)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-13)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-14)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-09)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
@@ -195,15 +195,15 @@ _Regenerated 2026-10-14. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-12)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-12)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-10-14)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-10-12)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-12)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-09)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-12)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-12)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-14)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-09)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-12)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-12)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-14)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-08)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_

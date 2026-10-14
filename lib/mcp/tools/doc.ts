@@ -19,7 +19,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { classifyDocument, classifyByFilename } from "@/lib/classifier"
-import { getFileMetadata, listFolder } from "@/lib/google-drive"
+import { getFileMetadata, listFolder, driveParentIds } from "@/lib/google-drive"
+import { assertTargetsNotSwitched, lockedFolderIdsCached, companyDocState, SwitchedCompanyDriveWriteError } from "@/lib/crm-store/switched-drive-guard"
 import { extractTextFromFile } from "@/lib/mcp/tools/classify"
 import { STORED_PAGE_DELIMITER } from "@/lib/docai-windows"
 import { logAction } from "@/lib/mcp/action-log"
@@ -70,6 +71,29 @@ export interface DriveFileMeta {
   parents?: string[]
 }
 
+/** What staff read when a bulk tool is pointed at a company whose files live in the new storage. */
+export const IN_STORAGE_MESSAGE =
+  "This company's files are in the new CRM storage — the Google Drive folder is only a backup copy. Work with its documents from Storage; re-reading the Drive backup here would create duplicate records."
+
+/**
+ * Pure-ish guard: true when the Drive file/folder sits inside a company or person folder that lives in storage
+ * (or is being moved). Fails closed: if the check itself cannot run, the file is treated as protected.
+ */
+export async function isInSwitchedDriveFolder(driveId: string): Promise<boolean> {
+  try {
+    await assertTargetsNotSwitched([driveId], { lockedFolderIds: () => lockedFolderIdsCached(), parentsOf: driveParentIds })
+    return false
+  } catch (e) {
+    if (e instanceof SwitchedCompanyDriveWriteError) return true
+    throw e
+  }
+}
+
+/** True when this CRM company's documents live in storage (or are mid-move). */
+export async function accountIsInStorage(accountId: string): Promise<boolean> {
+  return (await companyDocState(accountId)) !== "drive"
+}
+
 /**
  * Process a single file: extract text -> classify -> upsert into documents table.
  */
@@ -88,6 +112,11 @@ export async function processFile(
   error?: string
 }> {
   try {
+    // 0. A company in storage: its Drive folder is a backup — never re-ingest it as new records.
+    if ((accountId && (await accountIsInStorage(accountId))) || (await isInSwitchedDriveFolder(fileId))) {
+      return { success: false, fileName: fileId, status: "refused", error: IN_STORAGE_MESSAGE }
+    }
+
     // 1. Get metadata
     const meta = (await getFileMetadata(fileId)) as DriveFileMeta
 
@@ -329,6 +358,9 @@ export function registerDocTools(server: McpServer) {
     async ({ folder_id, account_id, skip_existing }) => {
       try {
         const startTime = Date.now()
+        if ((account_id && (await accountIsInStorage(account_id))) || (await isInSwitchedDriveFolder(folder_id))) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
 
         // 1. List folder contents
         const result = (await listFolder(folder_id, 100)) as { files: DriveFileMeta[] }
@@ -450,6 +482,9 @@ export function registerDocTools(server: McpServer) {
     async ({ folder_id, account_id, skip_existing }) => {
       try {
         const startTime = Date.now()
+        if ((account_id && (await accountIsInStorage(account_id))) || (await isInSwitchedDriveFolder(folder_id))) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
 
         // 1. Recursively collect all files from client folder tree
         const allFiles = await collectFilesRecursive(folder_id, 3)
@@ -1138,6 +1173,10 @@ export function registerDocTools(server: McpServer) {
           }
         }
 
+        if (await accountIsInStorage(account.id)) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
+
         // 2. Recursively collect files
         const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
 
@@ -1500,6 +1539,12 @@ export function registerDocTools(server: McpServer) {
           }
 
           try {
+            // A company in storage is skipped: its Drive folder is only a backup.
+            if (await accountIsInStorage(acc.id)) {
+              lastProcessedId = acc.id
+              accResults.push(result)
+              continue
+            }
             // Collect files
             const allFiles = await collectFilesRecursive(acc.drive_folder_id!, 3)
             result.totalFiles = allFiles.length

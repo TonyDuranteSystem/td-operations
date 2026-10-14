@@ -35,7 +35,7 @@ Creates all missing pieces in one call:
 - Relay banking form (if not exists) — USD business account
 - Payset banking form (if not exists) — EUR IBAN
 
-Also finds the EIN letter and Articles of Organization on Google Drive.
+Also finds the EIN letter and Articles of Organization in the company's CRM document records (Drive is read only for a company still in Drive).
 
 Returns the full welcome email (template dac9ce5f, IT+EN bilingual) with all links filled in, ready for Antonio to review.
 
@@ -259,10 +259,17 @@ Prerequisites:
           steps.push({ step: "Payset form", status: paysetResult.record.created ? "created" : "existing", detail: `${paysetResult.record.token} (${paysetResult.record.status})` })
         }
 
-        // ─── 7. FIND DRIVE DOCUMENTS ───
-        let einFileId = ""
-        let articlesFileId = ""
-        if (account.drive_folder_id) {
+        // ─── 7. FIND THE EIN LETTER + ARTICLES ───
+        // CRM records first (storage pointer or Drive id); the Drive folder is read only for a company
+        // still in Drive — for a company in storage it is a backup and reading it makes duplicates.
+        const { findWelcomeDocsFromRecords } = await import("@/lib/operations/welcome-docs")
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const found = await findWelcomeDocsFromRecords(account_id)
+        let einFileId = found.ein?.pointer ?? ""
+        let articlesFileId = found.articles?.pointer ?? ""
+        const einFromRecords = !!einFileId
+        const articlesFromRecords = !!articlesFileId
+        if ((!einFileId || !articlesFileId) && account.drive_folder_id && (await companyDocState(account_id)) === "drive") {
           try {
             const { listFolder } = await import("@/lib/google-drive")
             // Search Company subfolder first
@@ -287,16 +294,16 @@ Prerequisites:
         }
 
         if (einFileId) {
-          steps.push({ step: "EIN letter", status: "existing", detail: `Drive file ID: ${einFileId}` })
-          await autoSaveDocument({ accountId: account_id, fileName: "EIN Letter (CP 575)", documentType: "EIN Letter", category: 1, driveFileId: einFileId })
+          steps.push({ step: "EIN letter", status: "existing", detail: einFromRecords ? "Found in the CRM records" : `Drive file ID: ${einFileId}` })
+          if (!einFromRecords) await autoSaveDocument({ accountId: account_id, fileName: "EIN Letter (CP 575)", documentType: "EIN Letter", category: 1, driveFileId: einFileId })
         } else {
-          steps.push({ step: "EIN letter", status: "skipped", detail: "Not found on Drive — attach manually" })
+          steps.push({ step: "EIN letter", status: "skipped", detail: "Not found in the CRM records — attach manually" })
         }
         if (articlesFileId) {
-          steps.push({ step: "Articles", status: "existing", detail: `Drive file ID: ${articlesFileId}` })
-          await autoSaveDocument({ accountId: account_id, fileName: "Articles of Organization", documentType: "Articles of Organization", category: 1, driveFileId: articlesFileId })
+          steps.push({ step: "Articles", status: "existing", detail: articlesFromRecords ? "Found in the CRM records" : `Drive file ID: ${articlesFileId}` })
+          if (!articlesFromRecords) await autoSaveDocument({ accountId: account_id, fileName: "Articles of Organization", documentType: "Articles of Organization", category: 1, driveFileId: articlesFileId })
         } else {
-          steps.push({ step: "Articles", status: "skipped", detail: "Not found on Drive — attach manually" })
+          steps.push({ step: "Articles", status: "skipped", detail: "Not found in the CRM records — attach manually" })
         }
 
         // ─── 8. GENERATE EMAIL ───
@@ -362,9 +369,9 @@ Prerequisites:
           relayUrl ? `Relay: ${relayUrl}?preview=td` : null,
           paysetUrl ? `Payset: ${paysetUrl}?preview=td` : null,
           ``,
-          `── Drive Attachments ──`,
-          einFileId ? `EIN letter: https://drive.google.com/file/d/${einFileId}/view` : "⚠️ EIN letter not found — attach manually",
-          articlesFileId ? `Articles: https://drive.google.com/file/d/${articlesFileId}/view` : "⚠️ Articles not found — attach manually",
+          `── Attachments ──`,
+          einFileId ? `EIN letter: found (file id ${einFileId})` : "⚠️ EIN letter not found — attach manually",
+          articlesFileId ? `Articles: found (file id ${articlesFileId})` : "⚠️ Articles not found — attach manually",
           ``,
           `── Email Draft ──`,
           `To: ${contact.email}`,

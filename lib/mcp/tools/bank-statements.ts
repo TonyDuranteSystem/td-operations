@@ -74,7 +74,7 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_process",
-    "Download bank statement PDFs/CSVs from a client's Drive '3. Tax' folder, parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: client must have bank statements uploaded to their Drive folder.",
+    "Download bank statement PDFs/CSVs from the company's CRM document records (a company still in Drive: its '3. Tax' folder), parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: client must have bank statements uploaded to their Drive folder.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
@@ -84,7 +84,11 @@ export function registerBankStatementTools(server: McpServer) {
     async ({ account_id, tax_year, reprocess, file_id }) => {
       try {
         const ctx = await getAccountContext(account_id)
-        if (!ctx.driveFolderId && !file_id) {
+        // A company whose files live in the new storage: list its statements from the CRM records.
+        // The Drive folder is only a backup copy for such a company (reading it would re-parse duplicates).
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = !file_id && (await companyDocState(account_id)) !== "drive"
+        if (!inStorage && !ctx.driveFolderId && !file_id) {
           return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder linked. Set drive_folder_id first." }] }
         }
 
@@ -98,6 +102,14 @@ export function registerBankStatementTools(server: McpServer) {
           const mimeType = opened.mimeType || "application/octet-stream"
           const fileName = opened.fileName || file_id
           filesToProcess = [{ id: file_id, name: fileName, mimeType }]
+        } else if (inStorage) {
+          const { findStatementRecords } = await import("@/lib/operations/bank-statement-files")
+          const pick = await findStatementRecords(account_id, tax_year)
+          filesToProcess = pick.files
+          if (filesToProcess.length === 0) {
+            const extra = pick.undated > 0 ? ` ${pick.undated} statement(s) have no year on record — name one with file_id.` : ""
+            return { content: [{ type: "text" as const, text: `No ${tax_year} bank statements found in this company's CRM records.${extra}` }] }
+          }
         } else {
           // Find Tax folder
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)
