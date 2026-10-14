@@ -343,9 +343,12 @@ export async function runGoLive(accountId: string, actorId: string | null, opts:
     }
     const stageRows = verdicts.filter((x) => x.action === "repoint").map((x) => x.rowId)
     if (stageRows.length) {
-      const { clientMayOpen } = await import("@/lib/portal/client-store-docs")
+      // only the STORED FILE is checked here (typed, not staff-only, not someone's personal file): whether the client is shown the workspace
+      // document at all is decided by its stage, and an internal document (an IRS fax confirmation …) is rightly not shown — that is not a defect
+      const { dropStoreRowsClientCannotOpen } = await import("@/lib/portal/client-store-docs")
       const nowRows = await selectIn<{ id: string; drive_file_id: string; file_name: string | null; portal_visible: boolean | null; service_delivery_id: string | null; flow_stage: string | null }>(stageRows, (part) => d.from("documents").select("id, drive_file_id, file_name, portal_visible, service_delivery_id, flow_stage").in("id", part).not("flow_stage", "is", null), "the workspace records to check")
-      for (const r of nowRows) if (!(await clientMayOpen(r))) problems.push(`"${r.file_name}": a workspace document the client sees by its stage could not be opened from storage`)
+      const openable = new Set((await dropStoreRowsClientCannotOpen(nowRows, { applyRowRule: false })).map((r) => r.id))
+      for (const r of nowRows) if (!openable.has(r.id)) problems.push(`"${r.file_name}": a workspace document's stored file is not open to clients`)
     }
     if (problems.length) throw new Error(`the check found differences: ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? ` (+${problems.length - 5} more)` : ""}`)
 
