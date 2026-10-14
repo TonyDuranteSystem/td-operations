@@ -228,6 +228,47 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
+    // 3-cutover-person. A contact-scoped ITIN flow for a person whose files live in the new storage — their own live storage,
+    //    or a company of theirs that has switched — is saved through the PERSON's storage, never Drive (Drive is refused for it,
+    //    which used to end in a server error and block the ITIN approval upload). Anyone else carries on exactly as before.
+    if (!routed && pilot.status !== 'saved' && !accountId && contactId && sd.service_type === 'ITIN') {
+      const { companyDocState, liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
+      const { data: links } = await supabaseAdmin
+        .from('account_contacts')
+        .select('account_id, is_primary')
+        .eq('contact_id', contactId)
+        .order('is_primary', { ascending: false })
+        .order('account_id', { ascending: true })
+      let viaAccountId: string | null = null
+      for (const l of links ?? []) {
+        const accId = (l as { account_id: string }).account_id
+        if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
+      }
+      if (viaAccountId || (await liveOwnerOfContact(contactId))) {
+        const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+        const { storeNameKey } = await import('@/lib/crm-store/rules')
+        const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+        try {
+          const r = await saveDocumentForContact({
+            contactId,
+            name: effectiveName,
+            bytes: buffer,
+            mimeType: fileMime,
+            documentType: null,
+            callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
+            viaAccountId,
+            contactName: (contactRow as { full_name?: string | null } | null)?.full_name ?? null,
+            portalVisible: isItinApprovalUpload,
+            row: { service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
+          })
+          if (r.route === 'store') routed = { pointer: r.pointer }
+        } catch (e) {
+          if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+          return NextResponse.json({ success: false, detail: `Could not save the file in the person's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
+        }
+      }
+    }
+
     // 3b. Decide where the canonical copy lives.
     //    Production, account-scoped SD: the account's Drive folder (400 if the
     //    account has none — staff must link one first).
