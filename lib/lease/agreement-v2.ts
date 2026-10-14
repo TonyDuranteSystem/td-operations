@@ -25,8 +25,9 @@ export const PROVIDER_NOTICE_EMAIL = 'support@tonydurante.us'
 /**
  * Photos of the premises (Exhibit A) — chosen by Antonio on 2026-10-13 from the photographer's delivery. The files live in the app's
  * own public/images/premises folder (same origin as the signing page, so the browser's signed-PDF capture can always draw them).
- * With NO photos the Exhibit is not printed and the text does not mention it. The last four are the photographer's staged
- * (furnished-layout) renderings, so their captions say "illustrative"; the others are real photographs.
+ * With NO photos the Exhibit is not printed and the text does not mention it. The last four are COMPUTER-GENERATED
+ * images (made with ChatGPT image generation — their embedded content credentials say so, checked 2026-10-14; not the photographer's
+ * work and not photographs), so their captions say "illustrative"; the others are real camera photographs.
  */
 export interface ExhibitPhoto { url: string; caption: string }
 export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
