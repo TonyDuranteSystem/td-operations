@@ -123,6 +123,23 @@ async function main() {
   check((docs ?? []).length === 3 && docs.every((d: { account_id: string }) => d.account_id === m.account_id), "their CRM records now carry the company", docs)
   check(((await db.from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person")).data ?? []).length === 1, "the person keeps their own storage (contract + passport)")
 
+  console.log("\n6. ITIN workspace — a person document, saved through the person's storage (needs the dev server on :3100)")
+  const { call, sessionCookie } = await import("./qa-http")
+  const itin = await createSD({ service_type: "ITIN", contact_id: contactId, account_id: null, service_name: `ITIN - ${name}` } as never)
+  const itinId = (itin as { id: string; stage?: string }).id
+  const itinStage = (await db.from("service_deliveries").select("stage, account_id").eq("id", itinId).single()).data
+  check(itinStage.account_id === null, "the ITIN case belongs to the person", itinStage)
+  const staff = await sessionCookie("staff")
+  const stPath = `crm-uploads/store-staging/zz-b18-${tag}-itin.pdf`
+  await db.storage.from("onboarding-uploads").upload(stPath, await pdf(["ITIN signed form"]), { contentType: "application/pdf", upsert: true })
+  const itinName = `ZZ B18 itin form ${tag}.pdf`
+  const up = await call(`/api/flows/${itinId}/upload-document`, { cookie: staff, json: { storage_path: stPath, file_name: itinName, mime_type: "application/pdf", flow_stage: itinStage.stage, auto_advance: false } })
+  check(up.status === 200, "the ITIN upload is accepted", `HTTP ${up.status} ${up.text.slice(0, 200)}`)
+  const { data: itinDoc } = await db.from("documents").select("drive_file_id, contact_id, account_id, portal_visible").eq("file_name", itinName).maybeSingle()
+  check(itinDoc && String(itinDoc.drive_file_id).startsWith("store:") && itinDoc.contact_id === contactId && itinDoc.account_id === null, "saved in the person's storage, on the person", itinDoc)
+  const { data: pf } = await db.from("store_files").select("owner_id").eq("id", String(itinDoc?.drive_file_id).replace("store:", "")).maybeSingle()
+  check(pf?.owner_id === pOwner.id, "inside the person's own storage (not the company's)", pf)
+
   console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} FAILED`)
   process.exit(failures === 0 ? 0 : 1)
 }
