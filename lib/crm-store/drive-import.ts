@@ -346,7 +346,7 @@ interface Ctx {
 type TypeInfo = Ctx["types"] extends Map<string, infer V> ? V : never
 
 /** The document types by slug / type number / name, plus the labels answered in the type questions. */
-async function loadTypeMap(types: unknown[]): Promise<Ctx["types"]> {
+export async function loadTypeMap(types: unknown[]): Promise<Ctx["types"]> {
   const typeMap = new Map<string, TypeInfo>()
   for (const t of types as { slug: string; display_name: string; metadata: Record<string, unknown> | null }[]) {
     const m = t.metadata ?? {}
@@ -379,7 +379,8 @@ export async function continueDriveImport(runId: string, actorId: string | null,
   if (run.status !== "moving") return runView(runId)
   {
     const { data: gl } = await db().from("store_import_runs").select("report").eq("id", runId).maybeSingle()
-    if ((gl?.report as { goLive?: boolean } | null)?.goLive === true) return runView(runId) // closed by the go-live code only
+    const rep0 = gl?.report as { goLive?: boolean; catchUp?: boolean } | null
+    if (rep0?.goLive === true || rep0?.catchUp === true) return runView(runId) // closed by the go-live / catch-up code only
   }
   // a plan-driven build (hand-approved placement per file) is continued by its own module
   {
@@ -779,9 +780,10 @@ export async function finishRun(runId: string, ownerId: string, mode: ImportMode
 
 /** Rebuild a finished move's report from its ledger (after Set type / Re-check changed what it lists). */
 export async function refreshRunReport(runId: string): Promise<void> {
-  const { data: run, error } = await db().from("store_import_runs").select("status").eq("id", runId).maybeSingle()
+  const { data: run, error } = await db().from("store_import_runs").select("status, report").eq("id", runId).maybeSingle()
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run || !["done", "incomplete"].includes(run.status)) return
+  if ((run.report as { catchUp?: boolean } | null)?.catchUp === true) return // a catch-up keeps its own report
   const { data: items, error: iErr } = await db().from("store_import_items").select("*").eq("run_id", runId)
   if (iErr) throw new Error(`Could not read the move's files (${iErr.message}).`)
   const report = buildReport((items ?? []) as ImportItem[], STILL_READ_DRIVE)
@@ -802,7 +804,7 @@ export async function runView(runId: string): Promise<RunView> {
 
 /** The latest move of a company (for its page), or null. */
 export async function latestRunFor(accountId: string, mode?: ImportMode): Promise<RunView | null> {
-  let q = db().from("store_import_runs").select("id").eq("account_id", accountId)
+  let q = db().from("store_import_runs").select("id").eq("account_id", accountId).or("report->>catchUp.is.null,report->>catchUp.neq.true")
   if (mode) q = q.eq("mode", mode)
   const { data } = await q.order("started_at", { ascending: false }).limit(1).maybeSingle()
   return data?.id ? runView(data.id as string) : null
@@ -811,7 +813,7 @@ export async function latestRunFor(accountId: string, mode?: ImportMode): Promis
 /** When this company was moved to the new storage (its latest move that was not undone), else null. */
 export async function movedAt(accountId: string): Promise<{ status: string; finishedAt: string | null; startedAt: string } | null> {
   const { data, error } = await db().from("store_import_runs").select("status, finished_at, started_at").eq("account_id", accountId).eq("mode", "move")
-    .in("status", ["moving", "done", "incomplete", "undoing"]).order("started_at", { ascending: false }).limit(1).maybeSingle()
+    .or("report->>catchUp.is.null,report->>catchUp.neq.true").in("status", ["moving", "done", "incomplete", "undoing"]).order("started_at", { ascending: false }).limit(1).maybeSingle()
   if (error || !data) return null
   return { status: data.status, finishedAt: data.finished_at, startedAt: data.started_at }
 }
@@ -826,6 +828,7 @@ export async function undoDriveImport(runId: string, actorId: string | null, bud
   const { data: run, error } = await db().from("store_import_runs").select("id, status, owner_id, report").eq("id", runId).maybeSingle()
   if (error) throw new Error(`Could not read the move (${error.message}).`)
   if (!run) throw new Error("Move not found.")
+  if ((run.report as { catchUp?: boolean } | null)?.catchUp === true) throw new Error("That is a catch-up, not the company's move — it is undone from the catch-up, which never switches the company back.")
   if (run.status === "rolled_back") return runView(runId)
   const earlier = run.status === "undoing" && Array.isArray((run.report as { problems?: unknown })?.problems) ? (run.report as { problems: string[] }).problems : []
   if (run.status === "scanning") throw new Error("Wait for the scan to finish, then undo.")
@@ -902,9 +905,10 @@ export async function undoDriveImport(runId: string, actorId: string | null, bud
  * rules as by hand (a question it needs — whose passport? — leaves it listed for staff).
  */
 export async function recheckRunTypes(runId: string, actorId: string | null): Promise<{ typed: number; needAnswer: number; stillUnknown: number; failed: number }> {
-  const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status, account_id").eq("id", runId).maybeSingle()
+  const { data: run, error: rErr } = await db().from("store_import_runs").select("id, status, account_id, report").eq("id", runId).maybeSingle()
   if (rErr) throw new Error(`Could not read the move (${rErr.message}).`)
   if (!run || !["done", "incomplete"].includes(run.status)) throw new Error("Re-check works on a finished move.")
+  if ((run.report as { catchUp?: boolean } | null)?.catchUp === true) throw new Error("That is a catch-up, not the company's move.")
   const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id").eq("account_id", run.account_id)
   if (lErr) throw new Error(`Could not read the company's people (${lErr.message}).`)
   const memberIds = ((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)
