@@ -191,7 +191,7 @@ _Regenerated 2026-10-14. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-10-05)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-10-13)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
-- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-13)_
+- [documents.md](documents.md) — Documents & Storage _(verified 2026-10-14)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-10-12)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-09-26)_
