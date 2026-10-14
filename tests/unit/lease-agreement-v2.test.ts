@@ -106,7 +106,7 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     // Antonio's order (2026-10-13): sign, two aerials, building front, entrance, then the four staged views, and the kitchenette last
     expect(doc.exhibitPhotos.map(p => p.url.split('/').pop())).toEqual([
       'premises-01-center-sign.jpg', 'premises-02-area-aerial.jpg', 'premises-03-building-aerial.jpg', 'premises-04-building-front.jpg', 'premises-05-entrance.jpg',
-      'premises-06-office-area.jpg', 'premises-07-office-area-2.jpg', 'premises-08-private-desk.jpg', 'premises-09-meeting-room.jpg', 'premises-10-kitchenette.jpg',
+      'premises-06-office-area.jpg', 'premises-07-office-area-2.jpg', 'premises-08-office-desks.jpg', 'premises-09-meeting-room.jpg', 'premises-10-kitchenette.jpg',
     ])
     expect(doc.exhibitPhotos.slice(0, 5).some(p => /illustrative/i.test(p.caption))).toBe(false)
     expect(/illustrative/i.test(doc.exhibitPhotos[9].caption)).toBe(false)

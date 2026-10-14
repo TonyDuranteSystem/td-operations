@@ -37,7 +37,7 @@ export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
   { url: '/images/premises/premises-05-entrance.jpg', caption: 'The entrance to Tony Durante LLC' },
   { url: '/images/premises/premises-06-office-area.jpg', caption: 'The office area (illustrative: furnished layout)' },
   { url: '/images/premises/premises-07-office-area-2.jpg', caption: 'The office area (illustrative: furnished layout)' },
-  { url: '/images/premises/premises-08-private-desk.jpg', caption: 'A desk in the office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-08-office-desks.jpg', caption: 'Desks in the office area (illustrative: furnished layout)' },
   { url: '/images/premises/premises-09-meeting-room.jpg', caption: 'The meeting room (illustrative: furnished layout)' },
   { url: '/images/premises/premises-10-kitchenette.jpg', caption: 'The kitchenette' },
 ]
