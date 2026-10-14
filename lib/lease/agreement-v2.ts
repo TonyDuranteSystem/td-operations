@@ -19,9 +19,25 @@ export const AGREEMENT_V2_VERSION = 2
 export const PROVIDER_ADDRESS_V2 = '10225 Ulmerton Rd 3D, Largo, FL 33771'
 export const PROVIDER_NOTICE_EMAIL = 'support@tonydurante.us'
 
-/** Photos of the premises (Exhibit A). Empty until the photographer delivers — with no photos the Exhibit is not printed at all. */
+/**
+ * Photos of the premises (Exhibit A) — chosen by Antonio on 2026-10-13 from the photographer's delivery. The files live in the app's
+ * own public/images/premises folder (same origin as the signing page, so the browser's signed-PDF capture can always draw them).
+ * With NO photos the Exhibit is not printed and the text does not mention it. The last four are the photographer's staged
+ * (furnished-layout) renderings, so their captions say "illustrative"; the others are real photographs.
+ */
 export interface ExhibitPhoto { url: string; caption: string }
-export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = []
+export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
+  { url: '/images/premises/premises-01-building-aerial.jpg', caption: 'The building and its parking, seen from above' },
+  { url: '/images/premises/premises-02-area-aerial.jpg', caption: 'The area around the building (the building is marked by the red arrow)' },
+  { url: '/images/premises/premises-03-center-sign.jpg', caption: 'The Sugar Creek Professional Office Center sign at the entrance' },
+  { url: '/images/premises/premises-04-building-front.jpg', caption: 'The front of the building and the tenant sign' },
+  { url: '/images/premises/premises-05-entrance.jpg', caption: 'The entrance to Tony Durante LLC' },
+  { url: '/images/premises/premises-06-kitchenette.jpg', caption: 'The kitchenette' },
+  { url: '/images/premises/premises-07-meeting-room.jpg', caption: 'The meeting room (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-08-office-area.jpg', caption: 'The office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-09-office-area-2.jpg', caption: 'The office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-10-private-desk.jpg', caption: 'A desk in the office area (illustrative: furnished layout)' },
+]
 
 export interface AgreementV2Input {
   providerName: string

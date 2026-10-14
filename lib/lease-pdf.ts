@@ -16,7 +16,7 @@
  */
 
 import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib'
-import { buildAgreementV2, longDate } from '@/lib/lease/agreement-v2'
+import { buildAgreementV2, longDate, type ExhibitPhoto } from '@/lib/lease/agreement-v2'
 import { embedUnicodeFonts } from '@/lib/pdf/unicode-fonts'
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -70,6 +70,7 @@ export interface LeaseData {
   // Template version: 1 = the original Office Lease Agreement (default), 2 = Office Lease and Services Agreement (lib/lease/agreement-v2.ts)
   templateVersion?: number
   operatingAddress?: string | null // v2: the client's Operating Address typed at signing
+  exhibitPhotos?: ExhibitPhoto[]   // v2: Exhibit A photos (default: the premises photos in agreement-v2.ts; [] = none)
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -793,34 +794,37 @@ export function printable(text: string): string {
 }
 
 // ─── The logo banner ─────────────────────────────────────────────────────────────────────────────────────────────────
-let logoBytesCache: Uint8Array | null = null
+const publicImageCache = new Map<string, Uint8Array>()
 
 /**
- * public/images/logo.jpg (the same picture the signing page loads as its logo). Same loading pattern as the fonts
+ * A picture from the app's public folder ("/images/logo.jpg", "/images/premises/…"). Same loading pattern as the fonts
  * (lib/pdf/unicode-fonts.ts): the local file first, then the app's own static-asset URL (on Vercel public/ is served by the CDN
- * but is not always inside the function bundle). A logo that cannot be loaded never stops the agreement from being made.
+ * but is not always inside the function bundle). A picture that cannot be loaded never stops the agreement from being made.
  */
-async function loadLogoBytes(): Promise<Uint8Array | null> {
-  if (logoBytesCache) return logoBytesCache
+async function loadPublicImage(url: string): Promise<Uint8Array | null> {
+  const cached = publicImageCache.get(url)
+  if (cached) return cached
   try {
-    const localPath = join(process.cwd(), 'public', 'images', 'logo.jpg')
+    const localPath = join(process.cwd(), 'public', ...url.split('/').filter(Boolean))
+    let bytes: Uint8Array
     if (existsSync(localPath)) {
-      logoBytesCache = new Uint8Array(await readFile(localPath))
+      bytes = new Uint8Array(await readFile(localPath))
     } else {
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.tonydurante.us'
-      const res = await fetch(`${baseUrl}/images/logo.jpg`)
-      if (!res.ok) throw new Error(`logo ${res.status}`)
-      logoBytesCache = new Uint8Array(await res.arrayBuffer())
+      const res = await fetch(`${baseUrl}${url}`)
+      if (!res.ok) throw new Error(`${url} ${res.status}`)
+      bytes = new Uint8Array(await res.arrayBuffer())
     }
+    publicImageCache.set(url, bytes)
+    return bytes
   } catch (e) {
-    console.error('[lease-pdf] logo could not be loaded — printing without it:', e instanceof Error ? e.message : e)
+    console.error('[lease-pdf] picture could not be loaded — printing without it:', e instanceof Error ? e.message : e)
     return null
   }
-  return logoBytesCache
 }
 
 async function drawLogoBanner(doc: PDFDocument, pw: PageWriter): Promise<void> {
-  const bytes = await loadLogoBytes()
+  const bytes = await loadPublicImage('/images/logo.jpg')
   if (!bytes) return
   try {
     const img = await doc.embedJpg(bytes)
@@ -848,6 +852,7 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
     clientRepTitle: data.tenantTitle ?? null,
     suiteNumber: data.suiteNumber,
     operatingAddress: data.operatingAddress ?? null,
+    exhibitPhotos: data.exhibitPhotos,
   })
 
   const doc = await PDFDocument.create()
@@ -948,8 +953,31 @@ async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ byt
   col(rightX, 'CLIENT', data.tenantCompany, data.tenantContactName, tenantTitle)
   pw.y = yEnd - 20
 
-  // Exhibit A — only when photos exist (none until the photographer delivers). Photos are not embedded server-side:
-  // the signed copy a client downloads is the browser capture of the signing page, which includes them.
+  // Exhibit A — the photographs of the premises, on their own pages after the signature block (two per page). The browser's signed
+  // copy is a capture of the signing page, which shows the same photos; this keeps a server-made copy equal to it.
+  if (agreement.exhibitPhotos.length > 0) {
+    pw.newPage()
+    pw.title('EXHIBIT A — THE PREMISES', 14)
+    pw.rule()
+    pw.space(6)
+    for (const photo of agreement.exhibitPhotos) {
+      const bytes = await loadPublicImage(photo.url)
+      if (!bytes) continue
+      try {
+        const img = await doc.embedJpg(bytes)
+        const size = img.scaleToFit(pw.contentWidth, 285)
+        pw.checkSpace(size.height + 34)
+        pw.page.drawImage(img, { x: (pw.pageWidth - size.width) / 2, y: pw.y - size.height, width: size.width, height: size.height })
+        pw.y -= size.height + 12
+        const cap = printable(photo.caption)
+        const cw = pw.font.widthOfTextAtSize(cap, 9)
+        pw.page.drawText(cap, { x: (pw.pageWidth - cw) / 2, y: pw.y, size: 9, font: pw.font, color: C.medium })
+        pw.y -= 24
+      } catch (e) {
+        console.error('[lease-pdf] a premises photo could not be drawn — skipped:', e instanceof Error ? e.message : e)
+      }
+    }
+  }
   pw.drawPageFooter()
   return { bytes: await doc.save(), pages: pw.pageNum }
 }

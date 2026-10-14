@@ -75,10 +75,41 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
   })
 
   it('Exhibit A is only mentioned when photos exist', () => {
-    expect(allText(buildAgreementV2(INPUT))).not.toContain('Exhibit A')
+    expect(allText(buildAgreementV2({ ...INPUT, exhibitPhotos: [] }))).not.toContain('Exhibit A')
     const withPhotos = buildAgreementV2({ ...INPUT, exhibitPhotos: [{ url: 'https://x/y.jpg', caption: 'Lobby' }] })
     expect(allText(withPhotos)).toContain('Exhibit A')
     expect(withPhotos.exhibitPhotos).toHaveLength(1)
+  })
+
+  it('Exhibit A carries the ten premises photos Antonio chose; the files exist; the staged ones say "illustrative"', async () => {
+    const doc = buildAgreementV2(INPUT)
+    expect(doc.exhibitPhotos).toHaveLength(10)
+    expect(allText(doc)).toContain('including the office areas shown in Exhibit A')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    for (const p of doc.exhibitPhotos) {
+      const file = `${process.cwd()}/public${p.url}`
+      expect(fs.existsSync(file), file).toBe(true)
+      expect(fs.readFileSync(file).subarray(0, 2).toString('hex')).toBe('ffd8') // a JPEG
+      expect(p.caption.length).toBeGreaterThan(5)
+    }
+    expect(doc.exhibitPhotos.filter(p => /illustrative/i.test(p.caption))).toHaveLength(4)
+    expect(doc.exhibitPhotos.slice(0, 6).some(p => /illustrative/i.test(p.caption))).toBe(false)
+  })
+
+  it('the server PDF prints Exhibit A (the photos, two per page) after the signature block, and nothing when there are none', async () => {
+    const base = { tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2 }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string; numpages: number }>
+    const withEx = await parse(Buffer.from(await generateLeasePDF(base)))
+    expect(withEx.text).toContain('EXHIBIT A')
+    expect(withEx.text).toContain('The Sugar Creek Professional Office Center sign')
+    expect(withEx.numpages).toBeGreaterThanOrEqual(8) // 4 pages of agreement + 5 of photos
+    const raw = Buffer.from(await generateLeasePDF(base)).toString('latin1')
+    expect((raw.match(/\/DCTDecode/g) ?? []).length).toBeGreaterThanOrEqual(11) // the logo + ten photos
+    const without = await parse(Buffer.from(await generateLeasePDF({ ...base, exhibitPhotos: [] })))
+    expect(without.text).not.toContain('EXHIBIT A')
+    expect(without.numpages).toBe(4)
   })
 
   it('prints no client email (the browser never receives it) — only Provider\'s own notice address', () => {
@@ -113,7 +144,7 @@ describe('server-issued dates', () => {
   })
 
   it('a normal agreement is four pages and the signature block shares the last page with the final clauses', async () => {
-    const bytes = await generateLeasePDF({ tenantCompany: 'Example Holdings LLC', tenantContactName: 'Maria Rossi', tenantTitle: 'Manager', tenantState: 'Wyoming', tenantEin: '12-3456789', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, operatingAddress: 'Via Roma 1, 20121 Milano, Italy' })
+    const bytes = await generateLeasePDF({ tenantCompany: 'Example Holdings LLC', tenantContactName: 'Maria Rossi', tenantTitle: 'Manager', tenantState: 'Wyoming', tenantEin: '12-3456789', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, operatingAddress: 'Via Roma 1, 20121 Milano, Italy', exhibitPhotos: [] })
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string; numpages: number }>
     const out = await parse(Buffer.from(bytes))
