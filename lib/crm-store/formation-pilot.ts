@@ -167,7 +167,7 @@ export interface PilotSave {
 export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
   const folderId = p.folderId ?? (await folderOfKind(p.ownerId, p.folderKind))
   const save = (callerKey: string) => saveBytesToStore({
-    ownerId: p.ownerId, folderId, name: p.name, mimeType: p.mimeType, bytes: p.bytes,
+    ownerId: p.ownerId, folderId, name: storeSafeFileName(p.name), mimeType: p.mimeType, bytes: p.bytes,
     callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
     periodYear: p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
     links: p.links, subjects: p.subjects,
@@ -250,6 +250,20 @@ export async function upsertStoreDocumentRow(fileId: string, row: DocumentsRow, 
     throw new Error(`store pilot: could not list the document — ${error.message}`)
   }
   return { id, inserted: true }
+}
+
+/**
+ * A FILE name the store accepts (1–255 chars, no "/", "\\" or control characters). A name the store would refuse used to make the save fail and
+ * the file fall back to the old bucket (found by the browser QA: a slash in a name, a 260-character name). Too long → shortened in the
+ * middle, the extension kept. The CRM record lists the stored name.
+ */
+export function storeSafeFileName(name: string): string {
+  // eslint-disable-next-line no-control-regex -- control characters are exactly what the store refuses
+  const cleaned = name.replace(/[\\/\u0000-\u001f\u007f]/g, "-").replace(/\s+/g, " ").trim()
+  if (cleaned.length <= 255) return cleaned || "file"
+  const dot = cleaned.lastIndexOf(".")
+  const ext = dot > 0 && cleaned.length - dot <= 12 ? cleaned.slice(dot) : ""
+  return cleaned.slice(0, 255 - ext.length).trimEnd() + ext
 }
 
 /** A folder name the store accepts (no "/", "\\" or control characters, 1–255 chars); the company's real

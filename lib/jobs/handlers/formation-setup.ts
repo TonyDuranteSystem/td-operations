@@ -344,15 +344,19 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   // the new store: the passport goes to the buyer's personal storage (read by OCR from its bytes).
   // Drive is skipped ONLY when that worked; any failure runs today's Drive step below unchanged.
   let pilotSkipsDrive = false
-  if (p.contact_id && decision.action === "use_existing" && decision.deliveryId) {
+  // A brand-new client whose formation case is made by THIS run (no case yet): the passport still goes to their own storage —
+  // otherwise it would be saved nowhere (found by the browser QA).
+  const newClientNoCase = !!p.contact_id && decision.action === "create" && !!(await import("@/lib/crm-store/formation-pilot")).newClientsLive()
+    && (await (await import("@/lib/crm-store/formation-pilot")).contactIsNewClient(p.contact_id))
+  if (p.contact_id && ((decision.action === "use_existing" && decision.deliveryId) || newClientNoCase)) {
     try {
       const pilot = await import("@/lib/crm-store/formation-pilot")
-      const { data: pilotSd } = !pilot.formationStoreAllowed() ? { data: null } : await supabaseAdmin
+      const { data: pilotSd } = !decision.deliveryId || !pilot.formationStoreAllowed() ? { data: null } : await supabaseAdmin
         .from("service_deliveries")
         .select("id, contact_id, account_id, service_type")
         .eq("id", decision.deliveryId)
         .maybeSingle()
-      const owner = pilotSd
+      const owner = newClientNoCase ? ({ id: "person-only", kind: "formation" } as const) : pilotSd
         ? await pilot.ensureFormationOwner(
             {
               id: String(pilotSd.id),
@@ -383,7 +387,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
               fileName: cleanPath.split("/").pop() || "passport.pdf",
               bytes: Buffer.from(content),
               mimeType,
-              buyerCaseId: decision.deliveryId,
+              buyerCaseId: decision.deliveryId ?? null,
               row: {
                 document_type_name: "Passport", category: 2, category_name: "Contacts",
                 contact_id: p.contact_id, account_id: accountId, portal_visible: true,

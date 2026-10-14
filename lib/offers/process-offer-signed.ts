@@ -551,7 +551,8 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
             name: `Contract - ${offer.client_name} (Signed).pdf`,
             bytes: fileData,
             mimeType: "application/pdf",
-            documentType: null,
+            // typed (generic) so staff can show it to the client later on request — an untyped file is closed to clients — but still hidden now
+            documentType: "other_document",
             callerKey: `offer-signed:${offer.id}`,
             row: { document_type_name: "Signed Contract", category: 5, status: "classified" },
           })
