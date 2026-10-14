@@ -44,6 +44,8 @@ interface LeaseAgreement {
   tenant_title: string | null
   template_version: number
   operating_address: string | null
+  /** The signer's address in the CRM (lines joined by "\n"); shown read-only in Section 1.1 — null means the client types it. */
+  operating_address_crm?: string | null
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -193,7 +195,7 @@ export default function LeasePageWithCode() {
       alert('Admin preview cannot sign a lease. Open it as the client to do that.')
       return
     }
-    if (lease.template_version === 2 && operatingAddress.trim().length < 5) {
+    if (lease.template_version === 2 && !lease.operating_address_crm && operatingAddress.trim().length < 5) {
       alert('Please enter your Operating Address (where your business is run day to day) before signing.')
       return
     }
@@ -267,7 +269,7 @@ export default function LeasePageWithCode() {
       const signRes = await fetch(`/api/lease/${token}/sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? operatingAddress.trim() : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined, suite_number: lease.template_version === 2 ? lease.suite_number : undefined, tenant_company: lease.template_version === 2 ? lease.tenant_company : undefined, tenant_contact_name: lease.template_version === 2 ? lease.tenant_contact_name : undefined, tenant_title: lease.template_version === 2 ? (lease.tenant_title ?? '') : undefined }),
+        body: JSON.stringify({ code, pdf_storage_path: pdfPath, operating_address: lease.template_version === 2 ? (lease.operating_address_crm ?? operatingAddress.trim()) : undefined, signing_date: lease.template_version === 2 ? serverToday : undefined, suite_number: lease.template_version === 2 ? lease.suite_number : undefined, tenant_company: lease.template_version === 2 ? lease.tenant_company : undefined, tenant_contact_name: lease.template_version === 2 ? lease.tenant_contact_name : undefined, tenant_title: lease.template_version === 2 ? (lease.tenant_title ?? '') : undefined }),
       })
       if (!signRes.ok) {
         const d = await signRes.json().catch(() => ({}))
@@ -464,7 +466,7 @@ export default function LeasePageWithCode() {
         clientRepName: lease.tenant_contact_name,
         clientRepTitle: lease.tenant_title,
         suiteNumber: lease.suite_number,
-        operatingAddress: signed ? lease.operating_address : (operatingAddress.trim() || null),
+        operatingAddress: signed ? lease.operating_address : (lease.operating_address_crm ?? (operatingAddress.trim() || null)),
       })
     : null
   const v1Date = signed && lease.signed_at ? new Date(lease.signed_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : today()
@@ -647,7 +649,7 @@ export default function LeasePageWithCode() {
           {isV2 ? 'IN WITNESS WHEREOF, the parties have signed this Agreement on the dates written below.' : 'IN WITNESS WHEREOF, the Parties have executed this Agreement as of the Effective Date written above.'}
         </p>
 
-        {isV2 && !signed && (
+        {isV2 && !signed && !lease.operating_address_crm && (
           <div id="lease-operating-address-box" style={{ margin: '0 0 24px', padding: '16px 20px', background: '#f4f8fd', border: '1px solid #c9dcf2', borderRadius: 6 }}>
             <label htmlFor="lease-operating-address" style={{ display: 'block', fontWeight: 700, fontSize: 14, marginBottom: 6 }}>
               Your Operating Address <span style={{ color: '#c00' }}>*</span>

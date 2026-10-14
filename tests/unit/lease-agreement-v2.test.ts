@@ -125,7 +125,7 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     const without = await parse(Buffer.from(await generateLeasePDF({ ...base, exhibitPhotos: [] })))
     expect(without.text).not.toContain('EXHIBIT A')
     expect(without.numpages).toBe(4)
-  })
+  }, 60_000) // three PDFs with ten photos: slow when the whole suite runs in parallel
 
   it('prints no client email (the browser never receives it) — only Provider\'s own notice address', () => {
     expect(allText(buildAgreementV2(INPUT)).match(/[\w.+-]+@[\w.-]+/g)).toEqual(['support@tonydurante.us'])

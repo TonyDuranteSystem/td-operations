@@ -120,12 +120,20 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'para', label: 'E.', text: 'The Premises described below are Provider\'s own working office. Their use is not offered to the public and is available only to clients who have an annual service agreement with Provider for professional services.' })
 
   b.push({ t: 'heading', text: '1. Client\'s Operating Address and U.S. Office' })
-  b.push({
-    t: 'para', label: '1.1',
-    text: input.operatingAddress
-      ? `Client's day-to-day business operations are run from ${input.operatingAddress} (the "Operating Address"). Client will tell Provider in writing if it changes.`
-      : 'Client\'s day-to-day business operations are run from the address Client enters when signing (the "Operating Address"). Client will tell Provider in writing if it changes.',
-  })
+  // The Operating Address: from the CRM contact (several lines -> an address block, like Section 1.2); a one-line value typed by the
+  // client when the CRM has none stays an inline sentence; nothing yet -> "the address Client enters when signing".
+  const operatingLines = (input.operatingAddress ?? '').split('\n').map(l => l.trim()).filter(Boolean)
+  if (operatingLines.length > 1) {
+    b.push({ t: 'para', label: '1.1', text: 'Client\'s day-to-day business operations are run from the address below (the "Operating Address"). Client will tell Provider in writing if it changes.' })
+    b.push({ t: 'address', lines: [client, ...operatingLines] })
+  } else {
+    b.push({
+      t: 'para', label: '1.1',
+      text: operatingLines.length === 1
+        ? `Client's day-to-day business operations are run from ${operatingLines[0]} (the "Operating Address"). Client will tell Provider in writing if it changes.`
+        : 'Client\'s day-to-day business operations are run from the address Client enters when signing (the "Operating Address"). Client will tell Provider in writing if it changes.',
+    })
+  }
   b.push({ t: 'para', label: '1.2', text: 'The Premises described in Section 2 are Client\'s United States office. Client\'s official address, which it uses for its United States filings, is:' })
   b.push({ t: 'address', lines: [client, ...a.official] })
   b.push({ t: 'para', text: 'Client\'s mailing address, for the mail and packages Provider handles under Section 3, is:' })
