@@ -840,7 +840,7 @@ async function drawLogoBanner(doc: PDFDocument, pw: PageWriter): Promise<void> {
 // Prints the SAME blocks the signing page shows (lib/lease/agreement-v2.ts) — one text, three renderings.
 async function renderLeaseV2(data: LeaseData, totalPages: number): Promise<{ bytes: Uint8Array; pages: number }> {
   const landlordName = data.landlordName ?? 'Tony Durante LLC'
-  const landlordSigner = data.landlordSigner ?? 'Antonio Durante'
+  const landlordSigner = data.landlordSigner ?? 'Antonio Noel Durante'
   const landlordTitle = data.landlordTitle ?? 'Managing Member'
   const tenantTitle = data.tenantTitle ?? 'Manager'
   const agreement = buildAgreementV2({

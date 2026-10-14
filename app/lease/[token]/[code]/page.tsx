@@ -675,7 +675,7 @@ export default function LeasePageWithCode() {
             <div style={{ marginBottom: 8 }}>
               <p style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{isV2 ? 'Provider Signature:' : 'Landlord Signature:'}</p>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/antonio-signature.svg" alt="Antonio Durante signature" style={{ height: 50, opacity: 0.9 }} />
+              <img src="/images/antonio-signature.svg" alt="Antonio Noel Durante signature" style={{ height: 50, opacity: 0.9 }} />
             </div>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Print Name: <strong style={{ color: '#222' }}>{lease.landlord_signer}</strong></p>
             <p style={{ fontSize: 13, color: '#666', marginBottom: 2 }}>Title: {lease.landlord_title}</p>

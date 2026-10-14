@@ -34,7 +34,7 @@ import {
   officialAddressLine,
   syncPhysicalAddressToSuite,
 } from "@/lib/operations/suite"
-import { endOfYearIso, termMonthsThroughYearEnd, newYorkToday } from "@/lib/lease/agreement-v2"
+import { endOfYearIso, termMonthsThroughYearEnd, newYorkToday, LEASE_PROVIDER_SIGNER } from "@/lib/lease/agreement-v2"
 
 // Kept for existing importers — the canonical home is lib/operations/suite.ts.
 export { normalizeSuiteNumber, suiteNumericPart } from "@/lib/operations/suite"
@@ -292,6 +292,8 @@ export async function createLease(
         tenant_email: contact.email || null,
         tenant_title: params.tenant_title ?? 'Manager',
         landlord_address: officialAddressLine(),
+        // the Provider's signer, written explicitly (not left to the column default) — Antonio's full legal name
+        landlord_signer: LEASE_PROVIDER_SIGNER,
         premises_address: "10225 Ulmerton Rd, Largo, FL 33771",
         suite_number: suiteNumber,
         square_feet: params.square_feet ?? 120,

@@ -15,6 +15,9 @@ import { companyOfficialRow, companyMailingRow, formatAddressString, pmbNumberFr
 export const AGREEMENT_V2_TITLE = 'OFFICE LEASE AND SERVICES AGREEMENT'
 export const AGREEMENT_V2_VERSION = 2
 
+/** The Provider's signer as printed in the agreement (Antonio's full legal name, 2026-10-13). */
+export const LEASE_PROVIDER_SIGNER = 'Antonio Noel Durante'
+
 /** Provider's address in the heading: the official address, one line. */
 export const PROVIDER_ADDRESS_V2 = '10225 Ulmerton Rd 3D, Largo, FL 33771'
 export const PROVIDER_NOTICE_EMAIL = 'support@tonydurante.us'
@@ -110,7 +113,7 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'party', role: 'CLIENT', lines: [`${client}, ${article(input.clientState)} ${entityWord(client)}${ein}, address of record as stated in Section 1.2 ("Client"), represented by ${rep}.`] })
 
   b.push({ t: 'heading', text: 'Background' })
-  b.push({ t: 'para', label: 'A.', text: 'Provider is a consulting firm. Its principal, Antonio Durante, is an IRS Certified Acceptance Agent, a tax return preparer, a notary public and a business consultant.' })
+  b.push({ t: 'para', label: 'A.', text: 'Provider is a consulting firm. Its principal, Antonio Noel Durante, is an IRS Certified Acceptance Agent, a tax return preparer, a notary public and a business consultant.' })
   b.push({ t: 'para', label: 'B.', text: 'Provider manages the U.S. business affairs of companies whose owners live outside the United States, including tax work, state compliance, and administrative and operational consulting.' })
   b.push({ t: 'para', label: 'C.', text: 'Provider is a commercial mail receiving agency ("CMRA") registered with the U.S. Postal Service. Provider receives and handles its clients\' mail so that it is managed safely, lawfully and by a verified, accountable agent.' })
   b.push({ t: 'para', label: 'D.', text: 'Client\'s owner(s) live outside the United States.' })
@@ -149,7 +152,7 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'para', text: 'In consideration of the fees Client pays under the Annual Service Agreement, Provider grants the rights in this Agreement and provides the mail handling in Section 3.4 other than forwarding. No separate rent and no security deposit are payable.' })
 
   b.push({ t: 'heading', text: '6. Access' })
-  b.push({ t: 'para', text: 'Provider\'s office is currently staffed by Antonio Durante alone. Access to the Premises is by appointment with Provider. There is no reception service.' })
+  b.push({ t: 'para', text: 'Provider\'s office is currently staffed by Antonio Noel Durante alone. Access to the Premises is by appointment with Provider. There is no reception service.' })
 
   b.push({ t: 'heading', text: '7. Use and Conduct' })
   b.push({ t: 'para', text: 'Client will use the Premises only for lawful business purposes, will leave the spaces clean and in the condition found, and will be responsible for damage caused by Client or its guests. Client will not use the address or the Premises for any unlawful or deceptive purpose.' })

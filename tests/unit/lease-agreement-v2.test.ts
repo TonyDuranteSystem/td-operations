@@ -74,6 +74,15 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     expect(t).toContain('run from Via Roma 1, Milano, Italy (the "Operating Address")')
   })
 
+  it("Antonio's full legal name is printed everywhere in the agreement (text and signature block), never the short form", async () => {
+    const t = allText(buildAgreementV2(INPUT))
+    expect(t.match(/Antonio Noel Durante/g)).toHaveLength(2) // Background A and Section 6
+    expect(t).not.toContain('Antonio Durante')
+    const pdf = await pdfText(await generateLeasePDF({ tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, exhibitPhotos: [] }))
+    expect(pdf).toContain('Antonio Noel Durante')
+    expect(pdf).not.toMatch(/Antonio Durante/)
+  })
+
   it('Exhibit A is only mentioned when photos exist', () => {
     expect(allText(buildAgreementV2({ ...INPUT, exhibitPhotos: [] }))).not.toContain('Exhibit A')
     const withPhotos = buildAgreementV2({ ...INPUT, exhibitPhotos: [{ url: 'https://x/y.jpg', caption: 'Lobby' }] })

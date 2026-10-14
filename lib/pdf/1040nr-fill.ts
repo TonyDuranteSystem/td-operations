@@ -62,12 +62,13 @@
 import { PDFDocument } from "pdf-lib"
 import { CAA_ADDRESS_ONE_LINE, TD_OFFICE } from "@/lib/td-address"
 import { embedUnicodeFonts } from "./unicode-fonts"
+import { fitFieldText } from "./fit-field"
 
 const F1040NR_URL = "https://www.irs.gov/pub/irs-pdf/f1040nr.pdf"
 const SCHEDULE_OI_URL = "https://www.irs.gov/pub/irs-pdf/f1040nro.pdf"
 
 const PREPARER = {
-  name: "Antonio Durante",
+  name: "Antonio Noel Durante",
   company: "Tony Durante LLC",
   ein: "83-4299021",
   ptin: "P02389222",
@@ -195,6 +196,7 @@ export async function fill1040NR(data: F1040NRFillData): Promise<Uint8Array> {
 
   // === PAID PREPARER ===
   setText(`${P2}.f2_51[0]`, PREPARER.name)     // Preparer's name
+  fitFieldText(form, `${P2}.f2_51[0]`, PREPARER.name, unicodeFont)
   setText(`${P2}.f2_52[0]`, PREPARER.ptin)     // PTIN
   setText(`${P2}.f2_53[0]`, PREPARER.company)  // Firm's name
   setText(`${P2}.f2_54[0]`, PREPARER.phone)    // Phone no.
