@@ -113,7 +113,14 @@ export async function processFile(
 }> {
   try {
     // 0. A company in storage: its Drive folder is a backup — never re-ingest it as new records.
-    if ((accountId && (await accountIsInStorage(accountId))) || (await isInSwitchedDriveFolder(fileId))) {
+    // A failure of the check itself must not overwrite this file's record with an "error" status (the catch below does that).
+    let inStorage: boolean
+    try {
+      inStorage = (accountId ? await accountIsInStorage(accountId) : false) || (await isInSwitchedDriveFolder(fileId))
+    } catch (e) {
+      return { success: false, fileName: fileId, status: "check_failed", error: `Could not check where this company's files live — nothing was changed (${e instanceof Error ? e.message : String(e)})` }
+    }
+    if (inStorage) {
       return { success: false, fileName: fileId, status: "refused", error: IN_STORAGE_MESSAGE }
     }
 
@@ -1514,6 +1521,7 @@ export function registerDocTools(server: McpServer) {
           errors: number
           skipped: number
           partial: boolean
+          inStorage: boolean
         }
 
         const accResults: AccResult[] = []
@@ -1536,11 +1544,13 @@ export function registerDocTools(server: McpServer) {
             errors: 0,
             skipped: 0,
             partial: false,
+            inStorage: false,
           }
 
           try {
             // A company in storage is skipped: its Drive folder is only a backup.
             if (await accountIsInStorage(acc.id)) {
+              result.inStorage = true
               lastProcessedId = acc.id
               accResults.push(result)
               continue
@@ -1609,7 +1619,7 @@ export function registerDocTools(server: McpServer) {
         const totalClassified = accResults.reduce((s, a) => s + a.classified, 0)
         const totalUnclassified = accResults.reduce((s, a) => s + a.unclassified, 0)
         const totalErrors = accResults.reduce((s, a) => s + a.errors, 0)
-        const completed = accResults.filter(a => !a.partial && a.processed > 0 || a.skipped === a.totalFiles).length
+        const completed = accResults.filter(a => !a.inStorage && (!a.partial && a.processed > 0 || a.skipped === a.totalFiles)).length
         const partial = accResults.filter(a => a.partial).length
 
         const lines = [
@@ -1622,7 +1632,9 @@ export function registerDocTools(server: McpServer) {
         ]
 
         for (const a of accResults) {
-          if (a.totalFiles === 0) {
+          if (a.inStorage) {
+            lines.push(`📦 ${a.name} — files are in the new storage (skipped)`)
+          } else if (a.totalFiles === 0) {
             lines.push(`📭 ${a.name} — empty folder`)
           } else if (a.skipped === a.totalFiles) {
             lines.push(`⏭️ ${a.name} — all ${a.totalFiles} files already done`)

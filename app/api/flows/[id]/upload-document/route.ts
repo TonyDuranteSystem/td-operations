@@ -228,10 +228,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 3-cutover-person. A contact-scoped flow (ITIN …) for a person whose files live in the new storage — their own live storage,
+    // 3-cutover-person. A contact-scoped ITIN flow for a person whose files live in the new storage — their own live storage,
     //    or a company of theirs that has switched — is saved through the PERSON's storage, never Drive (Drive is refused for it,
     //    which used to end in a server error and block the ITIN approval upload). Anyone else carries on exactly as before.
-    if (!routed && pilot.status !== 'saved' && !accountId && contactId) {
+    if (!routed && pilot.status !== 'saved' && !accountId && contactId && sd.service_type === 'ITIN') {
       const { companyDocState, liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
       const { data: links } = await supabaseAdmin
         .from('account_contacts')

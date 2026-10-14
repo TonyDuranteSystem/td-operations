@@ -264,12 +264,17 @@ Prerequisites:
         // still in Drive — for a company in storage it is a backup and reading it makes duplicates.
         const { findWelcomeDocsFromRecords } = await import("@/lib/operations/welcome-docs")
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const found = await findWelcomeDocsFromRecords(account_id)
+        let found: Awaited<ReturnType<typeof findWelcomeDocsFromRecords>> = { ein: null, articles: null }
+        try {
+          found = await findWelcomeDocsFromRecords(account_id)
+        } catch {
+          // non-fatal, like the old Drive lookup: the steps below report "not found — attach manually"
+        }
         let einFileId = found.ein?.pointer ?? ""
         let articlesFileId = found.articles?.pointer ?? ""
         const einFromRecords = !!einFileId
         const articlesFromRecords = !!articlesFileId
-        if ((!einFileId || !articlesFileId) && account.drive_folder_id && (await companyDocState(account_id)) === "drive") {
+        if ((!einFileId || !articlesFileId) && account.drive_folder_id && (await companyDocState(account_id).catch(() => "store" as const)) === "drive") {
           try {
             const { listFolder } = await import("@/lib/google-drive")
             // Search Company subfolder first

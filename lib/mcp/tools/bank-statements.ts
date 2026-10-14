@@ -106,6 +106,22 @@ export function registerBankStatementTools(server: McpServer) {
           const { findStatementRecords } = await import("@/lib/operations/bank-statement-files")
           const pick = await findStatementRecords(account_id, tax_year)
           filesToProcess = pick.files
+          // Transactions already read from the Drive copy are filed under the OLD Drive id, so the "already processed"
+          // check below cannot recognise the storage copy of the same statement. Stop rather than risk double-counting.
+          if (filesToProcess.length > 0) {
+            const { data: prior } = await supabaseAdmin
+              .from("bank_transactions")
+              .select("source_file_id")
+              .eq("account_id", account_id)
+              .gte("transaction_date", `${tax_year}-01-01`)
+              .lte("transaction_date", `${tax_year}-12-31`)
+              .limit(1000)
+            const known = new Set(filesToProcess.map(f => f.id))
+            const fromElsewhere = (prior ?? []).some(r => r.source_file_id && !known.has(r.source_file_id))
+            if (fromElsewhere) {
+              return { content: [{ type: "text" as const, text: `⚠️ This company already has ${tax_year} transactions read from its earlier (Drive) statements. Re-reading the storage copies could count them twice, so nothing was done. Name one statement with file_id, or ask for a clean re-run.` }] }
+            }
+          }
           if (filesToProcess.length === 0) {
             const extra = pick.undated > 0 ? ` ${pick.undated} statement(s) have no year on record — name one with file_id.` : ""
             return { content: [{ type: "text" as const, text: `No ${tax_year} bank statements found in this company's CRM records.${extra}` }] }
