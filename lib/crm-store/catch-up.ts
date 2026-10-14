@@ -78,6 +78,22 @@ export function sharedDriveIds(eligible: Array<{ id: string; driveFileId: string
   return shared
 }
 
+/** PURE: the storage folder a type's catalog setting names ("3. Tax" → tax …); null = no opinion (the record's category decides). */
+export function kindFromSuggestedFolder(folder: string | null | undefined): "company" | "tax" | "banking" | "correspondence" | null {
+  const f = (folder ?? "").trim()
+  if (f.startsWith("1.")) return "company"
+  if (f.startsWith("3.")) return "tax"
+  if (f.startsWith("4.")) return "banking"
+  if (f.startsWith("5.")) return "correspondence"
+  return null
+}
+
+/** PURE: a tax year written in a file name ("2025 FramaUS LLC 1120 …") — 2000–2099 only; null when there is none or it is ambiguous. */
+export function yearFromFileName(name: string | null | undefined): number | null {
+  const years = Array.from(new Set(((name ?? "").match(/(?<!\d)20\d{2}(?!\d)/g) ?? []).map(Number)))
+  return years.length === 1 ? years[0] : null
+}
+
 export interface CatchUpPlan {
   accountId: string
   companyName: string | null
@@ -188,14 +204,18 @@ interface RunCtx {
   accountId: string
   ownerId: string
   actorId: string
-  types: Awaited<ReturnType<typeof loadTypes>>
+  types: Awaited<ReturnType<typeof loadTypes>>['types']
+  /** type slug → the folder its catalog entry names ("3. Tax") */
+  suggested: Map<string, string>
   folderByKind: Map<string, string>
 }
 
 async function loadTypes() {
   const { loadTypeMap } = await import("./drive-import")
-  const rows = await must<unknown[]>(db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types"), "the document types")
-  return loadTypeMap(rows)
+  const rows = await must<Array<{ slug: string; display_name: string; metadata: Record<string, unknown> | null }>>(db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types"), "the document types")
+  const suggested = new Map<string, string>()
+  for (const r of rows) { const f = r.metadata?.suggested_folder; if (typeof f === "string") suggested.set(r.slug, f) }
+  return { types: await loadTypeMap(rows), suggested }
 }
 
 /** ONE record: bring its Drive file in, then re-point exactly this record. Never throws for a file problem. */
@@ -224,9 +244,19 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
   if (bytes.length > MAX_FILE_BYTES) return res("failed", `too large for the new storage (${Math.round(bytes.length / 1048576)} MB)`)
   if (sum.md5 ? md5Hex(bytes) !== sum.md5 : size != null && bytes.length !== size) return res("failed", "the downloaded bytes do not match Drive's fingerprint — nothing was stored")
 
-  const folderId = ctx.folderByKind.get(kindForCategory(r.category))
+  // WHERE: the folder the document's TYPE belongs in (a signed tax return → Tax, an IRS fax → Correspondence …); only a type with no
+  // folder of its own follows the record's category. A tax document goes into the company's year folder when that folder exists.
+  const kind = kindFromSuggestedFolder(type ? ctx.suggested.get(type.slug) : null) ?? kindForCategory(r.category)
+  let folderId = ctx.folderByKind.get(kind)
   if (!folderId) return res("failed", "the company's folder for this document is missing in the new storage")
-  const callerKey = `catch-up:${r.id}`
+  let periodYear: number | null = r.tax_year ?? null
+  if (kind === "tax") {
+    const years = await must<Array<{ id: string; name: string }>>(d.from("store_folders").select("id, name").eq("parent_id", folderId).eq("kind", "tax_year").is("trashed_at", null), "the year folders")
+    if (!periodYear) periodYear = yearFromFileName(r.file_name) ?? yearFromFileName(meta.name) ?? years.map((y) => Number(y.name)).filter((n) => /^\d{4}$/.test(String(n))).sort((a, b) => b - a)[0] ?? null
+    const yearFolder = periodYear ? years.find((y) => y.name.trim() === String(periodYear)) : null
+    if (yearFolder) folderId = yearFolder.id
+  }
+  const callerKey = `catch-up:${r.id}:${folderId}`
   const { storeSafeFileName } = await import("./formation-pilot")
   const { storeNameKey } = await import("./rules")
   const files = await must<Array<{ name: string; caller_key: string | null }>>(d.from("store_files").select("name, caller_key").eq("folder_id", folderId).eq("state", "live"), "the folder")
@@ -237,7 +267,7 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
   const { saveBytesToStore } = await import("./writer")
   const w = await saveBytesToStore({
     ownerId: ctx.ownerId, folderId, name, mimeType: mime ?? null, bytes, callerKey, contentChanged: true, documentType: type?.slug ?? null, published: false, actor: ctx.actorId,
-    ...(r.tax_year ? { periodYear: r.tax_year } : {}),
+    ...(periodYear ? { periodYear } : {}),
     ...(type?.draftNeverVisible ? { filingStatus: (visible ? "filed" : "draft") as "filed" | "draft" } : {}),
   })
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") return res("failed", `the new storage refused it (${w.status})`)
@@ -310,11 +340,11 @@ export async function runCatchUp(accountId: string, actorId: string | null, opts
     const hashNow = again ? sha1(JSON.stringify({ accountId, copyStartedAt: again.copyStartedAt, ids: again.eligible.map((x) => `${x.id}:${x.driveFileId}`) })) : ""
     if (hashNow !== before) { await close("failed", "the company changed while the catch-up was starting — nothing was done"); return { ok: false, message: "The company changed while the catch-up was starting — nothing was done. Run the preview again.", runId, items, plan } }
 
-    const types = await loadTypes()
+    const { types, suggested } = await loadTypes()
     const folders = await must<Array<{ id: string; kind: string; parent_id: string | null }>>(d.from("store_folders").select("id, kind, parent_id").eq("owner_id", plan.ownerId).is("trashed_at", null), "the company's folders")
     const folderByKind = new Map<string, string>()
     for (const f of folders) if (f.parent_id && !folderByKind.has(f.kind)) folderByKind.set(f.kind, f.id)
-    const ctx: RunCtx = { runId, accountId, ownerId: plan.ownerId as string, actorId, types, folderByKind }
+    const ctx: RunCtx = { runId, accountId, ownerId: plan.ownerId as string, actorId, types, suggested, folderByKind }
     const deadline = Date.now() + CATCH_UP_BUDGET_MS
     for (const e of plan.eligible) {
       if (Date.now() + MIN_TIME_PER_FILE_MS > deadline) { items.push({ id: e.id, name: e.name, outcome: "failed", detail: "not reached — out of time; run it again" }); continue }
@@ -370,7 +400,15 @@ export async function undoCatchUp(runId: string, actorId: string | null): Promis
     const r = await restoreEntries(it.repointed ?? [])
     restored += r.restored
     problems.push(...r.problems)
-    if (it.store_file_id && r.problems.length === 0) await d.rpc("store_set_published", { p_file_id: it.store_file_id, p_published: false, p_actor: actorId })
+    if (it.store_file_id && r.problems.length === 0) {
+      await d.rpc("store_set_published", { p_file_id: it.store_file_id, p_published: false, p_actor: actorId })
+      // the stored copy this catch-up made goes to the trash (restorable) — a later run starts clean; copies it did not make are never touched
+      const { data: f } = await d.from("store_files").select("caller_key").eq("id", it.store_file_id).maybeSingle()
+      if (typeof f?.caller_key === "string" && f.caller_key.startsWith("catch-up:")) {
+        const { deleteStoreFile } = await import("./file-actions")
+        await deleteStoreFile(it.store_file_id, actorId).catch((e: unknown) => problems.push(`a stored copy could not be moved to the trash (${e instanceof Error ? e.message : String(e)})`))
+      }
+    }
   }
   await d.from("store_import_runs").update({ status: "rolled_back", finished_at: new Date().toISOString(), updated_at: new Date().toISOString(), report: { catchUp: true, undone: true, problems } }).eq("id", runId)
   return { restored, problems }
