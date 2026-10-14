@@ -17,7 +17,7 @@ export function storageLinkForOwner(ownerId: string): string {
   return `/storage?store=new&owner=${encodeURIComponent(ownerId)}`
 }
 
-export function StoreReadOnlyPanel({ ownerId, banner }: { ownerId: string; banner?: React.ReactNode }) {
+export function StoreReadOnlyPanel({ ownerId, banner, who = 'company' }: { ownerId: string; banner?: React.ReactNode; who?: 'company' | 'person' }) {
   const windowsAvailable = useWindowsAvailable()
   const href = storageLinkForOwner(ownerId)
   const open = () => {
@@ -31,8 +31,8 @@ export function StoreReadOnlyPanel({ ownerId, banner }: { ownerId: string; banne
     <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
       {banner}
       <p className="text-sm text-emerald-900">
-        This company&apos;s files live in the new storage. This page only shows them — to upload, rename, move, trash, or show or hide a
-        file for the client, work in Storage.
+        {who === 'person' ? "This person's documents live in the new storage." : "This company's files live in the new storage."} See, upload, rename, move
+        or trash them, and show or hide a file for the client, in Storage.
       </p>
       <button
         type="button"

@@ -41,7 +41,8 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
-import { NewStoreBrowser, useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
+import { useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
+import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
@@ -3085,12 +3086,7 @@ function ContactDocumentsTab({
   // here (preview, upload, rename, move, delete, show / hide) instead of the Drive folder tools
   const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
   const personStoreId = storeOwner.data?.ownerId ?? null
-  const personStoreSection = personStoreId ? (
-    <div className="space-y-2">
-      <p className="text-xs text-zinc-500">This person&apos;s own documents live in the new CRM storage (pilot).</p>
-      <NewStoreBrowser ownerId={personStoreId} scopedKind="person" />
-    </div>
-  ) : null
+  const personStoreSection = personStoreId ? <StoreReadOnlyPanel ownerId={personStoreId} who="person" /> : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadType, setUploadType] = useState('Passport')
@@ -3591,7 +3587,7 @@ function ContactDocumentsTab({
           company is in the new storage too) — the same screen as the company page, with all its tools */}
       {personStoreId && activeDocScope === 'personal' && personStoreSection}
       {companyScopeInStore && activeCompanyStore.data?.ownerId && (
-        <NewStoreBrowser ownerId={activeCompanyStore.data.ownerId} />
+        <StoreReadOnlyPanel ownerId={activeCompanyStore.data.ownerId} />
       )}
 
       {!(personStoreId && activeDocScope === 'personal') && !companyScopeInStore && scopedDocuments.length === 0 && (
