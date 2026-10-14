@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
 
-import { classifyCatchUpRow, sharedDriveIds, type CatchUpRow } from "@/lib/crm-store/catch-up"
+import { classifyCatchUpRow, sharedDriveIds, kindFromSuggestedFolder, yearFromFileName, type CatchUpRow } from "@/lib/crm-store/catch-up"
 
 const COPY = "2026-10-09T14:33:00.000Z"
 const row = (o: Partial<CatchUpRow> = {}): CatchUpRow => ({
@@ -67,5 +67,25 @@ describe("sharedDriveIds — a Drive file several records point at is left alone
   })
   it("a file only this record points at is not shared", () => {
     expect(sharedDriveIds([e("a", "D1")], [{ id: "a", drive_file_id: "D1" }], []).size).toBe(0)
+  })
+})
+
+describe("placement helpers", () => {
+  it("a type's folder setting names the storage folder", () => {
+    expect(kindFromSuggestedFolder("3. Tax")).toBe("tax")
+    expect(kindFromSuggestedFolder("5. Correspondence")).toBe("correspondence")
+    expect(kindFromSuggestedFolder("1. Company")).toBe("company")
+    expect(kindFromSuggestedFolder("4. Banking")).toBe("banking")
+  })
+  it("no folder setting (or a personal one) means no opinion — the record's category decides", () => {
+    expect(kindFromSuggestedFolder(null)).toBeNull()
+    expect(kindFromSuggestedFolder("2. Contacts")).toBeNull()
+    expect(kindFromSuggestedFolder("whatever")).toBeNull()
+  })
+  it("reads a single tax year from a file name, nothing when absent or ambiguous", () => {
+    expect(yearFromFileName("2025 FramaUS LLC 1120_To_Sign - Signed.pdf")).toBe(2025)
+    expect(yearFromFileName("Form 8879_Lucky Pama LLC_To_Sign - Signed.pdf")).toBeNull()
+    expect(yearFromFileName("2024 and 2025 summary.pdf")).toBeNull()
+    expect(yearFromFileName("invoice 120250.pdf")).toBeNull()
   })
 })

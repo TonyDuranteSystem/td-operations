@@ -49,6 +49,9 @@ async function main() {
   const fUntyped = await mkFile(`ZZ T24 untyped visible ${tag}.pdf`, "untyped")
   const fOld = await mkFile(`ZZ T24 older than copy ${tag}.pdf`, "old")
   const fStage = await mkFile(`ZZ T24 workspace ${tag}.pdf`, "stage")
+  const fTax = await mkFile(`ZZ T24 2025 signed return ${tag}.pdf`, "tax")
+  const rTax = await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category, category_name, document_type_name, portal_visible, status, created_at)
+              values ($1,$2,$3,'Uxio Test LLC',5,'Correspondence','Form 1120',true,'classified', now() - interval '1 day') returning id`, [fTax.id, `ZZ T24 2025 signed return ${tag}.pdf`, UXIO]).then((r) => r[0].id as string)
   const fPass = await mkFile(`ZZ T24 passport ${tag}.pdf`, "passport")
   const rPass = await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category, category_name, document_type_name, portal_visible, status, created_at)
               values ($1,$2,$3,'Uxio Test LLC',2,'Contacts','Passport',false,'classified', now() - interval '1 day') returning id`, [fPass.id, `ZZ T24 passport ${tag}.pdf`, UXIO]).then((r) => r[0].id as string)
@@ -94,6 +97,9 @@ async function main() {
     ck("3c the untyped record the client can see stays on Drive and is LISTED", byName("untyped visible")?.outcome === "kept_on_drive", res.items)
     const after = await q("select id, drive_file_id, portal_visible, document_type_name, status from documents where id = any($1)", [[rTyped, rHidden, rUntyped]])
     const get = (id: string) => after.find((r: { id: string }) => r.id === id)
+    const taxRow = (await q("select drive_file_id from documents where id=$1", [rTax]))[0]
+    const taxFile = (await q("select f.id, fo.kind, fo.name, (select p.kind from store_folders p where p.id=fo.parent_id) parent_kind from store_files f join store_folders fo on fo.id=f.folder_id where 'store:'||f.id = $1", [taxRow.drive_file_id]))[0]
+    ck("3c1 a signed return the CRM filed under 'Correspondence' lands in TAX (the type's folder), in its year folder when one exists", taxFile && (taxFile.kind === "tax" || (taxFile.kind === "tax_year" && taxFile.parent_kind === "tax")), taxFile)
     const pass = (await q("select drive_file_id from documents where id=$1", [rPass]))[0]
     ck("3c2 the personal document stays on Drive (never filed by the catch-up) and no person storage was switched", pass.drive_file_id === fPass.id && byName("passport")?.outcome === "kept_on_drive" && JSON.stringify(await q("select id, study_only from store_owners where kind='person' order by id")) === peopleBefore, byName("passport"))
     ck("3c3 the records that share a Drive file were NOT touched", (await q("select drive_file_id from documents where id = any($1)", [[rDup, rShareA]])).every((r: { drive_file_id: string }) => r.drive_file_id === fShared.id))
@@ -118,11 +124,11 @@ async function main() {
     const ma = await movedAt(UXIO)
     ck("3n 'moved at' ignores the catch-up run", !ma || ma.startedAt !== (await q("select started_at from store_import_runs where id=$1", [res.runId]))[0].started_at, ma)
     ck("3o the Move panel's undo refuses a catch-up run", await (async () => { try { await undoDriveImport(res.runId as string, actor); return false } catch { return true } })())
-    const copiesBefore = (await q("select count(*)::int n from store_files where caller_key=$1", [`catch-up:${rUntyped}`]))[0].n
+    const copiesBefore = (await q("select count(*)::int n from store_files where caller_key like $1", [`catch-up:${rUntyped}:%`]))[0].n
     console.log("\n4. run it again → nothing more to do")
     const again = await planCatchUp(UXIO)
     const res2 = await runCatchUp(UXIO, actor, { expectedPlanHash: again.planHash })
-    const copiesAfter = (await q("select count(*)::int n from store_files where caller_key=$1", [`catch-up:${rUntyped}`]))[0].n
+    const copiesAfter = (await q("select count(*)::int n from store_files where caller_key like $1", [`catch-up:${rUntyped}:%`]))[0].n
     ck("4b running it again makes NO second stored copy of the record kept on Drive", copiesBefore === 1 && copiesAfter === 1, { copiesBefore, copiesAfter })
     ck("4c nothing new was re-pointed the second time", res2.items.filter((i) => i.outcome === "brought_in").length === 0, res2.items.map((i) => i.outcome))
     ck("4a only the two records that STAY on Drive (untyped visible, personal) are still eligible", again.eligible.filter((e) => e.name.includes("ZZ T24")).map((e) => e.id).sort().join() === [rUntyped, rPass].sort().join(), again.eligible.map((e) => e.name))
@@ -133,10 +139,12 @@ async function main() {
     ck("5a every record is back on its Drive file, exactly as before", (await snapshotOf([rTyped, rHidden, rUntyped])) === bothBefore)
     ck("5b the company is still switched", (await companyDocState(UXIO)) === "store" && JSON.stringify(await q("select id, study_only from store_owners where account_id=$1 and kind='company'", [UXIO])) === ownerBefore)
     ck("5c the older / workspace / internal records are still untouched", (await snapshotOf(untouched)) === untouchedBefore)
+    const trashed = (await q("select state from store_files where caller_key like $1", [`catch-up:${rTyped}:%`]))
+    ck("5c2 the stored copies the catch-up made are in the trash after the undo (restorable), so a later run starts clean", trashed.length > 0 && trashed.every((t: { state: string }) => t.state === "trashed"), trashed)
     ck("5d the go-live undo refuses to touch a catch-up run", await (async () => { try { const { undoGoLive } = await import("../../../lib/crm-store/go-live-run"); await undoGoLive(res.runId as string, actor); return false } catch { return true } })())
   } finally {
     // clean up this run's fixtures
-    await q("delete from documents where id = any($1)", [[rTyped, rHidden, rUntyped, rOld, rStage, rPseudo, rDup, rShareA, rPass]])
+    await q("delete from documents where id = any($1)", [[rTyped, rHidden, rUntyped, rOld, rStage, rPseudo, rDup, rShareA, rPass, rTax]])
     await q("delete from store_import_runs where id=$1", [copy.id])
     await db.end()
   }
