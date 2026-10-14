@@ -160,6 +160,33 @@ async function loadStoredFiles(d: any, ledger: LedgerFile[], companyOwnerIds: st
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/**
+ * A workspace document (it has a stage or a service delivery) is shown to the client BY ITS STAGE, whatever the visible flag says. If the
+ * stored file behind it is not open to clients yet (no type, a staff-only type, or someone's personal file filed under the company),
+ * re-pointing it would break what the client sees. So that one old record stays exactly as it is (still opens from Drive) and the stored
+ * file gets its own new, hidden record — the company still switches.
+ */
+async function keepStageDocsThatClientCouldNotOpen(verdicts: RowVerdict[], f: Facts): Promise<RowVerdict[]> {
+  const byId = new Map(f.rows.map((r) => [r.id, r]))
+  const stage = verdicts.filter((v) => v.action === "repoint" && v.storeFileId && (() => { const r = byId.get(v.rowId); return !!(r && (r.flow_stage || r.service_delivery_id)) })())
+  if (stage.length === 0) return verdicts
+  const { staffOnlyStorePointers, personalStoreFilesOutsidePerson } = await import("./document-pointer")
+  const closed = new Set<string>()
+  const personal = new Set<string>()
+  for (const part of chunksOf(stage.map((v) => storePointer(v.storeFileId as string)), 50)) {
+    Array.from(await staffOnlyStorePointers(part)).forEach((p) => closed.add(p))
+    Array.from(await personalStoreFilesOutsidePerson(part)).forEach((p) => personal.add(p))
+  }
+  return verdicts.map((v) => {
+    if (v.action !== "repoint" || !v.storeFileId) return v
+    const r = byId.get(v.rowId)
+    if (!r || !(r.flow_stage || r.service_delivery_id)) return v
+    const p = storePointer(v.storeFileId)
+    if (!closed.has(p) && !personal.has(p)) return v
+    return { ...v, action: "leave" as const, storeFileId: null, reason: "a workspace document the client sees by its stage — its stored file is not open to clients yet (no type), so this record stays as it is" }
+  })
+}
+
 interface Plan { blockers: string[]; verdicts: RowVerdict[]; newRecords: StoredFileInfo[]; report: GoLiveReport }
 
 async function plan(f: Facts): Promise<Plan> {
@@ -178,6 +205,10 @@ async function plan(f: Facts): Promise<Plan> {
     const own = new Set(f.rows.map((r) => r.id))
     for (const u of used) if (!own.has(u.id)) taken.add(u.drive_file_id)
     verdicts = verdicts.map((v) => (v.action === "repoint" && v.storeFileId && taken.has(storePointer(v.storeFileId)) ? { ...v, action: "archive" as const, reason: "another record already lists this stored file — archived" } : v))
+    // a record whose stored copy was removed from storage after the copy (staff trashed it) cannot be re-pointed: it stays as it is
+    const liveIds = new Set(f.stored.map((x) => x.id))
+    verdicts = verdicts.map((v) => (v.action === "repoint" && v.storeFileId && !liveIds.has(v.storeFileId) ? { ...v, action: "leave" as const, storeFileId: null, reason: "its stored copy is no longer in storage (it was removed after the copy) — this record stays as it is" } : v))
+    verdicts = await keepStageDocsThatClientCouldNotOpen(verdicts, f)
   }
   const newRecords = blockers.length ? [] : filesWithoutRecord(f.stored, verdicts, taken)
   const report = buildGoLiveReport(f.accountId, blockers, f.rows, verdicts, f.stored, newRecords)

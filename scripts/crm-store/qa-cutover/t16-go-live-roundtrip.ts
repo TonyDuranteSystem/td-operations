@@ -26,6 +26,16 @@ async function main() {
   const stamp = Date.now()
   const oldDup = (await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category_name, document_type_name, portal_visible, status, created_at) values ($1,'QA old duplicate.pdf',$2,$3,'Company','Receipt',true,'classified','2025-01-01T00:00:00Z') returning id`, [`qa-old-${stamp}`, acct.id, acct.company_name]))[0].id
   const newer = (await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category_name, document_type_name, portal_visible, status, created_at) values ($1,'QA newer than the copy.pdf',$2,$3,'Company','Receipt',true,'classified', now()) returning id`, [`qa-new-${stamp}`, acct.id, acct.company_name]))[0].id
+  // a workspace document (has a stage) whose stored file has NO type: the client would be shown it by its stage, so this record must stay as it is
+  const copyRuns = "(select id from store_import_runs where owner_id=(select id from store_owners where account_id=$1 and kind='company') and mode='copy' and status='done')"
+  const untyped = (await q(`select i.source_id, i.store_file_id from store_import_items i join store_files f on f.id=i.store_file_id where f.state='live' and f.document_type is null and i.source='drive' and i.run_id in ${copyRuns} limit 1`, [acct.id]))[0]
+  const stageDoc = untyped ? (await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category_name, document_type_name, portal_visible, status, flow_stage, created_at) values ($1,'QA stage doc.pdf',$2,$3,'Company','Receipt',false,'classified','client_review','2025-01-01T00:00:00Z') returning id`, [`qa-stage-${stamp}`, acct.id, acct.company_name]))[0].id : null
+  // a record whose stored copy was removed from storage after the copy (its Drive id is in the copy ledger, the stored file is in the trash)
+  const gone = (await q(`select i.source_id, i.store_file_id from store_import_items i join store_files f on f.id=i.store_file_id where f.state='live' and f.document_type is not null and i.source='drive' and i.run_id in ${copyRuns} and not exists (select 1 from documents d where d.drive_file_id = i.source_id) limit 1`, [acct.id]))[0]
+  const goneDoc = gone ? (await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category_name, document_type_name, portal_visible, status, created_at) values ($1,'QA record of a removed file.pdf',$2,$3,'Company','Receipt',false,'classified','2025-01-01T00:00:00Z') returning id`, [gone.source_id, acct.id, acct.company_name]))[0].id : null
+  if (gone) await q("update store_files set state='trashed', trashed_at=now() where id=$1", [gone.store_file_id])
+  // the stage document points at the untyped file's Drive id, so the ledger maps it to that untyped stored file
+  if (stageDoc) await q("update documents set drive_file_id=$2 where id=$1", [stageDoc, untyped.source_id])
   try {
   const snapshot = async () => ({
     docs: await q("select * from documents where account_id=$1 or (account_id is null and contact_id in (select contact_id from account_contacts where account_id=$1)) order by id", [acct.id]),
@@ -63,6 +73,14 @@ async function main() {
   check("8  nothing from storage is shown to the client yet", rows.every((r: { portal_visible: boolean }) => r.portal_visible === false))
   const archived = await q("select count(*)::int n from documents where status='archived' and (account_id=$1 or contact_id in (select contact_id from account_contacts where account_id=$1))", [acct.id])
   check("9  the old records the cleaning did not keep are archived", archived[0].n === plan.listing.archivedRecords, `${archived[0].n} vs ${plan.listing.archivedRecords}`)
+  if (stageDoc) {
+    const st = (await q("select drive_file_id, status from documents where id=$1", [stageDoc]))[0]
+    check("9d a workspace document whose stored file is not open to clients stays as it is (the company still switches)", st.drive_file_id === untyped.source_id && st.status === "classified", JSON.stringify(st))
+  }
+  if (goneDoc) {
+    const gd = (await q("select drive_file_id, status from documents where id=$1", [goneDoc]))[0]
+    check("9e a record whose stored copy was removed from storage stays as it is (the company still switches)", gd.drive_file_id === gone.source_id && gd.status === "classified", JSON.stringify(gd))
+  }
   const oldRow = (await q("select status, portal_visible from documents where id=$1", [oldDup]))[0]
   check("9b the old duplicate is archived and hidden, kept for staff", oldRow.status === "archived" && oldRow.portal_visible === false, JSON.stringify(oldRow))
   const newRow = (await q("select status, portal_visible, drive_file_id from documents where id=$1", [newer]))[0]
@@ -104,7 +122,8 @@ async function main() {
   const kept = await q("select status, portal_visible from documents where id=$1", [newer])
   void kept
   } finally {
-    await q("delete from documents where id = any($1)", [[oldDup, newer]])
+    if (gone) await q("update store_files set state='live', trashed_at=null where id=$1", [gone.store_file_id])
+    await q("delete from documents where id = any($1)", [[oldDup, newer, ...(stageDoc ? [stageDoc] : []), ...(goneDoc ? [goneDoc] : [])]])
     await db.end()
   }
   summary()

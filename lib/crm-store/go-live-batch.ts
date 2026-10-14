@@ -6,7 +6,8 @@
  *
  * Only REAL attempts (a switch that took the lock) count toward the group size: a company that is simply not ready
  * (open signing, no finished copy …) is listed and passed over, so a few blocked companies can never starve the rest.
- * A company that was switched and then rolled back is not tried again by the night run (the owner retries it by hand).
+ * A company the OWNER switched and then undid by hand is not tried again by the night run; one that rolled itself back (a failed check)
+ * is tried again on the next pass, after the cause is fixed.
  */
 
 import { isExcludedCompany } from "./go-live"
@@ -70,7 +71,7 @@ async function db(): Promise<any> {
 
 /**
  * Companies still to switch: a hidden study copy with a finished copy run, an Active company (see isExcludedCompany), not
- * already switched-and-rolled-back by an earlier go-live run. Stable order (by name).
+ * already switched and then undone BY HAND (a rollback with no failure reason). Stable order (by name).
  */
 export async function nightCandidates(): Promise<BatchCandidate[]> {
   const d = await db()
@@ -84,7 +85,7 @@ export async function nightCandidates(): Promise<BatchCandidate[]> {
     const a = await d.from("accounts").select("id, company_name, status").in("id", part)
     if (a.error) throw new Error(`Could not read the companies (${a.error.message}).`)
     accts.push(...(a.data ?? []))
-    const t = await d.from("store_import_runs").select("account_id").in("account_id", part).eq("mode", "move").eq("status", "rolled_back").filter("report->>goLive", "eq", "true")
+    const t = await d.from("store_import_runs").select("account_id").in("account_id", part).eq("mode", "move").eq("status", "rolled_back").filter("report->>goLive", "eq", "true").is("report->>reason", null)
     if (t.error) throw new Error(`Could not read the earlier switches (${t.error.message}).`)
     for (const r of (t.data ?? []) as Array<{ account_id: string }>) skip.add(r.account_id)
   }
