@@ -68,6 +68,14 @@ export async function handleDocumentReprocess(job: Job): Promise<JobResult> {
     existingDoc?.contact_id ?? undefined
   )
 
+  if (!result.success && result.status === "refused") {
+    // The company's files now live in the new storage: retrying can never succeed, so finish quietly.
+    return {
+      summary: `Skipped ${result.fileName}: the company's files are in the new storage`,
+      steps: [step("process_file", "skipped", result.error ?? "company in storage")],
+    }
+  }
+
   if (!result.success) {
     // Throw → cron failJob() → re-queued until max_attempts (OCR may still
     // be down; that is exactly the case this job exists to wait out).

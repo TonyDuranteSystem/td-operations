@@ -74,7 +74,7 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_process",
-    "Download bank statement PDFs/CSVs from a client's Drive '3. Tax' folder, parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: client must have bank statements uploaded to their Drive folder.",
+    "Download bank statement PDFs/CSVs from the company's CRM document records (a company still in Drive: its '3. Tax' folder), parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: the statements must be among the company's documents (storage, or the Drive folder for a company still in Drive).",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
@@ -84,7 +84,11 @@ export function registerBankStatementTools(server: McpServer) {
     async ({ account_id, tax_year, reprocess, file_id }) => {
       try {
         const ctx = await getAccountContext(account_id)
-        if (!ctx.driveFolderId && !file_id) {
+        // A company whose files live in the new storage: list its statements from the CRM records.
+        // The Drive folder is only a backup copy for such a company (reading it would re-parse duplicates).
+        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+        const inStorage = !file_id && (await companyDocState(account_id)) !== "drive"
+        if (!inStorage && !ctx.driveFolderId && !file_id) {
           return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder linked. Set drive_folder_id first." }] }
         }
 
@@ -98,6 +102,30 @@ export function registerBankStatementTools(server: McpServer) {
           const mimeType = opened.mimeType || "application/octet-stream"
           const fileName = opened.fileName || file_id
           filesToProcess = [{ id: file_id, name: fileName, mimeType }]
+        } else if (inStorage) {
+          const { findStatementRecords } = await import("@/lib/operations/bank-statement-files")
+          const pick = await findStatementRecords(account_id, tax_year)
+          filesToProcess = pick.files
+          // Transactions already read from the Drive copy are filed under the OLD Drive id, so the "already processed"
+          // check below cannot recognise the storage copy of the same statement. Stop rather than risk double-counting.
+          if (filesToProcess.length > 0) {
+            const { data: prior } = await supabaseAdmin
+              .from("bank_transactions")
+              .select("source_file_id")
+              .eq("account_id", account_id)
+              .gte("transaction_date", `${tax_year}-01-01`)
+              .lte("transaction_date", `${tax_year}-12-31`)
+              .limit(1000)
+            const known = new Set(filesToProcess.map(f => f.id))
+            const fromElsewhere = (prior ?? []).some(r => r.source_file_id && !known.has(r.source_file_id))
+            if (fromElsewhere) {
+              return { content: [{ type: "text" as const, text: `⚠️ This company already has ${tax_year} transactions read from its earlier (Drive) statements. Re-reading the storage copies could count them twice, so nothing was done. Name one statement with file_id, or ask for a clean re-run.` }] }
+            }
+          }
+          if (filesToProcess.length === 0) {
+            const extra = pick.undated > 0 ? ` ${pick.undated} statement(s) have no year on record — name one with file_id.` : ""
+            return { content: [{ type: "text" as const, text: `No ${tax_year} bank statements found in this company's CRM records.${extra}` }] }
+          }
         } else {
           // Find Tax folder
           const taxFolderId = await findTaxFolder(ctx.driveFolderId)

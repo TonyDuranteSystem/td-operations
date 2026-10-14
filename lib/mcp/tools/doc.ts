@@ -19,7 +19,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { classifyDocument, classifyByFilename } from "@/lib/classifier"
-import { getFileMetadata, listFolder } from "@/lib/google-drive"
+import { getFileMetadata, listFolder, driveParentIds } from "@/lib/google-drive"
+import { assertTargetsNotSwitched, lockedFolderIdsCached, companyDocState, SwitchedCompanyDriveWriteError } from "@/lib/crm-store/switched-drive-guard"
 import { extractTextFromFile } from "@/lib/mcp/tools/classify"
 import { STORED_PAGE_DELIMITER } from "@/lib/docai-windows"
 import { logAction } from "@/lib/mcp/action-log"
@@ -70,6 +71,29 @@ export interface DriveFileMeta {
   parents?: string[]
 }
 
+/** What staff read when a bulk tool is pointed at a company whose files live in the new storage. */
+export const IN_STORAGE_MESSAGE =
+  "This company's files are in the new CRM storage — the Google Drive folder is only a backup copy. Work with its documents from Storage; re-reading the Drive backup here would create duplicate records."
+
+/**
+ * Pure-ish guard: true when the Drive file/folder sits inside a company or person folder that lives in storage
+ * (or is being moved). Fails closed: if the check itself cannot run, the file is treated as protected.
+ */
+export async function isInSwitchedDriveFolder(driveId: string): Promise<boolean> {
+  try {
+    await assertTargetsNotSwitched([driveId], { lockedFolderIds: () => lockedFolderIdsCached(), parentsOf: driveParentIds })
+    return false
+  } catch (e) {
+    if (e instanceof SwitchedCompanyDriveWriteError) return true
+    throw e
+  }
+}
+
+/** True when this CRM company's documents live in storage (or are mid-move). */
+export async function accountIsInStorage(accountId: string): Promise<boolean> {
+  return (await companyDocState(accountId)) !== "drive"
+}
+
 /**
  * Process a single file: extract text -> classify -> upsert into documents table.
  */
@@ -88,6 +112,18 @@ export async function processFile(
   error?: string
 }> {
   try {
+    // 0. A company in storage: its Drive folder is a backup — never re-ingest it as new records.
+    // A failure of the check itself must not overwrite this file's record with an "error" status (the catch below does that).
+    let inStorage: boolean
+    try {
+      inStorage = (accountId ? await accountIsInStorage(accountId) : false) || (await isInSwitchedDriveFolder(fileId))
+    } catch (e) {
+      return { success: false, fileName: fileId, status: "check_failed", error: `Could not check where this company's files live — nothing was changed (${e instanceof Error ? e.message : String(e)})` }
+    }
+    if (inStorage) {
+      return { success: false, fileName: fileId, status: "refused", error: IN_STORAGE_MESSAGE }
+    }
+
     // 1. Get metadata
     const meta = (await getFileMetadata(fileId)) as DriveFileMeta
 
@@ -329,6 +365,9 @@ export function registerDocTools(server: McpServer) {
     async ({ folder_id, account_id, skip_existing }) => {
       try {
         const startTime = Date.now()
+        if ((account_id && (await accountIsInStorage(account_id))) || (await isInSwitchedDriveFolder(folder_id))) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
 
         // 1. List folder contents
         const result = (await listFolder(folder_id, 100)) as { files: DriveFileMeta[] }
@@ -450,6 +489,9 @@ export function registerDocTools(server: McpServer) {
     async ({ folder_id, account_id, skip_existing }) => {
       try {
         const startTime = Date.now()
+        if ((account_id && (await accountIsInStorage(account_id))) || (await isInSwitchedDriveFolder(folder_id))) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
 
         // 1. Recursively collect all files from client folder tree
         const allFiles = await collectFilesRecursive(folder_id, 3)
@@ -1138,6 +1180,10 @@ export function registerDocTools(server: McpServer) {
           }
         }
 
+        if (await accountIsInStorage(account.id)) {
+          return { content: [{ type: "text" as const, text: `🚫 ${IN_STORAGE_MESSAGE}` }] }
+        }
+
         // 2. Recursively collect files
         const allFiles = await collectFilesRecursive(account.drive_folder_id, 3)
 
@@ -1475,6 +1521,7 @@ export function registerDocTools(server: McpServer) {
           errors: number
           skipped: number
           partial: boolean
+          inStorage: boolean
         }
 
         const accResults: AccResult[] = []
@@ -1497,9 +1544,17 @@ export function registerDocTools(server: McpServer) {
             errors: 0,
             skipped: 0,
             partial: false,
+            inStorage: false,
           }
 
           try {
+            // A company in storage is skipped: its Drive folder is only a backup.
+            if (await accountIsInStorage(acc.id)) {
+              result.inStorage = true
+              lastProcessedId = acc.id
+              accResults.push(result)
+              continue
+            }
             // Collect files
             const allFiles = await collectFilesRecursive(acc.drive_folder_id!, 3)
             result.totalFiles = allFiles.length
@@ -1564,7 +1619,7 @@ export function registerDocTools(server: McpServer) {
         const totalClassified = accResults.reduce((s, a) => s + a.classified, 0)
         const totalUnclassified = accResults.reduce((s, a) => s + a.unclassified, 0)
         const totalErrors = accResults.reduce((s, a) => s + a.errors, 0)
-        const completed = accResults.filter(a => !a.partial && a.processed > 0 || a.skipped === a.totalFiles).length
+        const completed = accResults.filter(a => !a.inStorage && (!a.partial && a.processed > 0 || a.skipped === a.totalFiles)).length
         const partial = accResults.filter(a => a.partial).length
 
         const lines = [
@@ -1577,7 +1632,9 @@ export function registerDocTools(server: McpServer) {
         ]
 
         for (const a of accResults) {
-          if (a.totalFiles === 0) {
+          if (a.inStorage) {
+            lines.push(`📦 ${a.name} — files are in the new storage (skipped)`)
+          } else if (a.totalFiles === 0) {
             lines.push(`📭 ${a.name} — empty folder`)
           } else if (a.skipped === a.totalFiles) {
             lines.push(`⏭️ ${a.name} — all ${a.totalFiles} files already done`)

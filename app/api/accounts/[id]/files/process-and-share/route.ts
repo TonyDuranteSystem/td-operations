@@ -112,6 +112,11 @@ export async function POST(
     // Step 2: No existing record — process the file (OCR + classify + upsert)
     const result = await processFile(fileId, accountId, account.company_name)
 
+    // A company in storage: its Drive folder is a backup. Share the file from Storage instead (409, not a server error).
+    if (!result.success && result.status === 'refused') {
+      return NextResponse.json({ error: result.error }, { status: 409 })
+    }
+
     if (!result.success) {
       return NextResponse.json({ error: result.error || 'Failed to process file' }, { status: 500 })
     }
