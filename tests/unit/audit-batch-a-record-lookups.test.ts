@@ -31,6 +31,12 @@ describe("pickWelcomeDocs", () => {
     expect(r.ein).toBeNull()
     expect(r.articles).toBeNull()
   })
+  it("falls back to an EIN confirmation fax only when no typed EIN letter exists", () => {
+    const fax = doc({ drive_file_id: "fax", document_type_name: "IRS Fax", file_name: "IRS EIN confirmation fax LTR 147C.pdf" })
+    expect(pickWelcomeDocs([fax]).ein?.pointer).toBe("fax")
+    expect(pickWelcomeDocs([fax, doc({ drive_file_id: "typed" })]).ein?.pointer).toBe("typed")
+    expect(pickWelcomeDocs([doc({ drive_file_id: "other", document_type_name: "IRS Fax", file_name: "SS-4 fax.pdf" })]).ein).toBeNull()
+  })
   it("returns nothing for no records", () => {
     expect(pickWelcomeDocs([])).toEqual({ ein: null, articles: null })
   })

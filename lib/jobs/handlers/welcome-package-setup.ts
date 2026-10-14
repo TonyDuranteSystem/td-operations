@@ -7,7 +7,7 @@
  * - Creates OA (if not exists)
  * - Creates Lease (if not exists)
  * - Creates Relay + Payset banking forms
- * - Finds EIN letter + Articles on Drive
+ * - Finds EIN letter + Articles in the CRM records
  * - Generates welcome email draft
  * - Updates account.welcome_package_status
  *

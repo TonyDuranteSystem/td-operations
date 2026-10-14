@@ -74,7 +74,7 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_process",
-    "Download bank statement PDFs/CSVs from the company's CRM document records (a company still in Drive: its '3. Tax' folder), parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: client must have bank statements uploaded to their Drive folder.",
+    "Download bank statement PDFs/CSVs from the company's CRM document records (a company still in Drive: its '3. Tax' folder), parse all transactions, auto-categorize (income/expense/distribution/fee/conversion), and store in bank_transactions table. Idempotent: skips files already processed unless reprocess=true. Returns summary with transaction counts and totals. CSV files are preferred over PDFs for accuracy. Prerequisite: the statements must be among the company's documents (storage, or the Drive folder for a company still in Drive).",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
