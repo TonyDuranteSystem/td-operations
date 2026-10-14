@@ -55,6 +55,18 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
     const f = filter.trim().toLowerCase()
     return (types ?? []).filter((t) => !f || t.name.toLowerCase().includes(f))
   }, [types, filter])
+  /** typing narrows the list; the name typed IS the choice when it names one type (exactly, or it is the only one left) — no hunting for it in the list */
+  const onFilter = (value: string) => {
+    setFilter(value)
+    const f = value.trim().toLowerCase()
+    if (!f) return
+    const matches = (types ?? []).filter((t) => t.name.toLowerCase().includes(f))
+    const exact = matches.find((t) => t.name.toLowerCase() === f)
+    const pick = exact ?? (matches.length === 1 ? matches[0] : null)
+    if (pick) setSlug(pick.slug)
+  }
+  // Save only acts on a type the person can SEE in the list (a choice hidden by the search must not be saved by accident)
+  const slugShown = shown.some((t) => t.slug === slug)
   const current = (types ?? []).find((t) => t.slug === file.documentType)
 
   /** "Not in the list? Add a new type": added once through the catalog (who added it is logged), then listed for everyone */
@@ -124,7 +136,12 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
         {!types && !typesError && <p className="text-xs text-zinc-500">Loading…</p>}
         {types && (
           <>
-            <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search types…"
+            <input autoFocus value={filter} onChange={(e) => onFilter(e.target.value)} placeholder="Search types…"
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                if (slugShown) { if (!busy && !(question && !choice)) void submit() } else if (shown.length > 0) setSlug(shown[0].slug)
+              }}
               className="mb-2 w-full rounded-md border border-zinc-300 px-2 py-1 text-sm" />
             <select size={8} value={slug} onChange={(e) => setSlug(e.target.value)} aria-label="Document type"
               className="w-full rounded-md border border-zinc-300 px-1 py-1 text-sm">
@@ -173,7 +190,7 @@ export function SetTypeDialog({ file, viewingOwnerId, onClose, onDone }: {
         )}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 px-3 py-1 hover:bg-zinc-50">Cancel</button>
-          <button type="button" disabled={busy || !slug || (!!question && !choice)} onClick={() => void submit()}
+          <button type="button" disabled={busy || !slug || !slugShown || (!!question && !choice)} onClick={() => void submit()}
             className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 disabled:opacity-50">
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{question ? 'Confirm' : slug === file.documentType ? 'Save again' : 'Save type'}
           </button>
