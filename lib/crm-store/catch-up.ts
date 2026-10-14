@@ -94,6 +94,15 @@ export function yearFromFileName(name: string | null | undefined): number | null
   return years.length === 1 ? years[0] : null
 }
 
+/**
+ * PURE: a fax receipt with no workspace link is the receipt of a TAX RETURN fax (the SS-4 package fax of a company formation always
+ * belongs to its workspace case and is never picked up here). The approved storage keeps those as "Fax Confirmation" in Tax / <year>,
+ * next to the return (282 of them, none in Correspondence) — so both "IRS Fax" and "Fax Confirmation" become Fax Confirmation in Tax.
+ */
+export function faxReceiptRule(typeSlug: string | null | undefined): { slug: string; kind: "tax" } | null {
+  return typeSlug === "irs_fax" || typeSlug === "fax_confirmation" ? { slug: "fax_confirmation", kind: "tax" } : null
+}
+
 export interface CatchUpPlan {
   accountId: string
   companyName: string | null
@@ -207,6 +216,8 @@ interface RunCtx {
   types: Awaited<ReturnType<typeof loadTypes>>['types']
   /** type slug → the folder its catalog entry names ("3. Tax") */
   suggested: Map<string, string>
+  /** type slug → its display name (for the record's label) */
+  display: Map<string, string>
   folderByKind: Map<string, string>
 }
 
@@ -214,8 +225,9 @@ async function loadTypes() {
   const { loadTypeMap } = await import("./drive-import")
   const rows = await must<Array<{ slug: string; display_name: string; metadata: Record<string, unknown> | null }>>(db().from("catalog_entries").select("slug, display_name, metadata").eq("catalog_id", "storage_document_types"), "the document types")
   const suggested = new Map<string, string>()
-  for (const r of rows) { const f = r.metadata?.suggested_folder; if (typeof f === "string") suggested.set(r.slug, f) }
-  return { types: await loadTypeMap(rows), suggested }
+  const display = new Map<string, string>()
+  for (const r of rows) { display.set(r.slug, r.display_name); const f = r.metadata?.suggested_folder; if (typeof f === "string") suggested.set(r.slug, f) }
+  return { types: await loadTypeMap(rows), suggested, display }
 }
 
 /** ONE record: bring its Drive file in, then re-point exactly this record. Never throws for a file problem. */
@@ -246,7 +258,9 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
 
   // WHERE: the folder the document's TYPE belongs in (a signed tax return → Tax, an IRS fax → Correspondence …); only a type with no
   // folder of its own follows the record's category. A tax document goes into the company's year folder when that folder exists.
-  const kind = kindFromSuggestedFolder(type ? ctx.suggested.get(type.slug) : null) ?? kindForCategory(r.category)
+  const fax = faxReceiptRule(type?.slug)
+  const slugToStore = fax?.slug ?? type?.slug ?? null
+  const kind = fax?.kind ?? kindFromSuggestedFolder(type ? ctx.suggested.get(type.slug) : null) ?? kindForCategory(r.category)
   let folderId = ctx.folderByKind.get(kind)
   if (!folderId) return res("failed", "the company's folder for this document is missing in the new storage")
   let periodYear: number | null = r.tax_year ?? null
@@ -265,15 +279,20 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
   if (!same && files.some((f) => storeNameKey(f.name) === storeNameKey(name))) { const { keepBothName } = await import("./names"); name = keepBothName(name, files.map((f) => f.name)) }
   const visible = r.portal_visible === true
   const { saveBytesToStore } = await import("./writer")
-  const w = await saveBytesToStore({
-    ownerId: ctx.ownerId, folderId, name, mimeType: mime ?? null, bytes, callerKey, contentChanged: true, documentType: type?.slug ?? null, published: false, actor: ctx.actorId,
+  const saveWith = (key: string) => saveBytesToStore({
+    ownerId: ctx.ownerId, folderId, name, mimeType: mime ?? null, bytes, callerKey: key, contentChanged: true, documentType: slugToStore, published: false, actor: ctx.actorId,
     ...(periodYear ? { periodYear } : {}),
     ...(type?.draftNeverVisible ? { filingStatus: (visible ? "filed" : "draft") as "filed" | "draft" } : {}),
   })
+  let w = await saveWith(callerKey)
+  // a key that points at a copy in the TRASH (an earlier catch-up that was undone) must not swallow this run: save as a new copy
+  for (let hop = 0; w.status === "trashed" && hop < 5; hop++) w = await saveWith(`${callerKey}:after-trash:${w.fileId}`)
   if (w.status !== "created" && w.status !== "versioned" && w.status !== "unchanged") return res("failed", `the new storage refused it (${w.status})`)
   // the backup learns which Drive file this is (so it never writes a second copy into Drive)
   const { error: refErr } = await d.rpc("store_import_record_ref", { p_file_id: w.fileId, p_drive_file_id: e.driveFileId, p_sha256: createHash("sha256").update(bytes).digest("hex"), p_drive_path: { area: "import", path: [] } })
-  const refNote = refErr ? ` (the backup could not record the Drive original: ${refErr.message})` : ""
+  // a Drive file has ONE link to ONE stored file: if an earlier (trashed) copy still holds it, the link moves to this copy
+  const reclaimed = refErr ? await reclaimDriveLink(e.driveFileId, w.fileId) : false
+  const refNote = refErr && !reclaimed ? ` (the backup could not record the Drive original: ${refErr.message})` : ""
 
   // the client sees exactly what they saw
   let keep: string | null = null
@@ -287,10 +306,11 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
 
   // ledger FIRST (the old pointer), then exactly this record
   const { storePointer, storeDocumentLink } = await import("./document-pointer")
-  const entry: LedgerEntry = { id: r.id, drive_file_id: r.drive_file_id, drive_link: r.drive_link ?? null }
+  const newLabel = fax && type?.slug !== fax.slug ? ctx.display.get(fax.slug) ?? null : null
+  const entry: LedgerEntry = { id: r.id, drive_file_id: r.drive_file_id, drive_link: r.drive_link ?? null, ...(newLabel ? { before: { document_type_name: r.document_type_name } } : {}) }
   const { data: item, error: iErr } = await d.from("store_import_items").insert({ run_id: ctx.runId, source: "drive", source_id: `catch-up-row:${r.id}`, drive_path: [], name, mime_type: mime ?? null, size_bytes: bytes.length, source_md5: sum.md5, status: "done", store_file_id: w.fileId, repointed: [entry] }).select("id").maybeSingle()
   if (iErr || !item) return res("failed", `could not record the record in the ledger (${iErr?.message ?? "no row"}) — nothing was changed`)
-  const { data: changed, error: uErr } = await d.from("documents").update({ drive_file_id: storePointer(w.fileId), drive_link: storeDocumentLink(r.id), updated_at: new Date().toISOString() }).eq("id", r.id).eq("drive_file_id", r.drive_file_id).select("id")
+  const { data: changed, error: uErr } = await d.from("documents").update({ drive_file_id: storePointer(w.fileId), drive_link: storeDocumentLink(r.id), ...(newLabel ? { document_type_name: newLabel } : {}), updated_at: new Date().toISOString() }).eq("id", r.id).eq("drive_file_id", r.drive_file_id).select("id")
   if (uErr || !changed || changed.length !== 1) {
     await d.from("store_import_items").delete().eq("id", item.id)
     return res("failed", `the record could not be re-pointed (${uErr?.message ?? "it changed while the catch-up ran"})`)
@@ -307,6 +327,21 @@ async function catchUpOne(e: CatchUpPlan["eligible"][number], ctx: RunCtx): Prom
     return res("put_back", `${err instanceof Error ? err.message : String(err)} — the record was put back on Drive`)
   }
   return res("brought_in", `ok${refNote}`)
+}
+
+/** The Drive-original link of a Drive file held by a stored copy that is no longer live moves to the live copy. Returns true when the live copy now holds it. */
+async function reclaimDriveLink(driveFileId: string, liveFileId: string): Promise<boolean> {
+  const d = db()
+  const { data: refs } = await d.from("store_external_refs").select("id, object_id").eq("provider", "gdrive").eq("direction", "import").eq("external_id", driveFileId)
+  let ok = false
+  for (const r of (refs ?? []) as Array<{ id: string; object_id: string }>) {
+    if (r.object_id === liveFileId) { ok = true; continue }
+    const { data: f } = await d.from("store_files").select("state").eq("id", r.object_id).maybeSingle()
+    if (f?.state === "live") return false // a live copy holds it — never take it away
+    const { error } = await d.from("store_external_refs").update({ object_id: liveFileId, status: "ok", last_checked_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", r.id)
+    if (!error) ok = true
+  }
+  return ok
 }
 
 export async function runCatchUp(accountId: string, actorId: string | null, opts: { expectedPlanHash?: string } = {}): Promise<CatchUpResult> {
@@ -340,11 +375,11 @@ export async function runCatchUp(accountId: string, actorId: string | null, opts
     const hashNow = again ? sha1(JSON.stringify({ accountId, copyStartedAt: again.copyStartedAt, ids: again.eligible.map((x) => `${x.id}:${x.driveFileId}`) })) : ""
     if (hashNow !== before) { await close("failed", "the company changed while the catch-up was starting — nothing was done"); return { ok: false, message: "The company changed while the catch-up was starting — nothing was done. Run the preview again.", runId, items, plan } }
 
-    const { types, suggested } = await loadTypes()
+    const { types, suggested, display } = await loadTypes()
     const folders = await must<Array<{ id: string; kind: string; parent_id: string | null }>>(d.from("store_folders").select("id, kind, parent_id").eq("owner_id", plan.ownerId).is("trashed_at", null), "the company's folders")
     const folderByKind = new Map<string, string>()
     for (const f of folders) if (f.parent_id && !folderByKind.has(f.kind)) folderByKind.set(f.kind, f.id)
-    const ctx: RunCtx = { runId, accountId, ownerId: plan.ownerId as string, actorId, types, suggested, folderByKind }
+    const ctx: RunCtx = { runId, accountId, ownerId: plan.ownerId as string, actorId, types, suggested, display, folderByKind }
     const deadline = Date.now() + CATCH_UP_BUDGET_MS
     for (const e of plan.eligible) {
       if (Date.now() + MIN_TIME_PER_FILE_MS > deadline) { items.push({ id: e.id, name: e.name, outcome: "failed", detail: "not reached — out of time; run it again" }); continue }
@@ -406,7 +441,9 @@ export async function undoCatchUp(runId: string, actorId: string | null): Promis
       const { data: f } = await d.from("store_files").select("caller_key").eq("id", it.store_file_id).maybeSingle()
       if (typeof f?.caller_key === "string" && f.caller_key.startsWith("catch-up:")) {
         const { deleteStoreFile } = await import("./file-actions")
-        await deleteStoreFile(it.store_file_id, actorId).catch((e: unknown) => problems.push(`a stored copy could not be moved to the trash (${e instanceof Error ? e.message : String(e)})`))
+        const trashed = await deleteStoreFile(it.store_file_id, actorId).then(() => true).catch((e: unknown) => { problems.push(`a stored copy could not be moved to the trash (${e instanceof Error ? e.message : String(e)})`); return false })
+        // its Drive-original link goes with it (the Drive file keeps ONE link — to the next live copy)
+        if (trashed) await d.from("store_external_refs").delete().eq("object_kind", "file").eq("object_id", it.store_file_id).eq("provider", "gdrive").eq("direction", "import")
       }
     }
   }

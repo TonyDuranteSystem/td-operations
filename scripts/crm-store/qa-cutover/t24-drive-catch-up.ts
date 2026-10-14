@@ -52,6 +52,9 @@ async function main() {
   const fTax = await mkFile(`ZZ T24 2025 signed return ${tag}.pdf`, "tax")
   const rTax = await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category, category_name, document_type_name, portal_visible, status, created_at)
               values ($1,$2,$3,'Uxio Test LLC',5,'Correspondence','Form 1120',true,'classified', now() - interval '1 day') returning id`, [fTax.id, `ZZ T24 2025 signed return ${tag}.pdf`, UXIO]).then((r) => r[0].id as string)
+  const fFax = await mkFile(`ZZ T24 fax-receipt-${tag}.pdf`, "fax")
+  const rFax = await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category, category_name, document_type_name, portal_visible, status, created_at)
+              values ($1,$2,$3,'Uxio Test LLC',5,'Correspondence','IRS Fax',true,'classified', now() - interval '1 day') returning id`, [fFax.id, `ZZ T24 fax-receipt-${tag}.pdf`, UXIO]).then((r) => r[0].id as string)
   const fPass = await mkFile(`ZZ T24 passport ${tag}.pdf`, "passport")
   const rPass = await q(`insert into documents (drive_file_id, file_name, account_id, account_name, category, category_name, document_type_name, portal_visible, status, created_at)
               values ($1,$2,$3,'Uxio Test LLC',2,'Contacts','Passport',false,'classified', now() - interval '1 day') returning id`, [fPass.id, `ZZ T24 passport ${tag}.pdf`, UXIO]).then((r) => r[0].id as string)
@@ -100,6 +103,9 @@ async function main() {
     const taxRow = (await q("select drive_file_id from documents where id=$1", [rTax]))[0]
     const taxFile = (await q("select f.id, fo.kind, fo.name, (select p.kind from store_folders p where p.id=fo.parent_id) parent_kind from store_files f join store_folders fo on fo.id=f.folder_id where 'store:'||f.id = $1", [taxRow.drive_file_id]))[0]
     ck("3c1 a signed return the CRM filed under 'Correspondence' lands in TAX (the type's folder), in its year folder when one exists", taxFile && (taxFile.kind === "tax" || (taxFile.kind === "tax_year" && taxFile.parent_kind === "tax")), taxFile)
+    const faxRow = (await q("select drive_file_id, document_type_name from documents where id=$1", [rFax]))[0]
+    const faxFile = (await q("select f.document_type, fo.kind, (select p.kind from store_folders p where p.id=fo.parent_id) parent_kind from store_files f join store_folders fo on fo.id=f.folder_id where 'store:'||f.id = $1", [faxRow.drive_file_id]))[0]
+    ck("3c4 a tax-return fax receipt ('IRS Fax', filed under Correspondence) lands in Tax as a Fax Confirmation, and its record says so", faxFile && faxFile.document_type === "fax_confirmation" && (faxFile.kind === "tax" || faxFile.parent_kind === "tax") && faxRow.document_type_name === "Fax Confirmation", { faxFile, faxRow })
     const pass = (await q("select drive_file_id from documents where id=$1", [rPass]))[0]
     ck("3c2 the personal document stays on Drive (never filed by the catch-up) and no person storage was switched", pass.drive_file_id === fPass.id && byName("passport")?.outcome === "kept_on_drive" && JSON.stringify(await q("select id, study_only from store_owners where kind='person' order by id")) === peopleBefore, byName("passport"))
     ck("3c3 the records that share a Drive file were NOT touched", (await q("select drive_file_id from documents where id = any($1)", [[rDup, rShareA]])).every((r: { drive_file_id: string }) => r.drive_file_id === fShared.id))
@@ -141,10 +147,23 @@ async function main() {
     ck("5c the older / workspace / internal records are still untouched", (await snapshotOf(untouched)) === untouchedBefore)
     const trashed = (await q("select state from store_files where caller_key like $1", [`catch-up:${rTyped}:%`]))
     ck("5c2 the stored copies the catch-up made are in the trash after the undo (restorable), so a later run starts clean", trashed.length > 0 && trashed.every((t: { state: string }) => t.state === "trashed"), trashed)
+    const refsLeft = await q("select count(*)::int n from store_external_refs r join store_files f on f.id=r.object_id where r.provider='gdrive' and r.direction='import' and f.caller_key like $1", [`catch-up:${rTyped}:%`])
+    ck("5c3 the trashed copies no longer hold the Drive file's link", refsLeft[0].n === 0, refsLeft)
+    ck("5c4 the undo puts the fax record's old label back ('IRS Fax') and its Drive file", (await q("select document_type_name, drive_file_id from documents where id=$1", [rFax]))[0].document_type_name === "IRS Fax" && (await q("select drive_file_id from documents where id=$1", [rFax]))[0].drive_file_id === fFax.id)
     ck("5d the go-live undo refuses to touch a catch-up run", await (async () => { try { const { undoGoLive } = await import("../../../lib/crm-store/go-live-run"); await undoGoLive(res.runId as string, actor); return false } catch { return true } })())
+    console.log("\n6. after the undo, run it again: the Drive file's link moves to the new copy")
+    const plan3 = await planCatchUp(UXIO)
+    const res3 = await runCatchUp(UXIO, actor, { expectedPlanHash: plan3.planHash })
+    console.log("      round 2:", res3.message, JSON.stringify(res3.items.filter((i) => i.name.startsWith("ZZ")).map((i) => `${i.outcome}:${i.name.slice(0, 28)}:${i.detail}`)))
+    const broughtAgain = res3.items.find((i) => i.name.includes("typed visible"))
+    ck("6a brought in again", broughtAgain?.outcome === "brought_in", res3.items)
+    ck("6b without a 'could not record the Drive original' note", !!broughtAgain && !/backup could not record/.test(broughtAgain.detail), broughtAgain)
+    const live = await q("select r.object_id, f.state from store_external_refs r join store_files f on f.id=r.object_id where r.provider='gdrive' and r.direction='import' and r.external_id=$1", [fTyped.id])
+    ck("6c the link points at the LIVE copy", live.length === 1 && live[0].state === "live", live)
+    await undoCatchUp(res3.runId as string, actor)
   } finally {
     // clean up this run's fixtures
-    await q("delete from documents where id = any($1)", [[rTyped, rHidden, rUntyped, rOld, rStage, rPseudo, rDup, rShareA, rPass, rTax]])
+    await q("delete from documents where id = any($1)", [[rTyped, rHidden, rUntyped, rOld, rStage, rPseudo, rDup, rShareA, rPass, rTax, rFax]])
     await q("delete from store_import_runs where id=$1", [copy.id])
     await db.end()
   }
