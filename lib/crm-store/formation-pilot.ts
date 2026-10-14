@@ -39,6 +39,21 @@ export function pilotEnvironmentAllowed(env: Env = process.env): boolean {
   return env.SANDBOX_MODE === "1" && !isProductionDatabase(env)
 }
 
+/**
+ * NEW CLIENTS (Drive cutover batch B, dev job ad09ea91): when STORE_NEW_CLIENTS=1 EVERY new client is built in the new
+ * storage from the start — the buyer's personal storage at signing, the company-in-formation storage when the formation
+ * starts, handed to the company when the Articles arrive. Off (default) = exactly the old behaviour: the sandbox pilot list
+ * only. Read from the environment each time; anything but "1" is off.
+ */
+export function newClientsLive(env: Env = process.env): boolean {
+  return env.STORE_NEW_CLIENTS === "1"
+}
+
+/** Is the formation-in-storage machinery usable here: the sandbox pilot, or the new-clients switch. */
+export function formationStoreAllowed(env: Env = process.env): boolean {
+  return pilotEnvironmentAllowed(env) || newClientsLive(env)
+}
+
 /** The setting half of the switch (pure — unit-tested). Anything but a list of ids → nobody. */
 export function contactListedInSetting(value: unknown, contactId: string | null | undefined): boolean {
   if (!contactId || !value || typeof value !== "object") return false
@@ -48,7 +63,9 @@ export function contactListedInSetting(value: unknown, contactId: string | null 
 
 /** Is this buyer a pilot contact? Read only when a formation's owner would be created (rule 1). */
 export async function isStorePilotContact(contactId: string | null | undefined, env: Env = process.env): Promise<boolean> {
-  if (!contactId || !pilotEnvironmentAllowed(env)) return false
+  if (!contactId) return false
+  if (newClientsLive(env)) return true // every new client
+  if (!pilotEnvironmentAllowed(env)) return false
   try {
     const { data, error } = await supabaseAdmin.from("app_settings").select("value").eq("key", PILOT_SETTINGS_KEY).maybeSingle()
     if (error || !data) return false
@@ -64,7 +81,7 @@ export interface StoreOwnerRef { id: string; kind: "formation" | "company" }
 
 /** The lasting question (rule 1): the store owner of this formation case, if it has one. */
 export async function storeOwnerForCase(caseId: string): Promise<StoreOwnerRef | null> {
-  if (!pilotEnvironmentAllowed()) return null
+  if (!formationStoreAllowed()) return null
   try {
     const { data, error } = await db().from("store_owners").select("id, kind").eq("service_delivery_id", caseId).maybeSingle()
     if (error || !data) return null
@@ -292,7 +309,7 @@ export async function pilotSaveFormationUpload(p: {
   bytes: Buffer
   mimeType: string | null
 }): Promise<PilotUpload> {
-  if (!pilotEnvironmentAllowed() || p.sd.service_type !== "Company Formation") return { status: "not_pilot" }
+  if (!formationStoreAllowed() || p.sd.service_type !== "Company Formation") return { status: "not_pilot" }
   // Rule 1: an upload never CREATES the formation's storage — only the wizard step (and, once the
   // workspace plan's S1 lands, payment) does. A formation that started on Drive stays on Drive.
   const owner = await storeOwnerForCase(p.sd.id)
@@ -397,7 +414,7 @@ export async function pilotSaveCaseFile(p: {
  * guess which case to link, and so do we).
  */
 export async function pilotCaseForCompanyCreation(contactId: string): Promise<{ caseId: string; owner: StoreOwnerRef } | null> {
-  if (!pilotEnvironmentAllowed()) return null
+  if (!formationStoreAllowed()) return null
   try {
     const { data } = await supabaseAdmin.from("service_deliveries").select("id")
       .eq("contact_id", contactId).eq("service_type", "Company Formation").eq("status", "active").is("account_id", null)
@@ -416,7 +433,7 @@ export async function pilotCaseForCompanyCreation(contactId: string): Promise<{ 
  * formation returns at once and logs nothing new.
  */
 export async function pilotCompleteHandover(accountId: string, companyName: string): Promise<AttachOutcome | null> {
-  if (!pilotEnvironmentAllowed()) return null
+  if (!formationStoreAllowed()) return null
   try {
     const { data } = await supabaseAdmin.from("service_deliveries").select("id")
       .eq("account_id", accountId).eq("service_type", "Company Formation")
@@ -459,4 +476,19 @@ export async function raisePilotAlarm(kind: PilotAlarmKind, details: Record<stri
       context: details,
     })
   } catch { /* never throw from an alarm */ }
+}
+
+/**
+ * A Company Formation case was just created (payment): open its company-in-formation storage right away, so every later
+ * step (wizard, SS-4, Articles, EIN) finds it. Idempotent; best-effort — never changes the outcome of the payment step.
+ * A failure is an alarm (a formation left without its storage would otherwise start on Drive).
+ */
+export async function ensureFormationStorageAtPayment(sd: { id: string; contact_id: string | null; account_id: string | null; service_type: string | null }): Promise<StoreOwnerRef | null> {
+  if (!formationStoreAllowed() || sd.service_type !== "Company Formation") return null
+  try {
+    return await ensureFormationOwner(sd, await formationRootName(sd.contact_id))
+  } catch (e) {
+    await raisePilotAlarm("formation_owner_failed", { caseId: sd.id, contactId: sd.contact_id, error: e instanceof Error ? e.message : String(e) })
+    return null
+  }
 }

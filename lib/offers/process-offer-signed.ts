@@ -535,6 +535,29 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }
+      } else if (contract?.pdf_path && !docAccountId && contactId && (await import("@/lib/crm-store/formation-pilot")).newClientsLive()) {
+        // A new client who has no company yet (the lead just signed): the signed contract goes into the PERSON's own storage,
+        // hidden from the client (staff can show it on request). Drive cutover batch B, dev job ad09ea91.
+        const { data: blob } = await supabase.storage.from("signed-contracts").download(contract.pdf_path)
+        if (blob) {
+          const fileData = Buffer.from(await blob.arrayBuffer())
+          const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
+          const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
+          await ensurePersonOwner(contactId, offer.client_name || "New client")
+          const routed = await saveDocumentForContact({
+            contactId,
+            name: `Contract - ${offer.client_name} (Signed).pdf`,
+            bytes: fileData,
+            mimeType: "application/pdf",
+            documentType: null,
+            callerKey: `offer-signed:${offer.id}`,
+            row: { document_type_name: "Signed Contract", category: 5, status: "classified" },
+          })
+          if (routed.route !== "store") throw new Error("The new client's storage could not be opened — the signed contract was not saved.")
+          driveUploadResult = `ok: ${routed.pointer}`
+        } else {
+          driveUploadResult = "error: could not download PDF from Storage"
+        }
       } else {
         driveUploadResult = `skipped: pdf_path=${!!contract?.pdf_path}, drive=${!!driveFolderId}`
       }

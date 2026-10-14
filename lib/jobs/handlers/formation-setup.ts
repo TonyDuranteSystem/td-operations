@@ -347,7 +347,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
   if (p.contact_id && decision.action === "use_existing" && decision.deliveryId) {
     try {
       const pilot = await import("@/lib/crm-store/formation-pilot")
-      const { data: pilotSd } = !pilot.pilotEnvironmentAllowed() ? { data: null } : await supabaseAdmin
+      const { data: pilotSd } = !pilot.formationStoreAllowed() ? { data: null } : await supabaseAdmin
         .from("service_deliveries")
         .select("id, contact_id, account_id, service_type")
         .eq("id", decision.deliveryId)
@@ -625,7 +625,7 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
       if (sdId && decision.action !== "refuse_finished" && decision.action !== "ambiguous") {
         try {
           const pilot = await import("@/lib/crm-store/formation-pilot")
-          const caseRow = pilot.pilotEnvironmentAllowed()
+          const caseRow = pilot.formationStoreAllowed()
             ? (await supabaseAdmin.from("service_deliveries").select("account_id, service_type").eq("id", sdId).maybeSingle()).data
             : null
           const owner = caseRow
