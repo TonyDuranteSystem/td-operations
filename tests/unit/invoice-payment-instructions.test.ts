@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 
+// Next's real revalidatePath needs a request context; the per-test doMock below can lose the race when the suite is
+// under load (intermittent "static generation store missing"). A file-level mock makes it deterministic.
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+
 describe('sanitizeInvoiceMessage', () => {
   // Real production shape: a message built by the old, now-deleted
   // buildPaymentInstructions() — a staff note followed by a machine-generated

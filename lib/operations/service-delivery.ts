@@ -427,6 +427,18 @@ export async function createSD(
     )
   }
 
+  // New clients live in the new storage from the start (Drive cutover batch B, dev job ad09ea91): a Company Formation case
+  // gets its company-in-formation storage at once. Inert unless the new-clients switch (or the sandbox pilot) is on;
+  // best-effort — a failure raises an alarm and never rolls back the SD.
+  if (row.service_type === "Company Formation" && !row.account_id) {
+    try {
+      const { ensureFormationStorageAtPayment } = await import("@/lib/crm-store/formation-pilot")
+      await ensureFormationStorageAtPayment({ id: row.id, contact_id: row.contact_id ?? null, account_id: row.account_id ?? null, service_type: row.service_type })
+    } catch (err) {
+      console.warn(`[createSD] formation storage failed (non-fatal) for SD ${row.id}:`, err instanceof Error ? err.message : String(err))
+    }
+  }
+
   // Universal task per SD (2026-05-18, per Antonio). When no workflow row
   // matches this service_type, fall back to creating a plain task so every
   // service has at least one tracked task visible in the portal-chats
