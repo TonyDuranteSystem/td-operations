@@ -94,7 +94,13 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
       expect(p.caption.length).toBeGreaterThan(5)
     }
     expect(doc.exhibitPhotos.filter(p => /illustrative/i.test(p.caption))).toHaveLength(4)
-    expect(doc.exhibitPhotos.slice(0, 6).some(p => /illustrative/i.test(p.caption))).toBe(false)
+    // Antonio's order (2026-10-13): sign, two aerials, building front, entrance, then the four staged views, and the kitchenette last
+    expect(doc.exhibitPhotos.map(p => p.url.split('/').pop())).toEqual([
+      'premises-01-center-sign.jpg', 'premises-02-area-aerial.jpg', 'premises-03-building-aerial.jpg', 'premises-04-building-front.jpg', 'premises-05-entrance.jpg',
+      'premises-06-office-area.jpg', 'premises-07-office-area-2.jpg', 'premises-08-private-desk.jpg', 'premises-09-meeting-room.jpg', 'premises-10-kitchenette.jpg',
+    ])
+    expect(doc.exhibitPhotos.slice(0, 5).some(p => /illustrative/i.test(p.caption))).toBe(false)
+    expect(/illustrative/i.test(doc.exhibitPhotos[9].caption)).toBe(false)
   })
 
   it('the server PDF prints Exhibit A (the photos, two per page) after the signature block, and nothing when there are none', async () => {
