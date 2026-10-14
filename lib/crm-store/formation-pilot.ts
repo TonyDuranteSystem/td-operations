@@ -65,7 +65,12 @@ export function contactListedInSetting(value: unknown, contactId: string | null 
 export async function isStorePilotContact(contactId: string | null | undefined, env: Env = process.env): Promise<boolean> {
   if (!contactId) return false
   if (newClientsLive(env)) return true // every new client
-  if (!pilotEnvironmentAllowed(env)) return false
+  return isListedPilotContact(contactId, env)
+}
+
+/** Only the sandbox pilot list (the old rule), never the new-clients switch. */
+export async function isListedPilotContact(contactId: string | null | undefined, env: Env = process.env): Promise<boolean> {
+  if (!contactId || !pilotEnvironmentAllowed(env)) return false
   try {
     const { data, error } = await supabaseAdmin.from("app_settings").select("value").eq("key", PILOT_SETTINGS_KEY).maybeSingle()
     if (error || !data) return false
@@ -97,12 +102,15 @@ export async function storeOwnerForCase(caseId: string): Promise<StoreOwnerRef |
  * every entry point (payment, wizard submit, any upload on the case). null = not a pilot formation.
  * Throws only for a pilot formation whose owner could not be set up (the caller then runs today's path).
  */
-export async function ensureFormationOwner(sd: FormationCase, rootName: string): Promise<StoreOwnerRef | null> {
+export async function ensureFormationOwner(sd: FormationCase, rootName: string, opts: { atCreation?: boolean } = {}): Promise<StoreOwnerRef | null> {
   const existing = await storeOwnerForCase(sd.id)
   if (existing) return existing
   if (sd.service_type && sd.service_type !== "Company Formation") return null
   if (sd.account_id) return null // the company already exists: not a pilot start (Stage 1 territory)
-  if (!(await isStorePilotContact(sd.contact_id))) return null
+  // The new-clients switch opens a storage ONLY at the moment the case is created. A formation that already started on Drive
+  // (no storage yet) is never moved mid-flight — its files would end up split between two places.
+  const allowed = (opts.atCreation && newClientsLive()) || (await isListedPilotContact(sd.contact_id))
+  if (!allowed) return null
   const { data: ownerId, error } = await db().rpc("store_ensure_owner", { p_kind: "formation", p_ref: sd.id })
   if (error || !ownerId) throw new Error(`store pilot: could not create the formation owner — ${error?.message ?? "no id"}`)
   const { error: tErr } = await db().rpc("store_apply_template", { p_owner_id: ownerId, p_template_slug: COMPANY_TEMPLATE, p_root_name: storeSafeFolderName(rootName) })
@@ -219,9 +227,21 @@ export async function upsertStoreDocumentRow(fileId: string, row: DocumentsRow, 
     await raisePilotAlarm("store_publish_refused", { fileId, wanted: portalVisible, error: pubErr.message })
     portalVisible = false
   }
+  // A record with no label of its own takes the label of the file's storage type ("EIN Letter (IRS)", "Articles of Organization" …),
+  // so tools that look documents up by label (welcome package, compliance checks) find a new-storage file like any other.
+  let typeLabel: string | null = row.document_type_name ?? null
+  if (!typeLabel) {
+    try {
+      const { data: f } = await db().from("store_files").select("document_type").eq("id", fileId).maybeSingle()
+      if (f?.document_type) {
+        const { data: c } = await db().from("catalog_entries").select("display_name").eq("catalog_id", "storage_document_types").eq("slug", f.document_type).maybeSingle()
+        typeLabel = (c?.display_name as string | undefined) ?? null
+      }
+    } catch { /* the record is listed without a label, as before */ }
+  }
   const id = randomUUID()
   const { error } = await db().from("documents").insert({
-    id, drive_file_id: pointer, drive_link: storeDocumentLink(id), status: row.status ?? "classified", ...row, portal_visible: portalVisible,
+    id, drive_file_id: pointer, drive_link: storeDocumentLink(id), status: row.status ?? "classified", ...row, ...(typeLabel ? { document_type_name: typeLabel } : {}), portal_visible: portalVisible,
   })
   if (error) {
     // a concurrent run may have inserted the same pointer a moment ago
@@ -483,10 +503,33 @@ export async function raisePilotAlarm(kind: PilotAlarmKind, details: Record<stri
  * step (wizard, SS-4, Articles, EIN) finds it. Idempotent; best-effort — never changes the outcome of the payment step.
  * A failure is an alarm (a formation left without its storage would otherwise start on Drive).
  */
-export async function ensureFormationStorageAtPayment(sd: { id: string; contact_id: string | null; account_id: string | null; service_type: string | null }): Promise<StoreOwnerRef | null> {
-  if (!formationStoreAllowed() || sd.service_type !== "Company Formation") return null
+/**
+ * Is this contact a genuinely NEW client — nothing of theirs exists in Drive or on a company yet? A returning client (a linked company,
+ * or a Drive contact folder with no storage of their own) stays on Drive until their companies switch, so one person's papers are
+ * never split between two places. A contact who already has a live storage of their own is still new (the storage was opened by us).
+ * Fails closed: an unreadable record = not new.
+ */
+export async function contactIsNewClient(contactId: string | null | undefined): Promise<boolean> {
+  if (!contactId) return false
   try {
-    return await ensureFormationOwner(sd, await formationRootName(sd.contact_id))
+    const { data: c, error } = await supabaseAdmin.from("contacts").select("drive_folder_id, gdrive_folder_url").eq("id", contactId).maybeSingle()
+    if (error || !c) return false
+    const { data: links, error: lErr } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", contactId).limit(1)
+    if (lErr || (links ?? []).length > 0) return false
+    const hasDrive = !!(c.drive_folder_id || c.gdrive_folder_url)
+    if (!hasDrive) return true
+    const { data: own, error: oErr } = await db().from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person").eq("study_only", false).limit(1)
+    return !oErr && (own ?? []).length > 0
+  } catch {
+    return false
+  }
+}
+
+export async function ensureFormationStorageAtPayment(sd: { id: string; contact_id: string | null; account_id: string | null; service_type: string | null }): Promise<StoreOwnerRef | null> {
+  if (!newClientsLive() || sd.service_type !== "Company Formation") return null
+  try {
+    if (!(await contactIsNewClient(sd.contact_id))) return null // a returning client stays on Drive until their companies switch
+    return await ensureFormationOwner(sd, await formationRootName(sd.contact_id), { atCreation: true })
   } catch (e) {
     await raisePilotAlarm("formation_owner_failed", { caseId: sd.id, contactId: sd.contact_id, error: e instanceof Error ? e.message : String(e) })
     return null

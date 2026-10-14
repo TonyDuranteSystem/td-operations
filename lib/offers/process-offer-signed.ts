@@ -535,15 +535,17 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }
-      } else if (contract?.pdf_path && !docAccountId && contactId && (await import("@/lib/crm-store/formation-pilot")).newClientsLive()) {
-        // A new client who has no company yet (the lead just signed): the signed contract goes into the PERSON's own storage,
+      } else if (contract?.pdf_path && !docAccountId && contactId && (await import("@/lib/crm-store/formation-pilot")).newClientsLive() && (await (await import("@/lib/crm-store/formation-pilot")).contactIsNewClient(contactId))) {
+        // A genuinely new client (no company, no Drive history) who has no company yet (the lead just signed): the signed contract goes into the PERSON's own storage,
         // hidden from the client (staff can show it on request). Drive cutover batch B, dev job ad09ea91.
         const { data: blob } = await supabase.storage.from("signed-contracts").download(contract.pdf_path)
         if (blob) {
           const fileData = Buffer.from(await blob.arrayBuffer())
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
-          const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
-          await ensurePersonOwner(contactId, offer.client_name || "New client")
+          const { ensurePersonOwner, raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+          try {
+          const { data: who } = await supabase.from("contacts").select("full_name").eq("id", contactId).maybeSingle()
+          await ensurePersonOwner(contactId, (who?.full_name as string | null) || offer.client_name || "New client")
           const routed = await saveDocumentForContact({
             contactId,
             name: `Contract - ${offer.client_name} (Signed).pdf`,
@@ -555,6 +557,11 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
           })
           if (routed.route !== "store") throw new Error("The new client's storage could not be opened — the signed contract was not saved.")
           driveUploadResult = `ok: ${routed.pointer}`
+          } catch (saveErr) {
+            // The signed PDF is still safe in the signed-contracts bucket; staff are alerted so it is filed by hand / retried.
+            await raisePilotAlarm("store_save_failed", { what: "signed contract", offerId: offer.id, contactId, error: saveErr instanceof Error ? saveErr.message : String(saveErr) })
+            throw saveErr
+          }
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }

@@ -122,6 +122,9 @@ async function main() {
   const { data: docs } = await db.from("documents").select("id, account_id, drive_file_id").in("drive_file_id", [art, ss4, ein].map((x) => (x.status === "saved" ? x.pointer : "")))
   check((docs ?? []).length === 3 && docs.every((d: { account_id: string }) => d.account_id === m.account_id), "their CRM records now carry the company", docs)
   check(((await db.from("store_owners").select("id").eq("contact_id", contactId).eq("kind", "person")).data ?? []).length === 1, "the person keeps their own storage (contract + passport)")
+  const { findWelcomeDocsFromRecords } = await import("../../../lib/operations/welcome-docs")
+  const w = await findWelcomeDocsFromRecords(m.account_id as string)
+  check(!!w.ein && !!w.articles, "the welcome package finds the EIN letter and the Articles of the new company (no Drive folder)", w)
 
   console.log("\n6. ITIN workspace — a person document, saved through the person's storage (needs the dev server on :3100)")
   const { call, sessionCookie } = await import("./qa-http")
