@@ -1,15 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { StorageBrowserClient } from './storage-browser-client'
 import { NewStoreBrowser } from '@/components/storage/new-store-browser'
 import { TypeQuestionsPanel } from '@/components/storage/type-questions-panel'
 
 const TAB_KEY = 'td-storage-tab'
 
-/** Storage page tabs: today's storage, and the view of the NEW CRM store (job 685467b5). */
+/** Storage page: the CRM storage (Antonio 2026-10-14: the old empty "Current storage" tab and the "pilot" label are gone) and the type questions. */
 export function StorageTabs() {
-  const [tab, setTab] = useState<'current' | 'new' | 'types'>('current')
+  const [tab, setTab] = useState<'new' | 'types'>('new')
   // a link can open the NEW storage on one folder: /storage?store=new&owner=<id>&folder=<id>
   const [deepLink, setDeepLink] = useState<{ ownerId: string; folderId: string | null } | null>(null)
   // the last tab used on this computer (a convenience only — read after the first render, never required)
@@ -23,13 +22,13 @@ export function StorageTabs() {
       setTab('new')
       return
     }
-    try { const v = window.localStorage.getItem(TAB_KEY); if (v === 'new' || v === 'types') setTab(v) } catch { /* storage blocked */ }
+    try { const v = window.localStorage.getItem(TAB_KEY); if (v === 'types') setTab(v) } catch { /* storage blocked */ }
   }, [])
-  const choose = (id: 'current' | 'new' | 'types') => {
+  const choose = (id: 'new' | 'types') => {
     setTab(id)
     try { window.localStorage.setItem(TAB_KEY, id) } catch { /* storage blocked */ }
   }
-  const btn = (id: 'current' | 'new' | 'types', label: string) => (
+  const btn = (id: 'new' | 'types', label: string) => (
     <button
       type="button"
       onClick={() => choose(id)}
@@ -41,11 +40,10 @@ export function StorageTabs() {
   return (
     <>
       <div className="mb-4 flex gap-1">
-        {btn('current', 'Current storage')}
-        {btn('new', 'New storage (pilot)')}
+        {btn('new', 'Storage')}
         {btn('types', 'Type questions')}
       </div>
-      {tab === 'current' ? <StorageBrowserClient /> : tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId ?? undefined} /> : <TypeQuestionsPanel />}
+      {tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId ?? undefined} /> : <TypeQuestionsPanel />}
     </>
   )
 }

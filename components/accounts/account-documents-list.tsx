@@ -77,6 +77,9 @@ export function AccountDocumentsList({
   // a MOVED company shows only the read-only storage panel below (its Drive tree is hidden), so a record that still points at a
   // Drive file has no other place to appear: list it here too (it used to vanish from both views)
   const driveTreeShown = accountHasDriveFolder && !storeOwner.data?.moved
+  // A company whose files live in the new storage: NO list here — the Documents tab is only the "Open in Storage" button
+  // (Antonio 2026-10-14). While it is still being worked out, nothing flashes either.
+  if (accountId && (storeOwner.isLoading || storeOwner.data?.ownerId)) return null
   const homeless = filterDocumentsNeedingFlatListing(documents, driveTreeShown)
     .filter((d) => !shown.has(d.drive_file_id ?? ''))
     .filter((d) => !(pendingStore && (d.drive_file_id ?? '').startsWith('store:')))
