@@ -22,7 +22,7 @@ export function RowAction({ row }: { row: CalendarRow }) {
           type="button"
           onClick={() => setOpen(true)}
           aria-label={`Wrap up ${row.name}`}
-          className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700"
+          className="whitespace-nowrap rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700"
         >
           Wrap up…
         </button>

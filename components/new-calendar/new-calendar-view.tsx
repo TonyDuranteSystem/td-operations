@@ -90,27 +90,31 @@ function Days({ row }: { row: CalendarRow }) {
   return <span>{row.daysHere}d</span>
 }
 
+// The six-column list needs about 950px of content next to the 256px side menu, so it only switches on from 1100px wide windows
+// (a floating window or a laptop split view is narrower and gets the stacked card layout, never a clipped or sideways-scrolling one).
+const GRID = 'min-[1100px]:grid min-[1100px]:grid-cols-[minmax(160px,1.6fr)_minmax(110px,1fr)_minmax(170px,1.5fr)_135px_minmax(150px,1.4fr)_150px] min-[1100px]:items-center min-[1100px]:gap-3'
+
 function Row({ row }: { row: CalendarRow }) {
   return (
-    <tr className="border-t align-middle hover:bg-zinc-50">
-      <td className="px-3 py-3">
-        <div className="flex flex-wrap items-center gap-1.5 font-semibold">
-          <span>{row.name}</span>
-          {row.isPerson && <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">person</span>}
-          {row.badges.map(b => (
-            <span key={b} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">{b}</span>
-          ))}
-        </div>
-      </td>
-      <td className="px-3 py-3 text-zinc-700">{row.serviceType}</td>
-      <td className="px-3 py-3">
+    <li className={`border-t px-3 py-3 text-sm hover:bg-zinc-50 ${GRID}`}>
+      <div className="flex flex-wrap items-center gap-1.5 font-semibold">
+        <span>{row.name}</span>
+        {row.isPerson && <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">person</span>}
+        {row.badges.map(b => (
+          <span key={b} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">{b}</span>
+        ))}
+      </div>
+      <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.serviceType}</div>
+      <div className="mt-1 min-[1100px]:mt-0">
         <div>{row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.bucket === 'closed' ? (row.stage || 'Finished') : (row.stage || 'no step')}</div>
         <span className={`mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${PILL_CLASS[row.pill]}`}>{PILL_LABELS[row.pill]}</span>
-      </td>
-      <td className="whitespace-nowrap px-3 py-3 font-mono text-[13px] tabular-nums"><Days row={row} /></td>
-      <td className="px-3 py-3 text-zinc-700">{row.next}</td>
-      <td className="px-3 py-3 text-right"><RowAction row={row} /></td>
-    </tr>
+      </div>
+      <div className="mt-1 font-mono text-[13px] tabular-nums min-[1100px]:mt-0">
+        <span className="font-sans text-zinc-500 min-[1100px]:hidden">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />
+      </div>
+      <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.next}</div>
+      <div className="mt-3 min-[1100px]:mt-0 min-[1100px]:text-right"><RowAction row={row} /></div>
+    </li>
   )
 }
 
@@ -202,32 +206,23 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
         </div>
       )}
 
-      {model.warnings.length > 0 && (
+      {model.warnings.length > 0 && !closedView && (
         <ul className="space-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {model.warnings.map(w => <li key={w}>{w}</li>)}
         </ul>
       )}
 
-      <div className="overflow-x-auto rounded-lg border bg-white">
-        <table className="w-full min-w-[760px] border-collapse text-sm">
-          <thead>
-            <tr className="bg-zinc-50 text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-              <th className="px-3 py-2">Client</th>
-              <th className="px-3 py-2">Service</th>
-              <th className="px-3 py-2">Step now</th>
-              <th className="px-3 py-2">{closedView ? 'Finished' : 'Days'}</th>
-              <th className="px-3 py-2">Next step</th>
-              <th className="px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {model.rows.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-zinc-500">Nothing here right now.</td></tr>
-            ) : (
-              model.rows.map(r => <Row key={r.id} row={r} />)
-            )}
-          </tbody>
-        </table>
+      <div className="overflow-hidden rounded-lg border bg-white">
+        <div className={`hidden bg-zinc-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 ${GRID}`} aria-hidden="true">
+          <div>Client</div><div>Service</div><div>Step now</div><div>{closedView ? 'Finished' : 'Days'}</div><div>Next step</div><div />
+        </div>
+        {model.rows.length === 0 ? (
+          <div className="border-t px-4 py-8 text-center text-zinc-500">Nothing here right now.</div>
+        ) : (
+          <ul>
+            {model.rows.map(r => <Row key={r.id} row={r} />)}
+          </ul>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-zinc-600">
