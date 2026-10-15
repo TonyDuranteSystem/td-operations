@@ -82,16 +82,19 @@ const WAIT_WORDS: Record<Who, string> = {
 /**
  * Which list an OPEN job belongs to. Every open job is in exactly one list.
  *   - a paused job (blocked, on hold, company not operating) waits: Pending, never counted late;
+ *   - a step with no waiting-on setting: Not sorted yet (the page will not guess, late or not);
  *   - a follow-up that ran late comes back to To work on, whoever it was waiting for;
  *   - a step that is ours, or the last step (nobody is waiting: close it): To work on;
- *   - a step with no waiting-on setting: Not sorted yet (the page will not guess);
  *   - client / outside office / a date: Pending.
  */
 export function bucketOf(row: Row): Bucket {
   if (row.followUp === "parked") return "pending"
+  // No waiting-on setting = the page cannot tell whose turn it is, so it does not guess: not even a late one goes to To work on
+  // (System Counselor, 2026-10-16: 5 mailing-address jobs would otherwise be "overdue" next to 221 identical ones "not sorted").
+  // Its lateness still shows in red in the Days column.
+  if (row.who === "unset") return "other"
   if (row.lateBy !== null) return "work"
   if (row.who === "us" || row.who === "none") return "work"
-  if (row.who === "unset") return "other"
   return "pending"
 }
 

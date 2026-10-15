@@ -22,7 +22,7 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
 export const BUCKET_HELP: Record<Bucket, string> = {
   work: "Steps that are ours, jobs whose follow-up time has passed, and jobs sitting on the last step (nobody is waiting: close them).",
   pending: "Steps waiting on the client, an outside office or a date, and paused jobs (blocked, on hold, company not operating).",
-  other: "The step has no \"waiting on\" setting yet, so the page cannot tell whose turn it is (if its follow-up time has passed it shows under To work on). Set it on the step in the Service Catalog.",
+  other: "The step has no \"waiting on\" setting yet, so the page cannot tell whose turn it is. Set it on the step in the Service Catalog.",
   closed: "Jobs that reached their last step in the last 30 days.",
 }
 

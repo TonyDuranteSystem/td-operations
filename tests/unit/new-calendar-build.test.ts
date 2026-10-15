@@ -133,11 +133,21 @@ describe("which list an open job lands in", () => {
     expect(plain.lateBy).toBeNull()
   })
 
+  it("a late job with no waiting-on setting stays under Not sorted yet and still shows its late days", () => {
+    const m = run([job({ service_type: "Gamma", stage: "Start", stage_entered_at: daysAgo(40) })], { b: "other" })
+    expect(m.rows).toHaveLength(1)
+    expect(m.rows[0].bucket).toBe("other")
+    expect(m.workToday).toBe(0)
+  })
+
   it("bucketOf: a paused job is never counted late and a late job outranks the step's owner", () => {
     const base = { followUp: "left", lateBy: null, who: "client" } as unknown as Row
     expect(bucketOf({ ...base, followUp: "parked", lateBy: 4, who: "us" } as Row)).toBe("pending")
     expect(bucketOf({ ...base, followUp: "late", lateBy: 4, who: "outside" } as Row)).toBe("work")
     expect(bucketOf({ ...base, who: "unset" } as Row)).toBe("other")
+    // not even a late job with no waiting-on setting is guessed into To work on; a paused one still waits
+    expect(bucketOf({ ...base, followUp: "late", lateBy: 9, who: "unset" } as Row)).toBe("other")
+    expect(bucketOf({ ...base, followUp: "parked", lateBy: null, who: "unset" } as Row)).toBe("pending")
   })
 
   it("nextText says 'No step recorded' for a job with no step", () => {
