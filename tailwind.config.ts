@@ -1,4 +1,6 @@
 import type { Config } from 'tailwindcss'
+import plugin from 'tailwindcss/plugin'
+import { buildDarkVariables, buildKindColors } from './lib/theme/crm-dark-palette'
 
 const config: Config = {
   darkMode: ['class'],
@@ -51,6 +53,15 @@ const config: Config = {
           border: 'hsl(var(--sidebar-border))',
         },
       },
+      // CRM dark mode: the stock palette routed through CSS variables (see lib/theme/crm-dark-palette.ts).
+      // Light values are the variables' fallbacks, so pages without `.crm-dark` look exactly as before.
+      backgroundColor: buildKindColors('bg'),
+      textColor: buildKindColors('text'),
+      placeholderColor: buildKindColors('text'),
+      borderColor: buildKindColors('border'),
+      divideColor: buildKindColors('border'),
+      ringColor: buildKindColors('border'),
+      gradientColorStops: buildKindColors('bg'),
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
@@ -58,6 +69,11 @@ const config: Config = {
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [
+    require('tailwindcss-animate'),
+    plugin(({ addBase }) => {
+      addBase({ '.crm-dark': { ...buildDarkVariables(), 'color-scheme': 'dark' } })
+    }),
+  ],
 }
 export default config
