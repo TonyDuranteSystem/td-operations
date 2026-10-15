@@ -89,9 +89,12 @@ const ownerIcon = (k: string) => (k === 'company' ? Building2 : k === 'person' ?
  * 'folder' = where a FOLDER may go (a top folder is fine; never inside itself). With `chooseOwner` the
  * picker first lists every storage (search), most likely first (`preferOwnerIds`).
  */
-export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, onPick, onClose }: {
+export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, excludeFolderId, currentFolderId, chooseOwner, preferOwnerIds, newPeople, onPickPerson, onPick, onClose }: {
   title: string; ownerId?: string; ownerLabel?: string; mode: 'file' | 'folder'; excludeFolderId?: string | null; currentFolderId?: string | null
-  chooseOwner?: boolean; preferOwnerIds?: string[]; onPick: (folderId: string, ownerId: string, path: string) => void; onClose: () => void
+  chooseOwner?: boolean; preferOwnerIds?: string[]
+  /** people of the same company who have NO storage yet: picking one gives them one (made when the file moves) */
+  newPeople?: Array<{ contactId: string; name: string }>; onPickPerson?: (contactId: string, name: string) => void
+  onPick: (folderId: string, ownerId: string, path: string) => void; onClose: () => void
 }) {
   const [owner, setOwner] = useState<{ id: string; label: string } | null>(fixedOwner ? { id: fixedOwner, label: ownerLabel ?? '' } : null)
   const [groups, setGroups] = useState<NavGroup[] | null>(null)
@@ -181,6 +184,14 @@ export function FolderPicker({ title, ownerId: fixedOwner, ownerLabel, mode, exc
           <>
             <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search a client, a person, Business…" className="mb-2 rounded-md border border-zinc-200 px-2 py-1.5 text-sm" />
             <ul className="min-h-0 flex-1 overflow-y-auto">
+              {(newPeople ?? []).filter((p) => !q || p.name.toLowerCase().includes(q)).map((p) => (
+                <li key={`new:${p.contactId}`}>
+                  <button type="button" onClick={() => onPickPerson?.(p.contactId, p.name)} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-zinc-50">
+                    <User className="h-4 w-4 text-zinc-400" /><span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    <span className="text-xs text-zinc-400">same company · no storage yet — made when the file moves</span>
+                  </button>
+                </li>
+              ))}
               {groups === null && !error && <li className="p-2 text-sm text-zinc-500">Loading…</li>}
               {shownOwners.slice(0, 200).map((o) => {
                 const Icon = ownerIcon(o.kind)
