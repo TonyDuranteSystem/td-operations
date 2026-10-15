@@ -111,7 +111,7 @@ export function matchExcludingCard(
   return null
 }
 
-function normalizeName(s: string): string {
+export function normalizeName(s: string): string {
   return s
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")

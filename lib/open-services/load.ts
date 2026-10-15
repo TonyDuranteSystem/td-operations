@@ -20,8 +20,8 @@ import type {
   StepInput,
 } from "@/lib/open-services/build"
 
-const PAGE = 1000
-const CHUNK = 100
+export const PAGE = 1000
+export const CHUNK = 100
 const MAX_PAGES = 200
 
 export interface OpenServicesInputs {
@@ -37,7 +37,7 @@ interface PageResult<T> {
   error: { message: string } | null
 }
 
-async function readAll<T extends { id: string }>(
+export async function readAll<T extends { id: string }>(
   label: string,
   page: (afterId: string | null) => PromiseLike<PageResult<T>>,
 ): Promise<T[]> {
@@ -60,13 +60,13 @@ async function readAll<T extends { id: string }>(
   throw new Error(`open-services: ${label} has more than ${MAX_PAGES * PAGE} rows — refusing to show a partial list`)
 }
 
-function chunk<T>(arr: T[], size: number): T[][] {
+export function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
 }
 
-function unique(ids: Array<string | null>): string[] {
+export function unique(ids: Array<string | null>): string[] {
   return Array.from(new Set(ids.filter((v): v is string => !!v)))
 }
 
