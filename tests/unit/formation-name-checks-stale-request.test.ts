@@ -20,6 +20,9 @@ import type { NameCheck } from '@/lib/flows/name-checks'
 
 let sdFixture: Record<string, unknown> | null = null
 let writtenChecks: unknown = null
+// When true the guarded save finds the case changed under it (0 rows updated).
+let writeConflict = false
+let writeCalls = 0
 // Static fallback (every call returns this) — used by the existing
 // always-succeeds / always-fails tests. When cancelUpdateErrorSequence is set
 // instead, each successive call pulls the next entry (for the retry tests,
@@ -47,10 +50,15 @@ vi.mock('@/lib/supabase-admin', () => ({
         const chain = {
           select: () => chain,
           eq: () => chain,
-          maybeSingle: () => Promise.resolve({ data: sdFixture, error: null }),
+          maybeSingle: () => Promise.resolve({ data: sdFixture ? structuredClone(sdFixture) : null, error: null }),
           update: (row: Record<string, unknown>) => {
             writtenChecks = row.name_checks
-            return { eq: () => Promise.resolve({ data: null, error: null }) }
+            writeCalls++
+            const upd = {
+              eq: () => upd,
+              select: () => Promise.resolve({ data: writeConflict ? [] : [{ id: 'sd' }], error: null }),
+            }
+            return upd
           },
         }
         return chain
@@ -86,11 +94,11 @@ vi.mock('@/lib/system-errors', () => ({
   reportSystemError: (...args: unknown[]) => reportSystemErrorMock(...args),
 }))
 
-import { handleNameAction, cancelPendingNewNamesRequests } from '@/lib/operations/formation-name-checks'
+import { handleNameAction, cancelPendingNewNamesRequests, applyNameDecisionResponse } from '@/lib/operations/formation-name-checks'
 
 const SD_ID = 'sd-lead-lift'
 
-function baseSd(name_checks: NameCheck[]) {
+function baseSd(name_checks: NameCheck[], stage = 'Filed with State') {
   return {
     id: SD_ID,
     // null account_id/contact_id short-circuits resolveState() to its
@@ -103,11 +111,15 @@ function baseSd(name_checks: NameCheck[]) {
     due_date: null,
     stage_entered_at: null,
     created_at: '2026-08-19T00:00:00Z',
+    stage,
+    updated_at: 'v1',
   }
 }
 
 beforeEach(() => {
   writtenChecks = null
+  writeConflict = false
+  writeCalls = 0
   cancelUpdateError = null
   cancelUpdateErrorSequence = null
   cancelUpdateCalls = 0
@@ -230,5 +242,114 @@ describe('cancelPendingNewNamesRequests error handling (2026-09-11, senior-engin
     expect(cancelUpdateCalls).toBe(2)
     expect(spy).toHaveBeenCalledTimes(1) // only the "retrying once" log — the retry succeeded
     expect(reportSystemErrorMock).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('mark_sos_rejected from an accepted name (Lahmar dead end, dev job 6bf11260)', () => {
+  const dead = (name: string): NameCheck => ({ name, source: 'wizard', status: 'not_available', updated_at: null })
+
+  it('records the state refusal on an accepted name, asks the client for new names, and does NOT re-advance a case already at Wizard Submitted', async () => {
+    sdFixture = baseSd(
+      [{ name: 'Redstone LLC', source: 'wizard', status: 'accepted', updated_at: null }, dead('B LLC'), dead('C LLC')],
+      'Wizard Submitted',
+    )
+    const result = await handleNameAction({ sdId: SD_ID, action: 'mark_sos_rejected', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(true)
+    expect((writtenChecks as NameCheck[])[0].status).toBe('rejected_by_sos')
+    expect(createDecisionRequestMock).toHaveBeenCalledTimes(1)
+    expect(advanceServiceDeliveryMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['pending', 'available', 'sent_to_client', 'rejected_by_client', 'not_available'] as const)(
+    'refuses a name that is %s (only accepted or filed can be marked refused by the state)',
+    async (status) => {
+      sdFixture = baseSd([{ name: 'A LLC', source: 'wizard', status, updated_at: null }], 'Wizard Submitted')
+      const result = await handleNameAction({ sdId: SD_ID, action: 'mark_sos_rejected', nameIndex: 0, actor: 'Luca' })
+      expect(result.ok).toBe(false)
+      expect(writeCalls).toBe(0)
+      expect(createDecisionRequestMock).not.toHaveBeenCalled()
+    },
+  )
+
+  it('sends nothing to the client when the guarded save finds the case changed', async () => {
+    sdFixture = baseSd(
+      [{ name: 'Redstone LLC', source: 'wizard', status: 'accepted', updated_at: null }, dead('B LLC')],
+      'Wizard Submitted',
+    )
+    writeConflict = true
+    const result = await handleNameAction({ sdId: SD_ID, action: 'mark_sos_rejected', nameIndex: 0, actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/changed while you were working/i)
+    expect(createDecisionRequestMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('add_name (staff adds a candidate directly)', () => {
+  it('appends a pending staff_added name and retracts an open "new names" ask', async () => {
+    sdFixture = baseSd([{ name: 'A LLC', source: 'wizard', status: 'not_available', updated_at: null }], 'Wizard Submitted')
+    const result = await handleNameAction({ sdId: SD_ID, action: 'add_name', nameIndex: 0, name: '  Redstone   Horizon LLC ', actor: 'Luca' })
+    expect(result.ok).toBe(true)
+    const saved = writtenChecks as NameCheck[]
+    expect(saved).toHaveLength(2)
+    expect(saved[1]).toMatchObject({ name: 'Redstone Horizon LLC', source: 'staff_added', status: 'pending' })
+    expect(cancelUpdateCalls).toBe(1)
+  })
+
+  it('refuses once the case is past name selection (server-side, not just the hidden box)', async () => {
+    sdFixture = baseSd([{ name: 'A LLC', source: 'wizard', status: 'filed', updated_at: null }], 'Filed with State')
+    const result = await handleNameAction({ sdId: SD_ID, action: 'add_name', nameIndex: 0, name: 'New LLC', actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(writeCalls).toBe(0)
+  })
+
+  it('refuses a name that matches one already tried, even a dead one', async () => {
+    sdFixture = baseSd([{ name: 'Redstone Horizon', source: 'client_suggestion', status: 'not_available', updated_at: null }], 'Wizard Submitted')
+    const result = await handleNameAction({ sdId: SD_ID, action: 'add_name', nameIndex: 0, name: 'redstone horizon llc', actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(writeCalls).toBe(0)
+    expect(cancelUpdateCalls).toBe(0)
+  })
+
+  it('does not retract the client ask when the save did not happen', async () => {
+    sdFixture = baseSd([{ name: 'A LLC', source: 'wizard', status: 'not_available', updated_at: null }], 'Wizard Submitted')
+    writeConflict = true
+    const result = await handleNameAction({ sdId: SD_ID, action: 'add_name', nameIndex: 0, name: 'Brand New LLC', actor: 'Luca' })
+    expect(result.ok).toBe(false)
+    expect(cancelUpdateCalls).toBe(0)
+  })
+})
+
+describe('applyNameDecisionResponse ignores a late answer for a name staff already moved on from', () => {
+  const req = (id: string) =>
+    ({ id, service_delivery_id: SD_ID, account_id: null, contact_id: null, options: { name_check: { kind: 'approval', name_index: 0 } } }) as never
+
+  it('does not flip a state-refused name back to accepted', async () => {
+    sdFixture = baseSd(
+      [{ name: 'Redstone LLC', source: 'wizard', status: 'rejected_by_sos', updated_at: null, decision_request_id: 'dr-1' }],
+      'Wizard Submitted',
+    )
+    await applyNameDecisionResponse(req('dr-1'), 'approved', {})
+    expect(writeCalls).toBe(0)
+  })
+
+  it('still records a normal answer for a name waiting on the client', async () => {
+    sdFixture = baseSd(
+      [{ name: 'Redstone LLC', source: 'wizard', status: 'sent_to_client', updated_at: null, decision_request_id: 'dr-1' }],
+      'Wizard Submitted',
+    )
+    await applyNameDecisionResponse(req('dr-1'), 'approved', {})
+    expect((writtenChecks as NameCheck[])[0].status).toBe('accepted')
+  })
+
+  it('reports to the error dashboard (does not swallow) when the save keeps conflicting', async () => {
+    sdFixture = baseSd(
+      [{ name: 'Redstone LLC', source: 'wizard', status: 'sent_to_client', updated_at: null, decision_request_id: 'dr-1' }],
+      'Wizard Submitted',
+    )
+    writeConflict = true
+    await applyNameDecisionResponse(req('dr-1'), 'approved', {})
+    expect(writeCalls).toBe(3)
+    expect(reportSystemErrorMock).toHaveBeenCalledTimes(1)
   })
 })

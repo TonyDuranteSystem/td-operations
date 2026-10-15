@@ -5,7 +5,8 @@
  *      the formation wizard when the SD has none yet).
  * POST /api/flows/[id]/name-check → { action, name_index } applies a name status
  *      change; 'send_to_client' / 'mark_sos_rejected' also create the matching
- *      Client Decision Request. Returns the updated name_checks.
+ *      Client Decision Request. 'add_name' ({ name }) lets staff add a candidate
+ *      directly. Returns the updated name_checks.
  *
  * [id] = service_delivery_id.
  */
@@ -17,7 +18,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getOrInitNameChecks, handleNameAction, type NameAction } from '@/lib/operations/formation-name-checks'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 
-const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names']
+const ACTIONS: NameAction[] = ['mark_available', 'mark_not_available', 'send_to_client', 'mark_filed', 'mark_sos_rejected', 'request_new_names', 'add_name']
 
 /** Same identity resolution requireStaffRoute() just validated — used here only to attribute the action (actor/actorId), not to gate access. */
 async function currentUser() {
@@ -47,8 +48,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!ACTIONS.includes(action)) {
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 })
   }
-  // request_new_names is not tied to a specific candidate, so it needs no index.
-  if (action !== 'request_new_names' && (!Number.isInteger(nameIndex) || nameIndex < 0)) {
+  // request_new_names / add_name are not tied to an existing candidate, so they need no index.
+  if (action === 'add_name' && typeof body.name !== 'string') {
+    return NextResponse.json({ success: false, error: 'name must be text.' }, { status: 400 })
+  }
+  if (action !== 'request_new_names' && action !== 'add_name' && (!Number.isInteger(nameIndex) || nameIndex < 0)) {
     return NextResponse.json({ success: false, error: 'name_index must be a non-negative integer.' }, { status: 400 })
   }
   const idx = Number.isInteger(nameIndex) && nameIndex >= 0 ? nameIndex : 0
@@ -57,7 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     || (user.email as string | undefined)
     || 'staff'
 
-  const result = await handleNameAction({ sdId: params.id, action, nameIndex: idx, actor: who, actorId: user.id })
+  const result = await handleNameAction({ sdId: params.id, action, nameIndex: idx, name: action === 'add_name' ? body.name : undefined, actor: who, actorId: user.id })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error }, { status: 400 })
   return NextResponse.json({ success: true, name_checks: result.name_checks })
 }

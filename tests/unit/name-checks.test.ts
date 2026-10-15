@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, allNamesDead, confirmedClientFacingName, type NameCheck } from '@/lib/flows/name-checks'
+import { initNameChecksFromWizard, parseProposedNames, hasFiledName, filedName, allNamesDead, confirmedClientFacingName, nameDedupeKey, addStaffName, MAX_STAFF_NAME_LENGTH, type NameCheck } from '@/lib/flows/name-checks'
 
 describe('initNameChecksFromWizard', () => {
   it('builds entries from the numbered candidates, skipping empties', () => {
@@ -170,5 +170,58 @@ describe('confirmedClientFacingName (2026-09-11, dev job cb771564)', () => {
         { ...base, name: 'Actually Filed LLC', status: 'filed' },
       ]),
     ).toBe('Actually Filed LLC')
+  })
+})
+
+
+describe('nameDedupeKey', () => {
+  it('treats LLC suffix, case, punctuation and spacing as the same name', () => {
+    const k = nameDedupeKey('Redstone Horizon')
+    expect(nameDedupeKey('REDSTONE  HORIZON LLC')).toBe(k)
+    expect(nameDedupeKey('Redstone Horizon L.L.C.')).toBe(k)
+    expect(nameDedupeKey('Redstone Horizon, LLC')).toBe(k)
+    expect(nameDedupeKey('Redstone Horizon Limited Liability Company')).toBe(k)
+  })
+  it('keeps genuinely different names apart and handles junk', () => {
+    expect(nameDedupeKey('Redstone Atlas')).not.toBe(nameDedupeKey('Redstone Horizon'))
+    expect(nameDedupeKey(null)).toBe('')
+    expect(nameDedupeKey('   ')).toBe('')
+  })
+})
+
+describe('addStaffName', () => {
+  const NOW = '2026-10-15T00:00:00.000Z'
+  const dead: NameCheck = { name: 'Redstone Global LLC', source: 'wizard', status: 'not_available', updated_at: null }
+
+  it('appends a pending staff_added entry with a cleaned name, without mutating the input', () => {
+    const input = [dead]
+    const r = addStaffName(input, '  Redstone   Horizon  ', NOW)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.checks).toHaveLength(2)
+      expect(r.checks[1]).toEqual({ name: 'Redstone Horizon', source: 'staff_added', status: 'pending', updated_at: NOW })
+    }
+    expect(input).toHaveLength(1)
+  })
+  it('works on an empty or missing list', () => {
+    expect(addStaffName(null, 'Acme LLC', NOW).ok).toBe(true)
+    expect(addStaffName([], 'Acme LLC', NOW).ok).toBe(true)
+  })
+  it('rejects blank, non-text and over-long names', () => {
+    expect(addStaffName([], '   ', NOW).ok).toBe(false)
+    expect(addStaffName([], 42, NOW).ok).toBe(false)
+    expect(addStaffName([], 'x'.repeat(MAX_STAFF_NAME_LENGTH + 1), NOW).ok).toBe(false)
+  })
+  it('rejects a duplicate of any existing name, dead ones included', () => {
+    const r = addStaffName([dead], 'redstone global', NOW)
+    expect(r.ok).toBe(false)
+  })
+  it('caps the number of candidates', () => {
+    const many: NameCheck[] = Array.from({ length: 30 }, (_, i) => ({ name: `N${i}`, source: 'wizard', status: 'pending', updated_at: null }))
+    expect(addStaffName(many, 'One More', NOW).ok).toBe(false)
+  })
+  it('a pending staff-added name makes the list not all-dead (hides Request New Names)', () => {
+    const r = addStaffName([dead], 'Fresh Name', NOW)
+    if (r.ok) expect(allNamesDead(r.checks)).toBe(false)
   })
 })

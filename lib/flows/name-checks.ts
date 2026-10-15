@@ -33,7 +33,7 @@ export type NameCheckStatus =
 
 export interface NameCheck {
   name: string
-  source: 'wizard' | 'client_resubmit' | 'client_suggestion'
+  source: 'wizard' | 'client_resubmit' | 'client_suggestion' | 'staff_added'
   field?: string | null
   status: NameCheckStatus
   updated_at: string | null
@@ -104,6 +104,58 @@ export function parseProposedNames(text: unknown): string[] {
     if (out.length >= 5) break
   }
   return out
+}
+
+/** Max length of one LLC name typed by staff (client messages interpolate it). */
+export const MAX_STAFF_NAME_LENGTH = 120
+/** Max candidates on one case — stops runaway lists. */
+export const MAX_NAME_CANDIDATES = 30
+
+/**
+ * Comparison key for "is this the same LLC name": lowercased, punctuation and
+ * extra spaces dropped, trailing LLC / L.L.C. / "limited liability company"
+ * ignored — so "Acme", "ACME LLC" and "Acme L.L.C." are one name. Pure.
+ */
+export function nameDedupeKey(name: unknown): string {
+  if (typeof name !== 'string') return ''
+  return name
+    .toLowerCase()
+    .replace(/[.,]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*(limited liability company|llc)$/, '')
+    .trim()
+}
+
+/**
+ * Staff adds a candidate name directly (e.g. the client sent one by email or
+ * chat). Appends a `pending` entry; rejects blank / too-long names and any
+ * name that matches an existing one — dead names included, so a name that was
+ * already refused can't come back through this door. Pure: returns a new array.
+ */
+export function addStaffName(
+  checks: NameCheck[] | null | undefined,
+  rawName: unknown,
+  nowIso: string,
+): { ok: boolean; checks?: NameCheck[]; error?: string } {
+  const name = typeof rawName === 'string' ? rawName.replace(/\s+/g, ' ').trim() : ''
+  if (!name) return { ok: false, error: 'Type the LLC name to add.' }
+  if (name.length > MAX_STAFF_NAME_LENGTH) {
+    return { ok: false, error: `That name is too long (max ${MAX_STAFF_NAME_LENGTH} characters).` }
+  }
+  const list = Array.isArray(checks) ? checks : []
+  if (list.length >= MAX_NAME_CANDIDATES) {
+    return { ok: false, error: 'There are already too many names on this case.' }
+  }
+  const key = nameDedupeKey(name)
+  if (!key) return { ok: false, error: 'Type the LLC name to add.' }
+  if (list.some((c) => nameDedupeKey(c.name) === key)) {
+    return { ok: false, error: 'That name is already on the list (or was already tried).' }
+  }
+  return {
+    ok: true,
+    checks: [...list, { name, source: 'staff_added', status: 'pending', updated_at: nowIso }],
+  }
 }
 
 /** True when at least one name has been filed with the SOS (advance gate). */

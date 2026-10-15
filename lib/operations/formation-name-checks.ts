@@ -13,6 +13,8 @@ import {
   initNameChecksFromWizard,
   parseProposedNames,
   allNamesDead,
+  addStaffName,
+  nameDedupeKey,
   type NameCheck,
   type NameCheckStatus,
 } from '@/lib/flows/name-checks'
@@ -34,6 +36,9 @@ export type NameAction =
   // Not tied to a specific candidate — asks the client for a fresh set of names
   // when none of the current ones are viable (all unavailable / rejected).
   | 'request_new_names'
+  // Staff types a candidate name directly (client sent one by email/chat).
+  // Not tied to an existing row; carries `name` instead of an index.
+  | 'add_name'
 
 interface SdRow {
   id: string
@@ -44,6 +49,8 @@ interface SdRow {
   due_date: string | null
   stage_entered_at: string | null
   created_at: string | null
+  stage: string | null
+  updated_at: string | null
 }
 
 async function loadSd(sdId: string): Promise<SdRow | null> {
@@ -51,14 +58,36 @@ async function loadSd(sdId: string): Promise<SdRow | null> {
   // selecting it here errors the whole query (and silently empties name_checks).
   // service_type + the date columns feed the flow-chat topic/year (send_to_client).
   const { data } = await sd()
-    .select('id, contact_id, account_id, name_checks, service_type, due_date, stage_entered_at, created_at')
+    .select('id, contact_id, account_id, name_checks, service_type, due_date, stage_entered_at, created_at, stage, updated_at')
     .eq('id', sdId)
     .maybeSingle()
   return (data as SdRow | null) ?? null
 }
 
-async function writeNameChecks(sdId: string, checks: NameCheck[]): Promise<void> {
-  await sd().update({ name_checks: checks, updated_at: new Date().toISOString() }).eq('id', sdId)
+interface WriteResult {
+  ok: boolean
+  conflict?: boolean
+  error?: string
+}
+
+/**
+ * Save the name list. With `expectedUpdatedAt` it only writes if nobody else
+ * changed the case since we read it (two staff, or staff + a client answer at
+ * the same moment, used to silently overwrite each other) — a stale save comes
+ * back as `conflict`. The write error is no longer swallowed.
+ */
+async function writeNameChecks(sdId: string, checks: NameCheck[], expectedUpdatedAt?: string | null): Promise<WriteResult> {
+  let q = sd().update({ name_checks: checks, updated_at: new Date().toISOString() }).eq('id', sdId)
+  if (expectedUpdatedAt) q = q.eq('updated_at', expectedUpdatedAt)
+  const { data, error } = await q.select('id')
+  if (error) {
+    console.error(`writeNameChecks failed for SD ${sdId}:`, error.message)
+    return { ok: false, conflict: false, error: 'Could not save the names — please try again.' }
+  }
+  if (expectedUpdatedAt && (!Array.isArray(data) || data.length === 0)) {
+    return { ok: false, conflict: true, error: 'The names changed while you were working (someone else or the client just acted). Reload the page and try again.' }
+  }
+  return { ok: true }
 }
 
 /**
@@ -224,6 +253,8 @@ async function cancelPendingNewNamesRequestsOnce(sdId: string): Promise<{ error:
     .eq('service_delivery_id', sdId)
     .eq('status', 'pending')
     .eq('request_type', 'text_input')
+    // Only the "propose new names" asks — never another text question open on the same case.
+    .eq('options->name_check->>kind', 'new_names')
 }
 
 /**
@@ -269,6 +300,8 @@ export async function handleNameAction(params: {
   sdId: string
   action: NameAction
   nameIndex: number
+  /** Only for add_name: the LLC name staff typed. */
+  name?: string
   actor: string
   /** Auth user UUID — used as portal_messages.sender_id for the flow chat note
    *  (that column is NOT NULL, so without it the heads-up message is dropped). */
@@ -278,6 +311,27 @@ export async function handleNameAction(params: {
   if (!row) return { ok: false, error: 'Service delivery not found.' }
 
   const checks = await getOrInitNameChecks(params.sdId)
+  // Fresh read AFTER any first-time seeding: gives the case's current stage and
+  // the version stamp the guarded save below compares against. (If the load
+  // fails the guard is simply skipped — never blocks on a missing stamp.)
+  const fresh = (await loadSd(params.sdId)) ?? row
+  const expectedUpdatedAt = fresh.updated_at ?? null
+
+  // add_name: staff types a candidate directly. Only while names are being
+  // selected (the server enforces it — the panel hiding the box is not enough),
+  // and it retracts any open "propose new names" ask, because that ask is moot
+  // the moment staff supply a name (same rule send_to_client already follows).
+  if (params.action === 'add_name') {
+    if (fresh.stage !== 'Wizard Submitted') {
+      return { ok: false, error: 'Names can only be added while the case is at the name-selection step (Wizard Submitted).' }
+    }
+    const added = addStaffName(checks, params.name, new Date().toISOString())
+    if (!added.ok) return { ok: false, error: added.error }
+    const saved = await writeNameChecks(params.sdId, added.checks, expectedUpdatedAt)
+    if (!saved.ok) return { ok: false, error: saved.error }
+    await cancelPendingNewNamesRequests(params.sdId)
+    return { ok: true, name_checks: added.checks }
+  }
 
   // request_new_names is not tied to a specific candidate — it asks the client
   // for a fresh set when none of the current names are viable. Handle before the
@@ -315,6 +369,7 @@ export async function handleNameAction(params: {
 
   const now = new Date().toISOString()
   const simple = SIMPLE_STATUS[params.action]
+  let savedAlready = false
 
   if (simple) {
     entry.status = simple
@@ -350,8 +405,20 @@ export async function handleNameAction(params: {
     entry.updated_at = now
     await sendNameProposalChatMessage(row, displayName, state, params.actorId ?? null)
   } else if (params.action === 'mark_sos_rejected') {
+    // Only a name the client accepted or staff filed can be "refused by the
+    // state". A name still waiting on the client could be answered later and
+    // would flip back to accepted; an unchecked one hasn't been tried.
+    if (entry.status !== 'accepted' && entry.status !== 'filed') {
+      return { ok: false, error: 'Only a name the client accepted (or that was filed) can be marked as refused by the state.' }
+    }
     entry.status = 'rejected_by_sos'
     entry.updated_at = now
+    // Record the refusal FIRST (guarded), then talk to the client — if the save
+    // fails nothing was sent, and if the client message fails the refusal is
+    // already on record and "Request New Names" still works.
+    const saved = await writeNameChecks(params.sdId, checks, expectedUpdatedAt)
+    if (!saved.ok) return { ok: false, error: saved.error }
+    savedAlready = true
     // Only ask the client for a fresh set once every candidate is actually
     // dead — a rejected filing with an untried sibling still sitting at
     // 'pending' (the normal in-between state; SOS checks happen one name at a
@@ -372,13 +439,16 @@ export async function handleNameAction(params: {
         },
         created_by: params.actor,
       })
-      if (!created.ok) return { ok: false, error: created.error }
+      if (!created.ok) return { ok: false, error: `The refusal was recorded, but the request to the client could not be created: ${created.error}. Use "Request New Names from Client".` }
     }
   } else {
     return { ok: false, error: `Unknown action: ${params.action}` }
   }
 
-  await writeNameChecks(params.sdId, checks)
+  if (!savedAlready) {
+    const saved = await writeNameChecks(params.sdId, checks, expectedUpdatedAt)
+    if (!saved.ok) return { ok: false, error: saved.error }
+  }
 
   // After an SOS rejection, revert the SD to "Wizard Submitted" so the name
   // panel becomes actionable again for the client's resubmitted names (at
@@ -387,10 +457,12 @@ export async function handleNameAction(params: {
   // skip_notify so we neither re-spawn stage tasks nor send the client a
   // confusing "moved to Wizard Submitted" notification. Best-effort — the name
   // is already rejected and the new-names request already created.
-  if (params.action === 'mark_sos_rejected') {
+  // Skipped when the case is already there: re-"advancing" to the same step
+  // would reset its timers and add a bogus history entry.
+  if (params.action === 'mark_sos_rejected' && fresh.stage !== 'Wizard Submitted') {
     try {
       const { advanceServiceDelivery } = await import('@/lib/service-delivery')
-      await advanceServiceDelivery({
+      const adv = await advanceServiceDelivery({
         delivery_id: params.sdId,
         target_stage: 'Wizard Submitted',
         skip_tasks: true,
@@ -398,6 +470,9 @@ export async function handleNameAction(params: {
         actor: 'name-sos-rejected',
         notes: `SOS rejected "${entry.name}" — reverted to Wizard Submitted for name re-selection`,
       })
+      if (adv && adv.success === false) {
+        console.error(`mark_sos_rejected: stage revert refused for SD ${params.sdId}:`, adv.error)
+      }
     } catch {
       /* best-effort: stage revert is non-critical to the rejection itself */
     }
@@ -419,18 +494,37 @@ export async function applyNameDecisionResponse(
   const marker = (req.options as { name_check?: { kind?: string; name_index?: number } } | null)?.name_check
   if (!marker || !req.service_delivery_id) return
 
-  const checks = await getOrInitNameChecks(req.service_delivery_id)
-  const now = new Date().toISOString()
-
+  // Read-modify-write with a version guard: if staff (or another answer) changed
+  // the list between our read and our save, re-read and redo, so neither side's
+  // change is silently lost. Three tries, then it is reported, not swallowed.
   let rejectedName: string | null = null
   let rejectionNote: string | null = null
   let suggestedNewName: string | null = null
+  let saved = false
+  let ignored = false
 
-  if (marker.kind === 'approval') {
-    // Prefer matching by the stored decision_request_id; fall back to name_index.
-    let idx = checks.findIndex((c) => c.decision_request_id === req.id)
-    if (idx < 0 && typeof marker.name_index === 'number') idx = marker.name_index
-    if (idx >= 0 && checks[idx]) {
+  for (let attempt = 0; attempt < 3 && !saved && !ignored; attempt++) {
+    const checks = await getOrInitNameChecks(req.service_delivery_id)
+    const fresh = await loadSd(req.service_delivery_id)
+    const now = new Date().toISOString()
+    rejectedName = null
+    rejectionNote = null
+    suggestedNewName = null
+
+    if (marker.kind === 'approval') {
+      // Prefer matching by the stored decision_request_id; fall back to name_index.
+      let idx = checks.findIndex((c) => c.decision_request_id === req.id)
+      if (idx < 0 && typeof marker.name_index === 'number') idx = marker.name_index
+      if (idx < 0 || !checks[idx]) {
+        ignored = true
+        break
+      }
+      // A late answer for a name staff already moved on from (e.g. recorded as
+      // refused by the state) must not bring that name back to life.
+      if (checks[idx].status !== 'sent_to_client') {
+        ignored = true
+        break
+      }
       const approved = status === 'approved'
       checks[idx].status = approved ? 'accepted' : 'rejected_by_client'
       checks[idx].updated_at = now
@@ -442,21 +536,45 @@ export async function applyNameDecisionResponse(
         rejectionNote = note
         // The client may suggest a replacement name → add it as a new pending
         // candidate so it appears immediately in the workspace name panel.
-        // Dedupe (case-insensitive) so we don't double-add an existing name.
+        // Dedupe (same-name key: case, punctuation, trailing LLC ignored) so we
+        // don't double-add an existing name.
         const suggested = typeof response.suggested_name === 'string' ? response.suggested_name.trim() : ''
-        if (suggested && !checks.some((c) => c.name.toLowerCase() === suggested.toLowerCase())) {
+        const suggestedKey = nameDedupeKey(suggested)
+        if (suggestedKey && !checks.some((c) => nameDedupeKey(c.name) === suggestedKey)) {
           checks.push({ name: suggested, source: 'client_suggestion', status: 'pending', updated_at: now })
           suggestedNewName = suggested
         }
       }
+    } else if (marker.kind === 'new_names') {
+      for (const name of parseProposedNames(response.text)) {
+        checks.push({ name, source: 'client_resubmit', status: 'pending', updated_at: now })
+      }
     }
-  } else if (marker.kind === 'new_names') {
-    for (const name of parseProposedNames(response.text)) {
-      checks.push({ name, source: 'client_resubmit', status: 'pending', updated_at: now })
+
+    const w = await writeNameChecks(req.service_delivery_id, checks, fresh?.updated_at ?? null)
+    if (w.ok) {
+      saved = true
+    } else if (!w.conflict) {
+      break
     }
   }
 
-  await writeNameChecks(req.service_delivery_id, checks)
+  if (!saved) {
+    if (!ignored) {
+      try {
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({
+          source: 'server',
+          route: 'lib/operations/formation-name-checks.ts:applyNameDecisionResponse',
+          message: `Could not save a client's answer onto the name list for SD ${req.service_delivery_id} (request ${req.id}).`,
+          context: { service_delivery_id: req.service_delivery_id, decision_request_id: req.id },
+        })
+      } catch {
+        /* best-effort */
+      }
+    }
+    return
+  }
 
   // Post an SD-scoped flow-chat note when the client rejects a name, so staff see
   // the rejection (and the client's reason) in the workspace chat — the generic
