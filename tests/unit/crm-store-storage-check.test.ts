@@ -48,6 +48,20 @@ describe("evaluateStorageCheck", () => {
     expect(f[0].kind).toBe("person_without_storage")
     expect(f[0].actions[0]).toMatchObject({ id: "create_person_storage", defaultOn: true })
   })
+  it("a representative who is not listed gets no 'create storage' nag, but their files are still compared (the Reset Formula passport)", () => {
+    const snap = base({
+      people: [
+        { contactId: "stella", name: "Stefano Stella", hasStorage: true, ownerId: "o-stella", roles: ["authorized_representative"], listed: false },
+        { contactId: "magg", name: "Francesco Maggiorino-Ortuso", hasStorage: true, ownerId: "o-magg", roles: ["owner"], listed: true },
+      ],
+      files: [{ fileId: "f1", name: "passport_owner_x_Maggiorino_Passport.pdf", ownerContactId: "stella" }],
+    })
+    const f = evaluateStorageCheck(snap)
+    expect(f.map((x) => x.kind)).toEqual(["misfiled_document"])
+    expect(f[0].data.toContactId).toBe("magg")
+    const noStore = evaluateStorageCheck(base({ people: [{ contactId: "rep", name: "Rita Rep", hasStorage: false, ownerId: null, roles: ["authorized_representative"], listed: false }] }))
+    expect(noStore).toEqual([])
+  })
   it("a folder with an old company name offers the rename", () => {
     const f = evaluateStorageCheck(base({ rootName: "Old Name LLC" }))
     expect(f.map((x) => x.kind)).toEqual(["folder_name_differs"])

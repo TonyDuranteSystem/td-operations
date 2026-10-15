@@ -34,7 +34,11 @@ export interface Finding {
   data: Record<string, unknown>
 }
 
-export interface CheckPerson { contactId: string; name: string; hasStorage: boolean; ownerId: string | null; roles: string[] }
+export interface CheckPerson {
+  contactId: string; name: string; hasStorage: boolean; ownerId: string | null; roles: string[]
+  /** shown in the company's "2. Contacts" (or an individual member); a representative who is not shown is still compared for misfiled documents but never told to get a storage */
+  listed?: boolean
+}
 export interface CheckMember { memberId: string; name: string; type: "individual" | "company"; contactId: string | null; linked: boolean }
 export interface CheckFile { fileId: string; name: string; ownerContactId: string }
 export interface LeftNote { id: string; contactId: string | null; name: string; createdAt: string }
@@ -87,7 +91,7 @@ export function evaluateStorageCheck(s: CheckSnapshot, safeName: (n: string) => 
 
   // 1. a person on the company without a storage of their own
   for (const p of s.people) {
-    if (p.hasStorage) continue
+    if (p.hasStorage || p.listed === false) continue
     out.push({
       key: findingKey("person_without_storage", p.contactId), kind: "person_without_storage",
       title: `${p.name} has no storage of their own`,
@@ -209,7 +213,9 @@ export async function loadSnapshot(accountId: string): Promise<CheckSnapshot> {
     memberId: m.id, type: m.member_type === "company" ? "company" : "individual", name: m.member_type === "company" ? (m.company_name ?? "A company") : (m.full_name ?? "A member"),
     contactId: m.contact_id, linked: !!m.contact_id && allLinked.has(m.contact_id),
   }))
-  const contactIds = Array.from(new Set<string>(Array.from(linkedIds).concat(members.filter((m) => m.member_type !== "company" && m.contact_id).map((m) => m.contact_id as string))))
+  const listedIds = new Set<string>(Array.from(linkedIds).concat(members.filter((m) => m.member_type !== "company" && m.contact_id).map((m) => m.contact_id as string)))
+  // every person currently linked to the company is compared for misfiled documents (a representative's file can belong to the owner)
+  const contactIds = Array.from(new Set<string>(Array.from(listedIds).concat(Array.from(allLinked))))
   if (contactIds.length) {
     const [{ data: cs }, { data: pos }] = await Promise.all([
       d.from("contacts").select("id, full_name").in("id", contactIds),
@@ -217,7 +223,7 @@ export async function loadSnapshot(accountId: string): Promise<CheckSnapshot> {
     ])
     const nameOf = new Map<string, string>(((cs ?? []) as Array<{ id: string; full_name: string | null }>).map((c) => [c.id, c.full_name ?? "Person"]))
     const ownerOf = new Map<string, string>(((pos ?? []) as Array<{ id: string; contact_id: string }>).map((o) => [o.contact_id, o.id]))
-    base.people = contactIds.map((id) => ({ contactId: id, name: nameOf.get(id) ?? "Person", hasStorage: ownerOf.has(id), ownerId: ownerOf.get(id) ?? null, roles: rolesByContact.get(id) ?? [] }))
+    base.people = contactIds.map((id) => ({ contactId: id, name: nameOf.get(id) ?? "Person", hasStorage: ownerOf.has(id), ownerId: ownerOf.get(id) ?? null, roles: rolesByContact.get(id) ?? [], listed: listedIds.has(id) }))
       .sort((a, b) => a.name.localeCompare(b.name))
     // files of those people (names only) — to look for a document that seems to belong to another of them
     const ownerIds = base.people.map((p) => p.ownerId).filter((x): x is string => !!x)
