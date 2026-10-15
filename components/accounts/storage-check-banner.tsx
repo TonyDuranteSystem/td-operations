@@ -7,11 +7,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FolderCog, Loader2, X } from 'lucide-react'
+import { FileSearch, FolderCog, Loader2, X } from 'lucide-react'
 import { STORAGE_CHECK_EVENT, takeStorageCheckWish } from '@/lib/crm-store/storage-check-events'
 
 interface FindingAction { id: string; label: string; defaultOn: boolean }
-interface FindingView { key: string; kind: string; title: string; detail: string; actions: FindingAction[]; blocked?: string | null }
+interface FindingView { key: string; kind: string; title: string; detail: string; actions: FindingAction[]; blocked?: string | null; openFileId?: string | null }
 interface CheckResponse { inStorage: boolean; findings: FindingView[]; results?: Array<{ key: string; action: string; ok: boolean; message: string }> }
 
 export function StorageCheckBanner({ accountId }: { accountId: string }) {
@@ -108,6 +108,11 @@ export function StorageCheckBanner({ accountId }: { accountId: string }) {
                   <p className="font-medium text-zinc-900">{f.title}</p>
                   <p className="mt-0.5 text-xs text-zinc-600">{f.detail}</p>
                   {f.blocked && <p className="mt-1 text-xs text-amber-700">{f.blocked}</p>}
+                  {f.openFileId && (
+                    <a href={`/api/crm-store/browse/file/${f.openFileId}`} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:underline">
+                      <FileSearch className="h-3.5 w-3.5" />Open the file to check
+                    </a>
+                  )}
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
                     {f.actions.map((a) => (
                       <label key={a.id} className="flex items-center gap-1.5 text-sm">

@@ -31,6 +31,8 @@ export interface Finding {
   actions: Array<{ id: string; label: string; defaultOn: boolean }>
   /** a reason the action is blocked right now */
   blocked?: string | null
+  /** a stored file staff can open to check the suggestion (a misfiled document) */
+  openFileId?: string | null
   data: Record<string, unknown>
 }
 
@@ -147,6 +149,7 @@ export function evaluateStorageCheck(s: CheckSnapshot, safeName: (n: string) => 
       title: `"${f.name}" looks like ${target.name}'s, not ${owner.name}'s`,
       detail: `It is filed in ${owner.name}'s storage but the file name points to ${target.name}. This is a suggestion from the name only — check the file first.`,
       actions: [{ id: "move_document", label: `Move it to ${target.name}`, defaultOn: false }],
+      openFileId: f.fileId,
       data: { fileId: f.fileId, fileName: f.name, fromContactId: owner.contactId, toContactId: to, toName: target.name },
     })
   }

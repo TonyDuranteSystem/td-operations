@@ -59,6 +59,7 @@ describe("evaluateStorageCheck", () => {
     const f = evaluateStorageCheck(snap)
     expect(f.map((x) => x.kind)).toEqual(["misfiled_document"])
     expect(f[0].data.toContactId).toBe("magg")
+    expect(f[0].openFileId).toBe("f1")
     const noStore = evaluateStorageCheck(base({ people: [{ contactId: "rep", name: "Rita Rep", hasStorage: false, ownerId: null, roles: ["authorized_representative"], listed: false }] }))
     expect(noStore).toEqual([])
   })
@@ -91,6 +92,7 @@ describe("evaluateStorageCheck", () => {
     expect(f[0].kind).toBe("misfiled_document")
     expect(f[0].actions[0].defaultOn).toBe(false)
     expect(f[0].data.toContactId).toBe("magg")
+    expect(f[0].openFileId).toBe("f1")
   })
   it("a person who was removed shows once, with 'mark as seen'", () => {
     const f = evaluateStorageCheck(base({ leftNotes: [{ id: "n1", contactId: "stella", name: "Stefano Stella", createdAt: "2026-10-15" }] }))
