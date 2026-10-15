@@ -6,7 +6,7 @@ import { stateGroup, groupOwners, isLockedFolder, cleanFolderName, suggestTaxYea
 
 const row = (o: Partial<Parameters<typeof groupOwners>[0][number]>) => ({
   id: o.id ?? "x", kind: o.kind ?? "company", label: o.label ?? "A LLC", status: o.status ?? null, fileCount: o.fileCount ?? 0,
-  state: o.state ?? null, accountStatus: o.accountStatus ?? null,
+  state: o.state ?? null, accountStatus: o.accountStatus ?? null, accountType: o.accountType ?? null,
 })
 
 describe("stateGroup", () => {
@@ -203,5 +203,30 @@ describe("paths for filters and dragged folders", () => {
   it("draggedFolderPath drops the file name and empty parts", () => {
     expect(draggedFolderPath("Taxes/2024/w2.pdf")).toEqual(["Taxes", "2024"])
     expect(draggedFolderPath("w2.pdf")).toEqual([])
+  })
+})
+
+describe("groupOwners — One-time customers", () => {
+  it("a One-Time company goes to its own group, not to its state", () => {
+    const g = groupOwners([
+      row({ id: "a", label: "Cleo LLC", state: "Wyoming", accountType: "One-Time" }),
+      row({ id: "b", label: "Regular LLC", state: "Wyoming", accountType: "Client" }),
+    ])
+    expect(g.find((x) => x.key === "one-time")?.owners.map((o) => o.id)).toEqual(["a"])
+    expect(g.find((x) => x.label === "Wyoming")?.owners.map((o) => o.id)).toEqual(["b"])
+    expect(g.find((x) => x.key === "one-time")?.label).toBe("One-time customers")
+  })
+  it("a closed One-Time company still goes to Closed / Cancelled", () => {
+    const g = groupOwners([row({ id: "a", state: "Wyoming", accountType: "One-Time", accountStatus: CLOSED_STATUSES[0] })])
+    expect(g.find((x) => x.key === "closed")?.owners.map((o) => o.id)).toEqual(["a"])
+    expect(g.find((x) => x.key === "one-time")).toBeUndefined()
+  })
+  it("a One-Time company with no state is still in the group (not 'Missing state')", () => {
+    const g = groupOwners([row({ id: "a", state: null, accountType: "One-Time" })])
+    expect(g.find((x) => x.key === "one-time")?.owners).toHaveLength(1)
+    expect(g.find((x) => x.key === "nostate")).toBeUndefined()
+  })
+  it("no group appears when nobody is One-Time", () => {
+    expect(groupOwners([row({ state: "Wyoming" })]).find((x) => x.key === "one-time")).toBeUndefined()
   })
 })
