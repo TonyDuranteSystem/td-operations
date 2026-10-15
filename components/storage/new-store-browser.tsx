@@ -29,6 +29,7 @@ import { allFolderPaths, filterPlainDrop, isInternalOwnerKind, itemsFromFileList
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuestionDialog, FolderPicker, MiniPreview, sha256OfFile, type StoreQuestion, type NavGroup, type Choice } from './store-dialogs'
 import { SetTypeDialog, useStoreDocTypes } from './set-type-dialog'
+import { ChangePersonDialog } from './change-person-dialog'
 import { DriveImportDialog } from './drive-import-dialog'
 import { folderNameProblem, suggestTaxYear as suggestYear, finalUploadName, keepBothName } from '@/lib/crm-store/names'
 
@@ -285,6 +286,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
   const ai = useAiMarks(ownerId, visibleFileIds)
   const [aiFile, setAiFile] = useState<string | null>(null)
   const [typing, setTyping] = useState<File_ | null>(null)
+  const [changingPerson, setChangingPerson] = useState<File_ | null>(null)
   // "Import from Google Drive" (owners, where copying is switched on — the server says)
   const [importOpen, setImportOpen] = useState(false)
   const { data: importProbe } = useQuery<{ allowed: boolean }>({
@@ -1717,6 +1719,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
               <MenuItem icon={Pencil} label="Rename" onClick={() => { setMenuFor(null); renameDone.current = false; setRenaming({ id: f.id, value: f.name.replace(/\.[A-Za-z0-9]{1,8}$/, '') }) }} />
               <MenuItem icon={FolderInput} label="Move to…" onClick={() => pickAndMoveFile(f, inFolder)} />
               <MenuItem icon={Tag} label={f.documentType ? 'Change type…' : 'Set type…'} onClick={() => { setMenuFor(null); setTyping(f) }} />
+              {f.inPersonStorage && <MenuItem icon={User} label="Belongs to another person…" onClick={() => { setMenuFor(null); setChangingPerson(f) }} />}
               {f.needsReview && <MenuItem icon={Check} label="Mark reviewed" onClick={() => markReviewed(f)} />}
               {f.filingStatus === 'draft' && !f.needsReview && <MenuItem icon={Check} label="Mark filed" onClick={() => markFiled(f)} />}
               <MenuItem icon={Trash2} label="Delete" danger onClick={() => doDeleteFile(f)} />
@@ -2338,6 +2341,10 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {typing && (
         <SetTypeDialog file={typing} viewingOwnerId={ownerId} onClose={() => setTyping(null)}
           onDone={() => { setTyping(null); void refreshAll() }} />
+      )}
+      {changingPerson && (
+        <ChangePersonDialog file={changingPerson} onClose={() => setChangingPerson(null)}
+          onDone={() => { setChangingPerson(null); void refreshAll() }} />
       )}
       {trashOpen && (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/40 p-4" onClick={() => setTrashOpen(false)} role="dialog" aria-modal="true">
