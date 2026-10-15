@@ -8,6 +8,7 @@ import { CommandPalette } from '@/components/dashboard/command-palette'
 import { DashboardHeader } from '@/components/dashboard/dashboard-header'
 import { AiAgentPanel } from '@/components/dashboard/ai-agent-panel'
 import { Providers } from '@/components/providers'
+import { ThemeScript, ThemeSync } from '@/components/dashboard/theme-sync'
 import { isAdmin, isDashboardUser, isProtectedAdminEmail } from '@/lib/auth'
 import { countTeamNotifications, countTalkNotifications, type TeamThreadCountRow } from '@/lib/team/workspace'
 import { SwRegister } from '@/components/dashboard/sw-register'
@@ -185,6 +186,9 @@ export default async function DashboardLayout({
 
   return (
     <Providers>
+      {/* Dark mode: pre-paint script + sync, outside ChromeOnly so floating-window frames get it too. */}
+      <ThemeScript />
+      <ThemeSync />
       {/* Window mode (see EmbeddedProvider): every piece of chrome is still rendered in
           its place so the tree keeps the SAME shape, but renders nothing inside a window.
           UiEventListener stays (it keeps a window's data fresh); the main scrolling area

@@ -79,6 +79,7 @@ import { CaptureButton } from '@/components/captures/capture-button'
 import { GlobalBackButton } from '@/components/dashboard/global-back-button'
 import { MfaSettingsDialog } from '@/components/dashboard/mfa-settings-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { ThemeToggle } from '@/components/dashboard/theme-sync'
 import { NavItemMenu } from '@/components/dashboard/nav-item-menu'
 
 interface NavItem {
@@ -808,6 +809,7 @@ export function Sidebar({
               <p className="text-xs text-sidebar-foreground/50 truncate">{user.email}</p>
             </div>
             <div className="flex items-center gap-0.5 shrink-0">
+              <ThemeToggle />
               <FastTooltip label="Change password">
                 <button
                   onClick={() => setPasswordDialogOpen(true)}
