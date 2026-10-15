@@ -59,7 +59,13 @@ export async function moveStoreFile(fileId: string, toFolderId: string, actorId:
   const { data: to, error: tErr } = await db().from("store_folders").select("id, owner_id, name, kind, trashed_at").eq("id", toFolderId).maybeSingle()
   if (tErr) throw new Error(`Could not read the folder — please try again (${tErr.message}).`)
   if (!to || to.trashed_at) throw new Error("That folder is not available.")
-  if (to.owner_id !== f.owner_id) throw new Error("A file can only be moved within the same company's or person's storage.")
+  if (to.owner_id !== f.owner_id) {
+    // another storage: only person → person of the same company (a company document goes to a person's/company's storage through "Change type")
+    if (f.store_owners.kind !== "person") throw new Error("A file can only be moved within the same company's storage. To give a personal document to a person, use its type (Change type…).")
+    const { moveFileToOtherPerson } = await import("./change-person")
+    const r = await moveFileToOtherPerson(fileId, toFolderId, actorId)
+    return { folderName: `${r.person} › ${r.folderName}` }
+  }
   if (to.id === f.folder_id) return { folderName: to.name }
   const wasInsideShare = f.store_owners.kind === "private" && await (await import("./staff-share")).isInStaffShare(f.folder_id)
   if (to.kind === "root") throw new Error("Files go inside a folder, not at the top.")

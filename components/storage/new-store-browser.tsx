@@ -683,7 +683,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setMenuFor(null)
     const oid = (inFolder && folderOwner.current.get(inFolder.id)) ?? ownerId
     if (!oid) return
-    const r = await pick({ title: `Move "${f.name}" to…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'file', currentFolderId: inFolder?.id ?? null })
+    const r = await pick({ title: `Move "${f.name}" to…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'file', currentFolderId: inFolder?.id ?? null, chooseOwner: f.inPersonStorage })
     setPicking(null)
     if (r) await moveFileTo(f, r.folderId, r.path)
   }
