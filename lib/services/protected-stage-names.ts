@@ -68,6 +68,7 @@ export const PROTECTED_STAGE_NAMES: ProtectedStageName[] = [
   { name: "Extension Filed", because: "the extension flow matches it by name" },
   { name: "Lease Created", because: "the lease flow matches it by name" },
   { name: "Closing", because: "the closure flow matches it by name" },
+  { name: "Wrap-up", because: "the closure workflow buttons move jobs to and from it by name, and the closing clean-up looks for its to-dos" },
   { name: "Closed", because: "the closure flow matches it by name" },
   { name: "Completed", because: "completion is detected by this name" },
   {
