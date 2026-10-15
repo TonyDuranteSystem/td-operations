@@ -101,7 +101,7 @@ export function goLiveBlockers(f: {
   if (f.ownerCount > 1) out.push("This company has more than one storage — cannot tell which is the approved copy.")
   if (f.ownerCount === 1 && !f.ownerIsStudy && f.state !== "store") out.push("This company's storage is not a hidden copy.")
   if (f.ownerCount >= 1 && !f.hasDoneCopy) out.push("The company's copy never finished.")
-  if (f.openSigning) out.push("A signing or SS-4 is open for this company — wait until it is signed.")
+  if (f.openSigning) out.push("An SS-4 or signing request is open for this company — wait until it is signed.")
   return out
 }
 
