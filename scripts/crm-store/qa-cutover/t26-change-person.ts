@@ -30,6 +30,24 @@ async function main() {
   const back = await changeFilePerson(FILE, FROM_CONTACT, null)
   const end = await state()
   ck("5 and it can be put back", end.contact_id === FROM_CONTACT && (!end.rec_contact || end.rec_contact === FROM_CONTACT), { end, back })
+  // the Move picker path: a folder CHOSEN in the other person's storage
+  const { moveStoreFile } = await import("@/lib/crm-store/file-actions")
+  const tf = (await db.query("select fo.id, fo.name from store_folders fo join store_owners o on o.id=fo.owner_id where o.contact_id=$1 and o.kind='person' and fo.kind='itin' and fo.trashed_at is null limit 1", [to.contactId])).rows[0]
+  const m = await moveStoreFile(FILE, tf.id, null)
+  const m1 = await state()
+  ck("6 the picker move puts it in the chosen folder of the other person", m1.contact_id === to.contactId && m1.folder === tf.name, { m, m1 })
+  const root = (await db.query("select fo.id from store_folders fo join store_owners o on o.id=fo.owner_id where o.id=(select owner_id from store_files where id=$1) and fo.kind='root'", [FILE])).rows[0]
+  let rootRefused = false
+  try { await moveStoreFile(FILE, root.id, null) } catch { rootRefused = true }
+  ck("7 the top folder is refused", rootRefused)
+  const co = (await db.query("select fo.id from store_folders fo join store_owners o on o.id=fo.owner_id where o.kind='company' and fo.kind='correspondence' and fo.trashed_at is null limit 1")).rows[0]
+  let coRefused = false
+  try { await moveStoreFile(FILE, co.id, null) } catch { coRefused = true }
+  ck("8 a company folder is refused", coRefused)
+  const pf = (await db.query("select fo.id from store_folders fo join store_owners o on o.id=fo.owner_id where o.contact_id=$1 and o.kind='person' and fo.kind='personal' and fo.trashed_at is null limit 1", [FROM_CONTACT])).rows[0]
+  await moveStoreFile(FILE, pf.id, null)
+  const e2 = await state()
+  ck("9 and it goes back through the same picker path", e2.contact_id === FROM_CONTACT && (!e2.rec_contact || e2.rec_contact === FROM_CONTACT), e2)
   console.log(`\n${pass} passed, ${fail} failed`)
   await db.end()
   process.exit(fail ? 1 : 0)

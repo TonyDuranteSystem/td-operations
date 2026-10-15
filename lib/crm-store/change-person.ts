@@ -48,6 +48,41 @@ export async function peopleForFile(fileId: string): Promise<PersonChoice[]> {
   })))
 }
 
+/**
+ * Move a file out of one person's storage into a folder the staff member CHOSE in another person's storage (the Move picker).
+ * Refused unless both storages are people's and the other person is in one of the first person's companies.
+ */
+export async function moveFileToOtherPerson(fileId: string, toFolderId: string, actorId: string | null): Promise<{ folderName: string; person: string }> {
+  const f = await personFile(fileId)
+  const { data: to, error: tErr } = await db().from("store_folders").select("id, owner_id, name, kind, trashed_at, store_owners!inner(kind, contact_id)").eq("id", toFolderId).maybeSingle()
+  if (tErr) throw new Error(`Could not read the folder — please try again (${tErr.message}).`)
+  if (!to || to.trashed_at) throw new Error("That folder is not available.")
+  if (to.store_owners.kind !== "person" || !to.store_owners.contact_id) throw new Error("A person's file can only move into another person's storage (of the same company) — not into a company, Business or My files.")
+  const who = (await peopleForFile(fileId)).find((c) => c.contactId === to.store_owners.contact_id)
+  if (!who) throw new Error("That person is not in one of this person's companies.")
+  if (to.kind === "root") throw new Error("Files go inside a folder, not at the top.")
+  if (to.kind === "contacts") throw new Error("\"2. Contacts\" shows the people's own documents — a file cannot go there.")
+  const { data: clash } = await db().from("store_files").select("id").eq("folder_id", to.id).eq("state", "live").eq("name", f.name).maybeSingle()
+  if (clash) throw new Error(`"${to.name}" already has a file called "${f.name}".`)
+  // a personal TYPE keeps its CRM category ("Contacts"); any other file follows its new folder (as the normal move does)
+  const { categoryForFolder, personalTypes } = await import("./structure")
+  const { data: ft } = await db().from("store_files").select("document_type").eq("id", f.id).maybeSingle()
+  const isPers = !!ft?.document_type && (await personalTypes()).has(ft.document_type)
+  const cat = isPers ? null : await categoryForFolder(to.id)
+  const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: to.id, p_actor: actorId, p_reason: `Moved to ${who.name}` })
+  if (rhErr) throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).`)
+  // the CRM record follows the file (a later failure puts the file back — never half-done)
+  const { storePointer } = await import("./document-pointer")
+  const patch: Record<string, unknown> = { contact_id: who.contactId, updated_at: new Date().toISOString() }
+  if (cat) { patch.category = cat.num; patch.category_name = cat.name }
+  const { error: rErr } = await db().from("documents").update(patch).eq("drive_file_id", storePointer(f.id))
+  if (rErr) {
+    await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Move failed — put back" })
+    throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
+  }
+  return { folderName: to.name, person: who.name }
+}
+
 export async function changeFilePerson(fileId: string, toContactId: string, actorId: string | null): Promise<{ person: string; folder: string }> {
   const f = await personFile(fileId)
   const choices = await peopleForFile(fileId)
@@ -61,16 +96,6 @@ export async function changeFilePerson(fileId: string, toContactId: string, acto
   const list = (folders ?? []) as Array<{ id: string; kind: string; name: string }>
   const target = list.find((x) => x.kind === f.folderKind) ?? list.find((x) => x.kind === "personal")
   if (!target) throw new Error("The other person's storage has no personal folder.")
-  const { data: clash } = await db().from("store_files").select("id").eq("folder_id", target.id).eq("state", "live").eq("name", f.name).maybeSingle()
-  if (clash) throw new Error(`"${target.name}" of ${who.name} already has a file called "${f.name}".`)
-  const { error: rhErr } = await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: target.id, p_actor: actorId, p_reason: `Belongs to ${who.name}` })
-  if (rhErr) throw new Error(`The file could not be moved (${rhErr.message.replace(/^store: /, "")}).`)
-  // the CRM record follows the file (a later failure puts the file back — never half-done)
-  const { storePointer } = await import("./document-pointer")
-  const { error: rErr } = await db().from("documents").update({ contact_id: who.contactId, updated_at: new Date().toISOString() }).eq("drive_file_id", storePointer(f.id))
-  if (rErr) {
-    await db().rpc("store_rehome_file", { p_file_id: f.id, p_to_folder: f.folder_id, p_actor: actorId, p_reason: "Change person failed — put back" })
-    throw new Error(`The CRM list could not be updated, so the file was not moved (${rErr.message}) — please try again.`)
-  }
-  return { person: who.name, folder: target.name }
+  const r = await moveFileToOtherPerson(fileId, target.id, actorId)
+  return { person: r.person, folder: r.folderName }
 }
