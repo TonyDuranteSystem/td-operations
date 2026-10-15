@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import StandaloneServiceAgreement, { SERVICE_CONTENT } from './standalone-service-agreement'
+import { isStandaloneAgreementType, type StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
 import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
@@ -421,7 +422,7 @@ export default function ContractPage() {
       if (!hasSOW) missing.push('SOW signature')
       addonKeys.forEach(k => {
         if (!sigPadsRef.current[k] || sigPadsRef.current[k].isEmpty()) {
-          const type = k.replace('addon_', '').replace('_', ' ')
+          const type = k.replace('addon_', '').replace(/_/g, ' ')
           missing.push(`${type} agreement signature`)
         }
       })
@@ -948,42 +949,15 @@ export default function ContractPage() {
     )
   }
 
-  // Tax Return agreement — lightweight contract
-  if ((offer as any).contract_type === 'tax_return') {
+  // Standalone agreements — one short agreement per type (tax return, ITIN,
+  // closure, name change, shipping, …). The list lives in
+  // lib/offers/standalone-contract-types.ts; the wording in SERVICE_CONTENT.
+  const standaloneType = (offer as any).contract_type
+  if (isStandaloneAgreementType(standaloneType)) {
     return (
       <>
         <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="tax_return" cred={cred} />
-      </>
-    )
-  }
-
-  // ITIN agreement — standalone ITIN application
-  if ((offer as any).contract_type === 'itin') {
-    return (
-      <>
-        <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="itin" cred={cred} />
-      </>
-    )
-  }
-
-  // Company Closure agreement — standalone agreement for LLC dissolution
-  if ((offer as any).contract_type === 'closure') {
-    return (
-      <>
-        <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="closure" cred={cred} />
-      </>
-    )
-  }
-
-  // Company Name Change agreement — short standalone agreement for an existing LLC
-  if ((offer as any).contract_type === 'company_change_name') {
-    return (
-      <>
-        <ContractStyles />
-        <StandaloneServiceAgreement offer={offer} token={token} contractType="company_change_name" cred={cred} />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType={standaloneType} cred={cred} />
       </>
     )
   }
@@ -1037,7 +1011,7 @@ export default function ContractPage() {
     const svcCt = (svc as any).contract_type
     if (!svcCt || svcCt === offerContractType) return false
     // Must be a supported standalone type
-    if (!['itin', 'tax_return'].includes(svcCt)) return false
+    if (!isStandaloneAgreementType(svcCt)) return false
     // Must be selected (if selected_services tracking is active)
     const isOpt = !!(svc as any).optional
     if (isOpt && selectedSvcSet.size > 0 && !selectedSvcSet.has(svc.name)) return false
@@ -1252,7 +1226,7 @@ export default function ContractPage() {
 
         {/* ADDON STANDALONE AGREEMENTS — rendered inline for multi-contract offers */}
         {addonServices.map((svc) => {
-          const svcCt = (svc as any).contract_type as 'itin' | 'tax_return'
+          const svcCt = (svc as any).contract_type as StandaloneAgreementType
           const ct = SERVICE_CONTENT[svcCt]
           if (!ct) return null
           const addonKey = `addon_${svcCt}`

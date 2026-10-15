@@ -6,6 +6,7 @@ import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/l
 import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { euroBankAddress } from '@/lib/offers/bank-address'
+import type { StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -20,7 +21,7 @@ function esc(v: string) {
 interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
-  contractType?: 'tax_return' | 'itin' | 'closure' | 'company_change_name'
+  contractType?: StandaloneAgreementType
   /** The offer's access code (N0) — every write goes through /api/offers with it. */
   cred: OfferCredential
 }
@@ -190,12 +191,177 @@ export const SERVICE_CONTENT = {
     },
     signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Company Name Change Service Agreement. I authorize Tony Durante LLC to file the name change of my LLC with the Secretary of State.',
     successNote: 'Once payment is received, we will start the name change. You will receive the official name change document from the Secretary of State by email.',
+    workPhrase: 'the name change work',
+    liabilityPhrase: 'delays, rejections or additional fees charged by the Secretary of State, or for consequences',
+  },
+  ein_change_name: {
+    title: 'EIN Name Change Service Agreement',
+    shortTitle: 'EIN Name Change Service Agreement',
+    pdfPrefix: 'EIN_Name_Change_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to request the update of the legal name on the Client\'s LLC EIN (Employer Identification Number) account with the IRS. This includes:',
+      items: [
+        'Preparing the IRS request to update the name on the LLC\'s EIN account (Form 8822-B, where applicable);',
+        'Sending the request to the IRS;',
+        'Following up with the IRS by phone to confirm that the request was received and processed;',
+        'Informing the Client by email when the IRS has updated the name on the EIN account.',
+      ],
+      closing: 'This Agreement covers the EIN account of one (1) LLC only. It does not change the name of the LLC with the Secretary of State, which is a separate service.',
+    },
+    procedure: {
+      intro: 'The EIN name change follows these steps:',
+      steps: [
+        { title: 'Step 1 — Preparation', desc: 'The Service Provider prepares the IRS request using the exact new legal name confirmed by the Client. The responsible party of the LLC signs where the IRS requires it.' },
+        { title: 'Step 2 — Sending to the IRS', desc: 'The Service Provider sends the signed request to the IRS.' },
+        { title: 'Step 3 — IRS Follow-up', desc: 'The Service Provider contacts the IRS by phone to confirm receipt and processing. IRS processing times vary and are outside the Service Provider\'s control.' },
+        { title: 'Step 4 — Confirmation', desc: 'When the IRS confirms that the name on the EIN account has been updated, the Service Provider informs the Client by email.' },
+      ],
+    },
+    commitments: [
+      'Prepare and send the IRS request within a reasonable timeframe after receiving the Client\'s confirmed new name and any required signature;',
+      'Follow up with the IRS until the request is processed or the IRS gives a final answer;',
+      'Inform the Client by email of the outcome.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Confirm the exact new legal name', rest: ' of the LLC, as it appears (or will appear) on the Secretary of State record;' },
+        { bold: 'Provide the signature and information the IRS requires', rest: ' from the LLC\'s responsible party;' },
+        { bold: 'Acknowledge that processing times and the final decision belong to the IRS', rest: ', not to the Service Provider;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this EIN Name Change Service Agreement. I authorize Tony Durante LLC to request the update of the name on my LLC\'s EIN account with the IRS.',
+    successNote: 'Once payment is received, we will start the EIN name change. We will email you when the IRS confirms the update.',
+    workPhrase: 'the EIN name change work',
+    liabilityPhrase: 'delays or rejections by the IRS, or for consequences',
+  },
+  shipping: {
+    title: 'Document Shipping Service Agreement',
+    shortTitle: 'Document Shipping Service Agreement',
+    pdfPrefix: 'Shipping_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to ship documents to the Client, or to the recipient named by the Client, on their behalf. This includes:',
+      items: [
+        'Preparing the shipment with the documents to be sent;',
+        'Sending the shipment to the delivery address provided by the Client, with a carrier chosen by the Service Provider;',
+        'Sending the Client the tracking number by email when the carrier provides one.',
+      ],
+      closing: 'This Agreement covers one (1) shipment only. Delivery times given by the carrier are estimates.',
+    },
+    procedure: {
+      intro: 'The shipment follows these steps:',
+      steps: [
+        { title: 'Step 1 — Preparing the Shipment', desc: 'The Service Provider prepares the documents and checks the delivery address with the Client.' },
+        { title: 'Step 2 — Shipped', desc: 'The Service Provider hands the shipment to the carrier and sends the Client the tracking number when available.' },
+        { title: 'Step 3 — Delivered', desc: 'The shipment is complete when the carrier delivers it to the address provided.' },
+      ],
+    },
+    commitments: [
+      'Prepare and send the shipment within a reasonable timeframe after payment and after receiving a complete delivery address;',
+      'Send the Client the tracking number by email when the carrier provides one.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Provide a complete and correct delivery address', rest: ', including a contact phone number where the carrier requires one;' },
+        { bold: 'Make sure someone can receive the shipment', rest: ' at that address;' },
+        { bold: 'Pay any customs duties, import taxes or local fees', rest: ' charged by the destination country, if any;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Document Shipping Service Agreement. I authorize Tony Durante LLC to ship my documents to the delivery address I provided.',
+    successNote: 'Once payment is received, we will prepare your shipment and email you the tracking number when it is available.',
+    workPhrase: 'the shipping work',
+    liabilityPhrase: 'delays, loss or damage caused by the carrier or customs, or for consequences',
+  },
+  public_notary: {
+    title: 'Notary Service Agreement',
+    shortTitle: 'Notary Service Agreement',
+    pdfPrefix: 'Notary_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to notarize the Client\'s documents on their behalf. This includes:',
+      items: [
+        'Receiving the documents to be notarized from the Client;',
+        'Notarizing the documents with a public notary;',
+        'Returning the notarized documents to the Client.',
+      ],
+      closing: 'This Agreement covers the notarization of the documents listed in the offer only. The notary confirms the identity of the signer and the signature; the notary does not check or give advice on the content of the documents.',
+    },
+    procedure: {
+      intro: 'The notarization follows these steps:',
+      steps: [
+        { title: 'Step 1 — Documents Received', desc: 'The Client sends the documents and the identification required for the notarization.' },
+        { title: 'Step 2 — Notarized', desc: 'The documents are notarized by a public notary.' },
+        { title: 'Step 3 — Returned to Client', desc: 'The Service Provider returns the notarized documents to the Client.' },
+      ],
+    },
+    commitments: [
+      'Notarize the documents within a reasonable timeframe after receiving them in complete form;',
+      'Return the notarized documents to the Client.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Provide valid government-issued identification', rest: ' of every person who has to sign;' },
+        { bold: 'Sign the documents as the notary requires', rest: ';' },
+        { bold: 'Be responsible for the content of the documents', rest: ' and for their use in the country where they will be presented;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Notary Service Agreement. I confirm that I am responsible for the content of the documents I submit for notarization.',
+    successNote: 'Once payment is received, we will begin the notarization. We will return your notarized documents as soon as they are ready.',
+    workPhrase: 'the notarization',
+    liabilityPhrase: 'the acceptance of the documents by any third party or authority, or for consequences',
+  },
+  consulting_call: {
+    title: 'Consulting Call Service Agreement',
+    shortTitle: 'Consulting Call Service Agreement',
+    pdfPrefix: 'Consulting_Call_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to hold a consulting call with the Client. This includes:',
+      items: [
+        'Scheduling the call at a time agreed with the Client;',
+        'Holding the call with a Tony Durante LLC consultant on the topics agreed in advance;',
+        'Following up by email on the next steps discussed, if any.',
+      ],
+      closing: 'This Agreement covers one (1) consulting call only. The call is general business consulting; it is not legal advice and does not create an attorney-client relationship. Any additional work requires a separate agreement.',
+    },
+    procedure: {
+      intro: 'The consulting call follows these steps:',
+      steps: [
+        { title: 'Step 1 — To Schedule', desc: 'After payment, the Service Provider and the Client agree on a date and time.' },
+        { title: 'Step 2 — Scheduled', desc: 'The Service Provider confirms the appointment with the Client by email.' },
+        { title: 'Step 3 — Call Done', desc: 'The call is held at the scheduled time and the service is complete.' },
+      ],
+    },
+    commitments: [
+      'Offer the Client a call date within a reasonable timeframe after payment;',
+      'Hold the call at the scheduled time with a qualified consultant;',
+      'Follow up by email on the next steps discussed, if any.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Send the topics and the documents', rest: ' needed for the call before it takes place;' },
+        { bold: 'Attend the call at the scheduled time', rest: ' and tell the Service Provider in advance if the time must change;' },
+        { bold: 'Provide accurate and complete information', rest: ' about their situation;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Consulting Call Service Agreement. I understand that the call is general business consulting and not legal advice.',
+    successNote: 'Once payment is received, we will contact you by email to schedule your consulting call.',
+    workPhrase: 'the consulting service',
+    liabilityPhrase: 'decisions taken by the Client on the basis of the call, or for consequences',
   },
 } as const
 
 export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
   const ct = SERVICE_CONTENT[contractType]
-  const isNameChange = contractType === 'company_change_name'
+  // Per-type wording for the Payment / Liability sections (defaults = the tax-return text).
+  const extra = ct as { workPhrase?: string; liabilityPhrase?: string }
+  const workPhrase = extra.workPhrase ?? 'the tax return preparation'
+  const liabilityPhrase = extra.liabilityPhrase ?? 'penalties, interest, or additional taxes'
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
   // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
@@ -523,14 +689,14 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         {/* SECTION 5 — PAYMENT */}
         <div className="contract-section">
           <h3>5. Payment</h3>
-          <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {isNameChange ? 'the name change work begins' : 'the tax return preparation begins'}. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
-          <p><strong>All fees are non-refundable</strong> once {isNameChange ? 'the name change work has commenced' : 'the tax return preparation has commenced'}.</p>
+          <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+          <p><strong>All fees are non-refundable</strong> once {workPhrase} has commenced.</p>
         </div>
 
         {/* SECTION 6 — LIMITATION OF LIABILITY */}
         <div className="contract-section">
           <h3>6. Limitation of Liability</h3>
-          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {isNameChange ? 'delays, rejections or additional fees charged by the Secretary of State, or for consequences' : 'penalties, interest, or additional taxes'} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
+          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {liabilityPhrase} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
         </div>
 
         {/* SECTION 7 — GOVERNING LAW */}

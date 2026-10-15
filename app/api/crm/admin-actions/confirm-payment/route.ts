@@ -33,6 +33,7 @@
 // money and activation together. Bound it explicitly, as its siblings do.
 export const maxDuration = 60
 
+import type { StandaloneAgreementType } from "@/lib/offers/standalone-contract-types"
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -58,7 +59,7 @@ interface ConfirmPaymentBody {
   // Offer-derived (Mode 1) or manual (Mode 2 — lead_id only)
   amount: number
   currency: "USD" | "EUR"
-  contract_type: "formation" | "onboarding" | "tax_return" | "itin" | "company_change_name"
+  contract_type: "formation" | "onboarding" | "tax_return" | "itin" | StandaloneAgreementType
   bundled_pipelines: string[]
   // Optional manual overrides (Mode 2 only)
   annual_1st_installment?: number

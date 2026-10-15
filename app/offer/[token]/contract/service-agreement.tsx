@@ -10,6 +10,7 @@ import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { SERVICE_CONTENT } from './standalone-service-agreement'
 import { euroBankAddress } from '@/lib/offers/bank-address'
+import { isStandaloneAgreementType, type StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
 
 function today() {
   return new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -174,7 +175,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
       if (!hasSOW) missing.push('SOW signature')
       addonKeys.forEach(k => {
         if (!sigPadsRef.current[k] || sigPadsRef.current[k].isEmpty()) {
-          const type = k.replace('addon_', '').replace('_', ' ')
+          const type = k.replace('addon_', '').replace(/_/g, ' ')
           missing.push(`${type} agreement signature`)
         }
       })
@@ -278,7 +279,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
   const addonServices = services.filter(svc => {
     const svcCt = (svc as any).contract_type
     if (!svcCt || svcCt === offerContractType) return false
-    if (!['itin', 'tax_return'].includes(svcCt)) return false
+    if (!isStandaloneAgreementType(svcCt)) return false
     const isOpt = !!(svc as any).optional
     if (isOpt && selectedSet.size > 0 && !selectedSet.has(svc.name)) return false
     return true
@@ -749,7 +750,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
 
         {/* ADDON STANDALONE AGREEMENTS — rendered inline for multi-contract offers */}
         {addonServices.map((svc) => {
-          const svcCt = (svc as any).contract_type as 'itin' | 'tax_return'
+          const svcCt = (svc as any).contract_type as StandaloneAgreementType
           const ct = SERVICE_CONTENT[svcCt]
           if (!ct) return null
           const addonKey = `addon_${svcCt}`

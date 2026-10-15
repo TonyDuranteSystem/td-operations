@@ -13,24 +13,21 @@
  */
 
 import { computeOfferPayable } from '@/lib/offers/compute-offer-totals'
+import { isStandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
 
 export type SignKind = 'main' | 'service' | 'standalone' | 'renewal'
 
 /**
  * Which component signs this contract type — the SAME routing the contract page
  * has always used to pick the component (renewal → RenewalAgreement; tax_return,
- * itin, closure, company_change_name → StandaloneServiceAgreement; onboarding → ServiceAgreement;
+ * every standalone type (lib/offers/standalone-contract-types.ts) → StandaloneServiceAgreement; onboarding → ServiceAgreement;
  * everything else, including a missing type, → the formation MSA).
  */
 export function signKindFor(contractType: string | null | undefined): SignKind {
   switch (contractType) {
     case 'renewal': return 'renewal'
-    case 'tax_return':
-    case 'itin':
-    case 'closure':
-    case 'company_change_name': return 'standalone'
     case 'onboarding': return 'service'
-    default: return 'main'
+    default: return isStandaloneAgreementType(contractType) ? 'standalone' : 'main'
   }
 }
 

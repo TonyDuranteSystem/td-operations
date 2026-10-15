@@ -72,6 +72,14 @@ export function getServiceLabel(contract_type: string | null | undefined): strin
       return "Company Closure"
     case "company_change_name":
       return "Company Change Name"
+    case "ein_change_name":
+      return "EIN Change Name"
+    case "shipping":
+      return "Document Shipping"
+    case "public_notary":
+      return "Public Notary"
+    case "consulting_call":
+      return "Consulting Call"
     default:
       return "Service"
   }

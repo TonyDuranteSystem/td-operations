@@ -5,6 +5,8 @@
 
 // ─── JSONB Sub-types ────────────────────────────────────────
 
+import type { StandaloneAgreementType } from '@/lib/offers/standalone-contract-types'
+
 export interface OfferIssue {
   title: string
   description: string
@@ -133,7 +135,7 @@ export interface Offer {
   currency?: string
   installment_currency?: string
   // Contract type
-  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | 'closure' | 'company_change_name'
+  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | StandaloneAgreementType
   // Pipelines to create when client pays (automation)
   bundled_pipelines?: string[]
   // Client selections (set when client signs, based on optional services chosen)
