@@ -39,12 +39,16 @@ export function stateGroup(value: string | null | undefined): string | null {
 export { CLOSED_ACCOUNT_STATUSES as CLOSED_STATUSES } from "./browse"
 import { CLOSED_ACCOUNT_STATUSES } from "./browse"
 
+/** The CRM's own value for a one-time customer (`accounts.account_type`) — the "One-time customers" group follows it automatically. */
+export const ONE_TIME_ACCOUNT_TYPE = "One-Time"
+
 export interface NavOwner { id: string; kind: string; label: string; status: string | null; fileCount: number }
 export interface NavGroup { key: string; label: string; section: "clients" | "business" | "private"; owners: NavOwner[] }
 
 /** Pure: put the owners into the left-side groups (unit-tested). */
-export function groupOwners(rows: Array<{ id: string; kind: string; label: string; status: string | null; fileCount: number; state: string | null; accountStatus: string | null }>): NavGroup[] {
+export function groupOwners(rows: Array<{ id: string; kind: string; label: string; status: string | null; fileCount: number; state: string | null; accountStatus: string | null; accountType?: string | null }>): NavGroup[] {
   const byState = new Map<string, NavOwner[]>()
+  const oneTime: NavOwner[] = []
   const people: NavOwner[] = [], forming: NavOwner[] = [], closed: NavOwner[] = [], noState: NavOwner[] = [], unfiled: NavOwner[] = []
   const business: NavOwner[] = [], mine: NavOwner[] = []
   for (const r of rows) {
@@ -55,6 +59,7 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
     else if (r.kind === "formation") (r.status === "archived" ? closed : forming).push(o)
     else if (r.kind === "unfiled") unfiled.push(o)
     else if (r.accountStatus && CLOSED_ACCOUNT_STATUSES.includes(r.accountStatus)) closed.push(o)
+    else if (r.accountType === ONE_TIME_ACCOUNT_TYPE) oneTime.push(o)
     else {
       const st = stateGroup(r.state)
       if (!st) noState.push(o)
@@ -64,6 +69,7 @@ export function groupOwners(rows: Array<{ id: string; kind: string; label: strin
   const sort = (a: NavOwner[]) => a.sort((x, y) => x.label.localeCompare(y.label))
   const groups: NavGroup[] = []
   for (const st of Array.from(byState.keys()).sort()) groups.push({ key: `state:${st}`, label: st, section: "clients", owners: sort(byState.get(st)!) })
+  if (oneTime.length) groups.push({ key: "one-time", label: "One-time customers", section: "clients", owners: sort(oneTime) })
   if (people.length) groups.push({ key: "people", label: "People", section: "clients", owners: sort(people) })
   if (forming.length) groups.push({ key: "forming", label: "Companies being formed", section: "clients", owners: sort(forming) })
   if (closed.length) groups.push({ key: "closed", label: "Closed / Cancelled", section: "clients", owners: sort(closed) })
@@ -100,12 +106,28 @@ export async function navigation(user: { id: string; email?: string | null } | n
   // a private area is listed only for the owners, and only the owners' one (the database function returns no other)
   const data = await allNavigationRows(ownersArea)
   const { ownerLabel, ownerStatus } = await import("./browse")
+  const accountTypes = await companyAccountTypes()
   return groupOwners((data as Array<{ id: string; kind: string; lifecycle_override: string | null; company_name: string | null; state_of_formation: string | null; account_status: string | null; person_name: string | null; root_name: string | null; file_count: number | string }>).map((o) => ({
     id: o.id, kind: o.kind,
     label: o.kind === "business" ? "Business" : o.kind === "private" ? "My files" : ownerLabel({ kind: o.kind, company: o.company_name, person: o.person_name, root: o.root_name }),
     status: ownerStatus(o.lifecycle_override), fileCount: Number(o.file_count) || 0,
-    state: o.state_of_formation, accountStatus: o.account_status,
+    state: o.state_of_formation, accountStatus: o.account_status, accountType: accountTypes.get(o.id) ?? null,
   })))
+}
+
+/** owner id → the CRM's account type, for the company owners (read in pages; a failure only means no "One-time" grouping, never a missing owner). */
+async function companyAccountTypes(): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  for (let from = 0; from < 100_000; from += 1000) {
+    const { data, error } = await db().from("store_owners").select("id, accounts(account_type)").eq("kind", "company").order("id").range(from, from + 999)
+    if (error) return out
+    for (const r of (data ?? []) as Array<{ id: string; accounts: { account_type: string | null } | Array<{ account_type: string | null }> | null }>) {
+      const a = Array.isArray(r.accounts) ? r.accounts[0] : r.accounts
+      if (a?.account_type) out.set(r.id, a.account_type)
+    }
+    if ((data ?? []).length < 1000) break
+  }
+  return out
 }
 
 /** The Business area (one) or a login's private area (one per login), created with its top folder on first use. */
