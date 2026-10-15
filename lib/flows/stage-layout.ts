@@ -42,6 +42,7 @@ export const STAGE_COMPONENT_TYPES = [
   'notes',
   'irs_tracking_entry',
   'suite_panel',
+  'closure_wrapup',
 ] as const
 
 export type StageComponentType = (typeof STAGE_COMPONENT_TYPES)[number]

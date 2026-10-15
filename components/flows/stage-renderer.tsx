@@ -20,6 +20,7 @@ import { ShippingInfo } from './shipping-info'
 import { MembersPanel } from './members-panel'
 import { SuitePanel } from './suite-panel'
 import { IrsTrackingEntry } from './irs-tracking-entry'
+import { ClosureWrapupPanel } from './closure-wrapup-panel'
 
 interface StageRendererProps {
   layout: StageLayout | null
@@ -143,6 +144,8 @@ function renderComponent(
       return <IrsTrackingEntry key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'suite_panel':
       return <SuitePanel key={key} serviceDeliveryId={serviceDelivery.id} />
+    case 'closure_wrapup':
+      return <ClosureWrapupPanel key={key} serviceDeliveryId={serviceDelivery.id} />
     case 'chat':
       return <FlowChat key={key} serviceDeliveryId={serviceDelivery.id} label={component.label} />
     case 'action_buttons':

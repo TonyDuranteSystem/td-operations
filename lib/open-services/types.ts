@@ -58,6 +58,29 @@ export interface Row {
   /** Plain-words flags: "blocked", "on hold", "company closed", "step not in settings". */
   badges: string[]
   href: string
+  /** The Calendar pop-up this job's step asks for (from the step's layout), or null: then the row links to the job page. */
+  popup: CalendarPopup | null
+}
+
+/**
+ * Step layout components that open as a POP-UP on the Calendar instead of sending the person to the job page (Antonio, 2026-10-15: the
+ * Calendar is where the day's work is done). DATA-DRIVEN: a step has a pop-up when its layout (pipeline_stages.stage_layout) lists one of
+ * these components, so no service or step name is written in code. Today: the Wrap-up of a Company Closure.
+ */
+export const CALENDAR_POPUPS = ["closure_wrapup"] as const
+export type CalendarPopup = (typeof CALENDAR_POPUPS)[number]
+
+/** The Calendar pop-up a step layout asks for, or null. Tolerates any shape (the layout is free-form data). */
+export function popupFromLayout(layout: unknown): CalendarPopup | null {
+  if (!layout || typeof layout !== "object") return null
+  const components = (layout as { components?: unknown }).components
+  if (!Array.isArray(components)) return null
+  for (const c of components) {
+    const type = c && typeof c === "object" ? (c as { type?: unknown }).type : null
+    const hit = CALENDAR_POPUPS.find((p) => p === type)
+    if (hit) return hit
+  }
+  return null
 }
 
 export interface GroupFacts {

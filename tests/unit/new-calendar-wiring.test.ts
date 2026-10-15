@@ -1,0 +1,160 @@
+import { describe, it, expect } from "vitest"
+import { existsSync, readFileSync, readdirSync } from "fs"
+import { join } from "path"
+
+/**
+ * New Calendar (dev job 40235e3c) — structural guarantees, pinned as source checks (the repo's unit tests run in plain node:
+ * no browser rendering). Each rule exists because the Open services page it is built on needed it.
+ */
+
+const root = join(__dirname, "..", "..")
+const read = (p: string) => readFileSync(join(root, p), "utf8")
+const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")
+const importsOf = (src: string) => Array.from(src.matchAll(/from\s+['"]([^'"]+)['"]/g)).map(m => m[1])
+
+const PAGE = "app/(dashboard)/new-calendar/page.tsx"
+const LIB = readdirSync(join(root, "lib/new-calendar")).map(f => `lib/new-calendar/${f}`)
+const COMPONENTS = readdirSync(join(root, "components/new-calendar")).map(f => `components/new-calendar/${f}`)
+const ROUTE_DIR = readdirSync(join(root, "app/(dashboard)/new-calendar"))
+
+describe("the page", () => {
+  const page = read(PAGE)
+  const code = stripComments(page)
+
+  it("is dynamic, so nothing is cached between requests", () => {
+    expect(page).toContain("export const dynamic = 'force-dynamic'")
+  })
+
+  it("runs the SAME guard as Open services FIRST, before anything is loaded; a denied visitor gets notFound() outside the try block", () => {
+    const guard = code.indexOf("requireOpenServicesAccess()")
+    const notFound = code.indexOf("if (!access.ok) notFound()")
+    const load = code.indexOf("loadNewCalendarInputs(")
+    const tryAt = code.indexOf("try {")
+    expect(guard).toBeGreaterThan(-1)
+    expect(notFound).toBeGreaterThan(guard)
+    expect(load).toBeGreaterThan(notFound)
+    expect(tryAt).toBeGreaterThan(notFound)
+  })
+
+  it("passes the access proof to the loader and shows 'Could not load' instead of an empty list when a read fails, and reports it to Sentry", () => {
+    expect(code).toContain("loadNewCalendarInputs(access")
+    expect(page).toContain("Could not load the New Calendar.")
+    expect(code).toContain("Sentry.captureException(err")
+  })
+
+  it("has its own loading and error screens, and nothing else in its folder (no route handler, no layout)", () => {
+    expect(ROUTE_DIR.sort()).toEqual(["error.tsx", "loading.tsx", "page.tsx"])
+    expect(read("app/(dashboard)/new-calendar/error.tsx")).toContain("Nothing was changed")
+  })
+})
+
+describe("read-only", () => {
+  const WRITES = [".insert(", ".update(", ".delete(", ".upsert(", ".rpc(", "use server", "fetch(", "method: \"POST\"", "method: 'POST'"]
+  for (const f of [...LIB, ...COMPONENTS, PAGE]) {
+    it(`${f} writes nothing and calls no server action or API`, () => {
+      const code = stripComments(read(f))
+      for (const w of WRITES) expect(code, `${f} contains ${w}`).not.toContain(w)
+    })
+  }
+})
+
+describe("no service or step name in the code (every service and step on the page comes from the settings)", () => {
+  const NAMES = [
+    "Banking", "ITIN", "CMRA", "Tax Return", "State RA", "Annual Report", "Annual Renewal", "Company Formation",
+    "Company Closure", "Client Onboarding", "EIN", "Consulting", "Notary", "Shipping", "TD Communication", "DBA", "Wrap-up",
+  ]
+  for (const f of [...LIB, ...COMPONENTS, PAGE]) {
+    it(`${f} names no service`, () => {
+      const code = stripComments(read(f))
+      for (const n of NAMES) expect(code, `${f} contains "${n}"`).not.toContain(n)
+    })
+  }
+})
+
+describe("client/server boundary", () => {
+  it("the page body imports only the client-safe modules and its own two small client pieces", () => {
+    const imports = importsOf(read("components/new-calendar/new-calendar-view.tsx"))
+    const mine = imports.filter(i => i.includes("new-calendar") || i.includes("open-services"))
+    expect(mine.sort()).toEqual([
+      "@/components/new-calendar/refresh-button",
+      "@/components/new-calendar/row-action",
+      "@/lib/new-calendar/greeting",
+      "@/lib/new-calendar/params",
+      "@/lib/new-calendar/types",
+    ].sort())
+    expect(imports.join(" ")).not.toMatch(/supabase|lib\/services|settings|audience|\/load|\/build/)
+  })
+
+  it("the row action imports only the Wrap-up pop-up and the row type", () => {
+    const imports = importsOf(read("components/new-calendar/row-action.tsx"))
+    expect(imports.filter(i => i.includes("new-calendar") || i.includes("open-services")).sort()).toEqual([
+      "@/components/open-services/closure-wrapup-dialog",
+      "@/lib/new-calendar/types",
+    ].sort())
+    expect(imports.join(" ")).not.toMatch(/supabase|audience|\/load|\/build/)
+  })
+
+  it("types.ts, params.ts and greeting.ts import nothing from the server side", () => {
+    for (const f of ["types", "params", "greeting"]) {
+      const imports = importsOf(read(`lib/new-calendar/${f}.ts`))
+      for (const i of imports) expect(["@/lib/new-calendar/types", "@/lib/open-services/types"], `${f} imports ${i}`).toContain(i)
+    }
+  })
+
+  it("the two client pieces are marked 'use client'; the page body is a server component", () => {
+    expect(read("components/new-calendar/row-action.tsx").startsWith("'use client'")).toBe(true)
+    expect(read("components/new-calendar/refresh-button.tsx").startsWith("'use client'")).toBe(true)
+    expect(read("components/new-calendar/new-calendar-view.tsx")).not.toContain("'use client'")
+  })
+})
+
+describe("the loader", () => {
+  const code = stripComments(read("lib/new-calendar/load.ts"))
+
+  it("demands the access proof, checks it at run time, and reuses the Open services read for the open jobs", () => {
+    expect(code).toContain("access: OpenServicesAccessGranted")
+    expect(code).toContain("access not granted")
+    expect(code).toContain("loadOpenServicesInputs(access)")
+  })
+
+  it("reads the finished jobs by keyset (not offset), only status completed, and throws on any read error", () => {
+    expect(code).toContain(".ilike(\"status\", \"completed\")")
+    expect(code).toContain(".gt(\"id\", after)")
+    expect(code).not.toContain(".range(")
+    expect((code.match(/throw new Error\(/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe("the menu item and the old Calendar", () => {
+  const sidebar = read("components/dashboard/sidebar.tsx")
+  const layout = read("app/(dashboard)/layout.tsx")
+
+  it("the sidebar has a 'New Calendar' item right after the existing Calendar, behind a feature flag", () => {
+    const calendar = sidebar.indexOf("{ id: 'calendar', name: 'Calendar', href: '/calendar'")
+    const item = sidebar.indexOf("{ id: 'new-calendar', name: 'New Calendar', href: '/new-calendar'")
+    expect(calendar).toBeGreaterThan(-1)
+    expect(item).toBeGreaterThan(calendar)
+    expect(sidebar.slice(item, item + 400)).toContain("featureFlag: 'new-calendar'")
+  })
+
+  it("the layout shows the item only to people the page itself would let in (same switch, same rule), never inside a floating window", () => {
+    const code = stripComments(layout)
+    expect(code).toContain("const showNewCalendar = embedded ? false : canViewOpenServices(user, await openServicesAudiencePromise)")
+    expect(code).toContain("enabledFeatures={showNewCalendar ? ['new-calendar'] : []}")
+  })
+
+  it("the existing Calendar (page and components) does not mention the new one: it stays exactly as it is until Antonio says to close it", () => {
+    const files = [
+      "app/(dashboard)/calendar/page.tsx",
+      ...readdirSync(join(root, "components/calendar")).map(f => `components/calendar/${f}`),
+    ]
+    for (const f of files) expect(read(f), f).not.toMatch(/new-calendar|NewCalendar/)
+    expect(existsSync(join(root, "app/(dashboard)/calendar/layout.tsx"))).toBe(false)
+  })
+
+  it("the Renewals tab is a plain link to the existing Calendar, so Mark Filed is exactly as it is", () => {
+    const view = read("components/new-calendar/new-calendar-view.tsx")
+    expect(view).toContain("href=\"/calendar\"")
+    expect(view).toContain("Renewals &amp; annual reports")
+  })
+})

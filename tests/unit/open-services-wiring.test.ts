@@ -70,7 +70,8 @@ describe("client/server boundary", () => {
     const view = read("components/open-services/open-services-view.tsx")
     const imports = Array.from(view.matchAll(/from\s+['"]([^'"]+)['"]/g)).map(m => m[1])
     const mine = imports.filter(i => i.includes("open-services"))
-    expect(mine.sort()).toEqual(["@/lib/open-services/params", "@/lib/open-services/types"].sort())
+    // the two pure shared files, plus the Wrap-up pop-up (a client component that only draws; it reads through its own API route)
+    expect(mine.sort()).toEqual(["@/components/open-services/closure-wrapup-dialog", "@/lib/open-services/params", "@/lib/open-services/types"].sort())
     expect(imports.join(" ")).not.toMatch(/supabase|lib\/services\/stages|settings/)
   })
 

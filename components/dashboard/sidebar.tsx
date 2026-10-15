@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Settings,
   Calendar,
+  CalendarDays,
   LogOut,
   Menu,
   X,
@@ -150,6 +151,9 @@ const defaultNavigation: NavItem[] = [
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, ownerOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Owner only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
+  // New Calendar (dev job 40235e3c, 2026-10-16): the day-by-day work list, being tested next to the existing Calendar. Shown only to
+  // people who may open it — the layout passes the 'new-calendar' flag from the same switch the page itself checks (see dashboard-navigation.md).
+  { id: 'new-calendar', name: 'New Calendar', href: '/new-calendar', icon: CalendarDays, featureFlag: 'new-calendar', tooltip: 'The new day-by-day work list: what is on us, what is waiting on someone else, what is finished. Being tested; the existing Calendar stays.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
   { id: 'td-communication', name: 'TD Communication', href: '/dashboard/td-communication', icon: Radio, tooltip: 'Direct realtime channel between TD staff and managed partners (e.g. Cris). Reply to partner messages here.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },

@@ -74,7 +74,7 @@ export const WINDOW_PAGE_ROOTS: readonly string[] = [
   'accounts', 'addresses', 'audit', 'bofa-intake', 'calendar', 'captures', 'cases', 'catalog', 'client-health',
   'clients', 'code-tasks', 'config', 'contacts', 'conversations', 'dashboard', 'dev-board',
   'dev-tools', 'email-templates', 'exceptions', 'finance', 'flows', 'forms', 'inbox', 'intake',
-  'invoice-aging', 'invoice-settings', 'leads', 'notes', 'onboarding-review', 'owner', 'partners',
+  'invoice-aging', 'invoice-settings', 'leads', 'new-calendar', 'notes', 'onboarding-review', 'owner', 'partners',
   'payments', 'pipeline', 'pipeline-overview', 'portal-chats', 'portal-launch', 'reconciliation',
   'referrals', 'research', 'sandbox-mail', 'service-catalog', 'services', 'shared', 'storage',
   'system-health', 'tasks', 'tax-returns', 'td-talk', 'team-chat', 'team-management', 'tools', 'trackers',

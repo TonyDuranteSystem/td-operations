@@ -21,6 +21,8 @@ import MyCapturesOverlay from '@/components/captures/my-captures-overlay'
 import FloatingChat from '@/components/team-chat/floating-chat'
 import { isFloatingChatEnabled, isFloatingWindowsEnabled } from '@/lib/settings'
 import { isFramedNavigation } from '@/lib/embed/embedded-request'
+import { getOpenServicesAudience } from '@/lib/open-services/audience'
+import { canViewOpenServices } from '@/lib/open-services/access'
 import {
   EmbeddedProvider,
   ChromeOnly,
@@ -151,6 +153,8 @@ export default async function DashboardLayout({
   // chrome's data is never shown, so its queries are skipped.
   const framed = isFramedNavigation(headers().get('sec-fetch-dest'))
   const windowsEnabledPromise = isFloatingWindowsEnabled()
+  // Started with the other independent lookups so the "New Calendar" menu check below adds no serial round trip.
+  const openServicesAudiencePromise = getOpenServicesAudience()
   const badgeCountsPromise = framed ? null : getBadgeCounts(supabase, user.id)
   const windowsEnabled = await windowsEnabledPromise
   const embedded = framed && windowsEnabled
@@ -175,6 +179,10 @@ export default async function DashboardLayout({
 
   const isSandbox = process.env.SANDBOX_MODE === '1'
 
+  // The "New Calendar" menu item shows only to people the page itself would let in (same switch, same rule), so it can never be a
+  // dead link. One cheap setting read on top of the user we already have; it fails closed (no item) on any problem.
+  const showNewCalendar = embedded ? false : canViewOpenServices(user, await openServicesAudiencePromise)
+
   return (
     <Providers>
       {/* Window mode (see EmbeddedProvider): every piece of chrome is still rendered in
@@ -196,6 +204,7 @@ export default async function DashboardLayout({
             isAdmin={admin}
             isOwner={owner}
             badgeCounts={badgeCounts}
+            enabledFeatures={showNewCalendar ? ['new-calendar'] : []}
           />
         </ChromeOnly>
         {/* pt-14 (not a spacer div) compensates for the fixed mobile top bar:

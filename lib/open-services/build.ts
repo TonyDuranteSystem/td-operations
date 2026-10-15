@@ -21,6 +21,7 @@ import {
   type Row,
   type ViewModel,
   type Who,
+  popupFromLayout,
 } from "@/lib/open-services/types"
 import { clampLimit, limitFor, type OpenServicesParams } from "@/lib/open-services/params"
 
@@ -47,6 +48,8 @@ export interface StepInput {
   waiting_on: string | null
   sla_days: number | null
   completes_service: boolean | null
+  /** The step's layout (pipeline_stages.stage_layout), free-form data; only used to find a Calendar pop-up. */
+  stage_layout?: unknown
 }
 
 export interface AccountInput {
@@ -108,7 +111,7 @@ export function matchExcludingCard(
   return null
 }
 
-function normalizeName(s: string): string {
+export function normalizeName(s: string): string {
   return s
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -273,6 +276,7 @@ export function classify(input: BuildInput): Classified {
       followUp,
       badges,
       href: `/flows/${job.id}`,
+      popup: popupFromLayout(step?.stage_layout),
     }
     items.push({ row, entered: enteredMs, created: parseMs(job.created_at), nameNorm: normalizeName(name) })
   }
