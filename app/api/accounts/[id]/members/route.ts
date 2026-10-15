@@ -117,6 +117,7 @@ export async function POST(
     if (error) return NextResponse.json({ error: explainFailure(error).message }, { status: 400 })
 
     // MM5: individual members with a contact must also get account_contacts for portal access
+    let linkWarning: string | null = null
     if (insert.member_type === "individual" && insert.contact_id) {
       const { error: acError } = await supabaseAdmin
         .from("account_contacts")
@@ -132,12 +133,13 @@ export async function POST(
         )
       if (acError) {
         console.error("[members POST] account_contacts upsert failed:", acError.message)
+        linkWarning = "The member was added, but linking the person to the company failed — they will not show in 2. Contacts or get a storage until it is linked."
       }
     }
 
     const ss4Refresh = await autoRefreshSs4(params.id)
     const oaRefresh = await autoRefreshOaForEdit(params.id)
-    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh }, { status: 201 })
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh, link_warning: linkWarning }, { status: 201 })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
@@ -209,6 +211,17 @@ export async function DELETE(
     if (!member_id) {
       return NextResponse.json({ error: "member_id is required" }, { status: 400 })
     }
+
+    // Storage check: remember who is leaving BEFORE the row goes. Never blocks the removal.
+    try {
+      const { data: gone } = await supabaseAdmin.from("members").select("member_type, full_name, contact_id").eq("id", member_id).eq("account_id", params.id).maybeSingle()
+      if (gone && gone.member_type !== "company" && gone.contact_id) {
+        const { createClient } = await import("@/lib/supabase/server")
+        const { data: { user } } = await createClient().auth.getUser()
+        const { recordPersonLeaving } = await import("@/lib/crm-store/storage-check")
+        await recordPersonLeaving({ accountId: params.id, contactId: gone.contact_id, personName: gone.full_name, actorId: user?.id ?? null, via: "member-delete" })
+      }
+    } catch { /* the removal goes on */ }
 
     const { error } = await supabaseAdmin
       .from("members")

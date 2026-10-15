@@ -45,7 +45,15 @@ import { AccountJourney } from './account-journey'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
-import { updateAccountField, updateContactField, addAccountNote, updateAccountContactRole, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
+import { updateAccountField as updateAccountFieldRaw, updateContactField as updateContactFieldRaw, addAccountNote, updateAccountContactRole as updateAccountContactRoleRaw, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
+import { StorageCheckBanner } from './storage-check-banner'
+import { notifyStorageCheck } from '@/lib/crm-store/storage-check-events'
+
+// Storage check: after a save that worked, the company page looks again at what the CRM and the storage say (a name, an owner,
+// a role …) and opens the pop-up when something needs a decision. The saves behave exactly as before.
+const updateAccountField: typeof updateAccountFieldRaw = async (...a) => { const r = await updateAccountFieldRaw(...a); if (r.success) notifyStorageCheck(); return r }
+const updateContactField: typeof updateContactFieldRaw = async (...a) => { const r = await updateContactFieldRaw(...a); if (r.success) notifyStorageCheck(); return r }
+const updateAccountContactRole: typeof updateAccountContactRoleRaw = async (...a) => { const r = await updateAccountContactRoleRaw(...a); if (r.success) notifyStorageCheck(); return r }
 import { StatusChangeDialog } from './status-change-dialog'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
@@ -294,6 +302,7 @@ function ContactsSection({
     const { unlinkContactFromAccount } = await import('@/app/(dashboard)/accounts/actions')
     const result = await unlinkContactFromAccount(account.id, unlinkTarget.id)
     if (result.success) {
+      notifyStorageCheck()
       setTimeout(() => window.location.reload(), 250)
       return { success: true, message: `${unlinkTarget.name} unlinked` }
     }
@@ -324,6 +333,7 @@ function ContactsSection({
       const { createAndLinkContact } = await import('@/app/(dashboard)/accounts/actions')
       const result = await createAndLinkContact(account.id, searchQuery.trim(), newEmail.trim() || null, selectedRole)
       if (result.success) {
+        notifyStorageCheck()
         if (result.warning) {
           // Longer duration + a real delay before reload — an immediate
           // reload wiped this toast before it could ever render (BLOCKER,
@@ -397,6 +407,7 @@ function ContactsSection({
       const { linkContactToAccount } = await import('@/app/(dashboard)/accounts/actions')
       const result = await linkContactToAccount(account.id, contactId, selectedRole)
       if (result.success) {
+        notifyStorageCheck()
         toast.success(`${contactName} linked as ${selectedRole}`)
         setShowSearch(false)
         setSearchQuery('')
@@ -672,6 +683,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
 
   return (
     <div className="space-y-6">
+      <StorageCheckBanner accountId={account.id} />
       {/* Header */}
       <div className="flex items-start gap-4">
         <button
@@ -1954,6 +1966,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       setMembers(prev => prev.map(m => m.id === editingId ? (data.data as CrmMember) : m))
       setEditingId(null)
       toast.success('Member updated')
+      notifyStorageCheck()
       // What the SS-4 auto-refresh did with this edit — kept an explicit pick,
       // blocked on the flag count, or refused an orphaned signer. Silence here
       // is how conflicting staff actions go unnoticed (council major, 2026-08-11).
@@ -1984,6 +1997,8 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       setShowAddForm(false)
       setAddDraft({})
       toast.success('Member added')
+      if ((data as { link_warning?: string | null }).link_warning) toast.warning((data as { link_warning: string }).link_warning, { duration: 12000 })
+      notifyStorageCheck()
       const addSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
       if (addSs4Note) toast.warning(addSs4Note, { duration: 12000 })
     } catch (err) {
@@ -2010,6 +2025,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       // (link revoked, staff must pick) — that must reach the person deleting.
       const delSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
       if (delSs4Note) toast.warning(delSs4Note, { duration: 12000 })
+      notifyStorageCheck()
       return { success: true, message: `${displayName(deleteTarget)} removed` }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to remove' }

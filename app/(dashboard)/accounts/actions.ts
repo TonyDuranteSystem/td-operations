@@ -641,6 +641,13 @@ export async function unlinkContactFromAccount(
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+    // Storage check: remember who is leaving BEFORE the link goes (afterwards nothing says who was there). Never blocks the unlink.
+    try {
+      const { data: who } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+      const { data: { user } } = await supabase.auth.getUser()
+      const { recordPersonLeaving } = await import('@/lib/crm-store/storage-check')
+      await recordPersonLeaving({ accountId, contactId, personName: who?.full_name ?? null, actorId: user?.id ?? null, via: 'unlink' })
+    } catch { /* the unlink goes on */ }
     const { error } = await supabase
       .from('account_contacts')
       .delete()
