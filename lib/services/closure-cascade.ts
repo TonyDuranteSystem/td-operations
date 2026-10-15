@@ -15,6 +15,10 @@
  * scripts/migrations/20261015-1200-closure-wrapup-step.sql; tests/unit/closure-cascade.test.ts keeps the two in step).
  */
 
+import type { Database } from "@/lib/database.types"
+
+type TaskCategory = Database["public"]["Enums"]["task_category"]
+
 /** The step the chores live on. Pinned in lib/services/protected-stage-names.ts: the closure workflow matches it by name. */
 export const WRAP_UP_STAGE_NAME = "Wrap-up"
 
@@ -25,7 +29,7 @@ export interface ClosureChore {
   cardTitle: string
   cardDescription: string
   priority: "High" | "Normal"
-  category: string
+  category: TaskCategory
 }
 
 export const CLOSURE_CHORES: readonly ClosureChore[] = [
@@ -79,7 +83,7 @@ export interface ClosureFollowUpCard {
   task_title: string
   description: string
   priority: "High" | "Normal"
-  category: string
+  category: TaskCategory
 }
 
 function normalise(s: string | null | undefined): string {
