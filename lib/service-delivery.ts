@@ -31,6 +31,7 @@ import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
 import { stageNotificationText } from "@/lib/services/step-settings"
+import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } from "@/lib/services/closure-cascade"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
@@ -1288,6 +1289,16 @@ export async function advanceServiceDelivery(
     targetStage.stage_name === "Closing" &&
     delivery.account_id
   ) {
+    // Read the job's own to-dos FIRST: the clean-up below marks every open to-do of the account Done, and a Wrap-up chore
+    // nobody did must not vanish in that sweep (it comes back as a follow-up to-do, see closure-cascade.ts).
+    let jobTasks: ClosureStepTask[] = []
+    try {
+      const { data: jt } = await supabaseAdmin.from("tasks").select("task_title, status").eq("delivery_id", delivery_id)
+      jobTasks = (jt ?? []) as ClosureStepTask[]
+    } catch {
+      /* could not read them → every chore gets its follow-up (the safe direction) */
+    }
+
     try {
       const { data: activeSds } = await supabaseAdmin
         .from("service_deliveries")
@@ -1337,31 +1348,32 @@ export async function advanceServiceDelivery(
         })
         autoTriggers.push(`Closed ${openTasks.length} open tasks`)
       }
-
-      // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await dbWriteSafe(supabaseAdmin.from("tasks").insert([
-        {
-          task_title: `[CLOSURE] Remove RA on Harbor Compliance`,
-          description: `Company closure in progress. Remove Registered Agent service from Harbor Compliance portal.`,
-          assigned_to: "Luca", priority: "High", category: "Filing", status: "To Do",
-          account_id: delivery.account_id, delivery_id, created_by: "System",
-        },
-        {
-          task_title: `[CLOSURE] Cancel QB recurring invoices`,
-          description: `Company closure. Check QuickBooks for any recurring invoices and cancel them.`,
-          assigned_to: "Luca", priority: "Normal", category: "Payment", status: "To Do",
-          account_id: delivery.account_id, delivery_id, created_by: "System",
-        },
-        {
-          task_title: `[CLOSURE] Email client -- closure complete`,
-          description: `All closure steps done. Send confirmation email to client that their LLC has been dissolved.`,
-          assigned_to: "Luca", priority: "Normal", category: "Client Communication", status: "To Do",
-          account_id: delivery.account_id, delivery_id, created_by: "System",
-        },
-      ]), "tasks.insert")
-      autoTriggers.push("Created 3 closure tasks: Harbor RA, QB invoices, client email")
     } catch (closureErr) {
       autoTriggers.push(`Closure auto-cleanup failed: ${closureErr instanceof Error ? closureErr.message : String(closureErr)}`)
+    }
+
+    // The follow-up to-dos in their own block, so a failure above cannot hide them and a failure here is reported as such.
+    try {
+      const cards = buildClosureFollowUpCards(jobTasks, stages.some(st => st.stage_name === WRAP_UP_STAGE_NAME))
+      const { error: cardsErr } = await dbWriteSafe(
+        // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
+        supabaseAdmin.from("tasks").insert(
+          cards.map(c => ({
+            task_title: c.task_title,
+            description: c.description,
+            assigned_to: "Luca", priority: c.priority, category: c.category, status: "To Do" as const,
+            account_id: delivery.account_id, delivery_id, created_by: "System",
+          }))
+        ),
+        "tasks.insert"
+      )
+      if (cardsErr) {
+        autoTriggers.push(`Closure follow-up to-dos NOT created: ${cardsErr}`)
+      } else {
+        autoTriggers.push(`Created ${cards.length} closure to-dos: ${cards.map(c => c.task_title.replace("[CLOSURE] ", "")).join("; ")}`)
+      }
+    } catch (cardsErr) {
+      autoTriggers.push(`Closure follow-up to-dos NOT created: ${cardsErr instanceof Error ? cardsErr.message : String(cardsErr)}`)
     }
   }
 
