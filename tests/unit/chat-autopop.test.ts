@@ -7,7 +7,7 @@
  * message that mattered.
  */
 import { describe, it, expect } from 'vitest'
-import { decideAutoPop, type AutoPopInput } from '@/lib/team/chat-autopop'
+import { decideAutoPop, quietFromStored, type AutoPopInput } from '@/lib/team/chat-autopop'
 
 const MY_DM = 'thread-dm-luca'
 const base: AutoPopInput = {
@@ -159,5 +159,25 @@ describe('decideAutoPop — not for me', () => {
   it('quiet and mobile still suppress a message that IS mine (the badge still moves)', () => {
     expect(decide({ quiet: true })).toBe('ignore')
     expect(decide({ isDesktop: false })).toBe('ignore')
+  })
+})
+
+describe('quietFromStored — pop-ups are OFF until the person turns them on (TD Talk, dev job c1e326dd)', () => {
+  it("only an explicit '0' means on; nothing saved, '1' or anything unexpected means off", () => {
+    expect(quietFromStored(null)).toBe(true)
+    expect(quietFromStored(undefined)).toBe(true)
+    expect(quietFromStored('')).toBe(true)
+    expect(quietFromStored('1')).toBe(true)
+    expect(quietFromStored('garbage')).toBe(true)
+    expect(quietFromStored('0')).toBe(false)
+  })
+  it('the floating window starts quiet (nothing can pop before the saved choice is read) and reads the saved choice through the helper', async () => {
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    const src = readFileSync(join(__dirname, '../../components/team-chat/floating-chat.tsx'), 'utf8')
+    expect(src).toContain('const [quiet, setQuiet] = useState(true)')
+    expect(src).toContain('const quietRef = useRef(true)')
+    expect(src).toContain('setQuiet(quietFromStored(store.get(QUIET_KEY)))')
+    expect(src).not.toContain("store.get(QUIET_KEY) === '1'")
   })
 })
