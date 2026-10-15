@@ -202,7 +202,7 @@ _Regenerated 2026-10-15. Every subsystem doc under `docs/systems/` (48 docs), wi
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-12)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-14)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-09)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-14)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-15)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-14)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-15)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
