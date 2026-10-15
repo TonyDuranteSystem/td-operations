@@ -446,6 +446,13 @@ export async function createSS4(params: CreateSS4Params): Promise<CreateSS4Resul
     /* non-fatal — the SS-4 record already exists; the doc link is best-effort */
   }
 
+  // ─── 11b. SAVE THE UNSIGNED SS-4 AS A FILE IN THE COMPANY'S STORAGE (when its files live there) ───
+  // Best-effort and silent for a company still on Drive: the SS-4 we just created is never undone by this.
+  try {
+    const { storeUnsignedSs4 } = await import("@/lib/operations/ss4-store")
+    await storeUnsignedSs4(params.account_id, "create")
+  } catch { /* storeUnsignedSs4 never throws; this is only a belt for the dynamic import */ }
+
   // ─── 12. NOTIFY THE SIGNER (only when created directly signable) ───
   // ready_to_sign=true creates the record at 'awaiting_signature' — the client
   // can sign NOW, so tell them (action-required: chat + immediate email +

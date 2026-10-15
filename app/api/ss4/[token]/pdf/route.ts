@@ -10,8 +10,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
 import { accessCodeError } from "@/lib/esign/access-guard"
-import { fillSS4, type SS4FillData } from "@/lib/pdf/ss4-fill"
-import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
+import { fillSS4 } from "@/lib/pdf/ss4-fill"
+import { ss4FillDataFromRow, type Ss4Row } from "@/lib/operations/ss4-store"
 
 export async function GET(
   request: NextRequest,
@@ -46,30 +46,8 @@ export async function GET(
     return NextResponse.json({ error: codeErr.error }, { status: codeErr.status })
   }
 
-  // Mailing address — fall back to TD Park Blvd for legacy rows without stored address
-  const TD_FALLBACK_STREET = CLIENT_ADDRESS_FALLBACK.street
-  const TD_FALLBACK_CITY_STATE_ZIP = CLIENT_ADDRESS_FALLBACK.cityStateZip
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ss4Any = ss4 as any
-  const mailingStreet: string = ss4Any.mailing_street || TD_FALLBACK_STREET
-  const mailingCityStateZip: string = ss4Any.mailing_city_state_zip || TD_FALLBACK_CITY_STATE_ZIP
-
-  // Build fill data from the DB record
-  const fillData: SS4FillData = {
-    companyName: ss4.company_name,
-    tradeName: ss4.trade_name || undefined,
-    entityType: ss4.entity_type as SS4FillData["entityType"],
-    stateOfFormation: ss4.state_of_formation,
-    formationDate: ss4.formation_date || "",
-    memberCount: ss4.member_count,
-    responsiblePartyName: ss4.responsible_party_name,
-    responsiblePartyItin: ss4.responsible_party_itin || undefined,
-    responsiblePartyPhone: ss4.responsible_party_phone || undefined,
-    responsiblePartyTitle: ss4.responsible_party_title,
-    mailingStreet,
-    mailingCityStateZip,
-    countyAndState: ss4.county_and_state || undefined,
-  }
+  // Build fill data from the DB record (shared with the stored copy — lib/operations/ss4-store.ts)
+  const fillData = ss4FillDataFromRow(ss4 as unknown as Ss4Row)
 
   // Generate the filled PDF
   const pdfBytes = await fillSS4(fillData)
