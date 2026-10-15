@@ -65,7 +65,14 @@ export function ThemeToggle() {
   const [pref, setPref] = useState<ThemePref>('auto')
 
   useEffect(() => {
-    setPref(readPref())
+    const refresh = () => setPref(readPref())
+    refresh()
+    window.addEventListener(THEME_CHANGE_EVENT, refresh)
+    window.addEventListener('storage', refresh) // keep the icon right when another tab changes it
+    return () => {
+      window.removeEventListener(THEME_CHANGE_EVENT, refresh)
+      window.removeEventListener('storage', refresh)
+    }
   }, [])
 
   const cycle = useCallback(() => {

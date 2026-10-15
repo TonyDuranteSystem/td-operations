@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import colors from 'tailwindcss/colors'
 import {
+  buildBorderDefault,
   buildDarkVariables,
   buildKindColors,
   darkShade,
@@ -46,6 +47,17 @@ describe('dark mapping', () => {
     expect(darkShade('bg', 'blue', 600)).toBe(600)
     expect(darkShade('bg', 'blue', 700)).toBe(700)
     expect(darkShade('text', 'zinc', 400)).toBe(400)
+  })
+  it('keeps dark labels legible on pale fills and primary buttons visible', () => {
+    // bg-amber-400 text-amber-950 -> text flips light, so the fill must darken too
+    expect(darkShade('bg', 'amber', 400)).toBe(600)
+    expect(darkShade('bg', 'yellow', 400)).toBe(600)
+    expect(darkShade('bg', 'blue', 400)).toBe(400)
+    // bg-zinc-900 text-white must not equal the dark card (zinc-900)
+    expect(darkShade('bg', 'zinc', 900)).toBe(700)
+  })
+  it('bare border / divide-y default keeps the stock gray-200 as fallback', () => {
+    expect(buildBorderDefault()).toBe('rgb(var(--c-border-gray-200, 229 231 235) / <alpha-value>)')
   })
   it('only emits variables that differ, and sets the white surface', () => {
     const v = buildDarkVariables()

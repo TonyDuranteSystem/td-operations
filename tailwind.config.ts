@@ -1,6 +1,6 @@
 import type { Config } from 'tailwindcss'
 import plugin from 'tailwindcss/plugin'
-import { buildDarkVariables, buildKindColors } from './lib/theme/crm-dark-palette'
+import { buildBorderDefault, buildDarkVariables, buildKindColors } from './lib/theme/crm-dark-palette'
 
 const config: Config = {
   darkMode: ['class'],
@@ -58,8 +58,8 @@ const config: Config = {
       backgroundColor: buildKindColors('bg'),
       textColor: buildKindColors('text'),
       placeholderColor: buildKindColors('text'),
-      borderColor: buildKindColors('border'),
-      divideColor: buildKindColors('border'),
+      borderColor: { ...buildKindColors('border'), DEFAULT: buildBorderDefault() },
+      divideColor: { ...buildKindColors('border'), DEFAULT: buildBorderDefault() },
       ringColor: buildKindColors('border'),
       gradientColorStops: buildKindColors('bg'),
       borderRadius: {

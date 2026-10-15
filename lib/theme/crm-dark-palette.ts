@@ -23,8 +23,12 @@ export type Shade = (typeof SHADES)[number]
 export type Kind = 'bg' | 'text' | 'border'
 
 // shade used in LIGHT mode -> shade of the same family used in DARK mode. Missing = unchanged.
-const BG_NEUTRAL: Partial<Record<Shade, Shade>> = { 50: 950, 100: 800, 200: 700, 300: 600 }
+// 900 -> 700: `bg-zinc-900 text-white` primary buttons would otherwise melt into the (zinc-900) dark card.
+const BG_NEUTRAL: Partial<Record<Shade, Shade>> = { 50: 950, 100: 800, 200: 700, 300: 600, 900: 700 }
 const BG_COLORED: Partial<Record<Shade, Shade>> = { 50: 950, 100: 900, 200: 800, 300: 700 }
+// Families whose 400 is a pale, bright fill that carries DARK text in light mode (`bg-amber-400 text-amber-950`).
+// Dark mode flips that text to near-white, so the fill itself must go darker too or the label vanishes.
+const BRIGHT_FILL_FAMILIES = ['amber', 'yellow', 'lime']
 const TEXT_NEUTRAL: Partial<Record<Shade, Shade>> = { 500: 400, 600: 300, 700: 200, 800: 100, 900: 50, 950: 50 }
 const TEXT_COLORED: Partial<Record<Shade, Shade>> = { 600: 400, 700: 300, 800: 200, 900: 100, 950: 50 }
 // Borders sit one step closer to the surface than fills so lines stay subtle.
@@ -61,6 +65,7 @@ function familyKind(family: string): 'neutral' | 'colored' {
 
 /** The dark shade for a light shade, or the same shade when this kind does not remap it. */
 export function darkShade(kind: Kind, family: string, shade: Shade): Shade {
+  if (kind === 'bg' && shade === 400 && BRIGHT_FILL_FAMILIES.includes(family)) return 600
   return MAPS[familyKind(family)][kind][shade] ?? shade
 }
 
@@ -97,4 +102,9 @@ export function buildDarkVariables(): Record<string, string> {
     }
   }
   return vars
+}
+
+/** The colour a bare `border` / `divide-y` falls back to (stock gray-200), routed through the same variable. */
+export function buildBorderDefault(): string {
+  return `rgb(var(${varName('border', 'gray', 200)}, ${hexToChannels(palette.gray['200'])}) / <alpha-value>)`
 }
