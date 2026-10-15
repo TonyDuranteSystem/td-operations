@@ -49,6 +49,14 @@ export interface BackupConfig {
   privateDriveId?: string
   restrictedRoot?: string
   protectedRoot?: string
+  /**
+   * FRESH MODE (Antonio 2026-10-16: "a new folder 'TD clients backup from the CRM' with the same structure as the CRM; the old Drive
+   * stays only as an archive"). The backup NEVER reuses an old Drive folder or file: no adopting of a company's / a person's existing
+   * Drive folder or of same-named sub-folders, an imported original is not counted as its own backup, and a copy found in the old tree is
+   * never reused, moved or trashed. Everything is made new under `companiesRoot` / `peopleRoot` (the new folder's Companies / People).
+   * A storage whose first backup is not finished ignores its old backup records, so every storage is re-copied once.
+   */
+  fresh?: boolean
 }
 
 export function backupEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -68,6 +76,7 @@ export function backupConfig(env: Record<string, string | undefined> = process.e
     privateDriveId: (env.STORE_BACKUP_PRIVATE_DRIVE_ID ?? "").trim() || undefined,
     restrictedRoot: (env.STORE_BACKUP_RESTRICTED_ROOT ?? "").trim() || undefined,
     protectedRoot: (env.STORE_BACKUP_PROTECTED_ROOT ?? "").trim() || undefined,
+    fresh: (env.STORE_BACKUP_FRESH ?? "").trim() === "1",
   }
   const anyPrivate = !!(c.privateDriveId || c.restrictedRoot || c.protectedRoot)
   if (!c.mainDriveId || !c.companiesRoot || (!c.peopleRoot && !anyPrivate)) {
@@ -107,6 +116,8 @@ export interface OwnerSnap {
   accountFolderTakenByOther: boolean
   /** `kind` 'contacts' = the company's "2. Contacts" VIEW of its people: it holds no files and is never mirrored (the people's own storages are backed up on their own) */
   folders: Array<{ id: string; parent_id: string | null; name: string; trashed_at: string | null; kind?: string }>
+  /** when this storage's first backup finished (null = never) — fresh mode re-copies a storage whose first backup is not done */
+  firstBackupAt?: string | null
   files: Array<{ id: string; folder_id: string; name: string; state: "live" | "trashed" | "purged"
                  sha256: string | null; bucket: string | null; path: string | null; size: number | null; mime: string | null }>
   backupRefs: Map<string, RefRow>
@@ -199,8 +210,9 @@ export const backupIO: BackupIO = {
       if (tErr) throw new Error(`store backup: could not check the account folder: ${tErr.message}`)
       accountFolderTakenByOther = (taken ?? []).some((t: { object_id: string }) => t.object_id !== root?.id)
     }
+    const { data: bs } = await db().from("store_backup_state").select("first_backup_at").eq("owner_id", ownerId).maybeSingle()
     return {
-      id: o.id, kind: o.kind, state, accountFolderId, accountFolderTakenByOther, folders,
+      id: o.id, kind: o.kind, state, accountFolderId, accountFolderTakenByOther, folders, firstBackupAt: (bs?.first_backup_at as string | null | undefined) ?? null,
       files: files.map((f) => {
         const v = (f.store_file_versions ?? {}) as Record<string, unknown>
         return { id: f.id as string, folder_id: f.folder_id as string, name: f.name as string, state: f.state as OwnerSnap["files"][number]["state"],
@@ -290,6 +302,11 @@ export async function backupOwner(
   const timeUp = () => opts.deadlineAt !== undefined && Date.now() > opts.deadlineAt - STOP_BEFORE_DEADLINE_MS
   try {
     const snap = await io.load(ownerId)
+    const fresh = !!cfg.fresh
+    // fresh mode: until this storage's first fresh backup has finished, the old backup records (they point into the old Drive tree) are ignored
+    if (fresh && !snap.firstBackupAt) snap.backupRefs = new Map()
+    // a copy found by its tag counts only when it already sits where it belongs (never one in the old tree)
+    const placedRight = (x: { parents?: string[] | null }, parentId: string) => !fresh || (x.parents ?? []).includes(parentId)
     // The firm's "Business" area and a staff member's private "My files" are NOT backed up into the client
     // Drive or the restricted area until Antonio decides where (master plan #94) — never fall into "Unfiled".
     if (snap.kind === "business" || snap.kind === "private") {
@@ -302,18 +319,19 @@ export async function backupOwner(
     const place = async (key: string, parentId: string, name: string, driveId: string): Promise<string> => {
       const hit = places.get(key)
       if (hit) return hit
-      let p = await io.place(key)
+      const pkey = fresh ? `v2:${key}` : key
+      let p = await io.place(pkey)
       if (p.driveId) {
         const it = await io.get(p.driveId)
         if (it && !it.trashed) { places.set(key, p.driveId); return p.driveId }
-        await io.placeReset(key, p.driveId)       // its folder was deleted by hand → create it again
-        p = await io.place(key)
+        await io.placeReset(pkey, p.driveId)       // its folder was deleted by hand → create it again
+        p = await io.place(pkey)
         if (p.driveId) { places.set(key, p.driveId); return p.driveId }
       }
       if (p.busy || !p.claim) throw new Error(`store backup: the Drive place "${name}" is being created by another run — retry`)
       const existing = (await io.childFolders(parentId, driveId)).find((f) => norm(f.name) === norm(name))
-      const id = existing?.id ?? (await io.createFolder(parentId, name, { crm_place: key.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) })).id
-      if (!(await io.placeSet(key, p.claim, id))) throw new Error(`store backup: lost the claim on "${name}" — retry`)
+      const id = existing?.id ?? (await io.createFolder(parentId, name, { crm_place: pkey.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100) })).id
+      if (!(await io.placeSet(pkey, p.claim, id))) throw new Error(`store backup: lost the claim on "${name}" — retry`)
       places.set(key, id)
       return id
     }
@@ -339,7 +357,7 @@ export async function backupOwner(
       }
       let item = ref && !ref.drive_path?.adopted ? await io.get(ref.external_id) : null
       if (item?.trashed) item = null
-      if (!item) item = (await io.find("crm_folder_id", crmId, drives)).find((f) => !f.trashed) ?? null
+      if (!item) item = (await io.find("crm_folder_id", crmId, drives)).find((f) => !f.trashed && placedRight(f, parentId)) ?? null
       if (!item) {
         item = await io.createFolder(parentId, name, { crm_folder_id: crmId })
         if (ref) rep.recreated++
@@ -359,7 +377,7 @@ export async function backupOwner(
 
     let rootDrive: string
     let rootAdopted = false
-    if ((snap.kind === "company" || (snap.kind === "person" && !privateArea)) && snap.accountFolderId && !snap.accountFolderTakenByOther
+    if (!fresh && (snap.kind === "company" || (snap.kind === "person" && !privateArea)) && snap.accountFolderId && !snap.accountFolderTakenByOther
         && (await io.get(snap.accountFolderId).then((x) => !!x && !x.trashed))) {
       rootDrive = await adoptFolder(rootFolder.id, snap.accountFolderId, null)
       rootAdopted = true
@@ -383,7 +401,7 @@ export async function backupOwner(
     // folders, top-down; inside an adopted root, existing sub-folders with the same name are adopted
     const mirror = new Map<string, string>([[rootFolder.id, rootDrive]])
     const walk = async (folderId: string, driveParent: string, parentAdopted: boolean) => {
-      const existing = parentAdopted ? await io.childFolders(driveParent, cfg.mainDriveId) : []
+      const existing = parentAdopted && !fresh ? await io.childFolders(driveParent, cfg.mainDriveId) : []
       for (const child of byParent.get(folderId) ?? []) {
         // The company's "2. Contacts" is only a VIEW of its people (no files, no sub-folders — the database refuses both). Its Drive twin is
         // usually the very folder a person's storage already adopted as their own contact folder, and a Drive folder can be claimed by one
@@ -418,7 +436,7 @@ export async function backupOwner(
         const ref = snap.backupRefs.get(f.id)
         const imp = snap.importRefs.get(f.id)
         if (f.state === "purged") {
-          const copies = [...(ref ? [await io.get(ref.external_id)] : []), ...(await io.find("crm_file_id", f.id, drives))]
+          const copies = [...(ref ? [await io.get(ref.external_id)] : []), ...(fresh ? [] : await io.find("crm_file_id", f.id, drives))]
           for (const c of copies) if (c && !c.trashed) { await io.trash(c.id); rep.removed++ }
           if (ref && ref.status !== "purged") await io.recordRef("file", f.id, ref.external_id, ref.backed_up_sha256, { area: "purged" }, "purged")
           continue   // an imported original is fixed (#62): it is never deleted from Drive
@@ -426,7 +444,7 @@ export async function backupOwner(
         if (!f.bucket || !f.path || !f.sha256) continue
         const area: "live" | "protected" = f.state === "live" && mirror.has(f.folder_id) ? "live" : "protected"
         // an imported original that still holds exactly these bytes IS the live copy — nothing to add
-        if (area === "live" && !ref && imp && imp.backed_up_sha256 === f.sha256) continue
+        if (!fresh && area === "live" && !ref && imp && imp.backed_up_sha256 === f.sha256) continue
         const parentId = area === "live" ? mirror.get(f.folder_id)! : await protectedArea()
         // cheap path: nothing changed since the last run and no full check is due → no Drive call
         if (!full && ref && ref.status === "ok" && ref.backed_up_sha256 === f.sha256
@@ -436,7 +454,7 @@ export async function backupOwner(
         const tags = { crm_file_id: f.id, crm_version_sha: f.sha256.slice(0, 64) }
         let item = ref ? await io.get(ref.external_id) : null
         if (item?.trashed) item = null
-        const tagged = (await io.find("crm_file_id", f.id, drives)).filter((x) => !x.trashed)
+        const tagged = (await io.find("crm_file_id", f.id, drives)).filter((x) => !x.trashed && placedRight(x, parentId))
         if (!item) item = tagged[0] ?? null
         if (full) for (const extra of tagged) if (item && extra.id !== item.id) { await io.trash(extra.id); rep.removed++ }   // stray duplicates of OUR copy
         if (!item) {
