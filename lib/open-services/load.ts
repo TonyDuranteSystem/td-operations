@@ -90,7 +90,7 @@ export async function loadOpenServicesInputs(access: OpenServicesAccessGranted):
     readAll<StepInput & { id: string }>("service steps", after => {
       let q = supabaseAdmin
         .from("pipeline_stages")
-        .select("id, service_type, stage_name, stage_order, waiting_on, sla_days, completes_service")
+        .select("id, service_type, stage_name, stage_order, waiting_on, sla_days, completes_service, stage_layout")
         .order("id")
         .limit(PAGE)
       if (after) q = q.gt("id", after)
@@ -160,6 +160,7 @@ export async function loadOpenServicesInputs(access: OpenServicesAccessGranted):
       waiting_on: s.waiting_on,
       sla_days: s.sla_days,
       completes_service: s.completes_service,
+      stage_layout: s.stage_layout,
     })),
     accounts: accountChunks.flat(),
     contacts: contactChunks.flat(),

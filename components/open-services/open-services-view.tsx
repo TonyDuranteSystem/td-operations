@@ -18,6 +18,7 @@ import {
   type OpenServicesParams,
 } from '@/lib/open-services/params'
 import { PAGE_SIZE, WHO_LABELS, WHO_VALUES, type Group, type Row, type ViewModel, type Who } from '@/lib/open-services/types'
+import { ClosureWrapupDialog } from '@/components/open-services/closure-wrapup-dialog'
 
 const BASE = '/calendar/open-services'
 
@@ -58,6 +59,9 @@ function FollowUp({ row }: { row: Row }) {
 }
 
 function JobRow({ row, showService }: { row: Row; showService: boolean }) {
+  // A step whose layout asks for the Wrap-up POP-UP opens it right here: the Calendar is where the work is done, not the job page.
+  const wrapUp = row.popup === 'closure_wrapup'
+  const [wrapUpOpen, setWrapUpOpen] = useState(false)
   return (
     <li className={`border-t px-3 py-3 text-sm ${GRID}`}>
       <div className="flex flex-wrap items-center gap-1.5 font-medium">
@@ -79,14 +83,38 @@ function JobRow({ row, showService }: { row: Row; showService: boolean }) {
       </div>
       <div className="mt-1 tabular-nums min-[1100px]:mt-0"><FollowUp row={row} /></div>
       <div className="mt-3 min-[1100px]:mt-0">
-        <Link
-          href={row.href}
-          prefetch={false}
-          aria-label={`Open workspace for ${row.name}`}
-          className="block rounded-md border px-3 py-2 text-center text-sm font-semibold text-blue-700 hover:border-blue-500 min-[1100px]:py-1.5"
-        >
-          Open workspace
-        </Link>
+        {wrapUp ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setWrapUpOpen(true)}
+              aria-label={`Wrap up ${row.name}`}
+              className="block w-full rounded-md bg-blue-600 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700 min-[1100px]:py-1.5"
+            >
+              Wrap up…
+            </button>
+            <Link href={row.href} prefetch={false} aria-label={`Open job page for ${row.name}`} className="mt-1 block text-center text-xs text-zinc-500 underline hover:text-zinc-700">
+              Job page
+            </Link>
+            {wrapUpOpen && (
+              <ClosureWrapupDialog
+                jobId={row.id}
+                name={row.name}
+                subtitle={`${row.serviceType} · ${row.stepNo ? `Step ${row.stepNo}: ` : ''}${row.stage || 'no step'}`}
+                onClose={() => setWrapUpOpen(false)}
+              />
+            )}
+          </>
+        ) : (
+          <Link
+            href={row.href}
+            prefetch={false}
+            aria-label={`Open workspace for ${row.name}`}
+            className="block rounded-md border px-3 py-2 text-center text-sm font-semibold text-blue-700 hover:border-blue-500 min-[1100px]:py-1.5"
+          >
+            Open workspace
+          </Link>
+        )}
       </div>
     </li>
   )

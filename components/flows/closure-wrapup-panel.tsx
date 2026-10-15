@@ -8,6 +8,11 @@ import { closingEmailRecipients } from '@/lib/closure/wrapup-email'
 
 interface ClosureWrapupPanelProps {
   serviceDeliveryId: string
+  /**
+   * 'page' = the box on the job's workspace page. 'popup' = the same content inside the Calendar's pop-up (Open services): no card
+   * frame of its own, and NO links out to Finance or the CRM — the Calendar is where the day's work is done (Antonio, 2026-10-15).
+   */
+  variant?: 'page' | 'popup'
 }
 
 /**
@@ -19,7 +24,8 @@ interface ClosureWrapupPanelProps {
  * "preview unavailable, change will still apply" is the antipattern). Server errors are shown verbatim (R099).
  * "Open Finance" is a plain new-tab link (a floating window would open under a modal backdrop — UX review, 2026-10-15).
  */
-export function ClosureWrapupPanel({ serviceDeliveryId }: ClosureWrapupPanelProps) {
+export function ClosureWrapupPanel({ serviceDeliveryId, variant = 'page' }: ClosureWrapupPanelProps) {
+  const popup = variant === 'popup'
   const [facts, setFacts] = useState<WrapUpFacts | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -60,12 +66,14 @@ export function ClosureWrapupPanel({ serviceDeliveryId }: ClosureWrapupPanelProp
   }, [load])
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4">
+    <div className={popup ? '' : 'rounded-xl border border-zinc-200 bg-white p-4'}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Wrap-up</div>
+          {!popup && <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Wrap-up</div>}
           <h3 className="text-sm font-semibold text-zinc-900">What the CRM knows before this company is closed</h3>
-          <p className="mt-0.5 text-xs text-zinc-500">Read-only view. Nothing here changes the company. Closing from this screen comes in a later version.</p>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            {popup ? 'Everything about this company in one place. The decisions (save for later, close the company) are added to this pop-up next.' : 'Read-only view. Nothing here changes the company. Closing from this screen comes in a later version.'}
+          </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-zinc-500">
           {facts && <span>Checked {new Date(facts.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
@@ -92,15 +100,20 @@ export function ClosureWrapupPanel({ serviceDeliveryId }: ClosureWrapupPanelProp
         </div>
       )}
 
-      {facts && (
+      {facts && !popup && (
         <div className="mb-3">
           <Warn>
             Closing is not available from this screen yet. Until it is, the old “Wrap-up done” button on the workflow card still closes the company right away, the old way: it checks nothing shown here and creates follow-up to-dos.
           </Warn>
         </div>
       )}
+      {facts && popup && (
+        <div className="mb-3">
+          <Warn>Closing is not available from here yet. Do not close this company any other way in the meantime.</Warn>
+        </div>
+      )}
 
-      {facts?.variant === 'company' && <CompanyView facts={facts} />}
+      {facts?.variant === 'company' && <CompanyView facts={facts} popup={popup} />}
       {facts?.variant === 'person' && <PersonView facts={facts} />}
     </div>
   )
@@ -172,7 +185,7 @@ function pending<T>(r: SectionResult<T>, render: (data: T) => React.ReactNode): 
 
 // ───────────────────────────── company view ─────────────────────────────
 
-function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
+function CompanyView({ facts, popup }: { facts: WrapUpCompanyFacts; popup: boolean }) {
   const h = facts.header
   return (
     <div>
@@ -207,10 +220,12 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
       </Section>
 
       <Section title="Money" tag={moneyTag(facts)}>
-        <div className="flex flex-wrap items-center gap-2">
-          <NewTabLink href={`/finance?tab=clients&client=${facts.accountId}`}>Open Finance for this company</NewTabLink>
-          <Hint>Opens in a new tab. When you come back this list refreshes.</Hint>
-        </div>
+        {!popup && (
+          <div className="flex flex-wrap items-center gap-2">
+            <NewTabLink href={`/finance?tab=clients&client=${facts.accountId}`}>Open Finance for this company</NewTabLink>
+            <Hint>Opens in a new tab. When you come back this list refreshes.</Hint>
+          </div>
+        )}
         {pending(facts.money, (m) => (
           <>
             {m.items.length === 0 ? <Hint>No open invoices or uninvoiced installments. Paid invoices are never touched.</Hint> : <MoneyTable items={m.items} />}
@@ -219,7 +234,7 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
                 {money(c.amount, c.currency)} of unspent client credit. Closing would leave it stranded.
               </Warn>
             ))}
-            <Hint>Counts Pending, Overdue, Delinquent, part-paid, draft and never-invoiced items. A part-paid invoice can only be settled in Finance.</Hint>
+            <Hint>Counts Pending, Overdue, Delinquent, part-paid, draft and never-invoiced items. {popup ? 'Settling or voiding them will be done from this pop-up.' : 'A part-paid invoice can only be settled in Finance.'}</Hint>
           </>
         ))}
       </Section>
