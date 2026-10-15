@@ -40,6 +40,8 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
   const [advancing, setAdvancing] = useState(false)
   const [requestingNames, setRequestingNames] = useState(false)
   const [requestSent, setRequestSent] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [addingName, setAddingName] = useState(false)
 
   const sos = resolveFormationFilingLink(stateOfFormation)
   // The name-selection workflow (check on SOS → mark available → send to client →
@@ -94,6 +96,38 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
       setError(err instanceof Error && err.message ? err.message : 'Could not update the name.')
     } finally {
       setBusyIndex(null)
+    }
+  }
+
+  // Recording a state refusal can send the client a "propose new names" request
+  // that says the Secretary of State rejected the name — so confirm first.
+  function refuseByState(c: NameCheck, i: number) {
+    const ok = window.confirm(
+      `Record that the Secretary of State refused "${c.name}"?\n\nIf every other name is also unusable, the client will be asked to propose new names and told the state rejected this one.`,
+    )
+    if (ok) void act(i, 'mark_sos_rejected', 'rejected_by_sos')
+  }
+
+  async function addName() {
+    const name = newName.trim()
+    if (!name) return
+    setAddingName(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/name-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add_name', name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) throw new Error(data.error || 'Could not add the name.')
+      setChecks((data.name_checks as NameCheck[]) ?? checks)
+      setNewName('')
+      setRequestSent(false)
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'Could not add the name.')
+    } finally {
+      setAddingName(false)
     }
   }
 
@@ -154,7 +188,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
     // reference-only here (selection happened on the previous stage).
     if (!selectionStage) {
       if (c.status === 'filed') {
-        return <Btn onClick={() => act(i, 'mark_sos_rejected', 'rejected_by_sos')} variant="danger">Mark SOS Rejected</Btn>
+        return <Btn onClick={() => refuseByState(c, i)} variant="danger">Mark SOS Rejected</Btn>
       }
       return null
     }
@@ -180,10 +214,11 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
               <ExternalLink className="h-3 w-3" /> File on SOS ({sos.stateCode}) →
             </a>
             <Btn onClick={() => act(i, 'mark_filed', 'filed')} variant="primary">Mark as Filed</Btn>
+            <Btn onClick={() => refuseByState(c, i)} variant="danger">State Refused This Name</Btn>
           </>
         )
       case 'filed':
-        return <Btn onClick={() => act(i, 'mark_sos_rejected', 'rejected_by_sos')} variant="danger">Mark SOS Rejected</Btn>
+        return <Btn onClick={() => refuseByState(c, i)} variant="danger">Mark SOS Rejected</Btn>
       default:
         return null
     }
@@ -233,6 +268,7 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
                   <span className="text-sm font-semibold text-zinc-900 break-words">{c.name}</span>
                   {c.source === 'client_resubmit' && <span className="text-[10px] text-zinc-400">(client-proposed)</span>}
                   {c.source === 'client_suggestion' && <span className="text-[10px] font-medium text-blue-500">(client suggested)</span>}
+                  {c.source === 'staff_added' && <span className="text-[10px] font-medium text-violet-500">(added by staff)</span>}
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${BADGE_CLS[c.status]}`}>
                     {meta.emoji} {meta.label}
                   </span>
@@ -258,6 +294,27 @@ export function FormationNames({ serviceDeliveryId, stateOfFormation, stage }: F
             )
           })}
         </ul>
+      )}
+
+      {selectionStage && loaded && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void addName() }}
+            maxLength={120}
+            placeholder="Add a name (e.g. from the client's email)"
+            aria-label="Add an LLC name"
+            className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2.5 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400"
+          />
+          <button
+            onClick={addName}
+            disabled={addingName || !newName.trim()}
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {addingName ? 'Adding…' : 'Add name'}
+          </button>
+        </div>
       )}
 
       {selectionStage && allDead && (

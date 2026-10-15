@@ -23,7 +23,8 @@ vi.mock('@/lib/supabase-admin', () => ({
           maybeSingle: () => Promise.resolve({ data: sdFixture, error: null }),
           update: (row: Record<string, unknown>) => {
             writtenChecks = row.name_checks
-            return { eq: () => Promise.resolve({ data: null, error: null }) }
+            const upd = { eq: () => upd, select: () => Promise.resolve({ data: [{ id: 'sd' }], error: null }) }
+            return upd
           },
         }
         return chain
