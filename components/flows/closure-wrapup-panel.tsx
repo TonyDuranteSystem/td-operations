@@ -200,7 +200,9 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
           <span className="text-zinc-500">Provider in the CRM:</span> {facts.registeredAgent.provider ?? '(empty)'}
         </p>
         {facts.registeredAgent.missing && <Warn>The CRM has no registered agent recorded for this company. Check the Articles or ask the client.</Warn>}
-        <Hint>{facts.registeredAgent.isHarbor ? 'Harbor is cancelled by hand: open the site, cancel, then keep the receipt for the file.' : 'Not Harbor, so there is no site to open here.'}</Hint>
+        {!facts.registeredAgent.missing && (
+          <Hint>{facts.registeredAgent.isHarbor ? 'Harbor is cancelled by hand: open the site, cancel, then keep the receipt for the file.' : 'Not Harbor, so there is no site to open here.'}</Hint>
+        )}
         {facts.registeredAgent.isHarbor && <NewTabLink href={HARBOR.url}>Open {HARBOR.label}</NewTabLink>}
       </Section>
 
