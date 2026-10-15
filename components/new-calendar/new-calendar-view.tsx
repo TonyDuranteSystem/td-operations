@@ -157,7 +157,7 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
             {BUCKET_LABELS[b]} <span className="font-mono text-xs tabular-nums opacity-80">{model.counts[b]}</span>
           </Chip>
         ))}
-        <form action={BASE} method="get" role="search" className="ml-auto flex items-center gap-2">
+        <form action={BASE} method="get" role="search" className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
           {params.b !== 'work' && <input type="hidden" name="b" value={params.b} />}
           {params.s && <input type="hidden" name="s" value={params.s} />}
           {params.s && params.st && <input type="hidden" name="st" value={params.st} />}
@@ -169,7 +169,7 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
             maxLength={80}
             placeholder="Search a company or person"
             aria-label="Search a company or person name"
-            className="w-56 rounded-md border bg-white px-3 py-1.5 text-sm"
+            className="min-w-0 flex-1 rounded-md border bg-white px-3 py-1.5 text-sm sm:w-56 sm:flex-none"
           />
           <button type="submit" className="rounded-md border bg-white px-3 py-1.5 text-sm font-medium hover:border-blue-400">Search</button>
           {params.q && (
