@@ -22,7 +22,7 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
 export const BUCKET_HELP: Record<Bucket, string> = {
   work: "Steps that are ours, jobs whose follow-up time has passed, and jobs sitting on the last step (nobody is waiting: close them).",
   pending: "Steps waiting on the client, an outside office or a date, and paused jobs (blocked, on hold, company not operating).",
-  other: "The step has no \"waiting on\" setting yet, so the page cannot tell whose turn it is. Set it on the step in the Service Catalog.",
+  other: "The step has no \"waiting on\" setting yet, so the page cannot tell whose turn it is (if its follow-up time has passed it shows under To work on). Set it on the step in the Service Catalog.",
   closed: "Jobs that reached their last step in the last 30 days.",
 }
 
@@ -32,6 +32,16 @@ export const CLOSED_WINDOW_DAYS = 30
 export const PAGE_SIZE = 50
 export const MAX_LIMIT = 5000
 export const MAX_TEXT_LENGTH = 80
+
+/** Whose turn a step is, in plain words (the tooltip on a step chip's coloured dot). */
+export const WAIT_LABELS: Record<Who, string> = {
+  us: "Our turn",
+  client: "Waiting on the client",
+  outside: "Waiting on an outside office",
+  date: "Waiting on a date",
+  none: "Last step: nobody is waiting",
+  unset: "Waiting-on not set",
+}
 
 export type Pill = "late" | "work" | "pending" | "other" | "closed"
 

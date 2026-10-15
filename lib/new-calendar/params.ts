@@ -39,6 +39,19 @@ export function cleanText(raw: string): string {
     .slice(0, MAX_TEXT_LENGTH)
 }
 
+/**
+ * Two names are "the same" the way the web address sees them: after the same cleaning the address gets (curly apostrophes, doubled
+ * spaces, trimming, the length cap). A chip carries the name as the data has it; the address comes back cleaned; both sides of every
+ * comparison go through this so a name with such characters can never give an empty list under a chip that shows a count.
+ */
+export function sameText(a: string, b: string): boolean {
+  return cleanText(a) === cleanText(b)
+}
+
+export function sameTextLoose(a: string, b: string): boolean {
+  return cleanText(a).toLowerCase() === cleanText(b).toLowerCase()
+}
+
 export function clampLimit(n: number): number {
   if (!Number.isFinite(n)) return PAGE_SIZE
   return Math.min(MAX_LIMIT, Math.max(PAGE_SIZE, Math.trunc(n)))

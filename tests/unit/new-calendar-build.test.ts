@@ -279,6 +279,23 @@ describe("service and step chips", () => {
   })
 })
 
+describe("names the web address would alter", () => {
+  const STEPS2: StepInput[] = [
+    { service_type: "Delta’s  Work", stage_name: "Client’s  review", stage_order: 1, waiting_on: "us", sla_days: null, completes_service: false },
+  ]
+  it("a service or step with a curly apostrophe or doubled spaces still shows its jobs under its chip (chip, step view and service filter agree)", () => {
+    const j = [job({ service_type: "Delta’s  Work", stage: "Client’s  review" })]
+    const base = { steps: STEPS2 }
+    const chosen = run(j, { s: "Delta's Work" }, [], base)
+    expect(chosen.rows).toHaveLength(1)
+    expect(chosen.steps).toHaveLength(1)
+    expect(chosen.steps[0].count).toBe(1)
+    const stepView = run(j, { s: "Delta's Work", st: "Client's review" }, [], base)
+    expect(stepView.rows).toHaveLength(1)
+    expect(stepView.total).toBe(1)
+  })
+})
+
 describe("the Closed list", () => {
   it("holds jobs finished in the last 30 days, most recent first, with the day on the row", () => {
     const m = run([], { b: "closed" }, [
@@ -325,6 +342,13 @@ describe("the Closed list", () => {
     expect(m.services.map(s => s.name).sort()).toEqual(["Alpha", "Delta"])
     expect(run([], { b: "closed", s: "Delta" }, closed).rows).toHaveLength(1)
     expect(run([], { b: "closed", q: "muller" }, closed).rows.map(r => r.name)).toEqual(["Müller GmbH"])
+  })
+
+  it("a job read by both the open and the finished read (finished in between) stays in the open list only", () => {
+    const j = job({ stage: "Two" })
+    const m = run([j], { b: "closed" }, [done({ id: j.id })])
+    expect(m.counts.closed).toBe(0)
+    expect(m.counts.work).toBe(1)
   })
 
   it("a step filter on the Closed list is ignored", () => {

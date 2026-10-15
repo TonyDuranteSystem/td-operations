@@ -33,7 +33,7 @@ import {
   type ServiceChip,
   type StepChip,
 } from "@/lib/new-calendar/types"
-import type { NewCalendarParams } from "@/lib/new-calendar/params"
+import { sameText, sameTextLoose, type NewCalendarParams } from "@/lib/new-calendar/params"
 
 const DAY_MS = 86_400_000
 
@@ -171,7 +171,7 @@ function dayLabel(ms: number, now: Date): string {
  * Finished jobs of the last CLOSED_WINDOW_DAYS days. Same people rules as the open list: test jobs, test / internal
  * companies and test people never show, and a job that lives on another page (a renewal, a tax return) is left to that page.
  */
-export function classifyClosed(input: NewCalendarInput): ClosedEntry[] {
+export function classifyClosed(input: NewCalendarInput, openIds: ReadonlySet<string> = new Set()): ClosedEntry[] {
   const { now } = input
   const accounts = new Map<string, AccountInput>(input.accounts.map(a => [a.id, a]))
   const contacts = new Map<string, ContactInput>(input.contacts.map(c => [c.id, c]))
@@ -181,6 +181,8 @@ export function classifyClosed(input: NewCalendarInput): ClosedEntry[] {
 
   const out: ClosedEntry[] = []
   for (const job of input.closed) {
+    // The open and finished reads are separate: a job finished in between could be read by both. It stays in the open list.
+    if (openIds.has(job.id)) continue
     if (job.is_test === true) continue
     const account = job.account_id ? accounts.get(job.account_id) ?? null : null
     const contact = !job.account_id && job.contact_id ? contacts.get(job.contact_id) ?? null : null
@@ -237,7 +239,7 @@ function norm(s: string): string {
 /** A service's own steps, in order, from the settings — with how many open jobs sit on each. */
 function stepChips(input: NewCalendarInput, service: string, open: OpenEntry[]): StepChip[] {
   const own = input.steps
-    .filter(s => s.service_type === service)
+    .filter(s => sameText(s.service_type, service))
     .sort((a, b) => a.stage_order - b.stage_order)
   const seen = new Set<string>()
   const chips: StepChip[] = []
@@ -251,7 +253,7 @@ function stepChips(input: NewCalendarInput, service: string, open: OpenEntry[]):
     } else if (isWaitingOn(s.waiting_on)) {
       waitingOn = s.waiting_on
     }
-    const count = open.filter(e => e.item.row.serviceType === service && norm(e.item.row.stage) === key).length
+    const count = open.filter(e => sameText(e.item.row.serviceType, service) && sameTextLoose(e.item.row.stage, s.stage_name)).length
     chips.push({ name: s.stage_name, count, waitingOn })
   }
   return chips
@@ -265,7 +267,7 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
   const passesQuery = (nameNorm: string) => q === "" || nameNorm.includes(q)
 
   const open: OpenEntry[] = classified.items.map(item => ({ item, bucket: bucketOf(item.row) }))
-  const closed = classifyClosed(input)
+  const closed = classifyClosed(input, new Set(open.map(e => e.item.row.id)))
 
   // The two numbers that never move with a search or a filter.
   const workToday = open.filter(e => e.bucket === "work").length
@@ -296,21 +298,20 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
   let rows: CalendarRow[]
   let total: number
   if (stepView) {
-    const want = norm(params.st)
     const picked = openQ
-      .filter(e => e.item.row.serviceType === params.s && norm(e.item.row.stage) === want)
+      .filter(e => sameText(e.item.row.serviceType, params.s) && sameTextLoose(e.item.row.stage, params.st))
       .sort((a, b) => compareItems(a.item, b.item))
     total = picked.length
     rows = picked.slice(0, params.n).map(toOpenRow)
   } else if (params.b === "closed") {
     const picked = closedQ
-      .filter(c => params.s === "" || c.row.serviceType === params.s)
+      .filter(c => params.s === "" || sameText(c.row.serviceType, params.s))
       .sort((a, b) => b.finished - a.finished || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0))
     total = picked.length
     rows = picked.slice(0, params.n).map(c => c.row)
   } else {
     const picked = openQ
-      .filter(e => e.bucket === params.b && (params.s === "" || e.item.row.serviceType === params.s))
+      .filter(e => e.bucket === params.b && (params.s === "" || sameText(e.item.row.serviceType, params.s)))
       .sort((a, b) => compareItems(a.item, b.item))
     total = picked.length
     rows = picked.slice(0, params.n).map(toOpenRow)

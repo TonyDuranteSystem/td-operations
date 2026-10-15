@@ -1,10 +1,10 @@
 # New Calendar (the day-by-day work list, built on the Open services data)
-_Last verified against code: 2026-10-16 — Claude (dev job `40235e3c`, child of `be7da01a`; SANDBOX — Antonio ships). v1 is READ-ONLY. Built from Antonio's October 1 mockup. Not on production yet._
+_Last verified against code: 2026-10-16b — Claude (dev job `40235e3c`, child of `be7da01a`; SANDBOX — Antonio ships; light council: project director GO, senior engineer 0 blockers). v1 is READ-ONLY. Built from Antonio's October 1 mockup. Not on production yet._
 
 ## What it is
 `/new-calendar` (left menu: **New Calendar**, right after the existing Calendar). Antonio, 2026-10-15/16: "I want a place to work day by day — that is the calendar. When we open the CRM in the morning we see what we have to do, what is left, what the clients must do, what is on us" and "ship the October 1 calendar mockup in the sidebar, named New Calendar, so we can test it; then we close the old calendar". It shows the SAME jobs as `/calendar/open-services` (which nothing linked to — it was invisible) sorted into four lists:
 
-- **To work on** — a step that is ours; a follow-up that ran late (whoever it was waiting for); a job on the last step (nobody is waiting: close it). The header says "Good morning, <first name> — N jobs to work on today" (N = this list, never moved by search or filters).
+- **To work on** — a step that is ours; a follow-up that ran late (whoever it was waiting for); a job on the last step (nobody is waiting: close it). The header says "Good morning, <first name> — N jobs to work on today (open services only)" with a link "Renewals and annual reports are on the existing Calendar" (N = this list, never moved by search or filters; council 2026-10-16: without that wording "Nothing to work on today" could be read as "no renewal or filing is due").
 - **Pending** — steps waiting on the client, an outside office (IRS, state, bank) or a date; also PAUSED jobs (blocked, on hold, company not operating — never counted late).
 - **Not sorted yet** — the step has no "waiting on" setting (or the step is not in the settings). The page does not guess. (On production at the time of writing these were the 226 mailing-address jobs.)
 - **Closed · last 30 days** — jobs with status `completed` whose finish date is in the last 30 days.
@@ -34,12 +34,14 @@ Under the lists: **service chips** (services present in the chosen list, biggest
 ## Gotchas, invariants & past bugs
 - The greeting hour must be read with `hourCycle: 'h23'`: with `hour12: false` midnight comes back as "24" and 00:30 would say "Good evening" (caught by a test).
 - A returning user's saved left-menu order is reset to the default once whenever a new menu item is added (existing behaviour of the sidebar: it only keeps a saved order that already contains every item). Not specific to this page.
+- Closed dates are approximate at the edges (bug hunter 2026-10-16): `end_date` is stamped with the UTC date, so a job finished at 9pm ET shows the next day; the 30-day cut is made at noon UTC of the day. A job read by both the open read and the finished read (finished in between) stays in the open list only (`classifyClosed` skips open ids).
 - The Closed list's date is "when the job reached its last step" unless an end date was recorded — an approximation Antonio has not reviewed. Company Formation has end dates on only 18 of 191 completed jobs.
 - "Not sorted yet" is large on day one on purpose (mailing-address jobs have no waiting-on setting). Filling the setting on the step moves them; the page never guesses.
+- Service and step names are compared the way the web address cleans them (`sameText` / `sameTextLoose` in `params.ts`: curly apostrophes, doubled spaces, trimming, 80-character cap), so a chip can never show a count and an empty list. Production had no such names on 2026-10-16 (checked), tests cover it. The step chips count open jobs in ALL lists (the label says so) while the service chips count the chosen list.
 - The step chips count open jobs by the step NAME (case/space-insensitive); a job sitting on a name that is not in the settings shows under its service but on no step chip.
 
 ## How to verify current state
 1. `select value from app_settings where key='open_services_audience'` → who can open it (`off` = nobody, and the menu item is hidden).
 2. Header number vs a direct count: open jobs (not completed/cancelled/inactive, not test/internal, not renewal/tax) whose step is waiting_on `us` or is the done step, plus the late follow-ups. Compare with `/calendar/open-services` "Waiting on us" + "Nobody is waiting" + late jobs in the other groups.
 3. `npx vitest run tests/unit/new-calendar-*.test.ts` (lists, chips, Closed window, params, greeting, wiring, no-write, no-service-name).
-4. Browser: sign in as staff → left menu → New Calendar; click a list, a service, a step; a Company Closure on its Wrap-up step shows "Wrap up…" and opens the pop-up on the row.
+4. Browser: sign in as staff → left menu → New Calendar; click a list, a service, a step; a Company Closure on its Wrap-up step shows "Review wrap-up" and opens the pop-up on the row.

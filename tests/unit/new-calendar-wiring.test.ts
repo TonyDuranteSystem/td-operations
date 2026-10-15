@@ -139,7 +139,7 @@ describe("the menu item and the old Calendar", () => {
 
   it("the layout shows the item only to people the page itself would let in (same switch, same rule), never inside a floating window", () => {
     const code = stripComments(layout)
-    expect(code).toContain("const showNewCalendar = embedded ? false : canViewOpenServices(user, await getOpenServicesAudience())")
+    expect(code).toContain("const showNewCalendar = embedded ? false : canViewOpenServices(user, await openServicesAudiencePromise)")
     expect(code).toContain("enabledFeatures={showNewCalendar ? ['new-calendar'] : []}")
   })
 

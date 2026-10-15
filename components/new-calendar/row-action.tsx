@@ -21,10 +21,10 @@ export function RowAction({ row }: { row: CalendarRow }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label={`Wrap up ${row.name}`}
+          aria-label={`Review wrap-up for ${row.name}`}
           className="whitespace-nowrap rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700"
         >
-          Wrap up…
+          Review wrap-up
         </button>
         <Link href={row.href} prefetch={false} aria-label={`Open job page for ${row.name}`} className="mt-1 block text-xs text-zinc-500 underline hover:text-zinc-700">
           Job page

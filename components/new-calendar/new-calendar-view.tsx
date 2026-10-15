@@ -11,12 +11,15 @@ import {
   BUCKET_HELP,
   BUCKET_LABELS,
   PILL_LABELS,
+  WAIT_LABELS,
   type Bucket,
   type CalendarModel,
   type CalendarRow,
   type Pill,
 } from '@/lib/new-calendar/types'
 import {
+  sameText,
+  sameTextLoose,
   toQueryString,
   withBucket,
   withMore,
@@ -55,15 +58,16 @@ const STEP_DOT: Record<string, string> = {
   unset: 'bg-zinc-400',
 }
 
-function Chip({ href, pressed, dim, dot, children }: { href: string; pressed: boolean; dim?: boolean; dot?: string; children: React.ReactNode }) {
+function Chip({ href, pressed, dim, dot, title, children }: { href: string; pressed: boolean; dim?: boolean; dot?: string; title?: string; children: React.ReactNode }) {
   return (
     <Link
       href={href}
       prefetch={false}
+      title={title}
       aria-current={pressed ? 'true' : undefined}
       className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium ${
         pressed ? 'border-zinc-900 bg-zinc-900 text-white' : 'bg-white text-zinc-800 hover:border-blue-400'
-      } ${dim && !pressed ? 'opacity-60' : ''}`}
+      } ${dim && !pressed ? 'opacity-70' : ''}`}
     >
       {dot && <span className={`h-2 w-2 rounded-full ${dot}`} aria-hidden="true" />}
       {children}
@@ -110,7 +114,7 @@ function Row({ row }: { row: CalendarRow }) {
         <span className={`mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${PILL_CLASS[row.pill]}`}>{PILL_LABELS[row.pill]}</span>
       </div>
       <div className="mt-1 font-mono text-[13px] tabular-nums min-[1100px]:mt-0">
-        <span className="font-sans text-zinc-500 min-[1100px]:hidden">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />
+        <span className="font-sans text-zinc-500 min-[1100px]:sr-only">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />
       </div>
       <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.next}</div>
       <div className="mt-3 min-[1100px]:mt-0 min-[1100px]:text-right"><RowAction row={row} /></div>
@@ -128,7 +132,8 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
         <p className="mt-1 text-sm text-zinc-600">
-          {greeting} — <b className="font-semibold text-foreground">{workTodayText(model.workToday)}</b>.
+          {greeting} — <b className="font-semibold text-foreground">{workTodayText(model.workToday)}</b> <span className="text-zinc-500">(open services only)</span>.{' '}
+          <Link href="/calendar" prefetch={false} className="text-blue-700 underline">Renewals and annual reports are on the existing Calendar</Link>.
         </p>
       </header>
 
@@ -157,6 +162,7 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
           {params.s && <input type="hidden" name="s" value={params.s} />}
           {params.s && params.st && <input type="hidden" name="st" value={params.st} />}
           <input
+            key={params.q}
             type="search"
             name="q"
             defaultValue={params.q}
@@ -181,7 +187,7 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
             </Chip>
           )}
           {model.services.map(s => (
-            <Chip key={s.name} href={hrefFor(withService(params, s.name))} pressed={params.s === s.name}>
+            <Chip key={s.name} href={hrefFor(withService(params, s.name))} pressed={sameText(params.s, s.name)}>
               {s.name} <span className="font-mono text-xs tabular-nums opacity-80">{s.count}</span>
             </Chip>
           ))}
@@ -190,9 +196,9 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
 
       {model.steps.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`${params.s} steps`}>
-          <span className="text-sm text-zinc-500">{params.s} steps:</span>
+          <span className="text-sm text-zinc-500">{params.s} steps (jobs in all lists):</span>
           {model.steps.map(st => (
-            <Chip key={st.name} href={hrefFor(withStep(params, st.name))} pressed={params.st === st.name} dim={st.count === 0} dot={STEP_DOT[st.waitingOn]}>
+            <Chip key={st.name} href={hrefFor(withStep(params, st.name))} pressed={sameTextLoose(params.st, st.name)} dim={st.count === 0} dot={STEP_DOT[st.waitingOn]} title={WAIT_LABELS[st.waitingOn]}>
               {st.name} <span className="font-mono text-xs tabular-nums opacity-80">{st.count}</span>
             </Chip>
           ))}
