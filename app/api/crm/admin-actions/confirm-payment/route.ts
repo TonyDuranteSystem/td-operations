@@ -58,7 +58,7 @@ interface ConfirmPaymentBody {
   // Offer-derived (Mode 1) or manual (Mode 2 — lead_id only)
   amount: number
   currency: "USD" | "EUR"
-  contract_type: "formation" | "onboarding" | "tax_return" | "itin"
+  contract_type: "formation" | "onboarding" | "tax_return" | "itin" | "company_change_name"
   bundled_pipelines: string[]
   // Optional manual overrides (Mode 2 only)
   annual_1st_installment?: number

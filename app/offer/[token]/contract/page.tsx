@@ -978,6 +978,16 @@ export default function ContractPage() {
     )
   }
 
+  // Company Name Change agreement — short standalone agreement for an existing LLC
+  if ((offer as any).contract_type === 'company_change_name') {
+    return (
+      <>
+        <ContractStyles />
+        <StandaloneServiceAgreement offer={offer} token={token} contractType="company_change_name" cred={cred} />
+      </>
+    )
+  }
+
   // Onboarding agreement — MSA+SOW for existing LLC clients (no formation timeline)
   if ((offer as any).contract_type === 'onboarding') {
     return (

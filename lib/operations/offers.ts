@@ -220,7 +220,7 @@ async function warnIfCreditWentUnattached(input: {
 
 // ─── Types ────────────────────────────────────────────────────
 
-export type OfferContractType = "formation" | "onboarding" | "tax_return" | "itin" | "renewal" | "closure"
+export type OfferContractType = "formation" | "onboarding" | "tax_return" | "itin" | "renewal" | "closure" | "company_change_name"
 export type OfferPaymentType = "checkout" | "bank_transfer" | "none" | "both"
 export type OfferPaymentGateway = "whop" | "stripe"
 export type OfferLanguage = "en" | "it"

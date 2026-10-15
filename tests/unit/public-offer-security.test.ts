@@ -48,6 +48,7 @@ describe('sign kind', () => {
     expect(signKindFor('tax_return')).toBe('standalone')
     expect(signKindFor('itin')).toBe('standalone')
     expect(signKindFor('closure')).toBe('standalone')
+    expect(signKindFor('company_change_name')).toBe('standalone')
     expect(signKindFor('onboarding')).toBe('service')
     expect(signKindFor('formation')).toBe('main')
     expect(signKindFor(null)).toBe('main')

@@ -57,6 +57,7 @@ const CONTRACT_TYPES = [
   { value: 'onboarding', label: 'Onboarding (existing LLC)' },
   { value: 'tax_return', label: 'Tax Return' },
   { value: 'itin', label: 'ITIN Application' },
+  { value: 'company_change_name', label: 'Company Name Change (existing LLC)' },
 ]
 
 export function ConfirmPaymentDialog({

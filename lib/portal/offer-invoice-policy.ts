@@ -70,6 +70,8 @@ export function getServiceLabel(contract_type: string | null | undefined): strin
       return "ITIN Application"
     case "closure":
       return "Company Closure"
+    case "company_change_name":
+      return "Company Change Name"
     default:
       return "Service"
   }
