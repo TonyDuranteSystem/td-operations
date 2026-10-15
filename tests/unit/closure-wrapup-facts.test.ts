@@ -22,6 +22,7 @@ import {
   type RawJob,
   type RawLease,
   type RawPayment,
+  type StageOrders,
 } from "@/lib/closure/wrapup-facts"
 import { closingEmailRecipients } from "@/lib/closure/wrapup-email"
 
@@ -68,7 +69,15 @@ function account(over: Partial<RawAccount> = {}): RawAccount {
 }
 
 function job(over: Partial<RawJob>): RawJob {
-  return { id: "j1", service_type: "Banking", stage: "Application Submitted", stage_order: 3, status: "active", due_date: null, ...over }
+  return { id: "j1", service_type: "Banking", stage: "Application Submitted", status: "active", due_date: null, ...over }
+}
+
+/** Step numbers come from the step list, by step NAME (the job's own copy of the number is often empty or stale). */
+const ORDERS: Record<string, StageOrders> = {
+  Banking: { first: 1, byName: { "Data Collection": 1, "Application Submitted": 3 } },
+  "State RA Renewal": { first: 1, byName: { Upcoming: 1 } },
+  "State Annual Report": { first: 1, byName: { Upcoming: 1 } },
+  "Tax Return": { first: -10, byName: { "Company Data Pending": -10, "Wizard Available": 40, "Extension Filed": 20, "TR Completed": 70, "TR Filed": 80, "Terminated - Non Payment": 90 } },
 }
 
 describe("buildLease (mirrors td_company_has_lease_in_force)", () => {
@@ -181,18 +190,17 @@ describe("buildMoney", () => {
 })
 
 describe("buildJobs / buildRenewals", () => {
-  const first = { Banking: 1, "State RA Renewal": 1, "Tax Return": -10 }
   it("drops this closure job and finished jobs, keeps blocked and on-hold ones with a flag", () => {
     const jobs = buildJobs(
       [
         job({ id: "self", service_type: "Company Closure" }),
         job({ id: "done", status: "completed" }),
         job({ id: "cx", status: "cancelled" }),
-        job({ id: "b", status: "blocked", service_type: "State RA Renewal", stage: "Upcoming", stage_order: 1 }),
+        job({ id: "b", status: "blocked", service_type: "State RA Renewal", stage: "Upcoming" }),
         job({ id: "h", status: "on_hold" }),
         job({ id: "ok", status: "Active" }),
       ],
-      first,
+      ORDERS,
       "self",
     )
     expect(jobs.map((j) => j.id)).toEqual(["b", "h", "ok"])
@@ -201,17 +209,18 @@ describe("buildJobs / buildRenewals", () => {
     expect(jobs.find((j) => j.id === "ok")?.flag).toBeNull()
   })
   it("marks a job already past its first step (it needs an explicit choice)", () => {
-    const [banking] = buildJobs([job({ stage_order: 3 })], first)
+    const [banking] = buildJobs([job({ stage: "Application Submitted" })], ORDERS)
     expect(banking.pastFirstStep).toBe(true)
-    const [tax] = buildJobs([job({ service_type: "Tax Return", stage: "Company Data Pending", stage_order: -10 })], first)
+    const [tax] = buildJobs([job({ service_type: "Tax Return", stage: "Company Data Pending" })], ORDERS)
     expect(tax.pastFirstStep).toBe(false)
   })
-  it("a job with an unknown step number is not claimed to be past its first step", () => {
-    const [j] = buildJobs([job({ stage_order: null })], first)
-    expect(j.pastFirstStep).toBe(false)
+  it("a job whose step name is not in the step list is not claimed to be past its first step", () => {
+    expect(buildJobs([job({ stage: "A step that no longer exists" })], ORDERS)[0].pastFirstStep).toBe(false)
+    expect(buildJobs([job({ stage: null })], ORDERS)[0].pastFirstStep).toBe(false)
+    expect(buildJobs([job({ service_type: "Unknown Service" })], ORDERS)[0].pastFirstStep).toBe(false)
   })
   it("renewal dates are listed even when no job is open, and say so", () => {
-    const jobs = buildJobs([job({ id: "ar", service_type: "State Annual Report", stage: "Upcoming", stage_order: 1 })], { ...first, "State Annual Report": 1 })
+    const jobs = buildJobs([job({ id: "ar", service_type: "State Annual Report", stage: "Upcoming" })], ORDERS)
     const r = buildRenewals(account({ ra_renewal_date: "2026-11-26", annual_report_due_date: "2026-12-08", cmra_renewal_date: "2027-01-05" }), jobs)
     expect(r.dates.map((d) => [d.key, d.hasOpenJob])).toEqual([
       ["ra", false],
@@ -226,8 +235,7 @@ describe("buildJobs / buildRenewals", () => {
 })
 
 describe("buildTax (Antonio's choice B: an open Tax Return keeps the company Active)", () => {
-  const taxJob = (stage: string, over: Partial<RawJob> = {}) =>
-    buildJobs([job({ id: "t", service_type: "Tax Return", stage, stage_order: 40, ...over })], { "Tax Return": -10 })
+  const taxJob = (stage: string, over: Partial<RawJob> = {}) => buildJobs([job({ id: "t", service_type: "Tax Return", stage, ...over })], ORDERS)
   it("an open Tax Return job holds the closing", () => {
     const t = buildTax([{ tax_year: 2025, status: "Wizard Available", paid: false }], taxJob("Wizard Available"))
     expect(t.holdsClosing).toBe(true)
@@ -300,11 +308,29 @@ describe("buildHolds (what would keep the Close button off)", () => {
     expect(holds.join(" ")).toMatch(/Could not check the payments/)
   })
   it("names the open Tax Return and counts the unpaid items", () => {
-    const tax = ok(buildTax([], buildJobs([job({ service_type: "Tax Return", stage: "Extension Filed", stage_order: 20 })], { "Tax Return": -10 })))
+    const tax = ok(buildTax([], buildJobs([job({ service_type: "Tax Return", stage: "Extension Filed" })], ORDERS)))
     const money = ok(buildMoney([payment({ status: "Overdue", invoice_status: "Overdue" }), payment({ id: "p2", status: "Pending", invoice_status: "Sent" })]))
     const holds = buildHolds({ tax, money })
     expect(holds[0]).toMatch(/Tax Return · Extension Filed/)
     expect(holds[1]).toMatch(/2 unpaid or uninvoiced items/)
+  })
+  it("every other section that could not be read holds the closing too (never 'nothing found' next to a red box)", () => {
+    const holds = buildHolds({
+      tax: ok(buildTax([], [])),
+      money: ok(buildMoney([])),
+      lease: { ok: false, error: "x" },
+      renewals: { ok: false, error: "x" },
+      jobs: { ok: false, error: "x" },
+      people: { ok: false, error: "x" },
+      memberOf: { ok: false, error: "x" },
+    })
+    expect(holds).toHaveLength(5)
+    expect(holds.join(" ")).toMatch(/lease/)
+    expect(holds.join(" ")).toMatch(/owners/)
+    expect(holds.join(" ")).toMatch(/companies this one belongs to/)
+  })
+  it("sections that loaded fine add nothing", () => {
+    expect(buildHolds({ tax: ok(buildTax([], [])), money: ok(buildMoney([])), lease: ok({}), renewals: ok({}), jobs: ok([]), people: ok([]), memberOf: ok([]) })).toEqual([])
   })
   it("nothing found means no holds", () => {
     expect(buildHolds({ tax: ok(buildTax([], [])), money: ok(buildMoney([])) })).toEqual([])

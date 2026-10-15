@@ -101,13 +101,17 @@ describe("the browser panel", () => {
   })
   it("surfaces the server's error and fails closed (R099, council)", () => {
     expect(panel).toContain("data.error || 'Could not read the Wrap-up facts.'")
-    expect(panel).toContain("Closing stays off until this can be checked.")
+    expect(panel).toContain("When closing arrives here it will stay off until this can be checked.")
   })
   it("opens Finance and Harbor in a new tab, never as a floating window", () => {
     expect(panel).toContain('target="_blank"')
     expect(panel).toContain('/finance?tab=clients&client=')
     expect(panel).toContain('facts.accountId')
     expect(panel).not.toMatch(/OPEN_WINDOW_EVENT|windows-context/)
+  })
+  it("tells staff plainly that the old card button still closes the company without checking anything (slice 1 has no gate yet)", () => {
+    expect(panel).toContain("Closing is not available from this screen yet.")
+    expect(panel).toContain("checks nothing shown here")
   })
   it("never shows the company's EIN", () => {
     expect(panel).not.toMatch(/ein_number|\bein\b/i)
@@ -138,9 +142,10 @@ describe("migration 20261015-1600-closure-wrapup-panel", () => {
     for (const u of updates) expect(u).toContain("service_type = 'Company Closure' AND stage_name = 'Wrap-up'")
     for (const u of undo.match(/UPDATE public\.pipeline_stages[\s\S]*?;/g) ?? []) expect(u).toContain("service_type = 'Company Closure' AND stage_name = 'Wrap-up'")
   })
-  it("empties the step to-dos and sets the panel layout", () => {
-    expect(mig).toContain("auto_tasks   = '[]'::jsonb")
-    expect(mig).toContain('{"components":[{"type":"closure_wrapup"}]}')
+  it("empties the step to-dos, sets the overview + panel layout and the new step text", () => {
+    expect(mig).toContain("auto_tasks        = '[]'::jsonb")
+    expect(mig).toContain('{"components":[{"type":"info_panel"},{"type":"closure_wrapup"}]}')
+    expect(mig).toContain("Use the panel below:")
   })
   it("refuses to run when the Wrap-up step does not exist, and checks its own result", () => {
     expect(mig).toContain("run 20261015-1200-closure-wrapup-step.sql first")

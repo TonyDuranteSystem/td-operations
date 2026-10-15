@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { HARBOR } from '@/lib/renewal-links'
 import type { SectionResult, WrapUpCompanyFacts, WrapUpFacts, WrapUpJob, WrapUpMoneyItem, WrapUpPersonFacts } from '@/lib/closure/wrapup-facts'
@@ -24,18 +24,25 @@ export function ClosureWrapupPanel({ serviceDeliveryId }: ClosureWrapupPanelProp
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Only the newest read may update the screen: two overlapping reads (a tab focus while a refresh is running) must not let the older
+  // answer overwrite the newer one.
+  const latest = useRef(0)
+
   const load = useCallback(async () => {
+    const mine = ++latest.current
     setLoading(true)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/wrapup-facts`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) throw new Error(data.error || 'Could not read the Wrap-up facts.')
+      if (mine !== latest.current) return
       setFacts(data.facts as WrapUpFacts)
       setError(null)
     } catch (err) {
+      if (mine !== latest.current) return
       setError(err instanceof Error && err.message ? err.message : 'Could not read the Wrap-up facts.')
     } finally {
-      setLoading(false)
+      if (mine === latest.current) setLoading(false)
     }
   }, [serviceDeliveryId])
 
@@ -85,6 +92,14 @@ export function ClosureWrapupPanel({ serviceDeliveryId }: ClosureWrapupPanelProp
         </div>
       )}
 
+      {facts && (
+        <div className="mb-3">
+          <Warn>
+            Closing is not available from this screen yet. Until it is, the old “Wrap-up done” button on the workflow card still closes the company right away, the old way: it checks nothing shown here and creates follow-up to-dos.
+          </Warn>
+        </div>
+      )}
+
       {facts?.variant === 'company' && <CompanyView facts={facts} />}
       {facts?.variant === 'person' && <PersonView facts={facts} />}
     </div>
@@ -109,7 +124,7 @@ function Section({ title, tag, children }: { title: string; tag?: { text: string
 function Failed({ error }: { error: string }) {
   return (
     <p className="flex items-start gap-2 rounded-lg bg-red-50 p-2.5 text-xs text-red-700">
-      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {error} Closing stays off until this can be checked.
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {error} When closing arrives here it will stay off until this can be checked.
     </p>
   )
 }
@@ -168,7 +183,7 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
         {h.accountStatus ? ` · ${h.accountStatus}` : ''}
       </p>
 
-      <Section title="What would hold the closing today" tag={facts.holds.length ? { text: `${facts.holds.length} to settle`, tone: 'amber' } : { text: 'Nothing found', tone: 'green' }}>
+      <Section title="What will hold the closing (once it is built here)" tag={facts.holds.length ? { text: `${facts.holds.length} to settle`, tone: 'amber' } : { text: 'Nothing found', tone: 'green' }}>
         {facts.holds.length ? (
           <ul className="list-disc space-y-1 pl-5">
             {facts.holds.map((x) => (
@@ -176,7 +191,7 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
             ))}
           </ul>
         ) : (
-          <Hint>Nothing in the CRM would hold the closing. The registered agent and the final tax return still need an answer.</Hint>
+          <Hint>Nothing in the CRM would hold the closing. The registered agent and the final tax return will still need an answer.</Hint>
         )}
       </Section>
 
@@ -184,7 +199,7 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
         <p>
           <span className="text-zinc-500">Provider in the CRM:</span> {facts.registeredAgent.provider ?? '(empty)'}
         </p>
-        {facts.registeredAgent.missing && <Warn>The CRM has no registered agent for this company (35 active companies have none). Check the Articles or ask the client.</Warn>}
+        {facts.registeredAgent.missing && <Warn>The CRM has no registered agent recorded for this company. Check the Articles or ask the client.</Warn>}
         <Hint>{facts.registeredAgent.isHarbor ? 'Harbor is cancelled by hand: open the site, cancel, then keep the receipt for the file.' : 'Not Harbor, so there is no site to open here.'}</Hint>
         {facts.registeredAgent.isHarbor && <NewTabLink href={HARBOR.url}>Open {HARBOR.label}</NewTabLink>}
       </Section>
@@ -343,8 +358,8 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
               <Hint>This company is not recorded as a member of another company in the CRM.</Hint>
             ) : (
               <>
-                {m.map((x) => (
-                  <p key={x.companyName}>
+                {m.map((x, i) => (
+                  <p key={`${x.companyName}-${i}`}>
                     Owns {x.ownershipPct !== null ? `${x.ownershipPct}% of ` : 'a stake in '}
                     {x.companyName}
                     {x.status ? ` (${x.status})` : ''}
@@ -365,14 +380,14 @@ function CompanyView({ facts }: { facts: WrapUpCompanyFacts }) {
 }
 
 function moneyTag(f: WrapUpCompanyFacts): { text: string; tone: 'amber' | 'green' | 'grey' | 'red' } {
-  if (!f.money.ok) return { text: 'Could not check', tone: 'red' }
+  if (f.money.ok === false) return { text: 'Could not check', tone: 'red' }
   const n = f.money.data.items.length
   if (n > 0) return { text: `${n} to settle`, tone: 'red' }
   return f.money.data.credit.length ? { text: 'Credit unspent', tone: 'amber' } : { text: 'Nothing owed', tone: 'grey' }
 }
 
 function taxTag(f: WrapUpCompanyFacts): { text: string; tone: 'amber' | 'green' | 'grey' | 'red' } {
-  if (!f.tax.ok) return { text: 'Could not check', tone: 'red' }
+  if (f.tax.ok === false) return { text: 'Could not check', tone: 'red' }
   return f.tax.data.holdsClosing ? { text: 'Holds the closing', tone: 'amber' } : { text: 'Nothing open', tone: 'grey' }
 }
 
@@ -389,6 +404,7 @@ function MoneyTable({ items }: { items: WrapUpMoneyItem[] }) {
                   {i.statusText}
                   {i.paid > 0 ? ` · ${money(i.paid, i.currency)} paid` : ' · nothing paid'}
                   {!i.canVoid && i.kind === 'partial' ? ' · cannot be voided here' : ''}
+                  {!i.inFinance && i.kind !== 'not_invoiced' ? ' · has no invoice document, so the Finance page does not list it' : ''}
                 </div>
               </td>
               <td className="whitespace-nowrap py-1.5 text-right text-sm font-medium text-zinc-800">{money(i.due ?? i.total, i.currency)}</td>
@@ -443,8 +459,8 @@ function PersonView({ facts }: { facts: WrapUpPersonFacts }) {
           <Hint>None.</Hint>
         ) : (
           <ul className="space-y-0.5">
-            {facts.personCompanies.map((c) => (
-              <li key={c.name}>
+            {facts.personCompanies.map((c, i) => (
+              <li key={`${c.name}-${i}`}>
                 {c.name}
                 <span className="text-zinc-500">{c.status ? ` · ${c.status}` : ''}</span>
               </li>

@@ -24,6 +24,9 @@ import { isItalian } from '@/lib/locale'
 export type SectionResult<T> = { ok: true; data: T } | { ok: false; error: string }
 
 export const TAX_RETURN_SERVICE = 'Tax Return'
+/** Both Tax Return job types end at "TR Filed" (the step that completes the job); an open one of either keeps the company Active. */
+export const TAX_RETURN_SERVICES: readonly string[] = ['Tax Return', 'Tax Return One-Time']
+export const CMRA_SERVICE = 'CMRA Mailing Address'
 export const RA_RENEWAL_SERVICE = 'State RA Renewal'
 export const ANNUAL_REPORT_SERVICE = 'State Annual Report'
 
@@ -70,7 +73,6 @@ export interface RawJob {
   id: string
   service_type: string
   stage: string | null
-  stage_order: number | null
   status: string | null
   due_date: string | null
 }
@@ -96,6 +98,8 @@ export interface RawMembership {
   company_name: string | null
   status: string | null
   ownership_pct: number | null
+  /** A stake that has ended (members.end_date in the past) is history, not a current membership. */
+  end_date?: string | null
 }
 
 // ───────────────────────────── section shapes ─────────────────────────────
@@ -160,6 +164,8 @@ export interface WrapUpMoneyItem {
   paid: number
   due: number | null
   currency: string
+  /** Finance lists only rows that have an invoice document (invoice_status). A row without one cannot be settled from the Finance page. */
+  inFinance: boolean
   /** Nothing was paid on it, so it could be voided as "not owed". A part-paid invoice cannot. */
   canVoid: boolean
 }
@@ -250,7 +256,10 @@ export function buildRegisteredAgent(a: RawAccount): WrapUpRegisteredAgent {
   return { provider, isHarbor: !!provider && /harbor/i.test(provider), missing: !provider }
 }
 
-/** today = YYYY-MM-DD in the office timezone (the caller passes it; this module never reads the clock). */
+/**
+ * today = YYYY-MM-DD as the DATABASE reads it (current_date, UTC) — the suite is released by that function, so the panel must agree with it
+ * (the office-time date differs from it for a few hours each evening). The caller passes it; this module never reads the clock.
+ */
 export function buildLease(account: Pick<RawAccount, 'suite_number'>, leases: RawLease[], today: string): WrapUpLease {
   const suite = clean(account.suite_number)
   const inForceLeases = leases.filter(
@@ -271,20 +280,30 @@ export function buildLease(account: Pick<RawAccount, 'suite_number'>, leases: Ra
   }
 }
 
-export function buildJobs(jobs: RawJob[], firstStageOrderByType: Record<string, number>, excludeJobId?: string): WrapUpJob[] {
+/**
+ * Step numbers per service type, read from the step list (pipeline_stages), NOT from the job: the job's own copy of the step number is
+ * often empty or stale (app/(dashboard)/flows/[id]/page.tsx). `byName` is keyed by the exact step name.
+ */
+export interface StageOrders {
+  first: number
+  byName: Record<string, number>
+}
+
+export function buildJobs(jobs: RawJob[], stageOrdersByType: Record<string, StageOrders>, excludeJobId?: string): WrapUpJob[] {
   return jobs
     .filter((j) => j.id !== excludeJobId && isLiveDeliveryStatus(j.status))
     .map((j) => {
       const status = (j.status ?? '').trim().toLowerCase()
-      const first = firstStageOrderByType[j.service_type]
+      const orders = stageOrdersByType[j.service_type]
+      const current = orders && j.stage ? orders.byName[j.stage.trim()] : undefined
       return {
         id: j.id,
         serviceType: j.service_type,
         stage: clean(j.stage),
         status: clean(j.status),
         flag: status === 'blocked' ? ('blocked' as const) : status === 'on_hold' || status === 'on hold' ? ('on_hold' as const) : null,
-        pastFirstStep: j.stage_order !== null && first !== undefined && j.stage_order > first,
-        isTaxReturn: j.service_type === TAX_RETURN_SERVICE,
+        pastFirstStep: !!orders && current !== undefined && current > orders.first,
+        isTaxReturn: TAX_RETURN_SERVICES.includes(j.service_type),
         isRenewal: j.service_type === RA_RENEWAL_SERVICE || j.service_type === ANNUAL_REPORT_SERVICE,
         dueDate: j.due_date,
       }
@@ -296,7 +315,7 @@ export function buildRenewals(account: RawAccount, jobs: WrapUpJob[]): { dates: 
   const dates: WrapUpRenewalDate[] = []
   if (account.ra_renewal_date) dates.push({ key: 'ra', label: 'Registered agent renewal', date: account.ra_renewal_date, hasOpenJob: hasJob(RA_RENEWAL_SERVICE) })
   if (account.annual_report_due_date) dates.push({ key: 'annual_report', label: 'Annual report', date: account.annual_report_due_date, hasOpenJob: hasJob(ANNUAL_REPORT_SERVICE) })
-  if (account.cmra_renewal_date) dates.push({ key: 'cmra', label: 'Mailing address (CMRA) renewal', date: account.cmra_renewal_date, hasOpenJob: false })
+  if (account.cmra_renewal_date) dates.push({ key: 'cmra', label: 'Mailing address (CMRA) renewal', date: account.cmra_renewal_date, hasOpenJob: hasJob(CMRA_SERVICE) })
   return { dates, jobs: jobs.filter((j) => j.isRenewal) }
 }
 
@@ -333,6 +352,7 @@ export function classifyPayment(p: RawPayment): WrapUpMoneyItem | null {
     paid,
     due,
     currency: clean(p.amount_currency) ?? 'USD',
+    inFinance: !!invoiceStatus,
     canVoid: paid === 0 && kind !== 'partial',
   }
 }
@@ -374,26 +394,44 @@ export function buildPeople(rows: RawPerson[]): WrapUpPerson[] {
   }))
 }
 
-export function buildMemberships(rows: RawMembership[]): WrapUpMembership[] {
-  return rows.map((m) => ({ companyName: clean(m.company_name) ?? 'Unnamed company', status: clean(m.status), ownershipPct: num(m.ownership_pct) }))
+export function buildMemberships(rows: RawMembership[], today?: string): WrapUpMembership[] {
+  return rows
+    .filter((m) => !today || !m.end_date || m.end_date >= today)
+    .map((m) => ({ companyName: clean(m.company_name) ?? 'Unnamed company', status: clean(m.status), ownershipPct: num(m.ownership_pct) }))
 }
 
-/** Plain-English reasons the Close button would stay off. Only sections that loaded can speak; a failed section says so. */
+/**
+ * Plain-English reasons the Close button would stay off. EVERY section can speak: one that could not be read holds the closing and
+ * says so (fail closed), so the summary never reads "nothing found" next to a red "could not check" box.
+ */
 export function buildHolds(sections: {
   tax: SectionResult<WrapUpTax>
   money: SectionResult<WrapUpMoney>
+  lease?: SectionResult<unknown>
+  renewals?: SectionResult<unknown>
+  jobs?: SectionResult<unknown>
+  people?: SectionResult<unknown>
+  memberOf?: SectionResult<unknown>
 }): string[] {
   const holds: string[] = []
-  if (!sections.tax.ok) holds.push('Could not check the tax return. Closing stays off until it can be checked.')
+  if (sections.tax.ok === false) holds.push('Could not check the tax return. Closing stays off until it can be checked.')
   else if (sections.tax.data.holdsClosing) {
     const first = sections.tax.data.openJobs[0]
     holds.push(`A Tax Return is still open (${first.label}). The company stays Active until it is filed.`)
   }
-  if (!sections.money.ok) holds.push('Could not check the payments. Closing stays off until they can be checked.')
+  if (sections.money.ok === false) holds.push('Could not check the payments. Closing stays off until they can be checked.')
   else {
     const n = sections.money.data.items.length
     if (n > 0) holds.push(`${n} unpaid or uninvoiced item${n === 1 ? '' : 's'} must be settled, voided as not owed, or kept owed with a note.`)
   }
+  const others: [string, SectionResult<unknown> | undefined][] = [
+    ['the lease', sections.lease],
+    ['the renewals', sections.renewals],
+    ['the open services', sections.jobs],
+    ['the owners', sections.people],
+    ['the companies this one belongs to', sections.memberOf],
+  ]
+  for (const [what, r] of others) if (r && r.ok === false) holds.push(`Could not check ${what}. Closing stays off until it can be checked.`)
   return holds
 }
 
