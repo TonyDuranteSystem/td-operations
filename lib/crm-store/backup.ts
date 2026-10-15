@@ -105,7 +105,8 @@ export interface OwnerSnap {
   /** the account's existing Drive folder (#62) — adopted when no other owner already uses it */
   accountFolderId: string | null
   accountFolderTakenByOther: boolean
-  folders: Array<{ id: string; parent_id: string | null; name: string; trashed_at: string | null }>
+  /** `kind` 'contacts' = the company's "2. Contacts" VIEW of its people: it holds no files and is never mirrored (the people's own storages are backed up on their own) */
+  folders: Array<{ id: string; parent_id: string | null; name: string; trashed_at: string | null; kind?: string }>
   files: Array<{ id: string; folder_id: string; name: string; state: "live" | "trashed" | "purged"
                  sha256: string | null; bucket: string | null; path: string | null; size: number | null; mime: string | null }>
   backupRefs: Map<string, RefRow>
@@ -175,7 +176,7 @@ export const backupIO: BackupIO = {
       accountFolderId = c?.drive_folder_id ?? null
     }
     const folders = await allRows<OwnerSnap["folders"][number]>(
-      () => db().from("store_folders").select("id, parent_id, name, trashed_at").eq("owner_id", ownerId).order("id"), "folders")
+      () => db().from("store_folders").select("id, parent_id, name, trashed_at, kind").eq("owner_id", ownerId).order("id"), "folders")
     const files = await allRows<Record<string, unknown>>(
       () => db().from("store_files")
         .select("id, folder_id, name, state, store_file_versions!store_files_current_version_fk(sha256, storage_bucket, storage_path, size_bytes, mime_type)")
@@ -384,6 +385,10 @@ export async function backupOwner(
     const walk = async (folderId: string, driveParent: string, parentAdopted: boolean) => {
       const existing = parentAdopted ? await io.childFolders(driveParent, cfg.mainDriveId) : []
       for (const child of byParent.get(folderId) ?? []) {
+        // The company's "2. Contacts" is only a VIEW of its people (no files, no sub-folders — the database refuses both). Its Drive twin is
+        // usually the very folder a person's storage already adopted as their own contact folder, and a Drive folder can be claimed by one
+        // storage only: adopting it twice stopped the whole company's backup (15 companies, 2026-10-15). Nothing to mirror, so skip it.
+        if (child.kind === "contacts") continue
         const ref = snap.backupRefs.get(child.id)
         if (child.trashed_at) {
           if (ref && !ref.drive_path?.adopted && ref.drive_path?.area !== "protected") {   // OUR empty mirror → protected area

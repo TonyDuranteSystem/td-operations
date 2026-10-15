@@ -89,6 +89,26 @@ describe("simple backup mode — everything in the one client Drive", () => {
     expect(Array.from(w.items.values()).find((i) => i.name === "Mario Rossi")!.parents).toEqual(["CONTACTS"])
   })
 
+  it("a company's '2. Contacts' view is never mirrored or adopted (a person already adopted that Drive folder) — the rest of the company backs up", async () => {
+    const snap: Snap = {
+      id: "o1", kind: "company", state: null, accountFolderId: "acme", accountFolderTakenByOther: false,
+      folders: [
+        { id: "root", parent_id: null, name: "Acme LLC", trashed_at: null, kind: "root" },
+        { id: "comp", parent_id: "root", name: "1. Company", trashed_at: null, kind: "company" },
+        { id: "cont", parent_id: "root", name: "2. Contacts", trashed_at: null, kind: "contacts" },
+      ],
+      files: [{ id: "f1", folder_id: "comp", name: "Articles.pdf", state: "live", sha256: "a".repeat(64), bucket: "crm-store", path: "o1/a", size: 4, mime: "application/pdf" }],
+    }
+    const w = world(snap)
+    w.add({ id: "acme", name: "Acme LLC", parents: ["C"] })
+    w.add({ id: "d-comp", name: "1. Company", parents: ["acme"] })
+    w.add({ id: "d-cont", name: "2. Contacts", parents: ["acme"] })
+    expect(await go(w)).toMatchObject({ status: "done" })
+    expect(w.refs.get("comp")?.external_id).toBe("d-comp")
+    expect(w.refs.has("cont")).toBe(false)
+    expect(Array.from(w.items.values()).filter((i) => i.name === "2. Contacts")).toHaveLength(1)
+  })
+
   it("a file trashed in the CRM moves its copy to one '_Trashed in CRM' folder under Companies — in the same Drive", async () => {
     const w2 = world(personSnap())
     await go(w2)
