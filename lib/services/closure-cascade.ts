@@ -10,6 +10,7 @@
  * that is NOT recorded Done comes back as a "[CLOSURE]" follow-up to-do. This also covers a job that skipped Wrap-up
  * altogether (moved straight to Closing, or advanced with the step to-dos switched off): it has no chore to-dos, so all
  * three come back. The QuickBooks and "email the client" to-dos are the long-standing ones and are unchanged.
+ * All of this applies only once the Wrap-up step exists; before that the closure behaves exactly as it always did.
  *
  * Pure — no database. The titles below are the to-do titles of the Wrap-up step (pipeline_stages.auto_tasks, set by
  * scripts/migrations/20261015-1200-closure-wrapup-step.sql; tests/unit/closure-cascade.test.ts keeps the two in step).
@@ -100,8 +101,18 @@ function choreRecordedDone(chore: ClosureChore, jobTasks: readonly ClosureStepTa
  * The follow-up to-dos to create when a closure job's company is closed.
  * @param jobTasks the closure job's own to-dos, read BEFORE the sweep that marks every open to-do Done.
  *   Pass an empty list when they could not be read: every chore then gets its follow-up (the safe direction).
+ * @param wrapUpStepExists whether the Company Closure step list contains the "Wrap-up" step. The step is switched on by
+ *   running scripts/migrations/20261015-1200-closure-wrapup-step.sql; until then this returns EXACTLY the three
+ *   follow-ups the closure always created (Harbor, QuickBooks, email the client), so shipping this code changes nothing.
  */
-export function buildClosureFollowUpCards(jobTasks: readonly ClosureStepTask[]): ClosureFollowUpCard[] {
+export function buildClosureFollowUpCards(jobTasks: readonly ClosureStepTask[], wrapUpStepExists: boolean): ClosureFollowUpCard[] {
+  const harbor = CLOSURE_CHORES[0]
+  if (!wrapUpStepExists) {
+    return [
+      { task_title: harbor.cardTitle, description: harbor.cardDescription, priority: harbor.priority, category: harbor.category },
+      ...ALWAYS_CARDS,
+    ]
+  }
   const chores = CLOSURE_CHORES.filter(c => !choreRecordedDone(c, jobTasks)).map(c => ({
     task_title: c.cardTitle,
     description: c.cardDescription,

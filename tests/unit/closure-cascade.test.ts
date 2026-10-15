@@ -17,7 +17,7 @@ const titles = (cards: { task_title: string }[]) => cards.map(c => c.task_title)
 
 describe("buildClosureFollowUpCards", () => {
   it("gives every chore its follow-up when the job has no to-dos (a job that skipped Wrap-up, or to-dos not readable)", () => {
-    const t = titles(buildClosureFollowUpCards([]))
+    const t = titles(buildClosureFollowUpCards([], true))
     expect(t).toEqual([
       "[CLOSURE] Remove RA on Harbor Compliance",
       "[CLOSURE] Cancel CMRA mailing address / lease if active",
@@ -31,7 +31,7 @@ describe("buildClosureFollowUpCards", () => {
     const t = titles(
       buildClosureFollowUpCards([
         { task_title: "[Company Closure - Acme LLC] Cancel Registered Agent on Harbor Compliance", status: "Done" },
-      ]),
+      ], true),
     )
     expect(t).not.toContain("[CLOSURE] Remove RA on Harbor Compliance")
     expect(t).toContain("[CLOSURE] Cancel CMRA mailing address / lease if active")
@@ -41,7 +41,7 @@ describe("buildClosureFollowUpCards", () => {
   it("a chore left open or in progress comes back — the sweep that marks every open to-do Done must not swallow it", () => {
     for (const status of ["To Do", "In Progress", "Waiting", "Cancelled", null]) {
       const t = titles(
-        buildClosureFollowUpCards([{ task_title: "[Company Closure - Acme LLC] Cancel CMRA/lease if active", status }]),
+        buildClosureFollowUpCards([{ task_title: "[Company Closure - Acme LLC] Cancel CMRA/lease if active", status }], true),
       )
       expect(t, `status ${status}`).toContain("[CLOSURE] Cancel CMRA mailing address / lease if active")
     }
@@ -53,7 +53,7 @@ describe("buildClosureFollowUpCards", () => {
         { task_title: "  [X] CANCEL REGISTERED AGENT ON HARBOR COMPLIANCE ", status: "Done" },
         { task_title: "[X] Fill out EIN closure form", status: "Done" },
         { task_title: null, status: "Done" },
-      ]),
+      ], true),
     )
     expect(t).not.toContain("[CLOSURE] Remove RA on Harbor Compliance")
     expect(t).toHaveLength(4)
@@ -61,19 +61,47 @@ describe("buildClosureFollowUpCards", () => {
 
   it("all three chores done → only the two long-standing follow-ups remain", () => {
     const done = CLOSURE_CHORES.map(c => ({ task_title: `[Company Closure - Acme LLC] ${c.stepTitle}`, status: "Done" }))
-    expect(titles(buildClosureFollowUpCards(done))).toEqual([
+    expect(titles(buildClosureFollowUpCards(done, true))).toEqual([
       "[CLOSURE] Cancel QB recurring invoices",
       "[CLOSURE] Email client -- closure complete",
     ])
   })
 
   it("every card is complete (title, description, priority, category)", () => {
-    for (const c of buildClosureFollowUpCards([])) {
+    for (const c of buildClosureFollowUpCards([], true)) {
       expect(c.task_title.startsWith("[CLOSURE] ")).toBe(true)
       expect(c.description.length).toBeGreaterThan(10)
       expect(["High", "Normal"]).toContain(c.priority)
       expect(c.category.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe("switched off until the Wrap-up step exists", () => {
+  const legacy = [
+    "[CLOSURE] Remove RA on Harbor Compliance",
+    "[CLOSURE] Cancel QB recurring invoices",
+    "[CLOSURE] Email client -- closure complete",
+  ]
+  it("with no Wrap-up step the closure creates exactly the follow-ups it always created, whatever the job's to-dos say", () => {
+    expect(titles(buildClosureFollowUpCards([], false))).toEqual(legacy)
+    const allDone = CLOSURE_CHORES.map(c => ({ task_title: `[X] ${c.stepTitle}`, status: "Done" }))
+    expect(titles(buildClosureFollowUpCards(allDone, false))).toEqual(legacy)
+  })
+
+  it("the legacy Harbor follow-up is word for word what the closure created before this change", () => {
+    const [harbor] = buildClosureFollowUpCards([], false)
+    expect(harbor).toEqual({
+      task_title: "[CLOSURE] Remove RA on Harbor Compliance",
+      description: "Company closure in progress. Remove Registered Agent service from Harbor Compliance portal.",
+      priority: "High",
+      category: "Filing",
+    })
+  })
+
+  it("the closing clean-up passes whether the step exists, taken from the job's own step list", () => {
+    const src = readFileSync(join(ROOT, "lib/service-delivery.ts"), "utf8")
+    expect(src).toContain("stages.some(st => st.stage_name === WRAP_UP_STAGE_NAME)")
   })
 })
 
@@ -100,7 +128,7 @@ describe("kept in step with the rest", () => {
     const section = src.slice(src.indexOf("// 14. Company Closure"), src.indexOf("// 15. Action log"))
     const readAt = section.indexOf(`select("task_title, status")`)
     const sweepAt = section.indexOf("updateTasksBulk")
-    const cardsAt = section.indexOf("buildClosureFollowUpCards(jobTasks)")
+    const cardsAt = section.indexOf("buildClosureFollowUpCards(jobTasks,")
     expect(readAt).toBeGreaterThan(-1)
     expect(sweepAt).toBeGreaterThan(readAt)
     expect(cardsAt).toBeGreaterThan(sweepAt)

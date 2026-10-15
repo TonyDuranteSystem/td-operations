@@ -31,7 +31,7 @@ import { formationStateForClient } from "@/lib/formation/state-lookup"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { stageCompletesService } from "@/lib/services/done-step"
 import { stageNotificationText } from "@/lib/services/step-settings"
-import { buildClosureFollowUpCards, type ClosureStepTask } from "@/lib/services/closure-cascade"
+import { buildClosureFollowUpCards, WRAP_UP_STAGE_NAME, type ClosureStepTask } from "@/lib/services/closure-cascade"
 import { logAction } from "@/lib/mcp/action-log"
 import { ACCOUNT_STATUS } from "@/lib/constants"
 import { filedName, type NameCheck } from "@/lib/flows/name-checks"
@@ -1354,7 +1354,7 @@ export async function advanceServiceDelivery(
 
     // The follow-up to-dos in their own block, so a failure above cannot hide them and a failure here is reported as such.
     try {
-      const cards = buildClosureFollowUpCards(jobTasks)
+      const cards = buildClosureFollowUpCards(jobTasks, stages.some(st => st.stage_name === WRAP_UP_STAGE_NAME))
       const { error: cardsErr } = await dbWriteSafe(
         // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         supabaseAdmin.from("tasks").insert(
