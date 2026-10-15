@@ -18,7 +18,6 @@ async function db(): Promise<any> {
   return supabaseAdmin
 }
 
-const OPEN_ESIGN_NOT = ["completed", "cancelled", "canceled", "declined", "expired", "void", "voided", "draft"]
 /** One company gets this long; past it the switch is undone (a request the platform kills cannot clean up after itself). */
 export const COMPANY_BUDGET_MS = 200_000
 /** A go-live run with no sign of life for this long is dead: the sweeper undoes it. */
@@ -92,7 +91,8 @@ async function loadFacts(accountId: string, ownLockRunId: string | null = null):
   // holding our own lock: the state ignores it (a live storage means "store"; any OTHER open run means "moving")
   const state = ownLockRunId ? stateFrom({ hasLiveOwner: owners.some((o) => !o.study_only), openMoveRun: openRuns.length > 0 }) : await companyDocState(accountId)
 
-  const openEsign = must(await d.from("esign_envelopes").select("id").eq("owner_account_id", accountId).not("status", "in", `(${OPEN_ESIGN_NOT.join(",")})`).limit(1), "open signings") as unknown[]
+  // An open E-SIGN envelope no longer blocks the switch: when it is signed, the signed PDF is filed through companyDocState() into the company's NEW storage (lib/operations/esign.ts), never Drive.
+  // SS-4s and signature requests still block (their filing paths were not checked for this).
   const openSs4 = must(await d.from("ss4_applications").select("id").eq("account_id", accountId).eq("status", "awaiting_signature").limit(1), "open SS-4s") as unknown[]
   const openSig = must(await d.from("signature_requests").select("id").eq("account_id", accountId).eq("status", "awaiting_signature").limit(1), "open signature requests") as unknown[]
 
@@ -118,7 +118,7 @@ async function loadFacts(accountId: string, ownLockRunId: string | null = null):
   return {
     accountId, companyName: acct.company_name as string, excluded: isExcludedCompany({ id: accountId, status: (acct.status as string | null) ?? null, name: acct.company_name as string }),
     owners, doneCopyRunIds: copyRuns.map((r) => r.id), copyStartedAt: copyRuns[0]?.started_at ?? null, openMoveRun: openRuns.length > 0,
-    openSigning: openEsign.length + openSs4.length + openSig.length > 0, state, ledger, rows, stored,
+    openSigning: openSs4.length + openSig.length > 0, state, ledger, rows, stored,
   }
 }
 
