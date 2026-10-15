@@ -1181,7 +1181,7 @@ export async function saveFormToDrive(
         subfolder: config.driveSubfolder,
         year: formType === "tax_return" ? meta.year ?? null : null,
         // the Formation Summary holds every member's personal data: staff-only, never shown to a client
-        summary: summaryBytes ? { name: `${config.filePrefix}_${slug}.pdf`, bytes: summaryBytes, documentType: formType === "formation" ? "formation_summary" : "other_document", callerKey: `form-summary:${switched.id}:${formType}:${meta.token}` } : null,
+        summary: summaryBytes ? { name: `${config.filePrefix}_${slug}.pdf`, bytes: summaryBytes, documentType: formType === "formation" ? "formation_summary" : formType === "itin" ? "itin_application" : "other_document", callerKey: `form-summary:${switched.id}:${formType}:${meta.token}` } : null,
         uploadPaths,
         bucketOf: (path) => (opts?.resolveBucket ? opts.resolveBucket(path) : bucket),
         submissionKey: `${switched.id}:${formType}:${meta.token}`,

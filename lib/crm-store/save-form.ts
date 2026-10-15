@@ -88,7 +88,8 @@ export async function switchedTargetForFolder(driveFolderId: string): Promise<Sw
 
 /** The top folder of the storage that matches the Drive sub-folder a form type used. */
 export function folderKindForDriveSubfolder(subfolder: string, target: Pick<SwitchedFolderTarget, "kind">): string {
-  if (target.kind === "contact") return "personal"
+  // a PERSON's ITIN papers live in the person's own ITIN folder (Antonio 2026-10-15); every other person form stays in Personal documents
+  if (target.kind === "contact") return subfolder.trim().toUpperCase() === "ITIN" ? "itin" : "personal"
   if (subfolder.startsWith("3.")) return "tax"
   if (subfolder.startsWith("4.")) return "banking"
   if (subfolder.startsWith("5.")) return "correspondence"
@@ -162,9 +163,19 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
     }
   }
 
+  // an older person storage may have no ITIN folder: the file then goes to Personal documents instead of failing
+  const saveFile: FormStoreDeps["saveFile"] = async (p) => {
+    try {
+      return await d.saveFile(p)
+    } catch (e) {
+      if (p.folderKind === "itin" && /has no "itin" folder/i.test(e instanceof Error ? e.message : String(e))) return d.saveFile({ ...p, folderKind: "personal" })
+      throw e
+    }
+  }
+
   if (spec.summary?.bytes) {
     try {
-      const w = await d.saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name: spec.summary.name, bytes: spec.summary.bytes, mimeType: "application/pdf", documentType: spec.summary.documentType, callerKey: spec.summary.callerKey })
+      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name: spec.summary.name, bytes: spec.summary.bytes, mimeType: "application/pdf", documentType: spec.summary.documentType, callerKey: spec.summary.callerKey })
       // a store POINTER, never the raw id: callers hand this to code that expects a Drive id or a pointer
       const { storePointer } = await import("./document-pointer")
       out.summaryFileId = storePointer(w.fileId)
@@ -182,7 +193,7 @@ export async function saveFormToStore(spec: FormStoreSpec, deps?: FormStoreDeps)
         got = await d.download(spec.bucketOf(path), path)
       }
       if (!got) { out.failed.push(`${name} (download failed after 3 attempts)`); continue }
-      const w = await d.saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name, bytes: got.bytes, mimeType: got.mimeType, documentType: null, callerKey: `form-upload:${spec.submissionKey}:${path}` })
+      const w = await saveFile({ ownerId: spec.target.ownerId, folderKind, folderId, name, bytes: got.bytes, mimeType: got.mimeType, documentType: null, callerKey: `form-upload:${spec.submissionKey}:${path}` })
       if (w.status === "unchanged") out.skipped.push(name)
       else out.copied.push(name)
     } catch (e) {

@@ -340,15 +340,15 @@ export async function POST(req: NextRequest) {
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
           const itinSlug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
           const itinDocs = [
-            { name: `W-7_${itinSlug}.pdf`, label: "ITIN W-7", bytes: w7Buffer },
-            { name: `1040-NR_${itinSlug}.pdf`, label: "ITIN 1040-NR", bytes: nrBuffer },
-            { name: `Schedule_OI_${itinSlug}.pdf`, label: "ITIN Schedule OI", bytes: oiBuffer },
+            { name: `W-7_${itinSlug}.pdf`, label: "ITIN W-7", bytes: w7Buffer, type: "form_w_7" },
+            { name: `1040-NR_${itinSlug}.pdf`, label: "ITIN 1040-NR", bytes: nrBuffer, type: "form_1040_nr" },
+            { name: `Schedule_OI_${itinSlug}.pdf`, label: "ITIN Schedule OI", bytes: oiBuffer, type: "itin_schedule_oi" },
           ]
           const routedDocs = []
           for (const doc of itinDocs) {
             // the same key on a re-run is a new VERSION of the same file, never a second copy
             routedDocs.push(await saveDocumentForContact({
-              contactId, viaAccountId: driveAccountId || null, contactName: clientName || undefined, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: null,
+              contactId, viaAccountId: driveAccountId || null, contactName: clientName || undefined, name: doc.name, bytes: Buffer.from(doc.bytes), mimeType: "application/pdf", documentType: doc.type, folderKind: "itin",
               callerKey: `itin-form-doc:${contactId}:${deliveryId ?? token}:${doc.name}`, accountId: sub.account_id ?? null, portalVisible: true,
               row: { document_type_name: doc.label, category: 3, status: "classified", service_delivery_id: deliveryId },
             }))

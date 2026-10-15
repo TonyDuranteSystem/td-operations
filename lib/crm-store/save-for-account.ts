@@ -133,6 +133,8 @@ export interface SaveForContactInput {
   contactName?: string | null
   portalVisible?: boolean
   actor?: string | null
+  /** the person's folder: "personal" (default) or "itin" (the ITIN papers). A person storage with no such folder gets Personal documents. */
+  folderKind?: "personal" | "itin"
   row?: Partial<Omit<DocumentsRow, "file_name" | "mime_type" | "file_size" | "portal_visible" | "account_id" | "contact_id">>
 }
 
@@ -164,10 +166,18 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
   }
   if (!ownerId) return { route: "drive" }
 
-  const w = await d.save({
-    ownerId, folderKind: "personal", name: input.name, bytes: input.bytes, mimeType: input.mimeType,
+  const saveIn = (folderKind: string) => d.save({
+    ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
   })
+  let w
+  try {
+    w = await saveIn(input.folderKind ?? "personal")
+  } catch (e) {
+    // an older person storage may have no ITIN folder: Personal documents instead of a failure
+    if (input.folderKind === "itin" && /has no "itin" folder/i.test(e instanceof Error ? e.message : String(e))) w = await saveIn("personal")
+    else throw e
+  }
   const listed = await d.upsertRow(w.fileId, {
     ...(input.row ?? {}),
     file_name: input.name, mime_type: input.mimeType, file_size: input.bytes.length,

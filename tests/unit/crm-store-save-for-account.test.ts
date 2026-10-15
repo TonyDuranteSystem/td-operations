@@ -114,6 +114,29 @@ describe("saveDocumentForContact — a person's own documents", () => {
   })
 })
 
+describe("saveDocumentForContact — the ITIN folder", () => {
+  const doc = { contactId: "c-1", name: "W-7_X.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", documentType: "form_w_7", callerKey: "itin:c-1:w7", folderKind: "itin" as const }
+  it("saves into the person's ITIN folder when asked", async () => {
+    const save = vi.fn(async () => ({ status: "created", fileId: FILE }))
+    const deps = { liveOwnerOfContact: async () => "person-owner", save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: true })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` }
+    await saveDocumentForContact(doc, deps)
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ folderKind: "itin", documentType: "form_w_7" }))
+  })
+  it("a person storage with no ITIN folder gets Personal documents instead of an error", async () => {
+    const calls: string[] = []
+    const save = vi.fn(async (p: { folderKind: string }) => { calls.push(p.folderKind); if (p.folderKind === "itin") throw new Error('store pilot: owner o has no "itin" folder'); return { status: "created", fileId: FILE } })
+    const deps = { liveOwnerOfContact: async () => "person-owner", save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: true })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` }
+    const r = await saveDocumentForContact(doc, deps)
+    expect(calls).toEqual(["itin", "personal"])
+    expect(r.route).toBe("store")
+  })
+  it("any other error is not swallowed", async () => {
+    const save = vi.fn(async () => { throw new Error("disk full") })
+    const deps = { liveOwnerOfContact: async () => "person-owner", save: save as unknown as SaveDeps["save"], upsertRow: (async () => ({ id: "row", inserted: true })) as unknown as SaveDeps["upsertRow"], pointer: (id: string) => `store:${id}` }
+    await expect(saveDocumentForContact(doc, deps)).rejects.toThrow(/disk full/)
+  })
+})
+
 describe("saveDocumentForContact — a person of a switched company", () => {
   const pass = { contactId: "c-1", name: "Passport.pdf", bytes: Buffer.from("pdf"), mimeType: "application/pdf", documentType: "passport", callerKey: "pass:c-1:2" }
   const mkC = (owner: string | null, companyState: "drive" | "store" | "moving") => {

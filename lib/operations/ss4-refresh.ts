@@ -647,6 +647,12 @@ export async function refreshSS4(args: {
     // The new signer is notified exactly once, when staff explicitly re-send.
     void notify
 
+    // the stored (unsigned) copy follows the change: a new version of the same file; a company still on Drive is untouched
+    try {
+      const { storeUnsignedSs4 } = await import("@/lib/operations/ss4-store")
+      await storeUnsignedSs4(account_id, `refresh:${source}`)
+    } catch { /* never blocks the refresh */ }
+
     const refreshed = computation.updates as Record<string, unknown>
     return {
       ok: true,

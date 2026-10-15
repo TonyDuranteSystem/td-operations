@@ -646,6 +646,8 @@ export function registerITINFormTools(server: McpServer) {
           const slug = clientName.replace(/\s+/g, "_")
           const saveOne = async (label: string, fileName: string, bytes: Buffer, mime: string, documentType: string | null) => {
             const routed = await saveDocumentForContact({
+              // the generated ITIN papers go to the person's ITIN folder; a passport stays in Personal documents
+              folderKind: documentType === "passport" ? "personal" : "itin",
               contactId: sub.contact_id as string, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
               contactName: clientName, name: fileName, bytes, mimeType: mime, documentType,
               callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
@@ -657,7 +659,7 @@ export function registerITINFormTools(server: McpServer) {
           }
           await saveOne("W-7", `W-7_${slug}.pdf`, Buffer.from(w7Pdf), "application/pdf", "form_w_7")
           await saveOne("1040-NR", `1040-NR_${slug}.pdf`, Buffer.from(nrPdf), "application/pdf", "form_1040_nr")
-          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", null)
+          await saveOne("Schedule OI", `Schedule_OI_${slug}.pdf`, Buffer.from(oiPdf), "application/pdf", "itin_schedule_oi")
           const uploads = sub.upload_paths as string[] | null
           for (const path of uploads ?? []) {
             try {

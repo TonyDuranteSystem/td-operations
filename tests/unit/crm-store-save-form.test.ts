@@ -11,9 +11,9 @@ describe("folderKindForDriveSubfolder — the storage folder that matches the Dr
     expect(folderKindForDriveSubfolder("4. Banking", account)).toBe("banking")
     expect(folderKindForDriveSubfolder("5. Correspondence", account)).toBe("correspondence")
   })
-  it("ITIN filed under a company goes to the company folder; anything for a person goes to their personal folder", () => {
+  it("ITIN filed under a company goes to the company folder; a person's ITIN goes to their ITIN folder; other person forms stay in Personal documents", () => {
     expect(folderKindForDriveSubfolder("ITIN", account)).toBe("company")
-    expect(folderKindForDriveSubfolder("ITIN", contact)).toBe("personal")
+    expect(folderKindForDriveSubfolder("ITIN", contact)).toBe("itin")
     expect(folderKindForDriveSubfolder("3. Tax", contact)).toBe("personal")
   })
 })
@@ -115,9 +115,29 @@ describe("saveFormToStore — a switched company's form summary and uploads", ()
     expect(r.copied).toHaveLength(2)
   })
 
-  it("a person's form goes into their personal folder", async () => {
+  it("a person's ITIN form goes into their ITIN folder; any other person form into Personal documents", async () => {
+    const a = mk()
+    await saveFormToStore(base({ target: contact, subfolder: "ITIN", uploadPaths: [] }), a.deps)
+    expect(a.saved[0]).toMatchObject({ ownerId: "person-1", folderKind: "itin" })
+    const b = mk()
+    await saveFormToStore(base({ target: contact, subfolder: "3. Tax", uploadPaths: [] }), b.deps)
+    expect(b.saved[0]).toMatchObject({ ownerId: "person-1", folderKind: "personal" })
+  })
+})
+
+describe("saveFormToStore — a person's ITIN form goes to the ITIN folder", () => {
+  const person = { kind: "contact", id: "c-1", ownerId: "owner-p" } as never
+  it("summary and uploads go to the itin folder", async () => {
     const { deps, saved } = mk()
-    await saveFormToStore(base({ target: contact, subfolder: "ITIN", uploadPaths: [] }), deps)
-    expect(saved[0]).toMatchObject({ ownerId: "person-1", folderKind: "personal" })
+    await saveFormToStore(base({ target: person, subfolder: "ITIN", uploadPaths: ["a/passport.pdf"], summary: { name: "ITIN_Data_X.pdf", bytes: Buffer.from("p"), documentType: "itin_application", callerKey: "k" } }), deps)
+    expect(saved.map((x) => x.folderKind)).toEqual(["itin", "itin"])
+    expect(saved[0]).toMatchObject({ documentType: "itin_application" })
+  })
+  it("a person storage with no ITIN folder falls back to Personal documents instead of failing", async () => {
+    const calls: string[] = []
+    const deps = mk({ saveFile: vi.fn(async (p) => { calls.push(p.folderKind); if (p.folderKind === "itin") throw new Error('store pilot: owner owner-p has no "itin" folder'); return { status: "created", fileId: "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f1" } as never }) }).deps
+    const r = await saveFormToStore(base({ target: person, subfolder: "ITIN", uploadPaths: [], summary: { name: "ITIN_Data_X.pdf", bytes: Buffer.from("p"), documentType: null, callerKey: "k" } }), deps)
+    expect(calls).toEqual(["itin", "personal"])
+    expect(r.errors).toEqual([])
   })
 })
