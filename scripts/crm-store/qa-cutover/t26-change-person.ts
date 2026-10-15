@@ -22,6 +22,7 @@ async function main() {
   let refused = false
   try { await changeFilePerson(FILE, "00000000-0000-0000-0000-000000000000", null) } catch { refused = true }
   ck("2 a person who is not in the company is refused", refused)
+  ck("1b each person says whether they already have a storage", people.every((p) => typeof p.hasStorage === "boolean"), people)
   const to = people[0]
   const r = await changeFilePerson(FILE, to.contactId, null)
   const mid = await state()

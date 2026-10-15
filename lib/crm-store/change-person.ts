@@ -9,7 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
 
-export interface PersonChoice { contactId: string; name: string }
+export interface PersonChoice { contactId: string; name: string; hasStorage?: boolean }
 
 interface PersonFile { id: string; name: string; owner_id: string; folder_id: string; state: string; ownerContactId: string; folderKind: string }
 
@@ -43,9 +43,14 @@ export async function peopleForFile(fileId: string): Promise<PersonChoice[]> {
   if (accountIds.length === 0) return []
   const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, contacts(full_name)").in("account_id", accountIds).is("ended_at", null)
   if (lErr) throw new Error(`Could not read the companies' people — please try again (${lErr.message}).`)
-  return peopleChoices(f.ownerContactId, ((links ?? []) as Array<{ contact_id: string; contacts: { full_name: string | null } | Array<{ full_name: string | null }> | null }>).map((l) => ({
+  const choices = peopleChoices(f.ownerContactId, ((links ?? []) as Array<{ contact_id: string; contacts: { full_name: string | null } | Array<{ full_name: string | null }> | null }>).map((l) => ({
     contactId: l.contact_id, name: (Array.isArray(l.contacts) ? l.contacts[0]?.full_name : l.contacts?.full_name) ?? null,
   })))
+  if (choices.length === 0) return choices
+  const { data: owners, error: oErr } = await db().from("store_owners").select("contact_id").eq("kind", "person").in("contact_id", choices.map((c) => c.contactId))
+  if (oErr) throw new Error(`Could not read the people's storages — please try again (${oErr.message}).`)
+  const have = new Set(((owners ?? []) as Array<{ contact_id: string }>).map((o) => o.contact_id))
+  return choices.map((c) => ({ ...c, hasStorage: have.has(c.contactId) }))
 }
 
 /**

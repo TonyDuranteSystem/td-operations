@@ -232,7 +232,9 @@ type PersonKey = `person:${string}`
 const personKey = (contactId: string): PersonKey => `person:${contactId}`
 
 interface Asking { slug: string; fallbackTitle: string; body: React.ReactNode; choices: Array<Omit<Choice, 'onChoose'>>; resolve: (key: string) => void }
-interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPick' | 'onClose'>; resolve: (r: { folderId: string; ownerId: string; path: string } | null) => void }
+type FolderPick = { folderId: string; ownerId: string; path: string }
+type PickResult = FolderPick | { personContactId: string; name: string }
+interface Picking { props: Omit<React.ComponentProps<typeof FolderPicker>, 'onPick' | 'onClose' | 'onPickPerson'>; resolve: (r: PickResult | null) => void }
 interface NewFolder { parentId: string; value: string; year?: boolean; siblings: string[]; left?: boolean }
 interface TreeNode { root?: Fold | null; folders: Fold[] }
 
@@ -380,8 +382,9 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     if (q && !q.enabled) { resolve('__default__'); return }
     setAsking({ slug, fallbackTitle, body, choices, resolve })
   }), [questions])
-  const pick = useCallback((props: Picking['props']) => new Promise<{ folderId: string; ownerId: string; path: string } | null>((resolve) => {
-    setPicking({ props, resolve })
+  // folder pickers answer a folder; only the one that passes `newPeople` can also answer a person (asked with pick<PickResult>)
+  const pick = useCallback(<T extends PickResult = FolderPick>(props: Picking['props']) => new Promise<T | null>((resolve) => {
+    setPicking({ props, resolve: resolve as Picking['resolve'] })
   }), [])
 
   const fetchInto = useCallback(async (oid: string, folderId: string | null, via?: boolean) => {
@@ -683,9 +686,30 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setMenuFor(null)
     const oid = (inFolder && folderOwner.current.get(inFolder.id)) ?? ownerId
     if (!oid) return
-    const r = await pick({ title: `Move "${f.name}" to…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'file', currentFolderId: inFolder?.id ?? null, chooseOwner: f.inPersonStorage })
+    // a person's file can go to another person of the same company — also one who has no storage yet (made when the file moves)
+    let newPeople: Array<{ contactId: string; name: string }> = []
+    if (f.inPersonStorage) {
+      try {
+        const d = await getJson<{ people: Array<{ contactId: string; name: string; hasStorage?: boolean }> }>(`/api/crm-store/browse/file/${f.id}/person`)
+        newPeople = d.people.filter((p) => p.hasStorage === false).map((p) => ({ contactId: p.contactId, name: p.name }))
+      } catch { /* the picker still works without the extra names */ }
+    }
+    const r = await pick<PickResult>({ title: `Move "${f.name}" to…`, ownerId: oid, ownerLabel: ownerLabelOf(oid), mode: 'file', currentFolderId: inFolder?.id ?? null, chooseOwner: f.inPersonStorage, newPeople })
     setPicking(null)
-    if (r) await moveFileTo(f, r.folderId, r.path)
+    if (!r) return
+    if ('personContactId' in r) {
+      await withBusy(f.id, async () => {
+        try {
+          const res = await postJson<{ person: string; folder: string }>(`/api/crm-store/browse/file/${f.id}/person`, { contactId: r.personContactId }, 'The file could not be moved.')
+          toast.success(`Moved "${f.name}" to ${res.person} › ${res.folder}`)
+          await refreshAll()
+        } catch (e) {
+          toast.error(errMsg(e, 'The file could not be moved.'))
+        }
+      })
+      return
+    }
+    await moveFileTo(f, r.folderId, r.path)
   }
 
   const doDeleteFile = (f: File_) => withBusy(f.id, async () => {
@@ -2477,6 +2501,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       {picking && (
         <FolderPicker {...picking.props}
           onClose={() => { const r = picking.resolve; setPicking(null); r(null) }}
+          onPickPerson={(contactId, name) => { const r = picking.resolve; setPicking(null); r({ personContactId: contactId, name }) }}
           onPick={(folderId, oid, path) => { const r = picking.resolve; setPicking(null); r({ folderId, ownerId: oid, path }) }} />
       )}
     </div>
