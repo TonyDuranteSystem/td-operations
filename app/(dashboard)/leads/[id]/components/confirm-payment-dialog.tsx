@@ -58,6 +58,10 @@ const CONTRACT_TYPES = [
   { value: 'tax_return', label: 'Tax Return' },
   { value: 'itin', label: 'ITIN Application' },
   { value: 'company_change_name', label: 'Company Name Change (existing LLC)' },
+  { value: 'ein_change_name', label: 'EIN Name Change' },
+  { value: 'shipping', label: 'Document Shipping' },
+  { value: 'public_notary', label: 'Public Notary' },
+  { value: 'consulting_call', label: 'Consulting Call' },
 ]
 
 export function ConfirmPaymentDialog({
