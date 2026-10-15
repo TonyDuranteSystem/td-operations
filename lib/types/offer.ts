@@ -133,7 +133,7 @@ export interface Offer {
   currency?: string
   installment_currency?: string
   // Contract type
-  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | 'closure'
+  contract_type?: 'formation' | 'onboarding' | 'tax_return' | 'itin' | 'closure' | 'company_change_name'
   // Pipelines to create when client pays (automation)
   bundled_pipelines?: string[]
   // Client selections (set when client signs, based on optional services chosen)

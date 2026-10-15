@@ -20,7 +20,7 @@ function esc(v: string) {
 interface StandaloneServiceAgreementProps {
   offer: Offer
   token: string
-  contractType?: 'tax_return' | 'itin' | 'closure'
+  contractType?: 'tax_return' | 'itin' | 'closure' | 'company_change_name'
   /** The offer's access code (N0) — every write goes through /api/offers with it. */
   cred: OfferCredential
 }
@@ -151,10 +151,51 @@ export const SERVICE_CONTENT = {
     signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Company Closure Service Agreement. I authorize Tony Durante LLC to proceed with the dissolution of my LLC and acknowledge that this process is irreversible once the state filing is submitted.',
     successNote: 'Once payment is received, we will begin the closure process. You will receive the official closure documents from the Secretary of State by email.',
   },
+  company_change_name: {
+    title: 'Company Name Change Service Agreement',
+    shortTitle: 'Company Name Change Service Agreement',
+    pdfPrefix: 'Name_Change_Agreement',
+    scope: {
+      intro: 'The Service Provider agrees to manage the change of the legal name of the Client\'s existing LLC on their behalf. This includes:',
+      items: [
+        'Collecting up to three (3) proposed new company names from the Client and checking their availability with the Secretary of State of the state where the LLC was formed;',
+        'Informing the Client which proposed name is available;',
+        'Preparing and filing the name change form (Articles of Amendment or equivalent) with the Secretary of State;',
+        'Delivering the official name change document received from the Secretary of State to the Client by email.',
+      ],
+      closing: 'This Agreement covers the name change of one (1) LLC only. Notifying the IRS, banks, payment processors and other third parties of the new name is not included unless purchased separately.',
+    },
+    procedure: {
+      intro: 'The company name change follows these steps:',
+      steps: [
+        { title: 'Step 1 — Proposed Names', desc: 'The Client provides up to three (3) proposed new names for the LLC. The Service Provider checks their availability in order of preference.' },
+        { title: 'Step 2 — Name Confirmation', desc: 'The Service Provider informs the Client which name is available. The Client confirms the name to be used before any filing is made.' },
+        { title: 'Step 3 — State Filing', desc: 'The Service Provider prepares and files the name change form with the Secretary of State. State processing times vary and are outside the Service Provider\'s control. The LLC keeps its current name until the state approves the change.' },
+        { title: 'Step 4 — Delivery', desc: 'When the Secretary of State returns the approved name change document, the Service Provider delivers it to the Client by email.' },
+      ],
+    },
+    commitments: [
+      'Check the availability of the proposed names with the Secretary of State;',
+      'File the name change form within a reasonable timeframe after the Client confirms the new name;',
+      'Deliver the official name change document to the Client by email upon receipt from the state.',
+    ],
+    clientDuties: {
+      intro: 'The Client agrees to:',
+      items: [
+        { bold: 'Provide up to three (3) proposed names', rest: ' that comply with the naming rules of the state of formation;' },
+        { bold: 'Understand that name availability is decided by the state', rest: ', and that a name found available may no longer be available at the time of filing;' },
+        { bold: 'Update third parties', rest: ' (banks, payment processors, the IRS and others) with the new name, unless this service is purchased separately;' },
+        { bold: 'Respond to requests for information', rest: ' within five (5) business days of receiving the request.' },
+      ],
+    },
+    signatureText: 'By signing below, I confirm that I have read and agree to the terms of this Company Name Change Service Agreement. I authorize Tony Durante LLC to file the name change of my LLC with the Secretary of State.',
+    successNote: 'Once payment is received, we will start the name change. You will receive the official name change document from the Secretary of State by email.',
+  },
 } as const
 
 export default function StandaloneServiceAgreement({ offer, token, contractType = 'tax_return', cred }: StandaloneServiceAgreementProps) {
   const ct = SERVICE_CONTENT[contractType]
+  const isNameChange = contractType === 'company_change_name'
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
   // DESTRUCTIVELY rewrites the DOM (inputs -> spans, canvases -> imgs), so a
@@ -482,14 +523,14 @@ export default function StandaloneServiceAgreement({ offer, token, contractType 
         {/* SECTION 5 — PAYMENT */}
         <div className="contract-section">
           <h3>5. Payment</h3>
-          <p>The total fee for this service is <strong>{fee}</strong>, payable in full before the tax return preparation begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
-          <p><strong>All fees are non-refundable</strong> once the tax return preparation has commenced.</p>
+          <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {isNameChange ? 'the name change work begins' : 'the tax return preparation begins'}. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+          <p><strong>All fees are non-refundable</strong> once {isNameChange ? 'the name change work has commenced' : 'the tax return preparation has commenced'}.</p>
         </div>
 
         {/* SECTION 6 — LIMITATION OF LIABILITY */}
         <div className="contract-section">
           <h3>6. Limitation of Liability</h3>
-          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for penalties, interest, or additional taxes resulting from inaccurate, incomplete, or late information provided by the Client.</p>
+          <p>The Service Provider&rsquo;s total liability under this Agreement shall not exceed the fee paid by the Client. The Service Provider is not liable for {isNameChange ? 'delays, rejections or additional fees charged by the Secretary of State, or for consequences' : 'penalties, interest, or additional taxes'} resulting from inaccurate, incomplete, or late information provided by the Client.</p>
         </div>
 
         {/* SECTION 7 — GOVERNING LAW */}

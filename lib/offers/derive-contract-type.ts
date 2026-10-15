@@ -23,3 +23,17 @@ export function deriveContractType(selectedContractTypes: Array<string | null | 
   if (types.includes('tax_return')) return 'tax_return'
   return types[0] ?? 'formation'
 }
+
+/**
+ * True when services are selected but NONE carries a catalog contract_type, so
+ * deriveContractType() can only fall back to 'formation' — the client would be
+ * sent the full LLC-formation agreement for a service that is not a formation.
+ * That is how Company Closure (fixed 2026-09-28) and Company Change Name
+ * (2026-10-15, International Automobile Authority LLC) went wrong. Used by the
+ * Create Offer dialog to warn staff instead of failing silently.
+ * A selection that includes Company Formation is a real formation, never flagged.
+ */
+export function isUntypedFormationFallback(selectedContractTypes: Array<string | null | undefined>): boolean {
+  if (selectedContractTypes.length === 0) return false
+  return selectedContractTypes.every((t) => !t)
+}

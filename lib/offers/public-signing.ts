@@ -19,7 +19,7 @@ export type SignKind = 'main' | 'service' | 'standalone' | 'renewal'
 /**
  * Which component signs this contract type — the SAME routing the contract page
  * has always used to pick the component (renewal → RenewalAgreement; tax_return,
- * itin, closure → StandaloneServiceAgreement; onboarding → ServiceAgreement;
+ * itin, closure, company_change_name → StandaloneServiceAgreement; onboarding → ServiceAgreement;
  * everything else, including a missing type, → the formation MSA).
  */
 export function signKindFor(contractType: string | null | undefined): SignKind {
@@ -27,7 +27,8 @@ export function signKindFor(contractType: string | null | undefined): SignKind {
     case 'renewal': return 'renewal'
     case 'tax_return':
     case 'itin':
-    case 'closure': return 'standalone'
+    case 'closure':
+    case 'company_change_name': return 'standalone'
     case 'onboarding': return 'service'
     default: return 'main'
   }
