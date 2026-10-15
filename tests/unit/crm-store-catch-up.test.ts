@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
 
-import { classifyCatchUpRow, sharedDriveIds, kindFromSuggestedFolder, yearFromFileName, type CatchUpRow } from "@/lib/crm-store/catch-up"
+import { classifyCatchUpRow, sharedDriveIds, kindFromSuggestedFolder, yearFromFileName, faxReceiptRule, type CatchUpRow } from "@/lib/crm-store/catch-up"
 
 const COPY = "2026-10-09T14:33:00.000Z"
 const row = (o: Partial<CatchUpRow> = {}): CatchUpRow => ({
@@ -87,5 +87,17 @@ describe("placement helpers", () => {
     expect(yearFromFileName("Form 8879_Lucky Pama LLC_To_Sign - Signed.pdf")).toBeNull()
     expect(yearFromFileName("2024 and 2025 summary.pdf")).toBeNull()
     expect(yearFromFileName("invoice 120250.pdf")).toBeNull()
+  })
+})
+
+describe("faxReceiptRule — a tax-return fax receipt goes to Tax / year as a Fax Confirmation", () => {
+  it("IRS Fax and Fax Confirmation both become Fax Confirmation in Tax", () => {
+    expect(faxReceiptRule("irs_fax")).toEqual({ slug: "fax_confirmation", kind: "tax" })
+    expect(faxReceiptRule("fax_confirmation")).toEqual({ slug: "fax_confirmation", kind: "tax" })
+  })
+  it("any other type is not touched by the rule", () => {
+    expect(faxReceiptRule("form_1120")).toBeNull()
+    expect(faxReceiptRule(null)).toBeNull()
+    expect(faxReceiptRule(undefined)).toBeNull()
   })
 })
