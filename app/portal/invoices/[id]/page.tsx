@@ -455,7 +455,8 @@ export default function InvoiceDetailPage() {
           nextRecurringDate={invoice.recurring_frequency ? (invoice.recurring_next_date ?? null) : null}
           sending={sending}
           downloading={downloading}
-          onSend={() => handleSend()}
+          // Close first: the missing-email warning, the 'send anyway?' question and the result toast all live on the page behind this pop-up
+          onSend={() => { setShowCreated(false); void handleSend() }}
           onDownload={handleDownloadPDF}
           onClose={() => setShowCreated(false)}
         />
