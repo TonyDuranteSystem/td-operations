@@ -12,12 +12,21 @@ export async function GET() {
   return NextResponse.json({ types: await listDocumentTypes() })
 }
 
-/** POST { name, folderKind } or { name, fileId } — add a staff document type (today's "Custom…"), via the catalog framework.
+/** POST { name, folderKind, folderId? } or { name, fileId } — add a staff document type (today's "Custom…"), via the catalog framework.
  *  With a fileId the folder kind is taken from the folder that file sits in (the Change type box has no folder in hand). */
 export async function POST(req: NextRequest) {
-  const denied = (await denyUnlessStoreStaff()) ?? (await denyUnlessStorePilotEnv({ study: true }))
+  const staffDenied = await denyUnlessStoreStaff()
+  if (staffDenied) return staffDenied
+  const body = (await req.json().catch(() => ({}))) as { name?: unknown; folderKind?: unknown; fileId?: unknown; folderId?: unknown }
+  // Staff may add a type while working in a LIVE (switched) storage — the file or folder they are in says which storage. Without one,
+  // or in a study copy, the strict rules apply (owners only). The old call passed neither, so a team member (Luca, 2026-10-16) was
+  // always refused with "Owners only while the new storage holds study copies".
+  const denied = await denyUnlessStorePilotEnv({
+    study: true,
+    fileId: typeof body.fileId === "string" && body.fileId ? body.fileId : null,
+    folderId: typeof body.folderId === "string" && body.folderId ? body.folderId : null,
+  })
   if (denied) return denied
-  const body = (await req.json().catch(() => ({}))) as { name?: unknown; folderKind?: unknown; fileId?: unknown }
   if (typeof body.name !== "string") return NextResponse.json({ error: "Enter a name for the new document type." }, { status: 400 })
   let folderKind = typeof body.folderKind === "string" ? body.folderKind : "company"
   if (typeof body.fileId === "string" && body.fileId) {

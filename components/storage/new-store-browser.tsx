@@ -1396,7 +1396,7 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
     setAddingType(true)
     try {
       const folderKind = upTargetIsPerson ? (upFolderObj.kind === 'person_tax' ? 'person_tax' : 'personal') : upFolderObj.kind
-      const r = await postJson<{ slug: string; name: string; created: boolean }>('/api/crm-store/browse/types', { name: customName, folderKind }, 'The type could not be added.')
+      const r = await postJson<{ slug: string; name: string; created: boolean }>('/api/crm-store/browse/types', { name: customName, folderKind, folderId: upFolderObj.id }, 'The type could not be added.')
       const fresh = await getJson<{ types: DocType[] }>('/api/crm-store/browse/types')
       setTypes(fresh.types)
       setUpType(r.slug)
