@@ -1,30 +1,11 @@
 import { describe, it, expect } from "vitest"
 import {
-  WAITING_ON_VALUES,
-  WAITING_ON_LABELS,
   documentMissingMessage,
   documentStepsCrossed,
-  isWaitingOn,
   onlyChangedStepFields,
   stageNotificationText,
   stepSettingsProblems,
 } from "@/lib/services/step-settings"
-
-describe("isWaitingOn", () => {
-  it("accepts every allowed value", () => {
-    for (const v of WAITING_ON_VALUES) expect(isWaitingOn(v)).toBe(true)
-  })
-  it("rejects anything else", () => {
-    expect(isWaitingOn("Client")).toBe(false)
-    expect(isWaitingOn("")).toBe(false)
-    expect(isWaitingOn(null)).toBe(false)
-    expect(isWaitingOn(undefined)).toBe(false)
-    expect(isWaitingOn(3)).toBe(false)
-  })
-  it("has a label for every value", () => {
-    for (const v of WAITING_ON_VALUES) expect(WAITING_ON_LABELS[v]).toBeTruthy()
-  })
-})
 
 describe("stepSettingsProblems", () => {
   it("is empty for a normal list", () => {

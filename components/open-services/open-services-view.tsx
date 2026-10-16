@@ -17,15 +17,17 @@ import {
   withoutMore,
   type OpenServicesParams,
 } from '@/lib/open-services/params'
-import { PAGE_SIZE, WHO_LABELS, WHO_VALUES, type Group, type Row, type ViewModel, type Who } from '@/lib/open-services/types'
+import { PAGE_SIZE, type Group, type Row, type ViewModel, type WaitBehaviour } from '@/lib/open-services/types'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ClosureWrapupDialog } from '@/components/open-services/closure-wrapup-dialog'
 
 const BASE = '/calendar/open-services'
 
-const CHIP_CLASS: Record<Who, string> = {
-  us: 'bg-blue-100 text-blue-800',
+// Colour comes from what a kind DOES (its behaviour), so a kind added to the list looks like the others of its sort.
+const CHIP_CLASS: Record<WaitBehaviour | 'unset', string> = {
+  ours: 'bg-blue-100 text-blue-800',
   client: 'bg-teal-100 text-teal-800',
-  outside: 'bg-rose-100 text-rose-800',
+  other: 'bg-rose-100 text-rose-800',
   date: 'bg-zinc-100 text-zinc-700',
   none: 'border border-dashed border-amber-500 bg-amber-50 text-amber-800',
   unset: 'border border-dashed border-zinc-400 text-zinc-500',
@@ -76,7 +78,7 @@ function JobRow({ row, showService }: { row: Row; showService: boolean }) {
         {row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.stage || 'no step'}
       </div>
       <div className="mt-2 min-[1100px]:mt-0">
-        <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${CHIP_CLASS[row.who]}`}>{WHO_LABELS[row.who]}</span>
+        <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${CHIP_CLASS[row.behaviour ?? 'unset']}`} title={row.whoPhrase ? `Waiting on ${row.whoPhrase}` : undefined}>{row.whoChip}</span>
       </div>
       <div className="mt-2 tabular-nums min-[1100px]:mt-0">
         {row.sinceLabel ? <>since {row.sinceLabel} · {row.daysHere} d</> : <span className="text-zinc-500">date unknown</span>}
@@ -177,7 +179,7 @@ export function OpenServicesView({ model, params }: { model: ViewModel; params: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cq])
 
-  const toggleWho = (w: Who) =>
+  const toggleWho = (w: string) =>
     push(withFilterChange(params, { who: params.who.includes(w) ? params.who.filter(x => x !== w) : [...params.who, w] }))
 
   const showService = model.view === 'who'
@@ -231,20 +233,22 @@ export function OpenServicesView({ model, params }: { model: ViewModel; params: 
       </div>
 
       <div className="flex flex-wrap gap-2 pb-1" role="group" aria-label="Waiting on">
-        {WHO_VALUES.map(w => (
-          <button
-            key={w}
-            type="button"
-            aria-pressed={params.who.includes(w)}
-            onClick={() => toggleWho(w)}
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${params.who.includes(w) ? 'border-blue-600 bg-blue-50 text-blue-800' : 'bg-white text-zinc-700 hover:border-blue-400'} ${model.chips[w] === 0 ? 'opacity-60' : ''}`}
-          >
-            {WHO_LABELS[w]} <span className="ml-1 tabular-nums text-zinc-500">{model.chips[w]}</span>
-          </button>
+        {model.chips.map(c => (
+          <FastTooltip key={c.who} label={c.tip}>
+            <button
+              type="button"
+              aria-label={`${c.tip}: ${c.count}`}
+              aria-pressed={params.who.includes(c.who)}
+              onClick={() => toggleWho(c.who)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${params.who.includes(c.who) ? 'border-blue-600 bg-blue-50 text-blue-800' : 'bg-white text-zinc-700 hover:border-blue-400'} ${c.count === 0 ? 'opacity-60' : ''}`}
+            >
+              {c.label} <span className="ml-1 tabular-nums text-zinc-500">{c.count}</span>
+            </button>
+          </FastTooltip>
         ))}
       </div>
       <p className="py-2 text-xs text-zinc-500">
-        Outside office means the IRS, a state or a bank. Late means past the follow-up days set on the step, counted from the last recorded move.
+        Late means past the follow-up days set on the step, counted from the last recorded move.
       </p>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pb-3 text-sm text-zinc-600">

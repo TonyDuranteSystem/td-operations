@@ -6,6 +6,7 @@
  * list names fall back to the default, and the row limit is clamped. No decodeURIComponent: Next has already decoded once.
  */
 
+import { WAIT_SLUG_RE } from "@/lib/open-services/types"
 import { BUCKETS, MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE, type Bucket } from "@/lib/new-calendar/types"
 
 export type RawSearchParams = Record<string, string | string[] | undefined>
@@ -23,6 +24,8 @@ export interface NewCalendarParams {
   s: string
   /** A step of that service ("" = none). Only meaningful together with `s`. */
   st: string
+  /** The "Waiting on" chip chosen on the Pending list: a kind slug or "paused" ("" = all). Only slug-shaped text is kept here; the builder checks it against the real kinds. */
+  w: string
   /** Search text for a company or person name. */
   q: string
   /** How many rows to show (PAGE_SIZE, then more on "Show more"). */
@@ -70,9 +73,11 @@ export function parseParams(raw: RawSearchParams): NewCalendarParams {
   const s = cleanText(first(raw.s))
   // A step means nothing without its service.
   const st = s === "" ? "" : cleanText(first(raw.st))
+  const wRaw = cleanText(first(raw.w)).toLowerCase()
+  const w = b === "pending" && WAIT_SLUG_RE.test(wRaw) ? wRaw : ""
   const q = cleanText(first(raw.q))
   const n = clampLimit(Number.parseInt(first(raw.n), 10))
-  return { tab, b, s, st, q, n }
+  return { tab, b, s, st, w, q, n }
 }
 
 /** The web address query for these params ("" when everything is default). */
@@ -83,6 +88,7 @@ export function toQueryString(p: NewCalendarParams): string {
   if (p.b !== DEFAULT_BUCKET) sp.set("b", p.b)
   if (p.s) sp.set("s", p.s)
   if (p.s && p.st) sp.set("st", p.st)
+  if (p.b === "pending" && p.w) sp.set("w", p.w)
   if (p.q) sp.set("q", p.q)
   if (p.n !== PAGE_SIZE) sp.set("n", String(p.n))
   const out = sp.toString()
@@ -91,17 +97,22 @@ export function toQueryString(p: NewCalendarParams): string {
 
 /** Switching tab keeps nothing from the other one. */
 export function withTab(p: NewCalendarParams, tab: CalendarTab): NewCalendarParams {
-  return { ...p, tab, b: DEFAULT_BUCKET, s: "", st: "", q: "", n: PAGE_SIZE }
+  return { ...p, tab, b: DEFAULT_BUCKET, s: "", st: "", w: "", q: "", n: PAGE_SIZE }
 }
 
 /** Choosing a list clears the service, the step and the paging, and keeps the search. */
 export function withBucket(p: NewCalendarParams, b: Bucket): NewCalendarParams {
-  return { ...p, b, s: "", st: "", n: PAGE_SIZE }
+  return { ...p, b, s: "", st: "", w: "", n: PAGE_SIZE }
 }
 
 /** Choosing a service ("" = all services) clears the step and the paging. */
 export function withService(p: NewCalendarParams, s: string): NewCalendarParams {
   return { ...p, s, st: "", n: PAGE_SIZE }
+}
+
+/** Choosing a "Waiting on" chip ("" = all; the chip already chosen clears itself) keeps the service and the search, and starts the paging over. */
+export function withWait(p: NewCalendarParams, w: string): NewCalendarParams {
+  return { ...p, w: p.w === w ? "" : w, n: PAGE_SIZE }
 }
 
 /** Choosing the step that is already chosen clears it. */

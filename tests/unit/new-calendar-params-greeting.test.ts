@@ -9,6 +9,7 @@ import {
   withMore,
   withService,
   withStep,
+  withWait,
   withTab,
 } from "@/lib/new-calendar/params"
 import { firstNameOf, greetingWord, workTodayText } from "@/lib/new-calendar/greeting"
@@ -18,7 +19,7 @@ import { MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE } from "@/lib/new-calendar/types"
 
 describe("parseParams", () => {
   it("defaults to the To work on list, no service, no step, no search, one page", () => {
-    expect(parseParams({})).toEqual({ tab: "jobs", b: "work", s: "", st: "", q: "", n: PAGE_SIZE })
+    expect(parseParams({})).toEqual({ tab: "jobs", b: "work", s: "", st: "", w: "", q: "", n: PAGE_SIZE })
   })
 
   it("accepts the four list names (any case) and falls back to the default for anything else", () => {
@@ -60,27 +61,54 @@ describe("parseParams", () => {
 describe("toQueryString and the helpers", () => {
   it("is empty for the defaults and round-trips everything else", () => {
     expect(toQueryString(parseParams({}))).toBe("")
-    const p = { tab: "jobs" as const, b: "pending" as const, s: "Alpha", st: "One", q: "Acme & Sons", n: 100 }
+    const p = { tab: "jobs" as const, b: "pending" as const, s: "Alpha", st: "One", w: "the_irs", q: "Acme & Sons", n: 100 }
     expect(parseParams(Object.fromEntries(new URLSearchParams(toQueryString(p)).entries()))).toEqual(p)
   })
 
   it("never writes a step without its service", () => {
-    expect(toQueryString({ tab: "jobs", b: "work", s: "", st: "One", q: "", n: PAGE_SIZE })).toBe("")
+    expect(toQueryString({ tab: "jobs", b: "work", s: "", st: "One", w: "", q: "", n: PAGE_SIZE })).toBe("")
   })
 
   it("choosing a list clears service, step and paging but keeps the search", () => {
-    expect(withBucket({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "acme", n: 150 }, "closed")).toEqual({ tab: "jobs", b: "closed", s: "", st: "", q: "acme", n: PAGE_SIZE })
+    expect(withBucket({ tab: "jobs", b: "work", s: "Alpha", st: "One", w: "", q: "acme", n: 150 }, "closed")).toEqual({ tab: "jobs", b: "closed", s: "", st: "", w: "", q: "acme", n: PAGE_SIZE })
   })
 
   it("choosing a service clears the step and the paging; choosing the same step again clears it", () => {
-    expect(withService({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "", n: 150 }, "Beta")).toEqual({ tab: "jobs", b: "work", s: "Beta", st: "", q: "", n: PAGE_SIZE })
-    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "", n: 100 }, "One").st).toBe("")
-    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "", q: "", n: 100 }, "One")).toMatchObject({ st: "One", n: PAGE_SIZE })
+    expect(withService({ tab: "jobs", b: "work", s: "Alpha", st: "One", w: "", q: "", n: 150 }, "Beta")).toEqual({ tab: "jobs", b: "work", s: "Beta", st: "", w: "", q: "", n: PAGE_SIZE })
+    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "One", w: "", q: "", n: 100 }, "One").st).toBe("")
+    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "", w: "", q: "", n: 100 }, "One")).toMatchObject({ st: "One", n: PAGE_SIZE })
   })
 
   it("'show more' adds a page and stops at the ceiling", () => {
     expect(withMore(parseParams({}) ).n).toBe(PAGE_SIZE * 2)
     expect(withMore({ ...parseParams({}), n: MAX_LIMIT }).n).toBe(MAX_LIMIT)
+  })
+})
+
+describe("the Waiting on chip (w)", () => {
+  it("is kept only on the Pending list and only when slug-shaped; the builder checks it against the real kinds", () => {
+    expect(parseParams({ b: "pending", w: "the_irs" }).w).toBe("the_irs")
+    expect(parseParams({ b: "pending", w: " Paused " }).w).toBe("paused")
+    expect(parseParams({ b: "work", w: "the_irs" }).w).toBe("")
+    expect(parseParams({ b: "pending", w: "a b" }).w).toBe("")
+    expect(parseParams({ b: "pending", w: "É" }).w).toBe("")
+    expect(parseParams({ b: "pending", w: ["us", "x"] }).w).toBe("us")
+  })
+
+  it("is written to the address only with the Pending list, and choosing a list or tab clears it", () => {
+    const base = parseParams({ b: "pending", w: "the_irs" })
+    expect(toQueryString(base)).toBe("?b=pending&w=the_irs")
+    expect(toQueryString({ ...base, b: "work" })).toBe("")
+    expect(withBucket(base, "work").w).toBe("")
+    expect(withTab(base, "news").w).toBe("")
+  })
+
+  it("choosing a chip keeps the service and the search and starts the paging over; the same chip again clears it", () => {
+    const base = { ...parseParams({ b: "pending", s: "Alpha", q: "acme", n: "150" }) }
+    const on = withWait(base, "the_irs")
+    expect(on).toMatchObject({ w: "the_irs", s: "Alpha", q: "acme", n: PAGE_SIZE })
+    expect(withWait(on, "the_irs").w).toBe("")
+    expect(withWait(on, "").w).toBe("")
   })
 })
 

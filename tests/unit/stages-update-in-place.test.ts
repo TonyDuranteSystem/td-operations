@@ -540,7 +540,7 @@ describe("N1a C2 — step settings", () => {
       replaceStagesForService("Shipping", [
         { id: "a", stage_order: 1, stage_name: "A", waiting_on: "staff" as never },
       ]),
-    ).rejects.toThrow(/not a valid "Waiting on"/)
+    ).rejects.toThrow(/not in the waiting-on list/)
   })
 
   it("refuses an 'action required' step that is not waiting on the client", async () => {

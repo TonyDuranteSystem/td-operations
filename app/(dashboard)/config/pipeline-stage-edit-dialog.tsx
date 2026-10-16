@@ -10,7 +10,9 @@ import {
   stageHasAction,
   setStageAction,
 } from "@/lib/services/stage-actions"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, onlyChangedStepFields, type WaitingOn } from "@/lib/services/step-settings"
+import { onlyChangedStepFields } from "@/lib/services/step-settings"
+import { waitingOnOptions } from "@/lib/open-services/wait-kinds"
+import type { WaitKind } from "@/lib/open-services/types"
 
 export interface PipelineStageRow {
   id: string
@@ -30,7 +32,7 @@ export interface PipelineStageRow {
   client_label_it: string | null
 }
 
-export function PipelineStageEditButton({ row }: { row: PipelineStageRow }) {
+export function PipelineStageEditButton({ row, waitKinds }: { row: PipelineStageRow; waitKinds: WaitKind[] }) {
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -40,16 +42,18 @@ export function PipelineStageEditButton({ row }: { row: PipelineStageRow }) {
       >
         <Pencil className="h-3 w-3" /> Edit
       </button>
-      {open && <PipelineStageEditDialog row={row} onClose={() => setOpen(false)} />}
+      {open && <PipelineStageEditDialog row={row} waitKinds={waitKinds} onClose={() => setOpen(false)} />}
     </>
   )
 }
 
 function PipelineStageEditDialog({
   row,
+  waitKinds,
   onClose,
 }: {
   row: PipelineStageRow
+  waitKinds: WaitKind[]
   onClose: () => void
 }) {
   const [stageName, setStageName] = useState(row.stage_name)
@@ -216,8 +220,8 @@ function PipelineStageEditDialog({
                 className="w-full border rounded-md px-3 py-2 text-sm"
               >
                 <option value="">Not set</option>
-                {WAITING_ON_VALUES.map(v => (
-                  <option key={v} value={v}>{WAITING_ON_LABELS[v as WaitingOn]}</option>
+                {waitingOnOptions(waitKinds, row.waiting_on).map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
               <span className="block text-xs text-zinc-500 mt-1">Who has to act next while a job sits on this step.</span>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { cleanQuery, clampLimit, limitFor, parseParams, toQueryString, withFilterChange, withMore } from "@/lib/open-services/params"
-import { MAX_LIMIT, MAX_QUERY_LENGTH, PAGE_SIZE } from "@/lib/open-services/types"
+import { MAX_LIMIT, MAX_QUERY_LENGTH, MAX_WHO_FILTERS, PAGE_SIZE } from "@/lib/open-services/types"
 
 /** N1a C3 — everything in the web address is hostile input. */
 
@@ -17,8 +17,17 @@ describe("parseParams", () => {
     expect(p.who).toEqual(["us"])
   })
 
-  it("who keeps only real states, once each", () => {
-    expect(parseParams({ who: "us, CLIENT,us,banana,,none,unset" }).who).toEqual(["us", "client", "none", "unset"])
+  it("who keeps slug-shaped tokens once each (the builder drops the ones that are not real kinds), and drops hostile shapes", () => {
+    // The list of kinds is data this pure file cannot see, so any slug-shaped token is kept here; unknown ones are dropped by the builder.
+    expect(parseParams({ who: "us, CLIENT,us,banana,,none,unset" }).who).toEqual(["us", "client", "banana", "none", "unset"])
+    // shape: lower-case snake_case starting with a letter; no punctuation, spaces inside, or unicode
+    expect(parseParams({ who: "a b,Z!,1abc,é,the_irs,__proto__x" }).who).toEqual(["the_irs"])
+    expect(parseParams({ who: "constructor,__proto__,tostring" }).who).toEqual(["constructor", "tostring"])
+  })
+
+  it("who is capped so a hostile address stays small", () => {
+    const many = Array.from({ length: 200 }, (_, i) => `kind_${i}`).join(",")
+    expect(parseParams({ who: many }).who).toHaveLength(MAX_WHO_FILTERS)
   })
 
   it("search text is cleaned and capped, never executed", () => {

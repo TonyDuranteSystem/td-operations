@@ -13,7 +13,10 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { protectedStageReason } from "@/lib/services/protected-stage-names"
 import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
-import { isWaitingOn, stepSettingsProblems, type WaitingOn } from "@/lib/services/step-settings"
+import { stepSettingsProblems } from "@/lib/services/step-settings"
+import { loadWaitKinds } from "@/lib/services/wait-kinds-load"
+import { waitingOnSaveProblem } from "@/lib/open-services/wait-kinds"
+import type { WaitKind } from "@/lib/open-services/types"
 import type { Json } from "@/lib/database.types"
 import {
   type StageAction,
@@ -53,7 +56,7 @@ export interface StageRow {
    *   requires_document_to_advance — a job may not move forward past the step without a document uploaded on it.
    *   client_label / client_label_it — what the client sees for the step (portal, notices).
    */
-  waiting_on?: WaitingOn | null
+  waiting_on?: string | null
   completes_service?: boolean | null
   requires_document_to_advance?: boolean | null
   client_label?: string | null
@@ -219,6 +222,44 @@ export function planStageOrders(
 }
 
 /**
+ * The refusals for the "waiting on" choices of a step list: one plain sentence per step whose choice is NEW and is not a built-in or an
+ * active kind of the list. `kinds` is loaded only when some choice actually changed (a save that changes no choice reads nothing).
+ */
+export async function waitingOnChoiceProblems(
+  steps: Array<{ name: string; value: string | null | undefined; stored: string | null | undefined }>,
+  kinds?: WaitKind[],
+): Promise<string[]> {
+  const changed = steps.filter(s => typeof s.value === "string" && s.value !== "" && s.value !== (s.stored ?? null))
+  if (changed.length === 0) return []
+  const list = kinds ?? (await loadWaitKinds()).kinds
+  const out: string[] = []
+  for (const s of changed) {
+    const p = waitingOnSaveProblem(list, s.value, s.stored)
+    if (p) out.push(`"${s.name}": ${p}`)
+  }
+  return out
+}
+
+/**
+ * Pre-check for the service editor (before it writes the service card): the "waiting on" choices a draft would save, compared with what
+ * is stored, so a stale choice is refused BEFORE anything is written and "Nothing has been changed" stays true.
+ */
+export async function checkWaitingOnChoices(
+  serviceType: string,
+  draft: Array<{ id?: string; stage_name: string; waiting_on?: string | null }>,
+  kinds?: WaitKind[],
+): Promise<string[]> {
+  if (!draft.some(s => typeof s.waiting_on === "string" && s.waiting_on !== "")) return []
+  const { data, error } = await supabaseAdmin.from("pipeline_stages").select("id, waiting_on").eq("service_type", serviceType)
+  if (error) throw new Error(`checkWaitingOnChoices(${serviceType}) read: ${error.message}`)
+  const stored = new Map(((data ?? []) as Array<{ id: string; waiting_on: string | null }>).map(r => [r.id, r.waiting_on]))
+  return waitingOnChoiceProblems(
+    draft.map(s => ({ name: s.stage_name, value: s.waiting_on, stored: s.id ? stored.get(s.id) ?? null : null })),
+    kinds,
+  )
+}
+
+/**
  * Reconcile a service's stages against what the editor submitted.
  *
  * WHY THIS IS NOT delete-then-insert (2026-07-22). It used to delete every row
@@ -247,7 +288,7 @@ export function planStageOrders(
 export async function replaceStagesForService(
   serviceType: string,
   stages: StageRow[],
-  opts: { knownStageIds?: string[]; actor?: string } = {},
+  opts: { knownStageIds?: string[]; actor?: string; waitKinds?: WaitKind[] } = {},
 ): Promise<{ warnings: string[] }> {
   // Every write below is stamped with its author for the database history (N1a P2, settings-actor.ts).
   const actor = settingsActor(opts.actor, "app:service-editor")
@@ -323,11 +364,13 @@ export async function replaceStagesForService(
 
   // N1a C2: the step settings this save would leave behind (a field the caller did not send keeps its stored value)
   // must be consistent — one done step, and the client-action steps waiting on the client. Checked before any write.
-  for (const s of submitted) {
-    if (s.waiting_on !== undefined && s.waiting_on !== null && !isWaitingOn(s.waiting_on)) {
-      throw new Error(`"${s.stage_name}": "${String(s.waiting_on)}" is not a valid "Waiting on" choice. Nothing has been changed.`)
-    }
-  }
+  // A "waiting on" choice must be a built-in or an ACTIVE catalog kind — but only when it CHANGES: a value a step already has is never
+  // refused, so retiring a kind later can not lock the editors on an unrelated save.
+  const choiceProblems = await waitingOnChoiceProblems(
+    submitted.map(s => ({ name: s.stage_name, value: s.waiting_on, stored: s.id ? (existingById.get(s.id)?.waiting_on as string | null | undefined) : null })),
+    opts.waitKinds,
+  )
+  if (choiceProblems.length > 0) throw new Error(`${choiceProblems.join(" ")} Nothing has been changed.`)
   const resulting = submitted.map(s => {
     const cur = s.id ? existingById.get(s.id) : undefined
     return {

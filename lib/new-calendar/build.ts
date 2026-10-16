@@ -10,7 +10,6 @@
  */
 
 import { stageCompletesService } from "@/lib/services/done-step"
-import { isWaitingOn } from "@/lib/services/step-settings"
 import {
   classify,
   compareItems,
@@ -22,16 +21,19 @@ import {
   type Classified,
   type ContactInput,
 } from "@/lib/open-services/build"
-import type { Row, Who } from "@/lib/open-services/types"
+import { resolveWho } from "@/lib/open-services/wait-kinds"
+import { UNSET_LABELS, defaultWaitKinds, firstKindWith, waitKindOf, type Row, type WaitKind } from "@/lib/open-services/types"
 import {
   CLOSED_WINDOW_DAYS,
   MAX_LIMIT,
+  PAUSED_KEY,
   type Bucket,
   type CalendarModel,
   type CalendarRow,
   type Pill,
   type ServiceChip,
   type StepChip,
+  type WaitChip,
 } from "@/lib/new-calendar/types"
 import { sameText, sameTextLoose, type NewCalendarParams } from "@/lib/new-calendar/params"
 
@@ -69,32 +71,22 @@ interface ClosedEntry {
   finished: number
 }
 
-/** Whose turn it is, in the words the page uses after "Waiting on". */
-const WAIT_WORDS: Record<Who, string> = {
-  us: "us",
-  client: "the client",
-  outside: "an outside office",
-  date: "a date",
-  none: "nobody",
-  unset: "",
-}
-
 /**
  * Which list an OPEN job belongs to. Every open job is in exactly one list.
  *   - a paused job (blocked, on hold, company not operating) waits: Pending, never counted late;
  *   - a step with no waiting-on setting: Not sorted yet (the page will not guess, late or not);
  *   - a follow-up that ran late comes back to To work on, whoever it was waiting for;
  *   - a step that is ours, or the last step (nobody is waiting: close it): To work on;
- *   - client / outside office / a date: Pending.
+ *   - waiting on the client, an outside office, a date (any kind from the waiting-on list): Pending.
  */
 export function bucketOf(row: Row): Bucket {
   if (row.followUp === "parked") return "pending"
   // No waiting-on setting = the page cannot tell whose turn it is, so it does not guess: not even a late one goes to To work on
   // (System Counselor, 2026-10-16: 5 mailing-address jobs would otherwise be "overdue" next to 221 identical ones "not sorted").
   // Its lateness still shows in red in the Days column.
-  if (row.who === "unset") return "other"
+  if (row.behaviour === null) return "other"
   if (row.lateBy !== null) return "work"
-  if (row.who === "us" || row.who === "none") return "work"
+  if (row.behaviour === "ours" || row.behaviour === "none") return "work"
   return "pending"
 }
 
@@ -107,16 +99,24 @@ export function nextText(row: Row): string {
   const stage = row.stage.trim()
   if (stage === "") return "No step recorded"
   if (row.lateBy !== null) return `Follow up: ${stage}`
-  switch (row.who) {
-    case "us":
+  switch (row.behaviour) {
+    case "ours":
       return `Do: ${stage}`
     case "none":
       return "Last step reached: close it"
-    case "unset":
+    case null:
       return "Waiting-on not set for this step"
     default:
-      return `Waiting on ${WAIT_WORDS[row.who]}: ${stage}`
+      return `Waiting on ${row.whoPhrase}: ${stage}`
   }
+}
+
+/** The words in the status pill. A waiting job says who it waits on; a paused one says so. */
+export function pillLabelOf(row: Row, bucket: Bucket): string {
+  if (bucket === "work") return row.lateBy !== null ? "Overdue" : "To work on"
+  if (bucket === "pending") return row.followUp === "parked" ? "Paused" : `Waiting on ${row.whoPhrase}`
+  if (bucket === "other") return "Not sorted"
+  return "Closed"
 }
 
 function pillOf(row: Row, bucket: Bucket): Pill {
@@ -135,7 +135,9 @@ function toOpenRow(e: OpenEntry): CalendarRow {
     stepNo: r.stepNo,
     bucket: e.bucket,
     pill: pillOf(r, e.bucket),
+    pillLabel: pillLabelOf(r, e.bucket),
     who: r.who,
+    behaviour: r.behaviour,
     daysHere: r.daysHere,
     lateBy: r.lateBy,
     finishedLabel: null,
@@ -176,6 +178,7 @@ function dayLabel(ms: number, now: Date): string {
  */
 export function classifyClosed(input: NewCalendarInput, openIds: ReadonlySet<string> = new Set()): ClosedEntry[] {
   const { now } = input
+  const noneKind = firstKindWith(input.waitKinds ?? defaultWaitKinds(), "none")
   const accounts = new Map<string, AccountInput>(input.accounts.map(a => [a.id, a]))
   const contacts = new Map<string, ContactInput>(input.contacts.map(c => [c.id, c]))
   const ordered = excludingCards(input.cards)
@@ -213,7 +216,9 @@ export function classifyClosed(input: NewCalendarInput, openIds: ReadonlySet<str
         stepNo: null,
         bucket: "closed",
         pill: "closed",
-        who: "none",
+        pillLabel: "Closed",
+        who: noneKind?.slug ?? "none",
+        behaviour: "none",
         daysHere: null,
         lateBy: null,
         finishedLabel: dayLabel(finished, now),
@@ -240,7 +245,7 @@ function norm(s: string): string {
 }
 
 /** A service's own steps, in order, from the settings — with how many open jobs sit on each. */
-function stepChips(input: NewCalendarInput, service: string, open: OpenEntry[]): StepChip[] {
+function stepChips(input: NewCalendarInput, kinds: readonly WaitKind[], service: string, open: OpenEntry[]): StepChip[] {
   const own = input.steps
     .filter(s => sameText(s.service_type, service))
     .sort((a, b) => a.stage_order - b.stage_order)
@@ -250,14 +255,11 @@ function stepChips(input: NewCalendarInput, service: string, open: OpenEntry[]):
     const key = norm(s.stage_name)
     if (seen.has(key)) continue
     seen.add(key)
-    let waitingOn: Who = "unset"
-    if (stageCompletesService({ stage_name: s.stage_name, stage_order: s.stage_order, completes_service: s.completes_service }, service)) {
-      waitingOn = "none"
-    } else if (isWaitingOn(s.waiting_on)) {
-      waitingOn = s.waiting_on
-    }
+    const done = stageCompletesService({ stage_name: s.stage_name, stage_order: s.stage_order, completes_service: s.completes_service }, service)
+    const waitingOn = resolveWho(kinds, s.waiting_on, done).who
+    const kind = waitKindOf(kinds, waitingOn)
     const count = open.filter(e => sameText(e.item.row.serviceType, service) && sameTextLoose(e.item.row.stage, s.stage_name)).length
-    chips.push({ name: s.stage_name, count, waitingOn })
+    chips.push({ name: s.stage_name, count, waitingOn, behaviour: kind?.behaviour ?? null, tip: kind?.tip ?? UNSET_LABELS.tip })
   }
   return chips
 }
@@ -266,6 +268,7 @@ function stepChips(input: NewCalendarInput, service: string, open: OpenEntry[]):
 export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarParams): CalendarModel {
   const { now } = input
   const classified = classify(input)
+  const kinds = classified.kinds
   const q = normalizeName(params.q)
   const passesQuery = (nameNorm: string) => q === "" || nameNorm.includes(q)
 
@@ -296,7 +299,26 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
       : openQ.filter(e => e.bucket === params.b).map(e => e.item.row.serviceType),
   )
 
-  const steps = params.s !== "" && params.b !== "closed" ? stepChips(input, params.s, openQ) : []
+  const steps = params.s !== "" && params.b !== "closed" ? stepChips(input, kinds, params.s, openQ) : []
+
+  // The "Waiting on" row: only on the Pending list. One chip per kind of wait that has jobs there (plus the paused ones), counted with the
+  // search and the service applied but NOT the chip itself. A chip typed in the address that is not a real kind is ignored.
+  const onPending = !stepView && params.b === "pending"
+  const pendingScope = onPending ? openQ.filter(e => e.bucket === "pending" && (params.s === "" || sameText(e.item.row.serviceType, params.s))) : []
+  const keyOf = (e: OpenEntry) => (e.item.row.followUp === "parked" ? PAUSED_KEY : e.item.row.who)
+  const waitCounts = new Map<string, number>()
+  for (const e of pendingScope) waitCounts.set(keyOf(e), (waitCounts.get(keyOf(e)) ?? 0) + 1)
+  const waitKind = waitKindOf(kinds, params.w)
+  const validWait = params.w === PAUSED_KEY || (waitKind !== null && waitKind.behaviour !== "ours" && waitKind.behaviour !== "none")
+  const waitFilter = onPending && validWait ? params.w : ""
+  const waiting: WaitChip[] = onPending
+    ? [
+        ...kinds
+          .filter(k => k.behaviour !== "ours" && k.behaviour !== "none")
+          .map(k => ({ key: k.slug, label: k.chip, count: waitCounts.get(k.slug) ?? 0, behaviour: k.behaviour as WaitChip["behaviour"] })),
+        { key: PAUSED_KEY, label: "Paused", count: waitCounts.get(PAUSED_KEY) ?? 0, behaviour: null },
+      ].filter(c => c.count > 0 || c.key === waitFilter)
+    : []
 
   let rows: CalendarRow[]
   let total: number
@@ -314,7 +336,7 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
     rows = picked.slice(0, params.n).map(c => c.row)
   } else {
     const picked = openQ
-      .filter(e => e.bucket === params.b && (params.s === "" || sameText(e.item.row.serviceType, params.s)))
+      .filter(e => e.bucket === params.b && (params.s === "" || sameText(e.item.row.serviceType, params.s)) && (waitFilter === "" || keyOf(e) === waitFilter))
       .sort((a, b) => compareItems(a.item, b.item))
     total = picked.length
     rows = picked.slice(0, params.n).map(toOpenRow)
@@ -328,6 +350,8 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
     active,
     services,
     steps,
+    waiting,
+    waitFilter,
     rows,
     total,
     hasMore: total > rows.length,
