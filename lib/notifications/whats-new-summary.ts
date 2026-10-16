@@ -40,6 +40,12 @@ export interface WhatsNewSummary {
 export const MAX_CLIENTS = 300
 export const TEXT_LENGTH = 160
 
+/** Cut to TEXT_LENGTH characters without splitting an emoji (a surrogate pair) in half. */
+function clip(text: string): string {
+  const chars = Array.from(text)
+  return chars.length <= TEXT_LENGTH ? text : chars.slice(0, TEXT_LENGTH).join('')
+}
+
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
 
 /** Newest first, count per client, names from the lookup (a missing name says so instead of showing an id). */
@@ -66,7 +72,7 @@ export function groupWhatsNewSummary(
         count: 1,
         latestAt: n.created_at,
         latestEventKey: n.event_key,
-        latestText: oneLine(n.text).slice(0, TEXT_LENGTH),
+        latestText: clip(oneLine(n.text)),
       })
       continue
     }
@@ -74,7 +80,7 @@ export function groupWhatsNewSummary(
     if (n.created_at > prior.latestAt) {
       prior.latestAt = n.created_at
       prior.latestEventKey = n.event_key
-      prior.latestText = oneLine(n.text).slice(0, TEXT_LENGTH)
+      prior.latestText = clip(oneLine(n.text))
     }
   }
   const all = Array.from(byKey.values()).sort((a, b) => (a.latestAt < b.latestAt ? 1 : a.latestAt > b.latestAt ? -1 : a.key < b.key ? -1 : 1))

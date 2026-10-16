@@ -84,7 +84,7 @@ export function WhatsNewTab() {
                     >
                       <span className="mt-0.5 shrink-0 rounded-full bg-purple-600 px-2 py-0.5 font-mono text-xs font-semibold text-white">{c.count}</span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold">{c.name}</span>
+                        <span className="block truncate text-sm font-semibold" title={c.name}>{c.name}</span>
                         <span className="block text-[11px] text-zinc-500">
                           {label ? <span className="mr-1 rounded border bg-zinc-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-zinc-500">{label}</span> : null}
                           {timeAgo(c.latestAt)}

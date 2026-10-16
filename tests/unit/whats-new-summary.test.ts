@@ -93,4 +93,12 @@ describe("groupWhatsNewSummary", () => {
     const b = groupWhatsNewSummary([note({ account_id: "a", created_at: t }), note({ account_id: "b", created_at: t })], names())
     expect(a.clients.map(c => c.key)).toEqual(b.clients.map(c => c.key))
   })
+
+  it("cuts a long note without splitting an emoji in half", () => {
+    const text = "😀".repeat(TEXT_LENGTH + 5)
+    const s = groupWhatsNewSummary([note({ text })], names({ a1: "Acme LLC" }))
+    const out = s.clients[0].latestText
+    expect(Array.from(out).length).toBe(TEXT_LENGTH)
+    expect(out).toBe("😀".repeat(TEXT_LENGTH))
+  })
 })

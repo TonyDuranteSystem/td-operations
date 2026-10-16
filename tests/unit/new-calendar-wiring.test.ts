@@ -165,6 +165,32 @@ describe("the What's New tab", () => {
     expect(summary).toContain('.is("handled_at", null)')
     expect(summary).toContain('.is("deleted_at", null)')
   })
+
+  it("the news tab does not load the Open services data, and a failed jobs read still leaves a way to the news", () => {
+    const page = stripComments(read(PAGE))
+    expect(page).toContain("const wantsJobs = params.tab !== 'news'")
+    expect(page).toContain("if (wantsJobs) {")
+    expect(page).toContain("/new-calendar?tab=news")
+    expect(view).toContain("model: CalendarModel | null")
+    expect(view).toContain("<JobsBody model={model} params={params} />")
+  })
+
+  it("the cross-client list is staff-only (the partner role passes isDashboardUser) and is read in honest pages of 1000", () => {
+    const at = route.indexOf('sp.get("summary") === "true"')
+    expect(at).toBeGreaterThan(0)
+    const branch = route.slice(at, at + 2500)
+    expect(branch).toContain("isStaffUser(user)")
+    expect(branch).toContain("PAGE_SIZE = 1000")
+    expect(branch).toContain(".range(")
+    expect(branch).toContain("readTruncated")
+    expect(branch).not.toContain("READ_LIMIT")
+  })
+
+  it("the panel shows a failed read and a failed Mark handled instead of 'Nothing new' or silence (R099)", () => {
+    expect(panel).toContain("if (!r.ok) throw new Error(d.error")
+    expect(panel).toContain("notesError && !notes")
+    expect(panel).toContain("toast.error(")
+  })
 })
 
 describe("the menu item and the old Calendar", () => {
