@@ -27,7 +27,7 @@ export const PROVIDER_NOTICE_EMAIL = 'support@tonydurante.us'
  * own public/images/premises folder (same origin as the signing page, so the browser's signed-PDF capture can always draw them).
  * With NO photos the Exhibit is not printed and the text does not mention it. The last four are COMPUTER-GENERATED
  * images (made with ChatGPT image generation — their embedded content credentials say so, checked 2026-10-14; not the photographer's
- * work and not photographs), so their captions say "illustrative"; the others are real camera photographs.
+ * work and not photographs), but Antonio (2026-10-15) had the "illustrative" wording removed from their captions; the others are real camera photographs.
  */
 export interface ExhibitPhoto { url: string; caption: string }
 export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
@@ -36,10 +36,10 @@ export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
   { url: '/images/premises/premises-03-building-aerial.jpg', caption: 'The building and its parking, seen from above' },
   { url: '/images/premises/premises-04-building-front.jpg', caption: 'The front of the building and the tenant sign' },
   { url: '/images/premises/premises-05-entrance.jpg', caption: 'The entrance to Tony Durante LLC' },
-  { url: '/images/premises/premises-06-office-area.jpg', caption: 'The office area (illustrative: furnished layout)' },
-  { url: '/images/premises/premises-07-office-area-2.jpg', caption: 'The office area (illustrative: furnished layout)' },
-  { url: '/images/premises/premises-08-office-desks.jpg', caption: 'Desks in the office area (illustrative: furnished layout)' },
-  { url: '/images/premises/premises-09-meeting-room.jpg', caption: 'The meeting room (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-06-office-area.jpg', caption: 'The office area' },
+  { url: '/images/premises/premises-07-office-area-2.jpg', caption: 'The office area' },
+  { url: '/images/premises/premises-08-office-desks.jpg', caption: 'Desks in the office area' },
+  { url: '/images/premises/premises-09-meeting-room.jpg', caption: 'The meeting room' },
   { url: '/images/premises/premises-10-kitchenette.jpg', caption: 'The kitchenette' },
 ]
 
