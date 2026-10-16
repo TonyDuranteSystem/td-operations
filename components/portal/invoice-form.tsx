@@ -223,7 +223,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
         })
         if (result.success) {
           toast.success(interpolateString(t('invForm.created'), { number: String(result.data?.invoice_number ?? '') }))
-          router.push('/portal/invoices')
+          router.push(result.data?.id ? `/portal/invoices/${result.data.id}?created=1` : '/portal/invoices')
         } else {
           toast.error(result.error ?? t('invForm.createFailed'))
         }

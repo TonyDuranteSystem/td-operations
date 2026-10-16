@@ -173,7 +173,7 @@ export async function POST(
     return NextResponse.json({ error: 'This invoice was just sent to this customer. Please wait a minute before sending it again.' }, { status: 409 })
   }
 
-  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY)
+  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY, invoice.account_id)
   let claimedTrackingId: string | null = null
   try {
     // Generate tracking ID and inject pixel into HTML

@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
   Calendar, User, Receipt, Clock, Pencil, Bell, BookmarkPlus, X,
-  Ban, Copy, DollarSign, Mail,
+  Ban, Copy, DollarSign,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { markInvoiceAsPaid, recordPartialPayment, voidInvoice, duplicateInvoice, createTemplate } from '../actions'
@@ -16,7 +16,8 @@ import { interpolateString } from '@/lib/template-interpolation'
 import { InvoiceSendNotices } from '@/components/portal/invoice-send-notices'
 import { sendNotices } from '@/lib/portal/invoice-send-notices'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
-import { SendFromOwnEmailDialog } from '@/components/portal/send-from-own-email-dialog'
+import { InvoiceCreatedDialog } from '@/components/portal/invoice-created-dialog'
+import { invoiceCreatedPopupIsOff } from '@/lib/portal/invoice-created-popup'
 
 // The calendar day in the user's own timezone (toISOString() is UTC: after 8pm in New York it is already tomorrow).
 const todayLocal = () => new Date().toLocaleDateString('en-CA')
@@ -39,6 +40,8 @@ interface InvoiceDetail {
   paid_date: string | null
   notes: string | null
   message: string | null
+  recurring_frequency?: string | null
+  recurring_next_date?: string | null
   created_at: string
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
@@ -70,6 +73,7 @@ function fmtDate(d: string | null): string {
 export default function InvoiceDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const invoiceId = params.id as string
 
   const { t } = useLocale()
@@ -79,7 +83,7 @@ export default function InvoiceDetailPage() {
   const [sending, setSending] = useState(false)
   const [confirmingSendAnyway, setConfirmingSendAnyway] = useState(false)
   const [reminding, setReminding] = useState(false)
-  const [showOwnEmail, setShowOwnEmail] = useState(false)
+  const [showCreated, setShowCreated] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
   const [showPartialModal, setShowPartialModal] = useState(false)
   const [showVoidConfirm, setShowVoidConfirm] = useState(false)
@@ -95,9 +99,18 @@ export default function InvoiceDetailPage() {
       const data = await res.json()
       setInvoice(data)
       setLoading(false)
+      // Just created: show every option at once (unless the client turned the pop-up off), and clear the flag from the
+      // address so a refresh does not open it again.
+      if (searchParams.get('created') === '1') {
+        if (!invoiceCreatedPopupIsOff()) setShowCreated(true)
+        router.replace(`/portal/invoices/${invoiceId}`)
+      }
     }
     load()
-  }, [invoiceId])
+  }, [invoiceId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Once the invoice is sent (from the pop-up or anywhere else) the "what next" pop-up has done its job.
+  useEffect(() => { if (invoice && invoice.status !== 'Draft') setShowCreated(false) }, [invoice])
 
   const currencySymbol = invoice?.currency === 'EUR' ? '\u20AC' : '$'
 
@@ -356,18 +369,6 @@ export default function InvoiceDetailPage() {
             </button>
           )}
 
-          {/* Send from the client's OWN email program (any provider): opens a prepared message, the client attaches the PDF. */}
-          {(invoice.status === 'Draft' || invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
-            <button
-              onClick={() => setShowOwnEmail(true)}
-              data-testid="send-from-own-email"
-              className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50"
-            >
-              <Mail className="h-4 w-4" />
-              {t('invMail.button')}
-            </button>
-          )}
-
           {(invoice.status === 'Sent' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (
             <>
               <button
@@ -445,19 +446,18 @@ export default function InvoiceDetailPage() {
         sending={sending}
       />
 
-      {showOwnEmail && invoice && (
-        <SendFromOwnEmailDialog
+      {showCreated && invoice && (
+        <InvoiceCreatedDialog
           invoiceId={invoiceId}
           invoiceNumber={invoice.invoice_number}
           status={invoice.status}
-          companyName={invoice.seller?.company_name ?? ''}
-          customerName={invoice.customer?.name ?? ''}
           customerEmail={invoice.customer?.email ?? null}
-          total={`${currencySymbol}${(invoice.total ?? 0).toFixed(2)}`}
-          dueDate={invoice.due_date}
-          message={invoice.message}
-          onClose={() => setShowOwnEmail(false)}
-          onSent={() => setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)}
+          nextRecurringDate={invoice.recurring_frequency ? (invoice.recurring_next_date ?? null) : null}
+          sending={sending}
+          downloading={downloading}
+          onSend={() => handleSend()}
+          onDownload={handleDownloadPDF}
+          onClose={() => setShowCreated(false)}
         />
       )}
 
