@@ -35,6 +35,8 @@ export interface OfferData {
   status: string
   contract_type: string | null
   cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  /** offers.currency — the Confirm Payment dialog pre-selects it. */
+  currency?: string | null
   bundled_pipelines: string[] | null
   view_count: number
   viewed_at: string | null
@@ -564,6 +566,7 @@ function OfferCard({
             contract_type: offer.contract_type,
             bundled_pipelines: offer.bundled_pipelines,
             cost_summary: offer.cost_summary,
+            currency: offer.currency,
           }}
         />
       )}

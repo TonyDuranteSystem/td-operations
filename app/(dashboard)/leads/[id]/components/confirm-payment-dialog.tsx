@@ -4,12 +4,15 @@ import { useState, useEffect, useTransition } from 'react'
 import { X, Loader2, CreditCard, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { confirmPaymentCurrency } from '@/lib/offers/confirm-payment-defaults'
 
 interface OfferData {
   token: string
   contract_type: string | null
   bundled_pipelines: string[] | null
   cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  /** offers.currency when the offer has one — wins over the price text (see confirm-payment-defaults). */
+  currency?: string | null
 }
 
 interface ConfirmPaymentDialogProps {
@@ -105,14 +108,8 @@ export function ConfirmPaymentDialog({
     return null
   })()
 
-  // Derive currency from cost_summary
-  const offerCurrency = (() => {
-    if (!offer?.cost_summary || !Array.isArray(offer.cost_summary)) return 'EUR'
-    for (const section of offer.cost_summary) {
-      if (section.total && section.total.includes('$')) return 'USD'
-    }
-    return 'EUR'
-  })()
+  // Currency: the offer's own recorded currency first, else read from cost_summary
+  const offerCurrency = confirmPaymentCurrency(offer?.currency, offer?.cost_summary)
 
   // Prefill amount + currency from the offer when the dialog opens. The fields
   // stay editable so the admin can override (e.g. a $0-setup contract that was
