@@ -387,6 +387,14 @@ describe("kinds from the waiting-on list", () => {
     expect(krun(jobs, { who: "banana,the_irs" }).shown).toBe(1)
   })
 
+  it("a RETIRED kind with no jobs gets no chip (it would sit dimmed forever); with jobs it keeps its chip", () => {
+    const kinds = assembleWaitKinds([catalogWaitKind("outside", "An outside office", "other"), catalogWaitKind("date", "A date", "date"), catalogWaitKind("old_bank", "Old bank", "other", true)])
+    const none = run([job({ stage: "Two" })], {}, { waitKinds: kinds })
+    expect(none.chips.map(c => c.who)).toEqual(["us", "client", "outside", "date", "none", "unset"])
+    const some = run([job({ service_type: "Zeta", stage: "Bank" })], {}, { waitKinds: kinds, steps: [{ service_type: "Zeta", stage_name: "Bank", stage_order: 1, waiting_on: "old_bank", sla_days: 3, completes_service: false }] })
+    expect(some.chips.find(c => c.who === "old_bank")).toMatchObject({ count: 1 })
+  })
+
   it("with no list given the two seeded kinds apply, so existing callers keep working", () => {
     const m = run([job({ stage: "Three" })])
     expect(m.chips.map(c => c.who)).toEqual(["us", "client", "outside", "date", "none", "unset"])

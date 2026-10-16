@@ -24,8 +24,8 @@ export const UNSET = "unset"
 /** A kind slug, or "unset". */
 export type Who = string
 
-/** Slugs a catalog kind may never use (they are built in, or mean "no setting"). */
-export const RESERVED_WAIT_SLUGS: readonly string[] = ["us", "client", "none", UNSET]
+/** Slugs a catalog kind may never use (they are built in, mean "no setting", or are the key of the Calendar's "Paused" chip). */
+export const RESERVED_WAIT_SLUGS: readonly string[] = ["us", "client", "none", UNSET, "paused"]
 /** The shape of any stored or typed kind slug: lower-case, starts with a letter, short. */
 export const WAIT_SLUG_RE = /^[a-z][a-z0-9_]{0,40}$/
 export const MAX_WHO_FILTERS = 20
@@ -51,7 +51,8 @@ export interface WaitKind {
 /** "The IRS" → "the IRS", "An outside office" → "an outside office", "Banco Sella" → "Banco Sella". */
 export function phraseOf(name: string): string {
   const n = name.trim()
-  return /^(the|an?)\s/i.test(n) ? n.charAt(0).toLowerCase() + n.slice(1) : n
+  // Only the usual capitalised article is lowered ("The IRS" → "the IRS"); "THE BANK" or "Banco Sella" stay as typed.
+  return /^(The|An|A)\s/.test(n) ? n.charAt(0).toLowerCase() + n.slice(1) : n
 }
 
 export function catalogWaitKind(slug: string, name: string, behaviour: "other" | "date", retired = false): WaitKind {

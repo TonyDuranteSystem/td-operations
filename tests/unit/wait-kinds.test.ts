@@ -69,6 +69,9 @@ describe("the built-in and default kinds", () => {
     expect(phraseOf("A date")).toBe("a date")
     expect(phraseOf("Banco Sella")).toBe("Banco Sella")
     expect(phraseOf("Theodora")).toBe("Theodora")
+    // only the usual capitalised article is lowered: an all-caps name stays as typed
+    expect(phraseOf("THE BANK")).toBe("THE BANK")
+    expect(phraseOf("the bank")).toBe("the bank")
     const k = catalogWaitKind("the_irs", "The IRS", "other")
     expect(k).toMatchObject({ chip: "The IRS", group: "Waiting on the IRS", phrase: "the IRS", tip: "Waiting on the IRS", builtin: false, retired: false })
   })
@@ -119,7 +122,8 @@ describe("slugs", () => {
   })
 
   it("reserved and badly shaped slugs are not usable", () => {
-    for (const s of ["us", "client", "none", "unset", "", "1abc", "A", "a b", "a,b", "a~b", "é"]) expect(isUsableKindSlug(s)).toBe(false)
+    // "paused" is the key of the Calendar's built-in Paused chip, so no kind may take it
+    for (const s of ["us", "client", "none", "unset", "paused", "", "1abc", "A", "a b", "a,b", "a~b", "é"]) expect(isUsableKindSlug(s)).toBe(false)
     for (const s of ["the_irs", "outside", "date", "a"]) expect(isUsableKindSlug(s)).toBe(true)
   })
 })

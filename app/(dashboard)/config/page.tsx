@@ -135,12 +135,13 @@ export default async function ConfigPage({
   // Fetch all three in parallel. Each table is small (17 / 56 / ≤100 rows);
   // fetching all three lets the tab nav show live counts without a second
   // round-trip.
+  // The waiting-on kinds are needed only by the Pipeline tab: a read problem there must not take the other tabs down.
   const [sops, pipeline, devTasks, announcements, waitList] = await Promise.all([
     fetchSOPs(),
     fetchPipelineStages(),
     fetchDevTasks(sp.dev_status),
     fetchAnnouncements(),
-    loadWaitKinds(),
+    tab === "pipeline" ? loadWaitKinds() : Promise.resolve(null),
   ])
 
   return (
@@ -164,7 +165,7 @@ export default async function ConfigPage({
       </nav>
 
       {tab === "sops" && <SOPsTab rows={sops} />}
-      {tab === "pipeline" && <PipelineTab rows={pipeline} waitKinds={waitList.kinds} />}
+      {tab === "pipeline" && waitList && <PipelineTab rows={pipeline} waitKinds={waitList.kinds} />}
       {tab === "dev-tasks" && <DevTasksTab rows={devTasks} activeStatus={sp.dev_status ?? "open"} />}
       {tab === "announcements" && <AnnouncementsTab initialRows={announcements} />}
     </div>

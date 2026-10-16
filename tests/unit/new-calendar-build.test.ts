@@ -497,6 +497,17 @@ describe("kinds from the waiting-on list (a kind added later sorts by what it DO
       }
     })
 
+    it("the service chips count with the chosen 'Waiting on' chip applied, so a service chip never promises rows the list will not show", () => {
+      const mixed = [z("Filed"), z("Filed"), job({ stage: "One" }), job({ stage: "One" }), job({ stage: "One" })]
+      // pending: Zeta has 2 on The IRS; Alpha has 3 on the client (default fixture steps)
+      const both = (raw: RawSearchParams) => run(mixed, raw, [], { steps: [...STEPS, ...KSTEPS], waitKinds: KINDS })
+      const all = both({ b: "pending" })
+      expect(all.services.map(c => [c.name, c.count])).toEqual([["Alpha", 3], ["Zeta", 2]])
+      const onIrs = both({ b: "pending", w: "the_irs" })
+      expect(onIrs.services.map(c => [c.name, c.count])).toEqual([["Zeta", 2]])
+      expect(onIrs.rows).toHaveLength(2)
+    })
+
     it("a chosen chip stays visible (so it can be cleared) even when the service filter leaves it empty", () => {
       const m = krun(jobs(), { b: "pending", w: "court_day", s: "Alpha" })
       expect(m.waiting.some(c => c.key === "court_day" && c.count === 0)).toBe(true)

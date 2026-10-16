@@ -46,6 +46,12 @@ describe("no fixed list of kinds in the code", () => {
     }
   })
 
+  it("lib/open-services/wait-kinds.ts is imported by 'use client' editors, so it stays pure: it imports only the shared types file", () => {
+    const code = strip(read("lib/open-services/wait-kinds.ts"))
+    const from = Array.from(code.matchAll(/from\s+["']([^"']+)["']/g)).map(m => m[1])
+    expect(from).toEqual(["@/lib/open-services/types"])
+  })
+
   it("the kinds reach the pure builders and the views as DATA (props/inputs), not as an import of the loader", () => {
     for (const f of [...files("components/open-services"), ...files("components/new-calendar"), "lib/open-services/types.ts", "lib/open-services/params.ts", "lib/new-calendar/types.ts", "lib/new-calendar/params.ts"]) {
       expect(strip(read(f)), f).not.toMatch(/wait-kinds-load|supabase/)
@@ -96,7 +102,8 @@ describe("the manager", () => {
     expect(read("app/(dashboard)/service-catalog/page.tsx")).toContain("<WaitKindsManager />")
     const actions = strip(read("app/(dashboard)/service-catalog/wait-kinds-actions.ts"))
     expect(actions.startsWith('"use server"')).toBe(true)
-    expect((actions.match(/requireAdminActor\(\)/g) ?? []).length).toBeGreaterThanOrEqual(5)
+    // the definition + the five actions (load, add, rename, retire, restore): losing one gate changes the count
+    expect((actions.match(/requireAdminActor\(\)/g) ?? []).length).toBe(6)
   })
 
   it("says plainly that it is not switched on until the database step has run", () => {

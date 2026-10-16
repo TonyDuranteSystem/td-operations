@@ -355,7 +355,10 @@ export function buildViewModel(classified: Classified, params: OpenServicesParam
   const chipCount = new Map<string, number>()
   for (const i of all) if (passesQuery(i) && passesLate(i)) chipCount.set(i.row.who, (chipCount.get(i.row.who) ?? 0) + 1)
   const chips: WhoChip[] = [
-    ...kinds.map(k => ({ who: k.slug, label: k.chip, tip: k.tip, behaviour: k.behaviour as WhoChip["behaviour"], count: chipCount.get(k.slug) ?? 0 })),
+    // A retired kind with no jobs is not worth a chip (it would sit dimmed forever); one that still has jobs keeps its chip.
+    ...kinds
+      .filter(k => !k.retired || (chipCount.get(k.slug) ?? 0) > 0 || whoSet.has(k.slug))
+      .map(k => ({ who: k.slug, label: k.chip, tip: k.tip, behaviour: k.behaviour as WhoChip["behaviour"], count: chipCount.get(k.slug) ?? 0 })),
     { who: UNSET, label: UNSET_LABELS.chip, tip: UNSET_LABELS.tip, behaviour: null, count: chipCount.get(UNSET) ?? 0 },
   ]
   const whoOrder = new Map(chips.map((c, i) => [c.who, i]))

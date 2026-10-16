@@ -52,18 +52,21 @@ export function WaitKindsManager() {
     if (open) void reload()
   }, [open, reload])
 
-  async function run(key: string, call: () => Promise<WaitKindResult>, done: string) {
+  /** Runs one action; true only when it worked, so the form keeps what was typed when it did not. */
+  async function run(key: string, call: () => Promise<WaitKindResult>, done: string): Promise<boolean> {
     setBusy(key)
     try {
       const res = await call()
       if ('error' in res) {
         toast.error(res.error)
-        return
+        return false
       }
       toast.success(done)
       await reload()
+      return true
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Something went wrong. Nothing was changed.')
+      return false
     } finally {
       setBusy(null)
     }
@@ -128,7 +131,7 @@ export function WaitKindsManager() {
                           <button
                             type="button"
                             disabled={busy !== null}
-                            onClick={() => run(`rename:${r.slug}`, () => renameWaitKind({ slug: r.slug, name: editName }), 'Renamed.').then(() => setEditing(null))}
+                            onClick={() => run(`rename:${r.slug}`, () => renameWaitKind({ slug: r.slug, name: editName }), 'Renamed.').then(ok => { if (ok) setEditing(null) })}
                             className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
                           >
                             Save
@@ -183,7 +186,7 @@ export function WaitKindsManager() {
                   className="mt-4 space-y-2 rounded-md border p-3"
                   onSubmit={e => {
                     e.preventDefault()
-                    void run('add', () => addWaitKind({ name, behaviour }), 'Added.').then(() => setName(''))
+                    void run('add', () => addWaitKind({ name, behaviour }), 'Added.').then(ok => { if (ok) setName('') })
                   }}
                 >
                   <div className="text-sm font-medium">Add a kind</div>

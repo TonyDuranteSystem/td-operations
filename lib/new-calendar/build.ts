@@ -292,15 +292,6 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
   const stepView = params.s !== "" && params.st !== "" && params.b !== "closed"
   const active: Bucket | null = stepView ? null : params.b
 
-  // Service chips always describe the list the visitor chose (so choosing a step does not rebuild the row of chips).
-  const services = countBy(
-    params.b === "closed"
-      ? closedQ.map(c => c.row.serviceType)
-      : openQ.filter(e => e.bucket === params.b).map(e => e.item.row.serviceType),
-  )
-
-  const steps = params.s !== "" && params.b !== "closed" ? stepChips(input, kinds, params.s, openQ) : []
-
   // The "Waiting on" row: only on the Pending list. One chip per kind of wait that has jobs there (plus the paused ones), counted with the
   // search and the service applied but NOT the chip itself. A chip typed in the address that is not a real kind is ignored.
   const onPending = !stepView && params.b === "pending"
@@ -319,6 +310,17 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
         { key: PAUSED_KEY, label: "Paused", count: waitCounts.get(PAUSED_KEY) ?? 0, behaviour: null },
       ].filter(c => c.count > 0 || c.key === waitFilter)
     : []
+
+  // Service chips always describe the list the visitor chose (so choosing a step does not rebuild the row of chips).
+  const services = countBy(
+    params.b === "closed"
+      ? closedQ.map(c => c.row.serviceType)
+      : openQ.filter(e => e.bucket === params.b && (waitFilter === "" || keyOf(e) === waitFilter)).map(e => e.item.row.serviceType),
+  )
+
+  const steps = params.s !== "" && params.b !== "closed" ? stepChips(input, kinds, params.s, openQ) : []
+
+
 
   let rows: CalendarRow[]
   let total: number

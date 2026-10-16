@@ -94,7 +94,9 @@ export async function addWaitKind(input: { name: string; behaviour: string }): P
     if (input.behaviour !== "other" && input.behaviour !== "date") {
       return { ok: false, error: 'Choose what the kind means: "waits on someone else" or "waits for a date".' }
     }
-    const slug = slugFromName(name)
+    let slug = slugFromName(name)
+    // A slug must start with a letter ("1099 filing office" → k_1099_filing_office).
+    if (/^[0-9]/.test(slug)) slug = `k_${slug}`.slice(0, 41)
     if (!isUsableKindSlug(slug)) {
       return { ok: false, error: `"${name}" cannot be used as a name here (it is reserved, or has no letters or digits). Pick another name.` }
     }
@@ -135,6 +137,10 @@ export async function renameWaitKind(input: { slug: string; name: string }): Pro
     const name = (input.name ?? "").trim().replace(/\s+/g, " ")
     if (name.length < 2 || name.length > 60) return { ok: false, error: "Give the kind a name of 2 to 60 characters." }
     if (name === entry.display_name) return { ok: true }
+    // Two kinds with the same name would give two identical chips: refuse by NAME, like adding (retired ones included, this one excluded).
+    const all = await listEntries(WAIT_KINDS_CATALOG, { includeDeprecated: true })
+    const clash = all.find(e => e.slug !== entry.slug && (e.display_name ?? "").trim().replace(/\s+/g, " ").toLowerCase() === name.toLowerCase())
+    if (clash) return { ok: false, error: `"${clash.display_name}" is already in the list${clash.status === "active" ? "" : " (retired)"}. Pick another name.` }
     await renameEntry(entry.id, name, "Renamed from the Service Catalog (waiting-on list)", actor)
     revalidatePath("/service-catalog")
     revalidatePath("/new-calendar")

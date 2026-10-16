@@ -87,6 +87,11 @@ describe("addWaitKind", () => {
     expect(data).toMatchObject({ slug: "the_irs", display_name: "The IRS", status: "active", metadata: { behaviour: "other" } })
   })
 
+  it("a name that starts with a digit gets a letter prefix instead of a wrong refusal", async () => {
+    expect(await addWaitKind({ name: "1099 filing office", behaviour: "other" })).toEqual({ ok: true })
+    expect((h.calls[0] as [string, string, Record<string, unknown>])[2]).toMatchObject({ slug: "k_1099_filing_office", display_name: "1099 filing office" })
+  })
+
   it("only 'other' and 'date' can be chosen; a built-in behaviour cannot be created here", async () => {
     for (const b of ["ours", "client", "none", "", "banana"]) {
       expect(await addWaitKind({ name: "A kind", behaviour: b }), b).toMatchObject({ ok: false })
@@ -99,6 +104,7 @@ describe("addWaitKind", () => {
     expect(await addWaitKind({ name: "Us", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "Unset", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "!!!", behaviour: "other" })).toMatchObject({ ok: false })
+    expect(await addWaitKind({ name: "Paused", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "An Outside Office", behaviour: "other" })).toMatchObject({ ok: false, error: expect.stringContaining("already in the list") })
     expect(await addWaitKind({ name: "Old bank", behaviour: "other" })).toMatchObject({ ok: false, error: expect.stringContaining("Restore") })
     expect(h.calls).toEqual([])
@@ -113,6 +119,13 @@ describe("rename, retire, restore", () => {
     expect(await renameWaitKind({ slug: "outside", name: "An outside office" })).toEqual({ ok: true })
     expect(h.calls).toEqual([])
     expect(await renameWaitKind({ slug: "outside", name: "x" })).toMatchObject({ ok: false })
+  })
+
+  it("a rename to a name another kind already has (retired ones included) is refused, like adding", async () => {
+    expect(await renameWaitKind({ slug: "outside", name: "old bank" })).toMatchObject({ ok: false, error: expect.stringContaining("already in the list") })
+    expect(h.calls).toEqual([])
+    // renaming a kind to its own name with other capitalisation is fine
+    expect(await renameWaitKind({ slug: "outside", name: "AN OUTSIDE OFFICE" })).toEqual({ ok: true })
   })
 
   it("the built-in kinds cannot be touched here, and an unknown kind is refused", async () => {

@@ -1,7 +1,8 @@
 -- UNDO for 20261016-1200-step-wait-kinds-catalog.sql.
 -- 1. Any step that uses a kind added after the seed is re-pointed to its behaviour's seed kind (date -> 'date', anything else -> 'outside'),
 --    because the old 5-value CHECK cannot hold a custom slug. 2. The shape rule is replaced by the old CHECK.
--- The catalog rows are left in place (harmless: nothing reads them once the old code is back); deleting them is optional.
+-- The catalog rows are left in place (harmless once the OLD code is back, since nothing reads them). ROLL THE CODE BACK TOGETHER WITH THIS UNDO: with the new
+-- code still deployed the Service Catalog's "Waiting-on list" would stay switched on and offer kinds the restored 5-value CHECK refuses.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT set_config('request.headers', '{"x-td-actor":"wait-kinds-undo"}', true);
