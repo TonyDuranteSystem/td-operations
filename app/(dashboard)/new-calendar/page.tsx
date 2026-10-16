@@ -8,6 +8,7 @@ import { firstNameOf, greetingWord } from '@/lib/new-calendar/greeting'
 import { parseParams, type RawSearchParams } from '@/lib/new-calendar/params'
 import type { CalendarModel } from '@/lib/new-calendar/types'
 import { NewCalendarView } from '@/components/new-calendar/new-calendar-view'
+import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 
 /**
  * New Calendar (dev job 40235e3c, child of be7da01a): the day-by-day work list the team opens every morning — what is on us,
@@ -50,11 +51,16 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   if (failed) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
+        {/* The failed screen keeps the page's own retry (a refresh every minute), so a hiccup in one background read never leaves it stuck. */}
+        <LiveRefresh />
+        <h1 className="text-2xl font-semibold tracking-tight">Calendar</h1>
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-          <p className="font-medium">Could not load the New Calendar.</p>
-          <p className="mt-1">Nothing was changed, and nothing is hidden or fixed by this page. Reload to try again.</p>
-          <p className="mt-2"><Link href="/new-calendar?tab=news" prefetch={false} className="underline">What&apos;s New</Link> does not depend on this and can still be opened.</p>
+          <p className="font-medium">Could not load the Calendar.</p>
+          <p className="mt-1">Nothing was changed, and nothing is hidden or fixed by this page. It will try again by itself in a minute, or reload.</p>
+          <p className="mt-2">
+            <Link href="/calendar" prefetch={false} className="underline">Renewals and annual reports (Mark Filed)</Link> and{' '}
+            <Link href="/new-calendar?tab=news" prefetch={false} className="underline">What&apos;s New</Link> do not depend on this and can still be opened.
+          </p>
         </div>
       </div>
     )

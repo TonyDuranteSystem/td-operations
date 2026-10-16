@@ -108,6 +108,8 @@ export function WhatsNewTab() {
                   contactId={selected.contactId}
                   cardAccountId={selected.accountId}
                   showMoneyActions={false}
+                  openWorkspaceInWindow
+                  workspaceTitle={selected.name}
                 />
               </>
             ) : (

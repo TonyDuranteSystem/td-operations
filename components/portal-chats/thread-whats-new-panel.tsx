@@ -21,6 +21,7 @@ import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
 import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import type { Task } from '@/lib/types'
 
 const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
@@ -93,6 +94,8 @@ interface ApiNote {
   topic: string | null
   /** Source-entity ref from the marker, e.g. "payments:uuid". Drives the Open deep-link. */
   src: string | null
+  /** The company's only open job, for a note about the company's own work; null otherwise. Used only when `openWorkspaceInWindow` is on. */
+  job_id?: string | null
   text: string
   /** Suggested next step for "Open card" — resolved server-side (per-event
    *  override from Board Settings → code default). Editable, no longer hardcoded. */
@@ -108,6 +111,8 @@ export function ThreadWhatsNewPanel({
   cardAccountId,
   onOpenCard,
   showMoneyActions = true,
+  openWorkspaceInWindow = false,
+  workspaceTitle,
 }: {
   /** Notes/dot SCOPE. Must mirror the conversation-list dot: account-level thread
    *  → its account_id; contact-level thread → null here (so notes load by contact_id).
@@ -123,6 +128,11 @@ export function ThreadWhatsNewPanel({
   onOpenCard?: (note: { noteId: string; label: string }) => void
   /** The money-action buttons under each non-workflow note. On by default (Portal Chats); off in the Calendar's tab. */
   showMoneyActions?: boolean
+  /** The Calendar's What's New tab: a note's "Open" goes straight to the job's workspace in a floating window (when the note names one job)
+   *  instead of the client page in a new tab. Off by default, so Portal Chats keeps its behaviour. */
+  openWorkspaceInWindow?: boolean
+  /** The window's title for that workspace (the client's name). */
+  workspaceTitle?: string
 }) {
   const qc = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -134,9 +144,9 @@ export function ThreadWhatsNewPanel({
 
   // A failed read must NOT look like "Nothing new" (R099): surface the server's own message.
   const { data: notes, isLoading, error: notesError } = useQuery<ApiNote[]>({
-    queryKey: ['thread-whats-new', scopeKey, limit],
+    queryKey: ['thread-whats-new', scopeKey, limit, openWorkspaceInWindow],
     queryFn: async () => {
-      const r = await fetch(`${WHATS_NEW_API}?notes=true&${param}&limit=${limit}`)
+      const r = await fetch(`${WHATS_NEW_API}?notes=true&${param}&limit=${limit}${openWorkspaceInWindow ? '&want_job=true' : ''}`)
       const d = (await r.json().catch(() => ({}))) as { notes?: ApiNote[]; error?: string }
       if (!r.ok) throw new Error(d.error || "Could not read What's New. Please try again.")
       return d.notes || []
@@ -258,6 +268,22 @@ export function ThreadWhatsNewPanel({
                       <div className="shrink-0 flex items-center gap-1">
                         {/* Deep-link to the related entity (payment / document / SS-4).
                             Opens in a new tab so the triage feed stays put. */}
+                        {openWorkspaceInWindow && note.job_id && (
+                          <FastTooltip label="Open this job's workspace in a window">
+                            <OpenInWindowLink
+                              href={`/flows/${note.job_id}`}
+                              title={workspaceTitle ?? 'Workspace'}
+                              aria-label="Open this job's workspace in a window"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
+                            >
+                              <ExternalLink className="h-3 w-3" /> Open workspace
+                            </OpenInWindowLink>
+                          </FastTooltip>
+                        )}
+                        {/* The related record's own page (payment / document / SS-4). Kept beside the workspace button: a document note
+                            (a passport, a tax paper) may not belong to the company's one open job, so the record is always one click away. */}
                         {deepLink && (
                           <FastTooltip label="Open the related record">
                             <a
@@ -267,7 +293,7 @@ export function ThreadWhatsNewPanel({
                               className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
                               aria-label="Open the related record"
                             >
-                              <ExternalLink className="h-3 w-3" /> Open
+                              <ExternalLink className="h-3 w-3" /> {openWorkspaceInWindow && note.job_id ? 'Record' : 'Open'}
                             </a>
                           </FastTooltip>
                         )}

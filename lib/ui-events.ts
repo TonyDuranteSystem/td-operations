@@ -13,6 +13,9 @@
  *  - 'todo'  — To-Do / action-board cards or columns changed
  *  - 'tasks' — CRM tasks changed
  *  - 'notes' — staff sticky notes created/edited/shared/snoozed/archived
+ *  - 'jobs'  — a service job was created or changed (its step, status, dates). Emitted by a DATABASE TRIGGER on service_deliveries
+ *              (migration 20261016-1500-jobs-live-event.sql), so every writer is covered, not only the code paths we remember to call this from.
+ *              Payload: none. Heard by the New Calendar (components/new-calendar/live-refresh.tsx), which re-renders itself.
  *  - 'whatsapp' — the WhatsApp Inbox changed: a message arrived, a reply's status changed, a phone reaction was applied,
  *                 media became playable, chat names changed. Emitted by app/api/wa-bridge/[channelId]/route.ts.
  *                 The listener refreshes only the WhatsApp list + open chat (lib/ui-event-whatsapp-keys.ts). Payload: none, EXCEPT
@@ -27,7 +30,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
 
-export type UiEventKind = "todo" | "tasks" | "notes" | "whatsapp"
+export type UiEventKind = "todo" | "tasks" | "notes" | "whatsapp" | "jobs"
 
 export async function emitUiEvent(
   kind: UiEventKind,

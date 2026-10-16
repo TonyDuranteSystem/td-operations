@@ -28,6 +28,7 @@ import {
   MAX_LIMIT,
   PAUSED_KEY,
   type Bucket,
+  type ListKey,
   type CalendarModel,
   type CalendarRow,
   type Pill,
@@ -118,6 +119,9 @@ export function pillLabelOf(row: Row, bucket: Bucket): string {
   if (bucket === "other") return "Not sorted"
   return "Closed"
 }
+
+/** The order of the open buckets inside "All open". */
+const BUCKET_RANK: Record<Bucket, number> = { work: 0, pending: 1, other: 2, closed: 3 }
 
 function pillOf(row: Row, bucket: Bucket): Pill {
   if (bucket === "work" && row.lateBy !== null) return "late"
@@ -282,7 +286,8 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
 
   const openQ = open.filter(e => passesQuery(e.item.nameNorm))
   const closedQ = closed.filter(c => passesQuery(c.nameNorm))
-  const counts: Record<Bucket, number> = {
+  const counts: Record<ListKey, number> = {
+    all: openQ.length,
     work: openQ.filter(e => e.bucket === "work").length,
     pending: openQ.filter(e => e.bucket === "pending").length,
     other: openQ.filter(e => e.bucket === "other").length,
@@ -291,10 +296,12 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
 
   // A step chosen on the chips shows EVERY open job on that step, whichever list it is in; it needs a service and an open list.
   const stepView = params.s !== "" && params.st !== "" && params.b !== "closed"
-  const active: Bucket | null = stepView ? null : params.b
+  const active: ListKey | null = stepView ? null : params.b
 
   // The "Waiting on" row: only on the Pending list. One chip per kind of wait that has jobs there (plus the paused ones), counted with the
   // search and the service applied but NOT the chip itself. A chip typed in the address that is not a real kind is ignored.
+  // Which open jobs the chosen list holds ("all" = every open job; the others = that bucket).
+  const inList = (e: OpenEntry) => params.b === "all" || e.bucket === params.b
   const onPending = !stepView && params.b === "pending"
   const pendingScope = onPending ? openQ.filter(e => e.bucket === "pending" && (params.s === "" || sameText(e.item.row.serviceType, params.s))) : []
   const keyOf = (e: OpenEntry) => (e.item.row.followUp === "parked" ? PAUSED_KEY : e.item.row.who)
@@ -316,7 +323,7 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
   const services = countBy(
     params.b === "closed"
       ? closedQ.map(c => c.row.serviceType)
-      : openQ.filter(e => e.bucket === params.b && (waitFilter === "" || keyOf(e) === waitFilter)).map(e => e.item.row.serviceType),
+      : openQ.filter(e => inList(e) && (waitFilter === "" || keyOf(e) === waitFilter)).map(e => e.item.row.serviceType),
   )
 
   const steps = params.s !== "" && params.b !== "closed" ? stepChips(input, kinds, params.s, openQ) : []
@@ -339,8 +346,9 @@ export function buildNewCalendar(input: NewCalendarInput, params: NewCalendarPar
     rows = picked.slice(0, params.n).map(c => c.row)
   } else {
     const picked = openQ
-      .filter(e => e.bucket === params.b && (params.s === "" || sameText(e.item.row.serviceType, params.s)) && (waitFilter === "" || keyOf(e) === waitFilter))
-      .sort((a, b) => compareItems(a.item, b.item))
+      .filter(e => inList(e) && (params.s === "" || sameText(e.item.row.serviceType, params.s)) && (waitFilter === "" || keyOf(e) === waitFilter))
+      // In "All open" the jobs that are on us come first, then the ones that wait, then the ones not sorted; inside each, the usual order.
+      .sort((a, b) => BUCKET_RANK[a.bucket] - BUCKET_RANK[b.bucket] || compareItems(a.item, b.item))
     total = picked.length
     rows = picked.slice(0, params.n).map(toOpenRow)
   }
