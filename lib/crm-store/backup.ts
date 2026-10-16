@@ -406,7 +406,8 @@ export async function backupOwner(
         // The company's "2. Contacts" is only a VIEW of its people (no files, no sub-folders — the database refuses both). Its Drive twin is
         // usually the very folder a person's storage already adopted as their own contact folder, and a Drive folder can be claimed by one
         // storage only: adopting it twice stopped the whole company's backup (15 companies, 2026-10-15). Nothing to mirror, so skip it.
-        if (child.kind === "contacts") continue
+        // FRESH mode never adopts anything, so there it is made as our own EMPTY folder: the new backup keeps the CRM's structure.
+        if (child.kind === "contacts" && !fresh) continue
         const ref = snap.backupRefs.get(child.id)
         if (child.trashed_at) {
           if (ref && !ref.drive_path?.adopted && ref.drive_path?.area !== "protected") {   // OUR empty mirror → protected area

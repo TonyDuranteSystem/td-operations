@@ -148,6 +148,26 @@ describe("fresh backup mode — a new folder, never the old Drive", () => {
     w.add({ id: "old-articles", name: "Articles.pdf", parents: ["old-comp"], size: "4" })
   }
 
+  it("a company's '2. Contacts' view is made as an EMPTY folder of our own in the new backup (structure like the CRM), never adopting the old one", async () => {
+    const snap = companySnap({
+      folders: [
+        { id: "root", parent_id: null, name: "Acme LLC", trashed_at: null, kind: "root" },
+        { id: "comp", parent_id: "root", name: "1. Company", trashed_at: null, kind: "company" },
+        { id: "cont", parent_id: "root", name: "2. Contacts", trashed_at: null, kind: "contacts" },
+      ],
+    })
+    const w = world(snap)
+    oldTree(w)
+    w.add({ id: "old-cont", name: "2. Contacts", parents: ["old-acme"] })
+    expect(await go(w, { config: FRESH })).toMatchObject({ status: "done" })
+    const mine = Array.from(w.items.values()).find((i) => i.name === "2. Contacts" && i.id !== "old-cont")!
+    const root = Array.from(w.items.values()).find((i) => i.name === "Acme LLC" && i.id !== "old-acme")!
+    expect(mine.parents).toEqual([root.id])
+    expect(Array.from(w.items.values()).filter((i) => i.parents?.includes(mine.id))).toHaveLength(0)
+    expect(w.items.get("old-cont")).toMatchObject({ parents: ["old-acme"] })
+    expect(w.refs.get("cont")?.drive_path.adopted).toBe(false)
+  })
+
   it("never adopts the company's old Drive folder or its sub-folders: it makes its own under the new Companies folder, and uploads every file — even an imported original", async () => {
     const imp = new Map([["f1", { external_id: "old-articles", backed_up_sha256: "a".repeat(64), drive_path: {}, status: "ok" }]])
     const w = world(companySnap(), imp)
