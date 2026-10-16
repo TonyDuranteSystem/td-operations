@@ -83,7 +83,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // Source of truth: offers table — fetch ALL versions for this lead
   const { data: allOffers } = await supabase
     .from('offers')
-    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes, version, superseded_by')
+    .select('token, status, contract_type, language, offer_date, selected_services, bundled_pipelines, cost_summary, currency, referrer_name, referrer_type, view_count, viewed_at, created_at, admin_notes, version, superseded_by')
     .eq('lead_id', params.id)
     .order('version', { ascending: false })
     .order('created_at', { ascending: false })

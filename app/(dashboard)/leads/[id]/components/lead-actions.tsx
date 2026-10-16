@@ -30,6 +30,7 @@ interface OfferData {
   contract_type: string | null
   bundled_pipelines: string[] | null
   cost_summary: Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null
+  currency?: string | null
 }
 
 interface ActivationData {

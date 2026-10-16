@@ -237,6 +237,8 @@ interface OfferRecord {
   selected_package_key: string | null
   package_locked_at: string | null
   contract_version?: string | null
+  /** offers.currency — pre-selected by the Confirm Payment dialog. */
+  currency?: string | null
 }
 
 interface PendingActivationRecord {
@@ -1121,6 +1123,7 @@ function QuickActionsBar({
             token: paymentOffer.token,
             contract_type: paymentOffer.contract_type,
             bundled_pipelines: paymentOffer.bundled_pipelines,
+            currency: paymentOffer.currency ?? null,
             cost_summary: (paymentOffer.cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
           } : null}
         />
