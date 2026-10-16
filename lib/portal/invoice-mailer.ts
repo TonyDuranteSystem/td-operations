@@ -23,10 +23,20 @@ export function invoiceFromAddress(): string {
 /** The address used by the original Gmail path. */
 export const GMAIL_FROM_ADDRESS = 'support@tonydurante.us'
 
-/** Resend only when the setting asks for it AND a key exists; anything else keeps today's Gmail path. */
-export function resolveInvoiceSender(setting: unknown, hasResendKey: boolean): InvoiceSender {
-  const v = typeof setting === 'string' ? setting : (setting && typeof setting === 'object' ? (setting as { sender?: unknown }).sender : null)
-  return v === 'resend' && hasResendKey ? 'resend' : 'gmail'
+/**
+ * Resend only when the setting asks for it AND a key exists; anything else keeps today's Gmail path.
+ * The setting is 'resend' (every company) or { sender: 'resend', account_ids: [...] } to start with chosen companies:
+ * a company not on the list stays on Gmail. A list that is empty or not a list of ids means nobody (fails closed).
+ */
+export function resolveInvoiceSender(setting: unknown, hasResendKey: boolean, accountId?: string | null): InvoiceSender {
+  if (!hasResendKey) return 'gmail'
+  if (setting === 'resend') return 'resend'
+  if (setting && typeof setting === 'object' && (setting as { sender?: unknown }).sender === 'resend') {
+    const ids = (setting as { account_ids?: unknown }).account_ids
+    if (ids === undefined) return 'resend'
+    return Array.isArray(ids) && !!accountId && ids.includes(accountId) ? 'resend' : 'gmail'
+  }
+  return 'gmail'
 }
 
 export function fromAddressFor(sender: InvoiceSender): string {

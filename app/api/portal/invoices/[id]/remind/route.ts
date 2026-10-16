@@ -127,7 +127,7 @@ export async function POST(
     </div>
   `
 
-  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY)
+  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY, invoice.account_id)
   try {
     // The tracking row is the reminder log the throttle above reads, and it is written first so two quick clicks
     // cannot both pass. If the send fails it is removed again so a retry is not blocked.

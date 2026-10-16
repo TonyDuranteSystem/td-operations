@@ -234,42 +234,6 @@ export async function markInvoiceAsPaid(invoiceId: string, paidDate: string): Pr
   })
 }
 
-/**
- * "Send from my own email": the client sent the invoice from their own mailbox, so nothing is emailed by us; this only
- * moves a Draft to Sent (a clean PDF from then on). Same guard as the Send route: it only flips a Draft, and two quick
- * clicks cannot both write. An invoice that is already past Draft is left exactly as it is.
- */
-export async function markInvoiceSentManually(invoiceId: string): Promise<ActionResult<{ status: string }>> {
-  const access = await authorizeInvoice(invoiceId)
-  if ('error' in access) return deny(access)
-
-  return safeAction(async () => {
-    const { data: inv } = await supabaseAdmin
-      .from('client_invoices')
-      .select('status')
-      .eq('id', invoiceId)
-      .eq('account_id', access.accountId)
-      .maybeSingle()
-    if (!inv) throw new Error('Invoice not found')
-    if (inv.status !== 'Draft') return { status: String(inv.status) }
-
-    const { data: flipped, error } = await supabaseAdmin
-      .from('client_invoices')
-      .update({ status: 'Sent', updated_at: new Date().toISOString() })
-      .eq('id', invoiceId)
-      .eq('account_id', access.accountId)
-      .eq('status', 'Draft')
-      .select('status')
-    if (error) throw new Error('The invoice could not be marked as sent. Please try again.')
-    revalidatePath('/portal/invoices')
-    void flipped // zero rows just means someone else already moved it out of Draft; the invoice is Sent either way
-    return { status: 'Sent' }
-  }, {
-    action_type: 'update', table_name: 'client_invoices', record_id: invoiceId,
-    summary: 'Invoice marked as sent (sent by the client from their own email)',
-  })
-}
-
 export async function recordPartialPayment(
   invoiceId: string,
   amountPaid: number,
