@@ -38,6 +38,14 @@ async function main() {
     ck("4 no folder was adopted", refs.length > 0 && refs.every((x) => x.adopted === "false"), refs)
     const st = (await q("select first_backup_at is not null done, consecutive_failures from store_backup_state where owner_id=$1", [owner]))[0]
     ck("5 the storage's first backup is recorded", st?.done === true && st.consecutive_failures === 0, st)
+    const contactsView = (await q("select id from store_folders where owner_id=$1 and kind='contacts' and trashed_at is null", [owner])).length
+    if (contactsView) {
+      const find = async (id: string, depth: number): Promise<boolean> => {
+        for (const k of await kidsOf(id)) { if (k.name === "2. Contacts") return true; if (depth > 0 && (await find(k.id, depth - 1))) return true }
+        return false
+      }
+      ck("5b the CRM's '2. Contacts' exists in the new backup as an empty folder", await find(companies.id, 3))
+    } else console.log("SKIP 5b (this storage has no Contacts view)")
     const r2 = await backupOwner(owner, { config: cfg, force: true })
     ck("6 a second run changes nothing", r2.status === "done" && r2.uploaded === 0 && r2.updated === 0 && r2.moved === 0 && r2.recreated === 0, r2)
   } finally {
