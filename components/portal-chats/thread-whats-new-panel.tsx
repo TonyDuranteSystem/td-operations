@@ -268,7 +268,7 @@ export function ThreadWhatsNewPanel({
                       <div className="shrink-0 flex items-center gap-1">
                         {/* Deep-link to the related entity (payment / document / SS-4).
                             Opens in a new tab so the triage feed stays put. */}
-                        {openWorkspaceInWindow && note.job_id ? (
+                        {openWorkspaceInWindow && note.job_id && (
                           <FastTooltip label="Open this job's workspace in a window">
                             <OpenInWindowLink
                               href={`/flows/${note.job_id}`}
@@ -281,7 +281,10 @@ export function ThreadWhatsNewPanel({
                               <ExternalLink className="h-3 w-3" /> Open workspace
                             </OpenInWindowLink>
                           </FastTooltip>
-                        ) : deepLink && (
+                        )}
+                        {/* The related record's own page (payment / document / SS-4). Kept beside the workspace button: a document note
+                            (a passport, a tax paper) may not belong to the company's one open job, so the record is always one click away. */}
+                        {deepLink && (
                           <FastTooltip label="Open the related record">
                             <a
                               href={deepLink}
@@ -290,7 +293,7 @@ export function ThreadWhatsNewPanel({
                               className="flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:text-blue-900 border border-blue-200 rounded px-2 py-0.5 bg-white"
                               aria-label="Open the related record"
                             >
-                              <ExternalLink className="h-3 w-3" /> Open
+                              <ExternalLink className="h-3 w-3" /> {openWorkspaceInWindow && note.job_id ? 'Record' : 'Open'}
                             </a>
                           </FastTooltip>
                         )}

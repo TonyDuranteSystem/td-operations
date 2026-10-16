@@ -42,8 +42,8 @@ describe("the page", () => {
     expect(code).toContain("Sentry.captureException(err")
   })
 
-  it("has its own loading and error screens, and nothing else in its folder (no route handler, no layout)", () => {
-    expect(ROUTE_DIR.sort()).toEqual(["error.tsx", "loading.tsx", "page.tsx"])
+  it("has its own loading, error and not-found screens, and nothing else in its folder (no route handler, no layout)", () => {
+    expect(ROUTE_DIR.sort()).toEqual(["error.tsx", "loading.tsx", "not-found.tsx", "page.tsx"])
     expect(read("app/(dashboard)/new-calendar/error.tsx")).toContain("Nothing was changed")
   })
 })
@@ -270,6 +270,12 @@ describe("the workspace opens in a floating window, and the page updates by itse
     expect(read("app/(dashboard)/new-calendar/error.tsx")).toContain('href="/calendar"')
   })
 
+  it("a 'not found' for this route keeps the retry and the way to renewals (an unreadable setting must not become a permanent 404)", () => {
+    const nf = read("app/(dashboard)/new-calendar/not-found.tsx")
+    expect(nf).toContain("<LiveRefresh />")
+    expect(nf).toContain('href="/calendar"')
+  })
+
   it("the live pieces are import-pure: the rules file imports nothing; the component imports only the rules, react and next/navigation", () => {
     expect(importsOf(read("lib/new-calendar/live.ts"))).toEqual([])
     expect(importsOf(read("components/new-calendar/live-refresh.tsx")).sort()).toEqual(["@/lib/new-calendar/live", "next/navigation", "react"].sort())
@@ -287,7 +293,8 @@ describe("the workspace opens in a floating window, and the page updates by itse
 
   it("the live-event trigger migration is wrapped so it can never block a job write, and is statement-level with an undo", () => {
     const up = read("scripts/migrations/20261016-1500-jobs-live-event.sql")
-    expect(up).toMatch(/EXCEPTION WHEN OTHERS THEN\s+NULL/)
+    expect(up).toMatch(/EXCEPTION WHEN OTHERS THEN[\s\S]*RAISE WARNING/)
+    expect(up).toMatch(/REVOKE ALL ON FUNCTION public.emit_jobs_ui_event\(\) FROM PUBLIC, anon, authenticated/)
     expect(up).toMatch(/FOR EACH STATEMENT/)
     expect(up).toMatch(/AFTER DELETE ON public.service_deliveries/)
     expect(up).not.toMatch(/FOR EACH ROW/)

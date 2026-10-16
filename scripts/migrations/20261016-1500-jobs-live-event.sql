@@ -22,10 +22,13 @@ BEGIN
   BEGIN
     INSERT INTO public.ui_events (kind, payload) VALUES ('jobs', NULL);
   EXCEPTION WHEN OTHERS THEN
-    NULL; -- a live-update signal must never block a job write
+    -- a live-update signal must never block a job write; leave a trace in the database log so a silent failure can be found
+    RAISE WARNING 'emit_jobs_ui_event: signal not written: %', SQLERRM;
   END;
   RETURN NULL;
 END $$;
+
+REVOKE ALL ON FUNCTION public.emit_jobs_ui_event() FROM PUBLIC, anon, authenticated;
 
 DROP TRIGGER IF EXISTS trg_service_deliveries_ui_event_ins ON public.service_deliveries;
 CREATE TRIGGER trg_service_deliveries_ui_event_ins
