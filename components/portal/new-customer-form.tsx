@@ -30,7 +30,7 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.first_name.trim() && !form.company_name.trim()) {
-      toast.error('First name or company name is required')
+      toast.error(t('custForm.nameRequired'))
       return
     }
 
@@ -64,10 +64,10 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
         const data = await res.json()
         throw new Error(data.error || 'Failed to create')
       }
-      toast.success('Customer created')
+      toast.success(t('invForm.customerCreated'))
       router.push('/portal/customers')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create customer')
+      toast.error(err instanceof Error ? err.message : t('invForm.customerFailed'))
     } finally {
       setSaving(false)
     }
@@ -79,38 +79,38 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
         <Link href="/portal/customers" className="p-2 rounded-lg hover:bg-zinc-100">
           <ArrowLeft className="h-5 w-5" />
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">New Customer</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{t('custForm.title')}</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border shadow-sm p-6 space-y-4">
         <div className="grid grid-cols-2 gap-4">
-          <Field label="First Name" value={form.first_name} onChange={v => update('first_name', v)} />
-          <Field label="Last Name" value={form.last_name} onChange={v => update('last_name', v)} />
+          <Field label={t('customers.firstName')} value={form.first_name} onChange={v => update('first_name', v)} />
+          <Field label={t('customers.lastName')} value={form.last_name} onChange={v => update('last_name', v)} />
         </div>
-        <Field label="Company Name" value={form.company_name} onChange={v => update('company_name', v)} placeholder="Leave empty for individual customers" />
+        <Field label={t('custForm.companyName')} value={form.company_name} onChange={v => update('company_name', v)} placeholder={t('custForm.companyPlaceholder')} />
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Email" value={form.email} onChange={v => update('email', v)} type="email" />
-          <Field label="Phone" value={form.phone} onChange={v => update('phone', v)} type="tel" />
+          <Field label={t('customers.email')} value={form.email} onChange={v => update('email', v)} type="email" />
+          <Field label={t('customers.phone')} value={form.phone} onChange={v => update('phone', v)} type="tel" />
         </div>
-        <Field label="Address" value={form.address} onChange={v => update('address', v)} placeholder="Street address" />
+        <Field label={t('customers.address')} value={form.address} onChange={v => update('address', v)} placeholder={t('custForm.streetPlaceholder')} />
         <div className="grid grid-cols-3 gap-4">
-          <Field label="City" value={form.city} onChange={v => update('city', v)} />
-          <Field label="Region/State" value={form.region} onChange={v => update('region', v)} />
-          <Field label="Country" value={form.country} onChange={v => update('country', v)} />
+          <Field label={t('customers.city')} value={form.city} onChange={v => update('city', v)} />
+          <Field label={t('custForm.regionState')} value={form.region} onChange={v => update('region', v)} />
+          <Field label={t('customers.country')} value={form.country} onChange={v => update('country', v)} />
         </div>
         <Field label={t('customers.vat')} value={form.vat_number} onChange={v => update('vat_number', v)} hint={t('customers.vatHint')} />
         <div>
-          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Notes</label>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">{t('customers.notes')}</label>
           <textarea value={form.notes} onChange={e => update('notes', e.target.value)} rows={2}
             className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
         </div>
 
         <div className="flex justify-end gap-3 pt-2">
-          <Link href="/portal/customers" className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50">Cancel</Link>
+          <Link href="/portal/customers" className="px-4 py-2.5 text-sm border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</Link>
           <button type="submit" disabled={saving}
             className="flex items-center gap-2 px-5 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Create Customer
+            {t('custForm.create')}
           </button>
         </div>
       </form>

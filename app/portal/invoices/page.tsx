@@ -1,6 +1,6 @@
 export const dynamic = 'force-dynamic'
 
-import { salesTotals, formatMoneyMap, sumExpensesByCurrency } from '@/lib/portal/invoice-totals'
+import { salesTotals, formatMoneyMap, zeroCurrencyFor, sumExpensesByCurrency } from '@/lib/portal/invoice-totals'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
@@ -200,9 +200,9 @@ export default async function PortalInvoicesPage({
   const sales = salesTotals(statsRows)
   const salesStats = {
     total: invoices.length,
-    totalAmount: formatMoneyMap(sales.invoiced),
-    paid: formatMoneyMap(sales.paid),
-    outstanding: formatMoneyMap(sales.outstanding),
+    totalAmount: formatMoneyMap(sales.invoiced, zeroCurrencyFor(sales.invoiced, sales.paid, sales.outstanding)),
+    paid: formatMoneyMap(sales.paid, zeroCurrencyFor(sales.invoiced, sales.paid, sales.outstanding)),
+    outstanding: formatMoneyMap(sales.outstanding, zeroCurrencyFor(sales.invoiced, sales.paid, sales.outstanding)),
   }
 
   // Expense stats (also per currency)

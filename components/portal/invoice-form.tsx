@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { createInvoice, updateInvoice, createCustomer } from '@/app/portal/invoices/actions'
 import { useLocale } from '@/lib/portal/use-locale'
 import { interpolateString } from '@/lib/template-interpolation'
+import { pickBankAccountId, bankCurrencyNote } from '@/lib/portal/bank-account-choice'
 import { nextRecurringDate, isValidCustomMonths, CUSTOM_MONTHS_MIN, CUSTOM_MONTHS_MAX } from '@/lib/portal/recurring-date'
 import Link from 'next/link'
 
@@ -81,7 +82,9 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
 
   // Bank account
   const [bankAccountId, setBankAccountId] = useState<string>(initialData?.bankAccountId ?? '')
-  const [bankAccounts, setBankAccounts] = useState<{ id: string; label: string; currency: string }[]>([])
+  const [bankAccounts, setBankAccounts] = useState<{ id: string; label: string; currency: string; show_on_invoice?: boolean }[]>([])
+  // Once the client picks an account themselves, changing the currency never overrides their choice.
+  const [bankChosenByClient, setBankChosenByClient] = useState(false)
 
   useEffect(() => {
     fetch(`/api/portal/bank-accounts?account_id=${accountId}`)
@@ -89,14 +92,19 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
       .then(data => {
         const list = Array.isArray(data) ? data : []
         setBankAccounts(list)
-        // Auto-select the show_on_invoice account if none selected
+        // Auto-select an account in the invoice's currency (see the effect below) if none selected
         if (mode === 'create' && !bankAccountId && list.length > 0) {
-          const defaultAcc = list.find((a: { show_on_invoice?: boolean }) => a.show_on_invoice) || list[0]
-          setBankAccountId(defaultAcc.id)
+          setBankAccountId(pickBankAccountId(list, currency) ?? '')
         }
       })
       .catch(() => {})
   }, [accountId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // New invoice: keep the default bank account in step with the invoice currency until the client chooses one.
+  useEffect(() => {
+    if (mode !== 'create' || bankChosenByClient || bankAccounts.length === 0) return
+    setBankAccountId(pickBankAccountId(bankAccounts, currency) ?? '')
+  }, [currency, bankAccounts, bankChosenByClient, mode])
 
   // Line items
   const [items, setItems] = useState<LineItem[]>(
@@ -107,6 +115,8 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
   // Tax is carried per line from an existing invoice (the form has no tax field of its own); shown so the total is the real one.
   const taxTotal = Math.round(items.reduce((sum, item) => sum + item.amount * (item.tax_rate ?? 0), 0) * 100) / 100
   const total = Math.max(subtotal - discount, 0) + taxTotal
+  const bankNote = bankCurrencyNote(bankAccounts, bankAccountId, currency)
+  const bankCurrencyLabel = bankAccounts.find(a => a.id === bankAccountId)?.currency ?? ''
   const currencySymbol = currency === 'EUR' ? '\u20AC' : '$'
 
   const updateItem = (index: number, field: keyof LineItem, value: string | number) => {
@@ -144,9 +154,9 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
       setShowNewCustomer(false)
       setNewCustomerName('')
       setNewCustomerEmail('')
-      toast.success('Customer created')
+      toast.success(t('invForm.customerCreated'))
     } else {
-      toast.error(result.error ?? 'Failed to create customer')
+      toast.error(result.error ?? t('invForm.customerFailed'))
     }
   }
 
@@ -154,11 +164,11 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
     e.preventDefault()
 
     if (!customerId) {
-      toast.error('Please select a customer')
+      toast.error(t('invForm.selectCustomer'))
       return
     }
     if (items.some(item => !item.description.trim())) {
-      toast.error('All line items need a description')
+      toast.error(t('invForm.itemNeedsDescription'))
       return
     }
     if (mode === 'create' && recurringFrequency === 'custom' && !customMonthsValid) {
@@ -190,10 +200,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           items: itemsPayload,
         })
         if (result.success) {
-          toast.success('Invoice updated')
+          toast.success(t('invForm.updated'))
           router.push(`/portal/invoices/${initialData.id}`)
         } else {
-          toast.error(result.error ?? 'Failed to update invoice')
+          toast.error(result.error ?? t('invForm.updateFailed'))
         }
       } else {
         const result = await createInvoice({
@@ -212,10 +222,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
           items: itemsPayload,
         })
         if (result.success) {
-          toast.success(`Invoice ${result.data?.invoice_number} created`)
+          toast.success(interpolateString(t('invForm.created'), { number: String(result.data?.invoice_number ?? '') }))
           router.push('/portal/invoices')
         } else {
-          toast.error(result.error ?? 'Failed to create invoice')
+          toast.error(result.error ?? t('invForm.createFailed'))
         }
       }
     })
@@ -511,7 +521,7 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             </label>
             <select
               value={bankAccountId}
-              onChange={e => setBankAccountId(e.target.value)}
+              onChange={e => { setBankChosenByClient(true); setBankAccountId(e.target.value) }}
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">{t('invoices.noBankAccount')}</option>
@@ -522,6 +532,11 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             <p className="text-xs text-zinc-400 mt-1">
               {t('bank.autoNote') || 'Choose which bank account details appear on this invoice'}
             </p>
+            {bankNote !== 'none' && (
+              <p className="text-xs text-amber-700 mt-1" data-testid="invoice-bank-currency-note">
+                {interpolateString(t(bankNote === 'mismatch' ? 'invoices.bankMismatch' : 'invoices.bankNoMatch'), { bank: bankCurrencyLabel, currency })}
+              </p>
+            )}
           </div>
         )}
 
