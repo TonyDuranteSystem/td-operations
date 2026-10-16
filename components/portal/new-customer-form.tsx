@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useLocale } from '@/lib/portal/use-locale'
+import { formatCustomerAddress } from '@/lib/portal/customer-address'
 
 export function NewCustomerForm({ accountId }: { accountId: string }) {
   const router = useRouter()
@@ -18,6 +19,7 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
     email: '',
     phone: '',
     address: '',
+    postal_code: '',
     city: '',
     region: '',
     country: '',
@@ -38,8 +40,9 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
     try {
       const displayName = form.company_name.trim()
         || `${form.first_name.trim()} ${form.last_name.trim()}`.trim()
-      const fullAddress = [form.address, form.city, form.region, form.country]
-        .filter(Boolean).join(', ')
+      const fullAddress = formatCustomerAddress({
+        street: form.address, postalCode: form.postal_code, city: form.city, region: form.region, country: form.country,
+      })
 
       const res = await fetch('/api/portal/customers', {
         method: 'POST',
@@ -53,6 +56,7 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
           email: form.email.trim() || null,
           phone: form.phone.trim() || null,
           address: fullAddress || null,
+          postal_code: form.postal_code.trim() || null,
           city: form.city.trim() || null,
           region: form.region.trim() || null,
           country: form.country.trim() || null,
@@ -93,8 +97,11 @@ export function NewCustomerForm({ accountId }: { accountId: string }) {
           <Field label={t('customers.phone')} value={form.phone} onChange={v => update('phone', v)} type="tel" />
         </div>
         <Field label={t('customers.address')} value={form.address} onChange={v => update('address', v)} placeholder={t('custForm.streetPlaceholder')} />
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Field label={t('customers.postalCode')} value={form.postal_code} onChange={v => update('postal_code', v)} />
           <Field label={t('customers.city')} value={form.city} onChange={v => update('city', v)} />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
           <Field label={t('custForm.regionState')} value={form.region} onChange={v => update('region', v)} />
           <Field label={t('customers.country')} value={form.country} onChange={v => update('country', v)} />
         </div>

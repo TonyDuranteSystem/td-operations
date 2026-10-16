@@ -79,6 +79,7 @@ export async function PATCH(
   if (body.phone !== undefined) updates.phone = body.phone || null
   if (body.address !== undefined) updates.address = body.address || null
   if (body.city !== undefined) updates.city = body.city || null
+  if (body.postal_code !== undefined) updates.postal_code = body.postal_code || null
   if (body.region !== undefined) updates.region = body.region || null
   if (body.country !== undefined) updates.country = body.country || null
   if (body.vat_number !== undefined) updates.vat_number = body.vat_number || null
