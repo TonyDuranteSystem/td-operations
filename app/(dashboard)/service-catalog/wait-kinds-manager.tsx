@@ -39,13 +39,19 @@ export function WaitKindsManager() {
   const reload = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const res = await loadWaitKindsAdmin()
-    if ('error' in res) setError(res.error)
-    else {
-      setDefined(res.defined)
-      setRows(res.rows)
+    try {
+      const res = await loadWaitKindsAdmin()
+      if ('error' in res) setError(res.error)
+      else {
+        setDefined(res.defined)
+        setRows(res.rows)
+      }
+    } catch (err) {
+      // R099: say what happened (for example the page is older than the server after a deploy) instead of spinning forever.
+      setError(err instanceof Error && err.message ? err.message : 'Could not read the waiting-on list. Reload the page and try again.')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -131,7 +137,10 @@ export function WaitKindsManager() {
                           <button
                             type="button"
                             disabled={busy !== null}
-                            onClick={() => run(`rename:${r.slug}`, () => renameWaitKind({ slug: r.slug, name: editName }), 'Renamed.').then(ok => { if (ok) setEditing(null) })}
+                            onClick={() => {
+                              if (r.usedBy > 0 && !window.confirm(`${r.usedBy} step(s) use "${r.name}". Renaming it changes the label on every job and chip that uses it, everywhere. Rename it to "${editName.trim()}"?`)) return
+                              void run(`rename:${r.slug}`, () => renameWaitKind({ slug: r.slug, name: editName }), 'Renamed.').then(ok => { if (ok) setEditing(null) })
+                            }}
                             className="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
                           >
                             Save

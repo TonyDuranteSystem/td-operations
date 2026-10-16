@@ -115,7 +115,7 @@ function Row({ row }: { row: CalendarRow }) {
       <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.serviceType}</div>
       <div className="mt-1 min-[1100px]:mt-0">
         <div>{row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.bucket === 'closed' ? (row.stage || 'Finished') : (row.stage || 'no step')}</div>
-        <span className={`mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${PILL_CLASS[row.pill]}`}>{row.pillLabel}</span>
+        <span className={`mt-1 inline-block max-w-full truncate whitespace-nowrap rounded-full px-2 py-0.5 align-bottom text-[11px] font-semibold ${PILL_CLASS[row.pill]}`} title={row.pillLabel}>{row.pillLabel}</span>
       </div>
       <div className="mt-1 font-mono text-[13px] tabular-nums min-[1100px]:mt-0">
         <span className="font-sans text-zinc-500 min-[1100px]:sr-only">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />

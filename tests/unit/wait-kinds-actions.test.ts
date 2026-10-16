@@ -105,6 +105,8 @@ describe("addWaitKind", () => {
     expect(await addWaitKind({ name: "Unset", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "!!!", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "Paused", behaviour: "other" })).toMatchObject({ ok: false })
+    expect(await addWaitKind({ name: "The client", behaviour: "other" })).toMatchObject({ ok: false, error: expect.stringContaining("built-in") })
+    expect(await addWaitKind({ name: "us", behaviour: "other" })).toMatchObject({ ok: false })
     expect(await addWaitKind({ name: "An Outside Office", behaviour: "other" })).toMatchObject({ ok: false, error: expect.stringContaining("already in the list") })
     expect(await addWaitKind({ name: "Old bank", behaviour: "other" })).toMatchObject({ ok: false, error: expect.stringContaining("Restore") })
     expect(h.calls).toEqual([])
@@ -123,6 +125,7 @@ describe("rename, retire, restore", () => {
 
   it("a rename to a name another kind already has (retired ones included) is refused, like adding", async () => {
     expect(await renameWaitKind({ slug: "outside", name: "old bank" })).toMatchObject({ ok: false, error: expect.stringContaining("already in the list") })
+    expect(await renameWaitKind({ slug: "outside", name: "The client" })).toMatchObject({ ok: false, error: expect.stringContaining("built-in") })
     expect(h.calls).toEqual([])
     // renaming a kind to its own name with other capitalisation is fine
     expect(await renameWaitKind({ slug: "outside", name: "AN OUTSIDE OFFICE" })).toEqual({ ok: true })

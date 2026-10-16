@@ -387,6 +387,7 @@ export function ServiceEditClient({ mode, initial, waitKinds }: Props) {
       <StagesSection
         pipeline={basics.pipeline ?? ""}
         waitKinds={waitKinds}
+        storedStages={initial?.stages ?? []}
         stages={stages}
         addStage={addStage}
         updateStage={updateStage}
@@ -608,6 +609,7 @@ function BasicsSection({
 function StagesSection({
   pipeline,
   waitKinds,
+  storedStages,
   stages,
   addStage,
   updateStage,
@@ -617,6 +619,8 @@ function StagesSection({
 }: {
   pipeline: string
   waitKinds: WaitKind[]
+  /** The steps as loaded: their stored "waiting on" keeps a retired / missing choice pickable after the editor switched away from it. */
+  storedStages: StageRow[]
   stages: StageRow[]
   addStage: () => void
   updateStage: (idx: number, p: Partial<StageRow>) => void
@@ -707,6 +711,7 @@ function StagesSection({
           total={stages.length}
           stage={stage}
           waitKinds={waitKinds}
+          storedWaitingOn={stage.id ? storedStages.find(x => x.id === stage.id)?.waiting_on ?? null : null}
           onPatch={(p) => updateStage(idx, p)}
           onMove={(dir) => moveStage(idx, dir)}
           onRemove={() => removeStage(idx)}
@@ -744,6 +749,7 @@ function StageCard({
   total,
   stage,
   waitKinds,
+  storedWaitingOn,
   onPatch,
   onMove,
   onRemove,
@@ -752,6 +758,7 @@ function StageCard({
   total: number
   stage: StageRow
   waitKinds: WaitKind[]
+  storedWaitingOn: string | null
   onPatch: (p: Partial<StageRow>) => void
   onMove: (dir: -1 | 1) => void
   onRemove: () => void
@@ -841,7 +848,7 @@ function StageCard({
             className={inputClass}
           >
             <option value="">Not set</option>
-            {waitingOnOptions(waitKinds, stage.waiting_on).map((o) => (
+            {waitingOnOptions(waitKinds, [stage.waiting_on, storedWaitingOn]).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

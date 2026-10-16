@@ -16,6 +16,7 @@ import {
 } from "@/lib/open-services/types"
 import {
   danglingWarning,
+  isReservedKindName,
   isUsableKindSlug,
   parseCatalogWaitKinds,
   resolveWho,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/open-services/wait-kinds"
 import { stepSettingsProblems } from "@/lib/services/step-settings"
 import { waitingOnChoiceProblems } from "@/lib/services/stages"
+import { PAUSED_KEY } from "@/lib/new-calendar/types"
 
 /**
  * "Waiting on" kinds (dev job 40235e3c): the built-in kinds + the catalog list. Pure rules only — names below are invented
@@ -230,5 +232,30 @@ describe("waitingOnChoiceProblems (the save path)", () => {
     expect(out[0]).toContain("retired")
     expect(out[1]).toContain('"B"')
     expect(out[1]).toContain("not in the waiting-on list")
+  })
+})
+
+describe("names that would clash with the built-in choices", () => {
+  it("a kind cannot be named like Us / The client / Nobody / Not set / Paused, with or without an article, in any case", () => {
+    for (const n of ["Us", "us", "The client", "client", "A Client", "  THE   CLIENT ", "Nobody", "Nobody: job is over", "Nobody (close it?)", "Not set", "Paused", "the paused"]) {
+      expect(isReservedKindName(n), n).toBe(true)
+    }
+    for (const n of ["The IRS", "An outside office", "A date", "Our bookkeeper", "Client's accountant", "Paused by the bank"]) {
+      expect(isReservedKindName(n), n).toBe(false)
+    }
+  })
+
+  it("the Calendar's Paused chip key is a reserved kind slug (the two copies of 'paused' cannot drift apart)", () => {
+    expect(RESERVED_WAIT_SLUGS).toContain(PAUSED_KEY)
+  })
+})
+
+describe("waitingOnOptions with the stored value as well as the draft value", () => {
+  const kinds = assembleWaitKinds([catalogWaitKind("outside", "An outside office", "other"), catalogWaitKind("old", "Old bank", "other", true)])
+  it("a retired stored choice stays pickable after the editor switched to another value", () => {
+    const opts = waitingOnOptions(kinds, ["us", "old"])
+    expect(opts.map(o => o.value)).toContain("old")
+    expect(opts.find(o => o.value === "old")!.label).toBe("Old bank (retired)")
+    expect(waitingOnOptions(kinds, ["us", null]).map(o => o.value)).not.toContain("old")
   })
 })

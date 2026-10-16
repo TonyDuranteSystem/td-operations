@@ -18,7 +18,7 @@ import { isAdmin } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { addEntry, deprecateEntry, getEntry, listEntries, renameEntry, restoreEntry, type Actor } from "@/lib/catalog/framework"
 import { WAIT_KINDS_CATALOG } from "@/lib/services/wait-kinds-load"
-import { isUsableKindSlug, slugFromName } from "@/lib/open-services/wait-kinds"
+import { isReservedKindName, isUsableKindSlug, slugFromName } from "@/lib/open-services/wait-kinds"
 import { BUILTIN_WAIT_KINDS } from "@/lib/open-services/types"
 
 export interface WaitKindAdminRow {
@@ -91,6 +91,7 @@ export async function addWaitKind(input: { name: string; behaviour: string }): P
     if (!(await catalogExists())) return { ok: false, error: NOT_SET_UP }
     const name = (input.name ?? "").trim().replace(/\s+/g, " ")
     if (name.length < 2 || name.length > 60) return { ok: false, error: "Give the kind a name of 2 to 60 characters." }
+    if (isReservedKindName(name)) return { ok: false, error: `"${name}" is the name of a built-in choice (Us, The client, Nobody, Not set, Paused). Pick a different name.` }
     if (input.behaviour !== "other" && input.behaviour !== "date") {
       return { ok: false, error: 'Choose what the kind means: "waits on someone else" or "waits for a date".' }
     }
@@ -137,6 +138,7 @@ export async function renameWaitKind(input: { slug: string; name: string }): Pro
     const name = (input.name ?? "").trim().replace(/\s+/g, " ")
     if (name.length < 2 || name.length > 60) return { ok: false, error: "Give the kind a name of 2 to 60 characters." }
     if (name === entry.display_name) return { ok: true }
+    if (isReservedKindName(name)) return { ok: false, error: `"${name}" is the name of a built-in choice (Us, The client, Nobody, Not set, Paused). Pick a different name.` }
     // Two kinds with the same name would give two identical chips: refuse by NAME, like adding (retired ones included, this one excluded).
     const all = await listEntries(WAIT_KINDS_CATALOG, { includeDeprecated: true })
     const clash = all.find(e => e.slug !== entry.slug && (e.display_name ?? "").trim().replace(/\s+/g, " ").toLowerCase() === name.toLowerCase())

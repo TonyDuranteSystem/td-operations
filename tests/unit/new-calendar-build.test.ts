@@ -525,7 +525,8 @@ describe("kinds from the waiting-on list (a kind added later sorts by what it DO
     const by = (n: string) => steps.find(s => s.name === n)!
     expect(by("Filed")).toMatchObject({ waitingOn: "the_irs", behaviour: "other", tip: "Waiting on the IRS" })
     expect(by("Hearing")).toMatchObject({ behaviour: "date", tip: "Waiting on Court day" })
-    expect(by("Lost")).toMatchObject({ waitingOn: "unset", behaviour: null, tip: "Waiting-on not set" })
+    expect(by("Lost")).toMatchObject({ waitingOn: "unset", behaviour: null })
+    expect(by("Lost").tip).toBe('Set to "gone_kind", which is no longer in the waiting-on list')
     expect(by("End")).toMatchObject({ waitingOn: "none", behaviour: "none" })
   })
 })

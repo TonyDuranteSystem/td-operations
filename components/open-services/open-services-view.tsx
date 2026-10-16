@@ -78,7 +78,7 @@ function JobRow({ row, showService }: { row: Row; showService: boolean }) {
         {row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.stage || 'no step'}
       </div>
       <div className="mt-2 min-[1100px]:mt-0">
-        <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${CHIP_CLASS[row.behaviour ?? 'unset']}`} title={row.whoPhrase ? `Waiting on ${row.whoPhrase}` : undefined}>{row.whoChip}</span>
+        <span className={`inline-block max-w-full truncate whitespace-nowrap rounded-full px-2.5 py-0.5 align-bottom text-xs font-semibold ${CHIP_CLASS[row.behaviour ?? 'unset']}`} title={row.whoPhrase ? `Waiting on ${row.whoPhrase}` : undefined}>{row.whoChip}</span>
       </div>
       <div className="mt-2 tabular-nums min-[1100px]:mt-0">
         {row.sinceLabel ? <>since {row.sinceLabel} · {row.daysHere} d</> : <span className="text-zinc-500">date unknown</span>}

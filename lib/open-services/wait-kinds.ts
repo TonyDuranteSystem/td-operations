@@ -38,6 +38,23 @@ export function slugFromName(name: string): string {
     .slice(0, 40)
 }
 
+/** A name compared the way people read it: lower-case, spaces collapsed, a leading article dropped ("The client" = "client"). */
+function nameKey(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase().replace(/^(the|an|a)\s+/, "")
+}
+
+const RESERVED_NAME_KEYS: ReadonlySet<string> = new Set(
+  [
+    ...Object.values(BUILTIN_WAIT_KINDS).flatMap(k => [k.name, k.chip, k.phrase]),
+    "Not set", "Nobody", "Paused",
+  ].map(nameKey),
+)
+
+/** A name that would give a second "The client" / "Us" / "Nobody" / "Not set" / "Paused" next to the built-in one. */
+export function isReservedKindName(name: string): boolean {
+  return RESERVED_NAME_KEYS.has(nameKey(name))
+}
+
 /** A slug the catalog may hold for a kind: right shape and not one of the built-in / reserved names. */
 export function isUsableKindSlug(slug: string): boolean {
   return WAIT_SLUG_RE.test(slug) && !RESERVED_WAIT_SLUGS.includes(slug)
@@ -114,11 +131,18 @@ export function waitingOnSaveProblem(
  * The choices of a step's "Waiting on" dropdown: every kind that is not retired, plus the step's CURRENT value when that kind is retired
  * or no longer exists (so the dropdown never shows "Not set" while the step really holds a value, and an unrelated save keeps it).
  */
-export function waitingOnOptions(kinds: readonly WaitKind[], current: string | null | undefined): Array<{ value: string; label: string }> {
+export function waitingOnOptions(
+  kinds: readonly WaitKind[],
+  current: string | null | undefined | ReadonlyArray<string | null | undefined>,
+): Array<{ value: string; label: string }> {
   const out = kinds.filter(k => !k.retired).map(k => ({ value: k.slug, label: k.name }))
-  if (typeof current === "string" && current !== "" && !out.some(o => o.value === current)) {
-    const kind = waitKindOf(kinds, current)
-    out.push({ value: current, label: kind ? `${kind.name} (retired)` : `${current} (no longer in the list)` })
+  // `current` may be the draft value AND the stored one: the stored (retired / missing) choice stays pickable after the editor switched away.
+  const wanted = Array.isArray(current) ? current : [current]
+  for (const c of wanted) {
+    if (typeof c === "string" && c !== "" && !out.some(o => o.value === c)) {
+      const kind = waitKindOf(kinds, c)
+      out.push({ value: c, label: kind ? `${kind.name} (retired)` : `${c} (no longer in the list)` })
+    }
   }
   return out
 }

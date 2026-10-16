@@ -256,10 +256,11 @@ function stepChips(input: NewCalendarInput, kinds: readonly WaitKind[], service:
     if (seen.has(key)) continue
     seen.add(key)
     const done = stageCompletesService({ stage_name: s.stage_name, stage_order: s.stage_order, completes_service: s.completes_service }, service)
-    const waitingOn = resolveWho(kinds, s.waiting_on, done).who
+    const resolved = resolveWho(kinds, s.waiting_on, done)
+    const waitingOn = resolved.who
     const kind = waitKindOf(kinds, waitingOn)
     const count = open.filter(e => sameText(e.item.row.serviceType, service) && sameTextLoose(e.item.row.stage, s.stage_name)).length
-    chips.push({ name: s.stage_name, count, waitingOn, behaviour: kind?.behaviour ?? null, tip: kind?.tip ?? UNSET_LABELS.tip })
+    chips.push({ name: s.stage_name, count, waitingOn, behaviour: kind?.behaviour ?? null, tip: kind?.tip ?? (resolved.dangling !== null ? `Set to "${resolved.dangling}", which is no longer in the waiting-on list` : UNSET_LABELS.tip) })
   }
   return chips
 }
