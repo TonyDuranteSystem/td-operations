@@ -26,7 +26,7 @@ describe('after creating an invoice', () => {
     expect(page).toMatch(/invoice\.status !== 'Draft'\) setShowCreated\(false\)/)
   })
   it('the pop-up reuses the page logic: send, download, close', () => {
-    expect(page).toContain('onSend={() => handleSend()}')
+    expect(page).toContain('void handleSend()')
     expect(page).toContain('onDownload={handleDownloadPDF}')
   })
 })
