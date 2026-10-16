@@ -23,6 +23,11 @@ describe("classifyGapFile", () => {
   it("a file nothing matches is missing — the Fulfil Partners case (no CRM row, no import, no same name)", () => {
     expect(classifyGapFile(file({ name: "2025_FULFIL_PARTNERS_LLC_1120Proforma_Signed_for_IRS.pdf" }), ctx({ storedNameKeys: new Set(["something else.pdf"]) }))).toBe("missing")
   })
+  it("a duplicate copy (same bytes as a file a move already saw) is already decided, whatever its name or id", () => {
+    expect(classifyGapFile(file({ md5: "abc" }), ctx({ seenMd5: new Set(["abc"]) }))).toBe("same_content_seen")
+    expect(classifyGapFile(file({ md5: "zzz" }), ctx({ seenMd5: new Set(["abc"]) }))).toBe("missing")
+    expect(classifyGapFile(file({ md5: null }), ctx({ seenMd5: new Set(["abc"]) }))).toBe("missing")
+  })
   it("imported wins over everything else", () => {
     expect(classifyGapFile(file(), ctx({ importedIds: new Set(["d1"]), crmDriveIds: new Set(["d1"]), storedNameKeys: new Set(["return.pdf"]) }))).toBe("imported")
   })
@@ -37,7 +42,7 @@ describe("summarizeGap", () => {
     const r = summarizeGap({ accountId: "acc", company: "Acme LLC", driveFolderId: "root" }, files,
       ctx({ importedIds: new Set(["a"]), crmDriveIds: new Set(["b"]), storedNameKeys: new Set(["e.pdf"]) }))
     expect(r.total).toBe(5)
-    expect(r.counts).toEqual({ imported: 1, in_crm_on_drive: 1, same_name_stored: 1, google_native: 1, missing: 1 })
+    expect(r.counts).toEqual({ imported: 1, same_content_seen: 0, in_crm_on_drive: 1, same_name_stored: 1, google_native: 1, missing: 1 })
     expect(r.files.map((f) => [f.id, f.kind])).toEqual([["b", "in_crm_on_drive"], ["c", "missing"], ["e", "same_name_stored"]])
     expect(r.files[1].path).toBe("3. Tax › 2025")
   })

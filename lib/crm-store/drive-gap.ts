@@ -11,6 +11,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 
 export type GapKind =
   | "imported"            // storage already holds it (the move recorded this exact Drive file)
+  | "same_content_seen"   // a move saw a file with exactly these bytes (a duplicate copy in Drive) — already decided
   | "in_crm_on_drive"     // the CRM lists it but still points at Drive (the catch-up can bring it in)
   | "same_name_stored"    // not recorded, but storage has a file of the same name — probably already there (renamed / re-uploaded)
   | "google_native"       // a Google Doc / Sheet / Slide — a link, not a file; never moved
@@ -22,11 +23,15 @@ export interface GapFile {
   mimeType: string
   path: string[]
   size: number | null
+  /** Drive's md5 of the bytes (null for Google-native files) */
+  md5?: string | null
 }
 
 export interface GapContext {
   /** Drive file ids the move recorded as imported */
   importedIds: ReadonlySet<string>
+  /** md5 of every Drive file a move saw — a Drive file with the same bytes is a duplicate copy of something already decided */
+  seenMd5?: ReadonlySet<string>
   /** Drive file ids a CRM documents row still points at */
   crmDriveIds: ReadonlySet<string>
   /** name keys of the files this company's storage holds (live) */
@@ -37,6 +42,7 @@ const GOOGLE_NATIVE_PREFIX = "application/vnd.google-apps."
 
 export function classifyGapFile(f: GapFile, ctx: GapContext): GapKind {
   if (ctx.importedIds.has(f.id)) return "imported"
+  if (f.md5 && ctx.seenMd5?.has(f.md5)) return "same_content_seen"
   if (f.mimeType.startsWith(GOOGLE_NATIVE_PREFIX)) return "google_native"
   if (ctx.crmDriveIds.has(f.id)) return "in_crm_on_drive"
   if (ctx.storedNameKeys.has(storeNameKey(f.name))) return "same_name_stored"
@@ -54,7 +60,7 @@ export interface GapReport {
 }
 
 export function summarizeGap(meta: { accountId: string; company: string; driveFolderId: string }, files: GapFile[], ctx: GapContext): GapReport {
-  const counts: Record<GapKind, number> = { imported: 0, in_crm_on_drive: 0, same_name_stored: 0, google_native: 0, missing: 0 }
+  const counts: Record<GapKind, number> = { imported: 0, same_content_seen: 0, in_crm_on_drive: 0, same_name_stored: 0, google_native: 0, missing: 0 }
   const out: GapReport["files"] = []
   for (const f of files) {
     const kind = classifyGapFile(f, ctx)
@@ -97,7 +103,7 @@ export async function scanCompanyGap(accountId: string): Promise<GapReport> {
   if (!c) throw new Error("This company is not in storage, or has no Drive folder.")
   const { scanDrive } = await import("./drive-import")
   const scanned = await scanDrive(c.driveFolderId)
-  const files: GapFile[] = scanned.map((s) => ({ id: s.source_id, name: s.name, mimeType: s.mime_type ?? "", path: s.drive_path ?? [], size: s.size_bytes ?? null }))
+  const files: GapFile[] = scanned.map((s) => ({ id: s.source_id, name: s.name, mimeType: s.mime_type ?? "", path: s.drive_path ?? [], size: s.size_bytes ?? null, md5: s.source_md5 ?? null }))
 
   const importedIds = new Set<string>()
   const crmDriveIds = new Set<string>()
@@ -112,6 +118,13 @@ export async function scanCompanyGap(accountId: string): Promise<GapReport> {
     const { data: seen, error: seenErr } = await d.from("store_import_items").select("source_id").eq("source", "drive").in("run_id", runIds).in("source_id", chunk)
     if (seenErr) throw new Error("Could not read what the moves saw.")
     for (const r of (seen ?? []) as Array<{ source_id: string }>) importedIds.add(r.source_id)
+  }
+  const seenMd5 = new Set<string>()
+  for (let from = 0; runIds.length; from += 1000) {
+    const { data: m, error: mErr } = await d.from("store_import_items").select("source_md5").eq("source", "drive").in("run_id", runIds).not("source_md5", "is", null).range(from, from + 999)
+    if (mErr) throw new Error("Could not read what the moves saw.")
+    for (const r of (m ?? []) as Array<{ source_md5: string }>) seenMd5.add(r.source_md5)
+    if (!m || m.length < 1000) break
   }
   for (let i = 0; i < ids.length; i += 150) {
     const chunk = ids.slice(i, i + 150)
@@ -129,5 +142,5 @@ export async function scanCompanyGap(accountId: string): Promise<GapReport> {
     for (const r of (sf ?? []) as Array<{ name_key: string | null }>) if (r.name_key) storedNameKeys.add(r.name_key)
     if (!sf || sf.length < 1000) break
   }
-  return summarizeGap({ accountId, company: c.company, driveFolderId: c.driveFolderId }, files, { importedIds, crmDriveIds, storedNameKeys })
+  return summarizeGap({ accountId, company: c.company, driveFolderId: c.driveFolderId }, files, { importedIds, seenMd5, crmDriveIds, storedNameKeys })
 }
