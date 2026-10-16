@@ -50,9 +50,9 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   if (failed) {
     return (
       <div className="p-6 lg:p-8">
-        <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Calendar</h1>
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-          <p className="font-medium">Could not load the New Calendar.</p>
+          <p className="font-medium">Could not load the Calendar.</p>
           <p className="mt-1">Nothing was changed, and nothing is hidden or fixed by this page. Reload to try again.</p>
           <p className="mt-2"><Link href="/new-calendar?tab=news" prefetch={false} className="underline">What&apos;s New</Link> does not depend on this and can still be opened.</p>
         </div>

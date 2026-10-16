@@ -7,7 +7,7 @@
  */
 
 import { WAIT_SLUG_RE } from "@/lib/open-services/types"
-import { BUCKETS, MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE, type Bucket } from "@/lib/new-calendar/types"
+import { LISTS, MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE, type ListKey } from "@/lib/new-calendar/types"
 
 export type RawSearchParams = Record<string, string | string[] | undefined>
 
@@ -18,8 +18,8 @@ export type CalendarTab = (typeof TABS)[number]
 export interface NewCalendarParams {
   /** "jobs" (default) or "news" = the What's New tab. Every other parameter belongs to "jobs". */
   tab: CalendarTab
-  /** Which list: to work on / pending / not sorted yet / closed. */
-  b: Bucket
+  /** Which list: all open (the default) / to work on / pending / not sorted yet / closed. */
+  b: ListKey
   /** A service chosen on the chips ("" = all services). Free text: it is whatever the service is called. */
   s: string
   /** A step of that service ("" = none). Only meaningful together with `s`. */
@@ -32,7 +32,8 @@ export interface NewCalendarParams {
   n: number
 }
 
-export const DEFAULT_BUCKET: Bucket = "work"
+/** The first screen shows EVERY open job (Antonio 2026-10-16), so a job never "disappears" the moment its next step belongs to someone else. */
+export const DEFAULT_BUCKET: ListKey = "all"
 
 function first(v: string | string[] | undefined): string {
   const s = Array.isArray(v) ? v[0] : v
@@ -69,7 +70,7 @@ export function clampLimit(n: number): number {
 export function parseParams(raw: RawSearchParams): NewCalendarParams {
   const tab: CalendarTab = first(raw.tab).trim().toLowerCase() === "news" ? "news" : "jobs"
   const bRaw = first(raw.b).trim().toLowerCase()
-  const b: Bucket = (BUCKETS as readonly string[]).includes(bRaw) ? (bRaw as Bucket) : DEFAULT_BUCKET
+  const b: ListKey = (LISTS as readonly string[]).includes(bRaw) ? (bRaw as ListKey) : DEFAULT_BUCKET
   const s = cleanText(first(raw.s))
   // A step means nothing without its service.
   const st = s === "" ? "" : cleanText(first(raw.st))
@@ -101,7 +102,7 @@ export function withTab(p: NewCalendarParams, tab: CalendarTab): NewCalendarPara
 }
 
 /** Choosing a list clears the service, the step and the paging, and keeps the search. */
-export function withBucket(p: NewCalendarParams, b: Bucket): NewCalendarParams {
+export function withBucket(p: NewCalendarParams, b: ListKey): NewCalendarParams {
   return { ...p, b, s: "", st: "", w: "", n: PAGE_SIZE }
 }
 

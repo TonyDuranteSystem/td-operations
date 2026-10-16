@@ -12,14 +12,24 @@ import type { CalendarPopup, WaitBehaviour, Who } from "@/lib/open-services/type
 export const BUCKETS = ["work", "pending", "other", "closed"] as const
 export type Bucket = (typeof BUCKETS)[number]
 
-export const BUCKET_LABELS: Record<Bucket, string> = {
+/** The lists on screen: "All open" (every open job: To work on + Pending + Not sorted yet) first, then the four lists. A JOB is always in one
+ *  Bucket; "all" is only a way of looking at them together (Antonio 2026-10-16: see the stage of everything, not only what is on us). */
+export const LISTS = ["all", ...BUCKETS] as const
+export type ListKey = (typeof LISTS)[number]
+
+export const LIST_LABELS: Record<ListKey, string> = {
+  all: "All open",
   work: "To work on",
   pending: "Pending",
   other: "Not sorted yet",
   closed: "Closed · last 30 days",
 }
 
-export const BUCKET_HELP: Record<Bucket, string> = {
+/** Kept under the old name for the code that labels a job's own list. */
+export const BUCKET_LABELS = LIST_LABELS
+
+export const BUCKET_HELP: Record<ListKey, string> = {
+  all: "Every open job, with its step and who the next move belongs to: the jobs that are on us first, then the ones waiting on someone else, then the ones not sorted yet.",
   work: "Steps that are ours, jobs whose follow-up time has passed, and jobs sitting on the last step (nobody is waiting: close them).",
   pending: "Steps waiting on someone else (any kind of wait in the waiting-on list), and paused jobs (blocked, on hold, company not operating). Use the \"Waiting on\" chips to see one kind of wait.",
   other: "The step has no usable \"waiting on\" setting (none, or a kind that is no longer in the list), so the page cannot tell whose turn it is. Set it on the step in the Service Catalog.",
@@ -114,9 +124,9 @@ export interface CalendarModel {
   /** Open jobs on this page (To work on + Pending + Not sorted yet), NOT affected by search or any filter. */
   openTotal: number
   /** Jobs per list, with the search applied (so a company search shows where its jobs are). */
-  counts: Record<Bucket, number>
+  counts: Record<ListKey, number>
   /** The list on screen, or null when a step filter is showing jobs from every open list. */
-  active: Bucket | null
+  active: ListKey | null
   /** Services present in the list the visitor chose (with the search applied). */
   services: ServiceChip[]
   /** That service's own steps, from its settings; empty unless a service is chosen on an open list. */

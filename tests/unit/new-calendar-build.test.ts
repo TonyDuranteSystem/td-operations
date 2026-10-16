@@ -196,7 +196,8 @@ describe("every open job is in exactly one list, and the people rules hold", () 
     const m = run(jobs())
     expect(m.openTotal).toBe(10)
     expect(m.counts.work + m.counts.pending + m.counts.other).toBe(m.openTotal)
-    expect(m.counts).toEqual({ work: 4, pending: 5, other: 1, closed: 0 })
+    expect(m.counts).toEqual({ all: 10, work: 4, pending: 5, other: 1, closed: 0 })
+    expect(m.counts.all).toBe(m.openTotal)
     expect(m.workToday).toBe(4)
   })
 
@@ -218,13 +219,14 @@ describe("every open job is in exactly one list, and the people rules hold", () 
 
   it("the morning number ignores search and filters; the list counts follow the search", () => {
     const js = [job({ stage: "Two", account_id: "a1" }), job({ stage: "Two", account_id: "a2" }), job({ stage: "One", account_id: "a2" })]
-    const all = run(js)
+    const all = run(js, { b: "work" })
     const searched = run(js, { q: "muller" })
     expect(searched.workToday).toBe(all.workToday)
     expect(searched.openTotal).toBe(all.openTotal)
     expect(all.counts.work).toBe(2)
-    expect(searched.counts).toEqual({ work: 1, pending: 1, other: 0, closed: 0 })
-    expect(searched.rows.map(r => r.name)).toEqual(["Müller GmbH"])
+    expect(searched.counts).toEqual({ all: 2, work: 1, pending: 1, other: 0, closed: 0 })
+    // the default list is "All open": both of that company's jobs are in it
+    expect(searched.rows.map(r => r.name)).toEqual(["Müller GmbH", "Müller GmbH"])
   })
 
   it("search is case- and accent-insensitive and treats typed symbols as plain text", () => {
@@ -256,13 +258,15 @@ describe("service and step chips", () => {
   ]
 
   it("service chips describe the chosen list, biggest first", () => {
-    const m = run(js())
+    const m = run(js(), { b: "work" })
     expect(m.services).toEqual([{ name: "Alpha", count: 3 }, { name: "Delta", count: 1 }])
     expect(run(js(), { b: "pending" }).services).toEqual([{ name: "Alpha", count: 1 }])
+    // "All open" counts every open job: the sum of the three lists
+    expect(run(js()).services.reduce((n, c) => n + c.count, 0)).toBe(run(js()).counts.all)
   })
 
   it("choosing a service narrows the list and shows that service's own steps, in order, with how many jobs sit on each", () => {
-    const m = run(js(), { s: "Alpha" })
+    const m = run(js(), { b: "work", s: "Alpha" })
     expect(m.rows).toHaveLength(3)
     expect(m.steps.map(s => `${s.name}:${s.count}:${s.waitingOn}`)).toEqual([
       "One:2:client",
@@ -288,7 +292,7 @@ describe("service and step chips", () => {
 
   it("a step without its service is ignored (the address parser drops it)", () => {
     expect(parseParams({ st: "One" }).st).toBe("")
-    expect(run(js(), { st: "One" }).active).toBe("work")
+    expect(run(js(), { st: "One" }).active).toBe("all")
   })
 
   it("a step name that matches nothing gives an empty list, not an error", () => {
@@ -398,12 +402,55 @@ describe("the empty database", () => {
   it("is all zeros, with a valid model", () => {
     const m = run([])
     expect(m.workToday).toBe(0)
-    expect(m.counts).toEqual({ work: 0, pending: 0, other: 0, closed: 0 })
+    expect(m.counts).toEqual({ all: 0, work: 0, pending: 0, other: 0, closed: 0 })
     expect(m.rows).toEqual([])
     expect(m.hasMore).toBe(false)
   })
 })
 
+
+describe("the All open list (the first screen)", () => {
+  const mixed = () => [
+    job({ stage: "One" }),                                    // waits on the client: Pending
+    job({ stage: "Two" }),                                    // ours: To work on
+    job({ stage: "Two", stage_entered_at: daysAgo(10) }),     // ours, late: To work on (Overdue)
+    job({ service_type: "Gamma", stage: "Start" }),           // no setting: Not sorted
+    job({ stage: "Three" }),                                  // outside office: Pending
+  ]
+
+  it("is the default: every open job is in it, whatever list it belongs to, and the number equals the open total", () => {
+    const m = run(mixed())
+    expect(m.active).toBe("all")
+    expect(m.rows).toHaveLength(5)
+    expect(m.total).toBe(5)
+    expect(m.counts.all).toBe(m.openTotal)
+  })
+
+  it("puts what is on us first (late ones on top), then what waits, then what is not sorted; each row still says its own list", () => {
+    const m = run(mixed())
+    expect(m.rows.map(r => r.bucket)).toEqual(["work", "work", "pending", "pending", "other"])
+    expect(m.rows[0].pill).toBe("late")
+    expect(m.rows.filter(r => r.bucket === "pending").map(r => r.pillLabel).sort()).toEqual(["Waiting on an outside office", "Waiting on the client"])
+  })
+
+  it("never holds a finished job (those live under Closed), and the other lists still hold only their own", () => {
+    const m = run(mixed(), {}, [done({ end_date: dateDaysAgo(3) })])
+    expect(m.rows.every(r => r.bucket !== "closed")).toBe(true)
+    expect(m.counts.closed).toBe(1)
+    expect(run(mixed(), { b: "work" }).rows).toHaveLength(2)
+  })
+
+  it("search and a chosen service narrow it like any list", () => {
+    const js = [job({ stage: "One", account_id: "a1" }), job({ stage: "Two", account_id: "a2" })]
+    expect(run(js, { q: "muller" }).rows.map(r => r.name)).toEqual(["Müller GmbH"])
+    expect(run([...js, job({ service_type: "Gamma", stage: "Start" })], { s: "Gamma" }).rows).toHaveLength(1)
+  })
+
+  it("the Waiting on chip row is still only on the Pending list", () => {
+    expect(run(mixed()).waiting).toEqual([])
+    expect(run(mixed(), { b: "pending" }).waiting.length).toBeGreaterThan(0)
+  })
+})
 
 describe("kinds from the waiting-on list (a kind added later sorts by what it DOES, never by its name)", () => {
   const KINDS: WaitKind[] = assembleWaitKinds([

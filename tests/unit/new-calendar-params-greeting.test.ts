@@ -18,8 +18,8 @@ import { MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE } from "@/lib/new-calendar/types"
 /** New Calendar — the web address is the page's only state, and it is typed by strangers: parse it defensively. */
 
 describe("parseParams", () => {
-  it("defaults to the To work on list, no service, no step, no search, one page", () => {
-    expect(parseParams({})).toEqual({ tab: "jobs", b: "work", s: "", st: "", w: "", q: "", n: PAGE_SIZE })
+  it("defaults to the All open list, no service, no step, no search, one page", () => {
+    expect(parseParams({})).toEqual({ tab: "jobs", b: "all", s: "", st: "", w: "", q: "", n: PAGE_SIZE })
   })
 
   it("accepts the four list names (any case) and falls back to the default for anything else", () => {
@@ -66,7 +66,7 @@ describe("toQueryString and the helpers", () => {
   })
 
   it("never writes a step without its service", () => {
-    expect(toQueryString({ tab: "jobs", b: "work", s: "", st: "One", w: "", q: "", n: PAGE_SIZE })).toBe("")
+    expect(toQueryString({ tab: "jobs", b: "all", s: "", st: "One", w: "", q: "", n: PAGE_SIZE })).toBe("")
   })
 
   it("choosing a list clears service, step and paging but keeps the search", () => {
@@ -98,8 +98,9 @@ describe("the Waiting on chip (w)", () => {
   it("is written to the address only with the Pending list, and choosing a list or tab clears it", () => {
     const base = parseParams({ b: "pending", w: "the_irs" })
     expect(toQueryString(base)).toBe("?b=pending&w=the_irs")
-    expect(toQueryString({ ...base, b: "work" })).toBe("")
-    expect(withBucket(base, "work").w).toBe("")
+    expect(toQueryString({ ...base, b: "all" })).toBe("")
+    expect(toQueryString({ ...base, b: "work" })).toBe("?b=work")
+    expect(withBucket(base, "all").w).toBe("")
     expect(withTab(base, "news").w).toBe("")
   })
 

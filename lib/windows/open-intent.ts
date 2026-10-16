@@ -32,3 +32,12 @@ export interface KeyLike {
 export function isWindowOpenKey(e: KeyLike): boolean {
   return e.key === 'Enter' && (e.metaKey === true || e.ctrlKey === true) && !e.altKey && !e.shiftKey
 }
+
+/**
+ * A click on a link that should open the page as a floating window when windows are available (the Calendar's "Open workspace").
+ * A plain left click, or Option/Alt + click, means "window". Cmd/Ctrl-click (new tab) and Shift-click (new browser window) stay the
+ * browser's own, per Antonio's "leave native mouse behaviour alone" (see isWindowOpenClick above).
+ */
+export function isWindowLinkClick(e: ClickLike): boolean {
+  return (e.button ?? 0) === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey
+}

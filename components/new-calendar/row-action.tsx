@@ -2,12 +2,14 @@
 
 /**
  * New Calendar — what a row's last cell does. A step whose layout asks for a Calendar pop-up opens it RIGHT HERE on the row
- * (the Calendar is where the team works every day); every other row keeps the link to its workspace for now (v1 is read-only).
+ * (the Calendar is where the team works every day); every other row opens its workspace in a floating window (the Calendar only SHOWS the stage;
+ * all acting happens in the workspace — Antonio 2026-10-16: no "Done" buttons).
  * No service or step name is written here: the pop-up comes from the step's layout data (`row.popup`).
  */
 
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
+import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import { ClosureWrapupDialog } from '@/components/open-services/closure-wrapup-dialog'
 import type { CalendarRow } from '@/lib/new-calendar/types'
 
@@ -41,14 +43,16 @@ export function RowAction({ row }: { row: CalendarRow }) {
     )
   }
 
+  // Every other row: the workspace opens as a FLOATING WINDOW over the Calendar (Antonio 2026-10-16), so the Calendar stays where it is and
+  // the line updates itself when the stage moves. Where windows are not available it is an ordinary link (see OpenInWindowLink).
   return (
-    <Link
+    <OpenInWindowLink
       href={row.href}
-      prefetch={false}
+      title={`${row.name} — ${row.serviceType}`}
       aria-label={`Open workspace for ${row.name}`}
       className="whitespace-nowrap text-sm font-semibold text-blue-700 hover:underline"
     >
       Open workspace →
-    </Link>
+    </OpenInWindowLink>
   )
 }

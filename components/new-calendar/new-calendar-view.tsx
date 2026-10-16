@@ -7,15 +7,16 @@
 
 import Link from 'next/link'
 import {
-  BUCKETS,
+  LISTS,
   BUCKET_HELP,
   BUCKET_LABELS,
-  type Bucket,
+  type ListKey,
   type CalendarModel,
   type CalendarRow,
   type Pill,
 } from '@/lib/new-calendar/types'
 import {
+  DEFAULT_BUCKET,
   sameText,
   sameTextLoose,
   toQueryString,
@@ -31,13 +32,15 @@ import type { WaitBehaviour } from '@/lib/open-services/types'
 import { workTodayText } from '@/lib/new-calendar/greeting'
 import { RowAction } from '@/components/new-calendar/row-action'
 import { RefreshButton } from '@/components/new-calendar/refresh-button'
+import { LiveRefresh } from '@/components/new-calendar/live-refresh'
 import { WhatsNewTab } from '@/components/whats-new/whats-new-tab'
 import { WhatsNewCount } from '@/components/whats-new/whats-new-count'
 
 const BASE = '/new-calendar'
 const hrefFor = (p: NewCalendarParams) => `${BASE}${toQueryString(p)}`
 
-const BUCKET_DOT: Record<Bucket, string> = {
+const BUCKET_DOT: Record<ListKey, string> = {
+  all: 'bg-blue-600',
   work: 'bg-orange-600',
   pending: 'bg-amber-500',
   other: 'bg-zinc-400',
@@ -135,13 +138,13 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
   return (
     <>
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Lists">
-        {BUCKETS.map(b => (
+        {LISTS.map(b => (
           <Chip key={b} href={hrefFor(withBucket(params, b))} pressed={model.active === b} dim={model.counts[b] === 0} dot={BUCKET_DOT[b]}>
             {BUCKET_LABELS[b]} <span className="font-mono text-xs tabular-nums opacity-80">{model.counts[b]}</span>
           </Chip>
         ))}
         <form action={BASE} method="get" role="search" className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
-          {params.b !== 'work' && <input type="hidden" name="b" value={params.b} />}
+          {params.b !== DEFAULT_BUCKET && <input type="hidden" name="b" value={params.b} />}
           {params.s && <input type="hidden" name="s" value={params.s} />}
           {params.s && params.st && <input type="hidden" name="st" value={params.st} />}
           {model.waitFilter && <input type="hidden" name="w" value={model.waitFilter} />}
@@ -161,7 +164,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
           )}
         </form>
       </div>
-      {!stepView && <p className="text-xs text-zinc-500">{BUCKET_HELP[model.active as Bucket]}</p>}
+      {!stepView && <p className="text-xs text-zinc-500">{BUCKET_HELP[model.active as ListKey]}</p>}
 
       {model.waiting.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Waiting on">
@@ -267,8 +270,9 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
 export function NewCalendarView({ model, params, greeting }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string }) {
   return (
     <div className="space-y-4 p-6 lg:p-8">
+      <LiveRefresh />
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Calendar</h1>
         <p className="mt-1 text-sm text-zinc-600">
           {model
             ? <>{greeting} — <b className="font-semibold text-foreground">{workTodayText(model.workToday)}</b> <span className="text-zinc-500">(open services only)</span>.{' '}</>
@@ -278,11 +282,11 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
       </header>
 
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-        This is the new Calendar, being tested. Open services shows the same jobs as before, sorted into what is on us and what is waiting — for now that list only <b>shows</b> things, so open a line to work on it.
-        What&apos;s New is the one place here where you can change something: ticking a note <b>Handled</b> (or a workflow&apos;s own button) is real. Renewals, annual reports and Mark Filed stay on the existing Calendar.
+        Every open job, with its step and who the next move belongs to. <b>Open workspace</b> opens the job in a window: act there, and this list updates by itself.
+        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Renewals, annual reports and Mark Filed are on the third tab.
       </div>
 
-      <nav className="flex gap-1 border-b text-sm" aria-label="New Calendar pages">
+      <nav className="flex gap-1 border-b text-sm" aria-label="Calendar pages">
         {params.tab === 'jobs' ? (
           <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
             Open services {model && <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>}

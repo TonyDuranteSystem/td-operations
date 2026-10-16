@@ -151,10 +151,11 @@ const defaultNavigation: NavItem[] = [
   { id: 'finance', name: 'Finance', href: '/finance', icon: Wallet, tooltip: 'Invoices, payments, bank feed reconciliation, and financial overview. Includes the bank-feed review queue for uncertain auto-matches and crashed activations.' },
   { id: 'owner', name: 'My Finances', href: '/owner', icon: TrendingUp, ownerOnly: true, tooltip: 'Tony Durante LLC — P&L, cash position, transaction categorization, tax estimates. Owner only.' },
   { id: 'tax', name: 'Tax Returns', href: '/tax-returns', icon: FileText, tooltip: 'Tax return filing tracker — status, deadlines, and accountant assignments.' },
+  // Calendar (dev job 40235e3c, Antonio 2026-10-16: "turn on the new calendar"): the ONE Calendar item. For people who may open the New Calendar
+  // (the layout passes the 'new-calendar' flag from the same switch the page itself checks — see dashboard-navigation.md) it opens the new
+  // day-by-day work list; for everyone else it keeps opening the existing /calendar, so nobody gets a 404 on a main menu item. The existing
+  // Calendar (renewals, annual reports, Mark Filed) stays reachable from the new page's third tab. The id stays 'calendar' so everyone's saved menu order holds.
   { id: 'calendar', name: 'Calendar', href: '/calendar', icon: Calendar, tooltip: 'Upcoming deadlines, meetings, and scheduled events.' },
-  // New Calendar (dev job 40235e3c, 2026-10-16): the day-by-day work list, being tested next to the existing Calendar. Shown only to
-  // people who may open it — the layout passes the 'new-calendar' flag from the same switch the page itself checks (see dashboard-navigation.md).
-  { id: 'new-calendar', name: 'New Calendar', href: '/new-calendar', icon: CalendarDays, featureFlag: 'new-calendar', tooltip: 'The new day-by-day work list: what is on us, what is waiting on someone else, what is finished. Being tested; the existing Calendar stays.' },
   { id: 'partners', name: 'Partners', href: '/partners', icon: Users, tooltip: 'Client-bringing partners — Maxscale, Fiscalot, Fresh Legal Group. View managed clients and invoices.' },
   { id: 'td-communication', name: 'TD Communication', href: '/dashboard/td-communication', icon: Radio, tooltip: 'Direct realtime channel between TD staff and managed partners (e.g. Cris). Reply to partner messages here.' },
   { id: 'referrals', name: 'Referrals', href: '/referrals', icon: Share2, tooltip: 'Referral tracking — who referred whom, commissions, and payouts.' },
@@ -635,6 +636,10 @@ export function Sidebar({
       if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
       if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
       if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
+      // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
+      if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
+        return { ...item, href: '/new-calendar', icon: CalendarDays, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
+      }
       return item
     })
     .filter((item): item is NavItem => {
@@ -762,9 +767,11 @@ export function Sidebar({
           >
             <SortableContext items={orderedNav.map(i => i.id)} strategy={verticalListSortingStrategy}>
               {orderedNav.map((item) => {
+                // The Calendar item is lit on BOTH calendar pages (the new work list and the existing renewals page behind its third tab).
+                const isCalendarPage = item.id === 'calendar' && (pathname === '/calendar' || pathname.startsWith('/calendar/') || pathname === '/new-calendar' || pathname.startsWith('/new-calendar/'))
                 const isActive = item.href === '/'
                   ? pathname === '/'
-                  : pathname === item.href || pathname.startsWith(item.href + '/')
+                  : isCalendarPage || pathname === item.href || pathname.startsWith(item.href + '/')
                 return (
                   <SortableNavItem
                     key={item.id}

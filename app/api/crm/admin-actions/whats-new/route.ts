@@ -27,6 +27,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser, isStaffUser } from "@/lib/auth"
+import { WORKSPACE_SRC_TABLES, soleOpenJobId, srcTableOfRef } from "@/lib/notifications/whats-new-job"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
 import { groupWhatsNewSummary, type SummaryNote } from "@/lib/notifications/whats-new-summary"
@@ -54,6 +55,11 @@ interface RawNote {
   created_at?: string
   handled_at?: string | null
   handled_by?: string | null
+}
+
+/** The table half of a note's source ref, read from its marker. */
+function srcTableOf(message: string): string {
+  return srcTableOfRef(message.match(MARKER_RE)?.[2] ?? null)
 }
 
 function parseMarker(message: string): { kind: string | null; src: string | null } {
@@ -283,6 +289,18 @@ export async function GET(req: NextRequest) {
       if (error) throw error
       const notes = (data ?? []) as RawNote[]
       const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(notes)])
+      // The job whose workspace a note's "Open" can go straight to (the Calendar's What's New tab). Notes do not carry a job id (their marker
+      // names the SS-4 / document / lease record), so: for the notes of a COMPANY thread whose record belongs to the company's own work, if the
+      // company has EXACTLY ONE open job, that is the job. Several open jobs = ambiguous = no job (the client page stays the target).
+      let soleOpenJobIdValue: string | null = null
+      if (accountId && notes.some((n) => WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)))) {
+        const { data: jobs, error: jobsErr } = await db
+          .from("service_deliveries")
+          .select("id, status, is_test")
+          .eq("account_id", accountId)
+        if (jobsErr) throw jobsErr
+        soleOpenJobIdValue = soleOpenJobId((jobs ?? []) as Array<{ id: string; status: string | null; is_test: boolean | null }>)
+      }
       const out = notes
         .filter((n) => {
           const key = keys.get(n)
@@ -302,6 +320,8 @@ export async function GET(req: NextRequest) {
             // Raw source ref ("payments:uuid", "documents:uuid", ...) so the
             // panel can deep-link the "Open" button to the related entity.
             src,
+            // Set only when the note's record belongs to the company's own work AND the company has exactly one open job (see above).
+            job_id: WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)) ? soleOpenJobIdValue : null,
             topic: n.topic ?? null,
             text: n.message.replace(MARKER_RE, "").trim(),
             // Suggested next step for "Open card": per-event override → code default.

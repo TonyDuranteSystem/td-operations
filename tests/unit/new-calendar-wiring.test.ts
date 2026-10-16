@@ -38,7 +38,7 @@ describe("the page", () => {
 
   it("passes the access proof to the loader and shows 'Could not load' instead of an empty list when a read fails, and reports it to Sentry", () => {
     expect(code).toContain("loadNewCalendarInputs(access")
-    expect(page).toContain("Could not load the New Calendar.")
+    expect(page).toContain("Could not load the Calendar.")
     expect(code).toContain("Sentry.captureException(err")
   })
 
@@ -76,6 +76,7 @@ describe("client/server boundary", () => {
     const imports = importsOf(read("components/new-calendar/new-calendar-view.tsx"))
     const mine = imports.filter(i => i.includes("new-calendar") || i.includes("open-services"))
     expect(mine.sort()).toEqual([
+      "@/components/new-calendar/live-refresh",
       "@/components/new-calendar/refresh-button",
       "@/components/new-calendar/row-action",
       "@/lib/new-calendar/greeting",
@@ -199,12 +200,16 @@ describe("the menu item and the old Calendar", () => {
   const sidebar = read("components/dashboard/sidebar.tsx")
   const layout = read("app/(dashboard)/layout.tsx")
 
-  it("the sidebar has a 'New Calendar' item right after the existing Calendar, behind a feature flag", () => {
-    const calendar = sidebar.indexOf("{ id: 'calendar', name: 'Calendar', href: '/calendar'")
-    const item = sidebar.indexOf("{ id: 'new-calendar', name: 'New Calendar', href: '/new-calendar'")
-    expect(calendar).toBeGreaterThan(-1)
-    expect(item).toBeGreaterThan(calendar)
-    expect(sidebar.slice(item, item + 400)).toContain("featureFlag: 'new-calendar'")
+  it("the menu has ONE Calendar item: it opens the New Calendar only for people who may see it (flag), else the existing one; the separate 'New Calendar' item is gone", () => {
+    const code = stripComments(sidebar)
+    expect(code).not.toContain("id: 'new-calendar'")
+    expect(code).toContain("{ id: 'calendar', name: 'Calendar', href: '/calendar'")
+    // the id stays 'calendar' so everyone's saved menu order holds; the href only changes behind the flag
+    expect(code).toContain("item.id === 'calendar' && enabledFeatures.includes('new-calendar')")
+    expect(code).toContain("href: '/new-calendar'")
+    // lit on both calendar pages
+    expect(code).toContain("item.id === 'calendar' && (pathname === '/calendar'")
+    expect(code).toContain("pathname === '/new-calendar'")
   })
 
   it("the layout shows the item only to people the page itself would let in (same switch, same rule), never inside a floating window", () => {
@@ -226,5 +231,48 @@ describe("the menu item and the old Calendar", () => {
     const view = read("components/new-calendar/new-calendar-view.tsx")
     expect(view).toContain("href=\"/calendar\"")
     expect(view).toContain("Renewals &amp; annual reports")
+  })
+})
+
+describe("the workspace opens in a floating window, and the page updates by itself", () => {
+  const rowAction = read("components/new-calendar/row-action.tsx")
+  const live = read("components/new-calendar/live-refresh.tsx")
+  const view = read("components/new-calendar/new-calendar-view.tsx")
+
+  it("a row's 'Open workspace' is the window link (a real link that falls back to a normal page)", () => {
+    expect(rowAction).toContain("<OpenInWindowLink")
+    expect(rowAction).toContain("href={row.href}")
+    const link = read("components/windows/open-in-window-link.tsx")
+    expect(link).toContain("canOpenWindowNow(windowsAvailable)")
+    expect(link).toContain("requestOpenWindow(href, title)")
+    expect(link).toContain("isWindowLinkClick(e)")
+  })
+
+  it("the What's New tab opts in to the workspace window; Portal Chats does not", () => {
+    expect(read("components/whats-new/whats-new-tab.tsx")).toContain("openWorkspaceInWindow")
+    expect(read("components/portal-chats/thread-whats-new-panel.tsx")).toContain("openWorkspaceInWindow = false")
+    expect(read("app/(dashboard)/portal-chats/page.tsx")).not.toContain("openWorkspaceInWindow")
+  })
+
+  it("the Calendar listens for the job-change event, debounces, and has a safety poll; it never subscribes to a table itself", () => {
+    expect(view).toContain("<LiveRefresh />")
+    expect(live).toContain("'td-ui-event'")
+    expect(live).toContain("isJobsEvent(")
+    expect(live).toContain("refreshDelay(")
+    expect(live).toContain("LIVE_POLL_MS")
+    expect(live).not.toMatch(/supabase|postgres_changes|channel\(/)
+  })
+
+  it("the live-event trigger migration is wrapped so it can never block a job write, and is statement-level with an undo", () => {
+    const up = read("scripts/migrations/20261016-1500-jobs-live-event.sql")
+    expect(up).toMatch(/EXCEPTION WHEN OTHERS THEN\s+NULL/)
+    expect(up).toMatch(/FOR EACH STATEMENT/)
+    expect(up).not.toMatch(/FOR EACH ROW/)
+    expect(up).toMatch(/SECURITY DEFINER SET search_path = public/)
+    expect(up).toContain("VALUES ('jobs', NULL)")
+    expect(up).toMatch(/AFTER UPDATE OF stage, status, stage_entered_at, end_date, is_test, account_id, contact_id/)
+    const undo = read("scripts/migrations/20261016-1500-jobs-live-event.UNDO.sql")
+    expect(undo).toMatch(/DROP TRIGGER IF EXISTS trg_service_deliveries_ui_event_upd/)
+    expect(undo).toMatch(/DROP FUNCTION IF EXISTS public.emit_jobs_ui_event/)
   })
 })
