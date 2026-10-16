@@ -15,8 +15,7 @@ import {
   type StepInput,
 } from "@/lib/open-services/build"
 import { cardClosesOnlyByFiling } from "@/lib/services/renewal-close"
-import { WAITING_ON_VALUES } from "@/lib/services/step-settings"
-import { WHO_VALUES } from "@/lib/open-services/types"
+import { BUILTIN_WAIT_KINDS, WAIT_BEHAVIOURS, assembleWaitKinds, catalogWaitKind, defaultWaitKinds, type WaitKind } from "@/lib/open-services/types"
 import { parseParams } from "@/lib/open-services/params"
 
 /**
@@ -78,8 +77,11 @@ function run(jobs: JobInput[], paramsRaw: Record<string, string | string[]> = {}
 const rowsOf = (m: ReturnType<typeof run>) => m.groups.flatMap(g => g.rows)
 
 describe("vocabulary", () => {
-  it("the six states are the five step settings plus 'unset' (drift guard)", () => {
-    expect([...WAITING_ON_VALUES, "unset"].sort()).toEqual([...WHO_VALUES].sort())
+  it("the default kinds are the five slugs stored before the list became data, in the old order (drift guard)", () => {
+    expect(defaultWaitKinds().map(k => k.slug)).toEqual(["us", "client", "outside", "date", "none"])
+    expect(defaultWaitKinds().map(k => k.behaviour)).toEqual(["ours", "client", "other", "date", "none"])
+    for (const b of WAIT_BEHAVIOURS) expect(defaultWaitKinds().some(k => k.behaviour === b)).toBe(true)
+    expect(Object.keys(BUILTIN_WAIT_KINDS).sort()).toEqual(["client", "none", "us"])
   })
 })
 
@@ -301,8 +303,9 @@ describe("grouping, ordering, filters", () => {
     expect(m.shown).toBe(2)
     expect(rowsOf(m).every(r => r.who === "us" && r.lateBy !== null)).toBe(true)
     // the 'client' chip still shows what it would add (late filter applied, who filter not)
-    expect(m.chips.client).toBe(1)
-    expect(m.chips.us).toBe(2)
+    const chip = (who: string) => m.chips.find(c => c.who === who)!.count
+    expect(chip("client")).toBe(1)
+    expect(chip("us")).toBe(2)
     expect(m.lateChip).toBe(2)
   })
 
@@ -329,5 +332,72 @@ describe("grouping, ordering, filters", () => {
     expect(m.totalOpen).toBe(6)
     expect(m.noDate).toBe(3)
     expect(m.late).toBe(3)
+  })
+})
+
+
+describe("kinds from the waiting-on list", () => {
+  const KINDS: WaitKind[] = assembleWaitKinds([
+    catalogWaitKind("outside", "An outside office", "other"),
+    catalogWaitKind("date", "A date", "date"),
+    catalogWaitKind("the_irs", "The IRS", "other"),
+    catalogWaitKind("court_day", "Court day", "date"),
+  ])
+  const KSTEPS: StepInput[] = [
+    { service_type: "Zeta", stage_name: "Filed", stage_order: 1, waiting_on: "the_irs", sla_days: 5, completes_service: false },
+    { service_type: "Zeta", stage_name: "Hearing", stage_order: 2, waiting_on: "court_day", sla_days: 2, completes_service: false },
+    { service_type: "Zeta", stage_name: "Lost", stage_order: 3, waiting_on: "gone_kind", sla_days: 3, completes_service: false },
+  ]
+  const krun = (jobs: JobInput[], paramsRaw: Record<string, string | string[]> = {}) =>
+    run(jobs, paramsRaw, { steps: KSTEPS, waitKinds: KINDS })
+  const z = (stage: string, over: Partial<JobInput> = {}) => job({ service_type: "Zeta", stage, ...over })
+
+  it("groups, chips and labels come from the list, in list order, with 'Not set' last", () => {
+    const m = krun([z("Filed"), z("Hearing"), z("Lost")])
+    expect(m.chips.map(c => c.who)).toEqual(["us", "client", "outside", "the_irs", "date", "court_day", "none", "unset"])
+    expect(m.chips.find(c => c.who === "the_irs")).toMatchObject({ label: "The IRS", tip: "Waiting on the IRS", behaviour: "other", count: 1 })
+    expect(m.groups.map(g => [g.key, g.label])).toEqual([["the_irs", "Waiting on the IRS"], ["court_day", "Waiting on Court day"], ["unset", "Waiting-on not set"]])
+  })
+
+  it("late follows the behaviour: a 'date' kind is never late, any other wait is late after its follow-up days", () => {
+    const m = krun([z("Filed", { stage_entered_at: daysAgo(9) }), z("Hearing", { stage_entered_at: daysAgo(90) })])
+    const byStage = (st: string) => rowsOf(m).find(r => r.stage === st)!
+    expect(byStage("Filed").lateBy).toBe(4)
+    expect(byStage("Hearing").followUp).toBe("date-step")
+    expect(byStage("Hearing").lateBy).toBeNull()
+  })
+
+  it("a step on a kind that no longer exists shows as not set AND is counted in a warning", () => {
+    const m = krun([z("Lost"), z("Lost")])
+    expect(rowsOf(m).every(r => r.who === "unset")).toBe(true)
+    expect(m.warnings.join(" ")).toMatch(/2 open job\(s\) use a "waiting on" kind that is no longer in the list \("gone_kind"\)/)
+  })
+
+  it("the who filter takes a list kind; a token that is not a real kind (stale bookmark, junk) is dropped, not 'no match'", () => {
+    const jobs = [z("Filed"), z("Hearing")]
+    const picked = krun(jobs, { who: "the_irs" })
+    expect(picked.shown).toBe(1)
+    expect(picked.anyFilter).toBe(true)
+    for (const who of ["banana", "__proto__", "constructor", "tostring"]) {
+      const m = krun(jobs, { who })
+      expect(m.anyFilter, who).toBe(false)
+      expect(m.shown, who).toBe(2)
+    }
+    // a real kind next to a junk token still filters by the real one
+    expect(krun(jobs, { who: "banana,the_irs" }).shown).toBe(1)
+  })
+
+  it("a RETIRED kind with no jobs gets no chip (it would sit dimmed forever); with jobs it keeps its chip", () => {
+    const kinds = assembleWaitKinds([catalogWaitKind("outside", "An outside office", "other"), catalogWaitKind("date", "A date", "date"), catalogWaitKind("old_bank", "Old bank", "other", true)])
+    const none = run([job({ stage: "Two" })], {}, { waitKinds: kinds })
+    expect(none.chips.map(c => c.who)).toEqual(["us", "client", "outside", "date", "none", "unset"])
+    const some = run([job({ service_type: "Zeta", stage: "Bank" })], {}, { waitKinds: kinds, steps: [{ service_type: "Zeta", stage_name: "Bank", stage_order: 1, waiting_on: "old_bank", sla_days: 3, completes_service: false }] })
+    expect(some.chips.find(c => c.who === "old_bank")).toMatchObject({ count: 1 })
+  })
+
+  it("with no list given the two seeded kinds apply, so existing callers keep working", () => {
+    const m = run([job({ stage: "Three" })])
+    expect(m.chips.map(c => c.who)).toEqual(["us", "client", "outside", "date", "none", "unset"])
+    expect(m.groups[0].label).toBe("Waiting on an outside office")
   })
 })

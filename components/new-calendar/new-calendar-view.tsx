@@ -10,8 +10,6 @@ import {
   BUCKETS,
   BUCKET_HELP,
   BUCKET_LABELS,
-  PILL_LABELS,
-  WAIT_LABELS,
   type Bucket,
   type CalendarModel,
   type CalendarRow,
@@ -26,8 +24,10 @@ import {
   withService,
   withStep,
   withTab,
+  withWait,
   type NewCalendarParams,
 } from '@/lib/new-calendar/params'
+import type { WaitBehaviour } from '@/lib/open-services/types'
 import { workTodayText } from '@/lib/new-calendar/greeting'
 import { RowAction } from '@/components/new-calendar/row-action'
 import { RefreshButton } from '@/components/new-calendar/refresh-button'
@@ -52,11 +52,12 @@ const PILL_CLASS: Record<Pill, string> = {
   closed: 'bg-green-100 text-green-800',
 }
 
-const STEP_DOT: Record<string, string> = {
-  us: 'bg-orange-600',
+// The dot on a step chip follows what the step's kind DOES: ours / the last step (nobody is waiting) are work, every kind of wait is pending.
+const STEP_DOT: Record<WaitBehaviour | 'unset', string> = {
+  ours: 'bg-orange-600',
   none: 'bg-orange-600',
   client: 'bg-amber-500',
-  outside: 'bg-amber-500',
+  other: 'bg-amber-500',
   date: 'bg-amber-500',
   unset: 'bg-zinc-400',
 }
@@ -114,7 +115,7 @@ function Row({ row }: { row: CalendarRow }) {
       <div className="mt-1 text-zinc-700 min-[1100px]:mt-0">{row.serviceType}</div>
       <div className="mt-1 min-[1100px]:mt-0">
         <div>{row.stepNo ? `Step ${row.stepNo}: ` : ''}{row.bucket === 'closed' ? (row.stage || 'Finished') : (row.stage || 'no step')}</div>
-        <span className={`mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${PILL_CLASS[row.pill]}`}>{PILL_LABELS[row.pill]}</span>
+        <span className={`mt-1 inline-block max-w-full truncate whitespace-nowrap rounded-full px-2 py-0.5 align-bottom text-[11px] font-semibold ${PILL_CLASS[row.pill]}`} title={row.pillLabel}>{row.pillLabel}</span>
       </div>
       <div className="mt-1 font-mono text-[13px] tabular-nums min-[1100px]:mt-0">
         <span className="font-sans text-zinc-500 min-[1100px]:sr-only">{row.bucket === 'closed' ? 'Finished: ' : 'Days: '}</span><Days row={row} />
@@ -143,6 +144,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
           {params.b !== 'work' && <input type="hidden" name="b" value={params.b} />}
           {params.s && <input type="hidden" name="s" value={params.s} />}
           {params.s && params.st && <input type="hidden" name="st" value={params.st} />}
+          {model.waitFilter && <input type="hidden" name="w" value={model.waitFilter} />}
           <input
             key={params.q}
             type="search"
@@ -160,6 +162,20 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
         </form>
       </div>
       {!stepView && <p className="text-xs text-zinc-500">{BUCKET_HELP[model.active as Bucket]}</p>}
+
+      {model.waiting.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Waiting on">
+          <span className="text-sm text-zinc-500">Waiting on:</span>
+          <Chip href={hrefFor(withWait(params, ''))} pressed={model.waitFilter === ''}>
+            All <span className="font-mono text-xs tabular-nums opacity-80">{model.waiting.reduce((n, c) => n + c.count, 0)}</span>
+          </Chip>
+          {model.waiting.map(c => (
+            <Chip key={c.key} href={hrefFor(withWait(params, c.key))} pressed={model.waitFilter === c.key} dim={c.count === 0}>
+              {c.label} <span className="font-mono text-xs tabular-nums opacity-80">{c.count}</span>
+            </Chip>
+          ))}
+        </div>
+      )}
 
       {model.services.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Services">
@@ -180,7 +196,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`${params.s} steps`}>
           <span className="text-sm text-zinc-500">{params.s} steps (jobs in all lists):</span>
           {model.steps.map(st => (
-            <Chip key={st.name} href={hrefFor(withStep(params, st.name))} pressed={sameTextLoose(params.st, st.name)} dim={st.count === 0} dot={STEP_DOT[st.waitingOn]} title={WAIT_LABELS[st.waitingOn]}>
+            <Chip key={st.name} href={hrefFor(withStep(params, st.name))} pressed={sameTextLoose(params.st, st.name)} dim={st.count === 0} dot={STEP_DOT[st.behaviour ?? 'unset']} title={st.tip}>
               {st.name} <span className="font-mono text-xs tabular-nums opacity-80">{st.count}</span>
             </Chip>
           ))}
@@ -236,7 +252,7 @@ function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendar
 
       <div className="rounded-lg border bg-white p-4 text-sm text-zinc-600">
         <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">How a line moves</h2>
-        Each step of a service is marked in its settings as waiting on us, on the client, on an outside office (the IRS, a state, a bank) or on a date.
+        Each step of a service is marked in its settings with whose turn it is: ours, the client&apos;s, or someone else&apos;s (the list of those kinds is kept in the Service Catalog).
         A job on a step that is ours is under <b>To work on</b>. A job on a step that waits for someone else is under <b>Pending</b>; if it waits longer than
         the follow-up days set on the step, it comes back to To work on with a red day count. A job on the last step (nobody is waiting) is under To work on
         so someone closes it. Steps with no &ldquo;waiting on&rdquo; setting are listed under <b>Not sorted yet</b> instead of being guessed. When a job is

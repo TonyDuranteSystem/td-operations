@@ -11,6 +11,8 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { TERMINAL_DELIVERY_STATUSES } from "@/lib/services/stages"
+import { loadWaitKinds } from "@/lib/services/wait-kinds-load"
+import type { WaitKind } from "@/lib/open-services/types"
 import type { OpenServicesAccessGranted } from "@/lib/open-services/audience"
 import type {
   AccountInput,
@@ -30,6 +32,9 @@ export interface OpenServicesInputs {
   accounts: AccountInput[]
   contacts: ContactInput[]
   cards: CardInput[]
+  /** The "waiting on" kinds (us, the client, the catalog kinds, nobody) and any problem found reading the list. */
+  waitKinds: WaitKind[]
+  waitKindProblems: string[]
 }
 
 interface PageResult<T> {
@@ -76,7 +81,7 @@ export async function loadOpenServicesInputs(access: OpenServicesAccessGranted):
 
   const terminal = TERMINAL_DELIVERY_STATUSES.join(",")
 
-  const [jobs, steps, cards] = await Promise.all([
+  const [jobs, steps, cards, waitList] = await Promise.all([
     readAll<JobInput>("jobs", after => {
       let q = supabaseAdmin
         .from("service_deliveries")
@@ -107,6 +112,7 @@ export async function loadOpenServicesInputs(access: OpenServicesAccessGranted):
       if (after) q = q.gt("id", after)
       return q as unknown as PromiseLike<PageResult<CardInput>>
     }),
+    loadWaitKinds(),
   ])
 
   // The renewals rule is live (C0): its cards must exist. If none come back, the exclusion would silently do nothing
@@ -165,5 +171,7 @@ export async function loadOpenServicesInputs(access: OpenServicesAccessGranted):
     accounts: accountChunks.flat(),
     contacts: contactChunks.flat(),
     cards,
+    waitKinds: waitList.kinds,
+    waitKindProblems: waitList.problems,
   }
 }

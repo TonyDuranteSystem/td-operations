@@ -6,7 +6,7 @@
  * anywhere in lib/new-calendar: every service and step on the page comes from the step settings (the data).
  */
 
-import type { CalendarPopup, Who } from "@/lib/open-services/types"
+import type { CalendarPopup, WaitBehaviour, Who } from "@/lib/open-services/types"
 
 /** The four lists of the page. "other" = jobs whose step has no "waiting on" setting yet (so they cannot be sorted honestly). */
 export const BUCKETS = ["work", "pending", "other", "closed"] as const
@@ -21,8 +21,8 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
 
 export const BUCKET_HELP: Record<Bucket, string> = {
   work: "Steps that are ours, jobs whose follow-up time has passed, and jobs sitting on the last step (nobody is waiting: close them).",
-  pending: "Steps waiting on the client, an outside office or a date, and paused jobs (blocked, on hold, company not operating).",
-  other: "The step has no \"waiting on\" setting yet, so the page cannot tell whose turn it is. Set it on the step in the Service Catalog.",
+  pending: "Steps waiting on someone else (any kind of wait in the waiting-on list), and paused jobs (blocked, on hold, company not operating). Use the \"Waiting on\" chips to see one kind of wait.",
+  other: "The step has no usable \"waiting on\" setting (none, or a kind that is no longer in the list), so the page cannot tell whose turn it is. Set it on the step in the Service Catalog.",
   closed: "Jobs that reached their last step in the last 30 days.",
 }
 
@@ -33,15 +33,8 @@ export const PAGE_SIZE = 50
 export const MAX_LIMIT = 5000
 export const MAX_TEXT_LENGTH = 80
 
-/** Whose turn a step is, in plain words (the tooltip on a step chip's coloured dot). */
-export const WAIT_LABELS: Record<Who, string> = {
-  us: "Our turn",
-  client: "Waiting on the client",
-  outside: "Waiting on an outside office",
-  date: "Waiting on a date",
-  none: "Last step: nobody is waiting",
-  unset: "Waiting-on not set",
-}
+/** The "Waiting on" chip that shows the paused jobs of the Pending list (blocked, on hold, company not operating). */
+export const PAUSED_KEY = "paused"
 
 export type Pill = "late" | "work" | "pending" | "other" | "closed"
 
@@ -65,7 +58,11 @@ export interface CalendarRow {
   stepNo: number | null
   bucket: Bucket
   pill: Pill
+  /** The words in the status pill: "Overdue", "To work on", "Waiting on the client", "Paused"... */
+  pillLabel: string
   who: Who
+  /** What `who` means (null = no setting). */
+  behaviour: WaitBehaviour | null
   /** Days on the current step; null when the job has no step date (and for closed jobs). */
   daysHere: number | null
   /** Days past the follow-up time; set only when strictly greater than zero. */
@@ -89,8 +86,20 @@ export interface ServiceChip {
 export interface StepChip {
   name: string
   count: number
-  /** Who the step waits on, from the settings: colours the chip's dot. */
+  /** Who the step waits on, from the settings. */
   waitingOn: Who
+  /** What that means (null = no setting): colours the chip's dot. */
+  behaviour: WaitBehaviour | null
+  /** Plain words for the dot's tooltip ("Waiting on the client", "Our turn"...). */
+  tip: string
+}
+
+/** One chip of the "Waiting on" row on the Pending list. `key` is a kind slug or PAUSED_KEY. */
+export interface WaitChip {
+  key: string
+  label: string
+  count: number
+  behaviour: WaitBehaviour | null
 }
 
 export interface ExcludedLine {
@@ -112,6 +121,10 @@ export interface CalendarModel {
   services: ServiceChip[]
   /** That service's own steps, from its settings; empty unless a service is chosen on an open list. */
   steps: StepChip[]
+  /** The "Waiting on" chips (Pending list only; empty elsewhere), counted with the search and the service applied. */
+  waiting: WaitChip[]
+  /** The chip chosen on the row ("" = all), already checked against the real kinds. */
+  waitFilter: string
   rows: CalendarRow[]
   /** Jobs in the view before paging. */
   total: number

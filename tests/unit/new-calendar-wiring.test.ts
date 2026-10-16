@@ -81,6 +81,8 @@ describe("client/server boundary", () => {
       "@/lib/new-calendar/greeting",
       "@/lib/new-calendar/params",
       "@/lib/new-calendar/types",
+      // the kind's behaviour type (the dot colour follows it): the client-safe types file, nothing else from open-services
+      "@/lib/open-services/types",
     ].sort())
     expect(imports.join(" ")).not.toMatch(/supabase|lib\/services|settings|audience|\/load|\/build/)
   })

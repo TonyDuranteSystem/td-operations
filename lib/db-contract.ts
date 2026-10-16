@@ -151,10 +151,10 @@ export const NOT_A_VOCABULARY = new Set([
   // Not an app vocabulary (N1a P2): the service settings history is written ONLY by its own trigger, which stores the
   // trigger's own operation name (TG_OP) — no code path writes this column.
   "service_settings_history_op_check",
-  // TEMPORARY (N1a C2, 2026-10-04): this IS a value list — "Waiting on" (WAITING_ON_VALUES in lib/services/step-settings.ts).
-  // It cannot be registered in CONSTRAINT_CONTRACTS until Antonio runs migration 20261005-0100-c2-step-settings.sql in
-  // production and the production snapshot is refreshed; registering it first makes "PRODUCTION accepts every value the
-  // code can write" fail. Then MOVE it into CONSTRAINT_CONTRACTS with WAITING_ON_VALUES and delete this line. Dev job be7da01a.
+  // TEMPORARY (N1a C2, 2026-10-04) — SUPERSEDED 2026-10-16 (dev job 40235e3c): "Waiting on" is no longer a code value list. The kinds are rows of the
+  // catalog step_wait_kinds, and migration 20261016-1200-step-wait-kinds-catalog.sql REPLACES this CHECK with a static shape rule
+  // (pipeline_stages_waiting_on_shape). So do NOT move this line into CONSTRAINT_CONTRACTS. Delete it only AFTER that migration has run in
+  // PRODUCTION (while production still has the old CHECK, removing the line turns the production monitor red), and register nothing in its place.
   "pipeline_stages_waiting_on_check",
   // TEMPORARY (2026-09-25, WhatsApp replies from the CRM, stage 1): these two ARE value lists, not shape rules. They cannot be registered in
   // CONSTRAINT_CONTRACTS yet: the committed PRODUCTION snapshot does not contain them until Antonio runs migration

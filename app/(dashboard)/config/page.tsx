@@ -12,7 +12,8 @@
 import Link from "next/link"
 import { Settings, FileText, Workflow, ListTodo, Megaphone } from "lucide-react"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { WAITING_ON_LABELS, type WaitingOn } from "@/lib/services/step-settings"
+import { loadWaitKinds } from "@/lib/services/wait-kinds-load"
+import { waitKindOf, type WaitKind } from "@/lib/open-services/types"
 import { SOPEditButton, type SOPRow } from "./sop-edit-dialog"
 import {
   PipelineStageEditButton,
@@ -134,11 +135,13 @@ export default async function ConfigPage({
   // Fetch all three in parallel. Each table is small (17 / 56 / ≤100 rows);
   // fetching all three lets the tab nav show live counts without a second
   // round-trip.
-  const [sops, pipeline, devTasks, announcements] = await Promise.all([
+  // The waiting-on kinds are needed only by the Pipeline tab: a read problem there must not take the other tabs down.
+  const [sops, pipeline, devTasks, announcements, waitList] = await Promise.all([
     fetchSOPs(),
     fetchPipelineStages(),
     fetchDevTasks(sp.dev_status),
     fetchAnnouncements(),
+    tab === "pipeline" ? loadWaitKinds() : Promise.resolve(null),
   ])
 
   return (
@@ -162,7 +165,7 @@ export default async function ConfigPage({
       </nav>
 
       {tab === "sops" && <SOPsTab rows={sops} />}
-      {tab === "pipeline" && <PipelineTab rows={pipeline} />}
+      {tab === "pipeline" && waitList && <PipelineTab rows={pipeline} waitKinds={waitList.kinds} />}
       {tab === "dev-tasks" && <DevTasksTab rows={devTasks} activeStatus={sp.dev_status ?? "open"} />}
       {tab === "announcements" && <AnnouncementsTab initialRows={announcements} />}
     </div>
@@ -203,7 +206,7 @@ function SOPsTab({ rows }: { rows: SOPRow[] }) {
   )
 }
 
-function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
+function PipelineTab({ rows, waitKinds }: { rows: PipelineStageRow[]; waitKinds: WaitKind[] }) {
   if (rows.length === 0) {
     return <p className="text-sm text-zinc-500">No pipeline stages.</p>
   }
@@ -246,13 +249,13 @@ function PipelineTab({ rows }: { rows: PipelineStageRow[] }) {
                     {s.requires_approval ? "Approval " : ""}
                     {s.completes_service ? "Done " : ""}
                     {s.requires_document_to_advance ? "Needs document " : ""}
-                    {s.waiting_on ? `Waiting on: ${WAITING_ON_LABELS[s.waiting_on as WaitingOn] ?? s.waiting_on} ` : ""}
+                    {s.waiting_on ? `Waiting on: ${waitKindOf(waitKinds, s.waiting_on)?.name ?? `${s.waiting_on} (no longer in the list)`} ` : ""}
                     {!s.auto_advance && !s.requires_approval && !s.completes_service && !s.requires_document_to_advance && !s.waiting_on
                       ? "—"
                       : ""}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <PipelineStageEditButton row={s} />
+                    <PipelineStageEditButton row={s} waitKinds={waitKinds} />
                   </td>
                 </tr>
               ))}

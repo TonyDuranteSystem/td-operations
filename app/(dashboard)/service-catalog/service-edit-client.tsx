@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation"
 import { ArrowLeft, ArrowUp, ArrowDown, Trash2, Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react"
 import { toast } from "sonner"
 import type { StageRow } from "@/lib/services/stages"
-import { WAITING_ON_LABELS, WAITING_ON_VALUES, isWaitingOn, onlyChangedStepFields } from "@/lib/services/step-settings"
+import { onlyChangedStepFields } from "@/lib/services/step-settings"
+import { waitingOnOptions } from "@/lib/open-services/wait-kinds"
+import type { WaitKind } from "@/lib/open-services/types"
 import {
   saveServiceComplete,
   type ServiceBasicsDraft,
@@ -23,6 +25,8 @@ import type { CatalogValidityIssue } from "@/lib/tasks/catalog-validity"
 
 interface Props {
   mode: "new" | "edit"
+  /** The "waiting on" kinds (built-in + the catalog list) offered in each step's dropdown. */
+  waitKinds: WaitKind[]
   initial: {
     basics: ServiceBasicsDraft
     stages: StageRow[]
@@ -251,7 +255,7 @@ const inputClass =
  */
 let carriedSaveWarnings: { slug: string; at: number; warnings: string[] } | null = null
 
-export function ServiceEditClient({ mode, initial }: Props) {
+export function ServiceEditClient({ mode, initial, waitKinds }: Props) {
   const router = useRouter()
   const [basics, setBasics] = useState<ServiceBasicsDraft>(
     initial?.basics ?? blankBasics(),
@@ -382,6 +386,8 @@ export function ServiceEditClient({ mode, initial }: Props) {
       <BasicsSection basics={basics} patch={patchBasics} mode={mode} />
       <StagesSection
         pipeline={basics.pipeline ?? ""}
+        waitKinds={waitKinds}
+        storedStages={initial?.stages ?? []}
         stages={stages}
         addStage={addStage}
         updateStage={updateStage}
@@ -602,6 +608,8 @@ function BasicsSection({
 
 function StagesSection({
   pipeline,
+  waitKinds,
+  storedStages,
   stages,
   addStage,
   updateStage,
@@ -610,6 +618,9 @@ function StagesSection({
   onGenerateActions,
 }: {
   pipeline: string
+  waitKinds: WaitKind[]
+  /** The steps as loaded: their stored "waiting on" keeps a retired / missing choice pickable after the editor switched away from it. */
+  storedStages: StageRow[]
   stages: StageRow[]
   addStage: () => void
   updateStage: (idx: number, p: Partial<StageRow>) => void
@@ -699,6 +710,8 @@ function StagesSection({
           idx={idx}
           total={stages.length}
           stage={stage}
+          waitKinds={waitKinds}
+          storedWaitingOn={stage.id ? storedStages.find(x => x.id === stage.id)?.waiting_on ?? null : null}
           onPatch={(p) => updateStage(idx, p)}
           onMove={(dir) => moveStage(idx, dir)}
           onRemove={() => removeStage(idx)}
@@ -735,6 +748,8 @@ function StageCard({
   idx,
   total,
   stage,
+  waitKinds,
+  storedWaitingOn,
   onPatch,
   onMove,
   onRemove,
@@ -742,6 +757,8 @@ function StageCard({
   idx: number
   total: number
   stage: StageRow
+  waitKinds: WaitKind[]
+  storedWaitingOn: string | null
   onPatch: (p: Partial<StageRow>) => void
   onMove: (dir: -1 | 1) => void
   onRemove: () => void
@@ -827,13 +844,13 @@ function StageCard({
         <Field label="Waiting on…" hint="Who has to act next while a job sits on this step.">
           <select
             value={stage.waiting_on ?? ""}
-            onChange={(e) => onPatch({ waiting_on: isWaitingOn(e.target.value) ? e.target.value : null })}
+            onChange={(e) => onPatch({ waiting_on: e.target.value === "" ? null : e.target.value })}
             className={inputClass}
           >
             <option value="">Not set</option>
-            {WAITING_ON_VALUES.map((v) => (
-              <option key={v} value={v}>
-                {WAITING_ON_LABELS[v]}
+            {waitingOnOptions(waitKinds, [stage.waiting_on, storedWaitingOn]).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </select>

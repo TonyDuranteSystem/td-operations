@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
 import { ServiceEditClient } from "../../service-edit-client"
 import { loadServiceComplete } from "../../actions"
+import { loadWaitKinds } from "@/lib/services/wait-kinds-load"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +24,7 @@ export default async function EditServicePage({ params }: Params) {
 
   const { basics, stages, workflow } = await loadServiceComplete(params.slug)
   if (!basics) notFound()
+  const { kinds } = await loadWaitKinds()
 
   // The editor keeps its own copy of what it loaded (the starting point it compares a save against, and the step ids
   // it knows). After a save the page re-reads the service; keying the editor on the loaded data restarts it from the
@@ -31,7 +33,7 @@ export default async function EditServicePage({ params }: Params) {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <ServiceEditClient key={loadedKey} mode="edit" initial={{ basics, stages, workflow }} />
+      <ServiceEditClient key={loadedKey} mode="edit" waitKinds={kinds} initial={{ basics, stages, workflow }} />
     </div>
   )
 }

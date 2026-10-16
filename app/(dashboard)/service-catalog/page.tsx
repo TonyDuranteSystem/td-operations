@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Plus, Pencil, Trash2, RotateCcw, Loader2, Package } from 'lucide-react'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { toast } from 'sonner'
+import { WaitKindsManager } from './wait-kinds-manager'
 
 interface ServiceItem {
   id: string
@@ -213,6 +214,7 @@ export default function ServiceCatalogPage() {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <WaitKindsManager />
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <input
               type="checkbox"

@@ -7,7 +7,7 @@
  * decoded each value once.
  */
 
-import { MAX_LIMIT, MAX_QUERY_LENGTH, PAGE_SIZE, WHO_VALUES, type View, type Who } from "@/lib/open-services/types"
+import { MAX_LIMIT, MAX_QUERY_LENGTH, MAX_WHO_FILTERS, PAGE_SIZE, UNSET, WAIT_SLUG_RE, type View, type Who } from "@/lib/open-services/types"
 
 export type RawSearchParams = Record<string, string | string[] | undefined>
 
@@ -52,8 +52,10 @@ export function parseParams(raw: RawSearchParams): OpenServicesParams {
 
   const who: Who[] = []
   for (const part of first(raw.who).split(",")) {
+    // Any slug-shaped token is kept here (the list of kinds is data this pure file cannot see); the builder drops the ones that are
+    // not real kinds before it uses them. Shape and count are capped so a hostile address stays small.
     const v = part.trim().toLowerCase()
-    if ((WHO_VALUES as readonly string[]).includes(v) && !who.includes(v as Who)) who.push(v as Who)
+    if ((WAIT_SLUG_RE.test(v) || v === UNSET) && !who.includes(v) && who.length < MAX_WHO_FILTERS) who.push(v)
   }
 
   const late = first(raw.late) === "1"

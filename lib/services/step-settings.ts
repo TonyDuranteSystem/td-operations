@@ -1,29 +1,14 @@
 /**
  * Per-step settings added in N1a C2 (dev job be7da01a; plan Google Doc §20).
  *
- *   waiting_on — who must act next while a job sits on the step. Read by the Operations Calendar (C3).
+ *   waiting_on — who must act next while a job sits on the step. Read by the Operations Calendar (C3). Its choices are the
+ *     "waiting on" kinds: the built-in us / client / none plus the catalog list `step_wait_kinds` that Antonio edits
+ *     (lib/open-services/types.ts, lib/open-services/wait-kinds.ts, lib/services/wait-kinds-load.ts).
  *   requires_document_to_advance — a job may not move forward past the step without a document uploaded on it;
  *     enforced by the database (trg_delivery_document_to_advance, migration 20261005-0100) for every writer.
- *
- * The values here mirror the database CHECK pipeline_stages_waiting_on_check.
  */
 import { actionStageConfigFor } from "@/lib/portal/action-stage-registry"
-
-export const WAITING_ON_VALUES = ["us", "client", "outside", "date", "none"] as const
-export type WaitingOn = (typeof WAITING_ON_VALUES)[number]
-
-/** Labels shown to staff. */
-export const WAITING_ON_LABELS: Record<WaitingOn, string> = {
-  us: "Us",
-  client: "The client",
-  outside: "An outside office (IRS, state, bank)",
-  date: "A date",
-  none: "Nobody: job is over",
-}
-
-export function isWaitingOn(v: unknown): v is WaitingOn {
-  return typeof v === "string" && (WAITING_ON_VALUES as readonly string[]).includes(v)
-}
+import { BUILTIN_WAIT_KINDS } from "@/lib/open-services/types"
 
 interface StepLike {
   stage_name: string
@@ -47,7 +32,8 @@ export function stepSettingsProblems(serviceType: string, steps: StepLike[]): st
   }
   for (const s of steps) {
     if (s.waiting_on == null) continue
-    if (actionStageConfigFor(serviceType, s.stage_name) && s.waiting_on !== "client") {
+    // The "client" kind is built in (behaviour: the client): a step that asks the client to act can wait on nobody else.
+    if (actionStageConfigFor(serviceType, s.stage_name) && s.waiting_on !== BUILTIN_WAIT_KINDS.client.slug) {
       problems.push(
         `"${s.stage_name}" sends the client an "action required" message, so it must be waiting on the client.`,
       )

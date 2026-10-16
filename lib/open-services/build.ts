@@ -8,21 +8,25 @@
 
 import { isLiveDeliveryStatus } from "@/lib/services/stages"
 import { stageCompletesService } from "@/lib/services/done-step"
-import { isWaitingOn } from "@/lib/services/step-settings"
 import {
   MAX_LIMIT,
   PAGE_SIZE,
-  WHO_GROUP_LABELS,
-  WHO_VALUES,
+  UNSET,
+  UNSET_LABELS,
+  defaultWaitKinds,
+  popupFromLayout,
+  waitKindOf,
   type ExcludedGroup,
   type FollowUpState,
   type Group,
   type GroupFacts,
   type Row,
   type ViewModel,
+  type WaitKind,
   type Who,
-  popupFromLayout,
+  type WhoChip,
 } from "@/lib/open-services/types"
+import { danglingWarning, resolveWho } from "@/lib/open-services/wait-kinds"
 import { clampLimit, limitFor, type OpenServicesParams } from "@/lib/open-services/params"
 
 /** Company statuses (lower-cased) that mean the company is not operating: its jobs are parked and never late. */
@@ -79,6 +83,10 @@ export interface BuildInput {
   contacts: ContactInput[]
   cards: CardInput[]
   now: Date
+  /** The "waiting on" kinds (built-in + the catalog list). Optional: the built-in kinds + the two seeded ones by default. */
+  waitKinds?: WaitKind[]
+  /** Plain-words problems found while reading the kind list (a skipped row...): shown in the warnings banner. */
+  waitKindProblems?: string[]
 }
 
 const DAY_MS = 86_400_000
@@ -151,11 +159,14 @@ export interface Classified {
   items: Item[]
   excluded: ExcludedGroup[]
   warnings: string[]
+  /** The kinds the rows were resolved with, in display order. */
+  kinds: WaitKind[]
 }
 
 /** Open jobs → rows (unfiltered), plus how many open jobs live on other pages. */
 export function classify(input: BuildInput): Classified {
   const { now } = input
+  const kinds = input.waitKinds ?? defaultWaitKinds()
   const accounts = new Map(input.accounts.map(a => [a.id, a]))
   const contacts = new Map(input.contacts.map(c => [c.id, c]))
   const ordered = excludingCards(input.cards)
@@ -191,6 +202,8 @@ export function classify(input: BuildInput): Classified {
   const excludedCount = new Map<string, { label: string; count: number }>()
   const items: Item[] = []
   let orphan = 0
+  let dangling = 0
+  const danglingSlugs: string[] = []
 
   for (const job of input.jobs) {
     if (!isLiveDeliveryStatus(job.status)) continue
@@ -219,14 +232,17 @@ export function classify(input: BuildInput): Classified {
       badges.push("step not in settings")
     }
 
-    let who: Who = "unset"
+    let who: Who = UNSET
     if (step) {
-      if (stageCompletesService({ stage_name: step.stage_name, stage_order: step.stage_order, completes_service: step.completes_service }, job.service_type)) {
-        who = "none"
-      } else if (isWaitingOn(step.waiting_on)) {
-        who = step.waiting_on
+      const done = stageCompletesService({ stage_name: step.stage_name, stage_order: step.stage_order, completes_service: step.completes_service }, job.service_type)
+      const resolved = resolveWho(kinds, step.waiting_on, done)
+      who = resolved.who
+      if (resolved.dangling !== null) {
+        dangling++
+        danglingSlugs.push(resolved.dangling)
       }
     }
+    const kind = waitKindOf(kinds, who)
 
     const status = (job.status ?? "").trim().toLowerCase()
     const accountStatus = (account?.status ?? "").trim().toLowerCase()
@@ -249,7 +265,7 @@ export function classify(input: BuildInput): Classified {
     let daysLeft: number | null = null
     if (parked) followUp = "parked"
     else if (daysHere === null) followUp = "no-date"
-    else if (who === "date") followUp = "date-step"
+    else if (kind?.behaviour === "date") followUp = "date-step"
     else if (sla === null) followUp = "no-follow-up"
     else if (daysHere > sla) { followUp = "late"; lateBy = daysHere - sla }
     else { followUp = "left"; daysLeft = sla - daysHere }
@@ -268,6 +284,9 @@ export function classify(input: BuildInput): Classified {
       stage,
       stepNo: step ? rank.get(stepKey(step.service_type, step.stage_name)) ?? null : null,
       who,
+      behaviour: kind?.behaviour ?? null,
+      whoChip: kind?.chip ?? UNSET_LABELS.chip,
+      whoPhrase: kind?.phrase ?? UNSET_LABELS.phrase,
       sinceLabel: enteredMs === null ? null : sinceLabel(enteredMs, now),
       daysHere,
       followUpDays: sla,
@@ -284,8 +303,11 @@ export function classify(input: BuildInput): Classified {
   const warnings: string[] = []
   if (duplicates > 0) warnings.push(`${duplicates} service step name(s) are duplicated; the lowest-numbered one is used.`)
   if (orphan > 0) warnings.push(`${orphan} open job(s) sit on a step that is not in the service's step list.`)
+  if (dangling > 0) warnings.push(danglingWarning(dangling, danglingSlugs, "job"))
+  for (const p of input.waitKindProblems ?? []) warnings.push(p)
 
   return {
+    kinds,
     items,
     excluded: Array.from(excludedCount.values()).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
     warnings,
@@ -311,14 +333,16 @@ function groupFacts(items: Item[]): GroupFacts {
     total: items.length,
     noDate: items.filter(i => i.row.daysHere === null).length,
     late: items.filter(i => i.row.lateBy !== null).length,
-    notSet: items.filter(i => i.row.who === "unset").length,
+    notSet: items.filter(i => i.row.who === UNSET).length,
     parked: items.filter(i => i.row.followUp === "parked").length,
   }
 }
 
 export function buildViewModel(classified: Classified, params: OpenServicesParams, now: Date): ViewModel {
   const q = normalizeName(params.q)
-  const whoSet = new Set<Who>(params.who)
+  const kinds = classified.kinds
+  // A filter token that is not a known kind (a stale bookmark, a typo) is dropped BEFORE anything is computed from it.
+  const whoSet = new Set<Who>(params.who.filter(w => w === UNSET || waitKindOf(kinds, w) !== null))
 
   const passesQuery = (i: Item) => q === "" || i.nameNorm.includes(q)
   const passesLate = (i: Item) => !params.late || i.row.lateBy !== null
@@ -328,14 +352,23 @@ export function buildViewModel(classified: Classified, params: OpenServicesParam
   const filtered = all.filter(i => passesQuery(i) && passesLate(i) && passesWho(i))
 
   // Chip counts: every filter EXCEPT the who filter (so the other chips keep showing what they would add).
-  const chips = Object.fromEntries(WHO_VALUES.map(w => [w, 0])) as Record<Who, number>
-  for (const i of all) if (passesQuery(i) && passesLate(i)) chips[i.row.who]++
+  const chipCount = new Map<string, number>()
+  for (const i of all) if (passesQuery(i) && passesLate(i)) chipCount.set(i.row.who, (chipCount.get(i.row.who) ?? 0) + 1)
+  const chips: WhoChip[] = [
+    // A retired kind with no jobs is not worth a chip (it would sit dimmed forever); one that still has jobs keeps its chip.
+    ...kinds
+      .filter(k => !k.retired || (chipCount.get(k.slug) ?? 0) > 0 || whoSet.has(k.slug))
+      .map(k => ({ who: k.slug, label: k.chip, tip: k.tip, behaviour: k.behaviour as WhoChip["behaviour"], count: chipCount.get(k.slug) ?? 0 })),
+    { who: UNSET, label: UNSET_LABELS.chip, tip: UNSET_LABELS.tip, behaviour: null, count: chipCount.get(UNSET) ?? 0 },
+  ]
+  const whoOrder = new Map(chips.map((c, i) => [c.who, i]))
+  const groupLabelOfWho = (who: string) => (who === UNSET ? UNSET_LABELS.group : waitKindOf(kinds, who)?.group ?? who)
   const lateChip = all.filter(i => passesQuery(i) && passesWho(i) && i.row.lateBy !== null).length
 
   // Groups.
   const byKey = new Map<string, { label: string; all: Item[]; filtered: Item[] }>()
   const keyOf = (i: Item) => (params.view === "service" ? i.row.serviceType : i.row.who)
-  const labelOf = (key: string) => (params.view === "service" ? key : WHO_GROUP_LABELS[key as Who])
+  const labelOf = (key: string) => (params.view === "service" ? key : groupLabelOfWho(key))
   for (const i of all) {
     const k = keyOf(i)
     if (!byKey.has(k)) byKey.set(k, { label: labelOf(k), all: [], filtered: [] })
@@ -351,7 +384,7 @@ export function buildViewModel(classified: Classified, params: OpenServicesParam
     const sorted = [...g.filtered].sort(compareItems)
     const limit = clampLimit(limitFor(params, key))
     const shownRows = sorted.slice(0, limit)
-    const allUnset = g.all.length > 0 && g.all.every(i => i.row.who === "unset")
+    const allUnset = g.all.length > 0 && g.all.every(i => i.row.who === UNSET)
     // Collapsed unless a filter matches inside, or the visitor opened it by hand (a 'more' entry for the group).
     const openedByHand = params.more.some(([k]) => k === key)
     const collapsed = allUnset && !openedByHand && !(anyFilter && g.filtered.length > 0)
@@ -371,7 +404,7 @@ export function buildViewModel(classified: Classified, params: OpenServicesParam
   }
 
   if (params.view === "who") {
-    groups.sort((a, b) => WHO_VALUES.indexOf(a.key as Who) - WHO_VALUES.indexOf(b.key as Who))
+    groups.sort((a, b) => (whoOrder.get(a.key) ?? 999) - (whoOrder.get(b.key) ?? 999))
   } else {
     groups.sort((a, b) => b.facts.late - a.facts.late || a.label.localeCompare(b.label))
   }

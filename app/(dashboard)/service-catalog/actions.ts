@@ -19,6 +19,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { SETTINGS_ACTOR_HEADER, settingsActor } from "@/lib/services/settings-actor"
 import { stepSettingsProblems } from "@/lib/services/step-settings"
 import {
+  checkWaitingOnChoices,
   getStagesForService,
   replaceStagesForService,
   validateStageDraft,
@@ -300,7 +301,11 @@ export async function saveServiceComplete(draft: ServiceDraft): Promise<SaveResu
     // N1a C2: refuse bad step settings BEFORE the service details are written, so "Nothing has been changed" is true.
     // The step save checks again against the stored values (a field this draft did not carry keeps its stored value).
     if (row.pipeline) {
-      const problems = stepSettingsProblems(row.pipeline, draft.stages)
+      const problems = [
+        ...stepSettingsProblems(row.pipeline, draft.stages),
+        // A "waiting on" choice that is new must be a kind that exists and is not retired (checked against the stored value, before any write).
+        ...(await checkWaitingOnChoices(row.pipeline, draft.stages)),
+      ]
       if (problems.length > 0) return { ok: false, error: `${problems.join(" ")} Nothing has been changed.` }
     }
 

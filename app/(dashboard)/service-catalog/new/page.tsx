@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { isAdmin } from "@/lib/auth"
 import { ServiceEditClient } from "../service-edit-client"
+import { loadWaitKinds } from "@/lib/services/wait-kinds-load"
 
 export const dynamic = "force-dynamic"
 
@@ -15,10 +16,11 @@ export default async function NewServicePage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !isAdmin(user)) redirect("/")
+  const { kinds } = await loadWaitKinds()
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <ServiceEditClient mode="new" initial={null} />
+      <ServiceEditClient mode="new" waitKinds={kinds} initial={null} />
     </div>
   )
 }
