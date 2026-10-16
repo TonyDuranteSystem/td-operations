@@ -87,6 +87,13 @@ export async function PATCH(
   const mergedCompany = (body.company_name !== undefined ? body.company_name : customer.company_name) || ''
   const mergedFirst = (body.first_name !== undefined ? body.first_name : customer.first_name) || ''
   const mergedLast = (body.last_name !== undefined ? body.last_name : customer.last_name) || ''
+  // Same rule as creating a customer: a first name or a company name. Only blocked when THIS edit would leave a customer
+  // that had one with neither (an older customer that only ever had a last name can still have its phone changed).
+  const hadNameBefore = !!String(customer.first_name ?? '').trim() || !!String(customer.company_name ?? '').trim()
+  const touchesName = body.first_name !== undefined || body.company_name !== undefined
+  if (touchesName && hadNameBefore && !String(mergedFirst).trim() && !String(mergedCompany).trim()) {
+    return NextResponse.json({ error: 'Keep a first name or a company name for this customer.' }, { status: 400 })
+  }
   const displayName = String(mergedCompany).trim() || `${String(mergedFirst).trim()} ${String(mergedLast).trim()}`.trim()
   if (displayName) updates.name = displayName
   updates.updated_at = new Date().toISOString()

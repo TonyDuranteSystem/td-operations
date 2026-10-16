@@ -48,12 +48,22 @@ export function salesTotals(rows: TotalsRow[]): { invoiced: MoneyByCurrency; pai
   return { invoiced, paid, outstanding }
 }
 
-/** "$1,200.00 · €300.00" (one entry per currency actually present); "$0.00" when there is nothing. */
-export function formatMoneyMap(map: MoneyByCurrency): string {
+/**
+ * "$1,200.00 · €300.00" (one entry per currency actually present). When there is nothing it prints a zero in
+ * `zeroCurrency` (default dollars): pass the currency the other boxes use so a company that only invoices in euros
+ * does not see "€190.00 / €190.00 / $0.00" side by side (10 Oct 2026 QA).
+ */
+export function formatMoneyMap(map: MoneyByCurrency, zeroCurrency: 'USD' | 'EUR' = 'USD'): string {
   const parts = (['USD', 'EUR'] as const)
     .filter(c => map[c] !== undefined && map[c] !== 0)
     .map(c => `${c === 'EUR' ? '€' : '$'}${map[c].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-  return parts.length > 0 ? parts.join(' · ') : '$0.00'
+  return parts.length > 0 ? parts.join(' · ') : `${zeroCurrency === 'EUR' ? '€' : '$'}0.00`
+}
+
+/** The currency an empty box should show a zero in: euros only when every amount shown is in euros and none is in dollars. */
+export function zeroCurrencyFor(...maps: MoneyByCurrency[]): 'USD' | 'EUR' {
+  const has = (c: 'USD' | 'EUR') => maps.some(m => m[c] !== undefined && m[c] !== 0)
+  return has('EUR') && !has('USD') ? 'EUR' : 'USD'
 }
 
 /** Generic per-currency sum for expense rows. */

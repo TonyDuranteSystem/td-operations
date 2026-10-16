@@ -11,6 +11,8 @@ import {
   authorizeAccount, authorizeInvoice, belongsToAccount, actorLabel,
 } from '@/lib/portal/invoice-access'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
+import { daysBetween, addDaysYmd } from '@/lib/portal/recurring-date'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 // EVERY exported function here is a public endpoint (a 'use server' file). Each one MUST start with
 // authorizeAccount / authorizeInvoice from lib/portal/invoice-access.ts, which takes the company from the
@@ -325,6 +327,11 @@ export async function duplicateInvoice(invoiceId: string): Promise<ActionResult<
       }),
     )
 
+    // The copy is dated today, so it keeps the SAME number of days to pay as the original (Net 14 stays Net 14).
+    const today = getOfficeDateString()
+    const gap = source.issue_date && source.due_date ? daysBetween(String(source.issue_date), String(source.due_date)) : null
+    const dueDate = gap !== null && gap >= 0 ? addDaysYmd(today, gap) : null
+
     const result = await createUnifiedInvoice({
       account_id: access.accountId,
       customer_id: source.customer_id || undefined,
@@ -332,6 +339,8 @@ export async function duplicateInvoice(invoiceId: string): Promise<ActionResult<
       currency: source.currency as 'USD' | 'EUR',
       discount: Number(source.discount) || 0,
       bank_account_id: source.bank_account_id || null,
+      issue_date: today,
+      due_date: dueDate || undefined,
       notes: source.notes || undefined,
       message: source.message || undefined,
     })
