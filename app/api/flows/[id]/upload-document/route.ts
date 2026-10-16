@@ -151,6 +151,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       resolveContactLinkedDriveFolder,
       deriveEffectiveFileName,
       resolveSubfolderId,
+      needsDriveFolder,
     } = await import('@/lib/flows/flow-drive-folder')
 
     // 3a. Fetch the account's naming fields UNCONDITIONALLY (not gated on
@@ -282,7 +283,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //    Storage (onboarding-uploads). The documents row + stage advance happen
     //    identically, so the flow works end-to-end in sandbox.
     let driveFolderId: string | null = null
-    if (process.env.SANDBOX_MODE !== '1' && !routed) {
+    if (needsDriveFolder({ sandbox: process.env.SANDBOX_MODE === '1', routed: !!routed, storeSaved: pilot.status === 'saved' })) {
       if (accountId) {
         driveFolderId = extractDriveFolderId(accountRow)
         if (!driveFolderId) {
