@@ -89,6 +89,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/drive-gap",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/hermes-bridge",
       "schedule": "*/5 * * * *"
     },

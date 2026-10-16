@@ -3,13 +3,12 @@
 import { useEffect, useState } from 'react'
 import { NewStoreBrowser } from '@/components/storage/new-store-browser'
 import { TypeQuestionsPanel } from '@/components/storage/type-questions-panel'
-import { DriveGapPanel } from '@/components/storage/drive-gap-panel'
 
 const TAB_KEY = 'td-storage-tab'
 
 /** Storage page: the CRM storage (Antonio 2026-10-14: the old empty "Current storage" tab and the "pilot" label are gone) and the type questions. */
-export function StorageTabs({ showDriveCheck = false }: { showDriveCheck?: boolean }) {
-  const [tab, setTab] = useState<'new' | 'types' | 'drive'>('new')
+export function StorageTabs() {
+  const [tab, setTab] = useState<'new' | 'types'>('new')
   // a link can open the NEW storage on one folder: /storage?store=new&owner=<id>&folder=<id>
   const [deepLink, setDeepLink] = useState<{ ownerId: string; folderId: string | null } | null>(null)
   // the last tab used on this computer (a convenience only — read after the first render, never required)
@@ -25,11 +24,11 @@ export function StorageTabs({ showDriveCheck = false }: { showDriveCheck?: boole
     }
     try { const v = window.localStorage.getItem(TAB_KEY); if (v === 'types') setTab(v) } catch { /* storage blocked */ }
   }, [])
-  const choose = (id: 'new' | 'types' | 'drive') => {
+  const choose = (id: 'new' | 'types') => {
     setTab(id)
     try { window.localStorage.setItem(TAB_KEY, id) } catch { /* storage blocked */ }
   }
-  const btn = (id: 'new' | 'types' | 'drive', label: string) => (
+  const btn = (id: 'new' | 'types', label: string) => (
     <button
       type="button"
       onClick={() => choose(id)}
@@ -43,9 +42,8 @@ export function StorageTabs({ showDriveCheck = false }: { showDriveCheck?: boole
       <div className="mb-4 flex gap-1">
         {btn('new', 'Storage')}
         {btn('types', 'Type questions')}
-        {showDriveCheck && btn('drive', 'Drive check')}
       </div>
-      {tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId ?? undefined} /> : tab === 'types' ? <TypeQuestionsPanel /> : showDriveCheck ? <DriveGapPanel /> : null}
+      {tab === 'new' ? <NewStoreBrowser openOwnerId={deepLink?.ownerId} openFolderId={deepLink?.folderId ?? undefined} /> : <TypeQuestionsPanel />}
     </>
   )
 }

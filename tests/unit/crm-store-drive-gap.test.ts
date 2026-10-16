@@ -47,3 +47,38 @@ describe("summarizeGap", () => {
     expect(r.files).toEqual([])
   })
 })
+
+import { applyReport, gapEnabled, stillLocked, type GapState } from "@/lib/crm-store/drive-gap-run"
+
+const base = (): GapState => ({ status: "running", startedAt: "t", updatedAt: "t", lockUntil: null, total: 3, checked: 0, queue: ["a", "b", "c"], failed: [], results: [] })
+
+describe("the Drive check run (no button)", () => {
+  it("is off unless STORE_DRIVE_GAP=1", () => {
+    expect(gapEnabled({})).toBe(false)
+    expect(gapEnabled({ STORE_DRIVE_GAP: "0" })).toBe(false)
+    expect(gapEnabled({ STORE_DRIVE_GAP: "1" })).toBe(true)
+  })
+  it("keeps ONLY the files nothing else knows (missing) — not the ones the CRM, storage or a move already know", () => {
+    const s = applyReport(base(), "a", "Acme LLC", { total: 3, files: [
+      { name: "new.pdf", path: "3. Tax", kind: "missing", size: 5 },
+      { name: "known.pdf", path: "", kind: "in_crm_on_drive", size: 5 },
+      { name: "same.pdf", path: "", kind: "same_name_stored", size: 5 },
+    ] })
+    expect(s.queue).toEqual(["b", "c"])
+    expect(s.checked).toBe(1)
+    expect(s.results).toEqual([{ accountId: "a", company: "Acme LLC", driveTotal: 3, files: [{ name: "new.pdf", path: "3. Tax", size: 5 }] }])
+  })
+  it("a company with nothing new adds no result row; a failure is recorded and the run goes on", () => {
+    let s = applyReport(base(), "a", "Acme LLC", { total: 2, files: [] })
+    expect(s.results).toEqual([])
+    s = applyReport(s, "b", "Beta LLC", { error: "Drive API 404" })
+    expect(s.failed).toEqual([{ company: "Beta LLC", why: "Drive API 404" }])
+    expect(s.queue).toEqual(["c"])
+    expect(s.checked).toBe(2)
+  })
+  it("a run that is still holding the lock is not started twice", () => {
+    expect(stillLocked({ ...base(), lockUntil: new Date(Date.now() + 60_000).toISOString() })).toBe(true)
+    expect(stillLocked({ ...base(), lockUntil: new Date(Date.now() - 60_000).toISOString() })).toBe(false)
+    expect(stillLocked(base())).toBe(false)
+  })
+})

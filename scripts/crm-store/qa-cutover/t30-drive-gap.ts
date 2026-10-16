@@ -24,6 +24,7 @@ async function main() {
   const before = (await q("select drive_folder_id from accounts where company_name='Test Company LLC'"))[0]?.drive_folder_id as string | null
   const acct = (await q("select id from accounts where company_name='Test Company LLC'"))[0].id as string
   await q("update accounts set drive_folder_id=$1 where id=$2", [root.id, acct])
+  let runId: string | null = null
   const storeBefore = (await q("select count(*)::int n from store_files"))[0].n as number
   try {
     ck("1 the company is listed for the check", (await listGapCompanies()).some((c) => c.accountId === acct))
@@ -31,12 +32,15 @@ async function main() {
     ck("2 the Drive-only file is reported as missing", r.counts.missing === 1 && r.files.some((f) => f.name === "T30-only-in-drive.pdf" && f.kind === "missing" && f.path === "3. Tax › 2025"), r)
     ck("3 total counts the file found two folders down", r.total === 1, r)
     // it is now "recorded as imported" → no longer reported
-    await q("insert into store_external_refs (object_kind, object_id, provider, direction, external_id, status) select 'file', f.id, 'gdrive', 'import', $1, 'ok' from store_files f limit 1", [f1.id])
+    // a move that SAW the file (whatever it decided) means it is not new
+    const run = (await q("insert into store_import_runs (account_id, mode, status) values ($1, 'copy', 'done') returning id", [acct]))[0].id as string
+    runId = run
+    await q("insert into store_import_items (run_id, source, source_id, name, status) values ($1, 'drive', $2, 'T30-only-in-drive.pdf', 'done')", [run, f1.id])
     const r2 = await scanCompanyGap(acct)
-    ck("4 once the move recorded it, it is not reported", r2.counts.imported === 1 && r2.counts.missing === 0, r2)
+    ck("4 once a move has seen it (and decided), it is not reported", r2.counts.imported === 1 && r2.counts.missing === 0, r2)
     ck("5 the check changed nothing in storage", (await q("select count(*)::int n from store_files"))[0].n === storeBefore)
   } finally {
-    await db.query("delete from store_external_refs where provider='gdrive' and direction='import' and external_id=$1", [f1.id]).catch(() => undefined)
+    if (runId) { await db.query("delete from store_import_items where run_id=$1", [runId]).catch(() => undefined); await db.query("delete from store_import_runs where id=$1", [runId]).catch(() => undefined) }
     await db.query("update accounts set drive_folder_id=$1 where id=$2", [before, acct]).catch(() => undefined)
     await drive.trashFile(root.id).catch(() => undefined)
     console.log(`\n${pass} passed, ${fail} failed`)

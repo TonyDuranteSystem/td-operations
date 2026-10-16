@@ -102,6 +102,17 @@ export async function scanCompanyGap(accountId: string): Promise<GapReport> {
   const importedIds = new Set<string>()
   const crmDriveIds = new Set<string>()
   const ids = files.map((f) => f.id)
+  // every Drive file the company's move scans ever listed was DECIDED then (brought in, merged, archived or deliberately left):
+  // only a file no scan has seen is new
+  const { data: runs, error: runErr } = await d.from("store_import_runs").select("id").eq("account_id", accountId)
+  if (runErr) throw new Error("Could not read the company's moves.")
+  const runIds = ((runs ?? []) as Array<{ id: string }>).map((r) => r.id)
+  for (let i = 0; i < ids.length && runIds.length; i += 150) {
+    const chunk = ids.slice(i, i + 150)
+    const { data: seen, error: seenErr } = await d.from("store_import_items").select("source_id").eq("source", "drive").in("run_id", runIds).in("source_id", chunk)
+    if (seenErr) throw new Error("Could not read what the moves saw.")
+    for (const r of (seen ?? []) as Array<{ source_id: string }>) importedIds.add(r.source_id)
+  }
   for (let i = 0; i < ids.length; i += 150) {
     const chunk = ids.slice(i, i + 150)
     const { data: refs, error } = await d.from("store_external_refs").select("external_id").eq("provider", "gdrive").eq("direction", "import").in("external_id", chunk)

@@ -4,7 +4,6 @@ import { isProductionDatabase } from "@/lib/google-drive-guard"
 import { createClient } from "@/lib/supabase/server"
 import { isStoreStaffUser } from "@/lib/crm-store/access"
 import { studyCopyAllowed } from "@/lib/crm-store/drive-import"
-import { isOwnerOnly } from "@/lib/auth"
 
 export const dynamic = "force-dynamic"
 
@@ -18,8 +17,6 @@ export default async function StoragePage() {
     const { data: { user } } = await createClient().auth.getUser()
     showNewStore = isStoreStaffUser(user)
   }
-  const { data: { user: viewer } } = await createClient().auth.getUser()
-  const owner = isOwnerOnly(viewer)
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       <div className="mb-4 sm:mb-6">
@@ -28,7 +25,7 @@ export default async function StoragePage() {
           Folders and files, organized however your team sets them up. Not connected to Google Drive.
         </p>
       </div>
-      {showNewStore ? <StorageTabs showDriveCheck={owner} /> : <StorageBrowserClient />}
+      {showNewStore ? <StorageTabs /> : <StorageBrowserClient />}
     </div>
   )
 }
