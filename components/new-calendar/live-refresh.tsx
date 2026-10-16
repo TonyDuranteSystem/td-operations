@@ -57,6 +57,8 @@ export function LiveRefresh() {
       document.removeEventListener('visibilitychange', onVisibility)
       window.clearInterval(poll)
       if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = null
+      firstSignalRef.current = null
     }
   }, [])
 

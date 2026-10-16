@@ -14,7 +14,7 @@ import {
 import type { AccountInput, CardInput, ContactInput, JobInput, StepInput } from "@/lib/open-services/build"
 import { assembleWaitKinds, catalogWaitKind, type Row, type WaitKind } from "@/lib/open-services/types"
 import { parseParams, type RawSearchParams } from "@/lib/new-calendar/params"
-import { BUCKETS, PAGE_SIZE } from "@/lib/new-calendar/types"
+import { LISTS, PAGE_SIZE } from "@/lib/new-calendar/types"
 
 /**
  * New Calendar — which list each job lands in, what the chips count, what the Closed list holds. All pure: plain data in,
@@ -204,7 +204,7 @@ describe("every open job is in exactly one list, and the people rules hold", () 
   it("test jobs, test and internal companies, test people and finished jobs never show; renewal and tax jobs are counted as living elsewhere", () => {
     const m = run(jobs())
     expect(m.excluded.map(e => `${e.label}:${e.count}`).sort()).toEqual(["Renewal Service:1", "Tax Service:1"])
-    for (const b of BUCKETS) {
+    for (const b of LISTS) {
       for (const r of run(jobs(), { b }).rows) {
         expect(["Test Co", "Internal Co", "QA Person"]).not.toContain(r.name)
       }

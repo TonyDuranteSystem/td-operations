@@ -37,4 +37,12 @@ CREATE TRIGGER trg_service_deliveries_ui_event_upd
   AFTER UPDATE OF stage, status, stage_entered_at, end_date, is_test, account_id, contact_id ON public.service_deliveries
   FOR EACH STATEMENT EXECUTE FUNCTION public.emit_jobs_ui_event();
 
+DROP TRIGGER IF EXISTS trg_service_deliveries_ui_event_del ON public.service_deliveries;
+CREATE TRIGGER trg_service_deliveries_ui_event_del
+  AFTER DELETE ON public.service_deliveries
+  FOR EACH STATEMENT EXECUTE FUNCTION public.emit_jobs_ui_event();
+
+-- Known, accepted: a statement that matches NO rows (UPDATE ... WHERE id = <missing>) still signals once (a statement-level trigger cannot tell
+-- without transition tables, which cannot be combined with the column list above). The cost of such a signal is one extra refresh.
+
 COMMIT;

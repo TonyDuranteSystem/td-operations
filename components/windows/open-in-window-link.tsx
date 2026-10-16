@@ -2,6 +2,7 @@
 
 import type { AnchorHTMLAttributes } from 'react'
 import { isWindowLinkClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
 import { canOpenWindowNow, requestOpenWindow, useWindowsAvailable } from '@/lib/windows/windows-context'
 
 /**
@@ -29,6 +30,7 @@ export function OpenInWindowLink({
         if (e.defaultPrevented) return
         if (!isWindowLinkClick(e)) return
         if (!canOpenWindowNow(windowsAvailable)) return
+        if (!isWindowableUrl(href)) return // a page that cannot be a window stays an ordinary link: never a click that does nothing
         e.preventDefault()
         requestOpenWindow(href, title)
       }}

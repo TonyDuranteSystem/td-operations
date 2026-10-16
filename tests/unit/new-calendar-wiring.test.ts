@@ -254,6 +254,28 @@ describe("the workspace opens in a floating window, and the page updates by itse
     expect(read("app/(dashboard)/portal-chats/page.tsx")).not.toContain("openWorkspaceInWindow")
   })
 
+  it("the job lookup is opt-in (the Calendar's tab asks for it), staff-only and best-effort, so Portal Chats and a failed read are untouched", () => {
+    const route = stripComments(read("app/api/crm/admin-actions/whats-new/route.ts"))
+    expect(route).toContain('sp.get("want_job") === "true" && isStaffUser(user)')
+    expect(route).toContain("job lookup failed (Open falls back to the client page)")
+    expect(route).not.toMatch(/if \(jobsErr\) throw/)
+    expect(route).toContain("!n.handled_at && WORKSPACE_SRC_TABLES.has(")
+    expect(read("components/portal-chats/thread-whats-new-panel.tsx")).toContain("'&want_job=true'")
+  })
+
+  it("the failed-load screens keep the retry and the way to renewals (the menu's only door to Mark Filed is this page)", () => {
+    const page = stripComments(read(PAGE))
+    expect(page).toContain("<LiveRefresh />")
+    expect(page).toContain('href="/calendar"')
+    expect(read("app/(dashboard)/new-calendar/error.tsx")).toContain('href="/calendar"')
+  })
+
+  it("the live pieces are import-pure: the rules file imports nothing; the component imports only the rules, react and next/navigation", () => {
+    expect(importsOf(read("lib/new-calendar/live.ts"))).toEqual([])
+    expect(importsOf(read("components/new-calendar/live-refresh.tsx")).sort()).toEqual(["@/lib/new-calendar/live", "next/navigation", "react"].sort())
+    expect(read("components/new-calendar/live-refresh.tsx").startsWith("'use client'")).toBe(true)
+  })
+
   it("the Calendar listens for the job-change event, debounces, and has a safety poll; it never subscribes to a table itself", () => {
     expect(view).toContain("<LiveRefresh />")
     expect(live).toContain("'td-ui-event'")
@@ -267,12 +289,14 @@ describe("the workspace opens in a floating window, and the page updates by itse
     const up = read("scripts/migrations/20261016-1500-jobs-live-event.sql")
     expect(up).toMatch(/EXCEPTION WHEN OTHERS THEN\s+NULL/)
     expect(up).toMatch(/FOR EACH STATEMENT/)
+    expect(up).toMatch(/AFTER DELETE ON public.service_deliveries/)
     expect(up).not.toMatch(/FOR EACH ROW/)
     expect(up).toMatch(/SECURITY DEFINER SET search_path = public/)
     expect(up).toContain("VALUES ('jobs', NULL)")
     expect(up).toMatch(/AFTER UPDATE OF stage, status, stage_entered_at, end_date, is_test, account_id, contact_id/)
     const undo = read("scripts/migrations/20261016-1500-jobs-live-event.UNDO.sql")
     expect(undo).toMatch(/DROP TRIGGER IF EXISTS trg_service_deliveries_ui_event_upd/)
+    expect(undo).toMatch(/DROP TRIGGER IF EXISTS trg_service_deliveries_ui_event_del/)
     expect(undo).toMatch(/DROP FUNCTION IF EXISTS public.emit_jobs_ui_event/)
   })
 })

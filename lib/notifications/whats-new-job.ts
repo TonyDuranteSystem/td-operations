@@ -6,9 +6,13 @@
  */
 
 import { isLiveDeliveryStatus } from "@/lib/services/stages"
+import { excludingCards, matchExcludingCard, type CardInput } from "@/lib/open-services/build"
 
-/** Source records that belong to a company's own work: "Open" can go to that company's job workspace instead of its client page. */
-export const WORKSPACE_SRC_TABLES: ReadonlySet<string> = new Set(["ss4_applications", "documents", "lease_agreements"])
+/**
+ * Source records that belong to a company's own work: "Open" can go to that company's job workspace instead of its client page.
+ * NOT the lease: a lease belongs to the company, not to one job, so it keeps opening the client page.
+ */
+export const WORKSPACE_SRC_TABLES: ReadonlySet<string> = new Set(["ss4_applications", "documents"])
 
 /** The table half of a note's source ref ("ss4_applications:uuid" -> "ss4_applications"), or "". */
 export function srcTableOfRef(src: string | null | undefined): string {
@@ -20,10 +24,16 @@ export interface JobLike {
   id: string
   status: string | null
   is_test: boolean | null
+  service_type: string
+  service_type_entry_id: string | null
 }
 
-/** The company's only open (live, non-test) job, or null when it has none or several. */
-export function soleOpenJobId(jobs: readonly JobLike[]): string | null {
-  const open = jobs.filter(j => j.is_test !== true && isLiveDeliveryStatus(j.status))
+/**
+ * The company's only open job, or null when it has none or several. "Open" means what the Calendar means: a live status, not a test, and not
+ * a job that lives on another page (a renewal or a tax return: the service-card flags) — so the button and the Calendar never disagree.
+ */
+export function soleOpenJobId(jobs: readonly JobLike[], cards: readonly CardInput[] = []): string | null {
+  const ordered = excludingCards([...cards])
+  const open = jobs.filter(j => j.is_test !== true && isLiveDeliveryStatus(j.status) && !matchExcludingCard(j, ordered))
   return open.length === 1 ? open[0].id : null
 }

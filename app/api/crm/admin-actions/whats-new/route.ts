@@ -27,7 +27,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser, isStaffUser } from "@/lib/auth"
-import { WORKSPACE_SRC_TABLES, soleOpenJobId, srcTableOfRef } from "@/lib/notifications/whats-new-job"
+import { WORKSPACE_SRC_TABLES, soleOpenJobId, srcTableOfRef, type JobLike } from "@/lib/notifications/whats-new-job"
+import type { CardInput } from "@/lib/open-services/build"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
 import { groupWhatsNewSummary, type SummaryNote } from "@/lib/notifications/whats-new-summary"
@@ -292,14 +293,23 @@ export async function GET(req: NextRequest) {
       // The job whose workspace a note's "Open" can go straight to (the Calendar's What's New tab). Notes do not carry a job id (their marker
       // names the SS-4 / document / lease record), so: for the notes of a COMPANY thread whose record belongs to the company's own work, if the
       // company has EXACTLY ONE open job, that is the job. Several open jobs = ambiguous = no job (the client page stays the target).
+      // Only when the caller asks (the Calendar's What's New tab sends want_job=true; Portal Chats does not) and only for STAFF (the partner role
+      // passes isDashboardUser): a failed or skipped lookup just leaves job_id empty, never the notes.
       let soleOpenJobIdValue: string | null = null
-      if (accountId && notes.some((n) => WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)))) {
-        const { data: jobs, error: jobsErr } = await db
-          .from("service_deliveries")
-          .select("id, status, is_test")
-          .eq("account_id", accountId)
-        if (jobsErr) throw jobsErr
-        soleOpenJobIdValue = soleOpenJobId((jobs ?? []) as Array<{ id: string; status: string | null; is_test: boolean | null }>)
+      if (sp.get("want_job") === "true" && isStaffUser(user) && accountId && notes.some((n) => !n.handled_at && WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)))) {
+        const [jobsRes, cardsRes] = await Promise.all([
+          db.from("service_deliveries").select("id, status, is_test, service_type, service_type_entry_id").eq("account_id", accountId),
+          db
+            .from("catalog_entries")
+            .select("id, display_name, metadata")
+            .eq("catalog_id", "services")
+            .or("metadata->>closes_only_by_filing.eq.true,metadata->>hidden_from_open_services.eq.true"),
+        ])
+        if (jobsRes.error || cardsRes.error) {
+          console.error("[whats-new] job lookup failed (Open falls back to the client page):", jobsRes.error?.message ?? cardsRes.error?.message)
+        } else {
+          soleOpenJobIdValue = soleOpenJobId((jobsRes.data ?? []) as JobLike[], (cardsRes.data ?? []) as CardInput[])
+        }
       }
       const out = notes
         .filter((n) => {
@@ -321,7 +331,7 @@ export async function GET(req: NextRequest) {
             // panel can deep-link the "Open" button to the related entity.
             src,
             // Set only when the note's record belongs to the company's own work AND the company has exactly one open job (see above).
-            job_id: WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)) ? soleOpenJobIdValue : null,
+            job_id: !n.handled_at && WORKSPACE_SRC_TABLES.has(srcTableOf(n.message)) ? soleOpenJobIdValue : null,
             topic: n.topic ?? null,
             text: n.message.replace(MARKER_RE, "").trim(),
             // Suggested next step for "Open card": per-event override → code default.
