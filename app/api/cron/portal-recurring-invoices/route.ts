@@ -106,10 +106,11 @@ export async function GET(request: Request) {
 
       // Advance the schedule. Anchored on the ORIGINAL issue day so Jan 31 monthly goes Feb 28, Mar 31 (no drift).
       const anchor = template.issue_date ? Number(String(template.issue_date).slice(8, 10)) : undefined
-      let next = nextRecurringDate(cycleDate, frequency, anchor)
+      const interval = (template.recurring_interval_months as number | null) ?? null
+      let next = nextRecurringDate(cycleDate, frequency, anchor, interval)
       if (!next) throw new Error('could not work out the next date')
       // Jump past the cycles that are already behind us (bounded, so a bad date can never loop forever).
-      for (let guard = 0; guard < 120 && next && next <= today; guard++) next = nextRecurringDate(next, frequency, anchor)
+      for (let guard = 0; guard < 120 && next && next <= today; guard++) next = nextRecurringDate(next, frequency, anchor, interval)
       if (!next) throw new Error('could not work out the next date')
       if (template.recurring_end_date && next > template.recurring_end_date) next = null as unknown as string
 

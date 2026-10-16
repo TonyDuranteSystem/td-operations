@@ -6,9 +6,23 @@
  * is always computed from the ORIGINAL anchor day, so a Jan 31 monthly invoice runs Jan 31, Feb 28, Mar 31.
  */
 
-export type RecurringFrequency = 'monthly' | 'quarterly' | 'yearly'
+export type RecurringFrequency = 'monthly' | 'quarterly' | 'yearly' | 'custom'
 
-const MONTHS: Record<RecurringFrequency, number> = { monthly: 1, quarterly: 3, yearly: 12 }
+/** "Custom" lets the client choose the number of months between invoices (Antonio 2026-10-12). */
+export const CUSTOM_MONTHS_MIN = 1
+export const CUSTOM_MONTHS_MAX = 36
+
+export function isValidCustomMonths(n: unknown): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= CUSTOM_MONTHS_MIN && n <= CUSTOM_MONTHS_MAX
+}
+
+const MONTHS: Record<Exclude<RecurringFrequency, 'custom'>, number> = { monthly: 1, quarterly: 3, yearly: 12 }
+
+/** Months between two cycles, or null when a custom schedule has no valid number of months. */
+export function monthsBetweenCycles(frequency: RecurringFrequency, intervalMonths?: number | null): number | null {
+  if (frequency === 'custom') return isValidCustomMonths(intervalMonths) ? intervalMonths : null
+  return MONTHS[frequency] ?? null
+}
 
 function parseYmd(ymd: string): { y: number; m: number; d: number } | null {
   const mt = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd)
@@ -31,10 +45,10 @@ function fmt(y: number, m: number, d: number): string {
  * schedule started on (defaults to `from`'s own day); passing it keeps a Jan 31 schedule on the 31st after a
  * short February. Returns null for an unparseable date (the caller must treat that as an error, not a default).
  */
-export function nextRecurringDate(from: string, frequency: RecurringFrequency, anchorDay?: number): string | null {
+export function nextRecurringDate(from: string, frequency: RecurringFrequency, anchorDay?: number, intervalMonths?: number | null): string | null {
   const p = parseYmd(from)
   if (!p) return null
-  const step = MONTHS[frequency]
+  const step = monthsBetweenCycles(frequency, intervalMonths)
   if (!step) return null
   const total = p.y * 12 + (p.m - 1) + step
   const y = Math.floor(total / 12)
