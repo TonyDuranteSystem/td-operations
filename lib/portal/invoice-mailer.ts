@@ -86,7 +86,7 @@ export async function deliverInvoiceEmail(email: InvoiceEmail): Promise<Delivery
       attachment: email.attachment,
     })
     console.warn('[SANDBOX] Resend email blocked:', { to: email.to, subject: email.subject })
-    void import('@/lib/sandbox-mail-capture').then(m => m.captureSandboxEmail(raw)).catch(() => undefined)
+    await import('@/lib/sandbox-mail-capture').then(m => m.captureSandboxEmail(raw)).catch(() => undefined)
     return { provider: 'resend', messageId: 'sandbox-blocked', threadId: null }
   }
 

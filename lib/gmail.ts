@@ -144,7 +144,9 @@ export async function gmailPost(
     // QA-only: record the rendered content so a tester can read what would have
     // been sent (sandbox blocks real delivery). Fire-and-forget; never disturbs
     // the no-op. Only reachable under SANDBOX_MODE — inert in production.
-    void import('@/lib/sandbox-mail-capture')
+    // Awaited: on serverless the function can be frozen the moment the response goes out, which
+    // silently lost the copy when this was fire-and-forget (captureSandboxEmail never throws).
+    await import('@/lib/sandbox-mail-capture')
       .then(m => m.captureSandboxEmail((body as { raw?: unknown }).raw))
       .catch(() => {})
     return { success: true, sandbox: true }
