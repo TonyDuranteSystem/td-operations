@@ -131,3 +131,13 @@ export async function resolveContactLinkedDriveFolder(contactId: string): Promis
   }
   return null
 }
+
+/**
+ * Does this upload still need the company's Drive folder? Not when the file was already saved in the company's new storage
+ * (the cutover save, or the formation pilot save) or in the sandbox. A storage-first company has NO Drive folder, so asking for
+ * one after a successful storage save made the upload fail with "Account has no Drive folder" (Redstone Atlas, 2026-10-15) even
+ * though the file was saved — and the stage never advanced.
+ */
+export function needsDriveFolder(f: { sandbox: boolean; routed: boolean; storeSaved: boolean }): boolean {
+  return !f.sandbox && !f.routed && !f.storeSaved
+}
