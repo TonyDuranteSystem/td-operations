@@ -25,11 +25,14 @@ import {
   withMore,
   withService,
   withStep,
+  withTab,
   type NewCalendarParams,
 } from '@/lib/new-calendar/params'
 import { workTodayText } from '@/lib/new-calendar/greeting'
 import { RowAction } from '@/components/new-calendar/row-action'
 import { RefreshButton } from '@/components/new-calendar/refresh-button'
+import { WhatsNewTab } from '@/components/whats-new/whats-new-tab'
+import { WhatsNewCount } from '@/components/whats-new/whats-new-count'
 
 const BASE = '/new-calendar'
 const hrefFor = (p: NewCalendarParams) => `${BASE}${toQueryString(p)}`
@@ -122,35 +125,14 @@ function Row({ row }: { row: CalendarRow }) {
   )
 }
 
-export function NewCalendarView({ model, params, greeting }: { model: CalendarModel; params: NewCalendarParams; greeting: string }) {
+/** The Open services tab: the lists, chips, search and rows. Rendered only when the Open services data was loaded (not on the What's New tab). */
+function JobsBody({ model, params }: { model: CalendarModel; params: NewCalendarParams }) {
   const closedView = model.active === 'closed'
   const stepView = model.active === null
   const serviceTotal = model.services.reduce((n, s) => n + s.count, 0)
 
   return (
-    <div className="space-y-4 p-6 lg:p-8">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
-        <p className="mt-1 text-sm text-zinc-600">
-          {greeting} — <b className="font-semibold text-foreground">{workTodayText(model.workToday)}</b> <span className="text-zinc-500">(open services only)</span>.{' '}
-          <Link href="/calendar" prefetch={false} className="text-blue-700 underline">Renewals and annual reports are on the existing Calendar</Link>.
-        </p>
-      </header>
-
-      <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-        This is the new Calendar, being tested. It shows the same jobs as before, sorted into what is on us and what is waiting. For now it only <b>shows</b> things — open a line to work on it.
-        Renewals, annual reports and Mark Filed stay on the existing Calendar.
-      </div>
-
-      <nav className="flex gap-1 border-b text-sm" aria-label="New Calendar pages">
-        <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
-          Open services <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>
-        </span>
-        <Link href="/calendar" prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
-          Renewals &amp; annual reports →
-        </Link>
-      </nav>
-
+    <>
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Lists">
         {BUCKETS.map(b => (
           <Chip key={b} href={hrefFor(withBucket(params, b))} pressed={model.active === b} dim={model.counts[b] === 0} dot={BUCKET_DOT[b]}>
@@ -260,6 +242,59 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
         so someone closes it. Steps with no &ldquo;waiting on&rdquo; setting are listed under <b>Not sorted yet</b> instead of being guessed. When a job is
         finished it stays under <b>Closed</b> for 30 days.
       </div>
+    </>
+  )
+}
+
+/** `model` is null on the What's New tab: that tab does not use the Open services data, so the page does not load it (and a failed
+ *  Open services read can never hide the news). */
+export function NewCalendarView({ model, params, greeting }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string }) {
+  return (
+    <div className="space-y-4 p-6 lg:p-8">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">New Calendar</h1>
+        <p className="mt-1 text-sm text-zinc-600">
+          {model
+            ? <>{greeting} — <b className="font-semibold text-foreground">{workTodayText(model.workToday)}</b> <span className="text-zinc-500">(open services only)</span>.{' '}</>
+            : <>{greeting}. </>}
+          <Link href="/calendar" prefetch={false} className="text-blue-700 underline">Renewals and annual reports are on the existing Calendar</Link>.
+        </p>
+      </header>
+
+      <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+        This is the new Calendar, being tested. Open services shows the same jobs as before, sorted into what is on us and what is waiting — for now that list only <b>shows</b> things, so open a line to work on it.
+        What&apos;s New is the one place here where you can change something: ticking a note <b>Handled</b> (or a workflow&apos;s own button) is real. Renewals, annual reports and Mark Filed stay on the existing Calendar.
+      </div>
+
+      <nav className="flex gap-1 border-b text-sm" aria-label="New Calendar pages">
+        {params.tab === 'jobs' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            Open services {model && <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>}
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'jobs'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            Open services {model && <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>}
+          </Link>
+        )}
+        {params.tab === 'news' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            What&apos;s New <WhatsNewCount />
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'news'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            What&apos;s New <WhatsNewCount />
+          </Link>
+        )}
+        <Link href="/calendar" prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+          Renewals &amp; annual reports →
+        </Link>
+      </nav>
+
+      {params.tab === 'news' ? (
+        <WhatsNewTab />
+      ) : model ? (
+        <JobsBody model={model} params={params} />
+      ) : null}
     </div>
   )
 }

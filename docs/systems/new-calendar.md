@@ -1,4 +1,5 @@
 # New Calendar (the day-by-day work list, built on the Open services data)
+_Last verified against code: 2026-10-16c — Claude (dev job `40235e3c`, SANDBOX): **What's New tab** (`/new-calendar?tab=news`): a third tab, "What's New N" (purple count), listing the clients with something new and opening the same panel as Portal Chats; see `whats-new.md`. The page's `tab` parameter is `jobs` (default) or `news`; the news tab has no filters of its own. On the news tab the page does NOT load the Open services data (`model` is null; the header drops the work-today number and the tab drops its count); if the Open services read fails the error box links to the news tab. The fetching client components live in `components/whats-new/` (not in `components/new-calendar/`, which stays free of `fetch`)._
 _Last verified against code: 2026-10-16b — Claude (dev job `40235e3c`, child of `be7da01a`; SANDBOX — Antonio ships; light council: project director GO, senior engineer 0 blockers). v1 is READ-ONLY. Built from Antonio's October 1 mockup. Not on production yet._
 
 ## What it is
@@ -15,7 +16,9 @@ Under the lists: **service chips** (services present in the chosen list, biggest
 
 **Tabs.** "Open services" (this page) and "Renewals & annual reports →", a plain link to the EXISTING `/calendar`, so Mark Filed and the renewals work are exactly as they were. The existing Calendar and the Open services page are NOT edited (a test pins that the Calendar files never mention this page).
 
-**NOT in v1 (by design, said to Antonio):** the "What's New (portal)" feed, the side panel with history, "Done: step" buttons that move a job from inside the Calendar, decision pop-ups other than the Wrap-up. Those are the next slices.
+**What's New tab (2026-10-16, sandbox):** the "What's New (portal) — only what clients did" feed from the mockup is now the third tab (see the 2026-10-16c entry above and `whats-new.md`).
+
+**NOT in v1 (by design, said to Antonio):** ~~the "What's New (portal)" feed~~ (now the What's New tab), the side panel with history, "Done: step" buttons that move a job from inside the Calendar, decision pop-ups other than the Wrap-up. Those are the next slices.
 
 ## Business rules
 - **Same switch and same guard as Open services**: `app_settings.open_services_audience` = `off | owners | all` (see `open-services.md`). The page calls `requireOpenServicesAccess()` FIRST on every request; a denied visitor gets the ordinary not-found page. The left-menu item shows only when `canViewOpenServices(user, audience)` is true (the layout reads the setting once and passes `enabledFeatures=['new-calendar']`; inside a floating window the menu is not drawn at all), so the item can never be a dead link. **When this ships to production the switch is already `all`, so every staff member will see the item at once; set it to `owners` first if only Antonio should.**

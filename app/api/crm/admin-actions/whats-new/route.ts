@@ -8,6 +8,10 @@
  * GET ?notes=true&account_id|contact_id — the VISIBLE chat-event notes for one
  *                                    client (the What's New feed), enriched with
  *                                    event_key + cleaned text + handled state.
+ * GET ?summary=true               — which clients have unhandled VISIBLE notes (name, count,
+ *                                    latest note), newest first, for the New Calendar's
+ *                                    What's New tab. Same visibility rules and the same
+ *                                    total as the dot (lib/notifications/whats-new-summary.ts).
  * POST { message_id, handled }     — tick/untick a note handled. Staff-only.
  *
  * Visibility is catalog-driven (`whats_new_events`, editable in Board Settings).
@@ -22,9 +26,10 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { isDashboardUser } from "@/lib/auth"
+import { isDashboardUser, isStaffUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
+import { groupWhatsNewSummary, type SummaryNote } from "@/lib/notifications/whats-new-summary"
 import { getClientAccountIds } from "@/lib/portal-auth"
 import {
   bucketWhatsNewCounts,
@@ -65,11 +70,13 @@ interface EventConfig {
 
 /** Per-event config from the whats_new_events catalog (visible + suggested_step). */
 async function loadConfig(): Promise<Map<string, EventConfig>> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("catalog_entries")
     .select("slug, metadata")
     .eq("catalog_id", "whats_new_events")
     .eq("status", "active")
+  // Unknown events default to VISIBLE, so a failed read must not break the page — but it must not be silent either.
+  if (error) console.error("[whats-new] could not read the event visibility catalog:", error.message)
   const map = new Map<string, EventConfig>()
   for (const r of data ?? []) {
     const m = (r.metadata as Record<string, unknown> | null) ?? {}
@@ -85,10 +92,11 @@ async function loadConfig(): Promise<Map<string, EventConfig>> {
 async function resolveTaskSlugs(taskIds: string[]): Promise<Map<string, string | null>> {
   const map = new Map<string, string | null>()
   if (taskIds.length === 0) return map
-  const { data } = await db
+  const { data, error } = await db
     .from("tasks")
     .select("id, workflow_slug")
     .in("id", taskIds)
+  if (error) console.error("[whats-new] could not resolve workflow task slugs:", error.message)
   for (const t of (data ?? []) as Array<{ id: string; workflow_slug: string | null }>) {
     map.set(t.id, t.workflow_slug ?? null)
   }
@@ -171,6 +179,72 @@ export async function GET(req: NextRequest) {
         multiMemberAccountIds(allNoteAccountIds),
       ])
       return NextResponse.json(bucketWhatsNewCounts(visible, contactsByAccount, new Set(multiMember)))
+    }
+
+    if (sp.get("summary") === "true") {
+      // The cross-client list names every client and their latest note, so it is for STAFF only — isDashboardUser also lets
+      // the partner role through (middleware keeps partners out; this is the second lock).
+      if (!isStaffUser(user)) return NextResponse.json({ error: "Not authorized" }, { status: 403 })
+      // PostgREST silently clips one request to its own row cap (1000 here), so a single `.limit(5000)` could never report
+      // "cut off". Read in pages of 1000, newest first, up to MAX_PAGES; if the last allowed page is still full there may be more.
+      const PAGE_SIZE = 1000
+      const MAX_PAGES = 5
+      const rows: RawNote[] = []
+      let readTruncated = false
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { data, error } = await db
+          .from("portal_messages")
+          .select("account_id, contact_id, message, created_at")
+          .eq("sender_type", "system")
+          .ilike("message", "%<!-- chat-event:%")
+          .is("handled_at", null)
+          .is("deleted_at", null)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+        if (error) throw error
+        const got = (data ?? []) as RawNote[]
+        rows.push(...got)
+        if (got.length < PAGE_SIZE) break
+        if (page === MAX_PAGES - 1) readTruncated = true
+      }
+      const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(rows)])
+      // Same visibility rule as the dot: hidden only if explicitly toggled off.
+      const notes: SummaryNote[] = rows
+        .filter((n) => {
+          const key = keys.get(n)
+          return !(key && config.get(key)?.visible === false)
+        })
+        .map((n) => ({
+          account_id: n.account_id,
+          contact_id: n.contact_id,
+          created_at: n.created_at ?? "",
+          text: n.message.replace(MARKER_RE, "").trim(),
+          event_key: keys.get(n) ?? null,
+        }))
+      const accountIds = Array.from(new Set(notes.map((n) => n.account_id).filter((id): id is string => !!id)))
+      const contactIds = Array.from(new Set(notes.filter((n) => !n.account_id && n.contact_id).map((n) => n.contact_id as string)))
+      const chunk = <T,>(arr: T[], size: number): T[][] => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const accounts = new Map<string, string | null>()
+      const contacts = new Map<string, string | null>()
+      await Promise.all([
+        ...chunk(accountIds, 150).map(async (ids) => {
+          const { data: a, error: e } = await db.from("accounts").select("id, company_name").in("id", ids)
+          // Names are cosmetic: a failed lookup must not take the whole list down (the row falls back to "Unnamed").
+          if (e) { console.error("[whats-new] account name lookup failed:", e.message); return }
+          for (const r of (a ?? []) as Array<{ id: string; company_name: string | null }>) accounts.set(r.id, r.company_name)
+        }),
+        ...chunk(contactIds, 150).map(async (ids) => {
+          const { data: c, error: e } = await db.from("contacts").select("id, full_name").in("id", ids)
+          if (e) { console.error("[whats-new] contact name lookup failed:", e.message); return }
+          for (const r of (c ?? []) as Array<{ id: string; full_name: string | null }>) contacts.set(r.id, r.full_name)
+        }),
+      ])
+      return NextResponse.json(groupWhatsNewSummary(notes, { accounts, contacts }, { readTruncated }))
     }
 
     if (wantNotes) {

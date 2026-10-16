@@ -14,7 +14,8 @@
 
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare, ExternalLink } from 'lucide-react'
+import { Loader2, Sparkles, Plus, CheckCircle2, Square, CheckSquare, ExternalLink, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
 import { formatDistanceToNow, format } from 'date-fns'
 import { WorkflowTaskCard } from '@/components/tasks/workflow-task-card'
 import { CardCreateActions } from '@/components/notifications/card-create-actions'
@@ -27,7 +28,7 @@ const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 /** Human-readable category label keyed off the note's event_key (the chat-event
  *  `kind`, or the workflow_slug for workflow_spawned notes). Replaces the old
  *  per-message `topic` badge — topic is no longer written for system notes. */
-const EVENT_KEY_LABELS: Record<string, string> = {
+export const EVENT_KEY_LABELS: Record<string, string> = {
   payment_received: 'Payment',
   ss4_signed: 'SS-4 Signed',
   document_uploaded: 'Document',
@@ -106,6 +107,7 @@ export function ThreadWhatsNewPanel({
   contactId,
   cardAccountId,
   onOpenCard,
+  showMoneyActions = true,
 }: {
   /** Notes/dot SCOPE. Must mirror the conversation-list dot: account-level thread
    *  → its account_id; contact-level thread → null here (so notes load by contact_id).
@@ -116,7 +118,11 @@ export function ThreadWhatsNewPanel({
   /** Account to attach NEW cards/money-actions to — may be the viewed company even on
    *  a contact-level thread. Defaults to accountId when omitted. */
   cardAccountId?: string | null
-  onOpenCard: (note: { noteId: string; label: string }) => void
+  /** Opens a To-Do card for the note. Omitted by the New Calendar's What's New tab, where the Calendar IS the to-do list
+   *  (Antonio, 2026-10-14: no separate to-do cards for people): the note then has no "Open card" / "+ card" button. */
+  onOpenCard?: (note: { noteId: string; label: string }) => void
+  /** The money-action buttons under each non-workflow note. On by default (Portal Chats); off in the Calendar's tab. */
+  showMoneyActions?: boolean
 }) {
   const qc = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -126,12 +132,15 @@ export function ThreadWhatsNewPanel({
   const scopeKey = accountId ?? contactId
   const param = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
 
-  const { data: notes, isLoading } = useQuery<ApiNote[]>({
+  // A failed read must NOT look like "Nothing new" (R099): surface the server's own message.
+  const { data: notes, isLoading, error: notesError } = useQuery<ApiNote[]>({
     queryKey: ['thread-whats-new', scopeKey, limit],
-    queryFn: () =>
-      fetch(`${WHATS_NEW_API}?notes=true&${param}&limit=${limit}`)
-        .then((r) => r.json())
-        .then((d: { notes?: ApiNote[] }) => d.notes || []),
+    queryFn: async () => {
+      const r = await fetch(`${WHATS_NEW_API}?notes=true&${param}&limit=${limit}`)
+      const d = (await r.json().catch(() => ({}))) as { notes?: ApiNote[]; error?: string }
+      if (!r.ok) throw new Error(d.error || "Could not read What's New. Please try again.")
+      return d.notes || []
+    },
     enabled: !!param,
     refetchInterval: 30_000,
   })
@@ -168,6 +177,8 @@ export function ThreadWhatsNewPanel({
           const d = await res.json().catch(() => ({}))
           throw new Error(d.error || 'Could not update')
         }
+      } catch (err) {
+        toast.error(err instanceof Error && err.message ? err.message : 'Could not update this note. Please try again.')
       } finally {
         await qc.invalidateQueries({ queryKey: ['thread-whats-new'] })
         await qc.invalidateQueries({ queryKey: ['portal-chat-whats-new-counts'] })
@@ -180,7 +191,7 @@ export function ThreadWhatsNewPanel({
   const open = useCallback(
     (note: ApiNote) => {
       const label = note.suggested_step || note.text
-      onOpenCard({ noteId: note.id, label })
+      onOpenCard?.({ noteId: note.id, label })
     },
     [onOpenCard],
   )
@@ -204,6 +215,11 @@ export function ThreadWhatsNewPanel({
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {isLoading ? (
           <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-zinc-400" /></div>
+        ) : notesError && !notes ? (
+          <p className="flex items-start gap-2 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            {notesError instanceof Error ? notesError.message : "Could not read What's New. Please try again."}
+          </p>
         ) : !notes || notes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <CheckCircle2 className="h-9 w-9 text-zinc-200 mb-2" />
@@ -257,7 +273,7 @@ export function ThreadWhatsNewPanel({
                         )}
                         {/* No "Open card" for workflow notes — the workflow itself IS the to-do
                             and its action buttons are shown below. */}
-                        {!handled && !wfTask && (
+                        {!handled && !wfTask && onOpenCard && (
                           <FastTooltip label="Open a To-Do card for this">
                             <button
                               onClick={() => open(note)}
@@ -313,14 +329,14 @@ export function ThreadWhatsNewPanel({
                       {handled ? 'Handled' : 'Mark handled'}
                     </button>
                   </FastTooltip>
-                  {handled && (
+                  {handled && onOpenCard && (
                     <button onClick={() => open(note)} className="text-[10px] text-zinc-400 hover:text-violet-700">
                       + card
                     </button>
                   )}
                 </div>
                 {/* Money actions — not on workflow notes (those carry their own action buttons). */}
-                {!wfTask && (
+                {!wfTask && showMoneyActions && (
                   <div className="mt-1.5 pt-1.5 border-t">
                     <CardCreateActions
                       accountId={cardAccountId ?? accountId}

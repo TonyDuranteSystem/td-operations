@@ -125,6 +125,74 @@ describe("the loader", () => {
   })
 })
 
+describe("the What's New tab", () => {
+  const view = read("components/new-calendar/new-calendar-view.tsx")
+  const route = stripComments(read("app/api/crm/admin-actions/whats-new/route.ts"))
+  const panel = read("components/portal-chats/thread-whats-new-panel.tsx")
+
+  it("is a tab next to Open services and Renewals, with the live count, and shows the same panel as Portal Chats", () => {
+    expect(view).toContain("What&apos;s New <WhatsNewCount />")
+    expect(view).toContain("withTab(params, 'news')")
+    expect(view).toContain("params.tab === 'news' ? (")
+    expect(view).toContain("<WhatsNewTab />")
+  })
+
+  it("its fetching lives outside lib/new-calendar and components/new-calendar (those stay free of fetch)", () => {
+    expect(existsSync(join(root, "components/whats-new/whats-new-tab.tsx"))).toBe(true)
+    expect(read("components/whats-new/use-whats-new-summary.ts")).toContain("/api/crm/admin-actions/whats-new?summary=true")
+    expect(stripComments(read("components/whats-new/whats-new-tab.tsx"))).toContain("ThreadWhatsNewPanel")
+  })
+
+  it("reuses the Portal Chats panel with the To-Do card button and the money actions OFF (the Calendar is the to-do)", () => {
+    const tab = read("components/whats-new/whats-new-tab.tsx")
+    expect(tab).toContain("showMoneyActions={false}")
+    expect(tab).not.toContain("onOpenCard")
+    expect(tab).not.toContain("NewCardDialog")
+  })
+
+  it("Portal Chats is unchanged by that: the panel's new props default to the old behaviour", () => {
+    expect(panel).toContain("showMoneyActions = true")
+    expect(panel).toContain("onOpenCard?: (note: { noteId: string; label: string }) => void")
+    const page = read("app/(dashboard)/portal-chats/page.tsx")
+    expect(page).toContain("onOpenCard={({ noteId, label }) => {")
+  })
+
+  it("the summary is staff-only like every other mode of the route, reads only (no write in the summary branch) and shares the visibility rule", () => {
+    const summary = route.slice(route.indexOf('if (sp.get("summary") === "true") {'), route.indexOf("if (wantNotes) {"))
+    expect(route.indexOf("isDashboardUser(user)")).toBeLessThan(route.indexOf('sp.get("summary")'))
+    expect(summary).toContain("config.get(key)?.visible === false")
+    for (const w of [".insert(", ".update(", ".delete(", ".upsert(", ".rpc("]) expect(summary, `summary contains ${w}`).not.toContain(w)
+    expect(summary).toContain('.is("handled_at", null)')
+    expect(summary).toContain('.is("deleted_at", null)')
+  })
+
+  it("the news tab does not load the Open services data, and a failed jobs read still leaves a way to the news", () => {
+    const page = stripComments(read(PAGE))
+    expect(page).toContain("const wantsJobs = params.tab !== 'news'")
+    expect(page).toContain("if (wantsJobs) {")
+    expect(page).toContain("/new-calendar?tab=news")
+    expect(view).toContain("model: CalendarModel | null")
+    expect(view).toContain("<JobsBody model={model} params={params} />")
+  })
+
+  it("the cross-client list is staff-only (the partner role passes isDashboardUser) and is read in honest pages of 1000", () => {
+    const at = route.indexOf('sp.get("summary") === "true"')
+    expect(at).toBeGreaterThan(0)
+    const branch = route.slice(at, at + 2500)
+    expect(branch).toContain("isStaffUser(user)")
+    expect(branch).toContain("PAGE_SIZE = 1000")
+    expect(branch).toContain(".range(")
+    expect(branch).toContain("readTruncated")
+    expect(branch).not.toContain("READ_LIMIT")
+  })
+
+  it("the panel shows a failed read and a failed Mark handled instead of 'Nothing new' or silence (R099)", () => {
+    expect(panel).toContain("if (!r.ok) throw new Error(d.error")
+    expect(panel).toContain("notesError && !notes")
+    expect(panel).toContain("toast.error(")
+  })
+})
+
 describe("the menu item and the old Calendar", () => {
   const sidebar = read("components/dashboard/sidebar.tsx")
   const layout = read("app/(dashboard)/layout.tsx")
