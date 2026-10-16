@@ -953,6 +953,11 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
       toast.error(errMsg(err, 'What was dropped could not be read (a file may be locked or an alias is broken) — try again or drop fewer files.'))
       return
     }
+    await startDrop(folder, found)
+  }
+
+  /** Files or a whole folder chosen for a company's folder — from a drop OR from the Upload box's pickers — go to the same typed upload. */
+  const startDrop = async (folder: Fold, found: { file: File; path: string[] }[]) => {
     // "2. Contacts" needs its people for "Whose documents?" even when the folder is closed in the tree
     if (folder.kind === 'contacts' && !loaded[folder.id]) {
       try {
@@ -2259,11 +2264,34 @@ export function NewStoreBrowser({ ownerId: scopedOwnerId, scopedKind = 'company'
                 })()}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {(() => {
+                  const target = upOptions.find((o) => o.f.id === upFolder)?.f ?? viewFolder
+                  const pick = (list: File[], withPath: boolean) => {
+                    if (!target || target.trashed || target.kind === 'root') { toast.error('Choose the folder first.'); return }
+                    const found = list.filter((f) => !f.name.startsWith('.')).map((file) => {
+                      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? ''
+                      return { file, path: withPath && rel.includes('/') ? rel.split('/').slice(0, -1) : [] }
+                    })
+                    setUploadOpen(false)
+                    void startDrop(target, found)
+                  }
+                  return (
+                    <>
+                      <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="company-choose-files">Choose files
+                        <input type="file" multiple className="hidden" disabled={uploading} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (list.length) pick(list, false) }} />
+                      </label>
+                      <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50" data-testid="company-choose-folder">Choose a folder
+                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- webkitdirectory is not in React's input typings */}
+                        <input type="file" multiple className="hidden" disabled={uploading} {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ''; if (list.length) pick(list, true) }} />
+                      </label>
+                    </>
+                  )
+                })()}
                 <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="text-sm"
                   disabled={uploading || !upFolder || !upType || upType === '__custom__' || (upIsContacts && !upPerson)}
                   onChange={(e) => { const file = e.target.files?.[0]; if (file) doUpload(file) }} />
                 {uploading && <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />}
-                <button type="button" onClick={() => setUploadOpen(false)} disabled={uploading} className="text-xs text-zinc-500 hover:underline">Cancel</button>
+                <button type="button" onClick={() => setUploadOpen(false)} disabled={uploading} className="rounded-md border border-zinc-300 bg-white px-3 py-1 hover:bg-zinc-50 disabled:opacity-50" data-testid="company-upload-cancel">Cancel</button>
                 <span className="text-xs text-zinc-400">Uploading a file with the same name replaces it; the old copy is kept under Versions.</span>
               </div>
             </div>
