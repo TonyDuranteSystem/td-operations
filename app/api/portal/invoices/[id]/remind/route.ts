@@ -2,8 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
-import { gmailPost } from '@/lib/gmail'
-import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
+import { getInvoiceEmailSenderSetting } from '@/lib/settings'
+import { deliverInvoiceEmail, resolveInvoiceSender, fromAddressFor } from '@/lib/portal/invoice-mailer'
+import { esc, headerSafe, isSafeRecipient, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
 import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
@@ -126,6 +127,7 @@ export async function POST(
     </div>
   `
 
+  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY)
   try {
     // The tracking row is the reminder log the throttle above reads, and it is written first so two quick clicks
     // cannot both pass. If the send fails it is removed again so a retry is not blocked.
@@ -134,24 +136,24 @@ export async function POST(
       tracking_id: trackingId,
       recipient: customer.email,
       subject,
-      from_email: 'support@tonydurante.us',
+      from_email: fromAddressFor(sender),
       account_id: invoice.account_id || null,
       contact_id: invoice.contact_id || null,
     })
     const trackedHtml = html + `<img src="${APP_BASE_URL}/api/track/open/${trackingId}" width="1" height="1" style="display:none" alt="" />`
 
     try {
-      const rawEmail = createRawEmail({
-        from: fromHeader(companyName, 'support@tonydurante.us'),
+      const sendResult = await deliverInvoiceEmail({
+        sender,
+        fromName: companyName,
         to: customer.email,
         subject,
         html: trackedHtml,
         replyTo: (invoice.account_id ? await getCompanyEmail(invoice.account_id) : null) ?? undefined,
       })
-      const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
       if (!claimErr) {
         await supabaseAdmin.from('email_tracking')
-          .update({ gmail_message_id: sendResult?.id || null, gmail_thread_id: sendResult?.threadId || null })
+          .update({ gmail_message_id: sendResult.messageId, gmail_thread_id: sendResult.threadId })
           .eq('tracking_id', trackingId)
       }
     } catch (sendErr) {
