@@ -143,6 +143,8 @@ export interface AdminChangeResult {
   suite?: string | null
   unsigned_leases_moved?: number
   signed_leases_to_replace?: number
+  /** The number the company left behind went back to the pool (false while a lease still carries it). */
+  returned_to_pool?: boolean
 }
 
 /**

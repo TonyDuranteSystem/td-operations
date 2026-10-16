@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { accessCodeError } from "@/lib/esign/access-guard"
 import { newYorkToday, endOfYearIso, termMonthsThroughYearEnd } from "@/lib/lease/agreement-v2"
+import { contactOperatingAddress, CONTACT_ADDRESS_COLUMNS } from "@/lib/lease/operating-address"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -67,10 +68,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   if (lease.status === "signed") {
     return NextResponse.json({ error: "Already signed" }, { status: 409 })
   }
-  // template v2: the client states where the business is really run (Section 1.1) — it is part of what they sign
+  // template v2: Section 1.1's Operating Address is the signer's address in the CRM when there is one (the page printed it read-only);
+  // only when the CRM has none does the client state where the business is really run. Either way it is part of what they sign.
   const isV2 = (lease.template_version ?? 1) === 2
-  if (isV2 && operatingAddress.length < 5) {
+  let crmAddress: string | null = null
+  if (isV2 && lease.contact_id) {
+    const { data: contact } = await db.from("contacts").select(CONTACT_ADDRESS_COLUMNS).eq("id", lease.contact_id).maybeSingle()
+    crmAddress = contactOperatingAddress(contact)?.text ?? null
+  }
+  if (isV2 && !crmAddress && operatingAddress.length < 5) {
     return NextResponse.json({ error: "Please enter your Operating Address (where your business is run day to day) before signing." }, { status: 400 })
+  }
+  // the CRM address the page printed must still be the CRM address now (staff changed the contact while the page was open -> reload)
+  if (isV2 && crmAddress && (typeof body.operating_address !== "string" || body.operating_address !== crmAddress)) {
+    return NextResponse.json(
+      { error: "The address in your agreement was updated while you had it open. The page will reload — please review it and sign again.", code: "lease_changed" },
+      { status: 409 },
+    )
   }
 
   // The signed PDF carries the company number and name the page printed. If staff changed either while the page was open (a number
@@ -114,7 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   // on the server, in New York time (the same date the page printed next to both signatures).
   const signedDay = isV2 ? printedDate : newYorkToday() // v2: already checked equal to today in New York above — no second clock read
   const v2Fields = isV2
-    ? { operating_address: operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: endOfYearIso(signedDay), term_months: termMonthsThroughYearEnd(signedDay) }
+    ? { operating_address: crmAddress ?? operatingAddress, effective_date: signedDay, term_start_date: signedDay, term_end_date: endOfYearIso(signedDay), term_months: termMonthsThroughYearEnd(signedDay) }
     : {}
   const { data: updated, error } = await db
     .from("lease_agreements")

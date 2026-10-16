@@ -34,7 +34,7 @@ export const LEASE_SELECT = [
 const SECRET_LEASE_FIELDS = ["access_code", "tenant_email", "account_id"] as const
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function toPublicLease(row: any) {
+export function toPublicLease(row: any, crmOperatingAddress?: string | null) {
   return {
     id: row.id,
     token: row.token,
@@ -67,6 +67,8 @@ export function toPublicLease(row: any) {
     pdf_storage_path: row.pdf_storage_path ?? null,
     template_version: row.template_version ?? 1,
     operating_address: row.operating_address ?? null,
+    // the signer's address in the CRM (several lines joined by "\n"), shown read-only in Section 1.1 on an unsigned v2 lease; null = the client types it
+    operating_address_crm: crmOperatingAddress ?? null,
   }
 }
 

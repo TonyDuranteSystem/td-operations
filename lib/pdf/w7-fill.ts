@@ -59,12 +59,13 @@
 import { PDFDocument } from "pdf-lib"
 import { CAA_IDENTITY_ADDRESS } from "@/lib/td-address"
 import { embedUnicodeFonts } from "./unicode-fonts"
+import { fitFieldText } from "./fit-field"
 
 const W7_PDF_URL = "https://www.irs.gov/pub/irs-pdf/fw7.pdf"
 
 // Tony Durante LLC as Acceptance Agent
 const AGENT = {
-  nameAndTitle: "Antonio Durante, Certified Acceptance Agent",
+  nameAndTitle: "Antonio Noel Durante, Certified Acceptance Agent",
   company: "Tony Durante LLC",
   ein: "83-4299021",
   ptin: "P02389222",
@@ -275,6 +276,7 @@ export async function fillW7(data: W7FillData): Promise<Uint8Array> {
   setText(`${P}.f1_42[0]`, AGENT.phone)        // Phone
   setText(`${P}.f1_43[0]`, AGENT.fax)          // Fax
   setText(`${P}.f1_44[0]`, AGENT.nameAndTitle) // Name and title
+  fitFieldText(form, `${P}.f1_44[0]`, AGENT.nameAndTitle, unicodeFont) // the box is narrow: shrink the text to fit instead of cutting it
   setText(`${P}.f1_45[0]`, AGENT.company)      // Name of company
   setText(`${P}.f1_46[0]`, AGENT.ein)          // EIN
   setText(`${P}.f1_47[0]`, AGENT.ptin)         // PTIN

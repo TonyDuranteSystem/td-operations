@@ -45,7 +45,10 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
     const result = await changeCompanySuite(accountId, newSuite.trim() === '' ? null : suiteFromPmbInput(newSuite), reason)
     setBusy(false)
     if (result.success) {
-      toast.success('PMB number changed')
+      const left = result.oldPmb ? (pmbNumberFromSuite(result.oldPmb) ?? result.oldPmb) : null
+      toast.success(newSuite.trim() === '' ? 'PMB number taken off the company' : 'PMB number changed')
+      if (left && result.returnedToPool === true) toast.success(`PMB ${left} is back in the pool and can be given to another company.`)
+      else if (left && result.returnedToPool === false) toast.warning(`PMB ${left} was NOT returned to the pool, because a lease still shows it.`)
       if ((result.signedLeasesToReplace ?? 0) > 0) {
         toast.warning(`${result.signedLeasesToReplace} signed lease(s) still show the old PMB number — use Delete lease in Documents, then create a corrected lease.`)
       }
@@ -98,7 +101,7 @@ export function SuiteAssignedField({ accountId, suite, isAdmin }: Props) {
       {changing && (
         <div className="ml-6 space-y-1.5 rounded border p-2">
           <p className="text-xs text-muted-foreground">
-            Owner only. The PMB number is locked — this is the one logged way to change it. Leave it empty to take it off the company.
+            Owner only. The PMB number is locked — this is the one logged way to change it. Leave it empty to take it off the company. The number it leaves goes back to the pool and can be given to another company (unless a lease still shows it).
           </p>
           <input
             value={newSuite}

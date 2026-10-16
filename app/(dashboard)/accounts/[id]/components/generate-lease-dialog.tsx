@@ -137,6 +137,7 @@ export function GenerateLeaseDialog({ open, onClose, accountId, companyName, for
               <div className="text-xs text-muted-foreground bg-zinc-50 rounded-lg p-3 space-y-1">
                 <p>Premises: 10225 Ulmerton Rd, Largo, FL 33771</p>
                 <p>Office Lease and Services Agreement — no separate rent or deposit; the term runs from the date the client signs to December 31 of that year.</p>
+                <p className="mt-1">Operating Address (Section 1.1): the signer&apos;s address in the CRM. If the contact has none, the client types it when signing.</p>
               </div>
             </>
           ) : (

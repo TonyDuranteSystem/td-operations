@@ -161,7 +161,7 @@ Workflow: lease_create → lease_get (review with admin preview link) → CRM Se
                 `**Mailing address:** ${mailingStreetForSuite(data.suite_number) ?? "?"}, Largo, FL 33771`,
                 ``,
                 `**Agreement:** Office Lease and Services Agreement (template v2) — no separate rent or deposit; fixed term from the date of the last signature to December 31 of that year${data.signed_at ? ` (${fmtDate(data.term_start_date)} → ${fmtDate(data.term_end_date)})` : ""}`,
-                data.operating_address ? `**Operating Address (stated by the client at signing):** ${data.operating_address}` : null,
+                data.operating_address ? `**Operating Address (the signer's address in the CRM, or typed by the client when the CRM has none):** ${data.operating_address}` : null,
               ]
             : [
                 `**Premises:** ${data.premises_address}, Suite ${data.suite_number}`,

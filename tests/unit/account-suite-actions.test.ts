@@ -117,6 +117,14 @@ describe("changeCompanySuite — owner only, reason required", () => {
     expect(syncPhysicalAddressToSuite).not.toHaveBeenCalled()
   })
 
+  it("tells the screen whether the number the company left went back to the pool (so it can say so)", async () => {
+    adminChangeCompanySuite.mockResolvedValue({ changed: true, old: "3D-235", new: null, signed_leases_to_replace: 0, returned_to_pool: true })
+    expect(await changeCompanySuite("acct-1", null, "removed")).toMatchObject({ success: true, returnedToPool: true, oldPmb: "3D-235" })
+    // a signed lease still shows the old number -> it stays out of the pool and the screen warns
+    adminChangeCompanySuite.mockResolvedValue({ changed: true, old: "3D-115", new: "3D-500", signed_leases_to_replace: 1, returned_to_pool: false })
+    expect(await changeCompanySuite("acct-1", "3D-500", "moved")).toMatchObject({ success: true, returnedToPool: false, oldPmb: "3D-115" })
+  })
+
   it("passes the database's own refusal (e.g. another company holds it) straight through", async () => {
     adminChangeCompanySuite.mockRejectedValue(new Error("Suite 3D-210 already belongs to another company"))
     const res = await changeCompanySuite("acct-1", "3D-210", "x")

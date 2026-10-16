@@ -114,3 +114,29 @@ describe('lease sign route — a v1 lease is unchanged', () => {
     expect(updates[0]).toMatchObject({ status: 'signed' })
   })
 })
+
+describe('lease sign route — the Operating Address comes from the CRM contact when there is one', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    updates = []
+    leaseRow = { id: 'l1', access_code: null, status: 'viewed', template_version: 2, contact_id: 'c1', suite_number: '3D-318', tenant_company: 'Acme LLC', tenant_contact_name: 'Jane Rossi', tenant_title: 'Manager',
+      // the mock returns this same row for the contact lookup too: these are the contact's address columns
+      address_line1: 'Via Roma 1', address_city: 'Milano', address_state: 'MI', address_zip: '20121', address_country: 'Italy' }
+  })
+  const CRM = 'Via Roma 1\n20121 Milano, MI\nItaly'
+
+  it('signs without anything typed: the CRM address is what is stored, with its line breaks', async () => {
+    const res = await sign({ operating_address: CRM, signing_date: newYorkToday() })
+    expect(res.status).toBe(200)
+    expect(updates[0].operating_address).toBe(CRM)
+  })
+
+  it('refuses (reload) when the address the page printed is no longer the CRM address', async () => {
+    const res = await sign({ operating_address: 'Somewhere else 5, Rome', signing_date: newYorkToday() })
+    expect(res.status).toBe(409)
+    expect((await res.json()).code).toBe('lease_changed')
+    expect(updates).toHaveLength(0)
+    const none = await sign({ signing_date: newYorkToday() })
+    expect(none.status).toBe(409)
+  })
+})

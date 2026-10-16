@@ -46,7 +46,7 @@ const TD_OFFICE = {
   cityStateZip: "Largo FL 33771",
 }
 
-const CONTACT_PERSON = "Antonio Durante"
+const CONTACT_PERSON = "Antonio Noel Durante"
 const CONTACT_PHONE = "3075004873"
 
 export interface Form8832FillData {

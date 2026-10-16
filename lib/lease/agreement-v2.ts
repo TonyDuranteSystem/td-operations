@@ -15,13 +15,33 @@ import { companyOfficialRow, companyMailingRow, formatAddressString, pmbNumberFr
 export const AGREEMENT_V2_TITLE = 'OFFICE LEASE AND SERVICES AGREEMENT'
 export const AGREEMENT_V2_VERSION = 2
 
+/** The Provider's signer as printed in the agreement (Antonio's full legal name, 2026-10-13). */
+export const LEASE_PROVIDER_SIGNER = 'Antonio Noel Durante'
+
 /** Provider's address in the heading: the official address, one line. */
 export const PROVIDER_ADDRESS_V2 = '10225 Ulmerton Rd 3D, Largo, FL 33771'
 export const PROVIDER_NOTICE_EMAIL = 'support@tonydurante.us'
 
-/** Photos of the premises (Exhibit A). Empty until the photographer delivers — with no photos the Exhibit is not printed at all. */
+/**
+ * Photos of the premises (Exhibit A) — chosen by Antonio on 2026-10-13 from the photographer's delivery. The files live in the app's
+ * own public/images/premises folder (same origin as the signing page, so the browser's signed-PDF capture can always draw them).
+ * With NO photos the Exhibit is not printed and the text does not mention it. The last four are COMPUTER-GENERATED
+ * images (made with ChatGPT image generation — their embedded content credentials say so, checked 2026-10-14; not the photographer's
+ * work and not photographs), so their captions say "illustrative"; the others are real camera photographs.
+ */
 export interface ExhibitPhoto { url: string; caption: string }
-export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = []
+export const EXHIBIT_A_PHOTOS: ExhibitPhoto[] = [
+  { url: '/images/premises/premises-01-center-sign.jpg', caption: 'The Sugar Creek Professional Office Center sign at the entrance' },
+  { url: '/images/premises/premises-02-area-aerial.jpg', caption: 'The area around the building (the building is marked by the red arrow)' },
+  { url: '/images/premises/premises-03-building-aerial.jpg', caption: 'The building and its parking, seen from above' },
+  { url: '/images/premises/premises-04-building-front.jpg', caption: 'The front of the building and the tenant sign' },
+  { url: '/images/premises/premises-05-entrance.jpg', caption: 'The entrance to Tony Durante LLC' },
+  { url: '/images/premises/premises-06-office-area.jpg', caption: 'The office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-07-office-area-2.jpg', caption: 'The office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-08-office-desks.jpg', caption: 'Desks in the office area (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-09-meeting-room.jpg', caption: 'The meeting room (illustrative: furnished layout)' },
+  { url: '/images/premises/premises-10-kitchenette.jpg', caption: 'The kitchenette' },
+]
 
 export interface AgreementV2Input {
   providerName: string
@@ -94,19 +114,27 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'party', role: 'CLIENT', lines: [`${client}, ${article(input.clientState)} ${entityWord(client)}${ein}, address of record as stated in Section 1.2 ("Client"), represented by ${rep}.`] })
 
   b.push({ t: 'heading', text: 'Background' })
-  b.push({ t: 'para', label: 'A.', text: 'Provider is a consulting firm. Its principal, Antonio Durante, is an IRS Certified Acceptance Agent, a tax return preparer, a notary public and a business consultant.' })
+  b.push({ t: 'para', label: 'A.', text: 'Provider is a consulting firm. Its principal, Antonio Noel Durante, is an IRS Certified Acceptance Agent, a tax return preparer, a notary public and a business consultant.' })
   b.push({ t: 'para', label: 'B.', text: 'Provider manages the U.S. business affairs of companies whose owners live outside the United States, including tax work, state compliance, and administrative and operational consulting.' })
   b.push({ t: 'para', label: 'C.', text: 'Provider is a commercial mail receiving agency ("CMRA") registered with the U.S. Postal Service. Provider receives and handles its clients\' mail so that it is managed safely, lawfully and by a verified, accountable agent.' })
   b.push({ t: 'para', label: 'D.', text: 'Client\'s owner(s) live outside the United States.' })
   b.push({ t: 'para', label: 'E.', text: 'The Premises described below are Provider\'s own working office. Their use is not offered to the public and is available only to clients who have an annual service agreement with Provider for professional services.' })
 
   b.push({ t: 'heading', text: '1. Client\'s Operating Address and U.S. Office' })
-  b.push({
-    t: 'para', label: '1.1',
-    text: input.operatingAddress
-      ? `Client's day-to-day business operations are run from ${input.operatingAddress} (the "Operating Address"). Client will tell Provider in writing if it changes.`
-      : 'Client\'s day-to-day business operations are run from the address Client enters when signing (the "Operating Address"). Client will tell Provider in writing if it changes.',
-  })
+  // The Operating Address: from the CRM contact (several lines -> an address block, like Section 1.2); a one-line value typed by the
+  // client when the CRM has none stays an inline sentence; nothing yet -> "the address Client enters when signing".
+  const operatingLines = (input.operatingAddress ?? '').split('\n').map(l => l.trim()).filter(Boolean)
+  if (operatingLines.length > 1) {
+    b.push({ t: 'para', label: '1.1', text: 'Client\'s day-to-day business operations are run from the address below (the "Operating Address"). Client will tell Provider in writing if it changes.' })
+    b.push({ t: 'address', lines: [client, ...operatingLines] })
+  } else {
+    b.push({
+      t: 'para', label: '1.1',
+      text: operatingLines.length === 1
+        ? `Client's day-to-day business operations are run from ${operatingLines[0]} (the "Operating Address"). Client will tell Provider in writing if it changes.`
+        : 'Client\'s day-to-day business operations are run from the address Client enters when signing (the "Operating Address"). Client will tell Provider in writing if it changes.',
+    })
+  }
   b.push({ t: 'para', label: '1.2', text: 'The Premises described in Section 2 are Client\'s United States office. Client\'s official address, which it uses for its United States filings, is:' })
   b.push({ t: 'address', lines: [client, ...a.official] })
   b.push({ t: 'para', text: 'Client\'s mailing address, for the mail and packages Provider handles under Section 3, is:' })
@@ -133,7 +161,7 @@ export function buildAgreementV2(input: AgreementV2Input): AgreementV2Doc {
   b.push({ t: 'para', text: 'In consideration of the fees Client pays under the Annual Service Agreement, Provider grants the rights in this Agreement and provides the mail handling in Section 3.4 other than forwarding. No separate rent and no security deposit are payable.' })
 
   b.push({ t: 'heading', text: '6. Access' })
-  b.push({ t: 'para', text: 'Provider\'s office is currently staffed by Antonio Durante alone. Access to the Premises is by appointment with Provider. There is no reception service.' })
+  b.push({ t: 'para', text: 'Provider\'s office is currently staffed by Antonio Noel Durante alone. Access to the Premises is by appointment with Provider. There is no reception service.' })
 
   b.push({ t: 'heading', text: '7. Use and Conduct' })
   b.push({ t: 'para', text: 'Client will use the Premises only for lawful business purposes, will leave the spaces clean and in the condition found, and will be responsible for damage caused by Client or its guests. Client will not use the address or the Premises for any unlawful or deceptive purpose.' })

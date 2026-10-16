@@ -397,6 +397,7 @@ describe("createLease — happy path", () => {
     expect(insert.square_feet).toBe(120)
     expect(insert.term_months).toBe(termMonthsThroughYearEnd(newYorkToday()))
     expect(insert.premises_address).toBe("10225 Ulmerton Rd, Largo, FL 33771")
+    expect(insert.landlord_signer).toBe("Antonio Noel Durante") // written explicitly, not left to the column default
     expect(insert.status).toBe("draft")
     expect(insert.suite_number).toBe("3D-151") // 150 + 1
 

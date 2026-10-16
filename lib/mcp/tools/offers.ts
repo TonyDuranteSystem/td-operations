@@ -164,7 +164,7 @@ export function buildTransitionWelcomeEmail(
     <p style="font-size: 14px;">Il portale &egrave; in continua evoluzione. Se trovi qualcosa che non funziona come dovrebbe, ci scusiamo in anticipo &mdash; &egrave; un progetto grande quello che stiamo costruendo per voi. Faccelo sapere e ci aiuterai a migliorare il sistema per tutti i nostri clienti.</p>
     <p style="font-size: 14px;">Per qualsiasi domanda, scrivici direttamente dalla chat del portale. Siamo qui per aiutarti.</p>
 
-    <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
+    <p style="margin-top: 20px;">Un caro saluto,<br/><strong>Antonio Noel Durante</strong><br/>Tony Durante LLC</p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
       Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>
@@ -246,7 +246,7 @@ export function buildTransitionWelcomeEmail(
     <p style="font-size: 14px;">The portal is continuously evolving. If you find anything that doesn't work as expected, we apologize in advance &mdash; it's a big project we are building for you. Let us know and you'll help us improve the system for all our clients.</p>
     <p style="font-size: 14px;">For any questions, contact us through the portal chat. We are here to help.</p>
 
-    <p style="margin-top: 20px;">Best regards,<br/><strong>Antonio Durante</strong><br/>Tony Durante LLC</p>
+    <p style="margin-top: 20px;">Best regards,<br/><strong>Antonio Noel Durante</strong><br/>Tony Durante LLC</p>
 
     <div style="border-top: 1px solid #e5e7eb; margin-top: 24px; padding-top: 16px; font-size: 11px; color: #9ca3af; text-align: center;">
       Tony Durante LLC &middot; 10225 Ulmerton Road, Suite 3D &middot; Largo, FL 33771<br/>

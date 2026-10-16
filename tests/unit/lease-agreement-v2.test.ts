@@ -74,12 +74,58 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     expect(t).toContain('run from Via Roma 1, Milano, Italy (the "Operating Address")')
   })
 
+  it("Antonio's full legal name is printed everywhere in the agreement (text and signature block), never the short form", async () => {
+    const t = allText(buildAgreementV2(INPUT))
+    expect(t.match(/Antonio Noel Durante/g)).toHaveLength(2) // Background A and Section 6
+    expect(t).not.toContain('Antonio Durante')
+    const pdf = await pdfText(await generateLeasePDF({ tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, exhibitPhotos: [] }))
+    expect(pdf).toContain('Antonio Noel Durante')
+    expect(pdf).not.toMatch(/Antonio Durante/)
+  })
+
   it('Exhibit A is only mentioned when photos exist', () => {
-    expect(allText(buildAgreementV2(INPUT))).not.toContain('Exhibit A')
+    expect(allText(buildAgreementV2({ ...INPUT, exhibitPhotos: [] }))).not.toContain('Exhibit A')
     const withPhotos = buildAgreementV2({ ...INPUT, exhibitPhotos: [{ url: 'https://x/y.jpg', caption: 'Lobby' }] })
     expect(allText(withPhotos)).toContain('Exhibit A')
     expect(withPhotos.exhibitPhotos).toHaveLength(1)
   })
+
+  it('Exhibit A carries the ten premises photos Antonio chose; the files exist; the staged ones say "illustrative"', async () => {
+    const doc = buildAgreementV2(INPUT)
+    expect(doc.exhibitPhotos).toHaveLength(10)
+    expect(allText(doc)).toContain('including the office areas shown in Exhibit A')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    for (const p of doc.exhibitPhotos) {
+      const file = `${process.cwd()}/public${p.url}`
+      expect(fs.existsSync(file), file).toBe(true)
+      expect(fs.readFileSync(file).subarray(0, 2).toString('hex')).toBe('ffd8') // a JPEG
+      expect(p.caption.length).toBeGreaterThan(5)
+    }
+    expect(doc.exhibitPhotos.filter(p => /illustrative/i.test(p.caption))).toHaveLength(4)
+    // Antonio's order (2026-10-13): sign, two aerials, building front, entrance, then the four staged views, and the kitchenette last
+    expect(doc.exhibitPhotos.map(p => p.url.split('/').pop())).toEqual([
+      'premises-01-center-sign.jpg', 'premises-02-area-aerial.jpg', 'premises-03-building-aerial.jpg', 'premises-04-building-front.jpg', 'premises-05-entrance.jpg',
+      'premises-06-office-area.jpg', 'premises-07-office-area-2.jpg', 'premises-08-office-desks.jpg', 'premises-09-meeting-room.jpg', 'premises-10-kitchenette.jpg',
+    ])
+    expect(doc.exhibitPhotos.slice(0, 5).some(p => /illustrative/i.test(p.caption))).toBe(false)
+    expect(/illustrative/i.test(doc.exhibitPhotos[9].caption)).toBe(false)
+  })
+
+  it('the server PDF prints Exhibit A (the photos, two per page) after the signature block, and nothing when there are none', async () => {
+    const base = { tenantCompany: 'Acme LLC', tenantContactName: 'Jane Rossi', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2 }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string; numpages: number }>
+    const withEx = await parse(Buffer.from(await generateLeasePDF(base)))
+    expect(withEx.text).toContain('EXHIBIT A')
+    expect(withEx.text).toContain('The Sugar Creek Professional Office Center sign')
+    expect(withEx.numpages).toBeGreaterThanOrEqual(8) // 4 pages of agreement + 5 of photos
+    const raw = Buffer.from(await generateLeasePDF(base)).toString('latin1')
+    expect((raw.match(/\/DCTDecode/g) ?? []).length).toBeGreaterThanOrEqual(11) // the logo + ten photos
+    const without = await parse(Buffer.from(await generateLeasePDF({ ...base, exhibitPhotos: [] })))
+    expect(without.text).not.toContain('EXHIBIT A')
+    expect(without.numpages).toBe(4)
+  }, 60_000) // three PDFs with ten photos: slow when the whole suite runs in parallel
 
   it('prints no client email (the browser never receives it) — only Provider\'s own notice address', () => {
     expect(allText(buildAgreementV2(INPUT)).match(/[\w.+-]+@[\w.-]+/g)).toEqual(['support@tonydurante.us'])
@@ -110,6 +156,19 @@ describe('server-issued dates', () => {
     // the banner is a JPEG image on page 1 (pdf-lib writes it as a DCTDecode image XObject)
     const raw = Buffer.from(bytes).toString('latin1')
     expect(raw).toContain('/DCTDecode')
+  })
+
+  it('a normal agreement is four pages and the signature block shares the last page with the final clauses', async () => {
+    const bytes = await generateLeasePDF({ tenantCompany: 'Example Holdings LLC', tenantContactName: 'Maria Rossi', tenantTitle: 'Manager', tenantState: 'Wyoming', tenantEin: '12-3456789', suiteNumber: '3D-318', effectiveDate: '2026-10-12', termStartDate: '2026-10-12', termEndDate: '2026-12-31', signedDate: '2026-10-12', templateVersion: 2, operatingAddress: 'Via Roma 1, 20121 Milano, Italy', exhibitPhotos: [] })
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const parse = require('pdf-parse/lib/pdf-parse.js') as (b: Buffer) => Promise<{ text: string; numpages: number }>
+    const out = await parse(Buffer.from(bytes))
+    expect(out.numpages).toBe(4)
+    expect(out.text).toContain('Page 4 of 4')
+    // the last page holds both a numbered clause and the signature block
+    const lastPage = out.text.slice(out.text.indexOf('Page 3 of 4'))
+    expect(lastPage).toContain('9.10')
+    expect(lastPage).toContain('IN WITNESS WHEREOF')
   })
 
   it('endOfYearIso / termMonthsThroughYearEnd', () => {
