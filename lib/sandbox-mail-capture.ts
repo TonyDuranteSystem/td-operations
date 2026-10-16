@@ -66,6 +66,14 @@ export function decodeSandboxEmail(rawBase64Url: string): {
   if (parts.length > 1) {
     for (let i = 1; i < parts.length; i++) {
       // The base64 payload is the block up to the next boundary / header line.
+      // An attachment (e.g. the invoice PDF) is binary: decoding it as text yields NUL characters that the
+      // database refuses, which silently dropped the whole capture. Note it instead of decoding it.
+      const headBefore = parts[i - 1].slice(-300)
+      if (/Content-Disposition:\s*attachment|Content-Type:\s*application\//i.test(headBefore.slice(headBefore.lastIndexOf("--") >= 0 ? headBefore.lastIndexOf("--") : 0))) {
+        const name = /filename="([^"]+)"/i.exec(headBefore)?.[1] ?? "file"
+        body += (body ? "\n\n" : "") + `[Attachment: ${name}]`
+        continue
+      }
       const chunk = parts[i].replace(/^\r?\n\r?\n?/, "")
       const b64 = chunk.split(/\r?\n--|\r?\n[A-Za-z-]+:/)[0].replace(/\s+/g, "")
       try {
@@ -84,7 +92,7 @@ export function decodeSandboxEmail(rawBase64Url: string): {
   // and clickable.
   const decodeEntities = (s: string): string =>
     s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/gi, "'").replace(/&#x2f;/gi, "/")
-  const cleanBody = decodeEntities(body)
+  const cleanBody = decodeEntities(body).replace(/\u0000/g, "")
   const links = Array.from(new Set((cleanBody.match(/https?:\/\/[^\s"'<>)]+/g) ?? []).map(s => s.replace(/[.,);]+$/, ""))))
   return { recipient, subject, body: cleanBody, links }
 }
