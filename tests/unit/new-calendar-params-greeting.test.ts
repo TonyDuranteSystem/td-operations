@@ -9,6 +9,7 @@ import {
   withMore,
   withService,
   withStep,
+  withTab,
 } from "@/lib/new-calendar/params"
 import { firstNameOf, greetingWord, workTodayText } from "@/lib/new-calendar/greeting"
 import { MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE } from "@/lib/new-calendar/types"
@@ -17,7 +18,7 @@ import { MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE } from "@/lib/new-calendar/types"
 
 describe("parseParams", () => {
   it("defaults to the To work on list, no service, no step, no search, one page", () => {
-    expect(parseParams({})).toEqual({ b: "work", s: "", st: "", q: "", n: PAGE_SIZE })
+    expect(parseParams({})).toEqual({ tab: "jobs", b: "work", s: "", st: "", q: "", n: PAGE_SIZE })
   })
 
   it("accepts the four list names (any case) and falls back to the default for anything else", () => {
@@ -59,27 +60,43 @@ describe("parseParams", () => {
 describe("toQueryString and the helpers", () => {
   it("is empty for the defaults and round-trips everything else", () => {
     expect(toQueryString(parseParams({}))).toBe("")
-    const p = { b: "pending" as const, s: "Alpha", st: "One", q: "Acme & Sons", n: 100 }
+    const p = { tab: "jobs" as const, b: "pending" as const, s: "Alpha", st: "One", q: "Acme & Sons", n: 100 }
     expect(parseParams(Object.fromEntries(new URLSearchParams(toQueryString(p)).entries()))).toEqual(p)
   })
 
   it("never writes a step without its service", () => {
-    expect(toQueryString({ b: "work", s: "", st: "One", q: "", n: PAGE_SIZE })).toBe("")
+    expect(toQueryString({ tab: "jobs", b: "work", s: "", st: "One", q: "", n: PAGE_SIZE })).toBe("")
   })
 
   it("choosing a list clears service, step and paging but keeps the search", () => {
-    expect(withBucket({ b: "work", s: "Alpha", st: "One", q: "acme", n: 150 }, "closed")).toEqual({ b: "closed", s: "", st: "", q: "acme", n: PAGE_SIZE })
+    expect(withBucket({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "acme", n: 150 }, "closed")).toEqual({ tab: "jobs", b: "closed", s: "", st: "", q: "acme", n: PAGE_SIZE })
   })
 
   it("choosing a service clears the step and the paging; choosing the same step again clears it", () => {
-    expect(withService({ b: "work", s: "Alpha", st: "One", q: "", n: 150 }, "Beta")).toEqual({ b: "work", s: "Beta", st: "", q: "", n: PAGE_SIZE })
-    expect(withStep({ b: "work", s: "Alpha", st: "One", q: "", n: 100 }, "One").st).toBe("")
-    expect(withStep({ b: "work", s: "Alpha", st: "", q: "", n: 100 }, "One")).toMatchObject({ st: "One", n: PAGE_SIZE })
+    expect(withService({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "", n: 150 }, "Beta")).toEqual({ tab: "jobs", b: "work", s: "Beta", st: "", q: "", n: PAGE_SIZE })
+    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "One", q: "", n: 100 }, "One").st).toBe("")
+    expect(withStep({ tab: "jobs", b: "work", s: "Alpha", st: "", q: "", n: 100 }, "One")).toMatchObject({ st: "One", n: PAGE_SIZE })
   })
 
   it("'show more' adds a page and stops at the ceiling", () => {
     expect(withMore(parseParams({}) ).n).toBe(PAGE_SIZE * 2)
     expect(withMore({ ...parseParams({}), n: MAX_LIMIT }).n).toBe(MAX_LIMIT)
+  })
+})
+
+describe("the What's New tab", () => {
+  it("is chosen only by tab=news (any case); anything else is the jobs tab", () => {
+    expect(parseParams({ tab: "news" }).tab).toBe("news")
+    expect(parseParams({ tab: " NEWS " }).tab).toBe("news")
+    for (const bad of ["", "jobs", "whats-new", "__proto__", "1"]) expect(parseParams({ tab: bad }).tab).toBe("jobs")
+    expect(parseParams({ tab: ["news", "jobs"] }).tab).toBe("news")
+  })
+
+  it("has no filters of its own: its address is just ?tab=news, and switching tabs drops the other tab's filters", () => {
+    const filtered = parseParams({ b: "closed", s: "Alpha", q: "acme", n: "200" })
+    expect(toQueryString(withTab(filtered, "news"))).toBe("?tab=news")
+    expect(withTab(parseParams({ tab: "news" }), "jobs")).toEqual(parseParams({}))
+    expect(toQueryString(withTab(parseParams({ tab: "news" }), "jobs"))).toBe("")
   })
 })
 

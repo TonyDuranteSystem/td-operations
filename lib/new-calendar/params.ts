@@ -10,7 +10,13 @@ import { BUCKETS, MAX_LIMIT, MAX_TEXT_LENGTH, PAGE_SIZE, type Bucket } from "@/l
 
 export type RawSearchParams = Record<string, string | string[] | undefined>
 
+/** Which page of the New Calendar: the open jobs, or the What's New feed. */
+export const TABS = ["jobs", "news"] as const
+export type CalendarTab = (typeof TABS)[number]
+
 export interface NewCalendarParams {
+  /** "jobs" (default) or "news" = the What's New tab. Every other parameter belongs to "jobs". */
+  tab: CalendarTab
   /** Which list: to work on / pending / not sorted yet / closed. */
   b: Bucket
   /** A service chosen on the chips ("" = all services). Free text: it is whatever the service is called. */
@@ -58,6 +64,7 @@ export function clampLimit(n: number): number {
 }
 
 export function parseParams(raw: RawSearchParams): NewCalendarParams {
+  const tab: CalendarTab = first(raw.tab).trim().toLowerCase() === "news" ? "news" : "jobs"
   const bRaw = first(raw.b).trim().toLowerCase()
   const b: Bucket = (BUCKETS as readonly string[]).includes(bRaw) ? (bRaw as Bucket) : DEFAULT_BUCKET
   const s = cleanText(first(raw.s))
@@ -65,11 +72,13 @@ export function parseParams(raw: RawSearchParams): NewCalendarParams {
   const st = s === "" ? "" : cleanText(first(raw.st))
   const q = cleanText(first(raw.q))
   const n = clampLimit(Number.parseInt(first(raw.n), 10))
-  return { b, s, st, q, n }
+  return { tab, b, s, st, q, n }
 }
 
 /** The web address query for these params ("" when everything is default). */
 export function toQueryString(p: NewCalendarParams): string {
+  // The What's New tab has no filters of its own.
+  if (p.tab === "news") return "?tab=news"
   const sp = new URLSearchParams()
   if (p.b !== DEFAULT_BUCKET) sp.set("b", p.b)
   if (p.s) sp.set("s", p.s)
@@ -78,6 +87,11 @@ export function toQueryString(p: NewCalendarParams): string {
   if (p.n !== PAGE_SIZE) sp.set("n", String(p.n))
   const out = sp.toString()
   return out ? `?${out}` : ""
+}
+
+/** Switching tab keeps nothing from the other one. */
+export function withTab(p: NewCalendarParams, tab: CalendarTab): NewCalendarParams {
+  return { ...p, tab, b: DEFAULT_BUCKET, s: "", st: "", q: "", n: PAGE_SIZE }
 }
 
 /** Choosing a list clears the service, the step and the paging, and keeps the search. */

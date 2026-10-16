@@ -27,7 +27,7 @@ const WHATS_NEW_API = '/api/crm/admin-actions/whats-new'
 /** Human-readable category label keyed off the note's event_key (the chat-event
  *  `kind`, or the workflow_slug for workflow_spawned notes). Replaces the old
  *  per-message `topic` badge — topic is no longer written for system notes. */
-const EVENT_KEY_LABELS: Record<string, string> = {
+export const EVENT_KEY_LABELS: Record<string, string> = {
   payment_received: 'Payment',
   ss4_signed: 'SS-4 Signed',
   document_uploaded: 'Document',
@@ -106,6 +106,7 @@ export function ThreadWhatsNewPanel({
   contactId,
   cardAccountId,
   onOpenCard,
+  showMoneyActions = true,
 }: {
   /** Notes/dot SCOPE. Must mirror the conversation-list dot: account-level thread
    *  → its account_id; contact-level thread → null here (so notes load by contact_id).
@@ -116,7 +117,11 @@ export function ThreadWhatsNewPanel({
   /** Account to attach NEW cards/money-actions to — may be the viewed company even on
    *  a contact-level thread. Defaults to accountId when omitted. */
   cardAccountId?: string | null
-  onOpenCard: (note: { noteId: string; label: string }) => void
+  /** Opens a To-Do card for the note. Omitted by the New Calendar's What's New tab, where the Calendar IS the to-do list
+   *  (Antonio, 2026-10-14: no separate to-do cards for people): the note then has no "Open card" / "+ card" button. */
+  onOpenCard?: (note: { noteId: string; label: string }) => void
+  /** The money-action buttons under each non-workflow note. On by default (Portal Chats); off in the Calendar's tab. */
+  showMoneyActions?: boolean
 }) {
   const qc = useQueryClient()
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -180,7 +185,7 @@ export function ThreadWhatsNewPanel({
   const open = useCallback(
     (note: ApiNote) => {
       const label = note.suggested_step || note.text
-      onOpenCard({ noteId: note.id, label })
+      onOpenCard?.({ noteId: note.id, label })
     },
     [onOpenCard],
   )
@@ -257,7 +262,7 @@ export function ThreadWhatsNewPanel({
                         )}
                         {/* No "Open card" for workflow notes — the workflow itself IS the to-do
                             and its action buttons are shown below. */}
-                        {!handled && !wfTask && (
+                        {!handled && !wfTask && onOpenCard && (
                           <FastTooltip label="Open a To-Do card for this">
                             <button
                               onClick={() => open(note)}
@@ -313,14 +318,14 @@ export function ThreadWhatsNewPanel({
                       {handled ? 'Handled' : 'Mark handled'}
                     </button>
                   </FastTooltip>
-                  {handled && (
+                  {handled && onOpenCard && (
                     <button onClick={() => open(note)} className="text-[10px] text-zinc-400 hover:text-violet-700">
                       + card
                     </button>
                   )}
                 </div>
                 {/* Money actions — not on workflow notes (those carry their own action buttons). */}
-                {!wfTask && (
+                {!wfTask && showMoneyActions && (
                   <div className="mt-1.5 pt-1.5 border-t">
                     <CardCreateActions
                       accountId={cardAccountId ?? accountId}

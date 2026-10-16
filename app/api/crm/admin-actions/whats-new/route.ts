@@ -8,6 +8,10 @@
  * GET ?notes=true&account_id|contact_id — the VISIBLE chat-event notes for one
  *                                    client (the What's New feed), enriched with
  *                                    event_key + cleaned text + handled state.
+ * GET ?summary=true               — which clients have unhandled VISIBLE notes (name, count,
+ *                                    latest note), newest first, for the New Calendar's
+ *                                    What's New tab. Same visibility rules and the same
+ *                                    total as the dot (lib/notifications/whats-new-summary.ts).
  * POST { message_id, handled }     — tick/untick a note handled. Staff-only.
  *
  * Visibility is catalog-driven (`whats_new_events`, editable in Board Settings).
@@ -25,6 +29,7 @@ import { createClient } from "@/lib/supabase/server"
 import { isDashboardUser } from "@/lib/auth"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { suggestedStepFor } from "@/lib/notifications/whats-new-defaults"
+import { groupWhatsNewSummary, type SummaryNote } from "@/lib/notifications/whats-new-summary"
 import { getClientAccountIds } from "@/lib/portal-auth"
 import {
   bucketWhatsNewCounts,
@@ -171,6 +176,57 @@ export async function GET(req: NextRequest) {
         multiMemberAccountIds(allNoteAccountIds),
       ])
       return NextResponse.json(bucketWhatsNewCounts(visible, contactsByAccount, new Set(multiMember)))
+    }
+
+    if (sp.get("summary") === "true") {
+      const READ_LIMIT = 5000
+      const { data, error } = await db
+        .from("portal_messages")
+        .select("account_id, contact_id, message, created_at")
+        .eq("sender_type", "system")
+        .ilike("message", "%<!-- chat-event:%")
+        .is("handled_at", null)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(READ_LIMIT)
+      if (error) throw error
+      const rows = (data ?? []) as RawNote[]
+      const [config, keys] = await Promise.all([loadConfig(), resolveEventKeys(rows)])
+      // Same visibility rule as the dot: hidden only if explicitly toggled off.
+      const notes: SummaryNote[] = rows
+        .filter((n) => {
+          const key = keys.get(n)
+          return !(key && config.get(key)?.visible === false)
+        })
+        .map((n) => ({
+          account_id: n.account_id,
+          contact_id: n.contact_id,
+          created_at: n.created_at ?? "",
+          text: n.message.replace(MARKER_RE, "").trim(),
+          event_key: keys.get(n) ?? null,
+        }))
+      const accountIds = Array.from(new Set(notes.map((n) => n.account_id).filter((id): id is string => !!id)))
+      const contactIds = Array.from(new Set(notes.filter((n) => !n.account_id && n.contact_id).map((n) => n.contact_id as string)))
+      const chunk = <T,>(arr: T[], size: number): T[][] => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const accounts = new Map<string, string | null>()
+      const contacts = new Map<string, string | null>()
+      await Promise.all([
+        ...chunk(accountIds, 150).map(async (ids) => {
+          const { data: a, error: e } = await db.from("accounts").select("id, company_name").in("id", ids)
+          if (e) throw e
+          for (const r of (a ?? []) as Array<{ id: string; company_name: string | null }>) accounts.set(r.id, r.company_name)
+        }),
+        ...chunk(contactIds, 150).map(async (ids) => {
+          const { data: c, error: e } = await db.from("contacts").select("id, full_name").in("id", ids)
+          if (e) throw e
+          for (const r of (c ?? []) as Array<{ id: string; full_name: string | null }>) contacts.set(r.id, r.full_name)
+        }),
+      ])
+      return NextResponse.json(groupWhatsNewSummary(notes, { accounts, contacts }, { readTruncated: rows.length >= READ_LIMIT }))
     }
 
     if (wantNotes) {

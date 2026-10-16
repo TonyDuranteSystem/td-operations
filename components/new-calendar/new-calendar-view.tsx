@@ -25,11 +25,14 @@ import {
   withMore,
   withService,
   withStep,
+  withTab,
   type NewCalendarParams,
 } from '@/lib/new-calendar/params'
 import { workTodayText } from '@/lib/new-calendar/greeting'
 import { RowAction } from '@/components/new-calendar/row-action'
 import { RefreshButton } from '@/components/new-calendar/refresh-button'
+import { WhatsNewTab } from '@/components/whats-new/whats-new-tab'
+import { WhatsNewCount } from '@/components/whats-new/whats-new-count'
 
 const BASE = '/new-calendar'
 const hrefFor = (p: NewCalendarParams) => `${BASE}${toQueryString(p)}`
@@ -143,14 +146,33 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
       </div>
 
       <nav className="flex gap-1 border-b text-sm" aria-label="New Calendar pages">
-        <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
-          Open services <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>
-        </span>
+        {params.tab === 'jobs' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            Open services <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'jobs'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            Open services <span className="ml-1 rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{model.openTotal}</span>
+          </Link>
+        )}
+        {params.tab === 'news' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            What&apos;s New <WhatsNewCount />
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'news'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            What&apos;s New <WhatsNewCount />
+          </Link>
+        )}
         <Link href="/calendar" prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
           Renewals &amp; annual reports →
         </Link>
       </nav>
 
+      {params.tab === 'news' ? (
+        <WhatsNewTab />
+      ) : (
+        <>
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Lists">
         {BUCKETS.map(b => (
           <Chip key={b} href={hrefFor(withBucket(params, b))} pressed={model.active === b} dim={model.counts[b] === 0} dot={BUCKET_DOT[b]}>
@@ -260,6 +282,8 @@ export function NewCalendarView({ model, params, greeting }: { model: CalendarMo
         so someone closes it. Steps with no &ldquo;waiting on&rdquo; setting are listed under <b>Not sorted yet</b> instead of being guessed. When a job is
         finished it stays under <b>Closed</b> for 30 days.
       </div>
+        </>
+      )}
     </div>
   )
 }
