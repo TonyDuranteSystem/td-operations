@@ -90,7 +90,7 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
     expect(withPhotos.exhibitPhotos).toHaveLength(1)
   })
 
-  it('Exhibit A carries the ten premises photos Antonio chose; the files exist; the staged ones say "illustrative"', async () => {
+  it('Exhibit A carries the ten premises photos Antonio chose; the files exist; no caption says "illustrative"', async () => {
     const doc = buildAgreementV2(INPUT)
     expect(doc.exhibitPhotos).toHaveLength(10)
     expect(allText(doc)).toContain('including the office areas shown in Exhibit A')
@@ -102,7 +102,7 @@ describe('Office Lease and Services Agreement (template v2) — the one shared t
       expect(fs.readFileSync(file).subarray(0, 2).toString('hex')).toBe('ffd8') // a JPEG
       expect(p.caption.length).toBeGreaterThan(5)
     }
-    expect(doc.exhibitPhotos.filter(p => /illustrative/i.test(p.caption))).toHaveLength(4)
+    expect(doc.exhibitPhotos.some(p => /illustrative/i.test(p.caption))).toBe(false)
     // Antonio's order (2026-10-13): sign, two aerials, building front, entrance, then the four staged views, and the kitchenette last
     expect(doc.exhibitPhotos.map(p => p.url.split('/').pop())).toEqual([
       'premises-01-center-sign.jpg', 'premises-02-area-aerial.jpg', 'premises-03-building-aerial.jpg', 'premises-04-building-front.jpg', 'premises-05-entrance.jpg',
