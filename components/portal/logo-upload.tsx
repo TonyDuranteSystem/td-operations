@@ -34,14 +34,14 @@ export function LogoUpload({ accountId, currentUrl }: LogoUploadProps) {
       const res = await fetch('/api/portal/logo', { method: 'POST', body: formData })
       if (!res.ok) {
         const data = await res.json()
-        throw new Error(data.error || 'Upload failed')
+        throw new Error(data.error || t('custForm.uploadFailed'))
       }
       const data = await res.json()
       setPreviewUrl(data.url)
       toast.success(t('logo.uploaded'))
       router.refresh()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed')
+      toast.error(err instanceof Error ? err.message : t('custForm.uploadFailed'))
     } finally {
       setUploading(false)
     }

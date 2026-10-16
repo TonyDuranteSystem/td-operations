@@ -29,6 +29,7 @@ export type AppSettingKey =
     | "support_person_user_id" // string (auth user UUID) — the staff member whose DM receives "Send to Support" shares from Inbox + Portal Chats. Stores the ACTUAL user id (no name-resolution at runtime — brittle). Seeded to Luca. Read via getSupportPersonUserId(); consumed in app/api/team/share. If unset, the share endpoint returns a "no support person configured" error rather than guessing.
   | "floating_windows_enabled" // boolean — when TRUE, a dashboard page loaded INSIDE A FRAME (a floating window) renders as a bare page: no left menu, alerts, chat or notes (dev job f3f3e237). DEFAULT FALSE and fails CLOSED: window mode is off everywhere until an admin switches it on (Dev Tools → Maintenance). See isFloatingWindowsEnabled.
   | "invoice_hub_enabled" // boolean, or { enabled, account_ids? } — roll-out switch for the client Invoices hub (Customers + Setup tabs inside Invoices, dev job 1a23f5f1). DEFAULT OFF and fails CLOSED: off = the old three tabs and the old My Clients / Profile pages, unchanged. A list of account ids releases it to chosen companies first. See lib/portal/invoice-hub.ts isInvoiceHubOnFor.
+  | "invoice_email_sender" // 'gmail' (DEFAULT, today: client invoice emails leave from our support mailbox) | 'resend' (every company, through the dedicated invoicing address on the new domain) | { sender: 'resend', account_ids: [uuid, ...] } (only those companies; the rest stay on gmail). Fails CLOSED to gmail, also when RESEND_API_KEY is missing. Read by lib/portal/invoice-mailer.ts. Dev job 1a23f5f1.
   | "worker_model" // string (a model id from WORKER_MODEL_OPTIONS in lib/ai-agent/worker-models.ts) — the model the WORKER runs on, shared by EVERY worker surface (Portal Chats tab, Inbox panel, dashboard sidebar, team chat). Antonio 2026-07-18: one setting, changeable from the gear on any worker panel, so the same question can't get different answers per screen. Read via resolveWorkerModelAsync() (stored → env WORKER_MODEL → built-in default), validated against the curated list so a typo'd/retired id can't take the worker down everywhere at once. Written by app/api/ai-agent/model (admin-only).
 
 export async function getAppSetting<T = unknown>(
@@ -124,6 +125,15 @@ export async function getRenewalBannerMinYear(): Promise<number> {
   const v = await getAppSetting<number>("renewal_banner_min_year", 2027)
   const n = Number(v)
   return Number.isFinite(n) && n > 0 ? n : 2027
+}
+
+/** Which sender client invoice emails use ('gmail' | 'resend'). Unreadable = gmail (today's behaviour). */
+export async function getInvoiceEmailSenderSetting(): Promise<unknown> {
+  try {
+    return await getAppSetting<unknown>("invoice_email_sender", "gmail")
+  } catch {
+    return "gmail"
+  }
 }
 
 /** Raw roll-out setting for the client Invoices hub; callers decide per company with isInvoiceHubOnFor. Unreadable = off. */

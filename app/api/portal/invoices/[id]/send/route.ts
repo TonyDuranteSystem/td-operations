@@ -2,12 +2,13 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
-import { gmailPost } from '@/lib/gmail'
+import { getInvoiceEmailSenderSetting } from '@/lib/settings'
+import { deliverInvoiceEmail, resolveInvoiceSender, fromAddressFor } from '@/lib/portal/invoice-mailer'
 import { APP_BASE_URL } from '@/lib/config'
 import { getCompanyEmail } from '@/lib/portal/queries'
 import { pdfStatusForSend } from '@/lib/portal/invoice-status'
 import { renderInvoicePdf } from '@/lib/portal/invoice-pdf'
-import { esc, fromHeader, headerSafe, isSafeRecipient, createRawEmail, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
+import { esc, headerSafe, isSafeRecipient, recentlyEmailed, overDailyEmailCap } from '@/lib/portal/invoice-email'
 import { getInvoicePaymentLinkUrl } from '@/lib/portal/payment-link-lookup'
 
 /**
@@ -172,6 +173,7 @@ export async function POST(
     return NextResponse.json({ error: 'This invoice was just sent to this customer. Please wait a minute before sending it again.' }, { status: 409 })
   }
 
+  const sender = resolveInvoiceSender(await getInvoiceEmailSenderSetting(), !!process.env.RESEND_API_KEY, invoice.account_id)
   let claimedTrackingId: string | null = null
   try {
     // Generate tracking ID and inject pixel into HTML
@@ -188,7 +190,7 @@ export async function POST(
       tracking_id: trackingId,
       recipient: customer.email,
       subject,
-      from_email: 'support@tonydurante.us',
+      from_email: fromAddressFor(sender),
       account_id: invoice.account_id || null,
       contact_id: invoice.contact_id || null,
     })
@@ -207,8 +209,9 @@ export async function POST(
       )
     }
 
-    const rawEmail = createRawEmail({
-      from: fromHeader(companyName, 'support@tonydurante.us'),
+    const sendResult = await deliverInvoiceEmail({
+      sender,
+      fromName: companyName,
       to: customer.email,
       subject,
       html: trackedHtml,
@@ -216,12 +219,10 @@ export async function POST(
       attachment: { base64: pdfBase64, filename: `${invoice.invoice_number}.pdf` },
     })
 
-    const sendResult = await gmailPost('/messages/send', { raw: rawEmail }) as { id?: string; threadId?: string }
-
     // Complete the tracking record (the claim row written above) with the Gmail ids.
     if (claimedTrackingId) {
       await supabaseAdmin.from('email_tracking')
-        .update({ gmail_message_id: sendResult?.id || null, gmail_thread_id: sendResult?.threadId || null })
+        .update({ gmail_message_id: sendResult.messageId, gmail_thread_id: sendResult.threadId })
         .eq('tracking_id', claimedTrackingId)
     }
 

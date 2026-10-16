@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useTransition } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Send, CheckCircle2, Loader2, FileText,
@@ -12,9 +12,12 @@ import { toast } from 'sonner'
 import { markInvoiceAsPaid, recordPartialPayment, voidInvoice, duplicateInvoice, createTemplate } from '../actions'
 import { format, parseISO } from 'date-fns'
 import { useLocale } from '@/lib/portal/use-locale'
+import { interpolateString } from '@/lib/template-interpolation'
 import { InvoiceSendNotices } from '@/components/portal/invoice-send-notices'
 import { sendNotices } from '@/lib/portal/invoice-send-notices'
 import { invoiceStatusRule } from '@/lib/portal/invoice-status'
+import { InvoiceCreatedDialog } from '@/components/portal/invoice-created-dialog'
+import { invoiceCreatedPopupIsOff } from '@/lib/portal/invoice-created-popup'
 
 // The calendar day in the user's own timezone (toISOString() is UTC: after 8pm in New York it is already tomorrow).
 const todayLocal = () => new Date().toLocaleDateString('en-CA')
@@ -37,6 +40,8 @@ interface InvoiceDetail {
   paid_date: string | null
   notes: string | null
   message: string | null
+  recurring_frequency?: string | null
+  recurring_next_date?: string | null
   created_at: string
   customer: { name: string; email: string | null; address: string | null; vat_number: string | null } | null
   items: { description: string; quantity: number; unit_price: number; amount: number; sort_order: number }[]
@@ -68,6 +73,7 @@ function fmtDate(d: string | null): string {
 export default function InvoiceDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const invoiceId = params.id as string
 
   const { t } = useLocale()
@@ -77,6 +83,7 @@ export default function InvoiceDetailPage() {
   const [sending, setSending] = useState(false)
   const [confirmingSendAnyway, setConfirmingSendAnyway] = useState(false)
   const [reminding, setReminding] = useState(false)
+  const [showCreated, setShowCreated] = useState(false)
   const [showTemplateModal, setShowTemplateModal] = useState(false)
   const [showPartialModal, setShowPartialModal] = useState(false)
   const [showVoidConfirm, setShowVoidConfirm] = useState(false)
@@ -92,9 +99,18 @@ export default function InvoiceDetailPage() {
       const data = await res.json()
       setInvoice(data)
       setLoading(false)
+      // Just created: show every option at once (unless the client turned the pop-up off), and clear the flag from the
+      // address so a refresh does not open it again.
+      if (searchParams.get('created') === '1') {
+        if (!invoiceCreatedPopupIsOff()) setShowCreated(true)
+        router.replace(`/portal/invoices/${invoiceId}`)
+      }
     }
     load()
-  }, [invoiceId])
+  }, [invoiceId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Once the invoice is sent (from the pop-up or anywhere else) the "what next" pop-up has done its job.
+  useEffect(() => { if (invoice && invoice.status !== 'Draft') setShowCreated(false) }, [invoice])
 
   const currencySymbol = invoice?.currency === 'EUR' ? '\u20AC' : '$'
 
@@ -114,9 +130,9 @@ export default function InvoiceDetailPage() {
       a.download = `${invoice?.invoice_number ?? 'invoice'}.pdf`
       a.click()
       URL.revokeObjectURL(url)
-      toast.success('PDF downloaded')
+      toast.success(t('invDetail.pdfDownloaded'))
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Failed to download PDF')
+      toast.error(err instanceof Error && err.message ? err.message : t('invDetail.pdfFailed'))
     } finally {
       setDownloading(false)
     }
@@ -152,10 +168,10 @@ export default function InvoiceDetailPage() {
         toast.warning(t('invoices.sentNotSaved'))
       } else {
         setInvoice(prev => prev ? { ...prev, status: 'Sent' } : prev)
-        toast.success(`Invoice sent to ${invoice?.customer?.email}`)
+        toast.success(interpolateString(t('invDetail.sent'), { email: invoice?.customer?.email ?? '' }))
       }
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send invoice')
+      toast.error(err instanceof Error && err.message ? err.message : t('invDetail.sendFailed'))
     } finally {
       setSending(false)
     }
@@ -174,7 +190,7 @@ export default function InvoiceDetailPage() {
       toast.success(t('invoices.emailSaved'))
       return true
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Could not save the email.')
+      toast.error(err instanceof Error && err.message ? err.message : t('invDetail.emailSaveFailed'))
       return false
     }
   }
@@ -186,16 +202,16 @@ export default function InvoiceDetailPage() {
         // Reload so the amounts shown (paid / still due) are the ones the server saved.
         const res = await fetch(`/api/portal/invoices/${invoiceId}`)
         if (res.ok) setInvoice(await res.json())
-        toast.success('Invoice marked as paid')
+        toast.success(t('invDetail.markedPaid'))
       } else {
-        toast.error(result.error ?? 'Failed to update')
+        toast.error(result.error ?? t('invDetail.updateFailed'))
       }
     })
   }
 
   const handleRemind = async () => {
     if (!invoice?.customer?.email) {
-      toast.error('Customer has no email address')
+      toast.error(t('invDetail.noEmail'))
       return
     }
     setReminding(true)
@@ -206,9 +222,9 @@ export default function InvoiceDetailPage() {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Failed to send reminder')
       }
-      toast.success(`Reminder sent to ${invoice.customer.email}`)
+      toast.success(interpolateString(t('invDetail.reminderSent'), { email: invoice.customer.email ?? '' }))
     } catch (err) {
-      toast.error(err instanceof Error && err.message ? err.message : 'Failed to send reminder')
+      toast.error(err instanceof Error && err.message ? err.message : t('invDetail.reminderFailed'))
     } finally {
       setReminding(false)
     }
@@ -227,11 +243,11 @@ export default function InvoiceDetailPage() {
     })
     setSavingTemplate(false)
     if (result.success) {
-      toast.success('Template saved')
+      toast.success(t('invDetail.templateSaved'))
       setShowTemplateModal(false)
       setTemplateName('')
     } else {
-      toast.error(result.error ?? 'Failed to save template')
+      toast.error(result.error ?? t('invDetail.templateFailed'))
     }
   }
 
@@ -241,9 +257,9 @@ export default function InvoiceDetailPage() {
       if (result.success) {
         setInvoice(prev => prev ? { ...prev, status: 'Cancelled' } : prev)
         setShowVoidConfirm(false)
-        toast.success('Invoice voided')
+        toast.success(t('invDetail.voided'))
       } else {
-        toast.error(result.error ?? 'Failed to void')
+        toast.error(result.error ?? t('invDetail.voidFailed'))
       }
     })
   }
@@ -252,10 +268,10 @@ export default function InvoiceDetailPage() {
     startTransition(async () => {
       const result = await duplicateInvoice(invoiceId)
       if (result.success && result.data) {
-        toast.success(`Duplicated as ${result.data.invoice_number}`)
+        toast.success(interpolateString(t('invDetail.duplicated'), { number: result.data.invoice_number }))
         router.push(`/portal/invoices/${result.data.id}/edit`)
       } else {
-        toast.error(result.error ?? 'Failed to duplicate')
+        toast.error(result.error ?? t('invDetail.duplicateFailed'))
       }
     })
   }
@@ -263,7 +279,7 @@ export default function InvoiceDetailPage() {
   const handlePartialPayment = () => {
     const amount = parseFloat(partialAmount)
     if (isNaN(amount) || amount <= 0) {
-      toast.error('Enter a valid amount')
+      toast.error(t('invDetail.validAmount'))
       return
     }
     startTransition(async () => {
@@ -274,9 +290,9 @@ export default function InvoiceDetailPage() {
         // Reload invoice data
         const res = await fetch(`/api/portal/invoices/${invoiceId}`)
         if (res.ok) setInvoice(await res.json())
-        toast.success(`Partial payment of ${amount} recorded`)
+        toast.success(interpolateString(t('invDetail.partialRecorded'), { amount: String(amount) }))
       } else {
-        toast.error(result.error ?? 'Failed to record payment')
+        toast.error(result.error ?? t('invDetail.paymentFailed'))
       }
     })
   }
@@ -293,8 +309,8 @@ export default function InvoiceDetailPage() {
     return (
       <div className="p-8 text-center">
         <FileText className="h-12 w-12 mx-auto text-zinc-300 mb-4" />
-        <p className="text-zinc-500">Invoice not found</p>
-        <Link href="/portal/invoices" className="text-sm text-blue-600 hover:underline mt-2 inline-block">Back to invoices</Link>
+        <p className="text-zinc-500">{t('invoices.notFound')}</p>
+        <Link href="/portal/invoices" className="text-sm text-blue-600 hover:underline mt-2 inline-block">{t('invDetail.backToInvoices')}</Link>
       </div>
     )
   }
@@ -389,7 +405,7 @@ export default function InvoiceDetailPage() {
             className="flex items-center justify-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-zinc-50 disabled:opacity-50"
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-            Duplicate
+            {t('invDetail.duplicate')}
           </button>
 
           {/* Payment — for anything still waiting for money, including a part-paid invoice (it used to dead-end there) */}
@@ -403,7 +419,7 @@ export default function InvoiceDetailPage() {
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50"
             >
               <DollarSign className="h-4 w-4" />
-              Partial Payment
+              {t('invDetail.partialPayment')}
             </button>
           )}
 
@@ -414,7 +430,7 @@ export default function InvoiceDetailPage() {
               className="flex items-center justify-center gap-2 px-3 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50"
             >
               <Ban className="h-4 w-4" />
-              Void
+              {t('invoices.void')}
             </button>
           )}
         </div>
@@ -430,25 +446,41 @@ export default function InvoiceDetailPage() {
         sending={sending}
       />
 
+      {showCreated && invoice && (
+        <InvoiceCreatedDialog
+          invoiceId={invoiceId}
+          invoiceNumber={invoice.invoice_number}
+          status={invoice.status}
+          customerEmail={invoice.customer?.email ?? null}
+          nextRecurringDate={invoice.recurring_frequency ? (invoice.recurring_next_date ?? null) : null}
+          sending={sending}
+          downloading={downloading}
+          // Close first: the missing-email warning, the 'send anyway?' question and the result toast all live on the page behind this pop-up
+          onSend={() => { setShowCreated(false); void handleSend() }}
+          onDownload={handleDownloadPDF}
+          onClose={() => setShowCreated(false)}
+        />
+      )}
+
       {/* Void Confirmation Modal */}
       {showVoidConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowVoidConfirm(false)} />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-red-700">Void Invoice</h3>
+              <h3 className="font-semibold text-red-700">{t('invDetail.voidTitle')}</h3>
               <button onClick={() => setShowVoidConfirm(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
             </div>
-            <p className="text-sm text-zinc-600 mb-4">Are you sure you want to void <strong>{invoice.invoice_number}</strong>? This cannot be undone.</p>
+            <p className="text-sm text-zinc-600 mb-4">{t('invDetail.voidConfirmA')} <strong>{invoice.invoice_number}</strong>{t('invDetail.voidConfirmB')}</p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowVoidConfirm(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button onClick={() => setShowVoidConfirm(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">{t('invDetail.goBack')}</button>
               <button
                 onClick={handleVoid}
                 disabled={isPending}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
-                Void
+                {t('invDetail.voidButton')}
               </button>
             </div>
           </div>
@@ -461,10 +493,10 @@ export default function InvoiceDetailPage() {
           <div className="absolute inset-0 bg-black/40" onClick={() => setShowPartialModal(false)} />
           <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-zinc-900">Record Payment</h3>
+              <h3 className="font-semibold text-zinc-900">{t('invDetail.recordPayment')}</h3>
               <button onClick={() => setShowPartialModal(false)} className="p-1 hover:bg-zinc-100 rounded"><X className="h-4 w-4" /></button>
             </div>
-            <label className="block text-sm text-zinc-600 mb-1">Amount received</label>
+            <label className="block text-sm text-zinc-600 mb-1">{t('invDetail.amountReceived')}</label>
             <input
               type="number"
               step="0.01"
@@ -474,14 +506,14 @@ export default function InvoiceDetailPage() {
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
             />
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowPartialModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button onClick={() => setShowPartialModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</button>
               <button
                 onClick={handlePartialPayment}
                 disabled={isPending}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <DollarSign className="h-4 w-4" />}
-                Record
+                {t('invDetail.record')}
               </button>
             </div>
           </div>
@@ -501,19 +533,19 @@ export default function InvoiceDetailPage() {
               type="text"
               value={templateName}
               onChange={e => setTemplateName(e.target.value)}
-              placeholder="Template name"
+              placeholder={t('invDetail.templateName')}
               autoFocus
               className="w-full px-3 py-2.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
             />
             <div className="flex justify-end gap-2">
-              <button onClick={() => setShowTemplateModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">Cancel</button>
+              <button onClick={() => setShowTemplateModal(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-zinc-50">{t('common.cancel')}</button>
               <button
                 onClick={handleSaveTemplate}
                 disabled={!templateName.trim() || savingTemplate}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 {savingTemplate ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookmarkPlus className="h-4 w-4" />}
-                Save
+                {t('common.save')}
               </button>
             </div>
           </div>
@@ -552,7 +584,7 @@ export default function InvoiceDetailPage() {
               </div>
             </div>
             <div className="sm:text-right shrink-0">
-              <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">Invoice</p>
+              <p className="text-xs font-medium text-zinc-400 uppercase tracking-wide">{t('invDetail.invoiceWord')}</p>
               <p className="text-base font-semibold text-zinc-900">{invoice.invoice_number}</p>
               <span className={`inline-block text-xs font-medium px-2.5 py-0.5 rounded-full mt-1 ${STATUS_COLORS[invoice.status] ?? 'bg-zinc-100 text-zinc-700'}`}>
                 {invoice.status}
@@ -565,7 +597,7 @@ export default function InvoiceDetailPage() {
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-6 border-b">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 uppercase mb-2">
-              <User className="h-3.5 w-3.5" /> Customer
+              <User className="h-3.5 w-3.5" /> {t('invoices.customer')}
             </div>
             <p className="font-medium text-zinc-900">{invoice.customer?.name ?? '—'}</p>
             {invoice.customer?.email && <p className="text-sm text-zinc-500">{invoice.customer.email}</p>}
@@ -575,20 +607,20 @@ export default function InvoiceDetailPage() {
           <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 uppercase mb-1">
-                <Calendar className="h-3.5 w-3.5" /> Issue Date
+                <Calendar className="h-3.5 w-3.5" /> {t('invoices.issueDate')}
               </div>
               <p className="text-sm text-zinc-900">{fmtDate(invoice.issue_date)}</p>
             </div>
             <div>
               <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 uppercase mb-1">
-                <Clock className="h-3.5 w-3.5" /> Due Date
+                <Clock className="h-3.5 w-3.5" /> {t('invoices.dueDate')}
               </div>
               <p className="text-sm text-zinc-900">{fmtDate(invoice.due_date)}</p>
             </div>
             {invoice.paid_date && (
               <div>
                 <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 uppercase mb-1">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> Paid Date
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> {t('invDetail.paidDate')}
                 </div>
                 <p className="text-sm text-emerald-700 font-medium">{fmtDate(invoice.paid_date)}</p>
               </div>
@@ -599,15 +631,15 @@ export default function InvoiceDetailPage() {
         {/* Line Items */}
         <div className="p-6 border-b">
           <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 uppercase mb-4">
-            <Receipt className="h-3.5 w-3.5" /> Items
+            <Receipt className="h-3.5 w-3.5" /> {t('invoices.items')}
           </div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left text-xs font-medium text-zinc-500 uppercase">
-                <th className="pb-2">Description</th>
-                <th className="pb-2 text-right w-20">Qty</th>
-                <th className="pb-2 text-right w-28">Price</th>
-                <th className="pb-2 text-right w-28">Amount</th>
+                <th className="pb-2">{t('invoices.description')}</th>
+                <th className="pb-2 text-right w-20">{t('invoices.qty')}</th>
+                <th className="pb-2 text-right w-28">{t('invoices.price')}</th>
+                <th className="pb-2 text-right w-28">{t('invoices.amount')}</th>
               </tr>
             </thead>
             <tbody>
@@ -629,12 +661,12 @@ export default function InvoiceDetailPage() {
         <div className="p-6 flex justify-end">
           <div className="w-64 space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-zinc-500">Subtotal</span>
+              <span className="text-zinc-500">{t('invoices.subtotal')}</span>
               <span>{currencySymbol}{invoice.subtotal.toFixed(2)}</span>
             </div>
             {invoice.discount > 0 && (
               <div className="flex justify-between">
-                <span className="text-zinc-500">Discount</span>
+                <span className="text-zinc-500">{t('invoices.discount')}</span>
                 <span className="text-red-600">-{currencySymbol}{invoice.discount.toFixed(2)}</span>
               </div>
             )}
@@ -645,17 +677,17 @@ export default function InvoiceDetailPage() {
               </div>
             )}
             <div className="flex justify-between pt-2 border-t font-semibold text-lg">
-              <span>Total</span>
+              <span>{t('invoices.total')}</span>
               <span>{currencySymbol}{invoice.total.toFixed(2)}</span>
             </div>
             {(Number(invoice.amount_paid) || 0) > 0 && (
               <>
                 <div className="flex justify-between text-emerald-700" data-testid="invoice-amount-paid">
-                  <span>Paid</span>
+                  <span>{t('invoices.paid')}</span>
                   <span>-{currencySymbol}{(Number(invoice.amount_paid) || 0).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between font-semibold" data-testid="invoice-amount-due">
-                  <span>Still due</span>
+                  <span>{t('invDetail.stillDue')}</span>
                   <span>{currencySymbol}{Math.max(Number(invoice.total) - (Number(invoice.amount_paid) || 0), 0).toFixed(2)}</span>
                 </div>
               </>
@@ -666,7 +698,7 @@ export default function InvoiceDetailPage() {
         {/* Message */}
         {invoice.message && (
           <div className="px-6 pb-6">
-            <p className="text-xs font-medium text-zinc-500 uppercase mb-1">Payment Terms</p>
+            <p className="text-xs font-medium text-zinc-500 uppercase mb-1">{t('invoices.paymentTerms')}</p>
             <p className="text-sm text-zinc-700 whitespace-pre-wrap">{invoice.message}</p>
           </div>
         )}
@@ -675,7 +707,7 @@ export default function InvoiceDetailPage() {
       {/* Internal Notes */}
       {invoice.notes && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-          <p className="text-xs font-medium text-amber-700 uppercase mb-1">Internal Notes</p>
+          <p className="text-xs font-medium text-amber-700 uppercase mb-1">{t('invoices.internalNotes')}</p>
           <p className="text-sm text-amber-800">{invoice.notes}</p>
         </div>
       )}
