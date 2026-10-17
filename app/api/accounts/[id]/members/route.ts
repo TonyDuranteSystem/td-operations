@@ -223,6 +223,9 @@ export async function DELETE(
       }
     } catch { /* the removal goes on */ }
 
+    // Who is this member (a PERSON with a contact record)? Needed after the delete to end their portal access to this company.
+    const { data: leaving } = await supabaseAdmin.from("members").select("member_type, contact_id").eq("id", member_id).eq("account_id", params.id).maybeSingle()
+
     const { error } = await supabaseAdmin
       .from("members")
       .delete()
@@ -230,9 +233,13 @@ export async function DELETE(
       .eq("account_id", params.id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Antonio 2026-10-17: removing a member stops that person's access to THIS company (their login and any other company stay).
+    const { endPortalAccessForRemovedMember } = await import("@/lib/crm-store/person-leaving")
+    const { accessEnded, warning } = await endPortalAccessForRemovedMember({ accountId: params.id, contactId: leaving?.contact_id ?? null, memberType: leaving?.member_type ?? null })
     const ss4Refresh = await autoRefreshSs4(params.id)
     const oaRefresh = await autoRefreshOaForEdit(params.id)
-    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh })
+    return NextResponse.json({ success: true, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh, access_ended: accessEnded, warning })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }

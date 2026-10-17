@@ -187,6 +187,15 @@ export async function POST(request: Request) {
       )
     }
 
+    // Storage check / Calendar: every company this person was linked to loses them — remember it BEFORE the row goes (never blocks).
+    try {
+      const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", contact_id)
+      const { recordPersonLeaving } = await import("@/lib/crm-store/storage-check")
+      for (const l of (links ?? []) as Array<{ account_id: string }>) {
+        await recordPersonLeaving({ accountId: l.account_id, contactId: contact_id, personName: contact.full_name ?? null, actorId: user?.id ?? null, via: "delete-contact" })
+      }
+    } catch { /* the delete goes on */ }
+
     // Remove portal login(s) first, then the row (CASCADE/SET NULL FKs self-resolve).
     let removedLogins = 0
     for (const u of portalUsers) {

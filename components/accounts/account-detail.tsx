@@ -2025,6 +2025,10 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       // (link revoked, staff must pick) — that must reach the person deleting.
       const delSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
       if (delSs4Note) toast.warning(delSs4Note, { duration: 12000 })
+      // Removing a member also ends their portal access to this company (unless kept on purpose — the server says why)
+      const delAccess = data.warning as string | null | undefined
+      if (delAccess) toast.warning(delAccess, { duration: 12000 })
+      else if (data.access_ended) toast.message('Their portal access to this company ended.')
       notifyStorageCheck()
       return { success: true, message: `${displayName(deleteTarget)} removed` }
     } catch (err) {

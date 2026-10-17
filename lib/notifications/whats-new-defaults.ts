@@ -21,6 +21,7 @@ export const WHATS_NEW_DEFAULT_STEPS: Record<string, string> = {
   closure_progress: 'Begin the closure / dissolution steps',
   closure_wizard_submitted: 'Review the closure form, then start the state compliance check',
   members_updated: 'Review the updated member details and reconcile the account',
+  person_left: 'Check the company still has the right people; if the person asks for their documents, send them by hand',
   contact_updated: 'Review the contact details the client submitted',
   plan_referrer_ready_to_release: 'Open the account page and click "Release commission"',
   recurring_invoice_generated: 'Review the Draft invoice in Finance and send it to the client',
