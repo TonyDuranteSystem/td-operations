@@ -151,9 +151,12 @@ export async function driveParentIds(id: string): Promise<string[]> {
  * Drive to every support@ caller, or breaking owner reads at random depending on
  * which identity warmed the cache first.
  */
-async function getAccessToken(subject: string = IMPERSONATE_EMAIL()): Promise<string> {
+async function getAccessToken(subject: string = IMPERSONATE_EMAIL(), scope: string = SCOPES): Promise<string> {
+  // The cache is keyed by subject AND scope: a read-only token must never be served to a caller that needs the full scope, and the
+  // other way round (a full-scope token handed to the read-only path would silently make it able to write).
+  const cacheKey = `${subject}|${scope}`
   // Return cached token if still valid (5 min buffer)
-  const cached = tokenCache.get(subject)
+  const cached = tokenCache.get(cacheKey)
   if (cached && Date.now() < cached.expiresAt - 5 * 60 * 1000) {
     return cached.token
   }
@@ -164,7 +167,7 @@ async function getAccessToken(subject: string = IMPERSONATE_EMAIL()): Promise<st
   // Build JWT assertion
   const privateKey = await importPKCS8(creds.private_key, "RS256")
   const assertion = await new SignJWT({
-    scope: SCOPES,
+    scope,
     sub: subject,
   })
     .setProtectedHeader({ alg: "RS256", typ: "JWT" })
@@ -190,7 +193,7 @@ async function getAccessToken(subject: string = IMPERSONATE_EMAIL()): Promise<st
   }
 
   const data = (await res.json()) as { access_token: string; expires_in: number }
-  tokenCache.set(subject, {
+  tokenCache.set(cacheKey, {
     token: data.access_token,
     expiresAt: Date.now() + data.expires_in * 1000,
   })
@@ -1647,4 +1650,85 @@ export async function downloadOwnerDriveFile(fileId: string, exportMime?: string
     throw new Error(`Drive ${res.status}: ${(err as { error?: { message?: string } }).error?.message || res.statusText}`)
   }
   return Buffer.from(await res.arrayBuffer())
+}
+
+// ─── READ-ONLY owner Drive reads for the My files drop (dev job 465a11fc) ───
+// Used ONLY by lib/crm-store/my-files-drop-drive.ts for the MCP tool my_files_save. Nothing here writes, lists or searches Drive:
+// it is `files.get` (metadata) and `files.get?alt=media` (bytes) on one file id, as the OWNER, with a drive.readonly token — so even a
+// bug in this path cannot change anything in his Drive. The subject is the owner's address; there is deliberately no `account` argument.
+
+export const DROP_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+const DROP_DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,100}$/
+const DROP_META_TIMEOUT_MS = 15_000
+const DROP_DOWNLOAD_TIMEOUT_MS = 90_000
+
+export const isDropDriveId = (id: unknown): id is string => typeof id === "string" && DROP_DRIVE_ID_RE.test(id)
+
+/** A Drive read that failed. `code` is the only thing a caller may turn into words — Google's own message is never passed on. */
+export class DropDriveError extends Error {
+  constructor(public code: "unavailable" | "failed" | "too_big", detail?: string) { super(detail ?? code) }
+}
+
+export interface DropDriveMeta {
+  id: string; name: string; mimeType: string; size: number | null; md5: string | null; ownedByMe: boolean; trashed: boolean
+  parents: string[]; driveId: string | null; version: string | null; modifiedTime: string | null
+}
+
+async function ownerReadonlyToken(): Promise<string> {
+  try { return await getAccessToken(OWNER_IMPERSONATE_EMAIL(), DROP_DRIVE_SCOPE) } catch { throw new DropDriveError("failed", "token") }
+}
+
+/** Metadata of one file or folder in the owner's Drive. 404/403 (not found, or not visible to him) = "unavailable". */
+export async function readOwnerDropMeta(fileId: string): Promise<DropDriveMeta> {
+  if (!isDropDriveId(fileId)) throw new DropDriveError("unavailable", "id shape")
+  const token = await ownerReadonlyToken()
+  const url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`)
+  url.searchParams.set("supportsAllDrives", "true")
+  url.searchParams.set("fields", "id,name,mimeType,size,md5Checksum,ownedByMe,trashed,parents,driveId,version,modifiedTime")
+  let res: Response
+  try { res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(DROP_META_TIMEOUT_MS) }) } catch { throw new DropDriveError("failed", "meta fetch") }
+  if (res.status === 429 || (res.status === 403 && /rate|quota/i.test(await res.clone().text().catch(() => "")))) throw new DropDriveError("failed", `meta ${res.status} (limit)`)
+  if (res.status === 404 || res.status === 403 || res.status === 400) throw new DropDriveError("unavailable", `meta ${res.status}`)
+  if (!res.ok) throw new DropDriveError("failed", `meta ${res.status}`)
+  const f = (await res.json().catch(() => null)) as Record<string, unknown> | null
+  if (!f || typeof f.id !== "string" || typeof f.name !== "string" || typeof f.mimeType !== "string") throw new DropDriveError("failed", "meta shape")
+  const size = typeof f.size === "string" && /^\d+$/.test(f.size) ? Number(f.size) : null
+  return {
+    id: f.id, name: f.name, mimeType: f.mimeType, size, md5: typeof f.md5Checksum === "string" ? f.md5Checksum : null,
+    ownedByMe: f.ownedByMe === true, trashed: f.trashed === true,
+    parents: Array.isArray(f.parents) ? (f.parents as unknown[]).filter((p): p is string => typeof p === "string") : [],
+    driveId: typeof f.driveId === "string" ? f.driveId : null,
+    version: typeof f.version === "string" ? f.version : null, modifiedTime: typeof f.modifiedTime === "string" ? f.modifiedTime : null,
+  }
+}
+
+/**
+ * The bytes of one file, streamed with a HARD cap on the decoded byte count (never trusts Content-Length; asks for no compression so
+ * the count is the real one). Over the cap = the stream is cancelled at once and the call fails with "too_big".
+ */
+export async function downloadOwnerDropBytes(fileId: string, maxBytes: number): Promise<Buffer> {
+  if (!isDropDriveId(fileId)) throw new DropDriveError("unavailable", "id shape")
+  const token = await ownerReadonlyToken()
+  const url = `${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true&acknowledgeAbuse=false`
+  let res: Response
+  try { res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Accept-Encoding": "identity" }, signal: AbortSignal.timeout(DROP_DOWNLOAD_TIMEOUT_MS) }) } catch { throw new DropDriveError("failed", "download fetch") }
+  if (res.status === 429 || (res.status === 403 && /rate|quota/i.test(await res.clone().text().catch(() => "")))) throw new DropDriveError("failed", `download ${res.status} (limit)`)
+  if (res.status === 404 || res.status === 403) throw new DropDriveError("unavailable", `download ${res.status}`)
+  if (!res.ok || !res.body) throw new DropDriveError("failed", `download ${res.status}`)
+  const reader = res.body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) { await reader.cancel().catch(() => undefined); throw new DropDriveError("too_big") }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+    }
+  } catch (e) {
+    if (e instanceof DropDriveError) throw e
+    throw new DropDriveError("failed", "download stream")
+  }
+  return Buffer.concat(chunks, total)
 }
