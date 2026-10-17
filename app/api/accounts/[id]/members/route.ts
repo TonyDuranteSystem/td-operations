@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
+import { historyFromForNewLink } from "@/lib/portal/history-cutoff"
+import { normalizeHistoryChoice } from "@/lib/documents/history-cutoff"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { explainFailure } from "@/lib/errors/explain-failure"
 import { refreshSS4, type Ss4RefreshResult } from "@/lib/operations/ss4-refresh"
@@ -118,7 +120,12 @@ export async function POST(
 
     // MM5: individual members with a contact must also get account_contacts for portal access
     let linkWarning: string | null = null
+    let historyFrom: string | null = null
     if (insert.member_type === "individual" && insert.contact_id) {
+      // Antonio 2026-10-17: a person added to a company that already has history sees it only from today, unless staff choose
+      // "everything" (body.history_from = "all"). A person who is already linked keeps the view they have (dev job d14e823f).
+      const decided = await historyFromForNewLink({ accountId: params.id, contactId: insert.contact_id as string, choice: normalizeHistoryChoice(body.history_from) })
+      historyFrom = decided ?? null
       const { error: acError } = await supabaseAdmin
         .from("account_contacts")
         .upsert(
@@ -128,6 +135,7 @@ export async function POST(
             role: "Member",
             ownership_pct: (insert.ownership_pct as number | null) ?? null,
             is_primary: (insert.is_primary as boolean) ?? false,
+            ...(decided === undefined ? {} : { history_visible_from: decided }),
           },
           { onConflict: "account_id,contact_id" }
         )
@@ -139,7 +147,7 @@ export async function POST(
 
     const ss4Refresh = await autoRefreshSs4(params.id)
     const oaRefresh = await autoRefreshOaForEdit(params.id)
-    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh, link_warning: linkWarning }, { status: 201 })
+    return NextResponse.json({ data, ss4_refresh: ss4Refresh, oa_refresh: oaRefresh, link_warning: linkWarning, history_visible_from: historyFrom }, { status: 201 })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
