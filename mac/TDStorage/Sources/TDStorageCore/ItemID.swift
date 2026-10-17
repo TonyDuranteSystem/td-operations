@@ -26,6 +26,8 @@ public enum ItemID: Equatable, Hashable {
 
     public init?(raw: String) {
         if raw == "root" { self = .root; return }
+        // a group key may itself contain ":" (the CRM's state groups are "state:Florida"), so a group is "g:" + EVERYTHING after it
+        if raw.hasPrefix("g:") { let key = String(raw.dropFirst(2)); if key.isEmpty { return nil }; self = .group(key); return }
         let parts = raw.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
         guard parts.count >= 2, !parts[1].isEmpty else { return nil }
         switch (parts[0], parts.count) {

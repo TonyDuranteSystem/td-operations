@@ -16,7 +16,7 @@ struct TDStorageApp: App {
 enum SignInState: Equatable {
     case checking
     case signedOut
-    case waiting(checkCode: String)          // the browser approval page is open; the code shown here must match the page's
+    case waiting(checkCode: String, link: URL)   // the browser approval page is open; the code shown here must match the page's
     case signedIn(String)
     case problem(String)
 }
@@ -25,6 +25,14 @@ enum SignInState: Equatable {
 final class AppModel: ObservableObject {
     @Published var state: SignInState = .checking
     @Published var fileVaultOK = true
+    @Published var browserProblem: String?
+    /// A DEBUG build (the dev-server / test-data configuration) may run without FileVault: it only ever talks to the sandbox's TEST data.
+    /// The Sandbox and (later) Production configurations always require it. Never ship a Debug build to a real user.
+    #if DEBUG
+    let fileVaultRequired = false
+    #else
+    let fileVaultRequired = true
+    #endif
 
     private let info = Bundle.main.infoDictionary ?? [:]
     private lazy var baseURL = URL(string: info["TDServerURL"] as? String ?? "https://invalid.example")!
@@ -42,14 +50,17 @@ final class AppModel: ObservableObject {
         do {
             let me = try await api.whoami()
             state = .signedIn(me.email ?? "signed in")
-            try? await register()
+            do { try await register() } catch {
+                let ns = error as NSError
+                state = .problem("Signed in, but macOS would not add TD Storage to Finder (\(ns.domain) \(ns.code): \(ns.localizedDescription)).")
+            }
         } catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
         catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
         catch { state = .problem("Could not reach the CRM. Check your internet connection.") }
     }
 
     func signIn() async {
-        guard fileVaultOK else { state = .problem("Turn on FileVault (System Settings › Privacy & Security) before using TD Storage: client documents must never sit on a disk that is not encrypted."); return }
+        guard fileVaultOK || !fileVaultRequired else { state = .problem("Turn on FileVault (System Settings › Privacy & Security) before using TD Storage: client documents must never sit on a disk that is not encrypted."); return }
         let verifier = PKCE.makeVerifier()
         let challenge = PKCE.challenge(for: verifier)
         let checkCode = PKCE.checkCode(for: challenge)
@@ -57,8 +68,8 @@ final class AppModel: ObservableObject {
         self.flow = flow
         do {
             let started = try await flow.start(baseURL: baseURL, deviceName: deviceName, challenge: challenge, state: PKCE.makeState(), checkCode: checkCode)
-            state = .waiting(checkCode: checkCode)
-            NSWorkspace.shared.open(started.approvalURL)
+            state = .waiting(checkCode: checkCode, link: started.approvalURL)
+            openInBrowser(started.approvalURL)
             let code = try await flow.waitForCode()
             _ = try await api.exchange(code: code, verifier: verifier, redirectURI: started.redirectURI)
             let me = try await api.whoami()
@@ -66,8 +77,23 @@ final class AppModel: ObservableObject {
             state = .signedIn(me.email ?? "signed in")
         } catch LoopbackSignIn.SignInError.timedOut { state = .problem("The sign-in took too long. Try again.") }
         catch StorageAPIError.forbidden(let why) { state = .problem(why) }
-        catch { state = .problem("The sign-in did not complete. Try again.") }
+        catch {
+            let ns = error as NSError
+            state = .problem("The sign-in did not complete (\(ns.domain) \(ns.code): \(ns.localizedDescription)). Try again.")
+        }
         self.flow = nil
+    }
+
+    /// Opens the CRM approval page in the person's default browser; if macOS cannot, the window says so (and offers the link).
+    func openInBrowser(_ url: URL) {
+        NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if let error { Task { @MainActor in self.browserProblem = "Could not open the browser: \(error.localizedDescription). Use Copy link and paste it into Chrome or Safari." } }
+        }
+    }
+
+    func copy(_ url: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 
     func signOut() async { await wipe(); state = .signedOut }

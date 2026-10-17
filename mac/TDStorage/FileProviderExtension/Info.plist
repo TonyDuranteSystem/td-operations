@@ -15,6 +15,7 @@
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key><string>com.apple.fileprovider-nonui</string>
+		<key>NSExtensionFileProviderSupportsEnumeration</key><true/>
 		<key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).FileProviderExtension</string>
 	</dict>
 	<key>TDServerURL</key><string>$(TD_SERVER_URL)</string>

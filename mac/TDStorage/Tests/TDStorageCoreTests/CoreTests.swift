@@ -28,6 +28,14 @@ final class ItemIDTests: XCTestCase {
         let ids: [ItemID] = [.root, .group("alabama"), .owner("o1"), .folder(owner: "o1", folder: "f1"), .file(owner: "o1", file: "x9")]
         for id in ids { XCTAssertEqual(ItemID(raw: id.raw), id) }
     }
+    func testGroupKeysMayContainColons() {
+        // the CRM's real state groups ("state:Florida"): the first version of the parser lost them and Finder showed "The file couldn't be opened"
+        let id = ItemID.group("state:Florida")
+        XCTAssertEqual(id.raw, "g:state:Florida")
+        XCTAssertEqual(ItemID(raw: "g:state:Florida"), id)
+        XCTAssertEqual(ItemID(raw: "g:one-time"), .group("one-time"))
+        XCTAssertNil(ItemID(raw: "g:"))
+    }
     func testRejectsGarbage() {
         for bad in ["", "x", "g:", "o:", "d:o1", "d:o1:", "f:o1", "z:1:2"] { XCTAssertNil(ItemID(raw: bad), bad) }
     }
