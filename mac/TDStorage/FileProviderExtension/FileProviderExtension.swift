@@ -108,14 +108,26 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             defer { progress.completedUnitCount = 1 }
             do {
                 let name = NameMapper.serverName(fromFinder: itemTemplate.filename)
+                let isFolderItem = itemTemplate.contentType == .folder || itemTemplate.contentType?.conforms(to: .folder) == true
+                Trace.log("createItem.start", ["name": name, "parent": itemTemplate.parentItemIdentifier.rawValue, "templateId": itemTemplate.itemIdentifier.rawValue,
+                    "folder": isFolderItem, "hasContents": url != nil, "fields": fields.rawValue, "options": options.rawValue,
+                    "size": url.flatMap { FileStability.snapshot(of: $0)?.size } ?? -1, "junk": NameMapper.isJunk(name)])
                 // system junk and partial downloads are never uploaded: the system is told this one is not synced
-                if NameMapper.isJunk(name) { throw NSFileProviderError(.excludedFromSync) }
-                guard itemTemplate.contentType != .folder, itemTemplate.contentType?.conforms(to: .folder) != true else { throw noPermission("Folders can be created in the CRM, not from the Mac yet.") }
-                guard case .folder(let owner, let folder)? = FPItem.itemID(for: itemTemplate.parentItemIdentifier) else { throw noPermission("Open one of the folders first — files go inside a folder.") }
-                let attrs = url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
-                let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-                let modified = (attrs?[.modificationDate] as? Date) ?? itemTemplate.contentModificationDate ?? nil
-                let key = ItemKey.make(parent: itemTemplate.parentItemIdentifier.rawValue, name: name, size: size, modified: modified)
+                if NameMapper.isJunk(name) { Trace.log("createItem.excluded", ["name": name]); throw NSFileProviderError(.excludedFromSync) }
+                guard !isFolderItem else { Trace.log("createItem.refused", ["name": name, "why": "folder"]); throw noPermission("Folders can be created in the CRM, not from the Mac yet.") }
+                guard case .folder(let owner, let folder)? = FPItem.itemID(for: itemTemplate.parentItemIdentifier) else { Trace.log("createItem.refused", ["name": name, "why": "no folder"]); throw noPermission("Open one of the folders first — files go inside a folder.") }
+                // a file that is still being written is waited for (a browser download, a big copy): never saved half-finished
+                var size = 0
+                var modified = itemTemplate.contentModificationDate ?? nil
+                if let url {
+                    let snap = try await FileStability.waitUntilStable(url)
+                    size = snap.size; modified = snap.modified ?? modified
+                    Trace.log("createItem.stable", ["name": name, "size": size])
+                }
+                // the system's own id for this pending item is stable across Finder's retries and new for every new create; use it when it is not one of ours
+                let sys = itemTemplate.itemIdentifier.rawValue
+                let systemId = (FPItem.itemID(for: itemTemplate.itemIdentifier) == nil && itemTemplate.itemIdentifier != .rootContainer) ? sys : nil
+                let key = ItemKey.make(parent: itemTemplate.parentItemIdentifier.rawValue, name: name, size: size, modified: modified, systemId: systemId)
                 let mime = itemTemplate.contentType?.preferredMIMEType
                 let slot = try await api.uploadSlot(ownerId: owner, folderId: folder, name: name, size: size, mimeType: mime, itemKey: key)
                 var fileId = slot.alreadySaved == true ? slot.fileId : nil
@@ -126,13 +138,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     if source == nil { let t = FileManager.default.temporaryDirectory.appendingPathComponent("tds-empty-" + UUID().uuidString); FileManager.default.createFile(atPath: t.path, contents: Data()); source = t; emptyTemp = t }
                     defer { if let emptyTemp { try? FileManager.default.removeItem(at: emptyTemp) } }
                     try await uploader.upload(file: source!, to: address, mimeType: mime)
+                    // it must not have changed while it was uploading (then the system asks again and the new content is saved)
+                    if let before = url.flatMap({ FileStability.snapshot(of: $0) }), before.size != size { Trace.log("createItem.changedDuringUpload", ["name": name, "was": size, "now": before.size]); throw StorageAPIError.transport("The file changed while it was being saved.") }
                     fileId = try await api.save(intentId: intent, itemKey: key).fileId
                 }
                 let id = ItemID.file(owner: owner, file: fileId!)
                 let item = try await catalog.item(for: id)
                 ledger.record(id: item.itemIdentifier.rawValue, keepSeconds: 900)   // the Mac's own copy is only kept briefly: the CRM has the file now
+                Trace.log("createItem.saved", ["name": name, "size": size, "fileId": fileId ?? ""])
                 completionHandler(item, [], false, nil)
-            } catch { completionHandler(nil, [], false, fileProviderError(error)) }
+            } catch { Trace.log("createItem.error", ["error": String(describing: error)]); completionHandler(nil, [], false, fileProviderError(error)) }
         }
         return progress
     }
@@ -141,6 +156,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let progress = Progress(totalUnitCount: 1)
         Task {
             defer { progress.completedUnitCount = 1 }
+            Trace.log("modifyItem", ["id": item.itemIdentifier.rawValue, "name": item.filename, "parent": item.parentItemIdentifier.rawValue, "fields": changedFields.rawValue, "hasContents": newContents != nil, "size": newContents.flatMap { FileStability.snapshot(of: $0)?.size } ?? -1])
             // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored; any change to the name, place or content is refused
             let real: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
             guard changedFields.intersection(real).isEmpty, let id = FPItem.itemID(for: item.itemIdentifier) else {
@@ -152,6 +168,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     }
 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion, options: NSFileProviderDeleteItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (Error?) -> Void) -> Progress {
+        Trace.log("deleteItem", ["id": identifier.rawValue])
         completionHandler(noPermission(Self.changeInCRM))
         return Progress()
     }

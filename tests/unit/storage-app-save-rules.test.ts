@@ -22,8 +22,8 @@ describe("where a Mac may save a new file (step A: Business and My files only)",
 
 describe("what a Mac may save", () => {
   it("junk and temporary names are never saved", () => {
-    for (const n of [".DS_Store", "._photo.jpg", "~$report.docx", "x.crdownload", "y.download", "z.part", "a.tmp", "doc.sb-1234-abcd", "Thumbs.db", ".~lock.a.odt#"]) expect(isJunkName(n)).toBe(true)
-    for (const n of ["report.pdf", "Download notes.txt", "partial agreement.docx", "tmp.pdf"]) expect(isJunkName(n)).toBe(false)
+    for (const n of [".DS_Store", "._photo.jpg", "~$report.docx", "x.crdownload", "y.download", "z.part", "a.tmp", "o.opdownload", "doc.sb-1a2b3c4d-AbCd9z", "(A Document Being Saved By Preview)", "Thumbs.db", ".~lock.a.odt#"]) expect(isJunkName(n)).toBe(true)
+    for (const n of ["report.pdf", "Download notes.txt", "partial agreement.docx", "tmp.pdf", "Q3.sb-final.pdf", "doc.sb-1234-abcd.pdf", "My Downloads list.xlsx", "part list.docx"]) expect(isJunkName(n)).toBe(false)
   })
   it("names are cleaned and bounded", () => {
     expect(cleanFileName("  a\u0000b.pdf ")).toBe("ab.pdf")

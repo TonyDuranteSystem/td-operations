@@ -65,10 +65,10 @@ final class NameMapperTests: XCTestCase {
         XCTAssertFalse(NameMapper.fitsFinder(""))
     }
     func testJunk() {
-        for j in [".DS_Store", "._photo.jpg", "~$Letter.docx", ".~lock.a.odt#", "x.tmp", "movie.crdownload", "doc.pdf.part", "a.sb-1234-xyz", "Thumbs.db", "desktop.ini"] {
+        for j in [".DS_Store", "._photo.jpg", "~$Letter.docx", ".~lock.a.odt#", "x.tmp", "movie.crdownload", "doc.pdf.part", "a.sb-1a2b3c4d-AbCd9z", "(A Document Being Saved By Preview)", "o.opdownload", "Thumbs.db", "desktop.ini"] {
             XCTAssertTrue(NameMapper.isJunk(j), j)
         }
-        for ok in ["Letter.docx", "tmp.pdf", "partial summary.pdf", "My notes.txt"] { XCTAssertFalse(NameMapper.isJunk(ok), ok) }
+        for ok in ["Letter.docx", "tmp.pdf", "partial summary.pdf", "My notes.txt", "Q3.sb-final.pdf", "a.sb-1234-xyz.pdf", "Downloads list.xlsx"] { XCTAssertFalse(NameMapper.isJunk(ok), ok) }
     }
 }
 
@@ -392,6 +392,12 @@ final class SaveNewFileTests: XCTestCase {
         XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f1", name: "b.pdf", size: 10, modified: d))
         XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 11, modified: d))
     }
+    func testTheSystemsOwnIdMakesTheKeyIndependentOfSizeAndTime() {
+        let d1 = Date(timeIntervalSince1970: 1_700_000_000), d2 = Date(timeIntervalSince1970: 1_700_000_050)
+        let a = ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 10, modified: d1, systemId: "sys-1")
+        XCTAssertEqual(a, ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 9999, modified: d2, systemId: "sys-1"))   // the file grew: same file
+        XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 10, modified: d1, systemId: "sys-2"))   // a new create of the same name: a new key
+    }
     func testTheKeyLooksLikeAUUIDTheServerAccepts() {
         let k = ItemKey.make(parent: "p", name: "n", size: 1, modified: nil)
         XCTAssertNotNil(UUID(uuidString: k)); XCTAssertEqual(k.count, 36)
@@ -434,6 +440,32 @@ final class SaveNewFileTests: XCTestCase {
         FileManager.default.createFile(atPath: f.path, contents: Data("x".utf8)); defer { try? FileManager.default.removeItem(at: f) }
         do { try await u.upload(file: f, to: "http://evil.example/u", mimeType: nil); XCTFail("should throw") }
         catch { guard case StorageAPIError.integrity? = error as? StorageAPIError else { return XCTFail("\(error)") } }
+    }
+}
+
+final class FileStabilityTests: XCTestCase {
+    private func temp() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("tds-stab-" + UUID().uuidString) }
+    func testAFileThatIsNotChangingIsStableAfterTheQuietTime() async throws {
+        let f = temp(); try Data("abc".utf8).write(to: f); defer { try? FileManager.default.removeItem(at: f) }
+        let t0 = Date()
+        let snap = try await FileStability.waitUntilStable(f, quiet: 0.4, poll: 0.1, max: 5)
+        XCTAssertEqual(snap.size, 3); XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(t0), 0.35)
+    }
+    func testAFileStillGrowingIsWaitedFor() async throws {
+        let f = temp(); try Data("a".utf8).write(to: f); defer { try? FileManager.default.removeItem(at: f) }
+        let writer = Task { for _ in 0..<6 { try? await Task.sleep(nanoseconds: 150_000_000); if let h = try? FileHandle(forWritingTo: f) { h.seekToEndOfFile(); h.write(Data("b".utf8)); try? h.close() } } }
+        let snap = try await FileStability.waitUntilStable(f, quiet: 0.5, poll: 0.1, max: 10)
+        await writer.value
+        XCTAssertEqual(snap.size, 7)      // it did not return while the file was still growing
+    }
+    func testAFileThatNeverSettlesGivesUp() async throws {
+        let f = temp(); try Data("a".utf8).write(to: f); defer { try? FileManager.default.removeItem(at: f) }
+        let writer = Task { for _ in 0..<40 { try? await Task.sleep(nanoseconds: 50_000_000); if let h = try? FileHandle(forWritingTo: f) { h.seekToEndOfFile(); h.write(Data("b".utf8)); try? h.close() } } }
+        do { _ = try await FileStability.waitUntilStable(f, quiet: 0.5, poll: 0.05, max: 1); XCTFail("should give up") } catch { /* expected */ }
+        writer.cancel()
+    }
+    func testAMissingFileIsAnError() async {
+        do { _ = try await FileStability.waitUntilStable(temp(), quiet: 0.1, poll: 0.05, max: 1); XCTFail("should throw") } catch { /* expected */ }
     }
 }
 

@@ -54,7 +54,7 @@ async function checkNameFree(folderId: string, cleanName: string, mimeType: stri
 }
 
 async function existingByKey(callerKey: string): Promise<{ id: string; owner_id: string; name: string } | null> {
-  const { data, error } = await db().from("store_files").select("id, owner_id, name").eq("caller_key", callerKey).neq("state", "purged").maybeSingle()
+  const { data, error } = await db().from("store_files").select("id, owner_id, name").eq("caller_key", callerKey).eq("state", "live").maybeSingle()
   if (error) throw new Error(`Could not check earlier saves (${error.message}).`)
   return data ?? null
 }

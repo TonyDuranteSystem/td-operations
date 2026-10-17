@@ -18,13 +18,17 @@ public enum NameMapper {
     /// Finder allows 255 UTF-8 bytes per name.
     public static func fitsFinder(_ name: String) -> Bool { !name.isEmpty && name.utf8.count <= 255 }
 
-    /// Names the app never uploads (system junk, partial downloads, Office lock/temp files). Used from phase P3 on.
+    /// Names the app never uploads: system junk and the temporary names other apps use while saving or downloading. Matched by KNOWN patterns only
+    /// (an exact name, a prefix, Apple's atomic-save marker ".sb-xxxxxxxx-xxxxxx", or a browser's partial-download ending) — never by a loose
+    /// "contains", so a real file such as "Q3.sb-final.pdf" is kept. A real file that ends in one of the partial-download endings
+    /// (.crdownload .download .part .partial .opdownload .tmp) is treated as temporary on purpose: that is what those endings mean.
     public static func isJunk(_ name: String) -> Bool {
         let n = name.lowercased()
         if n == ".ds_store" || n == "thumbs.db" || n == "desktop.ini" || n == "icon\r" { return true }
-        if n.hasPrefix("._") || n.hasPrefix("~$") || n.hasPrefix(".~lock.") { return true }
-        for ext in [".tmp", ".crdownload", ".part", ".download", ".partial"] where n.hasSuffix(ext) { return true }
-        if n.contains(".sb-") { return true }                      // Apple's atomic-save temp names
+        if n.hasPrefix("._") || n.hasPrefix("~$") || n.hasPrefix(".~lock.") || n.hasPrefix("(a document being saved by") { return true }
+        for ext in [".tmp", ".crdownload", ".part", ".partial", ".download", ".opdownload"] where n.hasSuffix(ext) { return true }
+        // Apple's atomic-save temp name: "<name>.sb-<8 hex>-<6 letters or digits>"
+        if n.range(of: #"\.sb-[0-9a-f]{8}-[0-9a-z]{6}$"#, options: .regularExpression) != nil { return true }
         return false
     }
 }

@@ -8,13 +8,13 @@ import { isInternalOwnerKind } from "@/lib/crm-store/plain-drop"
 export const MAX_SAVE_BYTES = 150 * 1024 * 1024
 export const MAX_NAME_BYTES = 255
 
-/** Names a Mac never saves (system junk, partial downloads, Office lock files, Apple's atomic-save temp names). Mirrors NameMapper.isJunk in the Mac app. */
+/** Names a Mac never saves: system junk and other apps' temporary names. KNOWN patterns only (mirrors NameMapper.isJunk in the Mac app) — a real file such as "Q3.sb-final.pdf" is kept. */
 export function isJunkName(name: string): boolean {
   const n = name.toLowerCase()
   if (n === ".ds_store" || n === "thumbs.db" || n === "desktop.ini" || n === "icon\r") return true
-  if (n.startsWith("._") || n.startsWith("~$") || n.startsWith(".~lock.")) return true
-  for (const ext of [".tmp", ".crdownload", ".part", ".download", ".partial"]) if (n.endsWith(ext)) return true
-  if (n.includes(".sb-")) return true
+  if (n.startsWith("._") || n.startsWith("~$") || n.startsWith(".~lock.") || n.startsWith("(a document being saved by")) return true
+  for (const ext of [".tmp", ".crdownload", ".part", ".partial", ".download", ".opdownload"]) if (n.endsWith(ext)) return true
+  if (/\.sb-[0-9a-f]{8}-[0-9a-z]{6}$/.test(n)) return true     // Apple's atomic-save temp name
   return false
 }
 

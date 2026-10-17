@@ -35,8 +35,10 @@ private final class NoRedirectsUpload: NSObject, URLSessionTaskDelegate {
 /// The Mac's own stable id for ONE new file: the same parent, name, size and modification time always give the same id, so Finder
 /// retrying a create after a lost answer reaches the same file in the CRM instead of making a second.
 public enum ItemKey {
-    public static func make(parent: String, name: String, size: Int, modified: Date?) -> String {
-        let seed = "\(parent)|\(name)|\(size)|\(Int(modified?.timeIntervalSince1970 ?? 0))"
+    /// With the system's OWN id for the pending item (stable across Finder's retries, new for every new create) the key does not depend on size
+    /// or time, so a file that is still changing keeps one key; without it the old content-based key is used.
+    public static func make(parent: String, name: String, size: Int, modified: Date?, systemId: String? = nil) -> String {
+        let seed = systemId.map { "sys|\($0)|\(parent)|\(name)" } ?? "\(parent)|\(name)|\(size)|\(Int(modified?.timeIntervalSince1970 ?? 0))"
         var b = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
         b[6] = (b[6] & 0x0f) | 0x50      // a name-based UUID (version 5 layout)
         b[8] = (b[8] & 0x3f) | 0x80
