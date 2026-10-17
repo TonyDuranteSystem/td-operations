@@ -49,6 +49,7 @@ import { registerClassifyTools } from "@/lib/mcp/tools/classify"
 import { registerCalendlyTools } from "@/lib/mcp/tools/calendly"
 import { registerDocTools } from "@/lib/mcp/tools/doc"
 import { registerStorageTools } from "@/lib/mcp/tools/storage"
+import { registerMyFilesDropTools } from "@/lib/mcp/tools/my-files-drop"
 import { registerSqlTools } from "@/lib/mcp/tools/sql"
 import { registerHermesReadTools } from "@/lib/mcp/tools/hermes-read"
 import { registerCodebaseReadTools } from "@/lib/mcp/tools/codebase-read"
@@ -114,6 +115,7 @@ const handler = createMcpHandler(
     registerCalendlyTools(server)
     registerDocTools(server)
     registerStorageTools(server)
+    registerMyFilesDropTools(server)
     registerSqlTools(server)
     registerHermesReadTools(server)
     registerCodebaseReadTools(server)

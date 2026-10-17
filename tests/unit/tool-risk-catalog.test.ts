@@ -168,6 +168,10 @@ describe("the two registration points must agree", () => {
       // give one send two routes with different gating — the shape that lets a control
       // be bypassed by taking the other door.
       "TeamChat",
+      // my_files_save (dev job 1ed4fb18) is a WRITE-ONLY drop into the owner's PRIVATE My files. It is for an owner-signed-in
+      // MCP session only (callerIsOwner + MY_FILES_DROP_ENABLED); the in-CRM assistant acts for any staff member and carries no
+      // owner identity, so it must never reach the private area through the generic bridge.
+      "MyFilesDrop",
     ])
     const missing = Array.from(onServer).filter((n) => !onBridge.has(n) && !BRIDGE_EXEMPT.has(n))
     expect(missing, `registered with the server but unreachable via the bridge: ${missing.join(", ")}`).toEqual([])
