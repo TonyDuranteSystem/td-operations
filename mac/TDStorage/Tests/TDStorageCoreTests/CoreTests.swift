@@ -338,6 +338,44 @@ final class DownloadTests: XCTestCase {
     }
 }
 
+final class EvictionLedgerTests: XCTestCase {
+    private func ledger() -> EvictionLedger {
+        let name = "td-ledger-test-" + UUID().uuidString
+        return EvictionLedger(defaults: UserDefaults(suiteName: name)!, key: "k")
+    }
+    func testACopyIsDueOnlyAfterItsKeepTime() {
+        let l = ledger(); let t0 = Date(timeIntervalSince1970: 1_000_000)
+        l.record(id: "a", keepSeconds: 120, now: t0); l.record(id: "b", keepSeconds: 900, now: t0)
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(119)), [])
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(121)), ["a"])
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(901)), ["a", "b"])
+    }
+    func testOpeningAgainRestartsTheClock() {
+        let l = ledger(); let t0 = Date(timeIntervalSince1970: 1_000_000)
+        l.record(id: "a", keepSeconds: 120, now: t0)
+        l.record(id: "a", keepSeconds: 120, now: t0.addingTimeInterval(100))
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(130)), [])
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(221)), ["a"])
+    }
+    func testRemoveStopsTracking() {
+        let l = ledger(); let t0 = Date(timeIntervalSince1970: 1_000_000)
+        l.record(id: "a", keepSeconds: 1, now: t0); l.remove(id: "a")
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(10)), []); XCTAssertEqual(l.pendingCount, 0)
+    }
+    func testAnOlderServerThatSaysNothingGetsTheShortTime() {
+        let l = ledger(); let t0 = Date(timeIntervalSince1970: 1_000_000)
+        l.record(id: "a", keepSeconds: nil, now: t0)
+        XCTAssertEqual(l.due(now: t0.addingTimeInterval(121)), ["a"])
+    }
+    func testTheServerAnswerCarriesTheKeepTime() throws {
+        let json = #"{"url":"https://x.example/a","name":"a.pdf","size":1,"mimeType":null,"sha256":null,"expiresIn":60,"sensitive":true,"keepSeconds":120}"#
+        let d = try JSONDecoder().decode(FileDownload.self, from: Data(json.utf8))
+        XCTAssertEqual(d.keepSeconds, 120); XCTAssertEqual(d.sensitive, true)
+        let old = try JSONDecoder().decode(FileDownload.self, from: Data(#"{"url":"https://x.example/a","name":"a","size":1,"mimeType":null,"sha256":null,"expiresIn":60}"#.utf8))
+        XCTAssertNil(old.keepSeconds)
+    }
+}
+
 enum FileDownloaderTestHelper {
     static func sha(_ s: String) -> String { var h = SHA256(); h.update(data: Data(s.utf8)); return h.finalize().map { String(format: "%02x", $0) }.joined() }
 }

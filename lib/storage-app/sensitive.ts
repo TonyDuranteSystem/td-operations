@@ -1,6 +1,8 @@
 /**
- * Which documents a Mac must NEVER download (Antonio, 2026-10-17: "Sensitive documents: not downloadable to the Macs").
- * PURE and enforced on the SERVER — the app is told, but the file route answers "open it in the CRM" whatever the app does.
+ * Which documents are "sensitive" for the Mac app. DECISION CHANGED 2026-10-17 (Antonio, evening): passports, IDs and ITIN papers MUST open
+ * on the Macs ("passports, IDs and ITIN has to open"). They are no longer refused. What "sensitive" now means: the file is opened like any
+ * other, but every open gets an EXTRA audit row, and the Mac keeps the copy only 2 minutes (other files: 15 minutes) — see keepSecondsFor.
+ * PURE; the SERVER decides and tells the app in the file answer.
  *
  * Sensitive =
  *  1. the identity / ITIN document TYPES (slugs of the document-type catalog): passports, IDs, W-7 (and its certificate-of-acceptance
@@ -33,4 +35,9 @@ export function isSensitiveForDevice(p: { documentType: string | null | undefine
   return looksSensitiveByName(p.name)
 }
 
-export const OPEN_IN_CRM_MESSAGE = "This document is not downloaded to a Mac. Open it in the CRM."
+/** How long a Mac may keep the copy of an opened file before it must remove it (Antonio, 2026-10-17: sensitive 2 minutes, others 15). */
+export const KEEP_SECONDS_SENSITIVE = 120
+export const KEEP_SECONDS_NORMAL = 900
+export function keepSecondsFor(sensitive: boolean): number {
+  return sensitive ? KEEP_SECONDS_SENSITIVE : KEEP_SECONDS_NORMAL
+}

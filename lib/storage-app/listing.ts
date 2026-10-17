@@ -1,7 +1,7 @@
 /**
  * What the Mac app is shown (dev job 1992a087). Reuses the Storage page's own functions — nothing about names, groups or
  * permissions is re-decided here. Two differences by design: LIVE storages only (a hidden study copy is not shown), and each
- * file says whether a Mac may download it (sensitive documents may not — see sensitive.ts).
+ * file says whether it is sensitive (opens like any other but is audited and kept only briefly — see sensitive.ts).
  */
 import type { User } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
@@ -48,14 +48,15 @@ export async function appFolder(ownerId: string, folderId: string | null) {
     folders: c.folders.filter((f) => f.kind !== "contacts").map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked })),
     files: c.files.filter((f) => f.state === "live").map((f) => ({
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
-      downloadable: !isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }),
+      downloadable: true,   // every file opens (Antonio 2026-10-17); kept so an older app build still reads the answer
+      sensitive: isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }),
     })),
   }
 }
 
 export interface AppItem {
   kind: "file" | "folder"; id: string; ownerId: string; parentId: string | null; name: string
-  locked?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean
+  locked?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean; sensitive?: boolean
 }
 
 /**
@@ -77,6 +78,6 @@ export async function appItem(kind: "file" | "folder", id: string): Promise<AppI
   const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
   return {
     kind, id: data.id, ownerId: data.owner_id, parentId: data.folder_id, name: data.name, size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null,
-    updatedAt: data.updated_at, downloadable: !isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
+    updatedAt: data.updated_at, downloadable: true, sensitive: isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
   }
 }

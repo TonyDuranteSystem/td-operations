@@ -2,7 +2,7 @@
 /**
  * Storage Mac app, phase P1 (dev job 1992a087): opening files. SANDBOX only. Real database + real storage + real route handlers.
  * Run: npx tsx scripts/crm-store/qa-cutover/t35-storage-app-file-open.ts
- * Proves: a normal file gives a 60-second link whose bytes match the recorded sha-256; sensitive documents, trashed files, hidden storages and
+ * Proves: a normal file gives a 60-second link whose bytes match the recorded sha-256; sensitive documents (open, audited, 2-minute copy), trashed files, hidden storages and
  * other people's My files are refused; the hourly limit stops a Mac; every open is audited (never with the link); a 100 MB file works;
  * a revoked Mac is stopped.
  */
@@ -92,13 +92,13 @@ async function main() {
     const untyped = (pf ?? []).find((f: { document_type: string | null }) => !f.document_type)
     if (passport) {
       const rp = await open(t.access_token, passport.id)
-      check("9 a passport → 403 open_in_crm", rp.status === 403 && rp.body?.error === "open_in_crm" && !("url" in (rp.body ?? {})), `status ${rp.status}`)
-      const { data: refused } = await admin.from("store_events").select("event").eq("event", "app_file_refused_sensitive").eq("file_id", passport.id)
-      check("10 the refusal is audited", (refused ?? []).length >= 1, "")
+      check("9 a passport OPENS (200, a link), flagged sensitive, kept 120 seconds", rp.status === 200 && typeof rp.body?.url === "string" && rp.body?.sensitive === true && rp.body?.keepSeconds === 120, `status ${rp.status}`)
+      const { data: opened } = await admin.from("store_events").select("event").eq("event", "app_sensitive_file_opened").eq("file_id", passport.id)
+      check("10 the sensitive open has its OWN audit row", (opened ?? []).length >= 1, "")
     }
-    if (untyped) check("11 an UNTYPED file in a person storage → 403", (await open(t.access_token, untyped.id)).status === 403, "")
+    if (untyped) check("11 an UNTYPED file in a person storage opens, flagged sensitive", (await (async () => { const r = await open(t.access_token, untyped.id); return r.status === 200 && r.body?.sensitive === true && r.body?.keepSeconds === 120 })()), "")
     const ITIN = (pf ?? []).find((f: { document_type: string | null }) => f.document_type && ["id_document", "itin_letter", "form_w_7", "form_1040_nr", "itin_application", "itin_schedule_oi"].includes(f.document_type))
-    if (ITIN) check(`12 an ${ITIN.document_type} → 403`, (await open(t.access_token, ITIN.id)).status === 403, "")
+    if (ITIN) check(`12 an ${ITIN.document_type} opens, flagged sensitive`, (await (async () => { const r = await open(t.access_token, ITIN.id); return r.status === 200 && r.body?.sensitive === true })()), "")
 
     await trashFile(ACTOR, f1.fileId, "qa file open")
     check("13 a trashed file → 404", (await open(t.access_token, f1.fileId)).status === 404, "")
@@ -119,8 +119,8 @@ async function main() {
     // 4b — an UNTYPED company file whose NAME looks like an ITIN / W-7 paper is refused until it is typed; an ordinary untyped one opens
     const fItin = await save(`ITIN data QA ${stamp}.pdf`, Buffer.from("itin " + stamp), "itin")
     const fPlain = await save(`Notes QA ${stamp}.txt`, Buffer.from("notes " + stamp), "plain")
-    check("12b an untyped company file named like an ITIN paper → 403", (await open(t.access_token, fItin.fileId)).status === 403, "")
-    check("12c an ordinary untyped company file → 200", (await open(t.access_token, fPlain.fileId)).status === 200, "")
+    check("12b an untyped company file named like an ITIN paper opens, flagged sensitive", (await (async () => { const r = await open(t.access_token, fItin.fileId); return r.status === 200 && r.body?.sensitive === true })()), "")
+    check("12c an ordinary untyped company file → 200, not sensitive, kept 900 seconds", (await (async () => { const r = await open(t.access_token, fPlain.fileId); return r.status === 200 && r.body?.sensitive === false && r.body?.keepSeconds === 900 })()), "")
 
     // 4c — PARALLEL requests cannot beat the hourly limit; the limit is also PER PERSON (all their Macs together)
     process.env.STORAGE_APP_READ_LIMIT_MB = "3"

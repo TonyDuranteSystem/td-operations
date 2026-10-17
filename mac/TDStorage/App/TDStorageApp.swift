@@ -26,13 +26,10 @@ final class AppModel: ObservableObject {
     @Published var state: SignInState = .checking
     @Published var fileVaultOK = true
     @Published var browserProblem: String?
-    /// A DEBUG build (the dev-server / test-data configuration) may run without FileVault: it only ever talks to the sandbox's TEST data.
-    /// The Sandbox and (later) Production configurations always require it. Never ship a Debug build to a real user.
-    #if DEBUG
+    /// FileVault is NO LONGER required (Antonio, 2026-10-17: the Mac mini is a server and must restart its services by itself, so its disk
+    /// stays unencrypted). Instead the CRM tells every Mac to remove its copy of an opened file after 15 minutes (2 minutes for passports,
+    /// IDs and ITIN papers). The app only shows a note when FileVault is off.
     let fileVaultRequired = false
-    #else
-    let fileVaultRequired = true
-    #endif
 
     private let info = Bundle.main.infoDictionary ?? [:]
     private lazy var baseURL = URL(string: info["TDServerURL"] as? String ?? "https://invalid.example")!
@@ -67,7 +64,6 @@ final class AppModel: ObservableObject {
     }
 
     func signIn() async {
-        guard fileVaultOK || !fileVaultRequired else { state = .problem("Turn on FileVault (System Settings › Privacy & Security) before using TD Storage: client documents must never sit on a disk that is not encrypted."); return }
         let verifier = PKCE.makeVerifier()
         let challenge = PKCE.challenge(for: verifier)
         let checkCode = PKCE.checkCode(for: challenge)

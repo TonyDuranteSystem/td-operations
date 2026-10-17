@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { isSensitiveForDevice, looksSensitiveByName, SENSITIVE_DOCUMENT_TYPES } from "@/lib/storage-app/sensitive"
+import { isSensitiveForDevice, looksSensitiveByName, SENSITIVE_DOCUMENT_TYPES, keepSecondsFor, KEEP_SECONDS_SENSITIVE, KEEP_SECONDS_NORMAL } from "@/lib/storage-app/sensitive"
 
-describe("what a Mac may not download (Antonio 2026-10-17)", () => {
+describe("what counts as sensitive for the Mac app (opens, but audited and kept only briefly — Antonio 2026-10-17)", () => {
   it("blocks passports, IDs and the ITIN papers wherever they are", () => {
     for (const t of SENSITIVE_DOCUMENT_TYPES) {
       expect(isSensitiveForDevice({ documentType: t, ownerKind: "company" })).toBe(true)
@@ -38,5 +38,14 @@ describe("what a Mac may not download (Antonio 2026-10-17)", () => {
   it("a TYPED file is judged by its type only, whatever its name says", () => {
     expect(isSensitiveForDevice({ documentType: "irs_notice", ownerKind: "company", name: "ITIN notice.pdf" })).toBe(false)
     expect(isSensitiveForDevice({ documentType: "passport", ownerKind: "company", name: "Notes.txt" })).toBe(true)
+  })
+})
+
+describe("how long a Mac keeps the copy of an opened file (Antonio 2026-10-17 evening)", () => {
+  it("sensitive papers 2 minutes, everything else 15 minutes", () => {
+    expect(KEEP_SECONDS_SENSITIVE).toBe(120)
+    expect(KEEP_SECONDS_NORMAL).toBe(900)
+    expect(keepSecondsFor(true)).toBe(120)
+    expect(keepSecondsFor(false)).toBe(900)
   })
 })

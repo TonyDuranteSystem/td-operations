@@ -1,7 +1,7 @@
 /**
  * GET /api/storage-app/file?id=<file id> — a 60-second signed download link for ONE live file (dev job 1992a087, P1). Same access checks
- * as the Storage page (a file shared with staff may be read too); sensitive documents are REFUSED here (403 open_in_crm) whatever the app
- * does; an hourly per-Mac limit applies; every open is audited. The link itself is never logged or stored. Token only.
+ * as the Storage page (a file shared with staff may be read too); sensitive documents (passport, ID, ITIN papers) now OPEN too (Antonio 2026-10-17) but are audited
+ * separately and flagged so the Mac keeps the copy only 2 minutes; an hourly per-Mac limit applies; every open is audited. The link itself is never logged or stored. Token only.
  */
 export const dynamic = "force-dynamic"
 import { NextRequest } from "next/server"

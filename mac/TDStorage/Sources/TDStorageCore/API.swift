@@ -97,7 +97,7 @@ public final class StorageAPI: @unchecked Sendable {
         if let folder { q.append(URLQueryItem(name: "folder", value: folder)) }
         return try await get("api/storage-app/folder", query: q)
     }
-    /// A 60-second link for one file. The server refuses sensitive documents (403 open_in_crm) and a Mac over its hourly limit (429).
+    /// A 60-second link for one file. Every file opens (since 2026-10-17 passports, IDs and ITIN papers too); the server only refuses a Mac over its hourly limit (429). A 403 open_in_crm is still understood in case it is ever switched back on.
     public func fileDownload(id: String) async throws -> FileDownload {
         try await get("api/storage-app/file", query: [URLQueryItem(name: "id", value: id)])
     }

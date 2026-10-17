@@ -35,8 +35,8 @@ struct ContentView: View {
                 Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                 Button("Try again") { Task { await model.start() } }
             }
-            if !model.fileVaultOK && !model.fileVaultRequired {
-                Label("Test build: FileVault is off. Allowed only because this build uses the sandbox's test data.", systemImage: "exclamationmark.shield").font(.caption).foregroundStyle(.orange)
+            if !model.fileVaultOK {
+                Label("FileVault is off on this Mac. Copies of opened files are removed after 15 minutes (passports, IDs and ITIN papers after 2).", systemImage: "exclamationmark.shield").font(.caption).foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
             Text("Server: \(model.serverLabel) · This Mac: \(model.deviceName)").font(.caption).foregroundStyle(.tertiary)

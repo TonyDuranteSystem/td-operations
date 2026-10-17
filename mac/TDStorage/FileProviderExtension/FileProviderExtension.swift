@@ -9,6 +9,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let catalog: Catalog
     let downloader: FileDownloader
     private var poller: Timer?
+    private let ledger = EvictionLedger()
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
@@ -21,11 +22,25 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         self.downloader = FileDownloader(api: api)
         super.init()
         Self.sweepTemporaryDownloads()
+        evictDueCopies()
         // ask the system to look at the change feed every 30 seconds (it then calls the working-set enumerator below)
         DispatchQueue.main.async { [weak self] in
             self?.poller = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
                 guard let self, let m = NSFileProviderManager(for: self.domain) else { return }
                 m.signalEnumerator(for: .workingSet) { _ in }
+                self.evictDueCopies()
+            }
+        }
+    }
+
+    /// The Mac keeps the copy of an opened file only briefly (the CRM says how long: 2 minutes for passports / IDs / ITIN papers, 15 for the
+    /// rest). When the time is up the copy is removed; the file stays in Finder and downloads again the next time it is opened.
+    func evictDueCopies() {
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        for id in ledger.due() {
+            manager.evictItem(identifier: NSFileProviderItemIdentifier(id)) { [ledger] error in
+                // gone, or never there: stop tracking. Any other error (the file is open right now): try again at the next sweep.
+                if error == nil || (error as NSError?)?.code == NSFileProviderError.noSuchItem.rawValue { ledger.remove(id: id) }
             }
         }
     }
@@ -59,15 +74,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     }
 
     // Reading a file (phase P1): the CRM gives a 60-second link; the file is downloaded, checked (size + SHA-256) and handed to the system.
-    // Sensitive documents (passport, ID, ITIN papers) are refused by the CRM — Finder shows "Open it in the CRM" — and nothing is fetched.
+    // Every file opens (passports, IDs and ITIN papers too, since 2026-10-17). The CRM says how long the Mac may keep the copy; it is removed then.
     func fetchContents(for itemIdentifier: NSFileProviderItemIdentifier, version requestedVersion: NSFileProviderItemVersion?, request: NSFileProviderRequest, completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         Task {
             do {
                 guard case .file(_, let fileId)? = FPItem.itemID(for: itemIdentifier) else { throw StorageAPIError.notFound }
-                let (url, _) = try await downloader.download(fileId: fileId)
+                let (url, info) = try await downloader.download(fileId: fileId)
                 do {
                     let item = try await catalog.item(for: FPItem.itemID(for: itemIdentifier)!)
+                    ledger.record(id: itemIdentifier.rawValue, keepSeconds: info.keepSeconds)
                     completionHandler(url, item, nil)
                 } catch {
                     try? FileManager.default.removeItem(at: url)      // never leave a downloaded file behind when the hand-over fails

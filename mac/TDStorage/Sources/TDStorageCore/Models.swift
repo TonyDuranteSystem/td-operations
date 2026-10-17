@@ -51,4 +51,6 @@ public struct ItemInfo: Codable, Equatable {
 /// GET /api/storage-app/file — a 60-second signed link for one file, with what the app must check on arrival.
 public struct FileDownload: Codable, Equatable {
     public var url: String; public var name: String; public var size: Int?; public var mimeType: String?; public var sha256: String?; public var expiresIn: Int
+    /// Set by the CRM: the copy a Mac keeps of this file must be removed after `keepSeconds` (120 for sensitive papers, 900 for the rest). Nil from an older server.
+    public var sensitive: Bool?; public var keepSeconds: Int?
 }
