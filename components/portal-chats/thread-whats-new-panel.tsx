@@ -35,6 +35,7 @@ export const EVENT_KEY_LABELS: Record<string, string> = {
   document_uploaded: 'Document',
   wizard_submitted: 'Form',
   members_updated: 'Members',
+  person_left: 'Left',
   contact_updated: 'Contact',
   offer_signed: 'Contract',
   workflow_spawned: 'Workflow',
