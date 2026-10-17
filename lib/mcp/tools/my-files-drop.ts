@@ -32,7 +32,7 @@ Returns the stored path, name and status (created | unchanged). Tell Antonio the
       }
       const ctx = getMcpAuthContext()
       const r = await saveToMyFilesDrop(args, { method: ctx?.method ?? "unknown", email: ctx?.email ?? "" })
-      if (!r.ok) return text(`Not saved: ${r.error}`, true)
+      if (r.ok === false) return text(`Not saved: ${r.error}`, true)
       return text(`${r.status === "created" ? "✅ Saved" : "↩️ Already there"}: ${r.path}\nName: ${r.name}\nSize: ${r.size} bytes · fingerprint ${r.sha256_prefix}\n${r.note}`)
     },
   )

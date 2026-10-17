@@ -86,7 +86,7 @@ describe("decodeDropContent", () => {
   it("refuses over the size limit before decoding, with the real size in the message", () => {
     const r = decodeDropContent(undefined, "A".repeat(Math.ceil(((DROP_MAX_BYTES + 100000) * 4) / 3)))
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toMatch(/MB; the limit is 3 MB/)
+    if (r.ok === false) expect(r.error).toMatch(/MB; the limit is 3 MB/)
   })
 })
 

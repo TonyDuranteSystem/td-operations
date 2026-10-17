@@ -87,7 +87,7 @@ async function main() {
   const tr = await sb.rpc("store_trash_file", { p_file_id: f1.id, p_actor: uid, p_reason: "QA t35" })
   if (tr.error) console.log("trash rpc error:", JSON.stringify(tr.error))
   const t = await saveToMyFilesDrop({ name: `QA plan ${tag}.md`, text: "# QA plan\n- one\n", caller_key: key1 }, caller)
-  check("D14 a deleted file's key is refused with a clear message", !t.ok && /deleted/.test(t.error), JSON.stringify(t))
+  check("D14 a deleted file's key is refused with a clear message", t.ok === false && /deleted/.test(t.error), JSON.stringify(t))
 
   // D15 the drop folder moved INTO 'Shared with staff': the next save must NOT land under it
   const { data: setting } = await sb.from("app_settings").select("value").eq("key", "my_files_drop_folder_id").maybeSingle()
