@@ -15,16 +15,20 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveBytesToStore, StoreFrozenFileError } from "./writer"
 import { effectiveKind, ownersAreaUserId } from "./structure"
 import {
-  DROP_FOLDER_NAME, DROP_FOLDER_SETTING, DROP_KEY_PREFIX, DROP_LIMITS,
-  checkDropContent, checkDropName, checkDropSubfolder, decodeDropContent, dropCallerKey, dropRateRefusal, sha256Of,
+  DROP_DRIVE_ACTION, DROP_FOLDER_NAME, DROP_FOLDER_SETTING, DROP_KEY_PREFIX, DROP_LIMITS,
+  checkDropContent, checkDropName, checkDropSubfolder, decodeDropContent, dropCallerKey, dropDrivePullRefusal, dropRateRefusal,
+  driveCallerKey, driveCopyName, sha256Of,
   type RecentDrops,
 } from "./my-files-drop-rules"
+import { driveRootFolder, fetchDriveBytes, inspectDriveFile, realDriveReader, type DriveReader } from "./my-files-drop-drive"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* tables are not in the generated types
 const db = () => supabaseAdmin as any
 
 export interface DropCaller { method: string; email: string }
-export interface DropInput { name: unknown; subfolder?: unknown; text?: unknown; content_base64?: unknown; caller_key?: unknown }
+export interface DropInput { name?: unknown; subfolder?: unknown; text?: unknown; content_base64?: unknown; drive_file_id?: unknown; caller_key?: unknown }
+/** Where the bytes came from, for the audit row and the stored file's provenance note (a Drive copy only). */
+interface DriveSource { fileId: string; md5: string; version: string | null; modifiedTime: string | null }
 export type DropResult =
   | { ok: true; status: "created" | "unchanged"; path: string; name: string; size: number; sha256_prefix: string; note: string }
   | { ok: false; error: string }
@@ -99,6 +103,15 @@ async function recentDrops(ownerId: string): Promise<RecentDrops> {
   return { lastHour, lastDay: (data ?? []).length, bytesLastDay: bytes }
 }
 
+/** Drive pulls started in the last hour — every attempt counts, refused ones too. */
+async function pullsLastHour(): Promise<number> {
+  const since = new Date(Date.now() - 3600_000).toISOString()
+  const { count, error } = await db().from("action_log").select("id", { count: "exact", head: true })
+    .eq("action_type", DROP_DRIVE_ACTION).eq("table_name", "google_drive").gte("created_at", since)
+  if (error) throw new Error(`pull count: ${error.message}`)
+  return Number(count ?? 0)
+}
+
 /** The file that already holds this key (any state but purged), with its current content hash. */
 async function fileForKey(key: string): Promise<{ id: string; ownerId: string; folderId: string; name: string; state: string; sha: string | null } | null> {
   const { data: f, error } = await db().from("store_files").select("id, owner_id, folder_id, name, state, current_version_id").eq("caller_key", key).neq("state", "purged").maybeSingle()
@@ -113,30 +126,91 @@ async function fileForKey(key: string): Promise<{ id: string; ownerId: string; f
   return { id: f.id as string, ownerId: f.owner_id as string, folderId: f.folder_id as string, name: f.name as string, state: f.state as string, sha }
 }
 
-async function audit(caller: DropCaller, d: { status: string; path: string; name: string; size: number; sha256: string; key: string; fileId: string }): Promise<void> {
+async function audit(caller: DropCaller, d: { status: string; path: string; name: string; size: number; sha256: string; key: string; fileId: string; drive?: DriveSource }): Promise<void> {
   const { error } = await db().from("action_log").insert({
     actor: "claude.mcp", action_type: "create", table_name: "store_files", record_id: d.fileId,
     summary: `my_files_save: ${d.status} "${d.name}" in ${d.path}`,
-    details: { tool: "my_files_save", status: d.status, path: d.path, size: d.size, sha256: d.sha256, caller_key: d.key, auth_method: caller.method, caller_email: caller.email, untrusted_ai_content: true },
+    details: { tool: "my_files_save", status: d.status, path: d.path, size: d.size, sha256: d.sha256, caller_key: d.key, auth_method: caller.method, caller_email: caller.email, untrusted_ai_content: true,
+      ...(d.drive ? { source: "google_drive", drive_file_id: d.drive.fileId, drive_md5: d.drive.md5, drive_version: d.drive.version } : {}) },
   })
   if (error) console.error("[my-files-drop] AUDIT WRITE FAILED:", error.message) // the store_events row still exists
 }
 
-export async function saveToMyFilesDrop(input: DropInput, caller: DropCaller): Promise<DropResult> {
+export async function saveToMyFilesDrop(input: DropInput, caller: DropCaller, driveReader?: DriveReader): Promise<DropResult> {
   try {
     if (!dropEnabled()) return fail("This tool is switched off. It is turned on with the setting MY_FILES_DROP_ENABLED=1.")
 
-    const nm = checkDropName(input.name)
-    if (nm.ok === false) return fail(nm.error)
+    const fromDrive = input.drive_file_id !== undefined && input.drive_file_id !== null
+    const hasInline = (input.text !== undefined && input.text !== null) || (input.content_base64 !== undefined && input.content_base64 !== null)
+    if (fromDrive && hasInline) return fail("Send exactly one of: text, content_base64, or drive_file_id.")
+
     const sub = checkDropSubfolder(input.subfolder)
     if (sub.ok === false) return fail(sub.error)
-    const body = decodeDropContent(input.text, input.content_base64)
-    if (body.ok === false) return fail(body.error)
-    const content = checkDropContent(nm.ext, body.bytes)
-    if (content.ok === false) return fail(content.error)
-    const sha = sha256Of(body.bytes)
-    const k = dropCallerKey(input.caller_key, sub.segments, nm.name, sha)
-    if (k.ok === false) return fail(k.error)
+
+    let nm: { name: string; ext: string; mime: string }
+    let bytes: Buffer
+    let k: { key: string; derived: boolean }
+    let drive: DriveSource | undefined
+
+    if (fromDrive) {
+      const root = driveRootFolder()
+      if (!root) return fail("Copying from Google Drive is not switched on (no Drive folder is set).")
+      if (typeof input.drive_file_id !== "string" || !/^[A-Za-z0-9_-]{10,100}$/.test(input.drive_file_id)) return fail("drive_file_id must be a Google Drive file id (letters, digits, - and _ only). Links are not accepted.")
+      const reader = driveReader ?? (await realDriveReader())
+      // every attempt is counted and logged BEFORE Drive is touched, refused ones too (a looping session must not burn the Drive quota with guesses)
+      const tooMany = dropDrivePullRefusal(await pullsLastHour())
+      if (tooMany) return fail(tooMany)
+      const { error: pullErr } = await db().from("action_log").insert({
+        actor: "claude.mcp", action_type: DROP_DRIVE_ACTION, table_name: "google_drive", record_id: input.drive_file_id,
+        summary: `my_files_save: read-only look at a file in Antonio's Google Drive`,
+        details: { tool: "my_files_save", drive_file_id: input.drive_file_id, auth_method: caller.method, caller_email: caller.email, untrusted_ai_content: true },
+      })
+      if (pullErr) throw new Error(`pull log: ${pullErr.message}`) // no log, no Drive read
+      const seen = await inspectDriveFile(reader, input.drive_file_id, root)
+      if (seen.ok === false) return fail(seen.error)
+      const meta = seen.meta
+      const dn = driveCopyName(input.name, meta.name)
+      if (dn.ok === false) return fail(dn.error)
+      const chk = checkDropName(dn.name)
+      if (chk.ok === false) return fail(input.name ? chk.error : `${chk.error} The Drive file's own name is not usable — pass \`name\` with a clean file name.`)
+      nm = chk
+      const dk = driveCallerKey(input.caller_key, sub.segments, nm.name, meta.id, meta.md5 as string)
+      if (dk.ok === false) return fail(dk.error)
+      k = dk
+      drive = { fileId: meta.id, md5: meta.md5 as string, version: meta.version, modifiedTime: meta.modifiedTime }
+
+      const area0 = await resolveArea()
+      if (typeof area0 === "string") return fail(area0)
+      // an unchanged file that was copied before costs no download at all (the default key holds the Drive id + checksum)
+      if (k.derived) {
+        const prior = await fileForKey(k.key)
+        if (prior && prior.ownerId === area0.ownerId) {
+          if (prior.state === "trashed") return fail("That file was deleted from Storage earlier. Use a new caller_key to save it again.")
+          return { ok: true, status: "unchanged", path: ALREADY_SAVED, name: nm.name, size: meta.size as number, sha256_prefix: (meta.md5 as string).slice(0, 12), note: "The identical file was already copied; no second copy was made." }
+        }
+      }
+      const limited0 = dropRateRefusal(await recentDrops(area0.ownerId), meta.size as number)
+      if (limited0) return fail(limited0)
+      const got = await fetchDriveBytes(reader, meta, root)
+      if (got.ok === false) return fail(got.error)
+      bytes = got.bytes
+      const content = checkDropContent(nm.ext, bytes)
+      if (content.ok === false) return fail(content.error)
+    } else {
+      const n0 = checkDropName(input.name)
+      if (n0.ok === false) return fail(n0.error)
+      nm = n0
+      const body = decodeDropContent(input.text, input.content_base64)
+      if (body.ok === false) return fail(body.error)
+      const content = checkDropContent(nm.ext, body.bytes)
+      if (content.ok === false) return fail(content.error)
+      bytes = body.bytes
+      const k0 = dropCallerKey(input.caller_key, sub.segments, nm.name, sha256Of(bytes))
+      if (k0.ok === false) return fail(k0.error)
+      k = k0
+    }
+    const sha = sha256Of(bytes)
+    const body = { bytes }
 
     const area = await resolveArea()
     if (typeof area === "string") return fail(area)
@@ -169,7 +243,10 @@ export async function saveToMyFilesDrop(input: DropInput, caller: DropCaller): P
         ownerId: area.ownerId, folderId: target, name: nm.name, mimeType: nm.mime, callerKey: k.key,
         contentChanged: false, // write-once: an existing key can only ever answer "unchanged", never add a version
         published: false, actor: null, documentType: null, skipAnalysis: true, bytes: body.bytes,
-        facts: [{ key: "saved_by", value: "Claude session via MCP my_files_save — untrusted AI-session content, not reviewed", source: "rule" }],
+        facts: [
+          { key: "saved_by", value: "Claude session via MCP my_files_save — untrusted AI-session content, not reviewed", source: "rule" },
+          ...(drive ? [{ key: "copied_from", value: `Antonio's Google Drive (read-only copy) — Drive checksum ${drive.md5}${drive.modifiedTime ? `, modified ${drive.modifiedTime}` : ""}`, source: "rule" as const }] : []),
+        ],
       })
     } catch (e) {
       if (e instanceof StoreFrozenFileError) return fail("That file is marked as filed and cannot be changed. Use a new caller_key.")
@@ -187,7 +264,7 @@ export async function saveToMyFilesDrop(input: DropInput, caller: DropCaller): P
     const status = res.status === "created" ? "created" : "unchanged"
     const folderPath = await pathOfFolder(stored.folderId)
     const path = status === "created" ? `${folderPath} › ${stored.name}` : ALREADY_SAVED
-    await audit(caller, { status, path: folderPath, name: stored.name, size: body.bytes.length, sha256: sha, key: k.key, fileId: stored.id })
+    await audit(caller, { status, path: folderPath, name: stored.name, size: body.bytes.length, sha256: sha, key: k.key, fileId: stored.id, drive })
     return {
       ok: true, status, path, name: stored.name, size: body.bytes.length, sha256_prefix: sha.slice(0, 12),
       note: status === "created" ? (stored.name !== nm.name ? `A file named "${nm.name}" already existed, so this one was saved as "${stored.name}".` : "Saved.") : "The identical file was already saved; no second copy was made.",

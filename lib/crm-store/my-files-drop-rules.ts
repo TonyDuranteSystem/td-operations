@@ -18,6 +18,16 @@ export const DROP_MAX_SUBFOLDER_SEGMENTS = 3
 /** The setting that remembers WHICH folder is the drop folder (by id — Antonio may rename or move it). */
 export const DROP_FOLDER_SETTING = "my_files_drop_folder_id"
 
+/**
+ * The cap for a file the SERVER copies from the owner's Google Drive (dev job 465a11fc). It does not travel in an MCP request body, so the 3 MB
+ * above does not apply to it — but the bytes are held in memory (about 3-4 copies at once while they are hashed, inspected and stored), so
+ * the cap is conservative. Measured in the sandbox (see storage.md); text / base64 stay at DROP_MAX_BYTES.
+ */
+export const DROP_DRIVE_MAX_BYTES = 25 * 1024 * 1024
+/** Drive pulls started in the last hour, refused ones included (a looping session must not be able to burn bandwidth on refusals). */
+export const DROP_DRIVE_PULLS_PER_HOUR = 40
+export const DROP_DRIVE_ACTION = "drive_pull"
+
 export const DROP_LIMITS = { perHour: 30, perDay: 200, bytesPerDay: 200 * 1024 * 1024 } as const
 
 /** extension → MIME. The MIME is ALWAYS derived from the extension; the caller never supplies one. */
@@ -213,3 +223,58 @@ export function dropRateRefusal(r: RecentDrops, addBytes: number): string | null
 }
 
 export const sha256Of = (b: Buffer): string => createHash("sha256").update(b).digest("hex")
+
+// ─── Copy from the owner's Google Drive (dev job 465a11fc) ───
+
+const NATIVE_PREFIX = "application/vnd.google-apps."
+
+/** What the Drive reported about one file — the parts the decision needs. */
+export interface DriveFileFacts {
+  name: string; mimeType: string; size: number | null; md5: string | null
+  ownedByMe: boolean; trashed: boolean; driveId: string | null
+}
+
+/**
+ * Plain-words refusal for a Drive file that is not a plain, owned, live, normal file (null = fine). Called ONLY after the file has been proven to sit
+ * inside the configured folder tree, so nothing here reveals anything about a file outside it.
+ */
+export function driveFileRefusal(f: DriveFileFacts): string | null {
+  if (f.trashed) return "That file is in the Drive trash."
+  if (f.mimeType === NATIVE_PREFIX + "folder") return "That is a folder, not a file."
+  if (f.mimeType === NATIVE_PREFIX + "shortcut") return "That is a shortcut, not the file itself. Use the id of the real file."
+  if (f.mimeType.startsWith(NATIVE_PREFIX)) return "That is a Google Doc / Sheet / Slides file, which cannot be copied as it is. Save it as a real .docx / .xlsx / .pptx (or .md / .pdf) file in Drive first, then copy that."
+  if (f.driveId) return "That file is in a shared drive; only files in Antonio's own Drive can be copied."
+  if (!f.ownedByMe) return "That file is not owned by Antonio, so it cannot be copied."
+  if (f.size === null || !f.md5) return "Google Drive did not give a size and checksum for that file, so it cannot be copied safely."
+  if (f.size === 0) return "The file is empty."
+  if (f.size > DROP_DRIVE_MAX_BYTES) return `The file is ${(f.size / 1048576).toFixed(1)} MB; the limit for a copy from Drive is ${DROP_DRIVE_MAX_BYTES / 1048576} MB. Larger files must be added to Storage by hand.`
+  return null
+}
+
+/**
+ * The file name for a Drive copy: the caller's own name if given (its extension must be the Drive file's), else the Drive file's name.
+ * Goes through the normal name rules afterwards (checkDropName).
+ */
+export function driveCopyName(callerName: unknown, driveName: string): Checked<{ name: string }> {
+  const ext = (n: string) => (/\.([A-Za-z0-9]{1,8})$/.exec(n)?.[1] ?? "").toLowerCase()
+  if (callerName === undefined || callerName === null || callerName === "") return { ok: true, name: driveName }
+  if (typeof callerName !== "string") return { ok: false, error: "name must be text." }
+  if (ext(callerName) !== ext(driveName)) return { ok: false, error: "The name must keep the same file ending as the file in Drive." }
+  return { ok: true, name: callerName }
+}
+
+/** Default storage key for a Drive copy: known BEFORE the download (Drive id + checksum), so a repeat of an unchanged file costs no download. */
+export function driveCallerKey(userKey: unknown, segments: string[], name: string, driveId: string, md5: string): Checked<{ key: string; derived: boolean }> {
+  if (userKey === undefined || userKey === null || userKey === "") {
+    const h = createHash("sha256").update([...segments, name].join("/")).update("\0drive\0").update(driveId).update("\0").update(md5).digest("hex").slice(0, 32)
+    return { ok: true, key: `${DROP_KEY_PREFIX}auto:${h}`, derived: true }
+  }
+  return dropCallerKey(userKey, segments, name, md5)
+}
+
+export const md5Of = (b: Buffer): string => createHash("md5").update(b).digest("hex")
+
+/** Rate decision for Drive pulls (attempts, refusals included). Null = allowed. */
+export function dropDrivePullRefusal(pullsLastHour: number): string | null {
+  return pullsLastHour >= DROP_DRIVE_PULLS_PER_HOUR ? `Too many copies from Drive started in the last hour (limit ${DROP_DRIVE_PULLS_PER_HOUR}). Try again later.` : null
+}

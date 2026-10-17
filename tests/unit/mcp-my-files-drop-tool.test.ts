@@ -68,7 +68,7 @@ describe("privacy boundary — the drop is not reachable from any HTTP route or 
   it("only the MCP tool file imports the drop module; no app/ route and no other lib file does", () => {
     const root = process.cwd()
     const importers = [...walk(join(root, "app")), ...walk(join(root, "lib")), ...walk(join(root, "components"))].filter((f) => {
-      if (f.endsWith("lib/crm-store/my-files-drop.ts") || f.endsWith("lib/crm-store/my-files-drop-rules.ts")) return false
+      if (f.endsWith("lib/crm-store/my-files-drop.ts") || f.endsWith("lib/crm-store/my-files-drop-rules.ts") || f.endsWith("lib/crm-store/my-files-drop-drive.ts")) return false
       return /from\s+["'][^"']*my-files-drop/.test(readFileSync(f, "utf8"))
     }).map((f) => f.replace(root + "/", ""))
     expect(importers.sort()).toEqual(["app/api/[transport]/route.ts", "lib/mcp/tools/my-files-drop.ts"])
