@@ -83,9 +83,9 @@ This is the single map of the whole system: every feature, where it lives, the r
 <!-- GENERATED:mcp-tools -->
 _Regenerated 2026-10-17. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
-**49 active tool groups**, **219 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
+**50 active tool groups**, **220 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
-`AgentApproval` · `AgentMessage` · `AgentThread` · `BankStatement` · `BankingForm` · `Calendar` · `Calendly` · `Catalog` · `Checkpoint` · `Circleback` · `Classify` · `Closure` · `CodebaseRead` · `Crm` · `Deadline` · `DevTask` · `Doc` · `Docai` · `DocumentGeneration` · `Drive` · `Formation` · `Gmail` · `HarborCompliance` · `HermesRead` · `ITINForm` · `Job` · `Knowledge` · `Lead` · `Lease` · `Lock` · `MemberInfo` · `Messaging` · `Oa` · `Offer` · `Onboarding` · `Operations` · `Portal` · `Referral` · `Signature` · `Sql` · `Ss4` · `Storage` · `Sysdoc` · `Tax` · `TaxQuote` · `TeamChat` · `Testing` · `WelcomePackage` · `Whop`
+`AgentApproval` · `AgentMessage` · `AgentThread` · `BankStatement` · `BankingForm` · `Calendar` · `Calendly` · `Catalog` · `Checkpoint` · `Circleback` · `Classify` · `Closure` · `CodebaseRead` · `Crm` · `Deadline` · `DevTask` · `Doc` · `Docai` · `DocumentGeneration` · `Drive` · `Formation` · `Gmail` · `HarborCompliance` · `HermesRead` · `ITINForm` · `Job` · `Knowledge` · `Lead` · `Lease` · `Lock` · `MemberInfo` · `Messaging` · `MyFilesDrop` · `Oa` · `Offer` · `Onboarding` · `Operations` · `Portal` · `Referral` · `Signature` · `Sql` · `Ss4` · `Storage` · `Sysdoc` · `Tax` · `TaxQuote` · `TeamChat` · `Testing` · `WelcomePackage` · `Whop`
 <!-- /GENERATED:mcp-tools -->
 
 ## Appendix B — Hooks & guardrails
@@ -200,7 +200,7 @@ _Regenerated 2026-10-17. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-10-16)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-10-17)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-10-14)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-14)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-10-17)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-16)_
@@ -217,7 +217,7 @@ _Regenerated 2026-10-17. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-10-13)_
-- [storage.md](storage.md) — CRM Storage _(verified 2026-10-16)_
+- [storage.md](storage.md) — CRM Storage _(verified 2026-10-17)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-10-13)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-10-12)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
