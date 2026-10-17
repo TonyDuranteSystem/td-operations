@@ -9,6 +9,8 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto"
 export const ACCESS_TTL_MS = 15 * 60_000            // access token: 15 minutes
 export const CODE_TTL_MS = 60_000                   // authorization code: 60 seconds, single use
 export const DEVICE_MAX_AGE_MS = 30 * 86_400_000    // a device must be approved again after 30 days (refresh chain cap)
+export const LEASE_MS = 24 * 3600_000            // a Mac that has not reached the CRM for 24 hours must be approved again (the server enforces it, not only the app)
+export const MAX_ACTIVE_DEVICES_PER_USER = 5
 export const REFRESH_GRACE_MS = 10_000              // a refresh token used twice within 10 s is treated as a lost response, not theft
 
 export type SecretKind = "access" | "refresh" | "code"

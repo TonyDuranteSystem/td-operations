@@ -37,7 +37,10 @@ final class AppModel: ObservableObject {
     private let info = Bundle.main.infoDictionary ?? [:]
     private lazy var baseURL = URL(string: info["TDServerURL"] as? String ?? "https://invalid.example")!
     private lazy var store = KeychainTokenStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
-    private lazy var api = StorageAPI(baseURL: baseURL, store: store)
+    private lazy var lease = KeychainLeaseStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
+    private lazy var api = StorageAPI(baseURL: baseURL, store: store, lease: lease)
+    private var leaseTimer: Timer?
+    private var wakeObserver: NSObjectProtocol?
     private let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(rawValue: "td-storage"), displayName: "TD Storage")
     private var flow: LoopbackSignIn?
 
@@ -47,6 +50,10 @@ final class AppModel: ObservableObject {
     func start() async {
         fileVaultOK = FileVaultCheck.isOn()
         guard store.load() != nil else { state = .signedOut; return }
+        // an install from before the lease existed has tokens but no record: start the lease now (the server enforces the real 24 hours)
+        if lease.lastContact() == nil { lease.touch() }
+        if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
+        startLeaseWatch()
         do {
             let me = try await api.whoami()
             state = .signedIn(me.email ?? "signed in")
@@ -72,8 +79,9 @@ final class AppModel: ObservableObject {
             openInBrowser(started.approvalURL)
             let code = try await flow.waitForCode()
             _ = try await api.exchange(code: code, verifier: verifier, redirectURI: started.redirectURI)
-            let me = try await api.whoami()
+            let me = try await api.whoami()      // the CRM answered: the 24-hour lease starts
             try await register()
+            startLeaseWatch()
             state = .signedIn(me.email ?? "signed in")
         } catch LoopbackSignIn.SignInError.timedOut { state = .problem("The sign-in took too long. Try again.") }
         catch StorageAPIError.forbidden(let why) { state = .problem(why) }
@@ -96,6 +104,33 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 
+    private let leaseMessage = "This Mac was offline from the CRM for more than 24 hours, so TD Storage signed itself out and cleared the folder. Sign in again."
+
+    /// Every few minutes: has this Mac been in contact with the CRM within 24 hours? If not → sign out and clear everything that was downloaded.
+    private func startLeaseWatch() {
+        leaseTimer?.invalidate()
+        leaseTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.checkLease() }
+        }
+        // the Finder extension is not always alive (the system may stop it, the Mac may sleep): the app itself also keeps in touch,
+        // every 5 minutes and right after the Mac wakes, so an ONLINE Mac never runs out of lease
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in await self?.checkLease() }
+            }
+        }
+    }
+
+    /// Signed out and cleared if the lease ran out; otherwise ask the CRM "who am I" (a real answer restarts the 24 hours).
+    private func checkLease() async {
+        guard store.load() != nil else { return }
+        if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
+        do { _ = try await api.whoami() }
+        catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
+        catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
+        catch { /* offline for now: the lease keeps running */ }
+    }
+
     func signOut() async { await wipe(); state = .signedOut }
 
     func openInFinder() {
@@ -107,7 +142,9 @@ final class AppModel: ObservableObject {
     private func register() async throws { try await NSFileProviderManager.add(domain) }
 
     private func wipe() async {
+        leaseTimer?.invalidate()
         store.clear()
+        lease.clear()
         try? await NSFileProviderManager.remove(domain)     // removes the TD Storage location and everything cached for it
     }
 }

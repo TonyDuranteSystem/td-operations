@@ -222,6 +222,31 @@ async function main() {
     check("35 a device older than 30 days is refused until approved again", (await call("whoami", dev3.access_token, whoami)).status === 401)
     check("36 and cannot renew", (await post({ grant_type: "refresh_token", refresh_token: dev3.refresh_token })).status === 400)
 
+    // ── the 24-hour lease is enforced on the SERVER too (not only in the app)
+    const dev5 = await (async () => {
+      const c = await A.createAuthCode({ userId: team.id, deviceName: "QA away Mac", codeChallenge: challenge, redirectUri: REDIRECT })
+      return (await post({ grant_type: "authorization_code", code: c, code_verifier: verifier, redirect_uri: REDIRECT })).body
+    })()
+    check("37a a fresh Mac works", (await call("whoami", dev5.access_token, whoami)).status === 200)
+    await admin.from("storage_app_devices").update({ last_seen_at: new Date(Date.now() - 25 * 3600_000).toISOString() }).eq("id", dev5.device_id)
+    check("37b a Mac that has not reached the CRM for 25 hours is refused by the server", (await call("whoami", dev5.access_token, whoami)).status === 401)
+    const awayRefresh = await post({ grant_type: "refresh_token", refresh_token: dev5.refresh_token })
+    check("37c and cannot renew — it must be approved again", awayRefresh.status === 400 && awayRefresh.body.error === "invalid_grant", JSON.stringify(awayRefresh.body))
+    await admin.from("storage_app_devices").update({ last_seen_at: new Date(Date.now() - 23 * 3600_000).toISOString() }).eq("id", dev5.device_id)
+    const stillOk = await post({ grant_type: "refresh_token", refresh_token: dev5.refresh_token })
+    check("37d at 23 hours it is still inside the lease and renews", stillOk.status === 200, `status ${stillOk.status}`)
+
+    // ── at most 5 Macs signed in per login
+    let refusedAt = 0
+    for (let i = 1; i <= 8; i++) {
+      try {
+        const c = await A.createAuthCode({ userId: team.id, deviceName: `QA cap Mac ${i}`, codeChallenge: challenge, redirectUri: REDIRECT })
+        await post({ grant_type: "authorization_code", code: c, code_verifier: verifier, redirect_uri: REDIRECT })
+      } catch (e) { if ((e as { code?: string }).code === "access_denied") { refusedAt = i; break } else throw e }
+    }
+    const { count: activeNow } = await admin.from("storage_app_devices").select("id", { count: "exact", head: true }).eq("user_id", team.id).is("revoked_at", null)
+    check("37e the sixth active Mac is refused with a plain message (and exactly 5 are active)", refusedAt > 0 && activeNow === 5, `refusedAt=${refusedAt} active=${activeNow}`)
+
     // ── nothing is stored in clear
     const { data: rows } = await admin.from("storage_app_tokens").select("token_hash").eq("device_id", dev2.device_id)
     check("37 only hashes are stored (no sa_ token in the table)", (rows ?? []).every((r: { token_hash: string }) => /^[0-9a-f]{64}$/.test(r.token_hash)), "")

@@ -39,11 +39,16 @@ public struct AppChange: Codable, Equatable {
 }
 public struct ChangesPage: Codable, Equatable { public var changes: [AppChange]; public var cursor: String?; public var resync: Bool; public var hasMore: Bool }
 public struct HeadResponse: Codable, Equatable { public var cursor: String? }
-public struct APIErrorBody: Codable { public var error: String?; public var errorDescription: String?
-    enum CodingKeys: String, CodingKey { case error, errorDescription = "error_description" } }
+public struct APIErrorBody: Codable { public var error: String?; public var errorDescription: String?; public var message: String?
+    enum CodingKeys: String, CodingKey { case error, errorDescription = "error_description", message } }
 
 /// One file or folder by id with its parent (GET /api/storage-app/item). `parentId` nil = a storage's top folder.
 public struct ItemInfo: Codable, Equatable {
     public var kind: String; public var id: String; public var ownerId: String; public var parentId: String?; public var name: String
     public var locked: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
+}
+
+/// GET /api/storage-app/file — a 60-second signed link for one file, with what the app must check on arrival.
+public struct FileDownload: Codable, Equatable {
+    public var url: String; public var name: String; public var size: Int?; public var mimeType: String?; public var sha256: String?; public var expiresIn: Int
 }

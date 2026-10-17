@@ -15,7 +15,7 @@ import { isStoreStaffUser } from "@/lib/crm-store/access"
 import { resolveMfaGate } from "@/lib/auth/mfa-gate"
 import { isOnAllowList, loadAllowList } from "./allow-list"
 import {
-  ACCESS_TTL_MS, CODE_TTL_MS, DEVICE_MAX_AGE_MS, REFRESH_GRACE_MS,
+  ACCESS_TTL_MS, CODE_TTL_MS, DEVICE_MAX_AGE_MS, LEASE_MS, MAX_ACTIVE_DEVICES_PER_USER, REFRESH_GRACE_MS,
   hashSecret, newSecret, verifyPkce, isValidChallenge, isValidLoopbackRedirect, cleanDeviceName, truncateIp,
 } from "./tokens"
 
@@ -26,10 +26,13 @@ const db = () => supabaseAdmin as any
 const NOT_ALLOWED = "This login cannot use the storage app."
 
 /** Audit (append-only store_events): who approved / signed in / was signed out, and why. Best effort — never blocks the sign-in. */
-export async function logAppEvent(event: string, actor: string | null, details: Record<string, unknown>): Promise<void> {
+export async function logAppEvent(event: string, actor: string | null, details: Record<string, unknown>, ids: { ownerId?: string | null; fileId?: string | null; folderId?: string | null } = {}): Promise<boolean> {
   try {
-    await db().from("store_events").insert({ event, actor, details })
-  } catch { /* the audit write must never break the flow */ }
+    // supabase-js REPORTS a rejected insert in `error` (it does not throw) — look at it
+    const { error } = await db().from("store_events").insert({ event, actor, details, owner_id: ids.ownerId ?? null, file_id: ids.fileId ?? null, folder_id: ids.folderId ?? null })
+    if (error) { console.error("[storage-app] audit write failed:", event, error.message); return false }
+    return true
+  } catch (e) { console.error("[storage-app] audit write failed:", event, e instanceof Error ? e.message : e); return false }
 }
 
 export class DeviceAuthError extends Error {
@@ -86,6 +89,11 @@ export async function createAuthCode(p: { userId: string; deviceName: unknown; c
     await logAppEvent("app_signin_refused", p.userId, { step: "approve", reason: may.reason })
     throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }
+  const { count: activeMacs } = await db().from("storage_app_devices").select("id", { count: "exact", head: true }).eq("user_id", p.userId).is("revoked_at", null)
+  if ((activeMacs ?? 0) >= MAX_ACTIVE_DEVICES_PER_USER) {
+    await logAppEvent("app_signin_refused", p.userId, { step: "approve", reason: "too many Macs" })
+    throw new DeviceAuthError("access_denied", `${MAX_ACTIVE_DEVICES_PER_USER} Macs are already signed in for this login. Sign one out on the “Macs signed in” page first.`)
+  }
   const { token, hash } = newSecret("code")
   const { error } = await db().from("storage_app_auth_codes").insert({
     code_hash: hash, user_id: p.userId, device_name: deviceName, code_challenge: p.codeChallenge, redirect_uri: p.redirectUri,
@@ -138,8 +146,9 @@ export async function exchangeCode(p: { code: unknown; codeVerifier: unknown; re
 }
 
 export async function revokeDevice(deviceId: string, reason: string, actor: string | null = null): Promise<void> {
-  const { data } = await db().from("storage_app_devices")
+  const { data, error } = await db().from("storage_app_devices")
     .update({ revoked_at: new Date().toISOString(), revoked_reason: reason }).eq("id", deviceId).is("revoked_at", null).select("id, user_id, name").maybeSingle()
+  if (error) { console.error("[storage-app] could not sign a Mac out:", error.message); throw new Error("Could not sign the Mac out. Please try again.") }
   if (data) await logAppEvent("app_device_revoked", actor ?? data.user_id, { deviceId, deviceName: data.name, ownerOfDevice: data.user_id, reason })
 }
 
@@ -151,10 +160,12 @@ export async function refreshTokens(p: { refreshToken: unknown; ip?: string | nu
   if (typeof p.refreshToken !== "string" || !p.refreshToken.startsWith("sa_rt_")) throw new DeviceAuthError("invalid_request", "Bad refresh token.")
   const hash = hashSecret(p.refreshToken)
   const { data: row } = await db().from("storage_app_tokens")
-    .select("id, device_id, expires_at, used_at, storage_app_devices!inner(user_id, created_at, revoked_at)").eq("token_hash", hash).eq("kind", "refresh").maybeSingle()
+    .select("id, device_id, expires_at, used_at, storage_app_devices!inner(user_id, created_at, revoked_at, last_seen_at)").eq("token_hash", hash).eq("kind", "refresh").maybeSingle()
   if (!row) throw new DeviceAuthError("invalid_grant", "Unknown refresh token.")
-  const dev = row.storage_app_devices as { user_id: string; created_at: string; revoked_at: string | null }
+  const dev = row.storage_app_devices as { user_id: string; created_at: string; revoked_at: string | null; last_seen_at: string | null }
   if (dev.revoked_at) throw new DeviceAuthError("device_revoked", "This device was signed out.")
+  // the 24-hour lease, enforced HERE (the app checks it too): a Mac that has not reached the CRM for a day must be approved again
+  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > LEASE_MS) throw new DeviceAuthError("invalid_grant", "This Mac was away from the CRM for more than 24 hours. Approve it again.")
   if (new Date(row.expires_at).getTime() <= Date.now() || new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) {
     throw new DeviceAuthError("invalid_grant", "This device must be approved again.")
   }
@@ -191,6 +202,7 @@ export async function verifyAccessToken(token: string, ip?: string | null): Prom
   if (dev.revoked_at) return null
   if (new Date(row.expires_at).getTime() <= Date.now()) return null
   if (new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) return null
+  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > LEASE_MS) return null     // the 24-hour lease, server side
   const user = await liveUser(dev.user_id)
   if (!user || !(await mayUseAppNow(user)).ok) return null
   // keep "last seen" fresh without a write on every request
@@ -203,4 +215,30 @@ export async function verifyAccessToken(token: string, ip?: string | null): Prom
 export async function listDevices(userId: string): Promise<Array<{ id: string; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>> {
   const { data } = await db().from("storage_app_devices").select("id, name, created_at, last_seen_at, revoked_at").eq("user_id", userId).order("created_at", { ascending: false })
   return data ?? []
+}
+
+/** For an OWNER: every Mac that is signed in (or was), with the person's email — the "sign a leaver's Mac out" view. */
+export async function listAllDevices(): Promise<Array<{ id: string; user_id: string; email: string | null; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>> {
+  const { data } = await db().from("storage_app_devices").select("id, user_id, name, created_at, last_seen_at, revoked_at").order("created_at", { ascending: false }).limit(500)
+  const rows = (data ?? []) as Array<{ id: string; user_id: string; name: string; created_at: string; last_seen_at: string | null; revoked_at: string | null }>
+  const emails = new Map<string, string | null>()
+  for (const uid of Array.from(new Set(rows.map((r) => r.user_id)))) emails.set(uid, (await liveUser(uid))?.email ?? null)
+  return rows.map((r) => ({ ...r, email: emails.get(r.user_id) ?? null }))
+}
+
+/** Sign out every active Mac (optionally only one person's) and burn that person's unused one-time codes. Loops until none are left; returns how many were REALLY signed out. */
+export async function revokeAllDevices(by: string, onlyUserId?: string): Promise<number> {
+  let done = 0
+  for (let round = 0; round < 50; round++) {
+    let q = db().from("storage_app_devices").select("id").is("revoked_at", null)
+    if (onlyUserId) q = q.eq("user_id", onlyUserId)
+    const { data } = await q.limit(200)
+    const ids = ((data ?? []) as Array<{ id: string }>).map((d) => d.id)
+    if (ids.length === 0) break
+    for (const id of ids) { await revokeDevice(id, onlyUserId ? "all of this person's Macs signed out by an owner" : "all Macs signed out by an owner", by); done++ }
+  }
+  let burn = db().from("storage_app_auth_codes").update({ used_at: new Date().toISOString() }).is("used_at", null)
+  if (onlyUserId) burn = burn.eq("user_id", onlyUserId)
+  await burn
+  return done
 }

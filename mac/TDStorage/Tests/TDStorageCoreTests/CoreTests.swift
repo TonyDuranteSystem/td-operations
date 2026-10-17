@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import TDStorageCore
 
 final class PKCETests: XCTestCase {
@@ -233,4 +234,110 @@ final class DisambiguatorTests: XCTestCase {
         let r = Disambiguator.unique([(id: "abcd0001", name: "X"), (id: "abcd0002", name: "X")])
         XCTAssertEqual(Set(r.values.map { $0.lowercased() }).count, 2)
     }
+}
+
+final class LeaseTests: XCTestCase {
+    func testFreshAndExpired() {
+        let now = Date()
+        XCTAssertFalse(Lease.isExpired(last: now.addingTimeInterval(-3600), now: now))
+        XCTAssertFalse(Lease.isExpired(last: now.addingTimeInterval(-(Lease.maxAge - 5)), now: now))
+        XCTAssertTrue(Lease.isExpired(last: now.addingTimeInterval(-(Lease.maxAge + 5)), now: now))
+    }
+    func testNoRecordMeansExpired() { XCTAssertTrue(Lease.isExpired(last: nil)) }
+    func testARecordFromTheFutureNeverLocksTheMacOut() {
+        // a clock that was fast when the record was written and has been corrected since: treated as "just now", not as expired
+        let now = Date()
+        XCTAssertFalse(Lease.isExpired(last: now.addingTimeInterval(7 * 86_400), now: now))
+        XCTAssertFalse(Lease.isExpired(last: now.addingTimeInterval(30), now: now))
+        XCTAssertFalse(Lease.isExpired(last: now.addingTimeInterval(150), now: now))     // 2.5 minutes of drift — the old guard wiped the sign-in here
+    }
+    func testStoreTouchAndClear() {
+        let store = MemoryLeaseStore()
+        XCTAssertTrue(store.isExpired())
+        store.touch(); XCTAssertFalse(store.isExpired())
+        store.clear(); XCTAssertTrue(store.isExpired())
+    }
+    func testExpiredLeaseStopsEveryCallBeforeTheNetwork() async {
+        StubProtocol.handler = { _ in (200, #"{"groups":[]}"#) }; StubProtocol.seen = []
+        let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [StubProtocol.self]
+        let api = StorageAPI(baseURL: URL(string: "https://crm.example.test/")!, store: MemoryTokenStore(TokenPair(accessToken: "sa_at_A", refreshToken: "sa_rt_A", expiresIn: 900, deviceId: "d")), session: URLSession(configuration: cfg), lease: MemoryLeaseStore(Date().addingTimeInterval(-2 * 86_400)))
+        do { _ = try await api.navigation(); XCTFail("should throw") } catch { XCTAssertEqual(error as? StorageAPIError, .leaseExpired) }
+        XCTAssertEqual(StubProtocol.seen.count, 0, "an expired Mac must not even ask the CRM")
+    }
+    func testAnAnswerFromTheCRMStartsTheLeaseAgain() async throws {
+        StubProtocol.handler = { _ in (200, #"{"groups":[]}"#) }
+        let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [StubProtocol.self]
+        let lease = MemoryLeaseStore(Date().addingTimeInterval(-3600))
+        let api = StorageAPI(baseURL: URL(string: "https://crm.example.test/")!, store: MemoryTokenStore(TokenPair(accessToken: "sa_at_A", refreshToken: "sa_rt_A", expiresIn: 900, deviceId: "d")), session: URLSession(configuration: cfg), lease: lease)
+        let before = lease.lastContact()!
+        _ = try await api.navigation()
+        XCTAssertGreaterThan(lease.lastContact()!, before)
+    }
+}
+
+final class DownloadTests: XCTestCase {
+    private let base = URL(string: "https://crm.example.test/")!
+    private func session() -> URLSession { let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [StubProtocol.self]; return URLSession(configuration: cfg) }
+    private func api() -> StorageAPI { StorageAPI(baseURL: base, store: MemoryTokenStore(TokenPair(accessToken: "sa_at_A", refreshToken: "sa_rt_A", expiresIn: 900, deviceId: "d")), session: session()) }
+    private let body = "hello storage"
+    private var bodySha: String { FileDownloaderTestHelper.sha(body) }
+    override func setUp() { StubProtocol.handler = nil; StubProtocol.seen = [] }
+
+    private func linkJSON(size: Int, sha: String) -> String {
+        #"{"url":"https://files.example.test/x?token=abc","name":"a.txt","size":\#(size),"mimeType":"text/plain","sha256":"\#(sha)","expiresIn":60}"#
+    }
+
+    func testDownloadsAndVerifies() async throws {
+        StubProtocol.handler = { req in req.url!.host == "files.example.test" ? (200, self.body) : (200, self.linkJSON(size: self.body.utf8.count, sha: self.bodySha)) }
+        let d = FileDownloader(api: api(), session: session())
+        let (file, info) = try await d.download(fileId: "f1")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), body)
+        XCTAssertEqual(info.name, "a.txt")
+        try? FileManager.default.removeItem(at: file)
+    }
+    func testWrongChecksumIsRefusedAndTheFileDeleted() async {
+        StubProtocol.handler = { req in req.url!.host == "files.example.test" ? (200, self.body) : (200, self.linkJSON(size: self.body.utf8.count, sha: String(repeating: "0", count: 64))) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tds-test-" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let d = FileDownloader(api: api(), session: session(), tempDirectory: dir)
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { guard case StorageAPIError.integrity? = error as? StorageAPIError else { return XCTFail("\(error)") } }
+        XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.count, 0, "a damaged file must not be left behind")
+    }
+    func testWrongSizeIsRefused() async {
+        StubProtocol.handler = { req in req.url!.host == "files.example.test" ? (200, self.body) : (200, self.linkJSON(size: 999, sha: self.bodySha)) }
+        let d = FileDownloader(api: api(), session: session())
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { guard case StorageAPIError.integrity? = error as? StorageAPIError else { return XCTFail("\(error)") } }
+    }
+    func testSensitiveDocumentIsRefusedWithTheServersWords() async {
+        StubProtocol.handler = { _ in (403, #"{"error":"open_in_crm","message":"This document is not downloaded to a Mac. Open it in the CRM."}"#) }
+        let d = FileDownloader(api: api(), session: session())
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { XCTAssertEqual(error as? StorageAPIError, .openInCRM("This document is not downloaded to a Mac. Open it in the CRM.")) }
+        XCTAssertEqual(StubProtocol.seen.filter { $0.url!.host == "files.example.test" }.count, 0, "nothing may be fetched for a sensitive document")
+    }
+    func testOverTheHourlyLimit() async {
+        StubProtocol.handler = { _ in (429, #"{"error":"download_limit","message":"This Mac has downloaded a lot in the last hour."}"#) }
+        let d = FileDownloader(api: api(), session: session())
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { XCTAssertEqual(error as? StorageAPIError, .rateLimited("This Mac has downloaded a lot in the last hour.")) }
+    }
+    func testRedirectsAreNeverFollowed() async {
+        // a link that redirects (to another host, or to http) is refused: the stub answers 302 for the file host
+        StubProtocol.handler = { req in req.url!.host == "files.example.test" ? (302, "") : (200, self.linkJSON(size: 1, sha: self.bodySha)) }
+        let d = FileDownloader(api: api(), session: session())
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { /* any error: nothing was delivered */ }
+    }
+    func testChecksumComparisonIgnoresLetterCase() async throws {
+        StubProtocol.handler = { req in req.url!.host == "files.example.test" ? (200, self.body) : (200, self.linkJSON(size: self.body.utf8.count, sha: self.bodySha.uppercased())) }
+        let d = FileDownloader(api: api(), session: session())
+        let (file, _) = try await d.download(fileId: "f1")
+        try? FileManager.default.removeItem(at: file)
+    }
+    func testAPlainHttpLinkToAnotherHostIsRefused() async {
+        StubProtocol.handler = { _ in (200, #"{"url":"http://evil.example/x","name":"a","size":1,"mimeType":null,"sha256":null,"expiresIn":60}"#) }
+        let d = FileDownloader(api: api(), session: session())
+        do { _ = try await d.download(fileId: "f1"); XCTFail("should throw") } catch { guard case StorageAPIError.integrity? = error as? StorageAPIError else { return XCTFail("\(error)") } }
+    }
+}
+
+enum FileDownloaderTestHelper {
+    static func sha(_ s: String) -> String { var h = SHA256(); h.update(data: Data(s.utf8)); return h.finalize().map { String(format: "%02x", $0) }.joined() }
 }

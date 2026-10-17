@@ -5,6 +5,10 @@ public enum StorageAPIError: Error, Equatable {
     case deviceRevoked                   // this Mac was signed out: wipe the local cache
     case notFound
     case forbidden(String)
+    case openInCRM(String)               // a sensitive document: never downloaded to a Mac (the server decides)
+    case rateLimited(String)             // this Mac downloaded too much in the last hour
+    case leaseExpired                    // no successful contact with the CRM for 24 hours: the Mac must sign in again
+    case integrity(String)               // what arrived is not what the CRM stored
     case server(Int, String)
     case transport(String)
     case badResponse
@@ -34,9 +38,12 @@ public final class StorageAPI: @unchecked Sendable {
     private let refreshLock = NSLock()
     private var refreshTask: Task<TokenPair, Error>?
 
-    public init(baseURL: URL, store: TokenStore, session: URLSession? = nil) {
+    private let lease: LeaseStore?
+
+    public init(baseURL: URL, store: TokenStore, session: URLSession? = nil, lease: LeaseStore? = nil) {
         self.baseURL = baseURL
         self.store = store
+        self.lease = lease
         if let session { self.session = session } else {
             let cfg = URLSessionConfiguration.ephemeral
             cfg.httpCookieStorage = nil
@@ -90,6 +97,10 @@ public final class StorageAPI: @unchecked Sendable {
         if let folder { q.append(URLQueryItem(name: "folder", value: folder)) }
         return try await get("api/storage-app/folder", query: q)
     }
+    /// A 60-second link for one file. The server refuses sensitive documents (403 open_in_crm) and a Mac over its hourly limit (429).
+    public func fileDownload(id: String) async throws -> FileDownload {
+        try await get("api/storage-app/file", query: [URLQueryItem(name: "id", value: id)])
+    }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }
@@ -114,6 +125,8 @@ public final class StorageAPI: @unchecked Sendable {
     }
 
     private func authorized<T: Decodable>(_ make: (String) -> URLRequest) async throws -> T {
+        // the 24-hour lease: a Mac that has not reached the CRM for a day refuses to serve anything (and the app signs itself out)
+        if let lease, lease.isExpired() { throw StorageAPIError.leaseExpired }
         guard var tokens = store.load() else { throw StorageAPIError.notSignedIn }
         do { return try await send(make(tokens.accessToken)) }
         catch StorageAPIError.notSignedIn {
@@ -136,11 +149,16 @@ public final class StorageAPI: @unchecked Sendable {
         guard let http = resp as? HTTPURLResponse else { throw StorageAPIError.badResponse }
         switch http.statusCode {
         case 200..<300:
-            do { return try JSONDecoder().decode(T.self, from: data) } catch { throw StorageAPIError.badResponse }
+            // only a REAL answer from the CRM restarts the lease (a captive-portal page that says 200 does not decode, so it does not count)
+            do { let value = try JSONDecoder().decode(T.self, from: data); lease?.touch(); return value } catch { throw StorageAPIError.badResponse }
         case 401: throw StorageAPIError.notSignedIn
+        case 429:
+            let body = try? JSONDecoder().decode(APIErrorBody.self, from: data)
+            throw StorageAPIError.rateLimited(body?.message ?? body?.errorDescription ?? "Too many downloads. Try again later.")
         case 403:
             let body = try? JSONDecoder().decode(APIErrorBody.self, from: data)
             if body?.error == "device_revoked" { throw StorageAPIError.deviceRevoked }
+            if body?.error == "open_in_crm" { throw StorageAPIError.openInCRM(body?.message ?? "This document is not downloaded to a Mac. Open it in the CRM.") }
             throw StorageAPIError.forbidden(body?.errorDescription ?? body?.error ?? "Not allowed.")
         case 404: throw StorageAPIError.notFound
         default:

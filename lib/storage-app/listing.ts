@@ -48,7 +48,7 @@ export async function appFolder(ownerId: string, folderId: string | null) {
     folders: c.folders.filter((f) => f.kind !== "contacts").map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked })),
     files: c.files.filter((f) => f.state === "live").map((f) => ({
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
-      downloadable: !isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind }),
+      downloadable: !isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }),
     })),
   }
 }
@@ -77,6 +77,6 @@ export async function appItem(kind: "file" | "folder", id: string): Promise<AppI
   const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
   return {
     kind, id: data.id, ownerId: data.owner_id, parentId: data.folder_id, name: data.name, size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null,
-    updatedAt: data.updated_at, downloadable: !isSensitiveForDevice({ documentType: data.document_type, ownerKind }),
+    updatedAt: data.updated_at, downloadable: !isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
   }
 }

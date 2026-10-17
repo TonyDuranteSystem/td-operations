@@ -111,12 +111,19 @@ actor Catalog {
 }
 
 /// Errors in the words Finder understands. A wrong or missing sign-in is "not authenticated" (Finder shows its sign-in prompt);
-/// a Mac that the CRM signed out is the same, and the host app removes the TD Storage location when it sees it.
+/// a Mac that the CRM signed out (or that was offline for 24 hours) is the same, and the host app removes the TD Storage location when it sees it.
 func fileProviderError(_ error: Error) -> Error {
+    func described(_ domainError: NSError, _ message: String) -> NSError {
+        NSError(domain: domainError.domain, code: domainError.code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
     switch error as? StorageAPIError {
-    case .notSignedIn?, .deviceRevoked?: return NSFileProviderError(.notAuthenticated)
+    case .notSignedIn?, .deviceRevoked?, .leaseExpired?: return NSFileProviderError(.notAuthenticated)
     case .notFound?: return NSFileProviderError(.noSuchItem)
     case .forbidden?: return NSFileProviderError(.cannotSynchronize)
+    // a sensitive document: said plainly, and NOT retried (a read-permission error is final)
+    case .openInCRM(let message)?: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: [NSLocalizedDescriptionKey: message])
+    case .rateLimited(let message)?: return described(NSFileProviderError(.serverUnreachable) as NSError, message)
+    case .integrity(let message)?: return described(NSFileProviderError(.cannotSynchronize) as NSError, message)
     default: return NSFileProviderError(.serverUnreachable)
     }
 }

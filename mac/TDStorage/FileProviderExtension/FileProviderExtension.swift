@@ -7,6 +7,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let domain: NSFileProviderDomain
     let api: StorageAPI
     let catalog: Catalog
+    let downloader: FileDownloader
     private var poller: Timer?
 
     required init(domain: NSFileProviderDomain) {
@@ -14,9 +15,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         let info = Bundle.main.infoDictionary ?? [:]
         let base = URL(string: info["TDServerURL"] as? String ?? "https://invalid.example")!
         let store = KeychainTokenStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
-        self.api = StorageAPI(baseURL: base, store: store)
+        let lease = KeychainLeaseStore(service: info["TDKeychainService"] as? String ?? "td-storage", accessGroup: info["TDKeychainGroup"] as? String)
+        self.api = StorageAPI(baseURL: base, store: store, lease: lease)
         self.catalog = Catalog(api: api)
+        self.downloader = FileDownloader(api: api)
         super.init()
+        Self.sweepTemporaryDownloads()
         // ask the system to look at the change feed every 30 seconds (it then calls the working-set enumerator below)
         DispatchQueue.main.async { [weak self] in
             self?.poller = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -27,6 +31,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     }
 
     func invalidate() { poller?.invalidate() }
+
+    /// Downloads are written to a temporary file first; anything a crash left behind from an earlier run is removed whenever the extension starts.
+    static func sweepTemporaryDownloads() {
+        let dir = FileManager.default.temporaryDirectory
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix("tds-") {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
+    }
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if containerItemIdentifier == .workingSet { return WorkingSetEnumerator(api: api, catalog: catalog) }
@@ -46,10 +58,25 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return progress
     }
 
-    // Reading a file's bytes comes in phase P1 (signed download link; sensitive documents are refused by the server).
+    // Reading a file (phase P1): the CRM gives a 60-second link; the file is downloaded, checked (size + SHA-256) and handed to the system.
+    // Sensitive documents (passport, ID, ITIN papers) are refused by the CRM — Finder shows "Open it in the CRM" — and nothing is fetched.
     func fetchContents(for itemIdentifier: NSFileProviderItemIdentifier, version requestedVersion: NSFileProviderItemVersion?, request: NSFileProviderRequest, completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
-        completionHandler(nil, nil, CocoaError(.featureUnsupported))
-        return Progress()
+        let progress = Progress(totalUnitCount: 1)
+        Task {
+            do {
+                guard case .file(_, let fileId)? = FPItem.itemID(for: itemIdentifier) else { throw StorageAPIError.notFound }
+                let (url, _) = try await downloader.download(fileId: fileId)
+                do {
+                    let item = try await catalog.item(for: FPItem.itemID(for: itemIdentifier)!)
+                    completionHandler(url, item, nil)
+                } catch {
+                    try? FileManager.default.removeItem(at: url)      // never leave a downloaded file behind when the hand-over fails
+                    throw error
+                }
+            } catch { completionHandler(nil, nil, fileProviderError(error)) }
+            progress.completedUnitCount = 1
+        }
+        return progress
     }
 
     // Read-only: the capabilities already stop Finder from offering these; if the system asks anyway, the answer is a plain "no".
