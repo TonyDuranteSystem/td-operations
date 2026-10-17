@@ -6,7 +6,8 @@ public enum StorageAPIError: Error, Equatable {
     case notFound
     case forbidden(String)
     case openInCRM(String)               // a sensitive document: never downloaded to a Mac (the server decides)
-    case rateLimited(String)             // this Mac downloaded too much in the last hour
+    case rateLimited(String)             // this Mac downloaded / uploaded too much in the last hour
+    case refused(String)                 // the CRM said no to a SAVE, in plain words (name taken, wrong folder, too big …) — final, not retried
     case leaseExpired                    // no successful contact with the CRM for 24 hours: the Mac must sign in again
     case integrity(String)               // what arrived is not what the CRM stored
     case server(Int, String)
@@ -101,6 +102,16 @@ public final class StorageAPI: @unchecked Sendable {
     public func fileDownload(id: String) async throws -> FileDownload {
         try await get("api/storage-app/file", query: [URLQueryItem(name: "id", value: id)])
     }
+    /// Saving a NEW file (phase P3 step A): 1) ask for a slot, 2) upload the bytes to the signed address, 3) save. `itemKey` is the Mac's stable id
+    /// for this one file, so a retry after a lost answer returns the same file and never makes a second.
+    public func uploadSlot(ownerId: String, folderId: String, name: String, size: Int, mimeType: String?, itemKey: String) async throws -> UploadSlot {
+        var body: [String: Any] = ["ownerId": ownerId, "folderId": folderId, "name": name, "size": size, "itemKey": itemKey]
+        if let mimeType { body["mimeType"] = mimeType }
+        return try await postAuthorized("api/storage-app/upload-slot", body)
+    }
+    public func save(intentId: String, itemKey: String) async throws -> SavedFile {
+        try await postAuthorized("api/storage-app/save", ["intentId": intentId, "itemKey": itemKey])
+    }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }
@@ -120,6 +131,18 @@ public final class StorageAPI: @unchecked Sendable {
             if !query.isEmpty { comps.queryItems = query }
             var req = URLRequest(url: comps.url!)
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            return req
+        }
+    }
+
+    private func postAuthorized<T: Decodable>(_ path: String, _ body: [String: Any]) async throws -> T {
+        let data = try JSONSerialization.data(withJSONObject: body)
+        return try await authorized { token in
+            var req = URLRequest(url: self.baseURL.appendingPathComponent(path))
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = data
             return req
         }
     }
@@ -154,7 +177,10 @@ public final class StorageAPI: @unchecked Sendable {
         case 401: throw StorageAPIError.notSignedIn
         case 429:
             let body = try? JSONDecoder().decode(APIErrorBody.self, from: data)
-            throw StorageAPIError.rateLimited(body?.message ?? body?.errorDescription ?? "Too many downloads. Try again later.")
+            throw StorageAPIError.rateLimited(body?.message ?? body?.errorDescription ?? "Too many downloads or uploads. Try again later.")
+        case 409, 413, 422:
+            let body = try? JSONDecoder().decode(APIErrorBody.self, from: data)
+            throw StorageAPIError.refused(body?.message ?? body?.errorDescription ?? body?.error ?? "This file could not be saved here.")
         case 403:
             let body = try? JSONDecoder().decode(APIErrorBody.self, from: data)
             if body?.error == "device_revoked" { throw StorageAPIError.deviceRevoked }

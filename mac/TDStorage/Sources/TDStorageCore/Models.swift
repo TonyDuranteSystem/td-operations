@@ -22,7 +22,7 @@ public struct NavGroup: Codable, Equatable {
 }
 public struct NavigationResponse: Codable, Equatable { public var groups: [NavGroup] }
 
-public struct FolderRef: Codable, Equatable, Hashable { public var id: String; public var name: String; public var kind: String; public var locked: Bool }
+public struct FolderRef: Codable, Equatable, Hashable { public var id: String; public var name: String; public var kind: String; public var locked: Bool; public var canSave: Bool? }
 public struct FileRef: Codable, Equatable, Hashable {
     public var id: String; public var name: String; public var size: Int?; public var mimeType: String?; public var updatedAt: String; public var downloadable: Bool
 }
@@ -45,8 +45,16 @@ public struct APIErrorBody: Codable { public var error: String?; public var erro
 /// One file or folder by id with its parent (GET /api/storage-app/item). `parentId` nil = a storage's top folder.
 public struct ItemInfo: Codable, Equatable {
     public var kind: String; public var id: String; public var ownerId: String; public var parentId: String?; public var name: String
-    public var locked: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
+    public var locked: Bool?; public var canSave: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
 }
+
+/// POST /api/storage-app/upload-slot — where to put the bytes (or: this very file was already saved).
+public struct UploadSlot: Codable, Equatable {
+    public var intentId: String?; public var uploadUrl: String?; public var maxBytes: Int?
+    public var alreadySaved: Bool?; public var fileId: String?; public var ownerId: String?; public var name: String?
+}
+/// POST /api/storage-app/save — the file as the CRM stored it (the name may differ if the CRM had to change it).
+public struct SavedFile: Codable, Equatable { public var fileId: String; public var ownerId: String; public var name: String; public var size: Int? }
 
 /// GET /api/storage-app/file — a 60-second signed link for one file, with what the app must check on arrival.
 public struct FileDownload: Codable, Equatable {

@@ -7,6 +7,7 @@ import type { User } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isOwnerOnly } from "@/lib/auth"
 import { isSensitiveForDevice } from "./sensitive"
+import { checkDestination } from "./save-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -42,10 +43,13 @@ export async function appFolder(ownerId: string, folderId: string | null) {
   const { folderContents } = await import("@/lib/crm-store/browse")
   const c = await folderContents(ownerId, folderId)
   if (c.folder?.trashed) return null          // a trashed folder is not shown (the Storage page lists it only in the trash view)
+  // can the Mac save a NEW file into each folder? (step A: Business / My files only; never a top folder, "2. Contacts" or "Shared with staff")
+  const inShare = c.folder ? await (await import("@/lib/crm-store/staff-share")).isInStaffShare(c.folder.id) : false
+  const canSave = (kind: string, trashed = false) => checkDestination({ ownerKind: c.owner.kind, folderKind: kind, inStaffShare: inShare || kind === "staff_share", folderTrashed: trashed }).ok
   return {
     owner: c.owner,
-    folder: c.folder ? { id: c.folder.id, name: c.folder.name, kind: c.folder.kind, locked: !!c.folder.locked } : null,
-    folders: c.folders.filter((f) => f.kind !== "contacts").map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked })),
+    folder: c.folder ? { id: c.folder.id, name: c.folder.name, kind: c.folder.kind, locked: !!c.folder.locked, canSave: canSave(c.folder.kind, !!c.folder.trashed) } : null,
+    folders: c.folders.filter((f) => f.kind !== "contacts").map((f) => ({ id: f.id, name: f.name, kind: f.kind, locked: !!f.locked, canSave: canSave(f.kind) })),
     files: c.files.filter((f) => f.state === "live").map((f) => ({
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
       downloadable: true,   // every file opens (Antonio 2026-10-17); kept so an older app build still reads the answer
@@ -56,7 +60,7 @@ export async function appFolder(ownerId: string, folderId: string | null) {
 
 export interface AppItem {
   kind: "file" | "folder"; id: string; ownerId: string; parentId: string | null; name: string
-  locked?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean; sensitive?: boolean
+  locked?: boolean; canSave?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean; sensitive?: boolean
 }
 
 /**
@@ -65,10 +69,13 @@ export interface AppItem {
  */
 export async function appItem(kind: "file" | "folder", id: string): Promise<AppItem | null> {
   if (kind === "folder") {
-    const { data, error } = await db().from("store_folders").select("id, owner_id, parent_id, name, template_slug, trashed_at").eq("id", id).maybeSingle()
+    const { data, error } = await db().from("store_folders").select("id, owner_id, parent_id, name, kind, template_slug, trashed_at, store_owners(kind)").eq("id", id).maybeSingle()
     if (error) throw new Error(`Could not read the folder (${error.message}).`)
     if (!data || data.trashed_at) return null
-    return { kind, id: data.id, ownerId: data.owner_id, parentId: data.parent_id ?? null, name: data.name, locked: data.template_slug !== null || data.parent_id === null }
+    const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
+    const inShare = await (await import("@/lib/crm-store/staff-share")).isInStaffShare(data.id)
+    return { kind, id: data.id, ownerId: data.owner_id, parentId: data.parent_id ?? null, name: data.name, locked: data.template_slug !== null || data.parent_id === null,
+      canSave: checkDestination({ ownerKind, folderKind: data.kind, inStaffShare: inShare, folderTrashed: false }).ok }
   }
   const { data, error } = await db().from("store_files")
     .select("id, owner_id, folder_id, name, state, document_type, updated_at, store_owners(kind), store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", id).maybeSingle()

@@ -1,9 +1,9 @@
 import FileProvider
 import UniformTypeIdentifiers
 
-/// What Finder is told about each item. READ-ONLY on purpose in phase P0/P1: folders can be listed and opened, files can be read
-/// (once the file route exists, P1); nothing can be added, renamed, moved or deleted from Finder (the capabilities below say so, so
-/// Finder never even offers it and never sends such a request).
+/// What Finder is told about each item. Files can be read. A NEW file can be added only into a folder the CRM says may take one
+/// (`canSave`: Business and My files for now); nothing existing can be renamed, moved, replaced or deleted from Finder (the capabilities
+/// below say so, so Finder never even offers it).
 final class FPItem: NSObject, NSFileProviderItem {
     let itemIdentifier: NSFileProviderItemIdentifier
     let parentItemIdentifier: NSFileProviderItemIdentifier
@@ -12,8 +12,10 @@ final class FPItem: NSObject, NSFileProviderItem {
     let size: Int?
     let modified: Date?
     let contentVersionTag: String
+    /// may the Mac save a NEW file into this folder? The CRM decides (Business and My files only for now); never anything else is allowed.
+    let canSave: Bool
 
-    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "") {
+    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "", canSave: Bool = false) {
         self.itemIdentifier = FPItem.identifier(for: id)
         self.parentItemIdentifier = FPItem.identifier(for: parent)
         self.filename = filename
@@ -21,12 +23,16 @@ final class FPItem: NSObject, NSFileProviderItem {
         self.size = size
         self.modified = modified
         self.contentVersionTag = versionTag
+        self.canSave = canSave
     }
 
     static func identifier(for id: ItemID) -> NSFileProviderItemIdentifier { id == .root ? .rootContainer : NSFileProviderItemIdentifier(id.raw) }
     static func itemID(for identifier: NSFileProviderItemIdentifier) -> ItemID? { identifier == .rootContainer ? .root : ItemID(raw: identifier.rawValue) }
 
-    var capabilities: NSFileProviderItemCapabilities { isFolder ? [.allowsReading, .allowsContentEnumerating] : [.allowsReading] }
+    var capabilities: NSFileProviderItemCapabilities {
+        guard isFolder else { return [.allowsReading] }
+        return canSave ? [.allowsReading, .allowsContentEnumerating, .allowsAddingSubItems] : [.allowsReading, .allowsContentEnumerating]
+    }
     var contentType: UTType {
         if isFolder { return .folder }
         let ext = (filename as NSString).pathExtension
@@ -80,7 +86,7 @@ actor Catalog {
         let l = try await api.folder(owner: owner, folder: folder)
         let entries = l.folders.map { (id: $0.id, name: NameMapper.finderName(fromServer: $0.name)) } + l.files.map { (id: $0.id, name: NameMapper.finderName(fromServer: $0.name)) }
         let names = Disambiguator.unique(entries)
-        var out: [FPItem] = l.folders.map { FPItem(id: .folder(owner: owner, folder: $0.id), parent: parent, filename: names[$0.id] ?? $0.name, isFolder: true) }
+        var out: [FPItem] = l.folders.map { FPItem(id: .folder(owner: owner, folder: $0.id), parent: parent, filename: names[$0.id] ?? $0.name, isFolder: true, canSave: $0.canSave ?? false) }
         out += l.files.map { fileItem($0, owner: owner, parent: parent, name: names[$0.id] ?? $0.name) }
         return out
     }
@@ -101,7 +107,7 @@ actor Catalog {
             throw StorageAPIError.notFound
         case .folder(let owner, let folder):
             let it = try await api.item(kind: "folder", id: folder)
-            return FPItem(id: id, parent: it.parentId.map { .folder(owner: owner, folder: $0) } ?? .owner(owner), filename: NameMapper.finderName(fromServer: it.name), isFolder: true)
+            return FPItem(id: id, parent: it.parentId.map { .folder(owner: owner, folder: $0) } ?? .owner(owner), filename: NameMapper.finderName(fromServer: it.name), isFolder: true, canSave: it.canSave ?? false)
         case .file(let owner, let file):
             let it = try await api.item(kind: "file", id: file)
             let parent: ItemID = it.parentId.map { .folder(owner: owner, folder: $0) } ?? .owner(owner)
@@ -122,6 +128,8 @@ func fileProviderError(_ error: Error) -> Error {
     case .forbidden?: return NSFileProviderError(.cannotSynchronize)
     // a sensitive document: said plainly, and NOT retried (a read-permission error is final)
     case .openInCRM(let message)?: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: [NSLocalizedDescriptionKey: message])
+    // a SAVE the CRM said no to (name taken, wrong folder, too big …): said plainly, and NOT retried (a write-permission error is final)
+    case .refused(let message)?: return NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError, userInfo: [NSLocalizedDescriptionKey: message])
     case .rateLimited(let message)?: return described(NSFileProviderError(.serverUnreachable) as NSError, message)
     case .integrity(let message)?: return described(NSFileProviderError(.cannotSynchronize) as NSError, message)
     default: return NSFileProviderError(.serverUnreachable)

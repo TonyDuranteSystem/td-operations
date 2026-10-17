@@ -10,6 +10,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let downloader: FileDownloader
     private var poller: Timer?
     private let ledger = EvictionLedger()
+    let uploader = FileUploader()
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
@@ -95,19 +96,63 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         return progress
     }
 
-    // Read-only: the capabilities already stop Finder from offering these; if the system asks anyway, the answer is a plain "no".
+    // SAVING a NEW file (phase P3 step A). Only into a folder the CRM says may take one (canSave: Business and My files for now). The CRM
+    // checks everything again. Real folders cannot be created from Finder yet; system junk and partial downloads are left out; nothing that
+    // already exists can be changed, replaced, moved or deleted from here ("Open it in the CRM to change it").
+    private static let changeInCRM = "This can only be changed in the CRM."
+    private func noPermission(_ message: String) -> Error { NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError, userInfo: [NSLocalizedDescriptionKey: message]) }
+
     func createItem(basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields, contents url: URL?, options: NSFileProviderCreateItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, CocoaError(.fileWriteNoPermission))
-        return Progress()
+        let progress = Progress(totalUnitCount: 1)
+        Task {
+            defer { progress.completedUnitCount = 1 }
+            do {
+                let name = NameMapper.serverName(fromFinder: itemTemplate.filename)
+                // system junk and partial downloads are never uploaded: the system is told this one is not synced
+                if NameMapper.isJunk(name) { throw NSFileProviderError(.excludedFromSync) }
+                guard itemTemplate.contentType != .folder, itemTemplate.contentType?.conforms(to: .folder) != true else { throw noPermission("Folders can be created in the CRM, not from the Mac yet.") }
+                guard case .folder(let owner, let folder)? = FPItem.itemID(for: itemTemplate.parentItemIdentifier) else { throw noPermission("Open one of the folders first — files go inside a folder.") }
+                let attrs = url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
+                let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+                let modified = (attrs?[.modificationDate] as? Date) ?? itemTemplate.contentModificationDate ?? nil
+                let key = ItemKey.make(parent: itemTemplate.parentItemIdentifier.rawValue, name: name, size: size, modified: modified)
+                let mime = itemTemplate.contentType?.preferredMIMEType
+                let slot = try await api.uploadSlot(ownerId: owner, folderId: folder, name: name, size: size, mimeType: mime, itemKey: key)
+                var fileId = slot.alreadySaved == true ? slot.fileId : nil
+                if fileId == nil {
+                    guard let intent = slot.intentId, let address = slot.uploadUrl else { throw StorageAPIError.badResponse }
+                    var source = url
+                    var emptyTemp: URL?
+                    if source == nil { let t = FileManager.default.temporaryDirectory.appendingPathComponent("tds-empty-" + UUID().uuidString); FileManager.default.createFile(atPath: t.path, contents: Data()); source = t; emptyTemp = t }
+                    defer { if let emptyTemp { try? FileManager.default.removeItem(at: emptyTemp) } }
+                    try await uploader.upload(file: source!, to: address, mimeType: mime)
+                    fileId = try await api.save(intentId: intent, itemKey: key).fileId
+                }
+                let id = ItemID.file(owner: owner, file: fileId!)
+                let item = try await catalog.item(for: id)
+                ledger.record(id: item.itemIdentifier.rawValue, keepSeconds: 900)   // the Mac's own copy is only kept briefly: the CRM has the file now
+                completionHandler(item, [], false, nil)
+            } catch { completionHandler(nil, [], false, fileProviderError(error)) }
+        }
+        return progress
     }
 
     func modifyItem(_ item: NSFileProviderItem, baseVersion version: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields, contents newContents: URL?, options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, CocoaError(.fileWriteNoPermission))
-        return Progress()
+        let progress = Progress(totalUnitCount: 1)
+        Task {
+            defer { progress.completedUnitCount = 1 }
+            // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored; any change to the name, place or content is refused
+            let real: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
+            guard changedFields.intersection(real).isEmpty, let id = FPItem.itemID(for: item.itemIdentifier) else {
+                completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return
+            }
+            do { completionHandler(try await catalog.item(for: id), [], false, nil) } catch { completionHandler(nil, [], false, fileProviderError(error)) }
+        }
+        return progress
     }
 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion, options: NSFileProviderDeleteItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (Error?) -> Void) -> Progress {
-        completionHandler(CocoaError(.fileWriteNoPermission))
+        completionHandler(noPermission(Self.changeInCRM))
         return Progress()
     }
 }

@@ -376,6 +376,67 @@ final class EvictionLedgerTests: XCTestCase {
     }
 }
 
+final class SaveNewFileTests: XCTestCase {
+    private let base = URL(string: "https://crm.example.test/")!
+    private func api() -> StorageAPI {
+        let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [StubProtocol.self]
+        return StorageAPI(baseURL: base, store: MemoryTokenStore(TokenPair(accessToken: "a", refreshToken: "r", expiresIn: 900, deviceId: "d1")), session: URLSession(configuration: cfg))
+    }
+    override func setUp() { StubProtocol.handler = nil; StubProtocol.seen = [] }
+
+    func testTheSameFileAlwaysGetsTheSameKey() {
+        let d = Date(timeIntervalSince1970: 1_700_000_000)
+        let a = ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 10, modified: d)
+        XCTAssertEqual(a, ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 10, modified: d))
+        XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f2", name: "a.pdf", size: 10, modified: d))
+        XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f1", name: "b.pdf", size: 10, modified: d))
+        XCTAssertNotEqual(a, ItemKey.make(parent: "d:o1:f1", name: "a.pdf", size: 11, modified: d))
+    }
+    func testTheKeyLooksLikeAUUIDTheServerAccepts() {
+        let k = ItemKey.make(parent: "p", name: "n", size: 1, modified: nil)
+        XCTAssertNotNil(UUID(uuidString: k)); XCTAssertEqual(k.count, 36)
+    }
+    func testAskingForASlotSendsTheRightBodyWithTheToken() async throws {
+        StubProtocol.handler = { _ in (200, #"{"intentId":"i1","uploadUrl":"https://x.example/u?token=t","maxBytes":157286400}"#) }
+        let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: "application/pdf", itemKey: "k")
+        XCTAssertEqual(slot.intentId, "i1"); XCTAssertEqual(slot.uploadUrl, "https://x.example/u?token=t")
+        let req = StubProtocol.seen.last!
+        XCTAssertEqual(req.httpMethod, "POST"); XCTAssertEqual(req.url!.path, "/api/storage-app/upload-slot")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer a")
+    }
+    func testAnAlreadySavedFileComesBackWithItsId() async throws {
+        StubProtocol.handler = { _ in (200, #"{"alreadySaved":true,"fileId":"x1","ownerId":"o1","name":"a.pdf"}"#) }
+        let slot = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k")
+        XCTAssertEqual(slot.alreadySaved, true); XCTAssertEqual(slot.fileId, "x1")
+    }
+    func testANameTakenOrAWrongFolderIsAPlainRefusal() async {
+        for code in [409, 413, 422] {
+            StubProtocol.handler = { _ in (code, #"{"error":"exists","message":"A file with this name is already in this folder. Open the CRM to replace it."}"#) }
+            do { _ = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k"); XCTFail("should throw") }
+            catch StorageAPIError.refused(let m) { XCTAssertTrue(m.contains("already in this folder")) }
+            catch { XCTFail("\(error)") }
+        }
+    }
+    func testTheUploadLimitIsAPlainRetryLater() async {
+        StubProtocol.handler = { _ in (429, #"{"error":"upload_limit","message":"This Mac has uploaded a lot in the last hour."}"#) }
+        do { _ = try await api().save(intentId: "i1", itemKey: "k"); XCTFail("should throw") }
+        catch StorageAPIError.rateLimited(let m) { XCTAssertTrue(m.contains("uploaded a lot")) }
+        catch { XCTFail("\(error)") }
+    }
+    func testFolderAnswersCarryTheCanSaveFlag() throws {
+        let json = #"{"owner":{"kind":"business","label":"Business","accountStatus":null,"closed":false},"folder":{"id":"f1","name":"Faxes","kind":"custom","locked":false,"canSave":true},"folders":[{"id":"f2","name":"x","kind":"custom","locked":false,"canSave":false},{"id":"f3","name":"y","kind":"custom","locked":false}],"files":[]}"#
+        let l = try JSONDecoder().decode(FolderListing.self, from: Data(json.utf8))
+        XCTAssertEqual(l.folder?.canSave, true); XCTAssertEqual(l.folders[0].canSave, false); XCTAssertNil(l.folders[1].canSave)
+    }
+    func testUploadsOnlyToHttpsAddresses() async {
+        let u = FileUploader()
+        let f = FileManager.default.temporaryDirectory.appendingPathComponent("tds-test-" + UUID().uuidString)
+        FileManager.default.createFile(atPath: f.path, contents: Data("x".utf8)); defer { try? FileManager.default.removeItem(at: f) }
+        do { try await u.upload(file: f, to: "http://evil.example/u", mimeType: nil); XCTFail("should throw") }
+        catch { guard case StorageAPIError.integrity? = error as? StorageAPIError else { return XCTFail("\(error)") } }
+    }
+}
+
 enum FileDownloaderTestHelper {
     static func sha(_ s: String) -> String { var h = SHA256(); h.update(data: Data(s.utf8)); return h.finalize().map { String(format: "%02x", $0) }.joined() }
 }
