@@ -261,14 +261,28 @@ export async function storageCheckFor(accountId: string): Promise<{ inStorage: b
  * Just BEFORE a CRM button removes a person from a company: remember who they were. Never throws — the removal must go on
  * even if the note cannot be saved (a missing table, a double click).
  */
-export async function recordPersonLeaving(p: { accountId: string; contactId: string | null; personName: string | null; actorId: string | null; via: string }): Promise<void> {
+export async function recordPersonLeaving(p: { accountId: string; contactId: string | null; personName: string | null; actorId: string | null; via: string }): Promise<{ onlyLinkedPerson: boolean }> {
+  let onlyLinkedPerson = false
   try {
-    if (!p.contactId) return
+    if (!p.contactId) return { onlyLinkedPerson }
     const d = db()
     const { data: owner } = await d.from("store_owners").select("id").eq("account_id", p.accountId).eq("kind", "company").maybeSingle()
-    if (!owner) return // the company is not in the new storage: nothing to tell
-    await d.from("storage_check_notes").insert({ account_id: p.accountId, kind: "left", contact_id: p.contactId, person_name: p.personName, details: { via: p.via }, created_by: p.actorId })
+    if (!owner) return { onlyLinkedPerson } // the company is not in the new storage: nothing to tell
+    const { data: note } = await d.from("storage_check_notes").insert({ account_id: p.accountId, kind: "left", contact_id: p.contactId, person_name: p.personName, details: { via: p.via }, created_by: p.actorId }).select("id").single()
+    // is this the only person linked to the company? (counted before the removal)
+    const { data: links } = await d.from("account_contacts").select("contact_id").eq("account_id", p.accountId)
+    const linked = ((links ?? []) as Array<{ contact_id: string }>).map((l) => l.contact_id)
+    onlyLinkedPerson = linked.length > 0 && linked.every((id) => id === p.contactId)
+    // Antonio 2026-10-17: every notification goes in the Calendar (What's New). Best effort — never blocks the removal.
+    if (note?.id) {
+      try {
+        const { data: acct } = await d.from("accounts").select("company_name").eq("id", p.accountId).maybeSingle()
+        const { emitPersonLeftEvent } = await import("@/lib/portal/chat-events")
+        await emitPersonLeftEvent({ noteId: note.id as string, accountId: p.accountId, personName: p.personName, companyName: (acct?.company_name as string | null) ?? null, via: p.via, onlyLinkedPerson })
+      } catch { /* the removal goes on */ }
+    }
   } catch { /* the removal goes on */ }
+  return { onlyLinkedPerson }
 }
 
 // ───────────────────────────────────────────────────────────── apply (re-checked against the live state)
