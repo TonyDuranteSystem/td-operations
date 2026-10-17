@@ -2530,6 +2530,7 @@ export type Database = {
           name: string
           notes: string | null
           phone: string | null
+          postal_code: string | null
           region: string | null
           updated_at: string | null
           vat_number: string | null
@@ -2549,6 +2550,7 @@ export type Database = {
           name: string
           notes?: string | null
           phone?: string | null
+          postal_code?: string | null
           region?: string | null
           updated_at?: string | null
           vat_number?: string | null
@@ -2568,6 +2570,7 @@ export type Database = {
           name?: string
           notes?: string | null
           phone?: string | null
+          postal_code?: string | null
           region?: string | null
           updated_at?: string | null
           vat_number?: string | null

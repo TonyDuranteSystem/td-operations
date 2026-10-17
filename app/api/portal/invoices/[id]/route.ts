@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { NextRequest, NextResponse } from 'next/server'
+import { displayCustomerAddress } from '@/lib/portal/customer-address'
 
 /**
  * GET /api/portal/invoices/[id] — Full invoice detail with customer + items
@@ -38,11 +39,11 @@ export async function GET(
   if (invoice.customer_id) {
     const { data } = await supabaseAdmin
       .from('client_customers')
-      .select('name, email, address, vat_number')
+      .select('name, email, address, postal_code, city, region, country, vat_number')
       .eq('id', invoice.customer_id)
       .eq('account_id', invoice.account_id) // a customer of another company is never shown on this invoice
       .maybeSingle()
-    customer = data
+    customer = data ? { name: data.name, email: data.email, address: displayCustomerAddress(data) || null, vat_number: data.vat_number } : null
   }
 
   // Fetch line items

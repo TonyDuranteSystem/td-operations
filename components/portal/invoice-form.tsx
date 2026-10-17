@@ -10,6 +10,7 @@ import { interpolateString } from '@/lib/template-interpolation'
 import { pickBankAccountId, bankCurrencyNote } from '@/lib/portal/bank-account-choice'
 import { nextRecurringDate, isValidCustomMonths, CUSTOM_MONTHS_MIN, CUSTOM_MONTHS_MAX } from '@/lib/portal/recurring-date'
 import Link from 'next/link'
+import { MoneyInput } from '@/components/portal/money-input'
 
 interface Customer {
   id: string
@@ -437,12 +438,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
                   step="0.01"
                   className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-                <input
-                  type="number"
+                <MoneyInput
                   value={item.unit_price}
-                  onChange={e => updateItem(i, 'unit_price', Number(e.target.value))}
-                  min="0"
-                  step="0.01"
+                  onChange={n => updateItem(i, 'unit_price', n)}
+                  testId={`invoice-item-price-${i}`}
                   className="px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <div className="px-3 py-2 text-sm bg-zinc-50 border rounded-lg text-zinc-700 font-medium">
@@ -478,12 +477,10 @@ export function InvoiceForm({ accountId, customers, templates, mode, initialData
             </div>
             <div className="flex justify-between items-center">
               <span className="text-zinc-500">{t('invoices.discount')}</span>
-              <input
-                type="number"
+              <MoneyInput
                 value={discount}
-                onChange={e => setDiscount(Number(e.target.value))}
-                min="0"
-                step="0.01"
+                onChange={setDiscount}
+                testId="invoice-discount"
                 className="w-24 px-2 py-1 text-sm border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
