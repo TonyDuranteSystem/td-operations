@@ -18,8 +18,9 @@
  *
  * Filing that same receipt in the company's CRM storage comes second and
  * never blocks the switch (the switch was done by hand on Harbor's site and is
- * already real): a company with no storage keeps the receipt in the upload
- * area, and the response says so in one sentence.
+ * already real). A company that can receive no file at all (finished, or no
+ * storage and no folder) is refused up front with one plain sentence, before
+ * anything is saved or the stage moves.
  *
  * Also stamps accounts.ra_switch_date and accounts.client_since (Antonio,
  * same follow-up: "I want the Client since and RA switch date so the crm
@@ -42,6 +43,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { advanceStageIfAt } from '@/lib/operations/service-delivery'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, accountCanReceiveFiles, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { deriveRenewalDates, applyRenewalDateFills } from '@/lib/operations/renewal-dates'
 
 const MAX_RECEIPT_BYTES = 15 * 1024 * 1024
@@ -114,6 +116,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const fileName = `RA_Switch_Receipt_${new Date().toISOString().slice(0, 10)}_${receipt.name}`
     const mimeType = receipt.type || 'application/pdf'
 
+    // A company that can receive no file at all (no storage, and finished or without a folder): one plain sentence, nothing
+    // saved, the stage not advanced.
+    let canReceive: boolean
+    try { canReceive = await accountCanReceiveFiles(sub.account_id) } catch {
+      return NextResponse.json({ success: false, error: "Could not check where this company's files live — please try again." }, { status: 500 })
+    }
+    if (!canReceive) return NextResponse.json({ success: false, error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+
     // 1. Durable copy FIRST — the same Supabase Storage bucket the client's
     // own wizard uploads already use (confirmed working live, 2026-09-22).
     // This is the record's real proof from this point on; Drive below is a
@@ -135,9 +145,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    // 2. File the receipt in the company's storage. The switch itself was done by hand on Harbor Compliance's site and is
-    // already real, so a company with no storage never blocks the confirmation: the receipt stays safe in the upload area
-    // (step 1) and the message below says so in one sentence — nothing is skipped quietly.
+    // 2. File the receipt in the company's storage (or, for a company left on its old folder, there). The switch itself was
+    // done by hand on Harbor Compliance's site and is already real, so a filing problem here never blocks the confirmation:
+    // the receipt stays safe in the upload area (step 1) and the message below says so — nothing is skipped quietly.
     let filingNote: string
     try {
       const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -149,9 +159,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           portalVisible: false,
           row: { document_type_name: 'RA Switch Receipt', category: 1, category_name: 'Company', status: 'classified', contact_id: null },
         })
-        filingNote = routed.route === 'store'
-          ? "also filed in the company's CRM storage (1. Company)."
-          : 'the receipt could not be filed because this company has no document storage in the CRM. It stays in the upload area.'
+        if (routed.route === 'store') {
+          filingNote = "also filed in the company's CRM storage (1. Company)."
+        } else {
+          // a company left on its old folder: the copy goes there, as before (the receipt is already safe above)
+          const decision = await noStorageDecisionFor(sub.account_id)
+          if (decision.route === 'drive') {
+            const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+            await uploadBinaryToDrive(fileName, buffer, mimeType, decision.folderId)
+            filingNote = "also filed to the company's folder."
+          } else {
+            filingNote = 'kept in the upload area — this company has no document storage in the CRM.'
+          }
+        }
       } catch (e) {
         if (e instanceof CompanyMovingError) filingNote = "kept in the upload area — the company's files are being moved right now, so file it again in a few minutes."
         else throw e

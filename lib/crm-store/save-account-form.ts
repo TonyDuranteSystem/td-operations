@@ -7,13 +7,16 @@
  * company itself, and files through the same `saveFormToStore` the Drive path already uses (same folders, same idempotent keys).
  *
  *   store   → filed in the company's storage; result is the usual { summaryFileId, copied, failed, skipped, errors }.
- *   drive   → `{ route: "none" }`: the company has no storage — the caller says so in the one plain sentence.
+ *   drive   → a company left on its old folder (no storage, a folder, not finished) is filed there through `saveFormToDrive`,
+ *             exactly as before (`route: "folder"`); any other company: `{ route: "none" }` — the caller says so in the one plain sentence.
  *   moving  → throws CompanyMovingError (nothing may land anywhere while a move runs).
  */
 
 import type { FormStoreResult } from "./save-form"
+import { NO_STORAGE_SENTENCE } from "./no-storage"
 
-export type SaveAccountFormResult = { route: "store"; result: FormStoreResult } | { route: "none" }
+/** store = filed in the company's storage; folder = filed in the old folder of a company left as it was; none = filed nowhere. */
+export type SaveAccountFormResult = { route: "store" | "folder"; result: FormStoreResult } | { route: "none" }
 
 export interface SaveAccountFormInput {
   accountId: string
@@ -30,6 +33,9 @@ export interface SaveAccountFormDeps {
   liveOwner: (accountId: string) => Promise<string | null>
   summary: (formType: string, data: Record<string, unknown>, meta: SaveAccountFormInput["meta"] & { uploadCount: number }) => Promise<{ bytes: Buffer | null; error: string | null; subfolder: string; filePrefix: string; defaultBucket: string }>
   store: typeof import("./save-form").saveFormToStore
+  /** the old folder of a company with no storage that is still being worked in its folder; null = none */
+  oldFolder: (accountId: string) => Promise<string | null>
+  toFolder: (i: SaveAccountFormInput, folderId: string) => Promise<FormStoreResult>
 }
 
 async function defaultDeps(): Promise<SaveAccountFormDeps> {
@@ -39,6 +45,15 @@ async function defaultDeps(): Promise<SaveAccountFormDeps> {
     state: guard.companyDocState,
     liveOwner: guard.liveOwnerOfAccount,
     store: saveForm.saveFormToStore,
+    oldFolder: async (accountId) => {
+      const { noStorageDecisionFor } = await import("./no-storage")
+      const d = await noStorageDecisionFor(accountId)
+      return d.route === "drive" ? d.folderId : null
+    },
+    toFolder: async (i, folderId) => {
+      const { saveFormToDrive } = await import("@/lib/form-to-drive")
+      return saveFormToDrive(i.formType, i.submittedData, i.uploadPaths, folderId, i.meta, i.bucket ? { bucket: i.bucket } : undefined)
+    },
     summary: async (formType, data, meta) => {
       const f = await import("@/lib/form-to-drive")
       const config = f.FORM_CONFIGS[formType]
@@ -61,7 +76,11 @@ export async function saveFormForAccount(input: SaveAccountFormInput, deps?: Sav
     const { CompanyMovingError } = await import("./save-for-account")
     throw new CompanyMovingError()
   }
-  if (state !== "store") return { route: "none" }
+  if (state !== "store") {
+    const folderId = await d.oldFolder(input.accountId)
+    if (!folderId) return { route: "none" }
+    return { route: "folder", result: await d.toFolder(input, folderId) }
+  }
   const ownerId = await d.liveOwner(input.accountId)
   if (!ownerId) throw new Error("This company's files live in the new storage, but its storage could not be found — nothing was saved.")
 
@@ -81,4 +100,20 @@ export async function saveFormForAccount(input: SaveAccountFormInput, deps?: Sav
     submissionKey: `${input.accountId}:${input.formType}:${input.meta.token}`,
   })
   return { route: "store", result: { ...res, errors: [...(s.error ? [s.error] : []), ...res.errors] } }
+}
+
+/**
+ * Pure: what to tell staff after filing a form, and whether it counts as FILED. Filed = it reached a storage or a folder with no
+ * error and no upload that failed. A review tool must not mark a form "reviewed" unless this is true.
+ */
+export function describeFiling(saved: SaveAccountFormResult | null): { ok: boolean; lines: string[] } {
+  if (!saved) return { ok: true, lines: [] }
+  if (saved.route === "none") return { ok: false, lines: [`⚠️ ${NO_STORAGE_SENTENCE}`] }
+  const r = saved.result
+  const lines: string[] = []
+  if (r.summaryFileId) lines.push(`✅ Data summary saved (${r.summaryFileId})`)
+  if (r.copied.length > 0) lines.push(`✅ ${r.copied.length} file(s) saved`)
+  if (r.failed.length > 0) lines.push(`⚠️ ${r.failed.length} file(s) failed to save`)
+  if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
+  return { ok: r.errors.length === 0 && r.failed.length === 0, lines }
 }

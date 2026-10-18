@@ -61,7 +61,14 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
     // below as "no_storage" (audit log), never skipped quietly.
     const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
     const inStorage = (await companyDocState(accountId)) !== "drive"
-    if (inStorage) {
+    // a company left on its old folder (no storage, a folder, not finished) carries on there, as before
+    let oldFolderId: string | null = null
+    if (!inStorage) {
+      const { noStorageDecisionFor } = await import("@/lib/crm-store/no-storage")
+      const decision = await noStorageDecisionFor(accountId)
+      if (decision.route === "drive") oldFolderId = decision.folderId
+    }
+    if (inStorage || oldFolderId) {
       const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
       const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
       if (!result) {
@@ -72,13 +79,21 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
       } else {
         const workbookName = `${companyName} - PnL + Balance Sheet ${taxYear} (client-confirmed).xlsx`
         const workbookMime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        // the same key on a re-confirm is a new VERSION of the year's one workbook, never a second copy
-        const { saveTaxFileForAccount } = await import("@/lib/crm-store/save-form")
-        const routed = await saveTaxFileForAccount({
-          accountId, year: taxYear, name: workbookName, bytes: Buffer.from(result.buffer), mimeType: workbookMime,
-          callerKey: `attest-workbook:${accountId}:${taxYear}`,
-        })
-        if (routed.route !== "store") throw new Error("This company's storage was not available while the workbook was being saved — nothing was saved.")
+        if (inStorage) {
+          // the same key on a re-confirm is a new VERSION of the year's one workbook, never a second copy
+          const { saveTaxFileForAccount } = await import("@/lib/crm-store/save-form")
+          const routed = await saveTaxFileForAccount({
+            accountId, year: taxYear, name: workbookName, bytes: Buffer.from(result.buffer), mimeType: workbookMime,
+            callerKey: `attest-workbook:${accountId}:${taxYear}`,
+          })
+          if (routed.route !== "store") throw new Error("This company's storage was not available while the workbook was being saved — nothing was saved.")
+        } else {
+          const { findTaxFolder, findOrCreateYearFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
+          const taxFolderId = await findTaxFolder(oldFolderId as string)
+          // Fall back to the folder root only when there is no '3. Tax' folder at all.
+          const target = taxFolderId ? await findOrCreateYearFolder(taxFolderId, taxYear) : (oldFolderId as string)
+          await uploadBinaryToDriveUpsert(workbookName, result.buffer, workbookMime, target)
+        }
         outcome = "archived"
       }
     } else {

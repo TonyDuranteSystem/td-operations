@@ -13,6 +13,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 let sdRow: Record<string, unknown> | null
 let accountRow: Record<string, unknown> | null
 let companyState: "drive" | "store"
+let driveMode: "forbid" | "record"
+let removedPaths: string[]
+let ensuredPersons: string[]
+let contactSaves: Array<Record<string, unknown>>
 let saveCalls: Array<Record<string, unknown>>
 let existingDocs: Array<{ id: string }>
 let docInsertError: { message: string } | null
@@ -38,8 +42,14 @@ vi.mock("@/lib/supabase-admin", () => ({
       }
       if (table === "accounts") {
         return {
-          select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: accountRow, error: null }) }) }),
+          select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: accountRow, error: null }), maybeSingle: () => Promise.resolve({ data: accountRow, error: null }) }) }),
         }
+      }
+      if (table === "account_contacts") {
+        return { select: () => ({ eq: () => ({ order: () => ({ order: () => Promise.resolve({ data: [] }) }) }) }) }
+      }
+      if (table === "contacts") {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { full_name: "Mario Rossi" } }) }) }) }
       }
       if (table === "documents") {
         return {
@@ -68,23 +78,24 @@ vi.mock("@/lib/supabase-admin", () => ({
             error: null,
           }),
         createSignedUrl: () => Promise.resolve({ data: { signedUrl: "https://signed.example/url" } }),
-        remove: () => Promise.resolve({}),
+        remove: (paths: string[]) => { for (const x of paths) removedPaths.push(x); return Promise.resolve({}) },
       }),
     },
   },
 }))
 
-// Google Drive is a SPY: nothing here may ever call it.
-vi.mock("@/lib/google-drive", () => {
-  const spy = (name: string) => vi.fn(async () => { driveCalls.push(name); throw new Error(`Drive must not be called: ${name}`) })
-  return { listFolderAnyDrive: spy("listFolderAnyDrive"), listFolder: spy("listFolder"), createFolder: spy("createFolder"), uploadBinaryToDrive: spy("uploadBinaryToDrive"), uploadBinaryToDriveUpsert: spy("uploadBinaryToDriveUpsert") }
+// Google Drive is a SPY: nothing may call it unless the test says the company is left on its old folder.
+vi.mock("@/lib/google-drive", async () => {
+  const h = await import("./_stop-drive-mocks")
+  return h.driveSpyDynamic(driveCalls, () => driveMode)
 })
 
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => companyState), liveOwnerOfContact: vi.fn(async () => null) }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => companyState), liveOwnerOfContact: vi.fn(async () => (ensuredPersons.length > 0 ? "person-owner" : null)) }))
 
 vi.mock("@/lib/crm-store/formation-pilot", () => ({
   pilotSaveFormationUpload: vi.fn(async () => ({ status: "not_pilot" })),
   FORMATION_UPLOAD_TYPES: {},
+  ensurePersonOwner: vi.fn(async (contactId: string) => { ensuredPersons.push(contactId); return "person-owner" }),
 }))
 
 vi.mock("@/lib/crm-store/save-for-account", () => ({
@@ -93,7 +104,10 @@ vi.mock("@/lib/crm-store/save-for-account", () => ({
     saveCalls.push(input)
     return { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
   }),
-  saveDocumentForContact: vi.fn(async () => ({ route: "drive" })),
+  saveDocumentForContact: vi.fn(async (input: Record<string, unknown>) => {
+    contactSaves.push(input)
+    return ensuredPersons.length > 0 ? { route: "store", fileId: "pf-1", pointer: "store:pf-1", documentRowId: "pdoc-1", status: "created" } : { route: "drive" }
+  }),
 }))
 
 vi.mock("@/lib/service-delivery", () => ({
@@ -138,6 +152,10 @@ const EIN_BODY = {
 beforeEach(() => {
   delete process.env.SANDBOX_MODE
   companyState = "store"
+  driveMode = "forbid"
+  removedPaths = []
+  ensuredPersons = []
+  contactSaves = []
   saveCalls = []
   sdRow = {
     id: "sd-1",
@@ -195,8 +213,9 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(driveCalls).toEqual([])
   })
 
-  it("Scenario 6 — a company with NO storage: one plain sentence (409), nothing saved, no document row, stage not advanced, zero Drive calls", async () => {
+  it("Scenario 6 — a company with NO storage and no folder: one plain sentence (409), nothing saved, no document row, stage not advanced, zero Drive calls, staged file removed", async () => {
     companyState = "drive"
+    accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Active", drive_folder_id: null, gdrive_folder_url: null }
     const res = await call(EIN_BODY)
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -206,16 +225,51 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(documentsInsertPayload).toBeNull()
     expect(advanceCalled).toBe(false)
     expect(driveCalls).toEqual([])
+    expect(removedPaths).toContain(EIN_BODY.storage_path)
   })
 
-  it("Scenario 7 — a flow with no company yet keeps the file in the upload bucket (renamed row), zero Drive calls", async () => {
-    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
+  it("Scenario 6b — a Closed company with a folder is refused as well (no Drive write, stage not advanced)", async () => {
+    companyState = "drive"
+    accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Closed", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(409)
+    expect(driveCalls).toEqual([])
+    expect(advanceCalled).toBe(false)
+  })
+
+  it("Scenario 6c — a company left on its old folder (Active, folder, no storage): filed there exactly as before, renamed, stage advances", async () => {
+    companyState = "drive"
+    driveMode = "record"
+    accountRow = { company_name: "Acme Holdings LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
     const res = await call(EIN_BODY)
     expect(res.status).toBe(200)
-    expect(driveCalls).toEqual([])
+    expect(driveCalls).toContain("uploadBinaryToDriveUpsert")
     expect(saveCalls).toEqual([])
-    expect(documentsInsertPayload?.file_name).toBe("cp575_scan.pdf")
-    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC.pdf")
+    expect(documentsInsertPayload?.drive_file_id).toBe("drive-file-1")
+    expect(advanceCalled).toBe(true)
+  })
+
+  it("Scenario 7 — a flow with no company yet (ITIN, person with NO storage): the person's storage is opened and the file is filed there; no expiring link, no bucket-only keep", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
+    const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
+    expect(res.status).toBe(200)
+    expect(ensuredPersons).toEqual(["cont-1"])
+    expect(contactSaves).toHaveLength(1)
+    expect(contactSaves[0]).toMatchObject({ contactId: "cont-1", portalVisible: true, name: "cp575_scan.pdf" })
+    expect(driveCalls).toEqual([])
+    // the row points at the storage (written by the storage save), nothing was inserted with a signed link
+    expect(documentsInsertPayload?.drive_link ?? "").not.toContain("signed.example")
+    expect(documentsInsertPayload?.drive_file_id ?? "store:pf-1").not.toContain("onboarding-uploads")
+    expect(removedPaths).toContain(EIN_BODY.storage_path)
+  })
+
+  it("Scenario 7b — a flow with neither a company nor a person: one plain sentence (409), nothing kept", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, contact_id: null }
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(409)
+    expect(documentsInsertPayload).toBeNull()
+    expect(removedPaths).toContain(EIN_BODY.storage_path)
   })
 
   it("Scenario 8 — idempotency: an already-registered storage file is not re-inserted", async () => {

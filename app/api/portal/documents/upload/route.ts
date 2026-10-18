@@ -5,7 +5,8 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { uploadBinaryToDrive } from '@/lib/google-drive'
 
 /**
  * POST /api/portal/documents/upload
@@ -94,8 +95,13 @@ export async function POST(request: NextRequest) {
     ? `${docType || 'Tax Document'} - ${taxYear}`
     : docType || 'Client Upload'
 
-  // Every upload is saved in the company's CRM storage (Stop Drive, dev job 264bb882). A company with no storage
-  // gets one plain sentence back — nothing else is tried.
+  // A refused upload must not leave the staged object behind in the upload bucket.
+  const discardStaged = () => {
+    if (storagePath) supabaseAdmin.storage.from('portal-uploads').remove([storagePath]).catch(() => {})
+  }
+
+  // Every upload is saved in the company's CRM storage (Stop Drive, dev job 264bb882). A company with no storage:
+  // the few left on their old folder carry on as before; everyone else gets one plain sentence back.
   let stored: { documentRowId: string } | null = null
   try {
     const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -120,7 +126,7 @@ export async function POST(request: NextRequest) {
       })
       if (routed.route === 'store') stored = { documentRowId: routed.documentRowId }
     } catch (e) {
-      if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+      if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ error: e.message }, { status: 409 }) }
       throw e
     }
   } catch (err) {
@@ -128,10 +134,52 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
   }
 
-  if (!stored) return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+  let driveFolderId: string | null = null
+  if (!stored) {
+    let decision
+    try { decision = await noStorageDecisionFor(accountId) } catch {
+      return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
+    }
+    if (decision.route === 'refuse') {
+      discardStaged()
+      return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    }
+    driveFolderId = decision.folderId
+  }
 
   try {
-    const docId = stored.documentRowId
+    let docId: string
+    if (stored) {
+      docId = stored.documentRowId
+    } else {
+      // A company left on its old folder (no storage, a folder, not finished): unchanged.
+      const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, driveFolderId as string)
+      const { data: doc, error: insertError } = await supabaseAdmin
+        .from('documents')
+        .insert({
+          file_name: fileName,
+          drive_file_id: driveFile.id,
+          account_id: accountId,
+          // A personal document (category 2 — passport/ID…) belongs to the member who
+          // uploaded it; without an owner nobody (not even the uploader) can see it.
+          // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
+          ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
+          category: categoryNum,
+          document_type_name: typeName,
+          status: 'classified',
+          confidence: 'high',
+          mime_type: mimeType,
+          file_size: fileBuffer.length,
+        })
+        .select('id')
+        .single()
+
+      if (insertError) {
+        console.error('Document insert error:', insertError)
+        return NextResponse.json({ error: 'File uploaded but failed to save record. Please contact support.' }, { status: 500 })
+      }
+      docId = doc.id as string
+    }
 
     // Clean up Supabase Storage (async, don't block response)
     if (storagePath) {

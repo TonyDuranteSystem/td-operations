@@ -68,6 +68,10 @@ vi.mock('@/lib/supabase-admin', () => ({
         is: () => chain,
         update: (payload: Record<string, unknown>) => { pendingUpdate = payload; return chain },
         upsert: (payload: Record<string, unknown>) => { pendingUpsert = payload; return chain },
+        maybeSingle: () => {
+          if (table === 'accounts') return Promise.resolve({ data: accountRow, error: null })
+          return Promise.resolve({ data: null, error: null })
+        },
         single: () => {
           if (table === 'accounts') return Promise.resolve({ data: accountRow, error: null })
           if (table === 'contacts') return Promise.resolve({ data: { language: contactLang[filters.id] ?? null }, error: null })
@@ -107,16 +111,39 @@ const baseParams = () => ({
 })
 
 describe('saveSignedGeneratedDocument', () => {
-  it('a company with no storage: one plain sentence, nothing saved, Drive never called', async () => {
+  it('a company with no storage and no folder: one plain sentence, flagged as a plain refusal, nothing saved, Drive never called', async () => {
     const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
     vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })
+    accountRow = { status: 'Active', drive_folder_id: null, gdrive_folder_url: null } as never
     const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
     const { NO_STORAGE_SENTENCE } = await import('@/lib/crm-store/no-storage')
     const r = await saveSignedGeneratedDocument(baseParams())
     expect(r.success).toBe(false)
     expect(r.error).toBe(NO_STORAGE_SENTENCE)
+    expect(r.refused).toBe(true)
     expect(driveUploads.length).toBe(0)
     expect(autoSaveCalls.length).toBe(0)
+  })
+
+  it('a Closed company that still has a folder is refused too', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })
+    accountRow = { status: 'Closed', drive_folder_id: 'folder-1', gdrive_folder_url: null } as never
+    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const r = await saveSignedGeneratedDocument(baseParams())
+    expect(r.refused).toBe(true)
+    expect(driveUploads.length).toBe(0)
+  })
+
+  it('a company left on its old folder (Active, folder, no storage) carries on exactly as before', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })
+    accountRow = { status: 'Active', drive_folder_id: 'folder-1', gdrive_folder_url: null } as never
+    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const r = await saveSignedGeneratedDocument({ ...baseParams(), category: 1 })
+    expect(r.success).toBe(true)
+    expect(driveUploads[0]).toEqual({ fileName: 'Distribution_SIGNED.pdf', folder: 'folder-1' })
+    expect(autoSaveCalls[0]).toMatchObject({ accountId: 'acct-1', portalVisible: true, driveFileId: 'drive-file-1' })
   })
 
   it('saves in the storage (portal-visible record), stamps it new, and pre-marks the maker as seen', async () => {

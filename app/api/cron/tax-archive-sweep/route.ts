@@ -29,7 +29,7 @@ import {
   ARCHIVE_SWEEP_CHANNEL,
   type ArchiveSweepRow,
 } from "@/lib/tax/archive-sweep"
-import { accountsWithoutFolder, splitByFolder } from "@/lib/archive/skip-no-drive-folder"
+import { collectSweepCandidates } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -47,37 +47,35 @@ export async function GET(req: NextRequest) {
   const dryRun = process.env.TAX_ARCHIVE_SWEEP_DRY_RUN !== "false"
   const now = new Date()
 
-  // Candidates: never-archived, forward of the cutoff. The partial index makes
-  // this cheap. Real-submission / grace / attempt filtering happens in decide().
-  const { data: rows, error } = await supabaseAdmin
-    .from("tax_return_submissions")
-    .select("id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta")
-    .is("drive_archived_at", null)
-    .gte("created_at", ARCHIVE_SWEEP_CUTOFF_ISO)
-    .order("created_at", { ascending: true })
-    .limit(200)
-
-  if (error) {
-    await reportSystemError({ source: "server", route: ENDPOINT, message: `candidate query failed: ${error.message}` }).catch(() => {})
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  // Candidates: never-archived, forward of the cutoff, oldest first. A company with no folder cannot be archived by this job
+  // (it would throw on every run): such rows are left alone and counted, and they never take a place in the window of 200 —
+  // pages are read until 200 real rows are found (or the data runs out). Real-submission / grace / attempt filtering
+  // happens in decide().
+  const pages = await collectSweepCandidates<ArchiveSweepRow>(
+    (from, to) =>
+      supabaseAdmin
+        .from("tax_return_submissions")
+        .select("id, account_id, status, review_status, created_at, drive_archived_at, drive_archive_meta")
+        .is("drive_archived_at", null)
+        .gte("created_at", ARCHIVE_SWEEP_CUTOFF_ISO)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: ArchiveSweepRow[] | null; error: { message: string } | null }>,
+    { limit: 200, pageSize: 200, maxPages: 25 },
+  )
+  if (pages.readError) {
+    await reportSystemError({ source: "server", route: ENDPOINT, message: `candidate query failed: ${pages.readError}` }).catch(() => {})
+    return NextResponse.json({ error: pages.readError }, { status: 500 })
   }
+  if (pages.lookupError) {
+    await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${pages.lookupError}` }).catch(() => {})
+  }
+  const candidates = pages.keep
+  const skippedNoFolder = pages.skipped
 
   let enqueued = 0
   const stuck: string[] = []
   const enqueuedIds: string[] = []
-
-  // A company with no folder cannot be archived by this job (it would throw on every run): leave it and count it.
-  // A failed lookup skips nothing — the sweep proceeds as before.
-  let candidates = (rows ?? []) as unknown as ArchiveSweepRow[]
-  let skippedNoFolder = 0
-  try {
-    const missing = await accountsWithoutFolder(candidates.map(r => r.account_id).filter((x): x is string => !!x))
-    const split = splitByFolder(candidates, missing)
-    candidates = split.keep
-    skippedNoFolder = split.skipped.length
-  } catch (e) {
-    await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${e instanceof Error ? e.message : String(e)}` }).catch(() => {})
-  }
 
   for (const r of candidates) {
     const action = decideArchiveSweep(r, now)
@@ -124,7 +122,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, candidates: (rows ?? []).length, skippedNoFolder, enqueued, enqueuedIds, stuck }
+  const summary = { dryRun, candidates: candidates.length, skippedNoFolder, enqueued, enqueuedIds, stuck }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }

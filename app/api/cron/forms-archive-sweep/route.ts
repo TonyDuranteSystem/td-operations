@@ -30,7 +30,7 @@ import {
   FORM_ARCHIVE_SWEEP_ALERTED_KEY,
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
-import { accountsWithoutFolder, splitByFolder } from "@/lib/archive/skip-no-drive-folder"
+import { collectSweepCandidates } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -61,33 +61,34 @@ export async function GET(req: NextRequest) {
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    const { data: rows, error } = await supabaseAdmin
-      .from(tbl)
-      .select(recipe.selectColumns)
-      .is("drive_archived_at", null)
-      .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
-      .order("created_at", { ascending: true })
-      .limit(200)
+    // Only the banking archive resolves the company's own folder (itin / closure resolve others). A company with no folder
+    // cannot be archived by it (it would throw on every run): such rows are left alone and counted, and they never take a
+    // place in the window of 200 — pages are read until 200 real rows are found (or the data runs out).
+    const skipNoFolder = recipe.formType === "banking"
+    const pages = await collectSweepCandidates<Record<string, unknown> & { account_id?: string | null }>(
+      (from, to) =>
+        supabaseAdmin
+          .from(tbl)
+          .select(recipe.selectColumns)
+          .is("drive_archived_at", null)
+          .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: Array<Record<string, unknown> & { account_id?: string | null }> | null; error: { message: string } | null }>,
+      { limit: 200, pageSize: 200, maxPages: skipNoFolder ? 25 : 1 },
+      skipNoFolder ? undefined : async () => new Set<string>(),
+    )
 
-    if (error) {
-      await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
+    if (pages.readError) {
+      await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${pages.readError}` }).catch(() => {})
       continue
     }
-
-    // Only the banking archive resolves the company's own folder (itin / closure resolve others). A company with no folder
-    // cannot be archived by it (it would throw on every run): leave it and count it.
-    let formRows = (rows ?? []) as unknown as Record<string, unknown>[]
-    if (recipe.formType === "banking") {
-      try {
-        const missing = await accountsWithoutFolder(formRows.map(r => r.account_id as string | null).filter((x): x is string => !!x))
-        const split = splitByFolder(formRows as Array<{ account_id?: string | null }>, missing)
-        formRows = split.keep as Record<string, unknown>[]
-        stats.skippedNoFolder = split.skipped.length
-        skippedNoFolder += split.skipped.length
-      } catch (e) {
-        await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${e instanceof Error ? e.message : String(e)}` }).catch(() => {})
-      }
+    if (pages.lookupError) {
+      await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${pages.lookupError}` }).catch(() => {})
     }
+    const formRows = pages.keep as Record<string, unknown>[]
+    stats.skippedNoFolder = pages.skipped
+    skippedNoFolder += pages.skipped
 
     for (const raw of formRows) {
       stats.candidates++

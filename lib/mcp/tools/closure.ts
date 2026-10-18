@@ -348,11 +348,12 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         lines.push(`Submitted: ${sub.completed_at}`)
 
         if (mark_reviewed) {
-          // File the form data + uploads in the company's storage
-          try {
-            if (sub.account_id) {
-              const { saveFormForAccount } = await import("@/lib/crm-store/save-account-form")
-              const { NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
+          // File the form data + uploads FIRST. The form is marked "reviewed" only when it was filed: a company that can receive
+          // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
+          let filed = true
+          if (sub.account_id) {
+            try {
+              const { saveFormForAccount, describeFiling } = await import("@/lib/crm-store/save-account-form")
               const saved = await saveFormForAccount({
                 accountId: sub.account_id,
                 formType: "closure",
@@ -360,20 +361,21 @@ Use gmail_send to send the link to the client after Antonio approves.`,
                 uploadPaths: (sub.upload_paths as string[]) || [],
                 meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token },
               })
-              if (saved.route === "none") {
-                lines.push(`⚠️ ${NO_STORAGE_SENTENCE}`)
-              } else {
-                const r = saved.result
-                if (r.summaryFileId) lines.push(`✅ Data summary saved (${r.summaryFileId})`)
-                if (r.copied.length > 0) lines.push(`✅ ${r.copied.length} file(s) saved`)
-                if (r.failed.length > 0) lines.push(`⚠️ ${r.failed.length} file(s) failed to save`)
-                if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
-              }
-            } else {
-              lines.push("⚠️ This form is not linked to a company, so its data was not saved to a company storage.")
+              const d = describeFiling(saved)
+              filed = d.ok
+              lines.push(...d.lines)
+            } catch (saveErr) {
+              filed = false
+              lines.push(`⚠️ Saving the form data failed: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`)
             }
-          } catch (saveErr) {
-            lines.push(`⚠️ Saving the form data failed: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`)
+          } else {
+            lines.push("⚠️ This form is not linked to a company, so its data was not filed.")
+          }
+
+          if (!filed) {
+            lines.push("")
+            lines.push("❌ The form was NOT marked as reviewed — nothing was changed. Fix the problem above and run the review again.")
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
           await supabaseAdmin

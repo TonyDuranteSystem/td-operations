@@ -19,7 +19,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
+import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion, fileEsignSignedPdf } from "@/lib/operations/esign"
 import { insertEsignEvent, REMINDER_SOURCE_AUTO } from "@/lib/esign/events"
 import { deliverReminder, loadReminderTimes, lastReopenedAt } from "@/lib/esign/deliver-reminder"
 import {
@@ -70,6 +70,25 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
     await insertEsignEvent({ envelope_id: env.id, event_type: "completed", metadata: { signed_pdf_path: signedPath, via: "reconcile" } })
     await finalizeEsignCompletion(env.id)
     reconciled++
+  }
+
+  // 0b. Re-file COMPLETED envelopes whose signed PDF could not be filed (the storage lookup threw, a save failed): the filing is
+  //     idempotent, so one that is already filed is a cheap no-op. Only the last 3 days — older ones were alarmed long ago.
+  const refileSince = new Date(now.getTime() - 3 * 86_400_000).toISOString()
+  const { data: unfiled } = await db
+    .from("esign_envelopes")
+    .select("id")
+    .eq("status", "completed")
+    .not("owner_account_id", "is", null)
+    .not("signed_pdf_path", "is", null)
+    .is("signed_pdf_drive_id", null)
+    .gte("completed_at", refileSince)
+  for (const e of (unfiled ?? []) as Array<{ id: string }>) {
+    try {
+      await fileEsignSignedPdf(e.id)
+    } catch {
+      /* transient — retry next run */
+    }
   }
 
   // 1. Expire overdue envelopes.

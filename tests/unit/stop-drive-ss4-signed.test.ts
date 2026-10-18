@@ -17,6 +17,8 @@ const state = vi.hoisted(() => ({
   saves: [] as Array<Record<string, unknown>>,
   mails: [] as string[],
   pdf: new Uint8Array(),
+  driveMode: "forbid" as "forbid" | "record",
+  listEmpty: false,
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
@@ -24,13 +26,14 @@ vi.mock("@/lib/supabase-admin", async () => {
   const base = h.makeSupabase(state.rows, state.recorded as never)
   // the signed-ss4 bucket returns a real one-page PDF
   const bucket = () => ({
-    list: async () => ({ data: [{ name: "signed.pdf" }], error: null }),
+    list: async () => ({ data: state.listEmpty ? [] : [{ name: "signed.pdf" }], error: null }),
     download: async () => ({ data: { arrayBuffer: async () => state.pdf.buffer.slice(state.pdf.byteOffset, state.pdf.byteOffset + state.pdf.byteLength), type: "application/pdf" }, error: null }),
     createSignedUrl: async () => ({ data: { signedUrl: "https://signed.example/u" } }),
   })
   return { supabaseAdmin: { from: base.from, storage: { from: bucket } } }
 })
-vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpy(state.driveCalls))
+vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpyDynamic(state.driveCalls, () => state.driveMode))
+vi.mock("@/lib/portal/auto-save-document", () => ({ autoSaveDocument: async () => ({ id: "doc-drive-1" }) }))
 vi.mock("@/lib/portal/chat-events", () => ({ emitSs4SignedEvent: async () => ({ emitted: true }) }))
 vi.mock("@/lib/gmail", () => ({ gmailPost: async (_p: string, body: { raw: string }) => { state.mails.push(Buffer.from(body.raw, "base64url").toString()); return {} } }))
 vi.mock("@/lib/ss4/resolve-articles-pdf", () => ({ resolveArticlesForSs4: async () => Buffer.from(state.pdf) }))
@@ -44,6 +47,7 @@ vi.mock("@/lib/crm-store/save-for-account", () => ({
 }))
 
 import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 const req = () => new NextRequest("http://localhost/api/ss4-signed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ss4_id: "ss4-1", token: "tok" }) })
 
@@ -52,13 +56,15 @@ beforeEach(async () => {
   d.addPage()
   state.pdf = new Uint8Array(await d.save())
   state.companyState = "store"
+  state.driveMode = "forbid"
+  state.listEmpty = false
   state.recorded.length = 0
   state.driveCalls.length = 0
   state.saves.length = 0
   state.mails.length = 0
   for (const k of Object.keys(state.rows)) delete state.rows[k]
   state.rows.ss4_applications = { id: "ss4-1", token: "tok", access_code: "123", company_name: "Acme LLC", account_id: "acct-1", contact_id: "c-1", entity_type: "SMLLC", responsible_party_name: "A B", status: "signed", state_of_formation: "WY" }
-  state.rows.accounts = { drive_folder_id: null }
+  state.rows.accounts = { status: "Active", drive_folder_id: null, gdrive_folder_url: null }
 })
 
 describe("/api/ss4-signed", () => {
@@ -91,5 +97,49 @@ describe("/api/ss4-signed", () => {
     // staff still get the notification email, with the package attached
     expect(state.mails).toHaveLength(1)
     expect(state.mails[0]).toContain("application/pdf")
+  })
+
+  it("a company left on its old folder: the signed copy and the IRS package go to its folder as before, registered as internal documents", async () => {
+    state.companyState = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    expect(state.saves).toEqual([])
+    expect(state.driveCalls.filter((c) => c === "uploadBinaryToDriveUpsert")).toHaveLength(2)
+    expect(steps.find((s) => s.step === "drive_upload")?.status).toBe("ok")
+    expect(steps.find((s) => s.step === "irs_package")?.status).toBe("ok")
+    expect(steps.find((s) => s.step === "signed_doc")).toBeUndefined()
+  })
+
+  it("a webhook RETRY whose fallback row already exists is not reported as 'no storage' (the signed copy IS filed)", async () => {
+    state.companyState = "drive"
+    state.rows.service_deliveries = { id: "sd-1", stage: "SS-4 Signed", stage_history: [] }
+    state.rows.documents = { id: "existing-row" }
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    expect(steps.find((s) => s.step === "signed_doc_storage")?.detail).toBe("Signed doc already linked")
+    expect(steps.find((s) => s.step === "signed_doc")).toBeUndefined()
+  })
+
+  it("a company that HAS storage but whose signed copy was not saved gets an accurate message, never the 'no storage' sentence", async () => {
+    state.listEmpty = true
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const sd = steps.find((s) => s.step === "signed_doc")
+    expect(sd?.status).toBe("error")
+    expect(sd?.detail).not.toBe(NO_STORAGE_SENTENCE)
+    expect(sd?.detail).toContain("could not be filed in the company's storage")
+  })
+
+  it("the fax task tells staff where the file is (the company's Documents) — no Drive wording", async () => {
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    await POST(req())
+    const task = state.recorded.find((r) => r.table === "tasks" && r.op === "insert")?.payload as { description: string }
+    expect(task.description).toContain("Documents")
+    expect(task.description.toLowerCase()).not.toContain("drive")
   })
 })

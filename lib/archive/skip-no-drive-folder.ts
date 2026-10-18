@@ -40,3 +40,48 @@ export async function accountsWithoutFolder(accountIds: string[]): Promise<Set<s
   }
   return missing
 }
+
+export interface CandidatePages<T> {
+  /** at most `limit` rows that are worth processing, oldest first */
+  keep: T[]
+  /** how many rows were left alone because their company has no folder */
+  skipped: number
+  /** set when the folder lookup failed: nothing was skipped on that page and the caller should raise a system error */
+  lookupError: string | null
+  /** set when a page could not be read */
+  readError: string | null
+}
+
+/**
+ * The sweeps take the OLDEST un-archived rows first. If the rows to skip (storage-only clients that never get a folder) were
+ * only removed AFTER a fixed-size window was read, they would fill the window forever and a real row behind them would never
+ * be seen. So: read page after page, drop the skippable rows as each page arrives, and stop as soon as `limit` real rows are
+ * collected, the data runs out, or `maxPages` pages were read. A skipped row never consumes the window.
+ */
+export async function collectSweepCandidates<T extends { account_id?: string | null }>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  opts: { limit: number; pageSize: number; maxPages: number },
+  lookup: (accountIds: string[]) => Promise<Set<string>> = accountsWithoutFolder,
+): Promise<CandidatePages<T>> {
+  const out: CandidatePages<T> = { keep: [], skipped: 0, lookupError: null, readError: null }
+  for (let page = 0; page < opts.maxPages && out.keep.length < opts.limit; page++) {
+    const from = page * opts.pageSize
+    const { data, error } = await fetchPage(from, from + opts.pageSize - 1)
+    if (error) { out.readError = error.message; break }
+    const rows = data ?? []
+    let missing = new Set<string>()
+    try {
+      missing = await lookup(rows.map((r) => r.account_id).filter((x): x is string => !!x))
+    } catch (e) {
+      out.lookupError = e instanceof Error ? e.message : String(e)
+    }
+    const split = splitByFolder(rows, missing)
+    out.skipped += split.skipped.length
+    for (const r of split.keep) {
+      if (out.keep.length >= opts.limit) break
+      out.keep.push(r)
+    }
+    if (rows.length < opts.pageSize) break
+  }
+  return out
+}

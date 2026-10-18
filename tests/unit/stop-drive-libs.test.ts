@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   taxSave: "store" as "store" | "drive",
   taxSaves: [] as Array<Record<string, unknown>>,
   driveCalls: [] as string[],
+  driveMode: "forbid" as "forbid" | "record",
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
@@ -24,7 +25,7 @@ vi.mock("@/lib/supabase-admin", async () => {
   }
   return { supabaseAdmin: { from, storage: base.storage } }
 })
-vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpy(state.driveCalls))
+vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpyDynamic(state.driveCalls, () => state.driveMode))
 vi.mock("@/lib/crm-store/switched-drive-guard", () => ({
   companyDocState: async () => state.companyState,
   liveOwnerOfAccount: async () => "owner-1",
@@ -38,18 +39,19 @@ vi.mock("@/lib/crm-store/save-form", () => ({
 }))
 vi.mock("@/lib/tax/financials-orchestration", () => ({ buildFinancialsWorkbookForAccount: async () => ({ buffer: new Uint8Array([1, 2, 3]) }) }))
 
-import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored } from "@/lib/crm-store/no-storage"
-import { splitByFolder, accountsWithoutFolder } from "@/lib/archive/skip-no-drive-folder"
-import { saveFormForAccount, type SaveAccountFormDeps } from "@/lib/crm-store/save-account-form"
+import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored, decideNoStorage, folderIdOf, noStorageDecisionFor, accountCanReceiveFiles } from "@/lib/crm-store/no-storage"
+import { splitByFolder, accountsWithoutFolder, collectSweepCandidates } from "@/lib/archive/skip-no-drive-folder"
+import { saveFormForAccount, describeFiling, type SaveAccountFormDeps } from "@/lib/crm-store/save-account-form"
 
 beforeEach(() => {
-  state.rows = {}
+  for (const k of Object.keys(state.rows)) delete state.rows[k]
   state.recorded.length = 0
   state.accountsError = false
   state.companyState = "store"
   state.taxSave = "store"
   state.taxSaves.length = 0
   state.driveCalls.length = 0
+  state.driveMode = "forbid"
 })
 
 describe("no-storage", () => {
@@ -95,6 +97,8 @@ describe("saveFormForAccount", () => {
       liveOwner: async () => "owner-1",
       summary: async () => ({ bytes: Buffer.from("pdf"), error: null, subfolder: "3. Tax", filePrefix: "Tax_Data", defaultBucket: "tax-form-uploads" }),
       store: (async (spec: unknown) => { stored.push(spec); return { summaryFileId: "store:s", copied: ["a.pdf"], failed: [], skipped: [], errors: [] } }) as SaveAccountFormDeps["store"],
+      oldFolder: async () => null,
+      toFolder: async (_i, folderId) => { stored.push({ oldFolder: folderId }); return { summaryFileId: "drive:s", copied: [], failed: [], skipped: [], errors: [] } },
       ...over,
     }
     return { deps, stored }
@@ -135,6 +139,13 @@ describe("saveFormForAccount", () => {
     expect(stored).toEqual([])
   })
 
+  it("a company left on its old folder: filed there through the old route (route 'folder'), not through the store", async () => {
+    const { deps, stored } = mk({ state: async () => "drive", oldFolder: async () => "OLDFOLDER" })
+    const r = await saveFormForAccount(input, deps)
+    expect(r.route).toBe("folder")
+    expect(stored).toEqual([{ oldFolder: "OLDFOLDER" }])
+  })
+
   it("a company being moved: refused with the moving error, nothing filed", async () => {
     const { deps, stored } = mk({ state: async () => "moving" })
     await expect(saveFormForAccount(input, deps)).rejects.toThrow(/being moved/)
@@ -168,9 +179,97 @@ describe("runAttestHandoff", () => {
     expect(state.driveCalls).toEqual([])
   })
 
+  it("a company left on its old folder: the workbook goes there as before (archived)", async () => {
+    state.companyState = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = { company_name: "Acme LLC", status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    await run()
+    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(state.taxSaves).toEqual([])
+    expect(audit().details.outcome).toBe("archived")
+  })
+
   it("storage that refuses the file: reported as failed, not archived", async () => {
     state.taxSave = "drive"
     await run()
     expect(audit().details.outcome).toBe("failed")
+  })
+})
+
+describe("describeFiling", () => {
+  const base = { summaryFileId: "store:s", copied: [] as string[], failed: [] as string[], skipped: [] as string[], errors: [] as string[] }
+  it("filed = no error and no failed upload", () => {
+    expect(describeFiling({ route: "store", result: base }).ok).toBe(true)
+    expect(describeFiling({ route: "folder", result: { ...base, copied: ["a"] } }).lines).toContain("✅ 1 file(s) saved")
+  })
+  it("not filed: nowhere to file it, an error, or a failed upload", () => {
+    expect(describeFiling({ route: "none" })).toEqual({ ok: false, lines: [`⚠️ ${NO_STORAGE_SENTENCE}`] })
+    expect(describeFiling({ route: "store", result: { ...base, errors: ["x"] } }).ok).toBe(false)
+    expect(describeFiling({ route: "store", result: { ...base, failed: ["a.pdf"] } }).ok).toBe(false)
+  })
+})
+
+describe("decideNoStorage / folderIdOf", () => {
+  it("a company left on its old folder: Active/Suspended/Offboarding with a folder", () => {
+    for (const status of ["Active", "Suspended", "Offboarding"]) expect(decideNoStorage({ status, drive_folder_id: "F" })).toEqual({ route: "drive", folderId: "F" })
+  })
+  it("Closed / Cancelled are refused even with a folder; no folder is refused; unknown account is refused", () => {
+    expect(decideNoStorage({ status: "Closed", drive_folder_id: "F" })).toEqual({ route: "refuse" })
+    expect(decideNoStorage({ status: " cancelled ", drive_folder_id: "F" })).toEqual({ route: "refuse" })
+    expect(decideNoStorage({ status: "Active", drive_folder_id: null })).toEqual({ route: "refuse" })
+    expect(decideNoStorage(null)).toEqual({ route: "refuse" })
+  })
+  it("the folder id also comes from the older link", () => {
+    expect(folderIdOf({ gdrive_folder_url: "https://drive.google.com/drive/folders/AbC-12_x?usp=sharing" })).toBe("AbC-12_x")
+    expect(folderIdOf({ drive_folder_id: "F", gdrive_folder_url: "https://drive.google.com/drive/folders/Other" })).toBe("F")
+    expect(folderIdOf({})).toBeNull()
+  })
+  it("noStorageDecisionFor reads the account; accountCanReceiveFiles is true for storage or an old folder", async () => {
+    state.rows.accounts = { status: "Active", drive_folder_id: "F", gdrive_folder_url: null }
+    expect(await noStorageDecisionFor("a")).toEqual({ route: "drive", folderId: "F" })
+    state.companyState = "drive"
+    expect(await accountCanReceiveFiles("a")).toBe(true)
+    state.rows.accounts = { status: "Active", drive_folder_id: null, gdrive_folder_url: null }
+    expect(await accountCanReceiveFiles("a")).toBe(false)
+    state.companyState = "store"
+    expect(await accountCanReceiveFiles("a")).toBe(true)
+  })
+})
+
+describe("collectSweepCandidates — skipped rows never use up the window", () => {
+  const mkRows = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, account_id: prefix === "x" ? "no-folder" : "real" }))
+  const pager = (all: Array<{ id: string; account_id: string }>) => async (from: number, to: number) => ({ data: all.slice(from, to + 1), error: null })
+  const lookup = async (ids: string[]) => new Set(ids.filter((i) => i === "no-folder"))
+
+  it("201 rows with no folder followed by 1 real row: the real row is found (the repro)", async () => {
+    const out = await collectSweepCandidates(pager([...mkRows(201, "x"), ...mkRows(1, "r")]), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
+    expect(out.keep.map((r) => r.id)).toEqual(["r0"])
+    expect(out.skipped).toBe(201)
+    expect(out.lookupError).toBeNull()
+  })
+  it("stops once the limit of real rows is reached and counts only what it looked at", async () => {
+    const out = await collectSweepCandidates(pager([...mkRows(5, "r"), ...mkRows(1000, "x")]), { limit: 3, pageSize: 4, maxPages: 25 }, lookup)
+    expect(out.keep).toHaveLength(3)
+  })
+  it("a Drive-state company with a folder is kept", async () => {
+    const out = await collectSweepCandidates(pager(mkRows(3, "r")), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
+    expect(out.keep).toHaveLength(3)
+    expect(out.skipped).toBe(0)
+  })
+  it("maxPages bounds the work", async () => {
+    let pages = 0
+    const fetchPage = async (from: number, to: number) => { pages++; return { data: mkRows(to - from + 1, "x"), error: null } }
+    const out = await collectSweepCandidates(fetchPage, { limit: 200, pageSize: 10, maxPages: 4 }, lookup)
+    expect(pages).toBe(4)
+    expect(out.keep).toEqual([])
+    expect(out.skipped).toBe(40)
+  })
+  it("a failed folder lookup skips nothing and is reported; a page read error is reported", async () => {
+    const out = await collectSweepCandidates(pager(mkRows(3, "x")), { limit: 200, pageSize: 200, maxPages: 25 }, async () => { throw new Error("lookup down") })
+    expect(out.keep).toHaveLength(3)
+    expect(out.skipped).toBe(0)
+    expect(out.lookupError).toBe("lookup down")
+    const bad = await collectSweepCandidates(async () => ({ data: null, error: { message: "read down" } }), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
+    expect(bad.readError).toBe("read down")
   })
 })

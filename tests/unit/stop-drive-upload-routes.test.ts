@@ -14,16 +14,20 @@ const state = vi.hoisted(() => ({
   driveCalls: [] as string[],
   route: "store" as "store" | "drive",
   saves: [] as Array<Record<string, unknown>>,
+  removed: [] as string[],
+  driveMode: "forbid" as "forbid" | "record",
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
   const h = await import("./_stop-drive-mocks")
-  return { supabaseAdmin: h.makeSupabase(state.rows, state.recorded as never) }
+  return { supabaseAdmin: h.makeSupabase(state.rows, state.recorded as never, { removed: state.removed }) }
 })
 vi.mock("@/lib/google-drive", async () => {
   const h = await import("./_stop-drive-mocks")
-  return h.driveSpy(state.driveCalls)
+  return h.driveSpyDynamic(state.driveCalls, () => state.driveMode)
 })
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.route === "store" ? "store" : "drive") }))
+vi.mock("@/lib/portal/auto-save-document", () => ({ autoSaveDocument: async () => ({ id: "doc-drive-1" }) }))
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: "u1", app_metadata: { role: "admin" }, user_metadata: {}, email: "staff@tonydurante.us" } } }) } }),
 }))
@@ -61,6 +65,7 @@ vi.mock("@/lib/crm-store/save-form", () => ({
 }))
 
 import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 const json = (body: unknown) => new NextRequest("http://localhost/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
 
@@ -69,6 +74,8 @@ beforeEach(() => {
   state.recorded.length = 0
   state.driveCalls.length = 0
   state.saves.length = 0
+  state.removed.length = 0
+  state.driveMode = "forbid"
   for (const k of Object.keys(state.rows)) delete state.rows[k]
 })
 
@@ -87,12 +94,38 @@ describe("portal documents upload", () => {
 
   it("no-storage company: one plain sentence, nothing saved, zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = ACCOUNT_REFUSED
     const { POST } = await import("@/app/api/portal/documents/upload/route")
     const res = await POST(json(body))
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
     expect(state.driveCalls).toEqual([])
+    // the refused upload leaves nothing behind in the upload bucket
+    expect(state.removed).toContain("portal-uploads/p/x.pdf")
+  })
+
+  it("a Closed company that still has a folder is refused too (no Drive write), staged file removed", async () => {
+    state.route = "drive"
+    state.rows.accounts = ACCOUNT_CLOSED_WITH_FOLDER
+    const { POST } = await import("@/app/api/portal/documents/upload/route")
+    const res = await POST(json(body))
+    expect(res.status).toBe(409)
+    expect(state.driveCalls).toEqual([])
+    expect(state.removed).toContain("portal-uploads/p/x.pdf")
+  })
+
+  it("a company left on its old folder (Active, folder, no storage) carries on exactly as before: uploaded there, record written", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    state.rows.documents = { id: "doc-drive-1" }
+    const { POST } = await import("@/app/api/portal/documents/upload/route")
+    const res = await POST(json(body))
+    expect(res.status).toBe(200)
+    expect(state.driveCalls).toEqual(["uploadBinaryToDrive"])
+    const ins = state.recorded.find((r) => r.table === "documents" && r.op === "insert")
+    expect(ins?.payload).toMatchObject({ account_id: "acct-1", drive_file_id: "drive-file-1", status: "classified" })
   })
 })
 
@@ -120,11 +153,32 @@ describe("workflow task file upload", () => {
 
   it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = ACCOUNT_REFUSED
     const { POST } = await import("@/app/api/workflows/upload-task-file/route")
     const res = await POST(form())
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
+  })
+
+  it("a company left on its old folder: uploaded there under the sub-folder chain, the old link shape returned", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = { id: "acct-1", company_name: "Acme LLC", ...ACCOUNT_OLD_FOLDER }
+    const { POST } = await import("@/app/api/workflows/upload-task-file/route")
+    const res = await POST(form())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ file_id: "drive-file-1", drive_url: "https://drive.google.com/file/d/drive-file-1/view" })
+    expect(state.driveCalls).toContain("uploadBinaryToDrive")
+  })
+
+  it("the stored-file answer (drive_url null) is what the workflow upload field handles: it only reads file_id / file_name", async () => {
+    const { readFileSync } = await import("node:fs")
+    const src = readFileSync("components/tasks/action-confirm-modal.tsx", "utf8")
+    const at = src.indexOf("fetch('/api/workflows/upload-task-file'")
+    const handler = src.slice(at, at + 900)
+    expect(handler).toContain("body.file_id")
+    expect(src).not.toMatch(/body\.drive_url|\.drive_url\b/)
   })
 })
 
@@ -143,11 +197,25 @@ describe("lease regeneration routes", () => {
 
   it("regen-lease-pdf, no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = ACCOUNT_REFUSED
     const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
     const res = await POST(json({ lease_id: "lease-1" }))
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
+    // decided before anything is built or stored: the lease row is untouched
+    expect(state.recorded.filter((r) => r.table === "lease_agreements")).toEqual([])
+  })
+
+  it("regen-lease-pdf, company left on its old folder: re-uploaded there as before", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    state.rows.documents = null
+    const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
+    const res = await POST(json({ lease_id: "lease-1" }))
+    expect(res.status).toBe(200)
+    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
   })
 
   it("lease-regen-drive, storage company: filed, zero Drive calls", async () => {
@@ -161,11 +229,22 @@ describe("lease regeneration routes", () => {
 
   it("lease-regen-drive, no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = ACCOUNT_REFUSED
     const { POST } = await import("@/app/api/lease-regen-drive/route")
     const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
+  })
+
+  it("lease-regen-drive, company left on its old folder: carries on there", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    const { POST } = await import("@/app/api/lease-regen-drive/route")
+    const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
+    expect(res.status).toBe(200)
+    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
   })
 })
 
@@ -183,11 +262,24 @@ describe("staff account document upload", () => {
 
   it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_REFUSED }
     const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
     const res = await POST(json(body))
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
+    expect(state.removed).toContain("onboarding-uploads/p/x.pdf")
+  })
+
+  it("company left on its old folder: uploaded there as before", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = { company_name: "Acme LLC", ...ACCOUNT_OLD_FOLDER }
+    state.rows.documents = []
+    const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
+    const res = await POST(json(body))
+    expect((await res.json()).success).toBe(true)
+    expect(state.driveCalls).toContain("uploadBinaryToDrive")
   })
 })
 
@@ -212,9 +304,20 @@ describe("DBA document upload", () => {
 
   it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = ACCOUNT_REFUSED
     const res = await call()
     expect(res.status).toBe(409)
     expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_SENTENCE })
     expect(state.driveCalls).toEqual([])
+    expect(state.removed).toContain("onboarding-uploads/p/dba.pdf")
+  })
+
+  it("company left on its old folder: uploaded there as before", async () => {
+    state.route = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(state.driveCalls).toContain("uploadBinaryToDrive")
   })
 })

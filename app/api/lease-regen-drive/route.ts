@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { autoSaveDocument } from '@/lib/portal/auto-save-document'
 
 export async function POST(req: NextRequest) {
   try {
@@ -57,7 +58,37 @@ export async function POST(req: NextRequest) {
       if (routed.route === 'store') return NextResponse.json({ ok: true, driveFileId: routed.pointer })
     }
 
-    return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
+    const decision = await noStorageDecisionFor(lease.account_id)
+    if (decision.route === 'refuse') return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+
+    const { listFolder, uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
+    const folderResult = await listFolder(decision.folderId) as {
+      files?: { id: string; name: string; mimeType: string }[]
+    }
+    const companyFolder = folderResult.files?.find(
+      f => f.name.includes('Company') && f.mimeType === 'application/vnd.google-apps.folder'
+    )
+    const targetFolderId = companyFolder?.id || decision.folderId
+
+    const fileData = Buffer.from(await blob.arrayBuffer())
+    const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
+
+    // Stable name -> UPSERT: regeneration refreshes the one existing file in place (LT Program incident class).
+    const driveResult = await uploadBinaryToDriveUpsert(
+      fileName, fileData, 'application/pdf', targetFolderId
+    ) as { id: string }
+
+    await autoSaveDocument({
+      accountId: lease.account_id,
+      fileName,
+      documentType: 'Lease Agreement',
+      category: 1,
+      driveFileId: driveResult.id,
+      portalVisible: true,
+    })
+
+    return NextResponse.json({ ok: true, driveFileId: driveResult.id })
   } catch (err) {
     console.error('[lease-regen-drive]', err)
     return NextResponse.json(

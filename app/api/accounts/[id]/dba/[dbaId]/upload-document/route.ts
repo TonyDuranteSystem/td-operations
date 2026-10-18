@@ -23,7 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractDbaFieldsFromOcr } from '@/lib/dba-ocr'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 
 type DbaDetailRow = {
   id: string
@@ -112,6 +112,9 @@ export async function POST(
       )
     }
 
+    // A refused upload must not leave the staged object behind.
+    const discardStaged = () => { supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {}) }
+
     const buffer = Buffer.from(await blob.arrayBuffer())
     const fileMime = mimeType || blob.type || 'application/pdf'
 
@@ -125,15 +128,34 @@ export async function POST(
         row: { document_type_name: 'DBA Application', category: 1, category_name: 'Company', status: 'classified', contact_id: null },
       })
     } catch (e) {
-      if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+      if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) }
       throw e
     }
 
-    if (routed.route !== 'store') {
-      return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    let driveFile: { id: string; name: string }
+    if (routed.route === 'store') {
+      driveFile = { id: routed.pointer, name: fileName }
+    } else {
+      // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
+      const decision = await noStorageDecisionFor(accountId)
+      if (decision.route === 'refuse') {
+        discardStaged()
+        return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+      }
+
+      // 4. Find "1. Company" subfolder (DBA registrations live with company docs).
+      const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
+      const foldersRes = await listFolderAnyDrive(decision.folderId)
+      const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
+      const targetFolder = folders.find(
+        f => f.name === '1. Company' && f.mimeType === 'application/vnd.google-apps.folder',
+      )
+      const uploadFolderId = targetFolder?.id || decision.folderId
+
+      // 5. Upload to Drive.
+      driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
     }
-    const driveFile: { id: string; name: string } = { id: routed.pointer, name: fileName }
-    const sideEffects: string[] = [`Saved to the new storage: ${fileName}`]
+    const sideEffects: string[] = [routed.route === 'store' ? `Saved to the new storage: ${fileName}` : `Uploaded: ${fileName}`]
 
     // 6. Insert documents row (idempotent on drive_file_id).
     const { data: existingDoc } = await supabaseAdmin

@@ -5,6 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
+import { ACCOUNT_REFUSED, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
+import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
 
 const state = vi.hoisted(() => ({
   rows: {} as Record<string, unknown>,
@@ -12,13 +14,19 @@ const state = vi.hoisted(() => ({
   driveCalls: [] as string[],
   route: "store" as "store" | "drive",
   saves: [] as Array<Record<string, unknown>>,
+  removed: [] as string[],
+  uploaded: [] as string[],
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
   const h = await import("./_stop-drive-mocks")
-  return { supabaseAdmin: h.makeSupabase(state.rows, state.recorded as never) }
+  return { supabaseAdmin: h.makeSupabase(state.rows, state.recorded as never, { removed: state.removed }) }
 })
-vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpy(state.driveCalls))
+vi.mock("@/lib/google-drive", async () => {
+  const h = await import("./_stop-drive-mocks")
+  return h.driveSpyDynamic(state.driveCalls, () => (state.route === "drive" && state.rows.accounts && (state.rows.accounts as { drive_folder_id?: string }).drive_folder_id ? "record" : "forbid"))
+})
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => (state.route === "store" ? "store" : "drive") }))
 vi.mock("@/lib/drive-folder-utils", () => ({ ensureCompanyFolder: vi.fn(async () => { state.driveCalls.push("ensureCompanyFolder"); throw new Error("no") }) }))
 vi.mock("@/lib/auth/require-staff-route", () => ({ requireStaffRoute: async () => null }))
 vi.mock("@/lib/operations/service-delivery", () => ({ advanceStageIfAt: async () => ({ advanced: true }) }))
@@ -61,13 +69,27 @@ describe("confirm-ra-switch", () => {
     expect(state.driveCalls).toEqual([])
   })
 
-  it("no-storage company: the switch still goes through; the message says in one sentence the receipt was not filed; zero Drive calls", async () => {
+  it("a company that can receive no file (no storage, no folder): refused up front with the one sentence — nothing saved, the stage NOT moved, zero Drive calls", async () => {
     state.route = "drive"
+    state.rows.accounts = { ...(state.rows.accounts as object), ...ACCOUNT_REFUSED }
+    const { POST } = await import("@/app/api/onboarding-review/[id]/confirm-ra-switch/route")
+    const res = await POST(req(), { params: { id: "sub-1" } })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, error: NO_STORAGE_SENTENCE })
+    expect(state.saves).toEqual([])
+    expect(state.driveCalls).toEqual([])
+    // nothing was stored (no durable copy was made for a refused confirmation)
+    expect(state.recorded.filter((r) => r.table === "service_deliveries")).toEqual([])
+  })
+
+  it("a company left on its old folder: the switch is confirmed and the receipt is copied to its folder as before", async () => {
+    state.route = "drive"
+    state.rows.accounts = { ...(state.rows.accounts as object), ...ACCOUNT_OLD_FOLDER }
     const { POST } = await import("@/app/api/onboarding-review/[id]/confirm-ra-switch/route")
     const res = await POST(req(), { params: { id: "sub-1" } })
     const body = await res.json()
     expect(body.success).toBe(true)
-    expect(body.message).toContain("the receipt could not be filed because this company has no document storage in the CRM")
-    expect(state.driveCalls).toEqual([])
+    expect(body.message).toContain("also filed to the company's folder")
+    expect(state.driveCalls).toEqual(["uploadBinaryToDrive"])
   })
 })

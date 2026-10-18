@@ -639,6 +639,45 @@ export function registerTaxTools(server: McpServer) {
           lines.push("APPLYING CHANGES...")
           lines.push("")
 
+          // ── File the form data + uploads FIRST ─────────────────────────
+          // The review is applied (job enqueued, submission marked reviewed) only when the form was filed: a company that can
+          // receive nothing, a company being moved, or a failed save leaves the submission exactly as it was. An already
+          // reviewed submission was filed by its first review, so it is not filed again.
+          if (sub.account_id && !sub.reviewed_at) {
+            let filed = true
+            try {
+              const taxUploadPaths = (sub.upload_paths as string[]) || []
+              // The submission's files live in whichever bucket they were
+              // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
+              // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
+              // the "tax-form-uploads" config default with a "{slug}-{year}/..."
+              // scheme. Pick by path prefix so staff review copies from the
+              // right bucket for either source.
+              const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
+              const { saveFormForAccount, describeFiling } = await import("@/lib/crm-store/save-account-form")
+              const saved = await saveFormForAccount({
+                accountId: sub.account_id,
+                formType: "tax_return",
+                submittedData: (sub.submitted_data as Record<string, unknown>) || {},
+                uploadPaths: taxUploadPaths,
+                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
+                bucket: portalUpload ? "onboarding-uploads" : undefined,
+              })
+              const d = describeFiling(saved)
+              filed = d.ok
+              lines.push(...d.lines)
+            } catch (e) {
+              filed = false
+              lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
+            }
+            if (!filed) {
+              lines.push("")
+              lines.push("❌ The changes were NOT applied and the form was not marked as reviewed — nothing was changed. Fix the problem above and run the review again.")
+              return { content: [{ type: "text" as const, text: lines.join("\n") }] }
+            }
+            lines.push("")
+          }
+
           // ── Apply via shared helper (Slice 8) ──────────────────────────
           // Helper handles: enqueue tax_form_setup job + reviewed_at flip with
           // a reviewed_at IS NOT NULL short-circuit. Same code path used by
@@ -656,7 +695,7 @@ export function registerTaxTools(server: McpServer) {
           }
 
           if (apply.alreadyApplied) {
-            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping job enqueue + Drive save to avoid duplicates.`)
+            lines.push(`ℹ️ Submission already reviewed (reviewed_at was set). Skipping job enqueue + filing to avoid duplicates.`)
             return { content: [{ type: "text" as const, text: lines.join("\n") }] }
           }
 
@@ -664,42 +703,6 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
-
-          // File the form data + uploads in the company's storage
-          if (sub.account_id) {
-            try {
-              const submitted = sub.submitted_data as Record<string, unknown> || {}
-              const taxUploadPaths = (sub.upload_paths as string[]) || []
-              // The submission's files live in whichever bucket they were
-              // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
-              // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
-              // the "tax-form-uploads" config default with a "{slug}-{year}/..."
-              // scheme. Pick by path prefix so staff review copies from the
-              // right bucket for either source.
-              const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
-              const { saveFormForAccount } = await import("@/lib/crm-store/save-account-form")
-              const { NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
-              const saved = await saveFormForAccount({
-                accountId: sub.account_id,
-                formType: "tax_return",
-                submittedData: submitted,
-                uploadPaths: taxUploadPaths,
-                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
-                bucket: portalUpload ? "onboarding-uploads" : undefined,
-              })
-              if (saved.route === "none") {
-                lines.push(`⚠️ ${NO_STORAGE_SENTENCE}`)
-              } else {
-                const r = saved.result
-                if (r.summaryFileId) lines.push(`✅ Tax data summary saved (${r.summaryFileId})`)
-                if (r.copied.length > 0) lines.push(`✅ ${r.copied.length} file(s) saved`)
-                if (r.failed.length > 0) lines.push(`⚠️ ${r.failed.length} file(s) failed to save`)
-                if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
-              }
-            } catch (e) {
-              lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
-            }
-          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }
@@ -992,7 +995,7 @@ export function registerTaxTools(server: McpServer) {
           .single()
 
         if (!account) return { content: [{ type: "text" as const, text: "❌ Account not found" }] }
-        if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ This company has no tax folder to gather the accountant's files from, so nothing was sent." }] }
+        if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder" }] }
 
         // Get primary contact. is_primary-first, then contact_id for a
         // deterministic pick when none/several rows are marked primary — this

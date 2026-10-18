@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   insertError: null as null | { message: string },
   mails: [] as string[],
   alarms: [] as Array<Record<string, unknown>>,
+  stateThrows: false,
+  driveMode: "forbid" as "forbid" | "record",
 }))
 
 vi.mock("@/lib/supabase-admin", async () => {
@@ -30,12 +32,14 @@ vi.mock("@/lib/supabase-admin", async () => {
   }
   return { supabaseAdmin: { from, storage: base.storage } }
 })
-vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpy(state.driveCalls))
+vi.mock("@/lib/google-drive", async () => (await import("./_stop-drive-mocks")).driveSpyDynamic(state.driveCalls, () => state.driveMode))
+vi.mock("@/lib/portal/auto-save-document", () => ({ autoSaveDocument: async () => ({ id: "doc-1" }) }))
+vi.mock("@/lib/operations/document", () => ({ updateDocument: async () => undefined }))
 vi.mock("@/lib/gmail", () => ({ gmailPost: async (_p: string, body: { raw: string }) => { state.mails.push(Buffer.from(body.raw, "base64url").toString()); return {} } }))
 vi.mock("@/lib/mcp/action-log", () => ({ logAction: () => undefined }))
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async (e: Record<string, unknown>) => { state.alarms.push(e); return null } }))
 vi.mock("@/lib/portal/document-alerts", () => ({ notifyClientsOfNewDocument: async () => undefined }))
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => state.companyState }))
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: async () => { if (state.stateThrows) throw new Error("lookup down"); return state.companyState } }))
 vi.mock("@/lib/crm-store/save-for-account", () => ({
   saveSignedPdfForAccount: vi.fn(async () => {
     if (state.saveResult === "throw") throw new Error("storage down")
@@ -51,11 +55,13 @@ beforeEach(() => {
   state.insertError = null
   state.recorded.length = 0
   state.driveCalls.length = 0
+  state.stateThrows = false
+  state.driveMode = "forbid"
   state.mails.length = 0
   state.alarms.length = 0
   for (const k of Object.keys(state.rows)) delete state.rows[k]
   state.rows.esign_envelopes = { ...env }
-  state.rows.accounts = { company_name: "Acme LLC" }
+  state.rows.accounts = { company_name: "Acme LLC", status: "Active", drive_folder_id: null, gdrive_folder_url: null }
 })
 
 describe("finalizeEsignCompletion — filing", () => {
@@ -110,5 +116,41 @@ describe("finalizeEsignCompletion — filing", () => {
     await finalizeEsignCompletion("env-1")
     expect(state.alarms).toEqual([])
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
+  })
+
+  it("a company left on its old folder: the signed PDF goes there as before, no alarm", async () => {
+    state.companyState = "drive"
+    state.driveMode = "record"
+    state.rows.accounts = { company_name: "Acme LLC", status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    const { finalizeEsignCompletion } = await import("@/lib/operations/esign")
+    await finalizeEsignCompletion("env-1")
+    expect(state.driveCalls).toContain("uploadBinaryToDriveUpsert")
+    expect(state.alarms).toEqual([])
+    expect(state.mails[0]).toContain("is filed in the client's documents")
+  })
+
+  it("the storage lookup throws: ONE clear alarm, the email says FILING FAILED, nothing is claimed — and the filing is genuinely retryable", async () => {
+    state.stateThrows = true
+    const { finalizeEsignCompletion, fileEsignSignedPdf } = await import("@/lib/operations/esign")
+    await finalizeEsignCompletion("env-1")
+    expect(state.alarms).toHaveLength(1)
+    expect(String((state.alarms[0].context as Record<string, unknown>).reason)).toContain("lookup down")
+    expect(state.mails[0]).toContain("FILING FAILED")
+    // nothing was marked filed: no pointer written, no fallback row
+    expect(state.recorded.filter((r) => r.table === "esign_envelopes" && r.op === "update")).toEqual([])
+    expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
+    // the reconciliation re-run (same function) files it once the lookup works
+    state.stateThrows = false
+    const again = await fileEsignSignedPdf("env-1")
+    expect(again.filed).toBe(true)
+    expect(state.recorded.some((r) => r.table === "esign_envelopes" && r.op === "update")).toBe(true)
+  })
+
+  it("filing is idempotent: the bucket-served row that already exists is a no-op that still counts as filed", async () => {
+    state.companyState = "drive"
+    state.rows.documents = { id: "existing" }
+    const { fileEsignSignedPdf } = await import("@/lib/operations/esign")
+    expect((await fileEsignSignedPdf("env-1")).filed).toBe(true)
+    expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([])
   })
 })
