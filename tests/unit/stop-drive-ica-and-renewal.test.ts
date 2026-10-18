@@ -88,7 +88,7 @@ describe("fileRenewal (Calendar 'Mark filed')", () => {
     expect(r.success).toBe(false)
     expect(r.error).toMatch(msg)
     expect(st.driveWrites).toEqual([])
-    expect(st.alarms.map((a) => a.kind)).toEqual(["drive_write_refused"])
+    // (Calendar "Mark filed" is a staff action: the person who clicked is told by the error itself — #731's shared rule, no extra alarm)
   })
   it("company in storage: the receipt goes to storage, zero Drive calls", async () => {
     seed("Active", null); st.companyState = "store"

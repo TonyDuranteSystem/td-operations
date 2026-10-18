@@ -3,6 +3,7 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { saveSignedGeneratedDocument } from '@/lib/portal/save-generated-document'
 import { reportSystemError } from '@/lib/system-errors'
+import { CLIENT_MOVING_SENTENCE, CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 import { NextRequest, NextResponse } from 'next/server'
 
 const ROUTE = '/api/portal/generated-documents/save-signed'
@@ -66,6 +67,16 @@ export async function POST(request: NextRequest) {
     category,
     mimeType: file.type || 'application/pdf',
   })
+
+  if (!result.success && result.moving) {
+    // the company's files are being moved right now: a clean 409 and a plain "try again", no alarm
+    return NextResponse.json({ error: CLIENT_MOVING_SENTENCE }, { status: NO_STORAGE_STATUS })
+  }
+
+  if (!result.success && result.refused) {
+    // a plain refusal (this company can receive no file): the client is told, ops is not alarmed
+    return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+  }
 
   if (!result.success) {
     // The client's download already succeeded, so this failure is otherwise

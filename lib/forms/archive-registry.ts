@@ -26,8 +26,8 @@ import { memberAwareFileName, splitMemberPassports } from "@/lib/forms/file-form
  *  into drive_archive_meta at submission time (so deferred archival never
  *  re-derives a folder from a mutable name / re-guesses the bucket). */
 export interface ArchivePlan {
-  /** Drive folder id the package lands in (a stable id, never a name). */
-  folderId: string
+  /** Drive folder id the package lands in (a stable id, never a name). null = file it by company (the company's storage). */
+  folderId: string | null
   /** Supabase Storage bucket the uploaded files actually live in. */
   bucket: string
   /** saveFormToDrive form-config key (drives the filename prefix + subfolder). */

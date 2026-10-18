@@ -22,6 +22,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveFormToDrive } from "@/lib/form-to-drive"
+import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
 import { getArchiveRecipe, type ArchivePlan } from "@/lib/forms/archive-registry"
 
 export interface FormArchiveResult {
@@ -99,41 +100,61 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
   }
 
   let result: Awaited<ReturnType<typeof saveFormToDrive>>
+  let filedIn: "storage" | "folder" = "folder"
   try {
     if (formType === "banking") {
       // Stop Drive (dev job 264bb882, S1d): the banking package goes through the ONE banking filer — company storage (or its Drive
       // folder if left on Drive), the client's personal papers to the PERSON's own storage — with the submission's own token and
-      // completed_at, so this retry makes the same files as the inline attempt.
+      // completed_at, so this retry makes the same files as the inline attempt. (No pinned folder: the filer works the destination out.)
       const { fileBankingPackage } = await import("@/lib/forms/file-banking-package")
       const pkg = await fileBankingPackage({
         flow: "banking-archive", formType: plan.configKey, accountId: (r["account_id"] as string | null) ?? null, contactId: (r["contact_id"] as string | null) ?? null,
         submittedData: (r.submitted_data ?? {}) as Record<string, unknown>, uploadPaths: plan.uploadPaths, bucket: plan.bucket,
-        token: r.token ?? plan.configKey, submittedAt: r.completed_at ?? r["created_at"] as string | null, companyName: plan.companyName, folderId: plan.folderId,
+        token: r.token ?? plan.configKey, submittedAt: r.completed_at ?? (r["created_at"] as string | null), companyName: plan.companyName, folderId: plan.folderId,
       })
       result = { summaryFileId: pkg.summaryFileId, copied: pkg.copied, failed: pkg.failed, skipped: [], errors: pkg.errors }
-    } else {
-    result = await saveFormToDrive(
-      plan.configKey,
-      (r.submitted_data ?? {}) as Record<string, unknown>,
-      plan.uploadPaths,
-      plan.folderId,
-      {
-        token: r.token ?? plan.configKey,
-        submittedAt: r.completed_at ?? nowIso,
-        companyName: plan.companyName,
-      },
-      // A form with MORE THAN ONE upload origin (e.g. closure: external form →
-      // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
-      // bucket resolver so BOTH origins download from the right bucket. plan.bucket
-      // is the default for forms with a single origin.
-      {
+      filedIn = pkg.pinFolderId && /^(account|person)-storage:/.test(pkg.pinFolderId) ? "storage" : "folder"
+    } else if (plan.folderId === null) {
+      // No folder: file the package by company (its storage, or its old folder if it has one) — never skipped.
+      const accountId = typeof r["account_id"] === "string" ? (r["account_id"] as string) : null
+      if (!accountId) throw new Error(`archive: ${formType} ${submissionId} has no company to file it against`)
+      const saved = await saveFormForAccount({
+        accountId,
+        formType: plan.configKey,
+        submittedData: (r.submitted_data ?? {}) as Record<string, unknown>,
+        uploadPaths: plan.uploadPaths,
+        meta: { token: r.token ?? plan.configKey, submittedAt: r.completed_at ?? nowIso, companyName: plan.companyName },
         bucket: plan.bucket,
         resolveBucket: recipe.resolveBucket,
-        fileNameOf: recipe.fileNameOf?.(r),
-        // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
-        person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
-      },
-    )
+      })
+      if (saved.route === "none") {
+        throw new Error(`archive: company ${accountId} (${plan.companyName ?? "?"}) has no storage and no folder — there is nowhere to archive its ${formType} package`)
+      }
+      result = saved.result
+      filedIn = saved.route === "store" ? "storage" : "folder"
+    } else {
+      result = await saveFormToDrive(
+        plan.configKey,
+        (r.submitted_data ?? {}) as Record<string, unknown>,
+        plan.uploadPaths,
+        plan.folderId,
+        {
+          token: r.token ?? plan.configKey,
+          submittedAt: r.completed_at ?? nowIso,
+          companyName: plan.companyName,
+        },
+        // A form with MORE THAN ONE upload origin (e.g. closure: external form →
+        // closure-uploads, portal wizard → onboarding-uploads) supplies a per-path
+        // bucket resolver so BOTH origins download from the right bucket. plan.bucket
+        // is the default for forms with a single origin.
+        {
+          bucket: plan.bucket,
+          resolveBucket: recipe.resolveBucket,
+          fileNameOf: recipe.fileNameOf?.(r),
+          // ITIN is person-keyed: a person whose files live in the new storage gets the package there (no Drive folder)
+          person: formType === "itin" && typeof r["contact_id"] === "string" ? { contactId: r["contact_id"] as string, viaAccountId: (r["account_id"] as string | null) ?? null, name: plan.companyName } : undefined,
+        },
+      )
     }
   } catch (e) {
     await recordAttempt(recipe.table, submissionId, priorMeta, priorAttempts + 1, `save threw: ${e instanceof Error ? e.message : String(e)}`, null)
@@ -168,6 +189,7 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
         copied: result.copied,
         skipped: result.skipped,
         drive_folder_id: plan.folderId,
+        filed_in: filedIn,
       },
     } as never)
     .eq("id", submissionId)

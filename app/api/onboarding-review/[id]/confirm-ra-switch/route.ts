@@ -16,16 +16,11 @@
  * (components/calendar/mark-filed-dialog.tsx), just for the one-time
  * initial switch rather than the annual renewal.
  *
- * Copying that same receipt into the account's Google Drive folder is
- * BEST-EFFORT, not required (dev job 7535a166, 2026-09-22: Drive folder
- * creation is currently failing for every new onboarding account in
- * sandbox, a pre-existing bug in the shared Drive-folder helper, not
- * something this route introduced or can fix by itself — confirmed via
- * the job logs of multiple real accounts, including Antonio's own SAD LLC
- * test). The switch must never get stuck on Drive being broken: the
- * receipt is never lost (it's always in Storage), and the response says
- * plainly whether it also made it to Drive so staff know if a manual
- * Drive filing is still needed.
+ * Filing that same receipt in the company's CRM storage comes second and
+ * never blocks the switch (the switch was done by hand on Harbor's site and is
+ * already real). A company that can receive no file at all (finished, or no
+ * storage and no folder) is refused up front with one plain sentence, before
+ * anything is saved or the stage moves.
  *
  * Also stamps accounts.ra_switch_date and accounts.client_since (Antonio,
  * same follow-up: "I want the Client since and RA switch date so the crm
@@ -48,8 +43,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { advanceStageIfAt } from '@/lib/operations/service-delivery'
-import { ensureCompanyFolder } from '@/lib/drive-folder-utils'
-import { uploadBinaryToDrive } from '@/lib/google-drive'
+import { NO_STORAGE_STATUS, receiveVerdictFor, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { deriveRenewalDates, applyRenewalDateFills } from '@/lib/operations/renewal-dates'
 
 const MAX_RECEIPT_BYTES = 15 * 1024 * 1024
@@ -114,13 +108,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: account } = await supabaseAdmin
       .from('accounts')
-      .select('drive_folder_id, company_name, state_of_formation, formation_date, ra_switch_date, client_since, ra_renewal_date, annual_report_due_date, cmra_renewal_date')
+      .select('company_name, state_of_formation, formation_date, ra_switch_date, client_since, ra_renewal_date, annual_report_due_date, cmra_renewal_date')
       .eq('id', sub.account_id)
       .maybeSingle()
 
     const buffer = Buffer.from(await receipt.arrayBuffer())
     const fileName = `RA_Switch_Receipt_${new Date().toISOString().slice(0, 10)}_${receipt.name}`
     const mimeType = receipt.type || 'application/pdf'
+
+    // A company that can receive no file at all (no storage, and finished or without a folder): one plain sentence, nothing
+    // saved, the stage not advanced.
+    let verdict
+    try { verdict = await receiveVerdictFor(sub.account_id) } catch {
+      return NextResponse.json({ success: false, error: "Could not check where this company's files live — please try again." }, { status: 500 })
+    }
+    if (!verdict.ok) return NextResponse.json({ success: false, error: verdict.sentence }, { status: NO_STORAGE_STATUS })
 
     // 1. Durable copy FIRST — the same Supabase Storage bucket the client's
     // own wizard uploads already use (confirmed working live, 2026-09-22).
@@ -143,32 +145,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       )
     }
 
-    // 2. Drive copy — BEST-EFFORT ONLY (see file header, dev job 7535a166).
-    // Never blocks the switch; a failure here is recorded in the response
-    // text, not thrown.
-    let driveNote = 'not filed to Drive automatically — the account has no Drive folder right now.'
+    // 2. File the receipt in the company's storage (or, for a company left on its old folder, there). The switch itself was
+    // done by hand on Harbor Compliance's site and is already real, so a filing problem here never blocks the confirmation:
+    // the receipt stays safe in the upload area (step 1) and the message below says so — nothing is skipped quietly.
+    let filingNote: string
     try {
-      let driveFolderId = account?.drive_folder_id ?? null
-      if (!driveFolderId && account?.company_name && account?.state_of_formation) {
-        const folder = await ensureCompanyFolder(sub.account_id, account.company_name, account.state_of_formation)
-        driveFolderId = folder.folderId
-      }
-      if (driveFolderId) {
-        await uploadBinaryToDrive(fileName, buffer, mimeType, driveFolderId)
-        driveNote = 'also filed to the account\'s Drive folder.'
+      const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+      const { createHash } = await import('crypto')
+      try {
+        const routed = await saveDocumentForAccount({
+          accountId: sub.account_id, name: fileName, bytes: buffer, mimeType, folder: 'company', documentType: null,
+          callerKey: `ra-switch-receipt:${sub.account_id}:${createHash('sha256').update(buffer).digest('hex')}`,
+          portalVisible: false,
+          row: { document_type_name: 'RA Switch Receipt', category: 1, category_name: 'Company', status: 'classified', contact_id: null },
+        })
+        if (routed.route === 'store') {
+          filingNote = "also filed in the company's CRM storage (1. Company)."
+        } else {
+          // a company left on its old folder: the copy goes there, as before (the receipt is already safe above)
+          const decision = await noStorageDecisionFor(sub.account_id)
+          if (decision.route === 'drive') {
+            const { uploadBinaryToDrive } = await import('@/lib/google-drive')
+            await uploadBinaryToDrive(fileName, buffer, mimeType, decision.folderId)
+            filingNote = "also filed to the company's folder."
+          } else {
+            filingNote = 'kept in the upload area — this company has no document storage in the CRM.'
+          }
+        }
+      } catch (e) {
+        if (e instanceof CompanyMovingError) filingNote = "kept in the upload area — the company's files are being moved right now, so file it again in a few minutes."
+        else throw e
       }
     } catch (e) {
-      const { isStoreOwnedRefusal, saveUploadsToStoreForAccount } = await import('@/lib/crm-store/account-uploads')
-      if (isStoreOwnedRefusal(e)) {
-        // CRM Store pilot company (sandbox only): file the receipt into the new store instead of Drive
-        const r = await saveUploadsToStoreForAccount({ accountId: sub.account_id, flow: 'ra-switch', paths: [storagePath] })
-        driveNote = r.saved === 1
-          ? 'also filed to the company\'s new CRM storage (1. Company).'
-          : 'kept in the upload area — it could not be filed to the company\'s new CRM storage (staff were alerted).'
-      } else {
-      console.error('[confirm-ra-switch] Drive copy failed (non-fatal, receipt is safe in Storage):', e)
-      driveNote = 'could not be filed to Drive automatically — Drive is currently having a problem for new accounts (tracked separately). The receipt itself is safely saved either way.'
-      }
+      console.error('[confirm-ra-switch] filing the receipt failed (non-fatal, receipt is safe in Storage):', e)
+      filingNote = "kept in the upload area — it could not be filed in the company's CRM storage."
     }
 
     const result = await advanceStageIfAt({
@@ -224,7 +234,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       console.error('[confirm-ra-switch] renewal-date stamp failed (non-fatal):', e)
     }
 
-    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and the receipt is saved — ${driveNote} Moved to ${finalStage.stage_name}.${dateNote}` })
+    return NextResponse.json({ success: true, message: `Registered Agent switch confirmed and the receipt is saved — ${filingNote} Moved to ${finalStage.stage_name}.${dateNote}` })
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 500 })
   }

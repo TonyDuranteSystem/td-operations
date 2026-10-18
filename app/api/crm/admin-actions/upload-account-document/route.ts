@@ -2,9 +2,9 @@
  * Upload a document for an account (company-level).
  *
  * Parallel to upload-document/route.ts (which is contact-centric). Uploads
- * land in the account's Drive folder (resolved from accounts.drive_folder_id
- * / gdrive_folder_url) under the category subfolder, and a documents row is
- * inserted with account_id set and contact_id=null.
+ * land in the company's CRM storage under the category folder, and a documents
+ * row is listed with account_id set and contact_id=null. A company with no
+ * storage gets one plain sentence back (409).
  *
  * Accepts JSON body (file already in Supabase Storage):
  *   { account_id, storage_path, file_name, mime_type, document_type, category, display_name? }
@@ -15,6 +15,8 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Company: { num: 1, subfolder: '1. Company' },
@@ -24,6 +26,10 @@ const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
 }
 
 export async function POST(req: NextRequest) {
+  // STAFF ONLY. `/api/*` inherits only "is logged in" from the middleware, and a portal client has a login: without this check any
+  // signed-in client could file a document into ANY company's storage by naming its account_id.
+  const denied = await requireStaffRoute()
+  if (denied) return denied
   try {
     const body = await req.json()
     const {
@@ -51,13 +57,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, detail: `Storage download failed: ${dlErr?.message || 'no data'}` }, { status: 500 })
     }
 
+    // A refused upload must not leave the staged object behind.
+    const discardStaged = () => { supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {}) }
+
     const buffer = Buffer.from(await blob.arrayBuffer())
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    // Get account info + Drive folder
+    // Get account info
     const { data: account } = await supabaseAdmin
       .from('accounts')
-      .select('company_name, drive_folder_id, gdrive_folder_url')
+      .select('company_name')
       .eq('id', accountId)
       .single()
 
@@ -75,8 +84,7 @@ export async function POST(req: NextRequest) {
         : `${sanitizedDisplay}${ext}`
       : fileName
 
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
-    // saves HERE (file + CRM record) and never touches Drive; a company still on Drive carries on as before, below.
+    // The file (and its CRM record) is saved in the company's storage.
     {
       const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
       const { createHash } = await import('crypto')
@@ -91,7 +99,7 @@ export async function POST(req: NextRequest) {
           row: { document_type_name: documentType, category: catInfo.num, category_name: category, status: 'classified', contact_id: null },
         })
       } catch (e) {
-        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 })
+        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
         throw e
       }
       if (routed.route === 'store') {
@@ -117,24 +125,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let driveFolderId: string | null = account.drive_folder_id
-    if (!driveFolderId && account.gdrive_folder_url) {
-      const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-      if (match) driveFolderId = match[1]
-    }
-
-    if (!driveFolderId) {
-      return NextResponse.json({ success: false, detail: 'Account has no Drive folder. Create or link one first.' }, { status: 400 })
+    // No storage: a company left on its old folder carries on as before; everyone else gets one plain sentence.
+    const decision = await noStorageDecisionFor(accountId)
+    if (decision.route === 'refuse') {
+      discardStaged()
+      return NextResponse.json({ success: false, detail: decision.sentence }, { status: NO_STORAGE_STATUS })
     }
 
     // Find target subfolder
     const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const foldersRes = await listFolderAnyDrive(driveFolderId)
+    const foldersRes = await listFolderAnyDrive(decision.folderId)
     const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
     const targetFolder = folders.find(
       (f: { name: string; mimeType: string }) => f.name === catInfo.subfolder && f.mimeType === 'application/vnd.google-apps.folder',
     )
-    const uploadFolderId = targetFolder?.id || driveFolderId
+    const uploadFolderId = targetFolder?.id || decision.folderId
 
     // Upload to Drive
     const driveFile = await uploadBinaryToDrive(finalFileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }

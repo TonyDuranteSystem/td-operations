@@ -2,7 +2,7 @@
  * Post-attestation handoff (Slice 9, master plan §3.7).
  *
  * After the client confirms the financials: archive the client-confirmed
- * Excel (P&L + Balance Sheet) to the client's Drive 3.Tax/{year} folder.
+ * Excel (P&L + Balance Sheet) to the company storage, 3. Tax › {year}.
  * Fire-and-forget from the attest route; every failure is logged, never
  * surfaced to the client (the attestation itself is already stored).
  *
@@ -28,7 +28,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 export async function runAttestHandoff(accountId: string, taxYear: number): Promise<void> {
   const { data: acct } = await supabaseAdmin
     .from("accounts")
-    .select("company_name, drive_folder_id")
+    .select("company_name")
     .eq("id", accountId)
     .single()
   // Never put the account UUID in the filename: a uuid segment like "…-2025-…"
@@ -40,7 +40,7 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   // that isn't there, and must not cry "failed" when nothing failed (Council
   // 2026-07-17). The year-folder lookup adds a throw path the flat-root create
   // never had, and it is caught below.
-  type ArchiveOutcome = "archived" | "nothing_to_archive" | "no_drive_folder" | "failed"
+  type ArchiveOutcome = "archived" | "nothing_to_archive" | "no_storage" | "failed"
   let outcome: ArchiveOutcome = "failed"
 
   // 1. Archive the confirmed Excel to Drive 3.Tax/{year}.
@@ -57,11 +57,18 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   //    year subfolder is the target, and the upsert REPLACES the year's file in
   //    place so exactly one client-confirmed workbook exists per year.
   try {
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company keeps the confirmed
-    // workbook in its new storage (3. Tax › <year>) — Drive is not touched; a company still on Drive carries on below.
+    // The confirmed workbook is kept in the company's storage (3. Tax › <year>); a company with no storage is reported
+    // below as "no_storage" (audit log), never skipped quietly.
     const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
     const inStorage = (await companyDocState(accountId)) !== "drive"
-    if (acct?.drive_folder_id || inStorage) {
+    // a company left on its old folder (no storage, a folder, not finished) carries on there, as before
+    let oldFolderId: string | null = null
+    if (!inStorage) {
+      const { noStorageDecisionFor } = await import("@/lib/crm-store/no-storage")
+      const decision = await noStorageDecisionFor(accountId)
+      if (decision.route === "drive") oldFolderId = decision.folderId
+    }
+    if (inStorage || oldFolderId) {
       const { buildFinancialsWorkbookForAccount } = await import("@/lib/tax/financials-orchestration")
       const result = await buildFinancialsWorkbookForAccount(accountId, taxYear)
       if (!result) {
@@ -79,25 +86,23 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
             accountId, year: taxYear, name: workbookName, bytes: Buffer.from(result.buffer), mimeType: workbookMime,
             callerKey: `attest-workbook:${accountId}:${taxYear}`,
           })
-          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the workbook was being saved — nothing was saved.")
+          if (routed.route !== "store") throw new Error("This company's storage was not available while the workbook was being saved — nothing was saved.")
         } else {
           const { findTaxFolder, findOrCreateYearFolder, uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-          const taxFolderId = await findTaxFolder(acct!.drive_folder_id as string)
-          // Fall back to the Drive root only when there is no '3. Tax' folder at all.
-          const target = taxFolderId
-            ? await findOrCreateYearFolder(taxFolderId, taxYear)
-            : (acct!.drive_folder_id as string)
+          const taxFolderId = await findTaxFolder(oldFolderId as string)
+          // Fall back to the folder root only when there is no '3. Tax' folder at all.
+          const target = taxFolderId ? await findOrCreateYearFolder(taxFolderId, taxYear) : (oldFolderId as string)
           await uploadBinaryToDriveUpsert(workbookName, result.buffer, workbookMime, target)
         }
         outcome = "archived"
       }
     } else {
-      // Nothing failed — the client has no Drive folder to archive into.
-      outcome = "no_drive_folder"
-      console.warn(`[attest-handoff] no Drive folder for account ${accountId} — Excel not archived`)
+      // Nothing failed — the company has no storage to archive into.
+      outcome = "no_storage"
+      console.warn(`[attest-handoff] account ${accountId} has no storage — Excel not archived`)
     }
   } catch (e) {
-    console.error("[attest-handoff] Drive archive failed:", e)
+    console.error("[attest-handoff] archive failed:", e)
   }
 
   // 2. Record the archive outcome (audit trail only — no task here anymore,
@@ -106,10 +111,10 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   // discarded — it goes to action_log instead of a second staff task.
   try {
     const detail = {
-      archived: `Confirmed Excel archived in Drive 3.Tax/${taxYear}.`,
+      archived: `Confirmed Excel archived in the company storage, 3. Tax › ${taxYear}.`,
       nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year before sending to the accountant.`,
-      no_drive_folder: `This account has no Drive folder — the confirmed Excel could not be archived. Create the client's Drive folder, then regenerate the workbook before the final pass.`,
-      failed: `ARCHIVING THE EXCEL TO DRIVE FAILED — there is no confirmed workbook in 3.Tax/${taxYear} to send. Regenerate it from the tax financials page before the final pass.`,
+      no_storage: `This company has no document storage in the CRM, so the confirmed Excel could not be archived. Regenerate the workbook from the tax financials page before the final pass.`,
+      failed: `ARCHIVING THE EXCEL FAILED — there is no confirmed workbook in 3. Tax › ${taxYear} to send. Regenerate it from the tax financials page before the final pass.`,
     }[outcome]
     await supabaseAdmin.from("action_log").insert({
       actor: "system",
