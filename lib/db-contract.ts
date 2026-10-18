@@ -198,6 +198,15 @@ export const NOT_A_VOCABULARY = new Set([
   // `npm run snapshot:constraints`, MOVE both into CONSTRAINT_CONTRACTS and delete these lines.
   "bofa_intake_requests_status_check",
   "bofa_intake_requests_email_status_check",
+  // TEMPORARY (2026-10-18, TD Storage Mac app - dev job 1992a087): these three ARE value lists, not shape rules, and both the sandbox and
+  // production now hold them (migration 20261017-0100-storage-app-p0.sql, run in production 2026-10-18). `storage_app_tokens_kind_check` =
+  // access / refresh (lib/storage-app/tokens.ts); `store_change_log_item_kind_check` = file / folder / owner and `store_change_log_op_check`
+  // = upsert / delete, written ONLY by the change-feed triggers (no code path writes them). They cannot be registered in CONSTRAINT_CONTRACTS
+  // yet: the committed PRODUCTION snapshot does not contain them until it is next fully regenerated. At the NEXT full
+  // `npm run snapshot:constraints`, MOVE the first into CONSTRAINT_CONTRACTS with its code-side list and delete these lines.
+  "storage_app_tokens_kind_check",
+  "store_change_log_item_kind_check",
+  "store_change_log_op_check",
   // TEMPORARY (2026-10-12, CI "Sandbox still enforces what production enforces" went red on every build): these 13 ARE
   // value lists, not shape rules — they were added by features shipped after the last full `npm run snapshot:constraints`
   // and were never registered. Checked against production 2026-10-12: it holds all of them EXCEPT the three pwa_events_*

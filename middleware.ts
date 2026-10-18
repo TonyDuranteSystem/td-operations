@@ -8,6 +8,7 @@ import { verifyMfaRememberDevice, MFA_RD_COOKIE } from '@/lib/auth/mfa-remember-
 import { isSandboxBlockedWebhook } from '@/lib/sandbox-webhook-guard'
 import { isClientAllowedApiPath } from '@/lib/auth/client-api-allowlist'
 import { isKnownAuthRole, isMarketingRole, isMarketingAllowedPath, MARKETING_HOME } from '@/lib/auth/role-door'
+import { STORAGE_APP_PUBLIC_PATHS } from '@/lib/storage-app/public-paths'
 
 // --- Public paths (no auth required) ---
 const PUBLIC_PREFIXES = [
@@ -195,6 +196,10 @@ const PUBLIC_PREFIXES = [
 ]
 
 function isPublicPath(pathname: string): boolean {
+  // The TD Storage Mac app has no browser cookie: its routes authenticate themselves (the token route by its one-time code / refresh
+  // token, the rest by `withDevice`, which fails closed). EXACT paths only (dev job 1992a087, Antonio's OK 2026-10-17) — a prefix
+  // would make every future route under /api/storage-app public AND skip the staff two-step-login check below.
+  if (STORAGE_APP_PUBLIC_PATHS.includes(pathname)) return true
   return PUBLIC_PREFIXES.some(prefix => pathname.startsWith(prefix))
 }
 
