@@ -198,7 +198,7 @@ export async function GET(request: NextRequest) {
     const cutoffs = await getHistoryCutoffs(authContactId)
     if (cutoffs.size > 0) {
       const openedByAccount = new Map<string, Set<string>>()
-      for (const accId of cutoffs.keys()) openedByAccount.set(accId, await getOpenedItemIds(accId, 'message'))
+      for (const accId of Array.from(cutoffs.keys())) openedByAccount.set(accId, await getOpenedItemIds(accId, 'message'))
       data = (rawData ?? []).filter(m => {
         const accId = m.account_id as string | null
         const cutoff = accId ? cutoffs.get(accId) : null

@@ -100,7 +100,7 @@ export async function fetchClientUnreadRows(contactId: string, accountIds: strin
   // (dev job d14e823f) — the same rule the chat applies, from lib/documents/history-cutoff.ts.
   const cutoffs = await getHistoryCutoffs(contactId)
   const opened = new Map<string, Set<string>>()
-  for (const accId of cutoffs.keys()) opened.set(accId, await getOpenedItemIds(accId, 'message'))
+  for (const accId of Array.from(cutoffs.keys())) opened.set(accId, await getOpenedItemIds(accId, 'message'))
   const byId = new Map<string, UnreadRow>()
   for (const r of [...(neverRead.data ?? []), ...(keptUnread.data ?? [])] as Array<UnreadRow & { id: string; created_at: string; addressed_to_contact_id: string | null }>) {
     const cutoff = r.account_id ? cutoffs.get(r.account_id) : null

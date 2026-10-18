@@ -115,7 +115,7 @@ export async function filterCorrespondenceForViewer<T extends { id: string; acco
   const cutoffs = await getHistoryCutoffs(contactId, d)
   if (cutoffs.size === 0) return rows
   const opened = new Map<string, Set<string>>()
-  for (const accId of cutoffs.keys()) opened.set(accId, await getOpenedItemIds(accId, "correspondence", d))
+  for (const accId of Array.from(cutoffs.keys())) opened.set(accId, await getOpenedItemIds(accId, "correspondence", d))
   return rows.filter(c => {
     const cutoff = c.account_id ? cutoffs.get(c.account_id) : null
     if (!c.account_id || !cutoff) return true
