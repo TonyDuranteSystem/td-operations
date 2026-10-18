@@ -357,11 +357,15 @@ export function registerBankStatementTools(server: McpServer) {
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
+      upload_to_drive: z.boolean().optional().describe("Removed - use save_to_storage."),
       save_to_storage: z.boolean().optional().default(true).describe("Save the Excel in the company's storage (default: true)"),
       notify_client: z.boolean().optional().default(false).describe("Notify the client this P&L is ready to review/confirm (default: false — use ONLY on the genuinely final run; every other regeneration during staff review stays silent)"),
     },
-    async ({ account_id, tax_year, save_to_storage, notify_client }) => {
+    async ({ account_id, tax_year, upload_to_drive, save_to_storage, notify_client }) => {
       try {
+        if (upload_to_drive !== undefined) {
+          return { content: [{ type: "text" as const, text: "❌ upload_to_drive was removed. Use save_to_storage (true saves the P&L in the company's storage, false only returns the numbers). Nothing was generated." }] }
+        }
         // Decide where the workbook will be saved BEFORE building it (never make a file that cannot be kept).
         if (save_to_storage) {
           const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")

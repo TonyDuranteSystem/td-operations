@@ -243,7 +243,7 @@ export function registerOnboardingTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "onboarding_form_review",
-    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, creates Drive folder (Companies/{State}/{Company}/), copies uploaded documents from Supabase Storage to Drive, sets drive_folder_id on account, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
+    "Review a completed onboarding form submission. Shows submitted data + diff of changed fields. If apply_changes=true, performs FULL post-onboarding CRM setup: creates/updates Contact and Account, links them, files the uploaded documents, creates follow-up tasks (WhatsApp group, lease agreement, RA change), checks tax return status and creates tax_returns records if needed, sets portal fields, marks lead as Converted, and marks form as reviewed. Always run without apply_changes first to review.",
     {
       token: z.string().describe("Form token to review"),
       apply_changes: z.boolean().optional().default(false).describe("If true, apply changes to CRM"),

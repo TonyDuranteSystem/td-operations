@@ -801,10 +801,14 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
       message_id: z.string().describe("Gmail message ID (from gmail_search or gmail_read)"),
       attachment_id: z.string().optional().describe("Specific attachment ID to download (from gmail_read). If omitted, lists all attachments with metadata."),
       save_to_account_id: z.string().uuid().optional().describe("CRM account UUID: save the attachment in this company's storage (5. Correspondence, internal)."),
+      save_to_drive_folder_id: z.string().optional().describe("Removed - use save_to_account_id."),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },
-    async ({ message_id, attachment_id, save_to_account_id, as_user }) => {
+    async ({ message_id, attachment_id, save_to_account_id, save_to_drive_folder_id, as_user }) => {
       try {
+        if (save_to_drive_folder_id) {
+          return { content: [{ type: "text" as const, text: "❌ save_to_drive_folder_id was removed. Use save_to_account_id (the company's CRM account id) to save the attachment. Nothing was saved." }] }
+        }
         // First, get the message to find attachments
         const msg = await gmailGet(`/messages/${message_id}`, {
           format: "full",
@@ -907,7 +911,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
               row: { document_type_name: "Email attachment", category: 5, status: "classified" },
             })
             if (routed.route !== "store") {
-              return { content: [{ type: "text" as const, text: `❌ This company has no CRM storage place yet. Nothing was saved.\n\nFile: ${filename} (${sizeKb} KB).` }] }
+              return { content: [{ type: "text" as const, text: `❌ Not saved: this company has no storage place yet. Set up its storage first, or save this file by hand.\n\nFile: ${filename} (${sizeKb} KB).` }] }
             }
             logAction({
               action_type: "upload", table_name: "documents", record_id: routed.documentRowId, account_id: save_to_account_id,

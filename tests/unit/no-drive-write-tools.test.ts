@@ -94,6 +94,13 @@ describe('AI assistants — no Drive write tools', () => {
     }
   })
 
+  it('gmail_get_attachments with save_to_storage but NO account_id is an explicit error, not a silent listing', async () => {
+    const { executeTool } = await import('@/lib/ai-agent/tools')
+    const out = JSON.parse(await executeTool('gmail_get_attachments', { message_id: 'm1', save_to_storage: true }))
+    expect(out.error).toMatch(/account_id/)
+    expect(out.attachments).toBeUndefined()
+  })
+
   it('asking the assistant to move or upload a Drive file reaches no tool', async () => {
     const { executeTool } = await import('@/lib/ai-agent/tools')
     for (const name of ['drive_move', 'drive_upload_file']) {

@@ -15,7 +15,7 @@
  *
  * Rules (from MASTER RULES):
  * - C5: 1st installment triggers 4 recurring SDs
- * - C6: 2nd installment = gate before tax return -> accountant
+ * - C6: 2nd installment = gate before the tax return
  * - P1: No service until paid
  */
 
@@ -379,11 +379,11 @@ export async function onFirstInstallmentPaid(
     // Record the send so a later reverse-and-rematch cycle does not repeat it.
     await supabaseAdmin.from("action_log").insert({
       actor: "installment-handler",
-      action_type: "installment_2_email",
+      action_type: "installment_1_email",
       table_name: "accounts",
       record_id: String(year),
       account_id: account.id,
-      summary: `2nd-installment hand-off email sent for ${year} (${account.company_name})`,
+      summary: `1st-installment team email sent for ${year} (${account.company_name})`,
     })
   } catch (e) {
     steps.push({ step: "email", status: "error", detail: e instanceof Error ? e.message : String(e) })

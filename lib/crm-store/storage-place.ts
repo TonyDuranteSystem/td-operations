@@ -24,16 +24,16 @@ async function realDeps(): Promise<StoragePlaceDeps> {
 }
 
 export async function companyStoragePlace(accountId: string | null | undefined, deps?: StoragePlaceDeps): Promise<StoragePlace> {
-  if (!accountId) return { ok: false, message: "This has no company attached, so there is no storage place to save into. Nothing was generated." }
+  if (!accountId) return { ok: false, message: "This has no company attached, so there is nowhere to save it. Nothing was generated — pick the company and try again." }
   const d = deps ?? (await realDeps())
   const state = await d.companyState(accountId)
-  if (state === "drive") return { ok: false, message: "This company has no storage place yet. Nothing was generated." }
-  if (state === "moving") return { ok: false, message: "This company's files are being moved right now. Try again in a few minutes. Nothing was generated." }
+  if (state === "drive") return { ok: false, message: "This company has no storage place yet, so nothing was generated. Set up its storage first, or do this one by hand." }
+  if (state === "moving") return { ok: false, message: "This company's files are being moved right now, so nothing was generated. Try again in a few minutes." }
   return { ok: true, message: "" }
 }
 
 export async function personStoragePlace(contactId: string | null | undefined, name: string, deps?: StoragePlaceDeps): Promise<StoragePlace> {
-  if (!contactId) return { ok: false, message: "This form is not linked to a person yet, so there is no storage place to save into. Nothing was generated." }
+  if (!contactId) return { ok: false, message: "This form is not linked to a person yet, so nothing was generated. Open the form, choose the person, and try again." }
   const d = deps ?? (await realDeps())
   if (await d.liveOwnerOfContact(contactId)) return { ok: true, message: "" }
   await d.ensurePersonOwner(contactId, name || "Member")

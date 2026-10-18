@@ -2055,7 +2055,7 @@ async function saveAttachmentToStorage(accountId: string, name: string, bytes: B
     callerKey: `ai-agent-file:${accountId}:${keyHint}:${storeNameKey(name)}`, portalVisible: false,
     row: { document_type_name: 'Saved by the assistant', category: 5, status: 'classified' },
   })
-  if (r.route !== 'store') throw new Error("This company has no storage place yet - nothing was saved.")
+  if (r.route !== 'store') throw new Error("This company has no storage place yet, so nothing was saved. Set up its storage first, or save the file by hand.")
   return r
 }
 
@@ -2065,8 +2065,11 @@ async function saveAttachmentToStorage(accountId: string, name: string, bytes: B
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailGetAttachmentsTool(p: any) {
+  if (p.save_to_storage && !p.account_id) {
+    return JSON.stringify({ error: 'save_to_storage needs the company account_id. Call gmail_get_attachments again with save_to_storage=true and account_id. Nothing was saved.' })
+  }
   if (p.save_to_drive || p.drive_folder_id) {
-    return JSON.stringify({ error: 'Nothing can be saved to Drive any more. To keep the attachments, call gmail_get_attachments again with save_to_storage=true and the company account_id. Nothing was saved.' })
+    return JSON.stringify({ error: 'save_to_drive and drive_folder_id were removed. To keep the attachments call gmail_get_attachments with save_to_storage=true and the company account_id. Nothing was saved.' })
   }
   const { gmailGet } = await import('@/lib/gmail')
 
@@ -2098,7 +2101,7 @@ async function gmailGetAttachmentsTool(p: any) {
     return JSON.stringify({ attachments: [], total: 0, message: 'No attachments found in this email.' })
   }
 
-  // Drive cutover: a company whose files live in the new storage gets the attachments there
+  // A company whose files live in the new storage gets the attachments there
   if (p.save_to_storage && p.account_id) {
     const { getGmailAttachment } = await import('@/lib/gmail')
     const uploaded: Array<{ filename: string; saved_as: string }> = []

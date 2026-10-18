@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { LEGACY_AGENT_BLOCKED_TOOLS } from '@/lib/ai-agent/providers'
+import { LEGACY_AGENT_BLOCKED_TOOLS, getTools } from '@/lib/ai-agent/providers'
 import { AGENT_TOOLS } from '@/lib/ai-agent/tools'
 
 describe('legacy sidebar engine — blocked tool set', () => {
@@ -74,5 +74,18 @@ describe('legacy sidebar engine — blocked tool set', () => {
       .filter(n => !LEGACY_AGENT_BLOCKED_TOOLS.has(n))
       .filter(n => !readOnlyDespiteName.has(n))
     expect(suspicious, `unclassified mutating tools reachable from the sidebar: ${suspicious.join(', ')}`).toEqual([])
+  })
+})
+
+describe('legacy sidebar engine — saving attachments is gated, listing is not', () => {
+  it('gmail_get_attachments with save_to_storage is refused without running', async () => {
+    const { executeTool } = await getTools()
+    const out = await executeTool('gmail_get_attachments', { message_id: 'm1', save_to_storage: true, account_id: 'a1' })
+    expect(out).toMatch(/cannot be done from this panel/)
+  })
+  it('plain listing is not refused by the guard', async () => {
+    const { executeTool } = await getTools()
+    const out = await executeTool('gmail_get_attachments', { message_id: 'm1' })
+    expect(out).not.toMatch(/cannot be done from this panel/)
   })
 })

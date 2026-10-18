@@ -141,7 +141,7 @@ if name.startswith("mcp__"):
 
     # An explicit mutation verb anywhere in the name disqualifies it, even if a
     # read-ish word also appears (e.g. `doc_update_health`, `msg_mark_read`,
-    # `portal_chat_mark_read`, `tax_send_to_accountant`, `session_checkpoint`).
+    # `portal_chat_mark_read`, `session_checkpoint`).
     WRITE_TOKENS = {
         "create", "update", "delete", "send", "write", "upload", "move", "rename",
         "add", "set", "remove", "claim", "release", "decide", "execute", "advance",

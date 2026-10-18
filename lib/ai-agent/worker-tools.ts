@@ -165,7 +165,7 @@ export const PROPOSE_ACTION_TOOL: ToolDef = {
   name: "propose_action",
   description: [
     "Propose an action for Antonio to approve. This does NOT run the action — it queues it.",
-    "Use this whenever the research request implies a side-effecting action (sending an email, creating/updating a CRM record, advancing a stage, moving/uploading a Drive file, logging a conversation, saving a memory).",
+    "Use this whenever the research request implies a side-effecting action (sending an email, creating/updating a CRM record, advancing a stage, logging a conversation, saving a memory).",
     "Do NOT describe-only: if an action is implied, propose it here. It will sit as 'pending' until Antonio approves it on the approval rail — nothing happens until then.",
     `Allowed tool_name values: ${Array.from(APPROVABLE_TOOL_NAMES).join(", ")}.`,
     "params must match that tool's own parameters. Include a short rationale explaining why the action is warranted.",

@@ -21,7 +21,7 @@ export function registerITINFormTools(server: McpServer) {
     {
       lead_id: z.string().uuid().optional().describe("Lead UUID (use for new clients)"),
       account_id: z.string().uuid().optional().describe("Account UUID (use for existing clients)"),
-      contact_id: z.string().uuid().optional().describe("Contact UUID (auto-detects primary contact if omitted)"),
+      contact_id: z.string().uuid().optional().describe("Contact UUID of the applicant (taken from the company only when it has a single member)"),
       language: z.enum(["en", "it"]).optional().describe("Form language (auto-detected from lead/contact language if omitted)"),
     },
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -61,13 +61,16 @@ export function registerITINFormTools(server: McpServer) {
             resolvedContactId = contact?.id || null
           }
         } else if (account_id) {
-          // Get primary contact for account
+          // The applicant: the one linked member, or the contact_id you pass. With several members we never guess.
           if (!resolvedContactId) {
             const { data: links } = await supabaseAdmin
               .from("account_contacts")
               .select("contact_id")
               .eq("account_id", account_id)
-              .limit(1)
+              .limit(2)
+            if ((links ?? []).length > 1) {
+              return { content: [{ type: "text" as const, text: "This company has several members, so I can't tell who the ITIN is for. Call itin_form_create again with contact_id set to the applicant." }] }
+            }
             resolvedContactId = links?.[0]?.contact_id || null
           }
 
@@ -530,13 +533,17 @@ export function registerITINFormTools(server: McpServer) {
   // ***************************************
   server.tool(
     "itin_prepare_documents",
-    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Saves all 3 PDFs + passport copies in the person's CRM storage (ITIN folder) and registers them as portal-visible documents (the client sees/downloads them in the portal). Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) The person must have a CRM storage place. Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
+    `Generate W-7, 1040-NR, and Schedule OI PDFs from a completed ITIN form submission. Saves all 3 PDFs + passport copies in the person's CRM storage (ITIN folder) and lists them in the CRM. This tool does NOT show them to the client. Prerequisites: 1) ITIN form must be 'completed' or 'reviewed', 2) The applicant is taken from the form's own data (email, then name), never from the first linked member; if that cannot be told the tool refuses. Run itin_form_review first to verify data, then use this tool to generate documents. NOTE (2026-06-26): the ITIN is now managed from the /flows/[sd] WORKSPACE — staff review the docs there and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing), which auto-posts the client a bilingual portal chat message. The client is NEVER emailed the PDFs; the portal is the delivery mechanism. Do NOT use send_email.`,
     {
       token: z.string().describe("ITIN form token"),
       send_email: z.boolean().optional().default(false).describe("DEPRECATED — do NOT use. The client gets the ITIN documents via the PORTAL/workspace, never by email. Leave false; advancing the workspace to Client Signing notifies the client."),
+      drive_folder_id: z.string().optional().describe("Removed - the documents are saved in the person's storage."),
     },
-    async ({ token, send_email }) => {
+    async ({ token, send_email, drive_folder_id }) => {
       try {
+        if (drive_folder_id) {
+          return { content: [{ type: "text" as const, text: "❌ drive_folder_id was removed. The documents are saved in the person's storage automatically - call again without it. Nothing was generated." }] }
+        }
         // 1. Load submission
         const { data: sub, error } = await supabaseAdmin
           .from("itin_submissions")
@@ -556,7 +563,12 @@ export function registerITINFormTools(server: McpServer) {
         // The ITIN belongs to the PERSON: decide where it will be saved BEFORE anything is generated. A person with no
         // storage gets one now; a form not linked to a person is refused (nothing is made, nothing is claimed).
         const { personStoragePlace } = await import("@/lib/crm-store/storage-place")
-        const place = await personStoragePlace(sub.contact_id as string | null, clientName)
+        // WHO is the applicant: from the form's own data, never "the first linked contact".
+        const { resolveItinApplicant, realItinApplicantDeps } = await import("@/lib/crm-store/itin-applicant")
+        const who = await resolveItinApplicant({ contact_id: sub.contact_id as string | null, account_id: sub.account_id as string | null, submitted_data: submitted }, await realItinApplicantDeps())
+        if (!who.ok) return { content: [{ type: "text" as const, text: `⚠️ ${who.message}` }] }
+        const applicantId = who.contactId as string
+        const place = await personStoragePlace(applicantId, clientName)
         if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         // 3. Generate W-7
@@ -615,7 +627,7 @@ export function registerITINFormTools(server: McpServer) {
             const routed = await saveDocumentForContact({
               // the generated ITIN papers go to the person's ITIN folder; a passport stays in Personal documents
               folderKind: documentType === "passport" ? "personal" : "itin",
-              contactId: sub.contact_id as string, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
+              contactId: applicantId, accountId: (sub.account_id as string | null) ?? null, viaAccountId: (sub.account_id as string | null) ?? null,
               contactName: clientName, name: fileName, bytes, mimeType: mime, documentType,
               callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
               row: { document_type_name: label, category: 1, status: "classified" },
@@ -746,7 +758,7 @@ support@tonydurante.us
         results.push("")
         results.push("---")
         if (!send_email) {
-          results.push("Documents generated, saved in storage, and registered as portal-visible. Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
+          results.push("Documents generated and saved in the person's storage (this tool does not show them to the client). Manage the ITIN from the /flows/[sd] workspace: review the docs there, then advance Document Preparation → Client Signing to notify the client via the portal. Do NOT email the PDFs (send_email is deprecated — the portal is the delivery mechanism).")
         }
 
         return { content: [{ type: "text" as const, text: results.join("\n") }] }

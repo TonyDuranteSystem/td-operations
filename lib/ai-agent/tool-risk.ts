@@ -17,7 +17,7 @@
  *   · lead_search / lead_get  — return offer links that sign a contract
  *   · msg_list_channels       — returns messaging provider config (credentials)
  *   · bank_statement_pnl      — hand-curated as safe, yet overwrites the client's
- *                               filed P&L because upload_to_drive DEFAULTS TRUE
+ *                               filed P&L because save_to_storage DEFAULTS TRUE
  *
  * The naming heuristic is GONE. This is now a positive allow-list: a tool is
  * auto-runnable ONLY if a human read its handler and listed it below. Everything else
@@ -152,7 +152,7 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
  * set requires approval — that is the fail-safe, and it is the whole design.
  *
  * NOTABLY ABSENT, and why — these were auto-run under the old name-guessing:
- *   bank_statement_pnl     upload_to_drive DEFAULTS TRUE → overwrites the client's P&L
+ *   bank_statement_pnl     save_to_storage DEFAULTS TRUE → overwrites the client's P&L
  *   sysdoc_read            no agent_readable gate, no redaction; reads credentials
  *   signature_request_get  returns a link that signs a legal document as the client
  *   docai_ocr_file         OCRs any Drive file by id → passports, tax returns

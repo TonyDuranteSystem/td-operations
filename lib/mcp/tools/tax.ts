@@ -19,7 +19,7 @@ export function registerTaxTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "tax_search",
-    "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/sent_to_accountant/extension/accountant_status). Use tax_tracker for the visual dashboard overview.",
+    "Search tax returns by year, status, return type, account, or special case flag. Returns company name, return type (1065/1120-S/1040NR), status, deadline, and workflow progress (paid/link_sent/data_received/extension/filed). Use tax_tracker for the visual dashboard overview.",
     {
       tax_year: z.number().optional().describe("Tax year (e.g., 2025)"),
       status: z.string().optional().describe("Status: Payment Pending, Paid - Not Started, Activated - Need Link, Link Sent - Awaiting Data, Wizard Available, Data Received, Sent to Accountant, Extension Filed, TR Completed - Awaiting Signature, TR Filed, Not Invoiced"),
@@ -81,10 +81,9 @@ export function registerTaxTools(server: McpServer) {
           const deadline = tr.deadline || "—"
           const ext = tr.extension_filed ? ` → ext: ${tr.extension_deadline || "?"}` : ""
           const special = tr.special_case ? " ⚠️" : ""
-          const accountant = tr.accountant_status && tr.accountant_status !== "Not Sent" ? ` | Accountant: ${tr.accountant_status}` : ""
 
           lines.push(`${icon} ${tr.company_name}${special}`)
-          lines.push(`   ${tr.return_type} ${tr.tax_year} | ${tr.status}${accountant}`)
+          lines.push(`   ${tr.return_type} ${tr.tax_year} | ${tr.status}`)
           lines.push(`   Deadline: ${deadline}${ext}`)
 
           // Workflow progress
@@ -92,7 +91,6 @@ export function registerTaxTools(server: McpServer) {
             tr.paid ? "✅ Paid" : "⬜ Paid",
             tr.link_sent ? "✅ Link" : "⬜ Link",
             tr.data_received ? "✅ Data" : "⬜ Data",
-            tr.sent_to_accountant ? "✅ Accountant" : "⬜ Accountant",
             tr.extension_filed ? "✅ Ext" : "⬜ Ext",
             tr.status === "TR Filed" ? "✅ Filed" : "⬜ Filed",
           ]

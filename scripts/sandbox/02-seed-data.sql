@@ -2356,12 +2356,7 @@ When sending a tax return for preparation, the accountant needs these documents:
 - Related party transactions also rendered as sub-sections (Transaction 1, Transaction 2...)
 
 ### Automation
-- Tool: `tax_send_to_accountant(account_id, tax_year, dry_run=true)` — bundles all documents from Drive
-- **ALWAYS run with dry_run=true first** to preview the package. Get Antonio''s approval. Then run with dry_run=false to send.
 - P&L auto-generates for MMLLC and Corp when tax form is submitted (auto-chain in /api/tax-form-completed)
-- Email subject format: `{Company} - {Contact} - {EIN} - {ReturnType}`
-- Default accountant email: tax@adasglobus.com (configurable via accountant_email param)
-- Tool searches both Tax/{year}/ subfolder AND Tax/ root for documents (handles both folder structures)
 - Entity type matching is regex-based: handles ''MMLLC'', ''Multi-Member LLC'', ''Multi Member LLC'', etc.
 
 ### PDF Generation (lib/form-to-drive.ts)
@@ -3973,11 +3968,7 @@ Prerequisites: payment confirmed + data complete + Antonio review OK.
 
 | # | Step | Who | Tool | Detail |
 |---|------|-----|------|--------|
-| 26 | Send to India | Claude | tax_send_to_accountant(account_id, tax_year) | Auto-bundles from Drive: Tax Organizer PDF, P&L Excel (MMLLC+Corp), prior year return, bank statements. Emails to tax@adasglobus.com. Subject: [Company] - [Contact] - [EIN] - [Type] |
-| 27 | Track India progress | Claude | tax_update | india_status: Sent - Pending → In Progress → Completed |
-| 28 | India returns completed TR | India team | -- | Tax return PDF ready for review |
 
-**India follow-up:** Week 2: check status. Week 3: 2nd follow-up. Week 4: escalation to Antonio.
 
 India = "filing team" or "preparation team". Never call them CPA or accountant.
 
@@ -4075,7 +4066,6 @@ India = "filing team" or "preparation team". Never call them CPA or accountant.
 | Portal wizard (tax type) | Primary data collection. Replaces tax_form_create |
 | Portal billing system | Official invoicing. Replaces QuickBooks |
 | Portal document signing | TR signed inside portal |
-| tax_send_to_accountant | Bundles all docs from Drive, emails India |
 | tax_extension_list | Generates bulk CSV of all clients, emails India |
 | tax_extension_update | Bulk marks extensions as filed with confirmation IDs |
 | tax_search / tax_tracker | Search and visual dashboard |
@@ -4092,7 +4082,7 @@ India = "filing team" or "preparation team". Never call them CPA or accountant.
 | 1.0 | 2026-02 | Initial |
 | 4.0 | 2026-03-16 | Post-September, extension tracking |
 | 5.0 | 2026-03-20 | Auto-chain, P&L, bulk extension |
-| 6.0 | 2026-03-23 | Comparative Balance Sheet, tax_send_to_accountant |
+| 6.0 | 2026-03-23 | Comparative Balance Sheet |
 | 7.0 | 2026-03-23 | Two scenarios. Portal-first (wizard + signing + billing). Extension list by February 1. Corp auto P&L. India bulk extension. Lead/Contact terminology clarified. All English. |
 
 ---

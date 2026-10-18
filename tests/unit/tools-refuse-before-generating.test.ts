@@ -53,7 +53,7 @@ describe('refuse up front, generate nothing, claim nothing', () => {
     sub = { id: 's1', status: 'completed', contact_id: null, account_id: null, submitted_data: { first_name: 'Ann', last_name: 'Lee' }, upload_paths: [] }
     const h = await tools('itin-form', 'registerITINFormTools')
     const out = text(await h['itin_prepare_documents']({ token: 't', send_email: false } as never))
-    expect(out).toMatch(/not linked to a person/i)
+    expect(out).toMatch(/which person/i)
     expect(out).not.toMatch(/saved in storage|generated, saved/i)
     expect(generated).not.toHaveBeenCalled()
   })
