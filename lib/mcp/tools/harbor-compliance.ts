@@ -378,7 +378,7 @@ Prerequisites:
 The file is saved in the company's "5. Correspondence" folder (internal).`,
     {
       delivery_id: z.string().describe("HC delivery UUID (from hc_list_deliveries)"),
-      account_id: z.string().uuid().describe("CRM account UUID "),
+      account_id: z.string().uuid().describe("CRM account UUID"),
     },
     async (params) => {
       try {
@@ -395,7 +395,7 @@ The file is saved in the company's "5. Correspondence" folder (internal).`,
 
         const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
         const place = await companyStoragePlace(params.account_id)
-        if (!place.ok) return { content: [{ type: "text" as const, text: `Not saved: ${place.message}` }] }
+        if (!place.ok) return { content: [{ type: "text" as const, text: `Not saved: ${place.message.replace("nothing was made", "nothing was saved")}` }] }
 
         // Get delivery metadata
         const deliveryInfo = await harborCompliance.getDelivery(params.delivery_id, {

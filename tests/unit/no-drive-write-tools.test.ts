@@ -58,9 +58,10 @@ describe('MCP server — no Drive write tools', () => {
 describe('what still touches Drive from MCP tools — pinned exactly (may only shrink)', () => {
   const dir = join(ROOT, 'lib/mcp/tools')
   const files = readdirSync(dir).filter(n => n.endsWith('.ts'))
-  it('only these tool files call saveFormToDrive (S1d moves them to storage)', () => {
+  it('no NEW tool file calls saveFormToDrive: today it is a subset of these four, and moving them to storage only shrinks it', () => {
     const users = files.filter(f => /\bsaveFormToDrive\b/.test(readFileSync(join(dir, f), 'utf8'))).sort()
-    expect(users).toEqual(['banking-form.ts', 'closure.ts', 'formation.ts', 'tax.ts'])
+    const allowed = ['banking-form.ts', 'closure.ts', 'formation.ts', 'tax.ts']
+    expect(users.filter(f => !allowed.includes(f)), `New saveFormToDrive callers: ${users.join(', ')}`).toEqual([])
   })
   it('only storage.ts mirrors into My Drive (syncToDrive)', () => {
     const users = files.filter(f => /\bsyncToDrive\b/.test(readFileSync(join(dir, f), 'utf8'))).sort()

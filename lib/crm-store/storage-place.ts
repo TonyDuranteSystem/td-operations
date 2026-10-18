@@ -24,18 +24,28 @@ async function realDeps(): Promise<StoragePlaceDeps> {
 }
 
 export async function companyStoragePlace(accountId: string | null | undefined, deps?: StoragePlaceDeps): Promise<StoragePlace> {
-  if (!accountId) return { ok: false, message: "This has no company attached, so there is nowhere to save it. Nothing was generated — pick the company and try again." }
+  if (!accountId) return { ok: false, message: "This has no company attached, so there is nowhere to save it - pick the company and try again." }
   const d = deps ?? (await realDeps())
   const state = await d.companyState(accountId)
-  if (state === "drive") return { ok: false, message: "This company has no storage place yet, so nothing was generated. Set up its storage first, or do this one by hand." }
-  if (state === "moving") return { ok: false, message: "This company's files are being moved right now, so nothing was generated. Try again in a few minutes." }
+  if (state === "drive") return { ok: false, message: "This company has no storage place yet, so nothing was made - set up its storage first or do this one by hand." }
+  if (state === "moving") return { ok: false, message: "This company's files are being moved right now, so nothing was made - try again in a few minutes." }
   return { ok: true, message: "" }
 }
 
-export async function personStoragePlace(contactId: string | null | undefined, name: string, deps?: StoragePlaceDeps): Promise<StoragePlace> {
-  if (!contactId) return { ok: false, message: "This form is not linked to a person yet, so nothing was generated. Open the form, choose the person, and try again." }
+/**
+ * A person's storage place. A person who already has storage is fine. Otherwise the company they are being handled through must
+ * not be a Drive-only company (their storage would be refused at save time) or one being moved; only then is the storage created.
+ * Nothing is created when the answer is a refusal.
+ */
+export async function personStoragePlace(contactId: string | null | undefined, name: string, deps?: StoragePlaceDeps, viaAccountId?: string | null): Promise<StoragePlace> {
+  if (!contactId) return { ok: false, message: "This form is not linked to a person yet, so nothing was made - open the form, choose the person and try again." }
   const d = deps ?? (await realDeps())
   if (await d.liveOwnerOfContact(contactId)) return { ok: true, message: "" }
+  if (viaAccountId) {
+    const state = await d.companyState(viaAccountId)
+    if (state === "drive") return { ok: false, message: "This person's company has no storage place yet, so nothing was made - set up its storage first or do this one by hand." }
+    if (state === "moving") return { ok: false, message: "This person's company files are being moved right now, so nothing was made - try again in a few minutes." }
+  }
   await d.ensurePersonOwner(contactId, name || "Member")
   return { ok: true, message: "" }
 }

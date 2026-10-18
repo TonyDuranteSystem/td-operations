@@ -489,6 +489,11 @@ export type PilotAlarmKind =
   | "formation_owner_failed"       // a pilot formation's store owner could not be set up
   | "store_unmapped_upload"        // an upload on a pilot formation at a stage with no document type
   | "formation_pilot_undecided"    // several open formations: Drive steps ran, the store files were handed over after
+  | "lead_form_filing_failed"      // a lead-stage form (formation/onboarding/closure) package could not be fully filed in storage
+  | "lead_form_contact_ambiguous"  // a lead's email matches several CRM contacts: nothing was filed under a guessed person
+  | "lead_form_person_on_drive"    // the person still lives on Drive (or in a hidden study copy): no storage was opened, nothing was filed
+  | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
+  | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**

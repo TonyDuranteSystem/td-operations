@@ -11,7 +11,13 @@
  * so a newly-added mutating tool cannot quietly become reachable here.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+// the real Gmail path must never run in a unit test
+vi.mock('@/lib/gmail', () => ({
+  gmailGet: vi.fn(async () => ({ payload: { parts: [] } })),
+  getGmailAttachment: vi.fn(),
+}))
 import { LEGACY_AGENT_BLOCKED_TOOLS, getTools } from '@/lib/ai-agent/providers'
 import { AGENT_TOOLS } from '@/lib/ai-agent/tools'
 

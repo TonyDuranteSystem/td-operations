@@ -12,7 +12,7 @@ vi.mock('@/lib/crm-store/switched-drive-guard', () => ({
   companyDocState: async () => companyState,
   liveOwnerOfContact: async () => liveOwner,
 }))
-vi.mock('@/lib/crm-store/formation-pilot', () => ({ ensurePersonOwner: (...a: unknown[]) => ensurePersonOwner(...a) }))
+vi.mock('@/lib/crm-store/formation-pilot', () => ({ ensurePersonOwner: (...a: unknown[]) => ensurePersonOwner(...a), raisePilotAlarm: vi.fn() }))
 
 let sub: Record<string, unknown> | null = null
 let acct: Record<string, unknown> | null = null
@@ -31,7 +31,7 @@ vi.mock('@/lib/supabase-admin', () => ({
 vi.mock('@/lib/crm-store/itin-applicant', async (orig) => {
   const real = await orig<typeof import('@/lib/crm-store/itin-applicant')>()
   return { ...real, realItinApplicantDeps: async () => ({
-    linkedContacts: async () => [{ id: 'c-ann', full_name: 'Ann Lee', email: 'ann@x.com' }, { id: 'c-bob', full_name: 'Robert Roe (CRM name)', email: 'bob@x.com' }],
+    linkedContacts: async () => [{ id: 'c-ann', full_name: 'Ann Lee', email: 'ann@x.com' }, { id: 'c-bob', full_name: 'Bob Roe', email: 'bob@x.com' }],
     contact: async () => null,
   }) }
 })
@@ -105,7 +105,7 @@ describe('itin_prepare_documents — MMLLC with two members', () => {
     for (const f of forms) {
       expect(f.contactId).toBe('c-bob')
       expect(f.portalVisible).toBe(true)
-      expect(f.contactName).toBe('Robert Roe (CRM name)')
+      expect(f.contactName).toBe('Bob Roe')
       expect(f.folderKind).toBe('itin')
       expect((f.row as Record<string, unknown>).category).toBe(3)
       expect(String(f.callerKey)).toMatch(/^itin-form-doc:c-bob:sd1:/)
@@ -115,11 +115,29 @@ describe('itin_prepare_documents — MMLLC with two members', () => {
     expect(out).not.toMatch(/Error/)
   })
 
+  it('a Drive-only company: refused in one sentence, nothing generated, no storage created', async () => {
+    companyState = 'drive'
+    sub = mmllc('bob@x.com', 'c-ann')
+    const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
+    expect(out).toMatch(/no storage place yet/i)
+    expect(ensurePersonOwner).not.toHaveBeenCalled()
+    expect(generated).not.toHaveBeenCalled()
+  })
+
+  it('Bob fills the form with his wife\'s email: refused, no storage for anyone, nothing generated', async () => {
+    sub = mmllc('ann@x.com', 'c-ann')
+    const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
+    expect(out).toMatch(/belongs to one member/i)
+    expect(ensurePersonOwner).not.toHaveBeenCalled()
+    expect(generated).not.toHaveBeenCalled()
+  })
+
   it('refuses before generating when the person has no open ITIN case', async () => {
     cases = []
     sub = mmllc('bob@x.com', 'c-ann')
     const out = text(await (await tools('itin-form', 'registerITINFormTools'))['itin_prepare_documents']({ token: 't', send_email: false } as never))
     expect(out).toMatch(/no open ITIN case/i)
+    expect(ensurePersonOwner).not.toHaveBeenCalled() // a refusal leaves no empty storage behind
     expect(generated).not.toHaveBeenCalled()
     expect(saved).toHaveLength(0)
   })

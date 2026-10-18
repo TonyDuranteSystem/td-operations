@@ -44,3 +44,26 @@ describe('personStoragePlace', () => {
     expect(d.ensurePersonOwner).not.toHaveBeenCalled()
   })
 })
+
+describe('personStoragePlace through a company', () => {
+  it('a person of a Drive-only company with no storage is refused and NO storage is created', async () => {
+    const d = deps({ companyState: async () => 'drive' })
+    const r = await personStoragePlace('c1', 'Ann', d, 'acct-drive')
+    expect(r.ok).toBe(false)
+    expect(d.ensurePersonOwner).not.toHaveBeenCalled()
+  })
+  it('a company being moved is refused and nothing is created', async () => {
+    const d = deps({ companyState: async () => 'moving' })
+    expect((await personStoragePlace('c1', 'Ann', d, 'acct-moving')).ok).toBe(false)
+    expect(d.ensurePersonOwner).not.toHaveBeenCalled()
+  })
+  it('a person who already has storage is fine even through a Drive-only company', async () => {
+    const d = deps({ companyState: async () => 'drive', liveOwnerOfContact: async () => 'o1' })
+    expect((await personStoragePlace('c1', 'Ann', d, 'acct-drive')).ok).toBe(true)
+  })
+  it('a switched company: the person\'s storage is created', async () => {
+    const d = deps()
+    expect((await personStoragePlace('c1', 'Ann', d, 'acct-ok')).ok).toBe(true)
+    expect(d.ensurePersonOwner).toHaveBeenCalledWith('c1', 'Ann')
+  })
+})

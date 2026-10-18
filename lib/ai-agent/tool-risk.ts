@@ -83,7 +83,7 @@ export const HARD_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
  *    by strangers.
  *
  * 2. IRREVERSIBLE CLIENT-FACING DOCUMENTS. Offers, leases, operating agreements,
- *    ITIN forms, invoices and the accountant hand-off all go to a real person and
+ *    ITIN forms and invoices all go to a real person and
  *    cannot be recalled. Firing one from a queue — where the payload was frozen
  *    minutes or hours earlier and nothing re-verifies the recipient — is the same
  *    risk in a different shape.

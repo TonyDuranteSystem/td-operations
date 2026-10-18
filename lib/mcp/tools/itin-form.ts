@@ -570,9 +570,6 @@ export function registerITINFormTools(server: McpServer) {
         const applicantId = who.contactId as string
         // The person's storage folder is named from the CRM record, not from what was typed in the form.
         const personName = who.fullName || clientName
-        const place = await personStoragePlace(applicantId, personName)
-        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
-
         // The documents are listed on the person's open ITIN case (so the workspace lists them and the portal card can show
         // them) exactly like the automatic path does. No open case = nothing to attach them to: refuse before generating.
         const sdFilters = [`notes.ilike.%${token}%`, `contact_id.eq.${applicantId}`]
@@ -588,8 +585,11 @@ export function registerITINFormTools(server: McpServer) {
         if (itinCaseErr) throw new Error(`Could not look up the ITIN case — ${itinCaseErr.message}`)
         const itinCaseId = (itinCases ?? [])[0]?.id as string | undefined
         if (!itinCaseId) {
-          return { content: [{ type: "text" as const, text: "⚠️ There is no open ITIN case for this person, so the documents would not show in the workspace. Nothing was generated. Open the ITIN case first, then try again." }] }
+          return { content: [{ type: "text" as const, text: "⚠️ There is no open ITIN case for this person, so nothing was made - open the ITIN case first and try again." }] }
         }
+        // Storage is created LAST, only once everything else says go (a refusal above must leave no empty storage behind).
+        const place = await personStoragePlace(applicantId, personName, undefined, sub.account_id as string | null)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         // 3. Generate W-7
         const { fillW7 } = await import("@/lib/pdf/w7-fill")

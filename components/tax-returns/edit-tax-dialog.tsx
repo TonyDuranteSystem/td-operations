@@ -18,7 +18,6 @@ export function EditTaxDialog({ open, onClose, taxReturn }: EditTaxDialogProps) 
   const [status, setStatus] = useState(taxReturn.status)
   const [paid, setPaid] = useState(taxReturn.paid ?? false)
   const [dataReceived, setDataReceived] = useState(taxReturn.data_received ?? false)
-  const [sentToAccountant, setSentToAccountant] = useState(taxReturn.sent_to_accountant ?? false)
   const [extensionFiled, setExtensionFiled] = useState(taxReturn.extension_filed ?? false)
   const [extensionDeadline, setExtensionDeadline] = useState(taxReturn.extension_deadline ?? '')
   const [deadline, setDeadline] = useState(taxReturn.deadline ?? '')
@@ -34,7 +33,6 @@ export function EditTaxDialog({ open, onClose, taxReturn }: EditTaxDialogProps) 
         status,
         paid,
         data_received: dataReceived,
-        sent_to_accountant: sentToAccountant,
         extension_filed: extensionFiled,
         extension_deadline: extensionFiled ? (extensionDeadline || null) : null,
         deadline: deadline || null,
@@ -111,15 +109,6 @@ export function EditTaxDialog({ open, onClose, taxReturn }: EditTaxDialogProps) 
                   className="rounded border-zinc-300"
                 />
                 Data Received
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={sentToAccountant}
-                  onChange={e => setSentToAccountant(e.target.checked)}
-                  className="rounded border-zinc-300"
-                />
-                Sent to Accountant
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <input

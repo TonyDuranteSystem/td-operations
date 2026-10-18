@@ -494,7 +494,7 @@ export const AGENT_TOOLS: ToolDef[] = [
         message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
         save_to_storage: { type: 'boolean', description: 'If true, download all attachments and save them in the company\'s storage (needs account_id)' },
         account_id: { type: 'string', description: 'CRM account UUID: with save_to_storage=true the attachments are saved in that company\'s storage (5. Correspondence, internal).' },
-        attachment_id: { type: 'string', description: 'Save only this attachment (from the listing). Without it every real file is saved; pictures embedded in the message body (logos, signatures) are skipped.' },
+        attachment_id: { type: 'string', description: 'Save only this attachment (from the listing). Without it every real file is saved; small pictures embedded in the message body (logos, signatures) are skipped and listed back.' },
         include_inline: { type: 'boolean', description: 'Also save the pictures embedded in the message body (default false)' },
       },
       required: ['message_id'],
@@ -2091,7 +2091,7 @@ async function gmailGetAttachmentsTool(p: any) {
         mimeType: part.mimeType || 'application/octet-stream',
         attachmentId: part.body.attachmentId,
         size: part.body.size || 0,
-        inline: isInlineImagePart(part),
+        inline: isInlineImagePart(part, part.body.size || 0),
       })
     }
     if (part.parts) {
@@ -2112,7 +2112,7 @@ async function gmailGetAttachmentsTool(p: any) {
     const failed: Array<{ filename: string; error: string }> = []
     const sel = selectAttachmentsToSave(attachments, { attachment_id: p.attachment_id, include_inline: !!p.include_inline })
     if (sel.error) return JSON.stringify({ error: sel.error })
-    if (sel.picked.length === 0) return JSON.stringify({ error: 'Only embedded pictures (logos/signatures) were found, so nothing was saved. Pass attachment_id to save one, or include_inline=true to save them too.' })
+    if (sel.picked.length === 0) return JSON.stringify({ error: 'Only small embedded pictures (logos/signatures) were found, so nothing was saved. Pass attachment_id to save one, or include_inline=true to save them too.' })
     for (const att of sel.picked) {
       try {
         const attData = await getGmailAttachment(p.message_id, att.attachmentId)
@@ -2126,6 +2126,8 @@ async function gmailGetAttachmentsTool(p: any) {
       attachments: attachments.map(a => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, embedded_picture: a.inline || undefined })),
       total: attachments.length,
       uploaded,
+      skipped_embedded_pictures: sel.skipped.length > 0 ? sel.skipped.map(a => ({ filename: a.filename, size: a.size, attachment_id: a.attachmentId })) : undefined,
+      note: sel.skipped.length > 0 ? 'Small pictures embedded in the message body were not saved; pass attachment_id (or include_inline=true) to save them.' : undefined,
       failed: failed.length > 0 ? failed : undefined,
     })
   }

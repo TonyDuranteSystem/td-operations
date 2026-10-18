@@ -30,7 +30,7 @@ ONBOARDING STEPS (execute in order):
    - Required: account_id, service_type, status, year, price
 
 4. FILES
-   - Nothing is written to Drive. The company's files live in the CRM Storage (the Storage page); no folder to create.
+   - New files go to the CRM Storage (the Storage page). This agent does not create folders or upload files.
 
 5. CREATE OFFER (if not already created)
    - offer_create with services and pricing from step 3

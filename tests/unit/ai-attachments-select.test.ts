@@ -16,6 +16,8 @@ vi.mock('@/lib/gmail', () => ({
       { filename: 'contract.pdf', mimeType: 'application/pdf', body: { attachmentId: 'a1', size: 10 }, headers: [] },
       { filename: 'image001.png', mimeType: 'image/png', body: { attachmentId: 'a2', size: 5 }, headers: [{ name: 'Content-ID', value: '<logo@x>' }] },
       { filename: 'photo.jpg', mimeType: 'image/jpeg', body: { attachmentId: 'a3', size: 50 }, headers: [{ name: 'Content-Disposition', value: 'attachment; filename="photo.jpg"' }] },
+      // Apple Mail: a real photo marked inline, with a Content-ID, large
+      { filename: 'IMG_0001.jpg', mimeType: 'image/jpeg', body: { attachmentId: 'a4', size: 2_400_000 }, headers: [{ name: 'Content-ID', value: '<ii_1>' }, { name: 'Content-Disposition', value: 'inline; filename=IMG_0001.jpg' }] },
     ] },
   }),
 }))
@@ -26,11 +28,11 @@ const all: ListedAttachment[] = [
 ]
 
 describe('which attachments to keep', () => {
-  it('an image with a Content-ID or marked inline is an embedded picture; a real photo attachment is not', () => {
-    expect(isInlineImagePart({ mimeType: 'image/png', headers: [{ name: 'Content-ID', value: '<x>' }] })).toBe(true)
-    expect(isInlineImagePart({ mimeType: 'image/png', headers: [{ name: 'Content-Disposition', value: 'inline; filename=a.png' }] })).toBe(true)
-    expect(isInlineImagePart({ mimeType: 'image/jpeg', headers: [{ name: 'Content-Disposition', value: 'attachment' }] })).toBe(false)
-    expect(isInlineImagePart({ mimeType: 'application/pdf', headers: [{ name: 'Content-ID', value: '<x>' }] })).toBe(false)
+  it('only a SMALL image with a Content-ID is an embedded logo; a big or Content-ID-less image is a real file', () => {
+    expect(isInlineImagePart({ mimeType: 'image/png', headers: [{ name: 'Content-ID', value: '<x>' }] }, 5_000)).toBe(true)
+    expect(isInlineImagePart({ mimeType: 'image/jpeg', headers: [{ name: 'Content-ID', value: '<x>' }, { name: 'Content-Disposition', value: 'inline; filename=IMG_1.jpg' }] }, 2_000_000)).toBe(false) // iPhone Mail photo
+    expect(isInlineImagePart({ mimeType: 'image/png', headers: [{ name: 'Content-Disposition', value: 'inline; filename=a.png' }] }, 1_000)).toBe(false) // inline but no Content-ID
+    expect(isInlineImagePart({ mimeType: 'application/pdf', headers: [{ name: 'Content-ID', value: '<x>' }] }, 100)).toBe(false)
   })
   it('default: real files only', () => expect(selectAttachmentsToSave(all, {}).picked.map((a) => a.filename)).toEqual(['contract.pdf']))
   it('include_inline brings the pictures too', () => expect(selectAttachmentsToSave(all, { include_inline: true }).picked).toHaveLength(2))
@@ -40,11 +42,13 @@ describe('which attachments to keep', () => {
 
 describe('the assistant tool saves per attachment and skips embedded pictures', () => {
   beforeEach(() => { savedNames.length = 0 })
-  it('save_to_storage saves the pdf and the real photo, not the logo', async () => {
+  it('save_to_storage saves the pdf, the photo and the Apple-style inline photo; skips only the tiny logo and LISTS it', async () => {
     const { executeTool } = await import('@/lib/ai-agent/tools')
     const out = JSON.parse(await executeTool('gmail_get_attachments', { message_id: 'm1', save_to_storage: true, account_id: 'acc' }))
-    expect(out.uploaded.map((u: { filename: string }) => u.filename)).toEqual(['contract.pdf', 'photo.jpg'])
-    expect(savedNames).toEqual(['contract.pdf', 'photo.jpg'])
+    expect(out.uploaded.map((u: { filename: string }) => u.filename)).toEqual(['contract.pdf', 'photo.jpg', 'IMG_0001.jpg'])
+    expect(savedNames).toEqual(['contract.pdf', 'photo.jpg', 'IMG_0001.jpg'])
+    expect(out.skipped_embedded_pictures).toEqual([{ filename: 'image001.png', size: 5, attachment_id: 'a2' }])
+    expect(out.note).toMatch(/not saved/i)
   })
   it('attachment_id saves only that one', async () => {
     const { executeTool } = await import('@/lib/ai-agent/tools')

@@ -370,7 +370,7 @@ export function registerBankStatementTools(server: McpServer) {
         if (save_to_storage) {
           const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
           const place = await companyStoragePlace(account_id)
-          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message} To see the numbers without saving, call again with save_to_storage=false.` }] }
+          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message.replace(/\.$/, "")}; to see the numbers without saving, call again with save_to_storage=false.` }] }
         }
         const ctx = await getAccountContext(account_id)
 
@@ -408,7 +408,7 @@ export function registerBankStatementTools(server: McpServer) {
 
         // Totals + the workbook now BOTH come from the ONE financials engine
         // (getFinancialsView), so this tool reports and files exactly the same
-        // numbers as the client's portal screen and the accountant hand-off —
+        // numbers as the client's portal screen and the filed workbook —
         // corrected beginning balances, refund-netted expenses, and the FX
         // translation adjustment included.
         const { getFinancialsView } = await import("@/lib/tax/financials-orchestration")
@@ -439,7 +439,7 @@ export function registerBankStatementTools(server: McpServer) {
 
         // ── SINGLE ENGINE ── build the 5-sheet P&L / Balance Sheet workbook from
         // the financials engine draft (buildFinancialsWorkbookForAccount) — the
-        // SAME artifact the client downloads and the accountant hand-off archives.
+        // SAME artifact the client downloads and the confirmation archive keeps.
         // This tool previously used the legacy transaction-based generator, which
         // had drifted from the engine (raw last balance for assets, no name-drift
         // identity healing, single-rate multi-currency). One engine, one file.

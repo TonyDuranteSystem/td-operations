@@ -9,6 +9,7 @@ import { localeFromLanguage } from "@/lib/locale"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { listFolder } from "@/lib/google-drive"
+import { csvCell, encodeMimeSubject } from "@/lib/csv-cell"
 import { advanceStageIfAt } from "@/lib/operations/service-delivery"
 import type { Json } from "@/lib/database.types"
 
@@ -747,7 +748,7 @@ export function registerTaxTools(server: McpServer) {
           const ein = acc?.ein_number || "N/A"
           const entity = acc?.entity_type || "N/A"
           const state = acc?.state_of_formation || "N/A"
-          csvLines.push(`${name},${ein},${entity},${state},${r.return_type || "N/A"},${r.id}`)
+          csvLines.push([name, ein, entity, state, r.return_type || "N/A", r.id].map(csvCell).join(","))
           tableLines.push(`| ${name} | ${ein} | ${entity} | ${state} | ${r.return_type || "N/A"} |`)
         }
 
@@ -804,7 +805,7 @@ export function registerTaxTools(server: McpServer) {
             const mimeMessage = [
               `From: Tony Durante LLC <support@tonydurante.us>`,
               `To: ${send_to_email}`,
-              `Subject: Tax Extension List ${tax_year} — ${needExtension.length} clients`,
+              `Subject: ${encodeMimeSubject(`Tax Extension List ${tax_year} — ${needExtension.length} clients`)}`,
               `MIME-Version: 1.0`,
               `Content-Type: multipart/mixed; boundary="${boundary}"`,
               "",
