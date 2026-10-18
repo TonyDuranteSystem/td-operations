@@ -429,6 +429,26 @@ final class SaveNewFileTests: XCTestCase {
         catch StorageAPIError.rateLimited(let m) { XCTAssertTrue(m.contains("uploaded a lot")) }
         catch { XCTFail("\(error)") }
     }
+    func testAnUpdateAsksForTheSameRoutesWithTheFileId() async throws {
+        StubProtocol.handler = { _ in (200, #"{"intentId":"i1","uploadUrl":"https://x.example/u?token=t","update":true,"fileId":"x1"}"#) }
+        _ = try await api().uploadSlot(ownerId: "o1", folderId: "f1", name: "a.pdf", size: 10, mimeType: nil, itemKey: "k", replaceFileId: "x1")
+        var body = try JSONSerialization.jsonObject(with: StubProtocol.seen.last!.httpBodyStreamData()) as! [String: Any]
+        XCTAssertEqual(body["replaceFileId"] as? String, "x1")
+        StubProtocol.handler = { _ in (200, #"{"fileId":"x1","ownerId":"o1","name":"a.pdf","size":10}"#) }
+        _ = try await api().save(intentId: "i1", itemKey: "k", replaceFileId: "x1")
+        body = try JSONSerialization.jsonObject(with: StubProtocol.seen.last!.httpBodyStreamData()) as! [String: Any]
+        XCTAssertEqual(body["replaceFileId"] as? String, "x1")
+        // a new file sends no replaceFileId
+        StubProtocol.handler = { _ in (200, #"{"fileId":"x2","ownerId":"o1","name":"b.pdf"}"#) }
+        _ = try await api().save(intentId: "i2", itemKey: "k2")
+        body = try JSONSerialization.jsonObject(with: StubProtocol.seen.last!.httpBodyStreamData()) as! [String: Any]
+        XCTAssertNil(body["replaceFileId"])
+    }
+    func testFilesSaidToBeMineCanBeUpdated() throws {
+        let json = #"{"owner":{"kind":"business","label":"Business","accountStatus":null,"closed":false},"folder":null,"folders":[],"files":[{"id":"a","name":"x.pdf","size":1,"mimeType":null,"updatedAt":"t","downloadable":true,"mine":true},{"id":"b","name":"y.pdf","size":1,"mimeType":null,"updatedAt":"t","downloadable":true}]}"#
+        let l = try JSONDecoder().decode(FolderListing.self, from: Data(json.utf8))
+        XCTAssertEqual(l.files[0].mine, true); XCTAssertNil(l.files[1].mine)
+    }
     func testFolderAnswersCarryTheCanSaveFlag() throws {
         let json = #"{"owner":{"kind":"business","label":"Business","accountStatus":null,"closed":false},"folder":{"id":"f1","name":"Faxes","kind":"custom","locked":false,"canSave":true},"folders":[{"id":"f2","name":"x","kind":"custom","locked":false,"canSave":false},{"id":"f3","name":"y","kind":"custom","locked":false}],"files":[]}"#
         let l = try JSONDecoder().decode(FolderListing.self, from: Data(json.utf8))
@@ -466,6 +486,18 @@ final class FileStabilityTests: XCTestCase {
     }
     func testAMissingFileIsAnError() async {
         do { _ = try await FileStability.waitUntilStable(temp(), quiet: 0.1, poll: 0.05, max: 1); XCTFail("should throw") } catch { /* expected */ }
+    }
+}
+
+extension URLRequest {
+    /// URLProtocol delivers the body as a stream: read it back for the tests.
+    func httpBodyStreamData() -> Data {
+        if let b = httpBody { return b }
+        guard let stream = httpBodyStream else { return Data() }
+        stream.open(); defer { stream.close() }
+        var data = Data(); var buf = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable { let n = stream.read(&buf, maxLength: buf.count); if n <= 0 { break }; data.append(buf, count: n) }
+        return data
     }
 }
 

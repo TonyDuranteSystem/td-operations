@@ -104,13 +104,16 @@ public final class StorageAPI: @unchecked Sendable {
     }
     /// Saving a NEW file (phase P3 step A): 1) ask for a slot, 2) upload the bytes to the signed address, 3) save. `itemKey` is the Mac's stable id
     /// for this one file, so a retry after a lost answer returns the same file and never makes a second.
-    public func uploadSlot(ownerId: String, folderId: String, name: String, size: Int, mimeType: String?, itemKey: String) async throws -> UploadSlot {
+    public func uploadSlot(ownerId: String, folderId: String, name: String, size: Int, mimeType: String?, itemKey: String, replaceFileId: String? = nil) async throws -> UploadSlot {
         var body: [String: Any] = ["ownerId": ownerId, "folderId": folderId, "name": name, "size": size, "itemKey": itemKey]
         if let mimeType { body["mimeType"] = mimeType }
+        if let replaceFileId { body["replaceFileId"] = replaceFileId }      // update a file THIS Mac saved (a new version of it)
         return try await postAuthorized("api/storage-app/upload-slot", body)
     }
-    public func save(intentId: String, itemKey: String) async throws -> SavedFile {
-        try await postAuthorized("api/storage-app/save", ["intentId": intentId, "itemKey": itemKey])
+    public func save(intentId: String, itemKey: String, replaceFileId: String? = nil) async throws -> SavedFile {
+        var body: [String: Any] = ["intentId": intentId, "itemKey": itemKey]
+        if let replaceFileId { body["replaceFileId"] = replaceFileId }
+        return try await postAuthorized("api/storage-app/save", body)
     }
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])

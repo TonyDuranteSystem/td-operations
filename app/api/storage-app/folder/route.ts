@@ -11,14 +11,14 @@ import { appFolder, isLiveOwner } from "@/lib/storage-app/listing"
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function GET(req: NextRequest) {
-  return withDevice(req, async ({ user }) => {
+  return withDevice(req, async ({ user, deviceId }) => {
     const owner = req.nextUrl.searchParams.get("owner")
     const folder = req.nextUrl.searchParams.get("folder")
     if (!owner || !UUID.test(owner) || (folder && !UUID.test(folder))) return json({ error: "Choose a storage." }, 400)
     if (!(await isLiveOwner(owner))) return json({ error: "Not found." }, 404)
     const noAccess = await denyUnlessAreaAccess({ ownerId: owner, folderId: folder }, { user })
     if (noAccess) return noAccess
-    const listing = await appFolder(owner, folder)
+    const listing = await appFolder(owner, folder, deviceId)
     return listing ? json(listing) : json({ error: "Not found." }, 404)
   })
 }

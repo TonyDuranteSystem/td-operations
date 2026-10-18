@@ -25,6 +25,8 @@ public struct NavigationResponse: Codable, Equatable { public var groups: [NavGr
 public struct FolderRef: Codable, Equatable, Hashable { public var id: String; public var name: String; public var kind: String; public var locked: Bool; public var canSave: Bool? }
 public struct FileRef: Codable, Equatable, Hashable {
     public var id: String; public var name: String; public var size: Int?; public var mimeType: String?; public var updatedAt: String; public var downloadable: Bool
+    /// true when THIS Mac saved the file: only such files can be updated from this Mac (as a new version)
+    public var mine: Bool?
 }
 public struct OwnerInfo: Codable, Equatable { public var kind: String; public var label: String; public var accountStatus: String?; public var closed: Bool }
 public struct FolderListing: Codable, Equatable {
@@ -45,7 +47,7 @@ public struct APIErrorBody: Codable { public var error: String?; public var erro
 /// One file or folder by id with its parent (GET /api/storage-app/item). `parentId` nil = a storage's top folder.
 public struct ItemInfo: Codable, Equatable {
     public var kind: String; public var id: String; public var ownerId: String; public var parentId: String?; public var name: String
-    public var locked: Bool?; public var canSave: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
+    public var locked: Bool?; public var canSave: Bool?; public var mine: Bool?; public var size: Int?; public var mimeType: String?; public var updatedAt: String?; public var downloadable: Bool?
 }
 
 /// POST /api/storage-app/upload-slot — where to put the bytes (or: this very file was already saved).

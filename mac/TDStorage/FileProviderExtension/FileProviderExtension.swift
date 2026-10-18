@@ -143,7 +143,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     fileId = try await api.save(intentId: intent, itemKey: key).fileId
                 }
                 let id = ItemID.file(owner: owner, file: fileId!)
-                let item = try await catalog.item(for: id)
+                let item = try await catalog.item(for: id).replacingModified(modified)
                 ledger.record(id: item.itemIdentifier.rawValue, keepSeconds: 900)   // the Mac's own copy is only kept briefly: the CRM has the file now
                 Trace.log("createItem.saved", ["name": name, "size": size, "fileId": fileId ?? ""])
                 completionHandler(item, [], false, nil)
@@ -157,12 +157,30 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         Task {
             defer { progress.completedUnitCount = 1 }
             Trace.log("modifyItem", ["id": item.itemIdentifier.rawValue, "name": item.filename, "parent": item.parentItemIdentifier.rawValue, "fields": changedFields.rawValue, "hasContents": newContents != nil, "size": newContents.flatMap { FileStability.snapshot(of: $0)?.size } ?? -1])
-            // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored; any change to the name, place or content is refused
-            let real: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
-            guard changedFields.intersection(real).isEmpty, let id = FPItem.itemID(for: item.itemIdentifier) else {
-                completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return
-            }
-            do { completionHandler(try await catalog.item(for: id), [], false, nil) } catch { completionHandler(nil, [], false, fileProviderError(error)) }
+            // harmless bookkeeping (dates, tags, extended attributes) is accepted and ignored; a change of NAME or PLACE is always refused
+            guard let id = FPItem.itemID(for: item.itemIdentifier) else { completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return }
+            guard changedFields.intersection([.filename, .parentItemIdentifier]).isEmpty else { completionHandler(nil, [], false, noPermission(Self.changeInCRM)); return }
+            do {
+                // changed CONTENT: allowed only for a file THIS Mac saved (the CRM checks again) — it becomes a new version of that file
+                if changedFields.contains(.contents), let newContents {
+                    guard case .file(let owner, let fileId) = id else { throw noPermission(Self.changeInCRM) }
+                    let info = try await api.item(kind: "file", id: fileId)
+                    guard info.mine == true else { Trace.log("modifyItem.refused", ["id": fileId, "why": "not mine"]); throw noPermission(Self.changeInCRM) }
+                    let snap = try await FileStability.waitUntilStable(newContents)
+                    let key = ItemKey.make(parent: fileId, name: "update", size: snap.size, modified: snap.modified)
+                    let mime = item.contentType?.preferredMIMEType
+                    let slot = try await api.uploadSlot(ownerId: owner, folderId: info.parentId ?? "", name: info.name, size: snap.size, mimeType: mime, itemKey: key, replaceFileId: fileId)
+                    guard let intent = slot.intentId, let address = slot.uploadUrl else { throw StorageAPIError.badResponse }
+                    try await uploader.upload(file: newContents, to: address, mimeType: mime)
+                    _ = try await api.save(intentId: intent, itemKey: key, replaceFileId: fileId)
+                    let updated = try await catalog.item(for: id).replacingModified(snap.modified)
+                    ledger.record(id: updated.itemIdentifier.rawValue, keepSeconds: 900)
+                    Trace.log("modifyItem.updated", ["id": fileId, "size": snap.size])
+                    completionHandler(updated, [], false, nil)
+                    return
+                }
+                completionHandler(try await catalog.item(for: id), [], false, nil)
+            } catch { Trace.log("modifyItem.error", ["error": String(describing: error)]); completionHandler(nil, [], false, fileProviderError(error)) }
         }
         return progress
     }

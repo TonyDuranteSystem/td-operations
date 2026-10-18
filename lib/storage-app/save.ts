@@ -7,6 +7,12 @@
  *      same file — never a second copy. A file whose name is already taken in the folder is REFUSED (the Mac never makes a new version or
  *      overwrites); the rare race that slips past is stored with the writer's " (2)" and the real name is returned.
  * Step A saves only into Business and My files. Never visible to a client: those areas have no client.
+ *
+ * UPDATE OF ONE'S OWN FILE (phase P3 step C1, Antonio 2026-10-18): a file THIS Mac saved can be updated from this Mac as a NEW VERSION of the same
+ * file (macOS sends a half-written snapshot first when an app writes a growing file in place, then the finished content; and an app may re-save
+ * its own document). Same two routes, no new path: upload-slot / save take `replaceFileId`. The server checks the file's key belongs to THIS Mac
+ * (`storage-app:<deviceId>:` prefix — never another Mac, never a staff upload), that it is live, not filed, and still in an allowed place; the
+ * writer makes version N+1 under the file's own key; the old versions stay. Same bytes = no new version. Last write wins (history kept).
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { User } from "@supabase/supabase-js"
@@ -59,7 +65,23 @@ async function existingByKey(callerKey: string): Promise<{ id: string; owner_id:
   return data ?? null
 }
 
-export async function createSaveSlot(p: { user: User; deviceId: string; ownerId: unknown; folderId: unknown; name: unknown; size: unknown; mimeType: unknown; itemKey: unknown }): Promise<SaveAnswer> {
+
+export interface OwnFile { id: string; owner_id: string; folder_id: string; name: string; caller_key: string; state: string; filing_status: string | null }
+
+/** The file to update, ONLY if this Mac saved it: its key carries this Mac's id. Anything else is refused with the same plain words. */
+async function loadOwnFile(fileId: string, deviceId: string): Promise<OwnFile | { refusal: SaveAnswer }> {
+  const none = (message = "Only a file this Mac saved can be changed from this Mac. Open the CRM to change it.") => ({ refusal: refuse(422, "not_own", message) })
+  const { data, error } = await db().from("store_files").select("id, owner_id, folder_id, name, caller_key, state, filing_status").eq("id", fileId).maybeSingle()
+  if (error) throw new Error(`Could not read the file (${error.message}).`)
+  if (!data || data.state === "purged") return { refusal: refuse(404, "not_found", "That file was not found.") }
+  if (typeof data.caller_key !== "string" || !data.caller_key.startsWith(`storage-app:${deviceId}:`)) return none()
+  if (data.state !== "live") return { refusal: refuse(409, "trashed", "That file is in the trash. Restore it in the CRM first.") }
+  if (data.filing_status === "filed") return none("This file is filed and frozen. Open the CRM to change it.")
+  return data as OwnFile
+}
+
+export async function createSaveSlot(p: { user: User; deviceId: string; ownerId: unknown; folderId: unknown; name: unknown; size: unknown; mimeType: unknown; itemKey: unknown; replaceFileId?: unknown }): Promise<SaveAnswer> {
+  if (p.replaceFileId !== undefined && p.replaceFileId !== null) return createUpdateSlot({ user: p.user, deviceId: p.deviceId, fileId: p.replaceFileId, size: p.size, mimeType: p.mimeType, itemKey: p.itemKey })
   if (typeof p.ownerId !== "string" || typeof p.folderId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "Choose a folder and a file.")
   const ids = { ownerId: p.ownerId, folderId: p.folderId }
   const refused = async (code: string, message: string, status: SaveStatus): Promise<SaveAnswer> => {
@@ -96,11 +118,77 @@ export async function createSaveSlot(p: { user: User; deviceId: string; ownerId:
   return { status: 200, body: { intentId, uploadUrl: signed.signedUrl, maxBytes: MAX_SAVE_BYTES } }
 }
 
+async function createUpdateSlot(p: { user: User; deviceId: string; fileId: unknown; size: unknown; mimeType: unknown; itemKey: unknown }): Promise<SaveAnswer> {
+  if (typeof p.fileId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "Choose a file.")
+  const own = await loadOwnFile(p.fileId, p.deviceId)
+  if ("refusal" in own) return own.refusal
+  const ids = { ownerId: own.owner_id, folderId: own.folder_id, fileId: own.id }
+  const refused = async (code: string, message: string, status: SaveStatus): Promise<SaveAnswer> => {
+    await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: code, update: true, name: own.name.slice(0, 120) }, ids)
+    return refuse(status, code, message)
+  }
+  const file = checkNewFile({ name: own.name, size: p.size })     // size cap and a usable size (the name is the file's own)
+  if (!file.ok) return refused(file.code, file.message, STATUS_OF[file.code] ?? 422)
+  const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user)
+  if (!target.ok) return refused(target.code, target.message, STATUS_OF[target.code] ?? 422)
+  const mimeType = typeof p.mimeType === "string" && p.mimeType ? p.mimeType.slice(0, 200) : null
+  // this update is counted against the hourly upload limit under its own key (a retry of the same update is not counted twice)
+  const updateKey = `${own.caller_key}:u:${(p.itemKey as string).toLowerCase()}`
+  const { data: reserve, error: rErr } = await db().rpc("storage_app_reserve_write", {
+    p_device: p.deviceId, p_user: p.user.id, p_owner: own.owner_id, p_name: own.name, p_caller_key: updateKey, p_size: p.size as number, p_limit: writeLimitBytes(),
+  })
+  if (rErr) throw new Error(`Could not check the upload limit (${rErr.message}).`)
+  if (!(reserve as { allowed?: boolean } | null)?.allowed) return refuse(429, "upload_limit", "This Mac has uploaded a lot in the last hour. Try again later, or add the files in the CRM.")
+  const { createServerUploadIntent, STORE_STAGING_BUCKET } = await import("@/lib/crm-store/writer")
+  // the slot carries the FILE'S OWN key, so the writer adds a version to that file; an open slot for the same update is reused
+  const { data: open } = await db().from("store_upload_intents").select("id, staging_path").eq("caller_key", own.caller_key).eq("created_by", p.user.id).is("consumed_at", null).gt("expires_at", new Date().toISOString()).limit(1).maybeSingle()
+  let intentId = open?.id as string | undefined
+  let stagingPath = open?.staging_path as string | undefined
+  if (!intentId) {
+    const i = await createServerUploadIntent({ ownerId: own.owner_id, folderId: own.folder_id, fileName: own.name, mimeType, callerKey: own.caller_key, actor: p.user.id })
+    intentId = i.intentId; stagingPath = i.stagingPath
+  }
+  const { data: signed, error: sErr } = await supabaseAdmin.storage.from(STORE_STAGING_BUCKET).createSignedUploadUrl(stagingPath!)
+  if (sErr || !signed?.signedUrl) throw new Error(`Could not prepare the upload (${sErr?.message ?? "no address"}).`)
+  return { status: 200, body: { intentId, uploadUrl: signed.signedUrl, maxBytes: MAX_SAVE_BYTES, update: true, fileId: own.id } }
+}
+
 async function giveBackReservation(p: { user: User; deviceId: string; callerKey: string; size: number }) {
   await logAppEvent("app_upload_refunded", p.user.id, { deviceId: p.deviceId, callerKey: p.callerKey, size: Math.max(p.size, 1048576) })
 }
 
-export async function saveFromSlot(p: { user: User; deviceId: string; intentId: unknown; itemKey: unknown }): Promise<SaveAnswer> {
+async function saveUpdate(p: { user: User; deviceId: string; intentId: unknown; itemKey: unknown; fileId: unknown }): Promise<SaveAnswer> {
+  if (typeof p.intentId !== "string" || typeof p.fileId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "The upload is not complete.")
+  const own = await loadOwnFile(p.fileId, p.deviceId)
+  if ("refusal" in own) return own.refusal
+  const ids = { ownerId: own.owner_id, folderId: own.folder_id, fileId: own.id }
+  const updateKey = `${own.caller_key}:u:${(p.itemKey as string).toLowerCase()}`
+  const { data: slot, error } = await db().from("store_upload_intents").select("id, owner_id, folder_id, caller_key, created_by, consumed_at, file_id, expires_at, staging_path").eq("id", p.intentId).maybeSingle()
+  if (error) throw new Error(`Could not read the upload slot (${error.message}).`)
+  if (!slot || slot.created_by !== p.user.id || slot.caller_key !== own.caller_key || slot.owner_id !== own.owner_id) return refuse(404, "not_found", "This upload was not found. Try saving again.")
+  // a retry after a lost answer: the slot was already used for THIS file → the update is done
+  if (slot.consumed_at) {
+    if (slot.file_id === own.id) return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, repeated: true } }
+    return refuse(409, "slot_closed", "This upload is no longer open. Try saving again.")
+  }
+  if (new Date(slot.expires_at).getTime() < Date.now()) return refuse(409, "slot_closed", "This upload is no longer open. Try saving again.")
+  const { storedSize, registerStagedUpload, STORE_STAGING_BUCKET } = await import("@/lib/crm-store/writer")
+  let size: number
+  try { size = await storedSize(STORE_STAGING_BUCKET, slot.staging_path as string) } catch { return refuse(409, "not_uploaded", "The file did not arrive. Try saving again.") }
+  const back = () => giveBackReservation({ user: p.user, deviceId: p.deviceId, callerKey: updateKey, size })
+  if (size > MAX_SAVE_BYTES) { await back(); return refuse(413, "too_big", "This file is too big to save from the Mac for now (the limit is 150 MB). Add it in the CRM.") }
+  const target = await checkTarget({ ownerId: own.owner_id, folderId: own.folder_id }, p.user)
+  if (!target.ok) { await back(); await logAppEvent("app_save_refused", p.user.id, { deviceId: p.deviceId, reason: target.code, update: true }, ids); return fromRefusal(target) }
+  let result
+  try { result = await registerStagedUpload({ intentId: p.intentId, actor: p.user.id }) } catch (e) { await back(); throw e }
+  if (result.status === "queued") throw new Error("A file this big should have been refused earlier.")
+  if (result.status === "frozen" || result.status === "trashed") { await back(); return refuse(409, result.status, "This file can no longer be changed from the Mac. Open the CRM.") }
+  await logAppEvent("app_file_updated", p.user.id, { deviceId: p.deviceId, userId: p.user.id, name: own.name, size, outcome: result.status }, ids)
+  return { status: 200, body: { fileId: own.id, ownerId: own.owner_id, name: own.name, size, outcome: result.status } }
+}
+
+export async function saveFromSlot(p: { user: User; deviceId: string; intentId: unknown; itemKey: unknown; replaceFileId?: unknown }): Promise<SaveAnswer> {
+  if (p.replaceFileId !== undefined && p.replaceFileId !== null) return saveUpdate({ user: p.user, deviceId: p.deviceId, intentId: p.intentId, itemKey: p.itemKey, fileId: p.replaceFileId })
   if (typeof p.intentId !== "string" || !isItemKey(p.itemKey)) return refuse(400, "bad_request", "The upload is not complete.")
   const callerKey = saveCallerKey(p.deviceId, p.itemKey)
   const earlier = await existingByKey(callerKey)

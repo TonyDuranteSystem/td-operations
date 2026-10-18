@@ -11,7 +11,7 @@ import { createSaveSlot } from "@/lib/storage-app/save"
 export async function POST(req: NextRequest) {
   return withDevice(req, async ({ user, deviceId }) => {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
-    const r = await createSaveSlot({ user, deviceId, ownerId: body.ownerId, folderId: body.folderId, name: body.name, size: body.size, mimeType: body.mimeType, itemKey: body.itemKey })
+    const r = await createSaveSlot({ user, deviceId, ownerId: body.ownerId, folderId: body.folderId, name: body.name, size: body.size, mimeType: body.mimeType, itemKey: body.itemKey, replaceFileId: body.replaceFileId })
     return json(r.body, r.status)
   })
 }

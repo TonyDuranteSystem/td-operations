@@ -14,8 +14,10 @@ final class FPItem: NSObject, NSFileProviderItem {
     let contentVersionTag: String
     /// may the Mac save a NEW file into this folder? The CRM decides (Business and My files only for now); never anything else is allowed.
     let canSave: Bool
+    /// a file THIS Mac saved: macOS may send its changed content back and the CRM keeps it as a new version
+    let canUpdate: Bool
 
-    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "", canSave: Bool = false) {
+    init(id: ItemID, parent: ItemID, filename: String, isFolder: Bool, size: Int? = nil, modified: Date? = nil, versionTag: String = "", canSave: Bool = false, canUpdate: Bool = false) {
         self.itemIdentifier = FPItem.identifier(for: id)
         self.parentItemIdentifier = FPItem.identifier(for: parent)
         self.filename = filename
@@ -24,13 +26,21 @@ final class FPItem: NSObject, NSFileProviderItem {
         self.modified = modified
         self.contentVersionTag = versionTag
         self.canSave = canSave
+        self.canUpdate = canUpdate
+    }
+
+    /// The same item with the modification date of the LOCAL file: when a Mac saves a file, the item handed back must carry the file's own date, or
+    /// macOS rewrites the file's date and an app that saved it (TextEdit) says "the file has been changed by another application".
+    func replacingModified(_ date: Date?) -> FPItem {
+        guard let date, let id = FPItem.itemID(for: itemIdentifier), let parent = FPItem.itemID(for: parentItemIdentifier) else { return self }
+        return FPItem(id: id, parent: parent, filename: filename, isFolder: isFolder, size: size, modified: date, versionTag: contentVersionTag, canSave: canSave, canUpdate: canUpdate)
     }
 
     static func identifier(for id: ItemID) -> NSFileProviderItemIdentifier { id == .root ? .rootContainer : NSFileProviderItemIdentifier(id.raw) }
     static func itemID(for identifier: NSFileProviderItemIdentifier) -> ItemID? { identifier == .rootContainer ? .root : ItemID(raw: identifier.rawValue) }
 
     var capabilities: NSFileProviderItemCapabilities {
-        guard isFolder else { return [.allowsReading] }
+        guard isFolder else { return canUpdate ? [.allowsReading, .allowsWriting] : [.allowsReading] }
         return canSave ? [.allowsReading, .allowsContentEnumerating, .allowsAddingSubItems] : [.allowsReading, .allowsContentEnumerating]
     }
     var contentType: UTType {
@@ -57,7 +67,7 @@ actor Catalog {
     private func date(_ s: String?) -> Date? { s.flatMap { iso.date(from: $0) ?? isoPlain.date(from: $0) } }
 
     private func fileItem(_ f: FileRef, owner: String, parent: ItemID, name: String) -> FPItem {
-        FPItem(id: .file(owner: owner, file: f.id), parent: parent, filename: name, isFolder: false, size: f.size, modified: date(f.updatedAt), versionTag: "\(f.size ?? 0)-\(f.updatedAt)")
+        FPItem(id: .file(owner: owner, file: f.id), parent: parent, filename: name, isFolder: false, size: f.size, modified: date(f.updatedAt), versionTag: "\(f.size ?? 0)-\(f.updatedAt)", canUpdate: f.mine ?? false)
     }
 
     // MARK: listing a container
@@ -111,7 +121,7 @@ actor Catalog {
         case .file(let owner, let file):
             let it = try await api.item(kind: "file", id: file)
             let parent: ItemID = it.parentId.map { .folder(owner: owner, folder: $0) } ?? .owner(owner)
-            return FPItem(id: id, parent: parent, filename: NameMapper.finderName(fromServer: it.name), isFolder: false, size: it.size, modified: date(it.updatedAt), versionTag: "\(it.size ?? 0)-\(it.updatedAt ?? "")")
+            return FPItem(id: id, parent: parent, filename: NameMapper.finderName(fromServer: it.name), isFolder: false, size: it.size, modified: date(it.updatedAt), versionTag: "\(it.size ?? 0)-\(it.updatedAt ?? "")", canUpdate: it.mine ?? false)
         }
     }
 }

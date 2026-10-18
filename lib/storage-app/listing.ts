@@ -39,10 +39,18 @@ export async function appNavigation(user: User) {
 }
 
 /** One folder (or an owner's top folder when folderId is null): sub-folders and live files with the download flag. */
-export async function appFolder(ownerId: string, folderId: string | null) {
+export async function appFolder(ownerId: string, folderId: string | null, deviceId?: string) {
   const { folderContents } = await import("@/lib/crm-store/browse")
   const c = await folderContents(ownerId, folderId)
   if (c.folder?.trashed) return null          // a trashed folder is not shown (the Storage page lists it only in the trash view)
+  // which of these files did THIS Mac save? (only those can be updated from this Mac — the key carries the Mac's id)
+  const liveFiles = c.files.filter((f) => f.state === "live")
+  const mine = new Set<string>()
+  if (deviceId && liveFiles.length > 0) {
+    const { data: keyed, error: kErr } = await db().from("store_files").select("id").in("id", liveFiles.map((f) => f.id)).like("caller_key", `storage-app:${deviceId}:%`)
+    if (kErr) throw new Error(`Could not read the files (${kErr.message}).`)
+    for (const r of (keyed ?? []) as { id: string }[]) mine.add(r.id)
+  }
   // can the Mac save a NEW file into each folder? (step A: Business / My files only; never a top folder, "2. Contacts" or "Shared with staff")
   const inShare = c.folder ? await (await import("@/lib/crm-store/staff-share")).isInStaffShare(c.folder.id) : false
   const canSave = (kind: string, trashed = false) => checkDestination({ ownerKind: c.owner.kind, folderKind: kind, inStaffShare: inShare || kind === "staff_share", folderTrashed: trashed }).ok
@@ -54,20 +62,21 @@ export async function appFolder(ownerId: string, folderId: string | null) {
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
       downloadable: true,   // every file opens (Antonio 2026-10-17); kept so an older app build still reads the answer
       sensitive: isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }),
+      mine: mine.has(f.id),
     })),
   }
 }
 
 export interface AppItem {
   kind: "file" | "folder"; id: string; ownerId: string; parentId: string | null; name: string
-  locked?: boolean; canSave?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean; sensitive?: boolean
+  locked?: boolean; canSave?: boolean; mine?: boolean; size?: number | null; mimeType?: string | null; updatedAt?: string; downloadable?: boolean; sensitive?: boolean
 }
 
 /**
  * One file or folder by id, with its PARENT — what Finder asks when it needs an item it only knows by id. `parentId` is null for a
  * storage's top folder (its parent, for Finder, is the storage itself). null = missing, trashed or purged.
  */
-export async function appItem(kind: "file" | "folder", id: string): Promise<AppItem | null> {
+export async function appItem(kind: "file" | "folder", id: string, deviceId?: string): Promise<AppItem | null> {
   if (kind === "folder") {
     const { data, error } = await db().from("store_folders").select("id, owner_id, parent_id, name, kind, template_slug, trashed_at, store_owners(kind)").eq("id", id).maybeSingle()
     if (error) throw new Error(`Could not read the folder (${error.message}).`)
@@ -78,13 +87,13 @@ export async function appItem(kind: "file" | "folder", id: string): Promise<AppI
       canSave: checkDestination({ ownerKind, folderKind: data.kind, inStaffShare: inShare, folderTrashed: false }).ok }
   }
   const { data, error } = await db().from("store_files")
-    .select("id, owner_id, folder_id, name, state, document_type, updated_at, store_owners(kind), store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", id).maybeSingle()
+    .select("id, owner_id, folder_id, name, state, document_type, updated_at, caller_key, store_owners(kind), store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", id).maybeSingle()
   if (error) throw new Error(`Could not read the file (${error.message}).`)
   if (!data || data.state !== "live") return null
   const v = (Array.isArray(data.store_file_versions) ? data.store_file_versions[0] : data.store_file_versions) as { size_bytes: number | null; mime_type: string | null } | null
   const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
   return {
     kind, id: data.id, ownerId: data.owner_id, parentId: data.folder_id, name: data.name, size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null,
-    updatedAt: data.updated_at, downloadable: true, sensitive: isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
+    updatedAt: data.updated_at, mine: !!deviceId && typeof data.caller_key === "string" && data.caller_key.startsWith(`storage-app:${deviceId}:`), downloadable: true, sensitive: isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
   }
 }
