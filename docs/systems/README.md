@@ -117,6 +117,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [captures.md](captures.md) | Capture/Share — screenshot, markup, send to one destination (sticky note, team chat, or a client's portal chat) | ✅ written |
 | [storage.md](storage.md) | CRM Storage — general-purpose staff file library, separate from Drive; preview + share to email/portal chat/team chat/fax | ✅ written |
 | [dashboard-navigation.md](dashboard-navigation.md) | Left menu + opening pages without leaving the current one (⋯ menu, floating-windows project) | ✅ written |
+| [storage-app.md](storage-app.md) | TD Storage Mac app — the CRM storage as a Finder location (device sign-in, change feed, sensitive-document rule); P0 server side on the sandbox, Mac app not built | ✅ written |
 | [open-services.md](open-services.md) | Open services page — read-only "what is open / who must move / what is late" (N1a C3), switch, exclusions by service card | ✅ written |
 | _formation.md_ | Company formation lifecycle (lead → EIN → active) | ⬜ to seed |
 | _onboarding.md_ | Onboarding flow | ⬜ to seed |
