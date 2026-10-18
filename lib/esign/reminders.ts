@@ -19,7 +19,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
-import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion } from "@/lib/operations/esign"
+import { flattenEnvelopeToSignedPdf, finalizeEsignCompletion, fileEsignSignedPdf } from "@/lib/operations/esign"
 import { insertEsignEvent, REMINDER_SOURCE_AUTO } from "@/lib/esign/events"
 import { deliverReminder, loadReminderTimes, lastReopenedAt } from "@/lib/esign/deliver-reminder"
 import {
@@ -35,6 +35,10 @@ const db = supabaseAdmin as any
 
 // Re-exported for the existing callers/tests that import them from here.
 export { REMINDER_AFTER_HOURS, MAX_REMINDERS }
+
+/** The re-filing step of the cron: at most this many envelopes per run, and it stops after this much time. */
+export const REFILE_MAX_PER_RUN = 10
+export const REFILE_TIME_BUDGET_MS = 20_000
 
 export async function runEsignReminders(now: Date = new Date()): Promise<{ expired: number; reminded: number; reconciled: number }> {
   // 0. Reconcile STUCK completions FIRST (before expiry, so a fully-signed-but-
@@ -124,6 +128,31 @@ export async function runEsignReminders(now: Date = new Date()): Promise<{ expir
         createdBy: "cron",
       })
       if (outcome !== "undeliverable") reminded++
+    }
+  }
+
+  // 4. Re-file COMPLETED envelopes whose signed PDF could not be filed (the storage lookup threw, a save failed). Runs LAST, so a
+  //    slow or down storage/old folder never delays expiry or reminders; capped per run and held to a time budget. Filing is
+  //    idempotent, and an envelope filed through the bucket-served row carries a durable marker (signed_pdf_drive_id), so one that
+  //    can never be filed any other way is not picked up again. Only the last 3 days — older ones were alarmed long ago.
+  const refileStart = Date.now()
+  const refileSince = new Date(now.getTime() - 3 * 86_400_000).toISOString()
+  const { data: unfiled } = await db
+    .from("esign_envelopes")
+    .select("id")
+    .eq("status", "completed")
+    .not("owner_account_id", "is", null)
+    .not("signed_pdf_path", "is", null)
+    .is("signed_pdf_drive_id", null)
+    .gte("completed_at", refileSince)
+    .order("completed_at", { ascending: true })
+    .limit(REFILE_MAX_PER_RUN)
+  for (const e of (unfiled ?? []) as Array<{ id: string }>) {
+    if (Date.now() - refileStart > REFILE_TIME_BUDGET_MS) break
+    try {
+      await fileEsignSignedPdf(e.id)
+    } catch {
+      /* transient — retry next run */
     }
   }
 

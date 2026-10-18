@@ -198,7 +198,7 @@ export async function fileRenewal(
       // 1. Load account
       const { data: account, error: acctErr } = await supabaseAdmin
         .from("accounts")
-        .select("id, company_name, state_of_formation, drive_folder_id, portal_tier, notes, ra_renewal_date, annual_report_due_date")
+        .select("id, company_name, state_of_formation, status, drive_folder_id, gdrive_folder_url, portal_tier, notes, ra_renewal_date, annual_report_due_date")
         .eq("id", params.account_id)
         .maybeSingle()
       if (acctErr || !account) {
@@ -263,16 +263,15 @@ export async function fileRenewal(
         docRowId = routed.documentRowId
         driveLink = `/api/documents/${routed.documentRowId}/preview`
       } else {
-        // Stop Drive (dev job 264bb882, S1d): only a company deliberately left on Drive (folder, no storage, not closed) is
-        // filed in Drive; any other state is an error for the caller plus a staff alarm — the receipt is not marked saved.
-        const { legacyDriveForAccount, raiseDriveWriteRefused } = await import("@/lib/crm-store/legacy-drive")
-        const legacy = await legacyDriveForAccount(account.id)
-        if (!legacy.allowed) {
-          throw new Error(await raiseDriveWriteRefused({ flow: "file-renewal", accountId: account.id, reason: legacy.reason, detail: targetFilename }))
-        }
+        // No storage: a company left on its old folder (not finished, has a folder) carries on there, exactly as the flow
+        // upload does; everyone else gets the one plain sentence — before anything is written.
+        const { decideNoStorage } = await import("@/lib/crm-store/no-storage")
+        const decision = decideNoStorage(account as { status?: string | null; drive_folder_id?: string | null; gdrive_folder_url?: string | null })
+        if (decision.route === "refuse") throw new Error(decision.sentence)
+        const oldFolderId = decision.folderId
 
         // 2. Ensure Compliance/ subfolder under the account folder (per SOP v7.0)
-        const complianceFolderId = await ensureDrivePath(legacy.folderId, [
+        const complianceFolderId = await ensureDrivePath(oldFolderId, [
           "Compliance",
         ])
 

@@ -25,8 +25,8 @@ import { resolveClosureFolder, resolveClosureClientName } from "@/lib/forms/clos
  *  into drive_archive_meta at submission time (so deferred archival never
  *  re-derives a folder from a mutable name / re-guesses the bucket). */
 export interface ArchivePlan {
-  /** Drive folder id the package lands in (a stable id, never a name). */
-  folderId: string
+  /** Drive folder id the package lands in (a stable id, never a name). null = file it by company (the company's storage). */
+  folderId: string | null
   /** Supabase Storage bucket the uploaded files actually live in. */
   bucket: string
   /** saveFormToDrive form-config key (drives the filename prefix + subfolder). */
@@ -67,7 +67,7 @@ export interface ArchiveRecipe {
 /** Read an account's stable Drive folder id. Throws retryable on a read error,
  *  loud on a genuinely-absent folder — the exact distinction the Carasso incident
  *  turned on (a swallowed read error read as "no folder" → silent skip). */
-async function resolveAccountFolder(accountId: string): Promise<{ folderId: string; companyName?: string }> {
+async function resolveAccountFolder(accountId: string): Promise<{ folderId: string | null; companyName?: string }> {
   const { data: acc, error } = await supabaseAdmin
     .from("accounts")
     .select("drive_folder_id, company_name")
@@ -75,10 +75,9 @@ async function resolveAccountFolder(accountId: string): Promise<{ folderId: stri
     .maybeSingle()
   if (error) throw new Error(`archive: account read failed (retryable): ${error.message}`)
   if (!acc) throw new Error(`archive: account ${accountId} not found`)
-  if (!acc.drive_folder_id) {
-    throw new Error(`archive: account ${accountId} (${acc.company_name ?? "?"}) has NO drive_folder_id — needs a Drive folder before its package can be archived`)
-  }
-  return { folderId: acc.drive_folder_id, companyName: acc.company_name ?? undefined }
+  // No folder is no longer an error here: a new (storage-first) client is archived into its storage by company. A company that
+  // can receive nothing fails in the archive engine (loudly) — never silently.
+  return { folderId: acc.drive_folder_id ?? null, companyName: acc.company_name ?? undefined }
 }
 
 function asStringArray(v: unknown): string[] {

@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStaffPreview } from "@/lib/auth/staff-preview"
+import { NO_STORAGE_STATUS, receiveVerdictFor } from "@/lib/crm-store/no-storage"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabaseAdmin as any
@@ -36,11 +37,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const { data: lease } = await db
     .from("lease_agreements")
-    .select("id")
+    .select("id, account_id")
     .eq("token", token)
     .maybeSingle()
   if (!lease) {
     return NextResponse.json({ error: "Lease not found." }, { status: 404 })
+  }
+
+  // Decide BEFORE changing the lease: the regenerated copy has to be filed afterwards (lease-regen-drive). A company that
+  // cannot receive it is told so now, and the lease row is left exactly as it was.
+  if (lease.account_id) {
+    let verdict
+    try { verdict = await receiveVerdictFor(lease.account_id as string) } catch {
+      return NextResponse.json({ error: "Could not check where this company's files live — please try again." }, { status: 500 })
+    }
+    // includes a company that is being moved: "try again in a few minutes", and the lease row is left exactly as it was
+    if (!verdict.ok) return NextResponse.json({ error: verdict.sentence }, { status: NO_STORAGE_STATUS })
   }
 
   const { error } = await db

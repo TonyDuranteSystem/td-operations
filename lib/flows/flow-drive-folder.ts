@@ -113,7 +113,7 @@ export function extractDriveFolderId(
 export async function resolveContactLinkedDriveFolder(contactId: string): Promise<string | null> {
   const { data: links } = await supabaseAdmin
     .from("account_contacts")
-    .select("account_id, is_primary, accounts(drive_folder_id, gdrive_folder_url)")
+    .select("account_id, is_primary, accounts(drive_folder_id, gdrive_folder_url, status)")
     .eq("contact_id", contactId)
     .order("is_primary", { ascending: false })
     .order("account_id", { ascending: true })
@@ -123,9 +123,11 @@ export async function resolveContactLinkedDriveFolder(contactId: string): Promis
     // generated types allow an array — normalize both shapes.
     const raw = (link as { accounts?: unknown }).accounts
     const account = (Array.isArray(raw) ? raw[0] : raw) as
-      | { drive_folder_id?: string | null; gdrive_folder_url?: string | null }
+      | { drive_folder_id?: string | null; gdrive_folder_url?: string | null; status?: string | null }
       | null
       | undefined
+    // A finished (Closed / Cancelled) company keeps its folder as a read-only archive: it never receives a member's new file.
+    if (account && /^(closed|cancell?ed)$/i.test(String(account.status ?? "").trim())) continue
     const folderId = extractDriveFolderId(account)
     if (folderId) return folderId
   }

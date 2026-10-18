@@ -30,6 +30,7 @@ import {
   FORM_ARCHIVE_SWEEP_ALERTED_KEY,
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
+import { readSweepWindow } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -50,29 +51,45 @@ export async function GET(req: NextRequest) {
   let enqueued = 0
   const enqueuedIds: string[] = []
   const stuck: string[] = []
-  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number }> = {}
+  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedFinished: number }> = {}
+  let skippedFinished = 0
 
   for (const recipe of Object.values(ARCHIVE_RECIPES)) {
-    const stats = { candidates: 0, enqueued: 0, stuck: 0 }
+    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedFinished: 0 }
     perForm[recipe.formType] = stats
 
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    const { data: rows, error } = await supabaseAdmin
-      .from(tbl)
-      .select(recipe.selectColumns)
-      .is("drive_archived_at", null)
-      .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
-      .order("created_at", { ascending: true })
-      .limit(200)
-
-    if (error) {
-      await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
-      continue
+    // Banking: the window holds only REAL (completed / reviewed) submissions whose one stuck-row alert has not fired yet, of
+    // companies that are not Closed / Cancelled — filtered IN the query, so shells and used-up rows never fill it. A company with
+    // no folder is archived into its storage by the job itself; a completed row with no company stays in (and fails loudly).
+    let formRows: Record<string, unknown>[]
+    if (recipe.formType === "banking") {
+      const win = await readSweepWindow<Record<string, unknown>>(recipe.table, recipe.selectColumns, FORM_ARCHIVE_SWEEP_CUTOFF_ISO, "status.in.(completed,reviewed)")
+      if (win.readError) {
+        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${win.readError}` }).catch(() => {})
+        continue
+      }
+      formRows = win.candidates
+      stats.skippedFinished = win.skippedFinished
+      skippedFinished += win.skippedFinished
+    } else {
+      const { data: rows, error } = await supabaseAdmin
+        .from(tbl)
+        .select(recipe.selectColumns)
+        .is("drive_archived_at", null)
+        .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+        .order("created_at", { ascending: true })
+        .limit(200)
+      if (error) {
+        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
+        continue
+      }
+      formRows = (rows ?? []) as unknown as Record<string, unknown>[]
     }
 
-    for (const raw of (rows ?? []) as unknown as Record<string, unknown>[]) {
+    for (const raw of formRows) {
       stats.candidates++
       const action = decideFormArchiveSweep(raw, recipe, now)
       if (action === "skip") continue
@@ -118,7 +135,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, enqueued, enqueuedIds, stuck, perForm }
+  const summary = { dryRun, skippedFinished, enqueued, enqueuedIds, stuck, perForm }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }

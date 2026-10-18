@@ -45,6 +45,10 @@ interface TaxFormPayload {
   entity_type?: string
   company_name?: string
   source?: "portal_wizard" | string
+  /** the form could not be filed: apply the corrections but do NOT mark the form reviewed */
+  leave_unreviewed?: boolean
+  /** enqueued by a staff/workflow REVIEW (not by the wizard): the review runs this once per submission */
+  review_apply?: boolean
 }
 
 function step(name: string, status: "ok" | "error" | "skipped", detail?: string) {
@@ -837,6 +841,8 @@ async function handleMcpApplyChanges(job: Job, p: TaxFormPayload): Promise<JobRe
   // ─── 6. MARK FORM AS REVIEWED ───
   if (!p.submission_id) {
     result.steps.push(step("form_reviewed", "skipped", "No submission_id"))
+  } else if (p.leave_unreviewed) {
+    result.steps.push(step("form_reviewed", "skipped", "Left unreviewed — the form was not filed"))
   } else {
     try {
       const { error: formErr } = await supabaseAdmin

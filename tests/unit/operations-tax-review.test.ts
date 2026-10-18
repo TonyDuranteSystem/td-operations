@@ -31,6 +31,8 @@ let accountRow: { company_name: string } | null = null
 let markReviewedError: { message: string } | null = null
 let enqueueShouldThrow = false
 let enqueueReturnsId: string = "job-xyz"
+let existingJobs: Array<{ id: string }> = []
+let jobLookupError: { message: string } | null = null
 
 const updateCalls: Array<{ table: string; payload: Record<string, unknown>; filters: Record<string, string | null> }> = []
 const enqueueCalls: Array<Record<string, unknown>> = []
@@ -56,6 +58,9 @@ vi.mock("@/lib/supabase-admin", () => ({
           filters[`${col}__is`] = value
           return chain
         }),
+        in: vi.fn(() => chain),
+        order: vi.fn(() => chain),
+        limit: vi.fn(() => chain),
         maybeSingle: vi.fn(() => Promise.resolve(resolveValue())),
         single: vi.fn(() => Promise.resolve(resolveValue())),
         then: (resolve: (v: unknown) => void) => resolve(resolveValue()),
@@ -67,6 +72,9 @@ vi.mock("@/lib/supabase-admin", () => ({
           const err = table === "tax_return_submissions" ? markReviewedError : null
           pendingUpdate = null
           return { data: null, error: err }
+        }
+        if (table === "job_queue") {
+          return { data: jobLookupError ? null : existingJobs, error: jobLookupError }
         }
         if (table === "tax_return_submissions") {
           return { data: submissionRow, error: null }
@@ -97,6 +105,8 @@ beforeEach(() => {
   markReviewedError = null
   enqueueShouldThrow = false
   enqueueReturnsId = "job-xyz"
+  existingJobs = []
+  jobLookupError = null
   updateCalls.length = 0
   enqueueCalls.length = 0
 })
@@ -199,5 +209,57 @@ describe("approveAndApplyTaxReview", () => {
     const result = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test" })
     expect(result.ok).toBe(true)
     expect(result.company_name).toBe("fallback-token")
+  })
+
+  const pending = (): SubRow => ({
+    id: "s1", token: "tk", account_id: "a1", contact_id: null,
+    tax_year: 2025, tax_return_id: null, changed_fields: null,
+    reviewed_at: null, status: "completed",
+  })
+
+  it("the review job is enqueued ONCE: it carries the review_apply mark the next run looks for", async () => {
+    submissionRow = pending()
+    accountRow = { company_name: "ACME" }
+    await approveAndApplyTaxReview({ submission_id: "s1", actor: "test" })
+    expect(enqueueCalls).toHaveLength(1)
+    expect((enqueueCalls[0].payload as Record<string, unknown>).review_apply).toBe(true)
+  })
+
+  it("a SECOND run after a leave-unreviewed run does NOT enqueue again (no reset, no second email, no overwrite): it only marks reviewed", async () => {
+    submissionRow = pending()
+    accountRow = { company_name: "ACME" }
+    existingJobs = [{ id: "job-first" }]
+    const result = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test" })
+    expect(result.ok).toBe(true)
+    expect(result.correctionsAlreadyApplied).toBe(true)
+    expect(result.job_id).toBe("job-first")
+    expect(enqueueCalls).toEqual([])
+    // the filing problem is fixed now, so THIS run stamps the form reviewed
+    expect(updateCalls.find((u) => u.table === "tax_return_submissions")?.payload.status).toBe("reviewed")
+  })
+
+  it("leaveUnreviewed: applies once, stamps nothing; a repeat while still unfiled enqueues nothing and stamps nothing", async () => {
+    submissionRow = pending()
+    accountRow = { company_name: "ACME" }
+    const first = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test", leaveUnreviewed: true })
+    expect(first.ok).toBe(true)
+    expect(enqueueCalls).toHaveLength(1)
+    expect((enqueueCalls[0].payload as Record<string, unknown>).leave_unreviewed).toBe(true)
+    expect(updateCalls.find((u) => u.table === "tax_return_submissions")).toBeUndefined()
+    enqueueCalls.length = 0
+    existingJobs = [{ id: "job-first" }]
+    const second = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test", leaveUnreviewed: true })
+    expect(second.correctionsAlreadyApplied).toBe(true)
+    expect(enqueueCalls).toEqual([])
+    expect(updateCalls.find((u) => u.table === "tax_return_submissions")).toBeUndefined()
+  })
+
+  it("an unreadable queue is never read as 'nothing queued' (a duplicate apply is the dangerous direction)", async () => {
+    submissionRow = pending()
+    accountRow = { company_name: "ACME" }
+    jobLookupError = { message: "queue down" }
+    const result = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test" })
+    expect(result.ok).toBe(false)
+    expect(enqueueCalls).toEqual([])
   })
 })

@@ -5,6 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
+import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 
 /**
@@ -28,7 +29,6 @@ export async function POST(request: NextRequest) {
   let accountId: string
   let fileName: string
   let mimeType: string
-  let fileSize: number
   let fileBuffer: Buffer
   let docType: string | null = null
   let category: string | null = null
@@ -42,7 +42,6 @@ export async function POST(request: NextRequest) {
     storagePath = body.storage_path
     fileName = body.file_name
     mimeType = body.mime_type || 'application/pdf'
-    fileSize = body.file_size || 0
     docType = body.doc_type
     category = body.category
     taxYear = body.tax_year
@@ -82,7 +81,6 @@ export async function POST(request: NextRequest) {
 
     fileName = file.name
     mimeType = file.type
-    fileSize = file.size
     fileBuffer = Buffer.from(await file.arrayBuffer())
   }
 
@@ -97,8 +95,13 @@ export async function POST(request: NextRequest) {
     ? `${docType || 'Tax Document'} - ${taxYear}`
     : docType || 'Client Upload'
 
-  // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
-  // saves HERE and never touches Drive; a company still on Drive carries on exactly as before, below.
+  // A refused upload must not leave the staged object behind in the upload bucket.
+  const discardStaged = () => {
+    if (storagePath) supabaseAdmin.storage.from('portal-uploads').remove([storagePath]).catch(() => {})
+  }
+
+  // Every upload is saved in the company's CRM storage (Stop Drive, dev job 264bb882). A company with no storage:
+  // the few left on their old folder carry on as before; everyone else gets one plain sentence back.
   let stored: { documentRowId: string } | null = null
   try {
     const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -123,7 +126,7 @@ export async function POST(request: NextRequest) {
       })
       if (routed.route === 'store') stored = { documentRowId: routed.documentRowId }
     } catch (e) {
-      if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 })
+      if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
       throw e
     }
   } catch (err) {
@@ -131,19 +134,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
   }
 
-  // A company still on Drive: get its Drive folder
   let driveFolderId: string | null = null
   if (!stored) {
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, company_name')
-      .eq('id', accountId)
-      .single()
-
-    if (!account?.drive_folder_id) {
-      return NextResponse.json({ error: 'No Drive folder configured for this account. Please contact support.' }, { status: 400 })
+    let decision
+    try { decision = await noStorageDecisionFor(accountId) } catch {
+      return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
     }
-    driveFolderId = account.drive_folder_id as string
+    if (decision.route === 'refuse') {
+      discardStaged()
+      return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+    }
+    driveFolderId = decision.folderId
   }
 
   try {
@@ -151,14 +152,8 @@ export async function POST(request: NextRequest) {
     if (stored) {
       docId = stored.documentRowId
     } else {
-      // Upload to Google Drive
-      const driveFile = await uploadBinaryToDrive(
-        fileName,
-        fileBuffer,
-        mimeType,
-        driveFolderId as string
-      )
-
+      // A company left on its old folder (no storage, a folder, not finished): unchanged.
+      const driveFile = await uploadBinaryToDrive(fileName, fileBuffer, mimeType, driveFolderId as string)
       const { data: doc, error: insertError } = await supabaseAdmin
         .from('documents')
         .insert({
@@ -174,14 +169,14 @@ export async function POST(request: NextRequest) {
           status: 'classified',
           confidence: 'high',
           mime_type: mimeType,
-          file_size: fileSize,
+          file_size: fileBuffer.length,
         })
         .select('id')
         .single()
 
       if (insertError) {
         console.error('Document insert error:', insertError)
-        return NextResponse.json({ error: 'File uploaded to Drive but failed to save record. Please contact support.' }, { status: 500 })
+        return NextResponse.json({ error: 'File uploaded but failed to save record. Please contact support.' }, { status: 500 })
       }
       docId = doc.id as string
     }
