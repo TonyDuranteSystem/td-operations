@@ -32,6 +32,7 @@ describe('MCP server — no Drive write tools', () => {
       mod[fn](server)
     }
     for (const w of WRITE_TOOL_NAMES) expect(names, w).not.toContain(w)
+    expect(names).not.toContain('tax_send_to_accountant')
     for (const r of ['drive_search', 'drive_list_folder', 'drive_get_file_info', 'drive_read_file', 'storage_write', 'storage_move', 'storage_read', 'storage_list', 'my_files_save']) {
       expect(names, r).toContain(r)
     }

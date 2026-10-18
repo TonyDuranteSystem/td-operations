@@ -504,7 +504,6 @@ async function handlePortalWizardTaxSetup(job: Job, p: TaxFormPayload): Promise<
 ${(entityType === "MMLLC" || entityType === "Corp") ? `<li>Bank statements auto-parsed. Review: <code>bank_statement_review(account_id="${p.account_id}")</code></li>
 <li>Generate P&L: <code>bank_statement_pnl(account_id="${p.account_id}", tax_year=${taxYear})</code></li>` : ""}
 <li>Check if 2nd installment is paid (Stage 6 gate)</li>
-<li>When ready: <code>tax_send_to_accountant(account_id="${p.account_id}", tax_year=${taxYear})</code></li>
 </ol>
 
 <p style="font-size:12px;color:#6b7280">Token: ${p.token} | Admin: ${APP_BASE_URL}/tax-form/${p.token}?preview=td</p>

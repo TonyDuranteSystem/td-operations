@@ -119,7 +119,6 @@ export const NO_APPROVAL_SEND_TOOLS: ReadonlySet<string> = new Set([
   "oa_send",
   "itin_form_send",
   "portal_invoice_send",
-  "tax_send_to_accountant",
 ])
 
 /**
@@ -134,7 +133,7 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   "portal_invoice_create", "portal_invoice_send", "portal_create_user",
   "portal_chat_send", "portal_team_send",
   "sd_advance_stage", "service_deactivate", "service_reactivate",
-  "referral_payout", "tax_send_to_accountant", "formation_confirm",
+  "referral_payout", "formation_confirm",
   "storage_delete", "agent_msg_send",
   "calendar_create_event", "calendar_update_event", "calendar_delete_event",
   "hc_submit_ra_change",

@@ -286,8 +286,6 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
   Entity types: SMLLC (Form 1120/5472), MMLLC (Form 1065), Corp (Form 1120).
 - tax_form_get: Check form status by token or account_id+tax_year. Shows prefilled vs submitted, changed fields.
 - tax_form_review: Review completed submission. Shows diff table. With apply_changes=true: updates CRM + marks tax return as Data Received.
-- tax_send_to_accountant: Send all tax documents to the accountant for preparation. Gathers Tax Organizer PDF, P&L Excel (MMLLC/Corp), prior year return, bank statements from Drive. Sends one email with all attachments. Updates tax_returns status + advances SD. Idempotent.
-  Workflow: data received → review → tax_send_to_accountant(account_id, tax_year) → accountant prepares → TR completed.
 
 ### Tax Return Quotes (1 tool: tax_quote_*)
 - tax_quote_create: Create an intake form link for a new/one-time client requesting a tax return quote.

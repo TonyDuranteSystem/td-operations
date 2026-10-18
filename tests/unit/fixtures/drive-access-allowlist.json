@@ -41,7 +41,6 @@
   "lib/jobs/handlers/tax-return-intake.ts",
   "lib/mcp/tools/closure.ts",
   "lib/mcp/tools/portal.ts",
-  "lib/mcp/tools/tax.ts",
   "lib/offers/process-offer-signed.ts",
   "lib/operations/esign.ts",
   "lib/operations/file-renewal.ts",
