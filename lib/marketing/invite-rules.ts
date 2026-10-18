@@ -8,7 +8,28 @@ import crypto from "node:crypto"
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 export const MAX_INVITES_PER_OWNER_PER_HOUR = 20
 export const MIN_PASSWORD_LENGTH = 12
-export const GENERIC_INVITE_ERROR = "This invitation cannot be used. Ask the person who sent it for a new one."
+export const GENERIC_INVITE_ERROR = "This invitation cannot be used. Ask the person who sent it for a new one, and if it keeps failing, ask for it to be sent to a different email address."
+export const TRY_AGAIN_ERROR = "Something went wrong. Please try again in a moment."
+export const WEAK_PASSWORD_ERROR = "Choose a stronger password and try again."
+
+type AuthErrorLike = { code?: string; status?: number; message?: string } | null | undefined
+/** The login system refused to create the login because the email already has one (a client, staff, admin, partner or marketing login). */
+export function isEmailTakenError(err: AuthErrorLike): boolean {
+  if (!err) return false
+  if (err.code === "email_exists" || err.code === "user_already_exists") return true
+  return err.status === 422 && /already|registered|exists/i.test(err.message ?? "")
+}
+/** The login system refused the password itself (too weak, found in a leak list ...): nothing was created, the person can retry. */
+export function isWeakPasswordError(err: AuthErrorLike): boolean {
+  if (!err) return false
+  if (err.code === "weak_password") return true
+  return /password/i.test(err.message ?? "") && /weak|short|least|strong|pwned|compromised|leak/i.test(err.message ?? "")
+}
+/** An existing login that WE created and never finished: a marketing login with no team membership at all (an earlier acceptance crashed
+ *  between creating the login and saving the membership). Anyone else's login is never ours to finish. */
+export function isOrphanMarketingLogin(role: unknown, membershipCount: number): boolean {
+  return typeof role === "string" && role.trim().toLowerCase() === "marketing" && membershipCount === 0
+}
 
 export function newInviteToken(): string {
   return crypto.randomBytes(32).toString("base64url")

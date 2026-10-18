@@ -363,7 +363,12 @@ export async function middleware(request: NextRequest) {
     return res
   }
 
-  const role = user.app_metadata?.role
+  // Normalised ONCE so every comparison below sees the same value: the role-door predicates already trim and lower-case, but the
+  // plain === checks further down did not, so a login whose role was stored as "Client " passed the known-role gate and then skipped
+  // the client bounce and reached dashboard pages (found by the real-login test, 2026-10-18). The admin-only check below stays on the
+  // RAW value on purpose: it must fail closed.
+  const rawRole = user.app_metadata?.role
+  const role = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : rawRole
 
   // --- Staff MFA gate (dev job de4564ee) ---
   // Runs for every STAFF session (deny-list predicate — same symbol the rest
@@ -416,6 +421,8 @@ export async function middleware(request: NextRequest) {
         rememberedDevice,
         graceUntilRaw: process.env.MFA_GRACE_UNTIL,
         now: Date.now(),
+        // Marketing logins never get the staff grace period or the owner exemption: second step from the first day.
+        strict: isMarketingRole(role),
       })
       if (verdict !== 'allow') {
         // Background fetches get machine-readable JSON, never redirect HTML

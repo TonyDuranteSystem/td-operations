@@ -14,6 +14,8 @@ async function main() {
   let pass = 0, fail = 0
   const ck = (id: string, ok: boolean, note?: unknown) => { if (ok) pass++; else fail++; console.log(ok ? "PASS" : "FAIL", id, ok ? "" : JSON.stringify(note)) }
   const M = await import("@/lib/marketing/members")
+  const { GENERIC_INVITE_ERROR } = await import("@/lib/marketing/invite-rules")
+  const { MARKETING_PERMISSIONS } = await import("@/lib/marketing/permissions")
   const S = await import("@/lib/marketing/settings")
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   const admin = supabaseAdmin as unknown as { auth: { admin: { createUser: (a: object) => Promise<{ data: { user: { id: string } | null }; error: unknown }>; getUserById: (id: string) => Promise<{ data: { user: { id: string; email?: string; banned_until?: string | null; app_metadata?: { role?: string } } | null } }>; deleteUser: (id: string) => Promise<unknown> } } }
@@ -54,7 +56,7 @@ async function main() {
   ck("8 Rocco can invite a setter", colInvite.ok === true, colInvite)
   const col = await M.acceptInvite({ token: tokenOf(colInvite.data!.inviteUrl), password: "Attacker-chosen-pass-1" })
   const after = (await admin.auth.admin.getUserById(existing.data.user!.id)).data.user
-  ck("9 an invite for an email that already has a login gives the generic answer and changes nothing", col.ok === false && col.error === "This invitation cannot be used. Ask the person who sent it for a new one." && after?.app_metadata?.role === "client", { col, role: after?.app_metadata })
+  ck("9 an invite for an email that already has a login gives the generic answer and changes nothing", col.ok === false && col.error === GENERIC_INVITE_ERROR && after?.app_metadata?.role === "client", { col, role: after?.app_metadata })
   ck("10 that existing login was NOT added to the team", (await db.query("select count(*) from marketing_team_members where user_id=$1", [existing.data.user!.id])).rows[0].count === "0")
 
   // 11. expiry
@@ -86,9 +88,6 @@ async function main() {
   await M.setMemberPaused({ teamId: team.id, userId: setterId, paused: false, actor: ownerActor })
   const access = await M.updateMemberAccess({ teamId: team.id, userId: setterId, permissions: ["money.read"], actor: ownerActor })
   ck("20 the owner can add a permission to a setter", access.ok === true && (await db.query("select permissions from marketing_team_members where user_id=$1", [setterId])).rows[0].permissions.includes("money.read"), access)
-  await S.setMarketingSetting({ key: "member_permission_ceiling", value: ["chat", "leads.read"], actor: "qa", teamId: team.id })
-  ck("21 a ceiling Antonio sets caps what the owner can give", (await M.updateMemberAccess({ teamId: team.id, userId: setterId, permissions: ["money.read"], actor: ownerActor })).ok === false)
-  await S.setMarketingSetting({ key: "member_permission_ceiling", value: [], actor: "qa", teamId: team.id })
   const rm = await M.removeMember({ teamId: team.id, userId: setterId, actor: ownerActor })
   const banned = (await admin.auth.admin.getUserById(setterId)).data.user
   const row = (await db.query("select status, token_version, removed_by from marketing_team_members where user_id=$1", [setterId])).rows[0]
@@ -103,6 +102,30 @@ async function main() {
     if (r.ok === false && /Too many/.test(r.error ?? "")) limited = true
   }
   ck("25 invitations are rate-limited per person per hour", limited)
+
+  // 26. an UNFINISHED marketing login (an earlier acceptance crashed) is finished by the next invitation instead of blocking it
+  const orphanEmail = `qa-orphan-${stamp}@example.test`
+  const orphan = await admin.auth.admin.createUser({ email: orphanEmail, password: "Old-unfinished-pass-1", email_confirm: true, app_metadata: { role: "marketing" } })
+  created.push(orphan.data.user!.id)
+  const orphanInvite = await M.createInvite({ teamId: team.id, email: orphanEmail, bundle: "setter", actor: adminActor })
+  const orphanAcc = await M.acceptInvite({ token: tokenOf(orphanInvite.data!.inviteUrl), password: "Fresh-chosen-password-7" })
+  ck("26 an unfinished marketing login is finished (membership created on the SAME login), not left stuck", orphanAcc.ok === true && (await db.query("select count(*) from marketing_team_members where user_id=$1 and status='active'", [orphan.data.user!.id])).rows[0].count === "1", orphanAcc)
+
+  // 27/28. a manager's invitation dies with his access, and removing him revokes his open invitations
+  const mgrEmail = `qa-mgr-${stamp}@example.test`
+  const mgrInvite = await M.createInvite({ teamId: team.id, email: mgrEmail, bundle: "seller", permissions: ["team.manage"], actor: adminActor })
+  const mgrAcc = await M.acceptInvite({ token: tokenOf(mgrInvite.data!.inviteUrl), password: "Manager-password-12345" })
+  const mgrId = (await db.query("select m.user_id from marketing_team_members m join auth.users u on u.id=m.user_id where u.email=$1", [mgrEmail])).rows[0]?.user_id
+  created.push(mgrId)
+  const mgrActor = { kind: "member" as const, userId: mgrId, label: mgrEmail, permissions: [...MARKETING_PERMISSIONS] as string[] }
+  const lateEmail = `qa-late-${stamp}@example.test`
+  const lateInvite = await M.createInvite({ teamId: team.id, email: lateEmail, bundle: "setter", actor: mgrActor })
+  ck("27a a manager can invite while he has access", mgrAcc.ok === true && lateInvite.ok === true, { mgrAcc, lateInvite })
+  const mgrRm = await M.removeMember({ teamId: team.id, userId: mgrId, actor: adminActor })
+  const revoked = (await db.query("select revoked_at from marketing_invites where email_lower=$1", [lateEmail])).rows[0]?.revoked_at
+  ck("27b removing the manager revokes his open invitations", mgrRm.ok === true && !!revoked, { mgrRm, revoked })
+  const lateAcc = await M.acceptInvite({ token: tokenOf(lateInvite.data!.inviteUrl), password: "Late-person-password-1" })
+  ck("27c his invitation can no longer be accepted and no login is created for it", lateAcc.ok === false && (await db.query("select count(*) from auth.users where email=$1", [lateEmail])).rows[0].count === "0", lateAcc)
 
   // clean up logins and the team
   for (const id of created.filter(Boolean)) await admin.auth.admin.deleteUser(id).catch(() => undefined)

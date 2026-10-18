@@ -85,6 +85,27 @@ export async function findAuthUserByEmail(
 }
 
 /**
+ * TD MARKETING: find a MARKETING login by email (the normal finders hide them on purpose). Used only to finish an invitation whose
+ * earlier acceptance crashed after the login was created. Returns null for any other kind of login.
+ */
+export async function findMarketingAuthUserByEmail(email: string): Promise<User | null> {
+  if (!email) return null
+  const normalized = email.toLowerCase().trim()
+  let page = 1
+  while (page <= MAX_PAGES) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: DEFAULT_PER_PAGE })
+    if (error) throw new Error(`findMarketingAuthUserByEmail: listUsers page=${page} failed: ${error.message}`)
+    const users = (data?.users ?? []) as User[]
+    const found = users.find((u) => (u.email ?? "").toLowerCase() === normalized && isMarketingRole(u.app_metadata?.role))
+    if (found) return found
+    const pagination = data as unknown as { nextPage?: number | null }
+    if (!(pagination?.nextPage !== null && users.length >= DEFAULT_PER_PAGE)) return null
+    page += 1
+  }
+  return null
+}
+
+/**
  * Find an auth user by id via the direct `getUserById` endpoint. Thin
  * wrapper so call sites import from one place; avoids the listUsers
  * pattern entirely when the caller already has the uuid.

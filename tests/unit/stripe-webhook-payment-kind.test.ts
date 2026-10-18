@@ -9,6 +9,7 @@ import crypto from "node:crypto"
 
 const calls: { table: string; op: string; payload?: unknown }[] = []
 const tables: Record<string, unknown[]> = {}
+let eventInsertError: { code?: string; message: string } | null = null
 
 function builder(table: string) {
   let op = "select"
@@ -24,7 +25,8 @@ function builder(table: string) {
     then: (res: (v: unknown) => unknown) => {
       if (op === "select") calls.push({ table, op: "select" })
       const data = op === "select" ? (tables[table] || []) : [{ id: "row-1" }]
-      return Promise.resolve({ data, error: null }).then(res)
+      const error = op === "insert" && table === "webhook_events" ? eventInsertError : null
+      return Promise.resolve({ data, error }).then(res)
     },
   }
   return b
@@ -86,6 +88,7 @@ const touched = (table: string) => calls.some(c => c.table === table)
 
 beforeEach(() => {
   calls.length = 0
+  eventInsertError = null
   for (const k of Object.keys(tables)) delete tables[k]
   tables.contacts = [{ id: "c1", account_contacts: [{ account_id: "a1" }] }]
   tables.leads = [{ id: "lead-1" }]
@@ -126,7 +129,32 @@ describe("Stripe webhook — tagged non-client payment", () => {
   })
 })
 
+describe("Stripe webhook — a tagged payment whose record cannot be saved", () => {
+  it("answers 500 so Stripe retries, and touches nothing else", async () => {
+    eventInsertError = { code: "08006", message: "connection lost" }
+    const res = await send({ payment_kind: "marketing_sale" })
+    expect(res.status).toBe(500)
+    expect(touched("leads")).toBe(false)
+    expect(touched("payments")).toBe(false)
+    expect(runActivation).not.toHaveBeenCalled()
+  })
+  it("a redelivery (unique violation) is acknowledged, not retried forever, and not double counted", async () => {
+    eventInsertError = { code: "23505", message: "duplicate key value violates unique constraint" }
+    const res = await send({ payment_kind: "marketing_sale" })
+    expect(res.status).toBe(200)
+    expect(touched("leads")).toBe(false)
+    expect(touched("payments")).toBe(false)
+  })
+})
+
 describe("Stripe webhook — normal client payment is unchanged", () => {
+  it("a normal payment is still processed even if the event record fails (behaviour deliberately unchanged)", async () => {
+    eventInsertError = { code: "08006", message: "connection lost" }
+    const res = await send({ offer_token: "tok", client_email: "payer@example.com", contract_type: "onboarding" })
+    expect(res.status).toBe(200)
+    expect(wrote("leads", "update")).toBe(true)
+  })
+
   it("untagged payment still converts the lead, upgrades the tier, consumes the activation", async () => {
     const res = await send({ offer_token: "tok", client_email: "payer@example.com", contract_type: "onboarding" })
     expect(res.status).toBe(200)

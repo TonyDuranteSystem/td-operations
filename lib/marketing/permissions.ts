@@ -2,8 +2,8 @@
  * TD Marketing — permissions (pure; P1, dev job 9aec66fa).
  *
  * The TEAM OWNER (Rocco, as boss) has every permission on his team — Antonio's ruling 2026-10-17. A MEMBER has what his
- * bundle (a setting) plus his own extra grants give him. A grant can never exceed what the granter has himself, and an
- * optional ceiling (a setting; empty = no ceiling) caps what an owner may hand out. Nobody can raise his own access.
+ * bundle (a setting) plus his own extra grants give him. A grant can never exceed what the granter has himself. Nobody can
+ * raise his own access. (There is no separate limit Antonio sets on what an owner may hand out: removed 2026-10-18, nothing used it.)
  */
 
 /** Every permission name that exists. A grant naming anything else is refused (a typo must not silently grant nothing). */
@@ -60,8 +60,6 @@ export interface GrantCheck {
   granterPermissions: readonly string[]
   /** what he wants to give */
   requested: readonly unknown[]
-  /** the ceiling setting; empty or absent = no ceiling */
-  ceiling?: readonly string[] | null
   /** who receives it; granting to yourself is always refused */
   granterUserId: string
   targetUserId: string | null
@@ -69,7 +67,7 @@ export interface GrantCheck {
 
 /**
  * May this grant happen? Refused when: it targets the granter himself; it names an unknown permission; it exceeds what the
- * granter has (an owner has everything); or it exceeds a non-empty ceiling. A member may only grant if he holds team.manage.
+ * granter has (an owner has everything). A member may only grant if he holds team.manage.
  */
 export function canGrant(g: GrantCheck): { ok: boolean; error?: string } {
   if (g.targetUserId && g.targetUserId === g.granterUserId) return { ok: false, error: "Nobody can change his own access." }
@@ -79,10 +77,5 @@ export function canGrant(g: GrantCheck): { ok: boolean; error?: string } {
   const own = g.granterRole === "owner" ? MARKETING_PERMISSIONS : g.granterPermissions
   const over = (v.value ?? []).filter(p => !(own as readonly string[]).includes(p))
   if (over.length) return { ok: false, error: `You cannot give what you do not have: ${over.join(", ")}.` }
-  const ceiling = g.ceiling ?? []
-  if (ceiling.length) {
-    const beyond = (v.value ?? []).filter(p => !ceiling.includes(p))
-    if (beyond.length) return { ok: false, error: `Above the limit Antonio set: ${beyond.join(", ")}.` }
-  }
   return { ok: true }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
-  MARKETING_SETTING_KEYS, defaultForSetting, isMarketingSettingKey, parseSettingValue, resolveSetting,
+  MARKETING_SETTING_KEYS, defaultForSetting, failClosedValue, isMarketingSettingKey, parseSettingValue, resolveSetting,
 } from "@/lib/marketing/settings-schema"
 
 describe("marketing settings schema", () => {
@@ -53,5 +53,26 @@ describe("marketing settings schema", () => {
     expect(isMarketingSettingKey("pipeline_stages")).toBe(true)
     expect(isMarketingSettingKey("toString")).toBe(false)
     expect(isMarketingSettingKey("__proto__")).toBe(false)
+  })
+})
+
+describe("a broken permission setting closes the door", () => {
+  it("a stored permission_bundles value that no longer fits the rules gives NO bundles (not the wider default)", () => {
+    const r = resolveSetting("permission_bundles", { setter: "not a list" })
+    expect(r.usedFallback).toBe(true)
+    expect(r.value).toEqual({})
+    expect(r.value).not.toEqual(defaultForSetting("permission_bundles"))
+  })
+  it("a permission_bundles value that was never stored still starts from the built-in default (the intended first state)", () => {
+    expect(resolveSetting("permission_bundles", undefined).value).toEqual(defaultForSetting("permission_bundles"))
+  })
+  it("a valid stored value is used as it is", () => {
+    const ok = { setter: ["leads.read"] }
+    expect(resolveSetting("permission_bundles", ok)).toEqual({ value: ok, usedFallback: false })
+  })
+  it("other settings still fall back to their defaults when broken (only access-granting ones fail closed)", () => {
+    expect(resolveSetting("owner_may_create_offers", "nonsense").value).toBe(defaultForSetting("owner_may_create_offers"))
+    expect(failClosedValue("owner_may_create_offers")).toBeUndefined()
+    expect(failClosedValue("permission_bundles")).toEqual({})
   })
 })

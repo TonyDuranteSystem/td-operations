@@ -53,11 +53,8 @@ describe("granting access", () => {
     expect(canGrant({ ...m, granterPermissions: ["team.manage", "chat"], requested: ["chat"] }).ok).toBe(true)
     expect(canGrant({ ...m, granterPermissions: ["team.manage", "chat"], requested: ["money.read"] }).ok).toBe(false)
   })
-  it("a non-empty ceiling caps even the owner; an empty one means no ceiling", () => {
-    expect(canGrant({ ...owner, requested: ["money.read"], ceiling: ["chat"] }).ok).toBe(false)
-    expect(canGrant({ ...owner, requested: ["chat"], ceiling: ["chat"] }).ok).toBe(true)
-    expect(canGrant({ ...owner, requested: ["money.read"], ceiling: [] }).ok).toBe(true)
-    expect(canGrant({ ...owner, requested: ["money.read"], ceiling: null }).ok).toBe(true)
+  it("there is no limit above what the owner holds: he can give any real permission", () => {
+    expect(canGrant({ ...owner, requested: ["money.read"] }).ok).toBe(true)
   })
   it("validatePermissionList refuses non-lists", () => {
     expect(validatePermissionList("chat").ok).toBe(false)

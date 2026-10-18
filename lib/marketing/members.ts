@@ -8,14 +8,18 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import { getMarketingSetting } from "@/lib/marketing/settings"
 import { canGrant, validatePermissionList, MARKETING_PERMISSIONS } from "@/lib/marketing/permissions"
+import { findMarketingAuthUserByEmail } from "@/lib/auth-admin-helpers"
 import {
-  GENERIC_INVITE_ERROR, hashInviteToken, inviteExpiry, inviteUsable, newInviteToken, normalizeEmail, overInviteLimit, passwordProblem, plausibleToken,
+  GENERIC_INVITE_ERROR, TRY_AGAIN_ERROR, WEAK_PASSWORD_ERROR, hashInviteToken, inviteExpiry, inviteUsable, isEmailTakenError, isOrphanMarketingLogin,
+  isWeakPasswordError, newInviteToken, normalizeEmail, overInviteLimit, passwordProblem, plausibleToken,
 } from "@/lib/marketing/invite-rules"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- newer tables than the generated types
 const db = () => supabaseAdmin as unknown as { from: (t: string) => any; auth: any }
 type R<T = undefined> = { ok: boolean; error?: string; data?: T }
 const fail = <T>(error: string): R<T> => ({ ok: false, error })
+/** The sender's login id for the invitations table (a uuid column): anything that is not a real uuid is stored as null. */
+const asUuidOrNull = (v: string | null): string | null => (typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) ? v : null)
 
 /** Who is acting. 'admin' is Antonio (owner of everything); an owner has every permission; a member only what he holds. */
 export interface Actor {
@@ -48,8 +52,7 @@ export async function createInvite(input: {
   const extra = input.permissions ?? []
   // what the person will hold must be something the granter may give: the bundle's permissions plus the extras
   const requested = [...(bundle ? (bundles[bundle] ?? []) : []), ...extra]
-  const ceiling = (await getMarketingSetting("member_permission_ceiling", input.teamId)) as string[]
-  const check = canGrant({ ...grantParams(input.actor), requested, ceiling, targetUserId: null })
+  const check = canGrant({ ...grantParams(input.actor), requested, targetUserId: null })
   if (!check.ok) return fail(check.error ?? "Not allowed.")
 
   const since = new Date(Date.now() - 3600_000).toISOString()
@@ -63,7 +66,7 @@ export async function createInvite(input: {
   const expiresAt = inviteExpiry(now)
   const { error } = await db().from("marketing_invites").insert({
     team_id: input.teamId, email_lower: email, member_role: memberRole, bundle, permissions: validatePermissionList(extra).value ?? [],
-    token_hash: hashInviteToken(token), expires_at: expiresAt, created_by: input.actor.label,
+    token_hash: hashInviteToken(token), expires_at: expiresAt, created_by: input.actor.label, created_by_user_id: asUuidOrNull(input.actor.userId),
   })
   if (error) return fail("The invitation could not be created. Please try again.")
   return { ok: true, data: { inviteUrl: `${APP_BASE_URL}/marketing/accept?token=${token}`, expiresAt, email } }
@@ -81,23 +84,55 @@ export async function acceptInvite(input: { token: unknown; password: unknown; f
     .eq("id", inv.id).is("used_at", null).is("revoked_at", null).select("id")
   if (!claimed || claimed.length === 0) return fail(GENERIC_INVITE_ERROR)
 
+  const nowIso = () => new Date().toISOString()
+  const revoke = async () => { await db().from("marketing_invites").update({ revoked_at: nowIso() }).eq("id", inv.id) }
+  // nothing was created: give the invitation back so the same link can be tried again
+  const unclaim = async () => { await db().from("marketing_invites").update({ used_at: null }).eq("id", inv.id).is("revoked_at", null) }
+
+  // the person who sent the invitation must still have access: a removed or paused manager's invitations die with it
+  if (inv.created_by_user_id) {
+    const sender = await loadMember(inv.team_id, inv.created_by_user_id)
+    if (sender && sender.status !== "active") { await revoke(); return fail(GENERIC_INVITE_ERROR) }
+  }
+
   const name = typeof input.fullName === "string" ? input.fullName.trim().slice(0, 120) : ""
+  let userId: string | null = null
   const created = await db().auth.admin.createUser({
     email: inv.email_lower, password: input.password, email_confirm: true,
     app_metadata: { role: "marketing" }, user_metadata: name ? { full_name: name } : {},
   })
-  if (created.error || !created.data?.user) {
-    // already a login with this email (client, staff, admin ...) or a refusal: say nothing specific, never touch the existing login
-    await db().from("marketing_invites").update({ revoked_at: new Date().toISOString() }).eq("id", inv.id)
-    return fail(GENERIC_INVITE_ERROR)
+  if (!created.error && created.data?.user) {
+    userId = created.data.user.id
+  } else if (isEmailTakenError(created.error)) {
+    // A login with this email already exists. It is ours to finish ONLY when it is a marketing login that never got a team
+    // membership (an earlier acceptance crashed between creating the login and saving the membership). A client, staff, admin or
+    // partner login is never touched, and the answer stays generic so nobody can learn which emails belong to TD clients.
+    const existing = await findMarketingAuthUserByEmail(inv.email_lower)
+    if (existing) {
+      const { count } = await db().from("marketing_team_members").select("user_id", { count: "exact", head: true }).eq("user_id", existing.id)
+      if (isOrphanMarketingLogin(existing.app_metadata?.role, count ?? 0)) {
+        const upd = await db().auth.admin.updateUserById(existing.id, {
+          password: input.password, email_confirm: true, user_metadata: { ...(existing.user_metadata ?? {}), ...(name ? { full_name: name } : {}) },
+        })
+        if (!upd?.error) userId = existing.id
+      }
+    }
+    if (!userId) { await revoke(); return fail(GENERIC_INVITE_ERROR) }
+  } else {
+    // a temporary failure, or a password the login system refuses: nothing was created
+    await unclaim()
+    return fail(isWeakPasswordError(created.error) ? WEAK_PASSWORD_ERROR : TRY_AGAIN_ERROR)
   }
+
   const { error: mErr } = await db().from("marketing_team_members").insert({
-    team_id: inv.team_id, user_id: created.data.user.id, member_role: inv.member_role, bundle: inv.bundle, permissions: inv.permissions ?? [],
-    status: "active", invited_by: inv.created_by, invited_at: inv.created_at, joined_at: new Date().toISOString(),
+    team_id: inv.team_id, user_id: userId, member_role: inv.member_role, bundle: inv.bundle, permissions: inv.permissions ?? [],
+    status: "active", invited_by: inv.created_by, invited_at: inv.created_at, joined_at: nowIso(),
   })
   if (mErr) {
-    await db().auth.admin.deleteUser(created.data.user.id)
-    return fail(GENERIC_INVITE_ERROR)
+    // undo the login we just made; if even that fails the login stays as an unfinished marketing login that the next acceptance finishes (above)
+    await db().auth.admin.deleteUser(userId)
+    await unclaim()
+    return fail(TRY_AGAIN_ERROR)
   }
   return { ok: true, data: { email: inv.email_lower } }
 }
@@ -131,11 +166,15 @@ export async function removeMember(input: { teamId: string; userId: string; acto
   if (!m || m.status === "removed") return fail("That person is not on the team.")
   if (m.member_role === "owner" && input.actor.kind !== "admin") return fail("Only Antonio can remove a team owner.")
   const now = new Date().toISOString()
+  // end the login FIRST (the middleware refuses a banned login on its very next request). If that fails nothing has changed and the
+  // person can simply try again; if saving the row fails afterwards the login is already closed, and trying again completes the record.
+  const ban = await db().auth.admin.updateUserById(input.userId, { ban_duration: "876000h" })
+  if (ban?.error) return fail("The login could not be ended. Please try again.")
   const { error } = await db().from("marketing_team_members").update({ status: "removed", removed_at: now, removed_by: input.actor.label, token_version: (m.token_version ?? 1) + 1 })
     .eq("team_id", input.teamId).eq("user_id", input.userId)
   if (error) return fail("The change could not be saved. Please try again.")
-  // end the login itself: the middleware refuses a banned login on its very next request
-  await db().auth.admin.updateUserById(input.userId, { ban_duration: "876000h" })
+  // his unused invitations die with his access
+  await db().from("marketing_invites").update({ revoked_at: now }).eq("team_id", input.teamId).eq("created_by_user_id", input.userId).is("used_at", null).is("revoked_at", null)
   return { ok: true }
 }
 
@@ -155,12 +194,12 @@ export async function updateMemberAccess(input: { teamId: string; userId: string
   const m = await loadMember(input.teamId, input.userId)
   if (!m || m.status === "removed") return fail("That person is not on the team.")
   if (m.member_role === "owner") return fail("A team owner already has every permission.")
+  if (input.permissions !== undefined && !Array.isArray(input.permissions)) return fail("Permissions must be a list.")
   const bundles = (await getMarketingSetting("permission_bundles", input.teamId)) as Record<string, string[]>
   const bundle = input.bundle === undefined ? m.bundle : input.bundle
   if (bundle && !Object.prototype.hasOwnProperty.call(bundles, bundle)) return fail("Unknown role.")
   const extra = input.permissions === undefined ? m.permissions : input.permissions
-  const ceiling = (await getMarketingSetting("member_permission_ceiling", input.teamId)) as string[]
-  const check = canGrant({ ...grantParams(input.actor), requested: [...(bundle ? bundles[bundle] : []), ...extra], ceiling, targetUserId: input.userId })
+  const check = canGrant({ ...grantParams(input.actor), requested: [...(bundle ? bundles[bundle] : []), ...extra], targetUserId: input.userId })
   if (!check.ok) return fail(check.error ?? "Not allowed.")
   const { error } = await db().from("marketing_team_members").update({ bundle, permissions: validatePermissionList(extra).value ?? [] }).eq("team_id", input.teamId).eq("user_id", input.userId)
   if (error) return fail("The change could not be saved. Please try again.")

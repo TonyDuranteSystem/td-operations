@@ -36,8 +36,7 @@ export const MARKETING_SETTING_DEFS = {
     schema: optionList,
     fallback: [
       { key: "wrong_profile", label: "Wrong profile" },
-      { key: "no_budget", label: "No budget" },
-      { key: "italian_resident", label: "Italian-resident trap" },
+      { key: "lives_in_italy_no_business", label: "Lives in Italy, no business" },
       { key: "not_interested", label: "Not interested" },
       { key: "other", label: "Other" },
     ],
@@ -82,8 +81,6 @@ export const MARKETING_SETTING_DEFS = {
   owner_may_export_leads: { schema: z.boolean(), fallback: true },
   /** Whether adding a member needs Antonio's approval first. */
   member_invites_need_approval: { schema: z.boolean(), fallback: false },
-  /** The most a team owner can give a member: a ceiling Antonio can set. EMPTY LIST = NO CEILING (Rocco, as boss, may give anything he has himself; Antonio's ruling 2026-10-17). */
-  member_permission_ceiling: { schema: z.array(z.string().trim().min(1).max(60)).max(60), fallback: [] as string[] },
 } as const
 
 export type MarketingSettingKey = keyof typeof MARKETING_SETTING_DEFS
@@ -120,5 +117,15 @@ export function parseSettingValue(key: string, raw: unknown): ParsedSetting {
 export function resolveSetting(key: MarketingSettingKey, stored: unknown): { value: unknown; usedFallback: boolean } {
   if (stored === undefined) return { value: defaultForSetting(key), usedFallback: true }
   const p = parseSettingValue(key, stored)
-  return p.ok === true ? { value: p.value, usedFallback: false } : { value: defaultForSetting(key), usedFallback: true }
+  if (p.ok === true) return { value: p.value, usedFallback: false }
+  // A stored value that EXISTS but is broken. For a setting that grants access the safe answer is "nothing", not the built-in
+  // default (which may be wider than what Antonio narrowed it to): the door stays shut until the setting is repaired.
+  const closed = failClosedValue(key)
+  return { value: closed !== undefined ? closed : defaultForSetting(key), usedFallback: true }
+}
+
+/** Settings that GRANT access. When their stored value is broken, or cannot be read at all, the result is this (no access), never the default. */
+const FAIL_CLOSED: Partial<Record<MarketingSettingKey, unknown>> = { permission_bundles: {} }
+export function failClosedValue(key: MarketingSettingKey): unknown {
+  return Object.prototype.hasOwnProperty.call(FAIL_CLOSED, key) ? FAIL_CLOSED[key] : undefined
 }

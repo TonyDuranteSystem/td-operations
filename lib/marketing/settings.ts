@@ -6,7 +6,7 @@
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
-  MARKETING_SETTING_KEYS, isMarketingSettingKey, parseSettingValue, resolveSetting, type MarketingSettingKey,
+  MARKETING_SETTING_KEYS, failClosedValue, isMarketingSettingKey, parseSettingValue, resolveSetting, type MarketingSettingKey,
 } from "@/lib/marketing/settings-schema"
 import { canChangeTeamStatus, isTeamStatus, type TeamStatus } from "@/lib/marketing/team-status"
 import type { CommissionTerm } from "@/lib/marketing/commission"
@@ -73,8 +73,14 @@ export async function setTeamStatus(teamId: string, to: TeamStatus, actor: strin
 
 /** Value for a key: the team's own, else the program-wide one, else the built-in default. Invalid stored values fall back. */
 export async function getMarketingSetting(key: MarketingSettingKey, teamId?: string | null): Promise<unknown> {
-  const rows: { team_id: string | null; value: unknown }[] =
-    (await db().from("marketing_settings").select("team_id, value").eq("key", key)).data ?? []
+  const read = await db().from("marketing_settings").select("team_id, value").eq("key", key)
+  if (read.error) {
+    // The settings could not be read. For a setting that grants access that must mean "no access", not the built-in default.
+    console.error(`[marketing] could not read setting ${key}: ${read.error.message}`)
+    const closed = failClosedValue(key)
+    if (closed !== undefined) return closed
+  }
+  const rows: { team_id: string | null; value: unknown }[] = read.data ?? []
   const own = teamId ? rows.find(r => r.team_id === teamId) : undefined
   const global = rows.find(r => r.team_id === null)
   return resolveSetting(key, (own ?? global)?.value).value
