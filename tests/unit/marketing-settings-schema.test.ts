@@ -9,9 +9,9 @@ describe("marketing settings schema", () => {
       expect(parseSettingValue(k, defaultForSetting(k)).ok, k).toBe(true)
     }
   })
-  it("starts with Antonio's rulings: offers/export/approvals off, no confirm limit", () => {
-    expect(defaultForSetting("owner_may_create_offers")).toBe(false)
-    expect(defaultForSetting("owner_may_export_leads")).toBe(false)
+  it("starts with Antonio's rulings: owner has offers and export ON, member approvals off, no confirm limit", () => {
+    expect(defaultForSetting("owner_may_create_offers")).toBe(true)
+    expect(defaultForSetting("owner_may_export_leads")).toBe(true)
     expect(defaultForSetting("member_invites_need_approval")).toBe(false)
     expect(defaultForSetting("confirm_above_amount")).toBeNull()
   })
@@ -45,9 +45,9 @@ describe("marketing settings schema", () => {
     expect(parseSettingValue("confirm_above_amount", -1).ok).toBe(false)
   })
   it("resolveSetting: stored value wins; missing or stale value falls back", () => {
-    expect(resolveSetting("owner_may_create_offers", true)).toEqual({ value: true, usedFallback: false })
-    expect(resolveSetting("owner_may_create_offers", undefined)).toEqual({ value: false, usedFallback: true })
-    expect(resolveSetting("owner_may_create_offers", "garbage")).toEqual({ value: false, usedFallback: true })
+    expect(resolveSetting("owner_may_create_offers", false)).toEqual({ value: false, usedFallback: false })
+    expect(resolveSetting("owner_may_create_offers", undefined)).toEqual({ value: true, usedFallback: true })
+    expect(resolveSetting("owner_may_create_offers", "garbage")).toEqual({ value: true, usedFallback: true })
   })
   it("isMarketingSettingKey does not accept inherited object keys", () => {
     expect(isMarketingSettingKey("pipeline_stages")).toBe(true)

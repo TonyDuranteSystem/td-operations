@@ -6,7 +6,7 @@
  * stage name, a reason, a percentage or a switch: it reads them through `lib/marketing/settings.ts`.
  *
  * Values here were taken from the plan and Antonio's rulings of 2026-10-17: no price rules, no VAT, 80/20 is a setting,
- * offers by Rocco and member approvals start OFF.
+ * offers and lead export are ON for the team owner (Rocco has every option); member approvals start OFF.
  */
 import { z } from "zod"
 
@@ -69,10 +69,10 @@ export const MARKETING_SETTING_DEFS = {
   },
   /** Above this amount (in the sale's own currency) the link form asks "are you sure?". Not a limit. */
   confirm_above_amount: { schema: z.number().positive().nullable(), fallback: null as number | null },
-  /** Whether the team owner may create offers (Antonio flips it when Rocco is trained). */
-  owner_may_create_offers: { schema: z.boolean(), fallback: false },
-  /** Whether the team owner may export lead lists. */
-  owner_may_export_leads: { schema: z.boolean(), fallback: false },
+  /** Whether the team owner may create offers. ON by Antonio's ruling (2026-10-17 late: Rocco has every option on); he can switch it off. */
+  owner_may_create_offers: { schema: z.boolean(), fallback: true },
+  /** Whether the team owner may export lead lists. ON by Antonio's ruling (2026-10-17 late); every export is logged; he can switch it off. */
+  owner_may_export_leads: { schema: z.boolean(), fallback: true },
   /** Whether adding a member needs Antonio's approval first. */
   member_invites_need_approval: { schema: z.boolean(), fallback: false },
   /** The most a team owner can give a member: a ceiling Antonio sets. Empty list = nothing beyond the defaults. */

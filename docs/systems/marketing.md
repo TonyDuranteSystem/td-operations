@@ -7,7 +7,7 @@ A separate, confined workspace for Rocco's sales team (Rocco = boss, Ale = his e
 ## Business rules (Antonio's rulings, 2026-10-17)
 - 80/20 on the strategic call is a SETTING (seller 80, TD 20), per person and per kind of sale, with an effective date. Paid to Rocco's own US LLC (Entregarse US LLC, CRM account `a2d2f660-8da9-4645-a478-54a8c1c1339d` on production).
 - No price rules: any amount, any currency. No VAT or tax lines anywhere. Upsell terms are blank until Antonio sets them ("terms not set": nothing computed).
-- Offers by Rocco, lead export and member-approval are switches that start OFF. Everything else (stages, reasons, templates, permission bundles, currencies) is a stored value, never hardcoded.
+- **Rocco, as boss, has every option ON for his team, including creating offers and exporting leads** (Antonio, 2026-10-17 late); both are settings Antonio can switch off, and member-approval starts OFF. Only the commission terms, the Meta connection and the kill switch stay Antonio's. Everything else (stages, reasons, templates, permission bundles, currencies) is a stored value, never hardcoded.
 - Legal/tax topics are parked (plan Appendix G) and never part of the build.
 
 ## How it's built

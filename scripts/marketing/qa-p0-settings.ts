@@ -29,19 +29,19 @@ async function main() {
 
   // settings: default, team value, global value, bad value, unknown key
   ck("4 default when nothing stored", ((await S.getMarketingSetting("pipeline_stages", teamId)) as unknown[]).length === 7)
-  const set1 = await S.setMarketingSetting({ key: "owner_may_create_offers", value: true, actor, teamId })
+  const set1 = await S.setMarketingSetting({ key: "owner_may_create_offers", value: false, actor, teamId })
   ck("5 team value saved", set1.ok === true, set1)
-  ck("6 team value read back", (await S.getMarketingSetting("owner_may_create_offers", teamId)) === true)
-  ck("7 other team / global still default", (await S.getMarketingSetting("owner_may_create_offers", null)) === false)
+  ck("6 team value read back", (await S.getMarketingSetting("owner_may_create_offers", teamId)) === false)
+  ck("7 other team / global still default (on)", (await S.getMarketingSetting("owner_may_create_offers", null)) === true)
   const badSet = await S.setMarketingSetting({ key: "owner_may_create_offers", value: "yes", actor, teamId })
-  ck("8 bad value refused, not stored", badSet.ok === false && (await S.getMarketingSetting("owner_may_create_offers", teamId)) === true, badSet)
+  ck("8 bad value refused, not stored", badSet.ok === false && (await S.getMarketingSetting("owner_may_create_offers", teamId)) === false, badSet)
   ck("9 unknown key refused", (await S.setMarketingSetting({ key: "hack", value: 1, actor })).ok === false)
-  await S.setMarketingSetting({ key: "owner_may_create_offers", value: false, actor, teamId })
+  await S.setMarketingSetting({ key: "owner_may_create_offers", value: true, actor, teamId })
   const hist = await S.getSettingHistory("owner_may_create_offers")
   const mine = hist.filter((h: { team_id: string }) => h.team_id === teamId)
   ck("10 every change wrote history (2 for this team)", mine.length === 2, mine.length)
-  ck("11 history keeps old and new", mine[0].old_value === true && mine[0].new_value === false, mine[0])
-  await S.setMarketingSetting({ key: "owner_may_create_offers", value: false, actor, teamId })
+  ck("11 history keeps old and new", mine[0].old_value === false && mine[0].new_value === true, mine[0])
+  await S.setMarketingSetting({ key: "owner_may_create_offers", value: true, actor, teamId })
   ck("12 saving the same value writes no new history", (await S.getSettingHistory("owner_may_create_offers")).filter((h: { team_id: string }) => h.team_id === teamId).length === 2)
 
   // history is append-only at the database
