@@ -1,4 +1,5 @@
 # TD Communication
+_Last verified against code: 2026-10-18 — Claude (TD Marketing, dev job `9aec66fa`, SANDBOX). `middleware.ts` now trims and lower-cases the login's role ONCE before every comparison, so the partner confinement (`role === 'partner'`: a partner is limited to `/collab`, `/api/conversations` and `/api/td-communication`) also catches a role stored as "Partner " or "partner "; a correctly written partner role behaves exactly as before. The real-login test (`scripts/marketing/qa-p1-logins.ts`) confirms a partner is bounced from the dashboard, the staff APIs and the marketing API back to `/collab`.
 _Last verified against code: 2026-10-12 — Claude (dev job 11d484a4). Re-checked after `middleware.ts` gained the bank application public paths and the `/forms` + `/bofa-intake` admin-only paths: nothing in TD Communication is affected._
 
 _Last verified against code: 2026-10-09 — Claude (dev job `c1e326dd`: `middleware.ts` gained TD Talk entries — public `/talk/manifest.webmanifest` + `/talk-sw.js` and a `?next=` return address for signed-out `/talk` visits. No change to TD Communication or the partner `/collab` confinement; see `docs/systems/talk.md`)_
