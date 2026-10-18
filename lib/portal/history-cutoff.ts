@@ -73,10 +73,14 @@ export async function getHistoryCutoffs(contactId: string | null | undefined, d:
   return out
 }
 
+/** history_item_overrides is newer than the generated database types, so it is reached through an untyped handle. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const overrides = (d: CutoffDb) => (d as unknown as { from: (t: string) => any }).from("history_item_overrides")
+
 /** The ids of one kind of item staff opened to new owners for this company. Only read when there IS a cutoff. */
 export async function getOpenedItemIds(accountId: string, kind: HistoryItemKind, d: CutoffDb = supabaseAdmin): Promise<Set<string>> {
   try {
-    const { data } = await d.from("history_item_overrides").select("item_id").eq("account_id", accountId).eq("item_kind", kind)
+    const { data } = await overrides(d).select("item_id").eq("account_id", accountId).eq("item_kind", kind)
     return new Set(((data ?? []) as Array<{ item_id: string }>).map(r => r.item_id))
   } catch {
     return new Set()
@@ -93,10 +97,10 @@ export async function getHistoryView(accountId: string, contactId: string | null
 /** Staff: open (or close again) ONE older item to people whose view starts later. Returns an error text or null. */
 export async function setItemOpenToNewOwners(p: { accountId: string; kind: HistoryItemKind; itemId: string; open: boolean; by?: string | null }, d: CutoffDb = supabaseAdmin): Promise<string | null> {
   if (p.open) {
-    const { error } = await d.from("history_item_overrides").upsert({ item_kind: p.kind, item_id: p.itemId, account_id: p.accountId, opened_by: p.by ?? null, opened_at: new Date().toISOString() }, { onConflict: "item_kind,item_id" })
+    const { error } = await overrides(d).upsert({ item_kind: p.kind, item_id: p.itemId, account_id: p.accountId, opened_by: p.by ?? null, opened_at: new Date().toISOString() }, { onConflict: "item_kind,item_id" })
     return error ? error.message : null
   }
-  const { error } = await d.from("history_item_overrides").delete().eq("item_kind", p.kind).eq("item_id", p.itemId)
+  const { error } = await overrides(d).delete().eq("item_kind", p.kind).eq("item_id", p.itemId)
   return error ? error.message : null
 }
 
