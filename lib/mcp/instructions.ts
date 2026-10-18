@@ -322,7 +322,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - doc_update_health: Batch-update client_health scores.
 
 ### Google Drive (10 tools: drive_*)
-- drive_search: Find files/folders by name.
+- drive_search: Find files/folders by name. Drive is now a read-only ARCHIVE + one-way backup for companies already in the CRM storage; their current documents are in the storage (storage_list / doc_search), so a Drive hit may be old.
 - drive_list_folder: Browse folder contents. Root: 0AOLZHXSfKUMHUk9PVA.
 - drive_read_file: Read text files. For PDFs/images, use docai_ocr_file instead.
 - drive_upload: Create/overwrite a TEXT file on Drive.

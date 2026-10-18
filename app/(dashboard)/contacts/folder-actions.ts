@@ -3,6 +3,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
+import { PERSON_IN_STORAGE_MESSAGE } from '@/lib/crm-store/drive-archive-notes'
 
 /**
  * Create a contact folder in Google Drive and link it to the contact.
@@ -131,6 +132,10 @@ export async function validateContactFolder(contactId: string): Promise<ActionRe
 export async function processContactFile(contactId: string, driveFileId: string, fileName: string): Promise<ActionResult<{ documentId?: string }>> {
   return safeAction(async () => {
     const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    // A person whose files live in the CRM storage (their own, or via a switched company): Drive is a read-only archive, so a
+    // Drive file is never ingested as a new record for them (dev job 2d26a2df). Strict: a failed check refuses too.
+    const { personHasFilesInStorage } = await import('@/lib/crm-store/person-drive-guard')
+    if (await personHasFilesInStorage(contactId)) throw new Error(PERSON_IN_STORAGE_MESSAGE)
 
     // Check if already processed
     const { data: existing } = await supabaseAdmin

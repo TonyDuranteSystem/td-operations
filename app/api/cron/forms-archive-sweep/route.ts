@@ -31,6 +31,8 @@ import {
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
 
+import { accountsWithoutDriveFolder, splitByDriveFolder } from "@/lib/archive/skip-no-drive-folder"
+
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
 
@@ -50,10 +52,11 @@ export async function GET(req: NextRequest) {
   let enqueued = 0
   const enqueuedIds: string[] = []
   const stuck: string[] = []
-  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number }> = {}
+  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedNoDriveFolder: number }> = {}
+  let skippedNoDriveFolder = 0
 
   for (const recipe of Object.values(ARCHIVE_RECIPES)) {
-    const stats = { candidates: 0, enqueued: 0, stuck: 0 }
+    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedNoDriveFolder: 0 }
     perForm[recipe.formType] = stats
 
     // Cast: recipe.table is a runtime string; the typed client needs a table
@@ -72,7 +75,22 @@ export async function GET(req: NextRequest) {
       continue
     }
 
-    for (const raw of (rows ?? []) as unknown as Record<string, unknown>[]) {
+    // Only the banking archive files into the account's own Drive folder (itin / closure resolve other folders). A storage-first
+    // company has no folder, so its job could only throw — leave it alone and count it (dev job 2d26a2df).
+    let formRows = (rows ?? []) as unknown as Record<string, unknown>[]
+    if (recipe.formType === "banking") {
+      try {
+        const missing = await accountsWithoutDriveFolder(formRows.map(r => r.account_id as string | null).filter((x): x is string => !!x))
+        const split = splitByDriveFolder(formRows as Array<{ account_id?: string | null }>, missing)
+        formRows = split.keep as Record<string, unknown>[]
+        stats.skippedNoDriveFolder = split.skipped.length
+        skippedNoDriveFolder += split.skipped.length
+      } catch (e) {
+        await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a Drive folder: ${e instanceof Error ? e.message : String(e)}` }).catch(() => {})
+      }
+    }
+
+    for (const raw of formRows) {
       stats.candidates++
       const action = decideFormArchiveSweep(raw, recipe, now)
       if (action === "skip") continue
@@ -118,7 +136,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, enqueued, enqueuedIds, stuck, perForm }
+  const summary = { dryRun, skippedNoDriveFolder, enqueued, enqueuedIds, stuck, perForm }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }

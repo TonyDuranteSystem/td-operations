@@ -41,6 +41,7 @@ import { EditableField } from '@/components/accounts/editable-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { driveLinkLabel } from '@/lib/crm-store/drive-archive-notes'
 import { useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
 import { StoreReadOnlyPanel } from '@/components/accounts/store-readonly-panel'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
@@ -3089,6 +3090,8 @@ function ContactDocumentsTab({
   // here (preview, upload, rename, move, delete, show / hide) instead of the Drive folder tools
   const storeOwner = useStoreOwnerForContact(contactId, !driveFolderId || documents.some((d) => (d.drive_file_id ?? '').startsWith('store:')))
   const personStoreId = storeOwner.data?.ownerId ?? null
+  // once the person's files live in the storage, the Drive folder is only the old read-only archive
+  const driveLabel = driveLinkLabel(!!personStoreId)
   const personStoreSection = personStoreId ? <StoreReadOnlyPanel ownerId={personStoreId} who="person" /> : null
   const [uploading, setUploading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
@@ -3514,15 +3517,18 @@ function ContactDocumentsTab({
       <div className="space-y-4">
         <div className="flex justify-end gap-2">
           {driveFolderUrl && (
-            <a
-              href={driveFolderUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open in Drive
-            </a>
+            <FastTooltip label={driveLabel.title}>
+              <a
+                href={driveFolderUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={driveLabel.title}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                {driveLabel.text}
+              </a>
+            </FastTooltip>
           )}
           {!personStoreId && uploadButton}
         </div>
@@ -3546,15 +3552,18 @@ function ContactDocumentsTab({
         <p className="text-sm text-muted-foreground">{personStoreId && (activeDocScope === 'personal' || companyScopeInStore) ? '' : `${scopedDocuments.length} documents`}</p>
         <div className="flex items-center gap-2">
           {driveFolderUrl && (
-            <a
-              href={driveFolderUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open in Drive
-            </a>
+            <FastTooltip label={driveLabel.title}>
+              <a
+                href={driveFolderUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={driveLabel.title}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border bg-zinc-50 text-zinc-700 border-zinc-200 hover:bg-zinc-100 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                {driveLabel.text}
+              </a>
+            </FastTooltip>
           )}
           {!personStoreId && uploadButton}
         </div>

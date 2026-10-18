@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { moveFile, listFolder } from '@/lib/google-drive'
 import { updateDocument } from '@/lib/operations/document'
 import { SwitchedCompanyDriveWriteError } from '@/lib/crm-store/switched-drive-guard'
+import { moveWithoutDriveFolderAnswer } from '@/lib/crm-store/drive-archive-notes'
 import { NextRequest, NextResponse } from 'next/server'
 
 // Map folder names to document categories
@@ -65,7 +66,10 @@ export async function POST(
       .eq('id', accountId)
       .maybeSingle()
     if (!account?.drive_folder_id) {
-      return NextResponse.json({ error: 'This account has no Drive folder linked' }, { status: 400 })
+      // A company whose files live in the CRM storage has no Drive folder on purpose: say what is true, not "none linked".
+      const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
+      const answer = moveWithoutDriveFolderAnswer(await companyDocState(accountId))
+      return NextResponse.json({ error: answer.error }, { status: answer.status })
     }
     const validFolderIds = new Set<string>([account.drive_folder_id])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

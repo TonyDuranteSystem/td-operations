@@ -57,6 +57,12 @@ vi.mock("@/lib/google-drive", () => ({
   listFolder: (...a: [string, number?]) => listFolderMock(...a),
 }))
 
+let companyState: "drive" | "moving" | "store" = "drive"
+vi.mock("@/lib/crm-store/switched-drive-guard", async (orig) => ({
+  ...(await orig<typeof import("@/lib/crm-store/switched-drive-guard")>()),
+  companyDocState: async () => companyState,
+}))
+
 const updateDocumentMock = vi.fn(async () => ({ success: true, outcome: "updated" }))
 vi.mock("@/lib/operations/document", () => ({
   updateDocument: (...a: unknown[]) => updateDocumentMock(...a),
@@ -151,5 +157,18 @@ describe("POST /api/accounts/[id]/files/move — folder-ownership check", () => 
 
     expect(res.status).toBe(400)
     expect(moveFileMock).not.toHaveBeenCalled()
+  })
+
+  it("tells the truth (409, not 'no Drive folder linked') for a storage-first company with no Drive folder", async () => {
+    accountDriveFolderId = null
+    companyState = "store"
+    try {
+      const res = await POST(req({ fileId: "f8", targetFolderId: "folder-1" }), ctx())
+      expect(res.status).toBe(409)
+      expect((await res.json()).error).toMatch(/CRM storage/)
+      expect(moveFileMock).not.toHaveBeenCalled()
+    } finally {
+      companyState = "drive"
+    }
   })
 })

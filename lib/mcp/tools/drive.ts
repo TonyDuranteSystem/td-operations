@@ -24,6 +24,7 @@ import {
 } from "@/lib/google-drive"
 import { getGmailAttachment } from "@/lib/gmail"
 import { supabaseAdmin } from "@/lib/supabase-admin"
+import { DRIVE_ARCHIVE_WARNING } from "@/lib/crm-store/drive-archive-notes"
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ export function registerDriveTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "drive_search",
-    "Search files and folders by name or keyword. Searches the Tony Durante LLC Shared Drive (client documents). When the caller is the owner, ALSO searches the owner's own private accounting folder in his personal Drive, reported as a clearly separated second section. Returns file names, sizes, modification dates, and direct links. Optionally filter by MIME type (e.g. 'application/pdf' for PDFs only). For browsing a known folder, use drive_list_folder instead.",
+    "⚠️ Drive is now a read-only ARCHIVE + one-way backup for every company already in the CRM storage — the live copy of those documents is in the storage (storage_list / doc_search), so a file found here may be old. Search files and folders by name or keyword. Searches the Tony Durante LLC Shared Drive (client documents). When the caller is the owner, ALSO searches the owner's own private accounting folder in his personal Drive, reported as a clearly separated second section. Returns file names, sizes, modification dates, and direct links. Optionally filter by MIME type (e.g. 'application/pdf' for PDFs only). For browsing a known folder, use drive_list_folder instead.",
     {
       query: z.string().describe("Search text (matches file/folder names)"),
       mime_type: z.string().optional().describe("Filter by MIME type (e.g. 'application/pdf', 'application/vnd.google-apps.folder')"),
@@ -100,7 +101,7 @@ export function registerDriveTools(server: McpServer) {
         const sharedFiles = result.files || []
         if (sharedFiles.length === 0 && ownerFiles.length === 0 && !ownerError) {
           return {
-            content: [{ type: "text" as const, text: `📭 No files found matching "${query}"` }],
+            content: [{ type: "text" as const, text: `📭 No files found matching "${query}"\n⚠️ ${DRIVE_ARCHIVE_WARNING}` }],
           }
         }
 
@@ -118,6 +119,7 @@ export function registerDriveTools(server: McpServer) {
 
         const lines = [
           `🔍 Company Shared Drive — ${sharedFiles.length} result(s) for "${query}"`,
+          `⚠️ ${DRIVE_ARCHIVE_WARNING}`,
           "",
         ]
         for (const f of sharedFiles) lines.push(...renderFile(f))

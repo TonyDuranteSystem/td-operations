@@ -19,6 +19,8 @@ import { isValidNormalizedRect } from "@/lib/esign/coordinates"
 import { flattenEsignPdf, type FlattenField, type EsignFieldType } from "@/lib/esign/flatten"
 import { appendCertificatePage, type CertificateSigner } from "@/lib/esign/certificate"
 import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
+import { reportSystemError } from "@/lib/system-errors"
+import { esignFilingLine } from "@/lib/crm-store/drive-archive-notes"
 
 const SOURCE_BUCKET = "signature-requests"
 const SIGNED_BUCKET = "signed-documents"
@@ -367,9 +369,11 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
     // legacy signature-request-signed flow. A Drive failure (no drive_folder_id,
     // API hiccup, or Drive-less env) falls back to a storage-served documents row,
     // so the signed PDF ALWAYS reaches the client's portal either way.
+    let signedPdfFiled = true
     if (env.signed_pdf_path && env.owner_account_id) {
       const fileName = `${env.document_name} - Signed.pdf`
       let filedToDrive = false
+      let filingError: string | null = null
 
       // 1a. Upload to the client's Google Drive "5. Correspondence" folder.
       // Idempotent: if signed_pdf_drive_id is already set, the upload already
@@ -407,6 +411,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
           }
         } catch (e) {
           console.error("[esign] saving the signed document to the new storage failed:", e instanceof Error ? e.message : String(e))
+          filingError = `storage save failed: ${e instanceof Error ? e.message : String(e)}`
           // could not even tell where the files live: file NOTHING (never guess Drive) — the re-run retries
           if (!stateKnown) switched = true
         }
@@ -449,7 +454,8 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
             }
           }
         }
-      } catch {
+      } catch (e) {
+        filingError = `Drive filing failed: ${e instanceof Error ? e.message : String(e)}`
         /* fall through to the storage-served fallback */
       }
 
@@ -481,9 +487,23 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
               notify_client: false,
             })
           }
-        } catch {
+          filedToDrive = true
+        } catch (e) {
+          filingError = `fallback filing failed: ${e instanceof Error ? e.message : String(e)}`
           /* best-effort filing */
         }
+      }
+
+      // Not filed anywhere: raise a proper system error so staff see it (never only a console line), and tell the support email truthfully.
+      if (!filedToDrive) {
+        signedPdfFiled = false
+        await reportSystemError({
+          source: "server",
+          route: "lib/operations/esign",
+          method: "INTERNAL",
+          message: `E-sign signed PDF could not be filed: ${env.document_name}`,
+          context: { envelopeId: env.id, accountId: env.owner_account_id, switchedCompany: switched, reason: filingError ?? (switched ? "storage did not accept the file" : "no filing route succeeded") },
+        }).catch(() => {})
       }
     }
 
@@ -495,7 +515,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
         company = account?.company_name || ""
       }
       const { gmailPost } = await import("@/lib/gmail")
-      const subject = `E-Sign completed: ${env.document_name}${company ? ` — ${company}` : ""}`
+      const subject = `${signedPdfFiled ? "" : "FILING FAILED — "}E-Sign completed: ${env.document_name}${company ? ` — ${company}` : ""}`
       const encoded = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
       const raw = [
         `From: support@tonydurante.us`,
@@ -505,7 +525,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
         ``,
         `The e-sign envelope "${env.document_name}" is fully signed.`,
         company ? `Client: ${company}` : ``,
-        `The signed PDF (with Certificate of Completion) is filed${env.owner_account_id ? " in the client's documents" : ""}.`,
+        esignFilingLine({ hasAccount: !!env.owner_account_id, filingNeeded: !!(env.signed_pdf_path && env.owner_account_id), filed: signedPdfFiled }),
       ].join("\r\n")
       await gmailPost("/messages/send", { raw: Buffer.from(raw).toString("base64url") })
     } catch {
