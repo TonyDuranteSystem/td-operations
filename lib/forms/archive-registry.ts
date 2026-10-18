@@ -19,7 +19,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { collectUploadPaths, isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 import { resolveItinContactFolder, resolveItinClientName } from "@/lib/forms/itin-contact-folder"
 import { resolveClosureFolder, resolveClosureClientName } from "@/lib/forms/closure-folder"
-import { memberAwareFileName } from "@/lib/forms/file-form-package"
+import { memberAwareFileName, splitMemberPassports } from "@/lib/forms/file-form-package"
 
 /** Everything the archival engine needs to write ONE submission's package. Either
  *  derived fresh by a recipe's resolvePlan(), or read back from the values PINNED
@@ -262,7 +262,7 @@ const formationRecipe: ArchiveRecipe = {
     if (!dest.marker) throw new Error(`archive: formation ${row.id} — this person only has a hidden study-copy storage; staff decide where it goes`)
     const data = (row.submitted_data ?? {}) as Record<string, unknown>
     const { data: lead } = row.lead_id ? await supabaseAdmin.from("leads").select("full_name").eq("id", row.lead_id as string).maybeSingle() : { data: null }
-    return { folderId: dest.marker, bucket: "onboarding-uploads", configKey: "formation", uploadPaths: deriveUploadPaths(row.upload_paths, data), companyName: lead?.full_name || undefined }
+    return { folderId: dest.marker, bucket: "onboarding-uploads", configKey: "formation", uploadPaths: splitMemberPassports(deriveUploadPaths(row.upload_paths, data)).forPrimary, companyName: lead?.full_name || undefined }
   },
   fileNameOf(row) {
     return memberAwareFileName((row.submitted_data ?? {}) as Record<string, unknown>)
@@ -280,12 +280,15 @@ const onboardingRecipe: ArchiveRecipe = {
   table: "onboarding_submissions",
   selectColumns: "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",
   isReal(row) {
-    return (row.status as string | null) === "completed" && !!(row.account_id || row.contact_id)
+    // a lead with no contact yet has nothing to file under (the review's setup job files the company documents later)
+    return (row.status as string | null) === "completed" && !!row.contact_id
   },
   async resolvePlan(row) {
     const { storageDestinationForForm } = await import("@/lib/crm-store/lead-form-store")
-    const dest = await storageDestinationForForm({ accountId: (row.account_id as string | null) ?? null, contactId: (row.contact_id as string | null) ?? null })
-    if (!dest.marker) throw new Error(`archive: onboarding ${row.id} — no company storage and no contact to file under, or only a hidden study-copy storage; staff decide where it goes`)
+    // PERSON only — never the company's folders: an onboarding package holds passports / IDs, which are personal documents.
+    // The company's own documents reach the company through the review's setup job. One copy, one place.
+    const dest = await storageDestinationForForm({ contactId: (row.contact_id as string | null) ?? null })
+    if (!dest.marker) throw new Error(`archive: onboarding ${row.id} — no contact to file under, or only a hidden study-copy storage; staff decide where it goes`)
     const data = (row.submitted_data ?? {}) as Record<string, unknown>
     const { data: lead } = row.lead_id ? await supabaseAdmin.from("leads").select("full_name").eq("id", row.lead_id as string).maybeSingle() : { data: null }
     return { folderId: dest.marker, bucket: "onboarding-uploads", configKey: "onboarding", uploadPaths: deriveUploadPaths(row.upload_paths, data), companyName: lead?.full_name || undefined }

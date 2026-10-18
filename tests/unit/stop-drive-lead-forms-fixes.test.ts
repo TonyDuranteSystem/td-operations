@@ -10,6 +10,8 @@ vi.mock("@/lib/supabase-admin", () => {
   chain.select = () => chain
   chain.ilike = (_c: string, pattern: string) => { patterns.push(pattern); return chain }
   chain.limit = async () => ({ data: rows, error: null })
+  chain.order = () => chain
+  chain.range = async (from: number) => ({ data: from === 0 ? rows : [], error: null })
   chain.eq = () => chain
   chain.maybeSingle = async () => ({
     data: { id: "sub-1", token: "t", status: "completed", account_id: null, contact_id: null, lead_id: null, submitted_data: { llc_name: "X" }, drive_archived_at: null, drive_archive_meta: {} },
@@ -34,7 +36,7 @@ vi.mock("@/lib/crm-store/lead-form-store", async () => {
 })
 
 import { findContactByExactEmail, escapeLikeExact, namesMatch, lookupLeadContact } from "@/lib/crm-store/lead-form-store"
-import { fileFormPackage, memberAwareFileName, type FileFormPackageInput } from "@/lib/forms/file-form-package"
+import { fileFormPackage, memberAwareFileName, splitMemberPassports, type FileFormPackageInput } from "@/lib/forms/file-form-package"
 import { ARCHIVE_RECIPES } from "@/lib/forms/archive-registry"
 import { decideFormArchiveSweep } from "@/lib/forms/archive-sweep"
 
@@ -152,11 +154,25 @@ describe("archiveFormSubmission — an unresolvable destination counts as an att
 })
 
 describe("round 2 — names, ambiguity, one alarm each", () => {
-  it("namesMatch ignores case, accents, punctuation and first/last order; different people do not match", () => {
+  it("namesMatch: same person written differently matches", () => {
     expect(namesMatch("Mario Rossi", "ROSSI, Mario")).toBe(true)
     expect(namesMatch("José  Núñez", "jose nunez")).toBe(true)
+    expect(namesMatch("Hans Müller", "Hans Mueller")).toBe(true)
+    expect(namesMatch("Anne-Marie Dupont", "Annemarie Dupont")).toBe(true)
+    expect(namesMatch("Mario Luigi Rossi", "Mario Rossi")).toBe(true) // middle name left out
+    expect(namesMatch("Mario Rossi Jr.", "Mario Rossi")).toBe(true)
+    expect(namesMatch("Łukasz Ørsted", "Lukasz Orsted")).toBe(true)
+    expect(namesMatch("Straße Weiß", "Strasse Weiss")).toBe(true)
+    expect(namesMatch("Иван Петров", "Петров Иван")).toBe(true) // non-Latin names are compared as they are
+  })
+  it("namesMatch: different people, empty or unsure = NOT a match (the caller treats it as ambiguous)", () => {
     expect(namesMatch("Mario Rossi", "Maria Rossi")).toBe(false)
-    expect(namesMatch("", "Maria Rossi")).toBe(true) // nothing to disprove
+    expect(namesMatch("Иван Петров", "Пётр Иванов")).toBe(false)
+    expect(namesMatch("Mario Rossi", "Rossi")).toBe(false) // a single word is not enough
+    expect(namesMatch("", "Maria Rossi")).toBe(false)
+    expect(namesMatch("Mario Rossi", null)).toBe(false)
+    expect(namesMatch("!!!", "???")).toBe(false) // nothing comparable on either side
+    expect(namesMatch("Rossi Mario Luigi", "Luigi Mario")).toBe(false) // subset but not in the same order is not accepted
   })
   it("a couple sharing one email: lead 'Mario Rossi' vs contact 'Maria Rossi' = ambiguous, ONE alarm, nobody used", async () => {
     rows = [{ id: "maria", email: "famiglia@x.it", full_name: "Maria Rossi" } as never]
@@ -189,22 +205,42 @@ describe("round 2 — MMLLC passport names, filing deadline, recipes, sweep", ()
     expect(f("lead/passport_member_5.pdf")).toBe("passport_member_5.pdf") // no such member: unchanged
     expect(f("lead/ein_letter.pdf")).toBe("ein_letter.pdf")
   })
-  it("filing that runs past the deadline does not starve the route: error step + one alarm", async () => {
+  it("filing that runs past the deadline does not starve the route and raises NO alarm of its own (not a failure)", async () => {
     saveMock.mockImplementation(() => new Promise(() => {}))
     const r = await fileFormPackage(base({ deadlineMs: 20 }))
-    expect(r.status).toBe("error")
+    expect(r.status).toBe("pending")
     expect(r.detail).toContain("retry job")
-    expect(alarms.map((a) => a[0])).toEqual(["lead_form_filing_failed"])
+    expect(alarms).toEqual([])
   })
   it("formation and onboarding now have a retry recipe; onboarding only counts once review linked a company/contact", () => {
     expect(ARCHIVE_RECIPES.formation.table).toBe("formation_submissions")
     expect(ARCHIVE_RECIPES.formation.isReal({ status: "completed" })).toBe(true)
     expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed" })).toBe(false)
+    expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed", account_id: "a" })).toBe(false) // a company alone is not a person to file under
     expect(ARCHIVE_RECIPES.onboarding.isReal({ status: "completed", contact_id: "c" })).toBe(true)
   })
   it("the sweep never re-files forms that predate the recipe", () => {
     const row = { status: "completed", created_at: "2026-10-18T10:00:00Z", drive_archived_at: null, drive_archive_meta: {} }
     expect(decideFormArchiveSweep(row, ARCHIVE_RECIPES.formation, new Date("2026-10-25T00:00:00Z"))).toBe("skip")
     expect(decideFormArchiveSweep({ ...row, created_at: "2026-10-19T12:00:00Z" }, ARCHIVE_RECIPES.formation, new Date("2026-10-25T00:00:00Z"))).toBe("enqueue")
+  })
+})
+
+describe("round 3 — member passports, formation filing", () => {
+  it("other members' passports are NOT filed under the primary contact; they wait on the submission for their own storage", async () => {
+    saveMock.mockResolvedValue({ summaryFileId: "store:x", copied: ["a"], failed: [], skipped: [], errors: [] })
+    const r = await fileFormPackage(base({ uploadPaths: ["f/passport_owner.pdf", "f/passport_member_0.pdf", "f/member_1_member_passport.pdf", "f/ein.pdf"] }))
+    expect(saveMock.mock.calls[0][2]).toEqual(["f/passport_owner.pdf", "f/ein.pdf"])
+    expect(r.detail).toContain("2 member passport(s) stay on the submission")
+    expect(splitMemberPassports(["x/passport_member_3.png"]).forMembers).toEqual(["x/passport_member_3.png"])
+  })
+  it("other forms are not split", async () => {
+    saveMock.mockResolvedValue({ summaryFileId: "store:x", copied: [], failed: [], skipped: [], errors: [] })
+    await fileFormPackage(base({ formType: "onboarding", uploadPaths: ["f/passport_member_0.pdf"] }))
+    expect(saveMock.mock.calls[0][2]).toEqual(["f/passport_member_0.pdf"])
+  })
+  it("the formation retry recipe leaves member passports out as well", async () => {
+    // resolvePlan needs a contact; test the filter helper the recipe uses
+    expect(splitMemberPassports(["a/passport_owner.pdf", "a/passport_member_0.pdf"]).forPrimary).toEqual(["a/passport_owner.pdf"])
   })
 })

@@ -155,6 +155,8 @@ export interface PilotSave {
   links?: StoreLink[]
   subjects?: StoreSubject[]
   actor?: string | null
+  /** never queue the AI file reader for this file (personal documents: passports, IDs) */
+  skipAnalysis?: boolean
 }
 
 /**
@@ -170,7 +172,7 @@ export async function savePilotFile(p: PilotSave): Promise<WriteResult> {
     ownerId: p.ownerId, folderId, name: storeSafeFileName(p.name), mimeType: p.mimeType, bytes: p.bytes,
     callerKey, contentChanged: p.contentChanged ?? true, documentType: p.documentType,
     periodYear: p.periodYear ?? null, published: p.published ?? null, actor: p.actor ?? null,
-    links: p.links, subjects: p.subjects,
+    links: p.links, subjects: p.subjects, skipAnalysis: p.skipAnalysis,
   })
   let w = await save(p.callerKey)
   // keyed on the trashed file: the next same-name upload becomes a VERSION of this new file, not a third
@@ -397,7 +399,7 @@ export async function pilotSavePassport(p: {
     const ownerId = await ensurePersonOwner(p.contactId, p.personName)
     const w = await savePilotFile({
       ownerId, folderKind: "personal", name: p.fileName, bytes: p.bytes, mimeType: p.mimeType,
-      documentType: "passport", callerKey: `person-passport:${p.contactId}`,
+      documentType: "passport", callerKey: `person-passport:${p.contactId}`, skipAnalysis: true,
       links: p.buyerCaseId ? [{ kind: "service_case", recordId: p.buyerCaseId }] : [],
       subjects: p.companyAccountId ? [{ kind: "company", accountId: p.companyAccountId, role: "owner_member" }] : [],
     })
@@ -454,7 +456,21 @@ export async function pilotCaseForCompanyCreation(contactId: string): Promise<{ 
       .eq("contact_id", contactId).eq("service_type", "Company Formation").eq("status", "active").is("account_id", null)
     const rows = (data ?? []) as { id: string }[]
     if (rows.length !== 1) return null
-    const owner = await storeOwnerForCase(rows[0].id)
+    let owner = await storeOwnerForCase(rows[0].id)
+    if (!owner) {
+      // A case created before the storage-first rail existed (or for a returning client) has no in-formation storage yet. Open it NOW so
+      // the company is built in the storage — Articles and every later file land there, never on Drive (Stop-Drive S1a). Only while the
+      // new-clients switch is on; any failure is an alarm and the caller falls back to today's path.
+      if (newClientsLive()) {
+        try {
+          const { data: sdRow } = await supabaseAdmin.from("service_deliveries").select("id, contact_id, account_id, service_type").eq("id", rows[0].id).maybeSingle()
+          if (sdRow) owner = await ensureFormationOwner(sdRow as FormationCase, await formationRootName(contactId), { atCreation: true })
+        } catch (e) {
+          await raisePilotAlarm("formation_owner_failed", { caseId: rows[0].id, contactId, error: e instanceof Error ? e.message : String(e) })
+          owner = null
+        }
+      }
+    }
     return owner ? { caseId: rows[0].id, owner } : null
   } catch {
     return null

@@ -317,6 +317,10 @@ export async function POST(req: NextRequest) {
     try {
       if (!sd.first_name || !sd.last_name) {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
+      } else if (!contactId) {
+        // No person to file the documents under (undecided contact — already alarmed once above). Nothing is generated and thrown
+        // away: the data and uploads stay on the submission, and itin_prepare_documents builds them once the contact is linked.
+        results.push({ step: "docs_generated", status: "skipped", detail: "No contact yet — the documents are not generated now; the data stays on the submission and they are prepared once the contact is linked" })
       } else {
         const w7Buffer = await generateW7Pdf(sd)
         const nrBuffer = await generate1040NRPdf(sd)
@@ -355,9 +359,7 @@ export async function POST(req: NextRequest) {
         // opened when the package was filed). Anything else — no contact, or a hidden study-copy storage — is an error AND an alarm,
         // never a silent skip.
         if (!itinSavedInStorage) {
-          const detail = contactId
-            ? "The ITIN documents could not be saved in the person's storage — nothing was written anywhere else"
-            : "No contact record to save the ITIN documents under — nothing was written anywhere else"
+          const detail = "The ITIN documents could not be saved in the person's storage — nothing was written anywhere else"
           results.push({ step: "docs_generated", status: "error", detail })
           const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
           await raisePilotAlarm("lead_form_filing_failed", { route: "itin-form-completed", formType: "itin", token, contactId: contactId ?? null, problems: [detail] })

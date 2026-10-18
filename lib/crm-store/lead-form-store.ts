@@ -105,24 +105,59 @@ export function escapeLikeExact(value: string): string {
 export async function findContactByExactEmail(email: string | null | undefined): Promise<ContactMatch> {
   const wanted = (email ?? "").trim().toLowerCase()
   if (!wanted) return { status: "none" }
-  const { data, error } = await supabaseAdmin.from("contacts").select("id, email, full_name").ilike("email", `%${escapeLikeExact(wanted)}%`).limit(200)
-  if (error) throw new Error(`Could not look up the contact: ${error.message}`)
-  const hits = (data ?? []).filter((r) => (r.email ?? "").trim().toLowerCase() === wanted)
+  const pattern = `%${escapeLikeExact(wanted)}%`
+  const hits: Array<{ id: string; full_name: string | null }> = []
+  // Pages in a fixed order until the list is exhausted (bounded): a short address contained in many longer ones cannot push the real
+  // match out of view, and an address stored with stray spaces is still found. Equality is decided here, in code.
+  for (let page = 0; page < 20; page++) {
+    const { data, error } = await supabaseAdmin.from("contacts").select("id, email, full_name").ilike("email", pattern).order("id").range(page * 200, page * 200 + 199)
+    if (error) throw new Error(`Could not look up the contact: ${error.message}`)
+    for (const r of data ?? []) if ((r.email ?? "").trim().toLowerCase() === wanted) hits.push({ id: r.id as string, full_name: (r.full_name as string | null) ?? null })
+    if (!data || data.length < 200) break
+  }
   if (hits.length === 0) return { status: "none" }
-  if (hits.length === 1) return { status: "one", id: hits[0].id as string, fullName: (hits[0].full_name as string | null) ?? null }
-  return { status: "many", ids: hits.map((h) => h.id as string) }
+  if (hits.length === 1) return { status: "one", id: hits[0].id, fullName: hits[0].full_name }
+  return { status: "many", ids: hits.map((h) => h.id) }
 }
 
-const fold = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean).sort().join(" ")
+// letters that do not decompose into base letter + accent
+const SPECIAL: Record<string, string> = { "ß": "ss", "ø": "o", "đ": "d", "ð": "d", "ł": "l", "æ": "ae", "œ": "oe", "þ": "th", "ı": "i" }
+const SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"])
+const NON_WORD = new RegExp("[^\\p{L}\\p{N}\\s]+", "gu")
+const COMBINING = new RegExp("[\\u0300-\\u036f]", "g")
+
+/** Name -> comparable word list. `german` spells ä/ö/ü as ae/oe/ue (Müller = Mueller). Hyphens/apostrophes join (Anne-Marie = Annemarie). */
+function nameTokens(raw: string, german: boolean): string[] {
+  let v = raw.toLowerCase()
+  if (german) v = v.replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue")
+  v = v.replace(/[ßøđðłæœþı]/g, (c) => SPECIAL[c] ?? c)
+  v = v.normalize("NFD").replace(COMBINING, "").replace(/[-'’`.]/g, "").replace(NON_WORD, " ")
+  return v.split(/\s+/).filter((t) => t && !SUFFIXES.has(t))
+}
+
+function sameOrderSubsequence(short: string[], long: string[]): boolean {
+  let i = 0
+  for (const t of long) if (t === short[i]) i++
+  return i === short.length
+}
+
+function tokenListsMatch(a: string[], b: string[]): boolean {
+  if (a.length === 0 || b.length === 0) return false
+  if (a.slice().sort().join(" ") === b.slice().sort().join(" ")) return true // same words, any order (first/last swapped)
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  // a middle name left out on one side: at least two words, all of them present on the other side in the same order
+  return short.length >= 2 && sameOrderSubsequence(short, long)
+}
 
 /**
- * Do two person names mean the same person? Case, accents, punctuation and the order of first/last name are ignored.
- * An empty name on either side cannot disprove anything, so it matches (the email already matched).
+ * Do two person names mean the same person? Case, accents, punctuation, hyphens, name suffixes (Jr, III), German spellings and
+ * the order of first/last name are ignored; a left-out middle name is allowed. CONSERVATIVE: a name that is empty (or has no
+ * comparable letters) on either side, or a single word against a full name, is NOT a match — the caller then treats it as ambiguous.
  */
 export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
-  const x = fold(a ?? ""), y = fold(b ?? "")
-  if (!x || !y) return true
-  return x === y
+  const x = (a ?? "").trim(), y = (b ?? "").trim()
+  if (!x || !y) return false
+  return tokenListsMatch(nameTokens(x, false), nameTokens(y, false)) || tokenListsMatch(nameTokens(x, true), nameTokens(y, true))
 }
 
 export type LeadContact =

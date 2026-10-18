@@ -10,7 +10,19 @@ import { saveFormToDrive } from "@/lib/form-to-drive"
 import { storageDestinationForForm, type FormStorageInput } from "@/lib/crm-store/lead-form-store"
 import { raisePilotAlarm } from "@/lib/crm-store/formation-pilot"
 
-export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped"; detail: string }
+export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped" | "pending"; detail: string }
+
+/** A member's own passport (legacy form key passport_member_<N>, wizard key member_<N>_member_passport). */
+const MEMBER_PASSPORT = /passport_member_\d+|member_\d+_member_passport/
+
+/**
+ * A person's passport never lands in ANOTHER person's storage (Antonio's rule). The lead-stage formation form is filed under the
+ * PRIMARY contact, so the other members' passports are NOT filed there: they stay on the submission (the upload bucket) and
+ * formation-materialize files each one in THAT member's own storage when it creates / links the member's contact.
+ */
+export function splitMemberPassports(paths: string[]): { forPrimary: string[]; forMembers: string[] } {
+  return { forPrimary: paths.filter((p) => !MEMBER_PASSPORT.test(p)), forMembers: paths.filter((p) => MEMBER_PASSPORT.test(p)) }
+}
 
 export interface FileFormPackageInput extends FormStorageInput {
   route: string
@@ -76,7 +88,8 @@ async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> 
       }
       folder = dest.marker
     }
-    const res = await saveFormToDrive(i.formType, i.submittedData, i.uploadPaths, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket, fileNameOf: i.fileNameOf })
+    const split = i.formType === "formation" ? splitMemberPassports(i.uploadPaths) : { forPrimary: i.uploadPaths, forMembers: [] as string[] }
+    const res = await saveFormToDrive(i.formType, i.submittedData, split.forPrimary, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket, fileNameOf: i.fileNameOf })
     const problems = [
       res.summaryFileId ? null : "the summary PDF was not saved",
       res.failed.length ? `${res.failed.length} file(s) failed: ${res.failed.join("; ")}` : null,
@@ -86,7 +99,8 @@ async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> 
       await raisePilotAlarm("lead_form_filing_failed", { ...context, problems })
       return { step: "storage_save", status: "error", detail: problems.join(" | ") }
     }
-    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.` }
+    const waiting = split.forMembers.length ? ` ${split.forMembers.length} member passport(s) stay on the submission — each is filed in that member's own storage when the company is created.` : ""
+    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.${waiting}` }
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
     await raisePilotAlarm("lead_form_filing_failed", { ...context, problems: [detail] })
@@ -104,7 +118,8 @@ export async function fileFormPackage(i: FileFormPackageInput): Promise<FilingSt
   } finally {
     if (timer) clearTimeout(timer)
   }
-  const detail = `Filing was still running after ${Math.round(ms / 1000)} s — the rest of the steps carried on; the retry job finishes it`
-  await raisePilotAlarm("lead_form_filing_failed", { route: i.route, formType: i.formType, token: i.meta.token, contactId: i.contactId ?? null, accountId: i.accountId ?? null, problems: [detail] })
-  return { step: "storage_save", status: "error", detail }
+  // Still running: NOT a failure. The filing carries on (every save is idempotent) and the retry job re-checks it; a real failure
+  // raises its own alarm from inside the filing, and the sweep alerts if the retry never completes. No alarm here, so a slow-but-fine
+  // filing never produces a false alert and a failing one produces exactly one.
+  return { step: "storage_save", status: "pending", detail: `Filing was still running after ${Math.round(ms / 1000)} s — the rest of the steps carried on; the retry job confirms it` }
 }

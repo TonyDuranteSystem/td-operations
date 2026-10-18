@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     let leadName = ""
     let leadEmail = ""
     let referrerName = ""
-    let contactId: string | null = null
+    let contactId: string | null = (sub.contact_id as string | null) ?? null
     let contactAmbiguous = false
 
     if (leadId) {
@@ -94,9 +94,12 @@ export async function POST(req: NextRequest) {
       // EXACT email AND matching name. Several matches, a different name on the same email, or a failed lookup = nobody is guessed:
       // ONE staff alarm, nothing linked or filed, and the rest of the chain still runs.
       const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
-      const found = await lookupLeadContact({ email: leadEmail, leadName, route: "onboarding-form-completed", leadId, token })
-      if (found.state === "one") contactId = found.contactId
-      else if (found.state === "ambiguous" || found.state === "error") {
+      const found = contactId ? ({ state: "one", contactId } as const) : await lookupLeadContact({ email: leadEmail, leadName, route: "onboarding-form-completed", leadId, token })
+      if (found.state === "one") {
+        contactId = found.contactId
+        // record it on the submission: the retry job and this route then agree on who the person is
+        if (!sub.contact_id) await supabaseAdmin.from("onboarding_submissions").update({ contact_id: contactId }).eq("id", submission_id).is("contact_id", null)
+      } else if (found.state === "ambiguous" || found.state === "error") {
         contactAmbiguous = true
         results.push({ step: "contact_lookup", status: "error", detail: found.detail })
       }

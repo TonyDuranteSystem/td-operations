@@ -64,7 +64,8 @@ export async function POST(req: NextRequest) {
     let leadEmail = ""
     let leadLanguage = "en"
     let referrerName = ""
-    let contactId: string | null = null
+    // the submission's own contact wins (the retry recipe resolves the SAME way: contactForSubmissionRow)
+    let contactId: string | null = (sub.contact_id as string | null) ?? null
     let contactAmbiguous = false
 
     if (leadId) {
@@ -81,42 +82,49 @@ export async function POST(req: NextRequest) {
         referrerName = lead.referrer_name || ""
       }
 
-      // Find the contact for this lead by EXACT email AND matching name. Several matches, a different name on the same email (a
-      // couple sharing one address), or a failed lookup = nobody is guessed: nothing is updated, filed or created under any
-      // contact, staff get ONE alarm, and the rest of the chain (email, delivery, task) still runs.
-      const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
-      const found = await lookupLeadContact({ email: leadEmail, leadName, route: "formation-form-completed", leadId, token })
-      if (found.state === "ambiguous" || found.state === "error") {
-        contactAmbiguous = true
-        results.push({ step: "contact_lookup", status: "error", detail: found.detail })
-      } else if (found.state === "one") {
-        contactId = found.contactId
-      } else if (lead) {
-        // AUTO-CREATE contact from lead data
-        try {
-          const newContact = await dbWrite(
-            // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
-            supabaseAdmin
-              .from("contacts")
-              .insert({
-                full_name: lead.full_name,
-                email: lead.email,
-                phone: lead.phone,
-                language: leadLanguage,
-              })
-              .select("id")
-              .single(),
-            "contacts.insert"
-          )
+      if (!contactId) {
+        // Find the contact for this lead by EXACT email AND matching name. Several matches, a different name on the same email (a
+        // couple sharing one address), or a failed lookup = nobody is guessed: nothing is updated, filed or created under any
+        // contact, staff get ONE alarm, and the rest of the chain (email, delivery, task) still runs.
+        const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
+        const found = await lookupLeadContact({ email: leadEmail, leadName, route: "formation-form-completed", leadId, token })
+        if (found.state === "ambiguous" || found.state === "error") {
+          contactAmbiguous = true
+          results.push({ step: "contact_lookup", status: "error", detail: found.detail })
+        } else if (found.state === "one") {
+          contactId = found.contactId
+        } else if (lead) {
+          // AUTO-CREATE contact from lead data
+          try {
+            const newContact = await dbWrite(
+              // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, predates WS-B; extract to lib/operations/ per dev_task 98484283
+              supabaseAdmin
+                .from("contacts")
+                .insert({
+                  full_name: lead.full_name,
+                  email: lead.email,
+                  phone: lead.phone,
+                  language: leadLanguage,
+                })
+                .select("id")
+                .single(),
+              "contacts.insert"
+            )
 
-          if (newContact) {
-            contactId = newContact.id
-            results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
+            if (newContact) {
+              contactId = newContact.id
+              results.push({ step: "contact_created", status: "ok", detail: `Contact auto-created: ${contactId}` })
+            }
+          } catch (e) {
+            results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
           }
-        } catch (e) {
-          results.push({ step: "contact_created", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
       }
+    }
+
+    // Record the decided contact on the submission, so the retry job and this route agree on who the person is.
+    if (contactId && !sub.contact_id) {
+      await supabaseAdmin.from("formation_submissions").update({ contact_id: contactId }).eq("id", submission_id).is("contact_id", null)
     }
 
     // ─── STEP 1B: Ensure Service Delivery exists ───
