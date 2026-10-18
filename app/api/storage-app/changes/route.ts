@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic"
 import { NextRequest } from "next/server"
 import { changesHead, changesSince, parseCursor } from "@/lib/storage-app/changes"
 import { json, withDevice } from "@/lib/storage-app/guard"
+import { getSettings } from "@/lib/storage-app/settings"
 
 export async function GET(req: NextRequest) {
   return withDevice(req, async ({ user }) => {
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
     const after = raw ? parseCursor(raw) : null
     if (raw && !after) return json({ error: "Bad cursor." }, 400)
     const limit = Math.max(1, Math.min(Number(q.get("limit")) || 500, 2000))
-    return json(await changesSince(user, after, limit))
+    // resyncMinutes (settings row): how often a Mac re-lists everything — this is how a company / person rename reaches Finder (the core CRM tables carry no trigger)
+    return json({ ...(await changesSince(user, after, limit)), resyncMinutes: (await getSettings()).resyncMinutes })
   })
 }

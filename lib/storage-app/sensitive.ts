@@ -13,9 +13,10 @@
  * The list is a decision of Antonio's; a type is added here only when he says so. (Not covered, on purpose: types like irs_notice_personal
  * — Antonio has not decided.)
  */
-export const SENSITIVE_DOCUMENT_TYPES: readonly string[] = [
-  "passport", "id_document", "itin_letter", "form_w_7", "form_w_7_coa", "form_1040_nr", "itin_application", "itin_schedule_oi",
-]
+import { DEFAULT_SENSITIVE_TYPES } from "./settings"
+
+/** The built-in list (the `sensitiveTypes` setting overrides it — Antonio decides what is on it). */
+export const SENSITIVE_DOCUMENT_TYPES: readonly string[] = DEFAULT_SENSITIVE_TYPES
 
 const SENSITIVE_NAME_PATTERNS: readonly RegExp[] = [
   /\bitin\b/, /\bw ?7\b/, /\bpassport\b/, /\bpassaporto\b/, /\bssn\b/, /social security/, /driver s? licen[cs]e/, /\bid (card|document)\b/,
@@ -28,16 +29,14 @@ export function looksSensitiveByName(name: string | null | undefined): boolean {
   return !!n && SENSITIVE_NAME_PATTERNS.some((re) => re.test(n))
 }
 
-export function isSensitiveForDevice(p: { documentType: string | null | undefined; ownerKind: string | null | undefined; name?: string | null }): boolean {
+export function isSensitiveForDevice(p: { documentType: string | null | undefined; ownerKind: string | null | undefined; name?: string | null }, types: readonly string[] = SENSITIVE_DOCUMENT_TYPES): boolean {
   const t = (p.documentType ?? "").trim().toLowerCase()
-  if (t) return SENSITIVE_DOCUMENT_TYPES.includes(t)
+  if (t) return types.includes(t)
   if (p.ownerKind === "person") return true
   return looksSensitiveByName(p.name)
 }
 
-/** How long a Mac may keep the copy of an opened file before it must remove it (Antonio, 2026-10-17: sensitive 2 minutes, others 15). */
-export const KEEP_SECONDS_SENSITIVE = 120
-export const KEEP_SECONDS_NORMAL = 900
-export function keepSecondsFor(sensitive: boolean): number {
-  return sensitive ? KEEP_SECONDS_SENSITIVE : KEEP_SECONDS_NORMAL
+/** How long a Mac may keep the copy of an opened file (the `keepSecondsSensitive` / `keepSecondsNormal` settings; built-in 2 minutes / 15 minutes). */
+export function keepSecondsFor(sensitive: boolean, s: { keepSecondsSensitive: number; keepSecondsNormal: number } = { keepSecondsSensitive: 120, keepSecondsNormal: 900 }): number {
+  return sensitive ? s.keepSecondsSensitive : s.keepSecondsNormal
 }

@@ -4,12 +4,13 @@
  */
 import { isInternalOwnerKind } from "@/lib/crm-store/plain-drop"
 
-/** Step B slice 1: client storages a Mac may save into, and the folder kinds inside them (a team-made folder, or Correspondence). Banking, Tax, Tax year, the company's own papers, ITIN, personal folders and companies being formed come later. */
-export const CLIENT_SAVE_OWNER_KINDS: ReadonlySet<string> = new Set(["company", "person"])
-export const CLIENT_SAVE_FOLDER_KINDS: ReadonlySet<string> = new Set(["custom", "correspondence"])
-export const isClientSaveOwner = (kind: string | null | undefined): boolean => !!kind && CLIENT_SAVE_OWNER_KINDS.has(kind)
+import { clientSaveAllowed, type ClientSaves } from "./settings"
 
-/** Staged and registered inline up to this size (the CRM's own limit for the inline path); bigger files are refused for now. */
+/** What counts as a CLIENT storage (a file saved from a Mac there needs its "Needs review" mark and its documents row). WHICH of them, and which folders, a Mac may save into is the `clientSaves` setting (lib/storage-app/settings.ts). */
+export const CLIENT_OWNER_KINDS: ReadonlySet<string> = new Set(["company", "person", "formation"])
+export const isClientOwnerKind = (kind: string | null | undefined): boolean => !!kind && CLIENT_OWNER_KINDS.has(kind)
+
+/** The CRM writer's inline-registration cap: the ABSOLUTE ceiling for one saved file (the `maxSaveMB` setting can only lower it). */
 export const MAX_SAVE_BYTES = 150 * 1024 * 1024
 export const MAX_NAME_BYTES = 255
 
@@ -44,31 +45,29 @@ export type SaveRefusal =
   | { ok: false; code: "not_found" | "not_allowed" | "too_big" | "bad_name" | "ignored" | "exists"; message: string }
 
 /** Where step A allows a save: inside a folder (never a storage's top folder, never "2. Contacts", never "Shared with staff") of Business or My files. */
-export function checkDestination(p: { ownerKind: string | null | undefined; folderKind: string | null | undefined; inStaffShare: boolean; folderTrashed: boolean }): SaveRefusal {
+export function checkDestination(p: {
+  ownerKind: string | null | undefined; folderKind: string | null | undefined; inStaffShare: boolean; folderTrashed: boolean
+  /** the settings row's `clientSaves` + the ids that identify THIS storage (store owner id / account id / contact id) */
+  clientSaves: ClientSaves; ownerIds?: { ownerId?: string | null; accountId?: string | null; contactId?: string | null }
+}): SaveRefusal {
   if (p.folderTrashed) return { ok: false, code: "not_found", message: "That folder is in the trash." }
   if (/(^|_)root$/.test(p.folderKind ?? "")) return { ok: false, code: "not_allowed", message: "Open one of the folders first — files go inside a folder, not at the top." }
   if (p.folderKind === "contacts") return { ok: false, code: "not_allowed", message: "People's documents are added in the CRM, not from the Mac." }
   if (p.inStaffShare) return { ok: false, code: "not_allowed", message: "\"Shared with staff\" is managed in the CRM." }
   if (isInternalOwnerKind(p.ownerKind)) return { ok: true }
-  if (isClientSaveOwner(p.ownerKind)) {
-    if (CLIENT_SAVE_FOLDER_KINDS.has(p.folderKind ?? "")) return { ok: true }
-    return { ok: false, code: "not_allowed", message: "Saving into this folder from the Mac is not available yet — for now only Correspondence and the folders your team added." }
+  if (isClientOwnerKind(p.ownerKind)) {
+    if (!clientSaveAllowed(p.clientSaves, { kind: p.ownerKind, ...p.ownerIds })) return { ok: false, code: "not_allowed", message: "Saving into this client's folders from the Mac is not switched on." }
+    if (!p.clientSaves.folderKinds.includes(p.folderKind ?? "")) return { ok: false, code: "not_allowed", message: "Saving into this kind of folder from the Mac is not switched on." }
+    return { ok: true }
   }
-  return { ok: false, code: "not_allowed", message: "Saving here from the Mac is not available yet." }
+  return { ok: false, code: "not_allowed", message: "Saving here from the Mac is not available." }
 }
 
-export function checkNewFile(p: { name: unknown; size: unknown }): SaveRefusal & { cleanName?: string } {
+export function checkNewFile(p: { name: unknown; size: unknown }, maxBytes: number = MAX_SAVE_BYTES): SaveRefusal & { cleanName?: string } {
   const name = cleanFileName(p.name)
   if (!name) return { ok: false, code: "bad_name", message: "This file name cannot be used." }
   if (isJunkName(name)) return { ok: false, code: "ignored", message: "This is a system or temporary file — it is not saved." }
   if (typeof p.size !== "number" || !Number.isFinite(p.size) || p.size < 0) return { ok: false, code: "bad_name", message: "The file size is missing." }
-  if (p.size > MAX_SAVE_BYTES) return { ok: false, code: "too_big", message: "This file is too big to save from the Mac for now (the limit is 150 MB). Add it in the CRM." }
+  if (p.size > maxBytes) return { ok: false, code: "too_big", message: `This file is too big to save from the Mac for now (the limit is ${Math.floor(maxBytes / (1024 * 1024))} MB). Add it in the CRM.` }
   return { ok: true, cleanName: name }
-}
-
-/** How much one Mac may upload per hour (STORAGE_APP_WRITE_LIMIT_MB, default 500). */
-export const DEFAULT_WRITE_LIMIT_MB = 500
-export function writeLimitBytes(envValue: string | undefined = process.env.STORAGE_APP_WRITE_LIMIT_MB): number {
-  const n = Number(envValue)
-  return (Number.isFinite(n) && n > 0 ? n : DEFAULT_WRITE_LIMIT_MB) * 1024 * 1024
 }

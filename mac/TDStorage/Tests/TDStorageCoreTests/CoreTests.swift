@@ -501,6 +501,36 @@ extension URLRequest {
     }
 }
 
+final class FlexibleValuesTests: XCTestCase {
+    func testTheLeaseLengthFollowsTheServer() {
+        let store = MemoryLeaseStore(Date().addingTimeInterval(-3 * 3600))        // last contact 3 hours ago
+        XCTAssertFalse(store.isExpired())                                         // built-in 24 h
+        store.setLeaseSeconds(2 * 3600)                                           // the CRM says: 2 hours
+        XCTAssertTrue(store.isExpired())
+        store.setLeaseSeconds(48 * 3600)
+        XCTAssertFalse(store.isExpired())
+        store.setLeaseSeconds(5)                                                  // nonsense (under an hour) is ignored
+        XCTAssertEqual(store.leaseSeconds(), 48 * 3600)
+    }
+    func testAFullRefreshIsDueEveryResyncMinutes() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertFalse(ResyncClock.due(last: nil, now: t0, minutes: 10))                                  // no record yet: start counting
+        XCTAssertFalse(ResyncClock.due(last: t0, now: t0.addingTimeInterval(9 * 60), minutes: 10))
+        XCTAssertTrue(ResyncClock.due(last: t0, now: t0.addingTimeInterval(10 * 60), minutes: 10))
+        XCTAssertTrue(ResyncClock.due(last: t0, now: t0.addingTimeInterval(61), minutes: 1))
+        XCTAssertFalse(ResyncClock.due(last: t0, now: t0.addingTimeInterval(86_400), minutes: 0))        // 0 / nonsense = never forced
+        XCTAssertTrue(ResyncClock.due(last: t0, now: t0.addingTimeInterval(10 * 60), minutes: nil))      // older server: the built-in 10 minutes
+    }
+    func testTheAnswersCarryTheTwoValues() throws {
+        let me = try JSONDecoder().decode(WhoAmI.self, from: Data(#"{"userId":"u","email":null,"role":"admin","owner":true,"deviceId":"d","leaseHours":6,"resyncMinutes":3}"#.utf8))
+        XCTAssertEqual(me.leaseHours, 6); XCTAssertEqual(me.resyncMinutes, 3)
+        let old = try JSONDecoder().decode(WhoAmI.self, from: Data(#"{"userId":"u","email":null,"role":null,"owner":false,"deviceId":"d"}"#.utf8))
+        XCTAssertNil(old.leaseHours)
+        let page = try JSONDecoder().decode(ChangesPage.self, from: Data(#"{"changes":[],"cursor":null,"resync":false,"hasMore":false,"resyncMinutes":7}"#.utf8))
+        XCTAssertEqual(page.resyncMinutes, 7)
+    }
+}
+
 enum FileDownloaderTestHelper {
     static func sha(_ s: String) -> String { var h = SHA256(); h.update(data: Data(s.utf8)); return h.finalize().map { String(format: "%02x", $0) }.joined() }
 }

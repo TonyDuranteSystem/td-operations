@@ -12,7 +12,11 @@ public struct TokenPair: Codable, Equatable {
     }
 }
 
-public struct WhoAmI: Codable, Equatable { public var userId: String; public var email: String?; public var role: String?; public var owner: Bool; public var deviceId: String }
+public struct WhoAmI: Codable, Equatable {
+    public var userId: String; public var email: String?; public var role: String?; public var owner: Bool; public var deviceId: String
+    /// the two values the CRM's settings row gives the Mac (older servers do not send them)
+    public var leaseHours: Double?; public var resyncMinutes: Double?
+}
 
 public struct NavOwner: Codable, Equatable, Hashable {
     public var id: String; public var kind: String; public var label: String; public var status: String?; public var fileCount: Int
@@ -39,7 +43,7 @@ public struct AppChange: Codable, Equatable {
     public var kind: ChangeKind; public var id: String; public var op: ChangeOp
     public var ownerId: String?; public var parentId: String?; public var oldOwnerId: String?; public var oldParentId: String?; public var name: String?
 }
-public struct ChangesPage: Codable, Equatable { public var changes: [AppChange]; public var cursor: String?; public var resync: Bool; public var hasMore: Bool }
+public struct ChangesPage: Codable, Equatable { public var changes: [AppChange]; public var cursor: String?; public var resync: Bool; public var hasMore: Bool; public var resyncMinutes: Double? }
 public struct HeadResponse: Codable, Equatable { public var cursor: String? }
 public struct APIErrorBody: Codable { public var error: String?; public var errorDescription: String?; public var message: String?
     enum CodingKeys: String, CodingKey { case error, errorDescription = "error_description", message } }

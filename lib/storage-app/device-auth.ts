@@ -13,9 +13,10 @@ import type { User } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStoreStaffUser } from "@/lib/crm-store/access"
 import { resolveMfaGate } from "@/lib/auth/mfa-gate"
+import { getSettings } from "./settings"
 import { isOnAllowList, loadAllowList } from "./allow-list"
 import {
-  ACCESS_TTL_MS, CODE_TTL_MS, DEVICE_MAX_AGE_MS, LEASE_MS, MAX_ACTIVE_DEVICES_PER_USER, REFRESH_GRACE_MS,
+  ACCESS_TTL_MS, CODE_TTL_MS, DEVICE_MAX_AGE_MS, REFRESH_GRACE_MS,
   hashSecret, newSecret, verifyPkce, isValidChallenge, isValidLoopbackRedirect, cleanDeviceName, truncateIp,
 } from "./tokens"
 
@@ -42,12 +43,15 @@ export class DeviceAuthError extends Error {
 export interface TokenPair { access_token: string; refresh_token: string; token_type: "Bearer"; expires_in: number; device_id: string }
 
 /** Is this login still allowed to use the app at all? Staff role, not suspended, and the CRM would still let it in (two-step login). */
-export function userMayUseApp(user: User | null | undefined): { ok: true } | { ok: false; reason: string } {
+export function userMayUseApp(user: User | null | undefined, requireSecondFactor = true): { ok: true } | { ok: false; reason: string } {
   if (!user) return { ok: false, reason: "no such user" }
   if (!isStoreStaffUser(user)) return { ok: false, reason: "not staff" }
   const bannedUntil = (user as { banned_until?: string | null }).banned_until
   if (bannedUntil && new Date(bannedUntil).getTime() > Date.now()) return { ok: false, reason: "suspended" }
   const hasVerifiedFactor = (user.factors ?? []).some((f) => f.factor_type === "totp" && f.status === "verified")
+  // THE DEFAULT (the `requireSecondFactor` setting): a verified two-step login is ALWAYS required — no mfa_exempt shortcut, no grace window — so a shared or
+  // exempted login (support@) can never approve a Mac. Switch it off only on the sandbox, where the test logins have no authenticator.
+  if (requireSecondFactor && !hasVerifiedFactor) return { ok: false, reason: "a verified two-step login is required" }
   // Would the CRM let this person in? Same decision function as the middleware, asked with "a session that did the check":
   // an enrolled person is always fine here (the check happened at approval); a person with no factor must be exempt / in grace.
   const verdict = resolveMfaGate({
@@ -65,7 +69,7 @@ export function userMayUseApp(user: User | null | undefined): { ok: true } | { o
 
 /** The CRM's rules (`userMayUseApp`) AND the allow-list setting (who Antonio let use the app). */
 export async function mayUseAppNow(user: User | null | undefined): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const crm = userMayUseApp(user)
+  const crm = userMayUseApp(user, (await getSettings()).requireSecondFactor)
   if (!crm.ok) return crm
   if (!isOnAllowList(user?.email, await loadAllowList())) return { ok: false, reason: "not on the allow-list" }
   return { ok: true }
@@ -89,10 +93,11 @@ export async function createAuthCode(p: { userId: string; deviceName: unknown; c
     await logAppEvent("app_signin_refused", p.userId, { step: "approve", reason: may.reason })
     throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }
+  const maxMacs = (await getSettings()).maxMacsPerLogin
   const { count: activeMacs } = await db().from("storage_app_devices").select("id", { count: "exact", head: true }).eq("user_id", p.userId).is("revoked_at", null)
-  if ((activeMacs ?? 0) >= MAX_ACTIVE_DEVICES_PER_USER) {
+  if ((activeMacs ?? 0) >= maxMacs) {
     await logAppEvent("app_signin_refused", p.userId, { step: "approve", reason: "too many Macs" })
-    throw new DeviceAuthError("access_denied", `${MAX_ACTIVE_DEVICES_PER_USER} Macs are already signed in for this login. Sign one out on the “Macs signed in” page first.`)
+    throw new DeviceAuthError("access_denied", `${maxMacs} Macs are already signed in for this login. Sign one out on the “Macs signed in” page first.`)
   }
   const { token, hash } = newSecret("code")
   const { error } = await db().from("storage_app_auth_codes").insert({
@@ -165,7 +170,7 @@ export async function refreshTokens(p: { refreshToken: unknown; ip?: string | nu
   const dev = row.storage_app_devices as { user_id: string; created_at: string; revoked_at: string | null; last_seen_at: string | null }
   if (dev.revoked_at) throw new DeviceAuthError("device_revoked", "This device was signed out.")
   // the 24-hour lease, enforced HERE (the app checks it too): a Mac that has not reached the CRM for a day must be approved again
-  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > LEASE_MS) throw new DeviceAuthError("invalid_grant", "This Mac was away from the CRM for more than 24 hours. Approve it again.")
+  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > (await getSettings()).leaseHours * 3_600_000) throw new DeviceAuthError("invalid_grant", "This Mac was away from the CRM for more than 24 hours. Approve it again.")
   if (new Date(row.expires_at).getTime() <= Date.now() || new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) {
     throw new DeviceAuthError("invalid_grant", "This device must be approved again.")
   }
@@ -202,7 +207,7 @@ export async function verifyAccessToken(token: string, ip?: string | null): Prom
   if (dev.revoked_at) return null
   if (new Date(row.expires_at).getTime() <= Date.now()) return null
   if (new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) return null
-  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > LEASE_MS) return null     // the 24-hour lease, server side
+  if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > (await getSettings()).leaseHours * 3_600_000) return null     // the 24-hour lease, server side
   const user = await liveUser(dev.user_id)
   if (!user || !(await mayUseAppNow(user)).ok) return null
   // keep "last seen" fresh without a write on every request

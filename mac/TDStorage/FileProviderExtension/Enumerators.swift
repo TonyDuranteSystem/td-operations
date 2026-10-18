@@ -49,7 +49,14 @@ final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
             do {
                 let raw = String(data: anchor.rawValue, encoding: .utf8) ?? "start"
                 let page = try await api.changes(since: raw == "start" || raw == "v1" ? nil : raw)
-                if page.resync { observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired)); return }
+                let clock = UserDefaults.standard, key = "td-storage-last-full-refresh"
+                let last = (clock.object(forKey: key) as? Date)
+                // a full refresh: when the CRM says so, or every `resyncMinutes` (a company / person RENAME has no change-feed row: this is how Finder learns it)
+                if page.resync || ResyncClock.due(last: last, minutes: page.resyncMinutes) {
+                    clock.set(Date(), forKey: key)
+                    observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired)); return
+                }
+                if last == nil { clock.set(Date(), forKey: key) }
                 var updated: [NSFileProviderItem] = []
                 var deleted: [NSFileProviderItemIdentifier] = []
                 for c in page.changes {

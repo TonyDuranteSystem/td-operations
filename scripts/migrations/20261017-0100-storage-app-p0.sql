@@ -4,10 +4,34 @@
 -- 1) storage_app_devices / storage_app_auth_codes / storage_app_tokens — the Mac app's own sign-in
 --    (OAuth code + PKCE). Only HASHES of codes and tokens are stored. RLS on, no policies: only the
 --    service role (behind routes that check the user) can reach them, like every store_* table.
--- 2) store_change_log + triggers on the store tables themselves (and on the CRM rows that decide an
---    owner's name / group): ONE place that sees EVERY write — the CRM, imports, the Drive pickup
---    job, purges — so Finder can never miss a change because a code path forgot to report it.
---    The cursor is (txid, seq), not seq alone: a row that commits late can never fall behind it.
+-- 2) store_change_log + triggers on the STORE tables only (store_files, store_folders, store_owners): ONE place that sees
+--    EVERY storage write — the CRM, imports, the Drive pickup job, purges — so Finder can never miss a change because a
+--    code path forgot to report it. The cursor is (txid, seq), not seq alone: a row that commits late can never fall behind it.
+--    DESIGN RULES (production rollout review, 2026-10-18):
+--      * NO trigger on accounts or contacts: the core CRM tables are never touched. A company / person rename reaches Finder
+--        through the Mac's periodic full refresh (a setting, default 10 minutes), not through the feed.
+--      * Every trigger FAILS SAFE: its body is inside BEGIN .. EXCEPTION WHEN OTHERS, so a problem writing the log can never
+--        abort the storage write that fired it (a missed log row costs only a refresh; a lost CRM write costs real work).
+--      * A pre-flight check refuses to run if the production schema lacks a table or column the triggers read.
+--      * The three triggers can be switched off / on without data loss: 20261018-1300-storage-app-triggers-off.sql / -on.sql.
+
+-- ───────────────────────────────────────────── pre-flight: refuse to run against a schema that lacks what the triggers read
+DO $preflight$
+DECLARE missing text := '';
+  need text[] := ARRAY[
+    'store_files.state','store_files.trashed_at','store_files.purged_at','store_files.current_version_id','store_files.document_type','store_files.name','store_files.folder_id','store_files.owner_id',
+    'store_folders.trashed_at','store_folders.parent_id','store_folders.name','store_folders.owner_id',
+    'store_owners.study_only','store_owners.lifecycle_override','store_owners.account_id','store_owners.contact_id','store_owners.kind','store_owners.private_user_id',
+    'store_events.event','store_events.actor','store_events.owner_id','store_events.file_id','store_events.folder_id','store_events.name_snapshot','store_events.details','store_events.occurred_at'];
+  n text;
+BEGIN
+  FOREACH n IN ARRAY need LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = split_part(n, '.', 1) AND column_name = split_part(n, '.', 2)) THEN
+      missing := missing || n || ' ';
+    END IF;
+  END LOOP;
+  IF missing <> '' THEN RAISE EXCEPTION 'storage-app p0 pre-flight: this database lacks: %', missing; END IF;
+END $preflight$;
 
 -- ───────────────────────────────────────────── sign-in
 CREATE TABLE IF NOT EXISTS public.storage_app_devices (
@@ -109,6 +133,10 @@ BEGIN
             CASE WHEN vis_old AND OLD.folder_id IS DISTINCT FROM NEW.folder_id THEN OLD.folder_id END, NEW.name);
   END IF;
   RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'store_change_log_file failed (%): % — the storage write goes ahead', SQLSTATE, SQLERRM;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
 END $$;
 
 CREATE OR REPLACE FUNCTION public.store_change_log_folder() RETURNS trigger
@@ -138,6 +166,10 @@ BEGIN
             CASE WHEN vis_old AND OLD.parent_id IS DISTINCT FROM NEW.parent_id THEN OLD.parent_id END, NEW.name);
   END IF;
   RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'store_change_log_folder failed (%): % — the storage write goes ahead', SQLSTATE, SQLERRM;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
 END $$;
 
 -- owners: an owner appears when it is live (study_only = false) and disappears when it is hidden again.
@@ -164,28 +196,9 @@ BEGIN
     INSERT INTO store_change_log (item_kind, item_id, op, owner_id) VALUES ('owner', NEW.id, 'upsert', NEW.id);
   END IF;
   RETURN NEW;
-END $$;
-
--- the CRM rows that decide an owner's name and its group (company name, state, status, type; a person's name):
--- a closed client moving to another group is a MOVE for Finder, not a delete plus an add.
-CREATE OR REPLACE FUNCTION public.store_change_log_account() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-BEGIN
-  IF OLD.company_name IS DISTINCT FROM NEW.company_name OR OLD.state_of_formation IS DISTINCT FROM NEW.state_of_formation
-     OR OLD.status IS DISTINCT FROM NEW.status OR OLD.account_type IS DISTINCT FROM NEW.account_type THEN
-    INSERT INTO store_change_log (item_kind, item_id, op, owner_id)
-    SELECT 'owner', o.id, 'upsert', o.id FROM store_owners o WHERE o.account_id = NEW.id AND o.study_only = false;
-  END IF;
-  RETURN NEW;
-END $$;
-
-CREATE OR REPLACE FUNCTION public.store_change_log_contact() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-BEGIN
-  IF OLD.full_name IS DISTINCT FROM NEW.full_name OR OLD.first_name IS DISTINCT FROM NEW.first_name OR OLD.last_name IS DISTINCT FROM NEW.last_name THEN
-    INSERT INTO store_change_log (item_kind, item_id, op, owner_id)
-    SELECT 'owner', o.id, 'upsert', o.id FROM store_owners o WHERE o.contact_id = NEW.id AND o.study_only = false;
-  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'store_change_log_owner failed (%): % — the storage write goes ahead', SQLSTATE, SQLERRM;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;
 END $$;
 
@@ -198,12 +211,11 @@ CREATE TRIGGER trg_store_change_log_folder AFTER INSERT OR UPDATE OR DELETE ON p
 DROP TRIGGER IF EXISTS trg_store_change_log_owner ON public.store_owners;
 CREATE TRIGGER trg_store_change_log_owner AFTER INSERT OR UPDATE OR DELETE ON public.store_owners
   FOR EACH ROW EXECUTE FUNCTION public.store_change_log_owner();
+-- the CORE CRM tables carry NO change-feed trigger (an earlier sandbox build had two): remove them where they exist
 DROP TRIGGER IF EXISTS trg_store_change_log_account ON public.accounts;
-CREATE TRIGGER trg_store_change_log_account AFTER UPDATE ON public.accounts
-  FOR EACH ROW EXECUTE FUNCTION public.store_change_log_account();
 DROP TRIGGER IF EXISTS trg_store_change_log_contact ON public.contacts;
-CREATE TRIGGER trg_store_change_log_contact AFTER UPDATE ON public.contacts
-  FOR EACH ROW EXECUTE FUNCTION public.store_change_log_contact();
+DROP FUNCTION IF EXISTS public.store_change_log_account();
+DROP FUNCTION IF EXISTS public.store_change_log_contact();
 
 -- Read the feed from a cursor. Returns ONLY rows whose transaction is older than every transaction still in
 -- flight, ordered by (txid, seq): a late-committing row always has a txid at or above the snapshot's xmin, so it
@@ -278,5 +290,3 @@ GRANT EXECUTE ON FUNCTION public.storage_app_prune() TO service_role;
 REVOKE ALL ON FUNCTION public.store_change_log_file() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_change_log_folder() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_change_log_owner() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.store_change_log_account() FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.store_change_log_contact() FROM PUBLIC, anon, authenticated;

@@ -91,7 +91,11 @@ public final class StorageAPI: @unchecked Sendable {
 
     // MARK: data routes (token only)
 
-    public func whoami() async throws -> WhoAmI { try await get("api/storage-app/whoami") }
+    public func whoami() async throws -> WhoAmI {
+        let me: WhoAmI = try await get("api/storage-app/whoami")
+        if let h = me.leaseHours { lease?.setLeaseSeconds(h * 3600) }      // the CRM decides how long a Mac may be away
+        return me
+    }
     public func navigation() async throws -> [NavGroup] { (try await get("api/storage-app/navigation") as NavigationResponse).groups }
     public func folder(owner: String, folder: String? = nil) async throws -> FolderListing {
         var q = [URLQueryItem(name: "owner", value: owner)]

@@ -33,13 +33,21 @@ describe("who may use the Mac app", () => {
     const past = new Date(Date.now() - 3_600_000).toISOString()
     expect(userMayUseApp(user({ app_metadata: { role: "team" }, factors: totp, banned_until: past } as never)).ok).toBe(true)
   })
-  it("follows the CRM's own two-step-login decision for a person with no authenticator", () => {
+  it("by DEFAULT a verified two-step login is required: no exemption, no grace window (a shared login like support@ can never approve a Mac)", () => {
     const team = { role: "team" }
-    expect(userMayUseApp(user({ app_metadata: team, factors: [] })).ok).toBe(false)                          // not enrolled, no grace → refused
-    expect(userMayUseApp(user({ app_metadata: { ...team, mfa_exempt: true }, factors: [] })).ok).toBe(true) // owner-set exemption
+    expect(userMayUseApp(user({ app_metadata: team, factors: [] })).ok).toBe(false)
+    expect(userMayUseApp(user({ app_metadata: { ...team, mfa_exempt: true }, factors: [] })).ok).toBe(false)
     process.env.MFA_GRACE_UNTIL = new Date(Date.now() + 86_400_000).toISOString()
-    expect(userMayUseApp(user({ app_metadata: team, factors: [] })).ok).toBe(true)                           // inside the grace period
+    expect(userMayUseApp(user({ app_metadata: team, factors: [] })).ok).toBe(false)
+    expect(userMayUseApp(user({ app_metadata: team, factors: totp })).ok).toBe(true)
+  })
+  it("with requireSecondFactor switched OFF (sandbox only) it follows the CRM's own two-step-login decision", () => {
+    const team = { role: "team" }
+    expect(userMayUseApp(user({ app_metadata: team, factors: [] }), false).ok).toBe(false)                          // not enrolled, no grace → refused
+    expect(userMayUseApp(user({ app_metadata: { ...team, mfa_exempt: true }, factors: [] }), false).ok).toBe(true) // owner-set exemption
+    process.env.MFA_GRACE_UNTIL = new Date(Date.now() + 86_400_000).toISOString()
+    expect(userMayUseApp(user({ app_metadata: team, factors: [] }), false).ok).toBe(true)                           // inside the grace period
     process.env.MFA_GRACE_UNTIL = "not a date"
-    expect(userMayUseApp(user({ app_metadata: team, factors: [] })).ok).toBe(false)                          // garbage deadline → enforce
+    expect(userMayUseApp(user({ app_metadata: team, factors: [] }), false).ok).toBe(false)                          // garbage deadline → enforce
   })
 })

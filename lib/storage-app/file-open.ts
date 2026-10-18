@@ -10,7 +10,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logAppEvent } from "./device-auth"
 import { keepSecondsFor } from "./sensitive"
-import { readLimitBytes } from "./read-limit"
+import { getSettings } from "./settings"
 import type { AppItem } from "./listing"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
@@ -38,7 +38,8 @@ export async function openFileForDevice(p: { item: AppItem; userId: string; devi
   if (!v) return { status: 404, body: { error: "Not found." } }
   // ONE atomic step: count what this Mac and this person opened in the last hour, refuse if this file does not fit, else write the audit row.
   // A database error here throws → no link (fail closed).
-  const limit = readLimitBytes()
+  const settings = await getSettings()
+  const limit = settings.readLimitMB * 1024 * 1024
   const { data: reserve, error: rErr } = await db().rpc("storage_app_reserve_read", {
     p_device: p.deviceId, p_user: p.userId, p_owner: p.item.ownerId, p_file: p.item.id, p_name: p.item.name, p_size: v.size, p_device_limit: limit, p_user_limit: limit,
   })
@@ -52,5 +53,5 @@ export async function openFileForDevice(p: { item: AppItem; userId: string; devi
   }
   const { data, error } = await supabaseAdmin.storage.from(v.bucket).createSignedUrl(v.path, LINK_SECONDS)
   if (error || !data?.signedUrl) throw new Error(`Could not prepare the download (${error?.message ?? "no link"}).`)
-  return { status: 200, body: { url: data.signedUrl, name: p.item.name, size: v.size, mimeType: v.mimeType, sha256: v.sha256, expiresIn: LINK_SECONDS, sensitive, keepSeconds: keepSecondsFor(sensitive) } }
+  return { status: 200, body: { url: data.signedUrl, name: p.item.name, size: v.size, mimeType: v.mimeType, sha256: v.sha256, expiresIn: LINK_SECONDS, sensitive, keepSeconds: keepSecondsFor(sensitive, settings) } }
 }

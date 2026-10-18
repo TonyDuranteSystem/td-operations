@@ -8,6 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isOwnerOnly } from "@/lib/auth"
 import { isSensitiveForDevice } from "./sensitive"
 import { checkDestination } from "./save-rules"
+import { getSettings } from "./settings"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
 const db = () => supabaseAdmin as any
@@ -51,9 +52,12 @@ export async function appFolder(ownerId: string, folderId: string | null, device
     if (kErr) throw new Error(`Could not read the files (${kErr.message}).`)
     for (const r of (keyed ?? []) as { id: string }[]) mine.add(r.id)
   }
-  // can the Mac save a NEW file into each folder? (step A: Business / My files only; never a top folder, "2. Contacts" or "Shared with staff")
+  // can the Mac save a NEW file into each folder? (the `clientSaves` setting decides for client storages; Business / My files as always)
+  const settings = await getSettings()
+  const { data: ownRow } = await db().from("store_owners").select("account_id, contact_id").eq("id", ownerId).maybeSingle()
+  const ownerIds = { ownerId, accountId: ownRow?.account_id ?? null, contactId: ownRow?.contact_id ?? null }
   const inShare = c.folder ? await (await import("@/lib/crm-store/staff-share")).isInStaffShare(c.folder.id) : false
-  const canSave = (kind: string, trashed = false) => checkDestination({ ownerKind: c.owner.kind, folderKind: kind, inStaffShare: inShare || kind === "staff_share", folderTrashed: trashed }).ok
+  const canSave = (kind: string, trashed = false) => checkDestination({ ownerKind: c.owner.kind, folderKind: kind, inStaffShare: inShare || kind === "staff_share", folderTrashed: trashed, clientSaves: settings.clientSaves, ownerIds }).ok
   return {
     owner: c.owner,
     folder: c.folder ? { id: c.folder.id, name: c.folder.name, kind: c.folder.kind, locked: !!c.folder.locked, canSave: canSave(c.folder.kind, !!c.folder.trashed) } : null,
@@ -61,7 +65,7 @@ export async function appFolder(ownerId: string, folderId: string | null, device
     files: c.files.filter((f) => f.state === "live").map((f) => ({
       id: f.id, name: f.name, size: f.size, mimeType: f.mimeType, updatedAt: f.updatedAt,
       downloadable: true,   // every file opens (Antonio 2026-10-17); kept so an older app build still reads the answer
-      sensitive: isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }),
+      sensitive: isSensitiveForDevice({ documentType: f.documentType, ownerKind: f.inPersonStorage ? "person" : c.owner.kind, name: f.name }, settings.sensitiveTypes),
       mine: mine.has(f.id),
     })),
   }
@@ -78,13 +82,15 @@ export interface AppItem {
  */
 export async function appItem(kind: "file" | "folder", id: string, deviceId?: string): Promise<AppItem | null> {
   if (kind === "folder") {
-    const { data, error } = await db().from("store_folders").select("id, owner_id, parent_id, name, kind, template_slug, trashed_at, store_owners(kind)").eq("id", id).maybeSingle()
+    const { data, error } = await db().from("store_folders").select("id, owner_id, parent_id, name, kind, template_slug, trashed_at, store_owners(kind, account_id, contact_id)").eq("id", id).maybeSingle()
     if (error) throw new Error(`Could not read the folder (${error.message}).`)
     if (!data || data.trashed_at) return null
-    const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
+    const ownerRow = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners) as { kind?: string; account_id?: string | null; contact_id?: string | null } | undefined
+    const ownerKind = ownerRow?.kind
+    const settings = await getSettings()
     const inShare = await (await import("@/lib/crm-store/staff-share")).isInStaffShare(data.id)
     return { kind, id: data.id, ownerId: data.owner_id, parentId: data.parent_id ?? null, name: data.name, locked: data.template_slug !== null || data.parent_id === null,
-      canSave: checkDestination({ ownerKind, folderKind: data.kind, inStaffShare: inShare, folderTrashed: false }).ok }
+      canSave: checkDestination({ ownerKind, folderKind: data.kind, inStaffShare: inShare, folderTrashed: false, clientSaves: settings.clientSaves, ownerIds: { ownerId: data.owner_id, accountId: ownerRow?.account_id ?? null, contactId: ownerRow?.contact_id ?? null } }).ok }
   }
   const { data, error } = await db().from("store_files")
     .select("id, owner_id, folder_id, name, state, document_type, updated_at, caller_key, store_owners(kind), store_file_versions!store_files_current_version_fk(size_bytes, mime_type)").eq("id", id).maybeSingle()
@@ -94,6 +100,6 @@ export async function appItem(kind: "file" | "folder", id: string, deviceId?: st
   const ownerKind = (Array.isArray(data.store_owners) ? data.store_owners[0] : data.store_owners)?.kind as string | undefined
   return {
     kind, id: data.id, ownerId: data.owner_id, parentId: data.folder_id, name: data.name, size: v?.size_bytes ?? null, mimeType: v?.mime_type ?? null,
-    updatedAt: data.updated_at, mine: !!deviceId && typeof data.caller_key === "string" && data.caller_key.startsWith(`storage-app:${deviceId}:`), downloadable: true, sensitive: isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }),
+    updatedAt: data.updated_at, mine: !!deviceId && typeof data.caller_key === "string" && data.caller_key.startsWith(`storage-app:${deviceId}:`), downloadable: true, sensitive: isSensitiveForDevice({ documentType: data.document_type, ownerKind, name: data.name }, (await getSettings()).sensitiveTypes),
   }
 }

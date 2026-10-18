@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { isSensitiveForDevice, looksSensitiveByName, SENSITIVE_DOCUMENT_TYPES, keepSecondsFor, KEEP_SECONDS_SENSITIVE, KEEP_SECONDS_NORMAL } from "@/lib/storage-app/sensitive"
+import { isSensitiveForDevice, looksSensitiveByName, SENSITIVE_DOCUMENT_TYPES, keepSecondsFor } from "@/lib/storage-app/sensitive"
+import { defaultSettings } from "@/lib/storage-app/settings"
 
 describe("what counts as sensitive for the Mac app (opens, but audited and kept only briefly — Antonio 2026-10-17)", () => {
   it("blocks passports, IDs and the ITIN papers wherever they are", () => {
@@ -43,9 +44,11 @@ describe("what counts as sensitive for the Mac app (opens, but audited and kept 
 
 describe("how long a Mac keeps the copy of an opened file (Antonio 2026-10-17 evening)", () => {
   it("sensitive papers 2 minutes, everything else 15 minutes", () => {
-    expect(KEEP_SECONDS_SENSITIVE).toBe(120)
-    expect(KEEP_SECONDS_NORMAL).toBe(900)
-    expect(keepSecondsFor(true)).toBe(120)
-    expect(keepSecondsFor(false)).toBe(900)
+    const d = defaultSettings()
+    expect(d.keepSecondsSensitive).toBe(120)
+    expect(d.keepSecondsNormal).toBe(900)
+    expect(keepSecondsFor(true, d)).toBe(120)
+    expect(keepSecondsFor(false, d)).toBe(900)
+    expect(keepSecondsFor(true, { keepSecondsSensitive: 30, keepSecondsNormal: 60 })).toBe(30)
   })
 })

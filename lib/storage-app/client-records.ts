@@ -12,7 +12,7 @@
  * so a crash between the write and the mark can never leave an unmarked file in a client folder.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { isClientSaveOwner } from "./save-rules"
+import { isClientOwnerKind } from "./save-rules"
 import { looksSensitiveByName } from "./sensitive"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_* not in generated types until production
@@ -62,7 +62,7 @@ async function rowFor(f: FileFacts) {
 /** Make sure a Mac-saved file in a client folder is marked "Needs review" and has its documents row. No-op for other storages and for files that already have the row. */
 export async function ensureClientFileRecords(fileId: string, actorId: string | null): Promise<{ applied: boolean }> {
   const f = await loadFacts(fileId)
-  if (!f || f.state !== "live" || !isClientSaveOwner(f.ownerKind)) return { applied: false }
+  if (!f || f.state !== "live" || !isClientOwnerKind(f.ownerKind)) return { applied: false }
   if (await documentsRowExists(fileId)) return { applied: false }
   const reason = NEEDS_TYPE_REASON + (f.ownerKind === "company" && looksSensitiveByName(f.name) ? ID_NUDGE : "")
   const { markNeedsReview } = await import("@/lib/crm-store/structure")
@@ -78,7 +78,7 @@ export async function ensureClientFileRecords(fileId: string, actorId: string | 
 /** After a new version of a still-untyped Mac-saved file: the documents row follows the new name / size / type of the stored file. */
 export async function refreshClientRow(fileId: string): Promise<void> {
   const f = await loadFacts(fileId)
-  if (!f || f.state !== "live" || !isClientSaveOwner(f.ownerKind)) return
+  if (!f || f.state !== "live" || !isClientOwnerKind(f.ownerKind)) return
   const { upsertStoreDocumentRow } = await import("@/lib/crm-store/formation-pilot")
   await upsertStoreDocumentRow(fileId, await rowFor(f), "versioned")
 }
@@ -89,7 +89,7 @@ export async function sweepClientSaves(limit = 200): Promise<{ checked: number; 
   const { data, error } = await db().from("store_files").select("id, store_owners(kind)").like("caller_key", "storage-app:%").eq("state", "live").gt("created_at", since).limit(limit)
   if (error) throw new Error(`Could not list recent Mac saves (${error.message}).`)
   const rows = ((data ?? []) as { id: string; store_owners: { kind: string } | { kind: string }[] | null }[])
-    .filter((r) => isClientSaveOwner((Array.isArray(r.store_owners) ? r.store_owners[0] : r.store_owners)?.kind))
+    .filter((r) => isClientOwnerKind((Array.isArray(r.store_owners) ? r.store_owners[0] : r.store_owners)?.kind))
   let repaired = 0, failed = 0
   for (const r of rows) {
     try { if ((await ensureClientFileRecords(r.id, null)).applied) repaired++ } catch (e) { failed++; console.error("[storage-app sweep]", r.id, e instanceof Error ? e.message : e) }

@@ -10,14 +10,19 @@ Dir.chdir(ROOT)
 FileUtils.rm_rf('TDStorage.xcodeproj')
 project = Xcodeproj::Project.new('TDStorage.xcodeproj')
 
-# Debug = the dev server on this Mac (http://localhost:3050); Sandbox = the sandbox deployment. There is NO Production
-# configuration yet (phase P4, on Antonio's word): a sandbox build can never be pointed at production data.
+# Debug = the dev server on this Mac (http://localhost:3050); Sandbox = the sandbox deployment; Production = the real CRM (the address is a
+# setting of the BUILD, not of the code: TD_PRODUCTION_URL=https://host ruby generate_xcodeproj.rb, default https://crm.tonydurante.us).
+# Each configuration has its OWN bundle ids and Keychain service/group (suffix), so a sandbox build and a production build can never share
+# tokens: a token is also only valid for the database that made it.
+prod_url = (ENV['TD_PRODUCTION_URL'] || 'https://crm.tonydurante.us').sub(%r{\A(https?:)//}, '\\1/$()/')
 CONFIGS = {
   'Debug'   => { 'TD_SERVER_URL' => 'http:/$()/localhost:3050',            'ID' => 'com.tonydurante.tdstorage.local',   'SUFFIX' => 'local' },
   'Sandbox' => { 'TD_SERVER_URL' => 'https:/$()/td-operations-sandbox.vercel.app', 'ID' => 'com.tonydurante.tdstorage.sandbox', 'SUFFIX' => 'sandbox' },
+  'Production' => { 'TD_SERVER_URL' => prod_url, 'ID' => 'com.tonydurante.tdstorage', 'SUFFIX' => 'prod' },
 }
 project.build_configurations.each { |c| c.build_settings.clear }
 project.build_configurations.find { |c| c.name == 'Release' }.name = 'Sandbox'   # the second configuration
+project.add_build_configuration('Production', :release)                         # the third, created explicitly (never by renaming)
 
 common = {
   'SWIFT_VERSION' => '5.0', 'MACOSX_DEPLOYMENT_TARGET' => '13.0', 'CODE_SIGN_STYLE' => 'Automatic',
@@ -32,7 +37,7 @@ end
 
 app = project.new_target(:application, 'TDStorage', :osx, '13.0')
 ext = project.new_target(:app_extension, 'TDStorageFileProvider', :osx, '13.0')
-[app, ext].each { |t| t.build_configurations.find { |c| c.name == 'Release' }&.name = 'Sandbox' }
+[app, ext].each { |t| t.build_configurations.find { |c| c.name == 'Release' }&.name = 'Sandbox'; t.add_build_configuration('Production', :release) }
 
 def group_for(project, path)
   project.main_group.find_subpath(path, true).tap { |g| g.set_source_tree('<group>'); g.set_path(path) }
@@ -73,11 +78,11 @@ bf = embed.add_file_reference(ext.product_reference, true)
 bf.settings = { 'ATTRIBUTES' => ['RemoveHeadersOnCopy', 'CodeSignOnCopy'] }
 
 project.save
-%w[Debug Sandbox].each do |cfg|
+%w[Debug Sandbox Production].each do |cfg|
   scheme = Xcodeproj::XCScheme.new
   scheme.add_build_target(app)
   scheme.set_launch_target(app)
   scheme.launch_action.build_configuration = cfg
-  scheme.save_as(project.path, cfg == 'Debug' ? 'TDStorage' : 'TDStorage-Sandbox', true)
+  scheme.save_as(project.path, { 'Debug' => 'TDStorage', 'Sandbox' => 'TDStorage-Sandbox', 'Production' => 'TDStorage-Production' }[cfg], true)
 end
 puts "generated TDStorage.xcodeproj"

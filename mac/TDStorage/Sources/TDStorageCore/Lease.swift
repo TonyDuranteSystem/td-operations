@@ -11,6 +11,9 @@ public protocol LeaseStore: AnyObject {
     func lastContact() -> Date?
     func touch()
     func clear()
+    /// How long the Mac may be away. The CRM sets it (the `leaseHours` setting) and the app follows; until the CRM has said, the built-in 24 hours.
+    func leaseSeconds() -> TimeInterval
+    func setLeaseSeconds(_ seconds: TimeInterval)
 }
 
 public enum Lease {
@@ -26,11 +29,14 @@ public enum Lease {
 }
 
 public extension LeaseStore {
-    func isExpired(now: Date = Date()) -> Bool { Lease.isExpired(last: lastContact(), now: now) }
+    func isExpired(now: Date = Date()) -> Bool { Lease.isExpired(last: lastContact(), now: now, maxAge: leaseSeconds()) }
 }
 
 public final class MemoryLeaseStore: LeaseStore {
     private var date: Date?
+    private var seconds: TimeInterval = Lease.maxAge
+    public func leaseSeconds() -> TimeInterval { seconds }
+    public func setLeaseSeconds(_ s: TimeInterval) { if s >= 3600 { seconds = s } }
     public init(_ date: Date? = nil) { self.date = date }
     public func lastContact() -> Date? { date }
     public func touch() { date = Date() }
@@ -70,4 +76,36 @@ public final class KeychainLeaseStore: LeaseStore {
     }
 
     public func clear() { SecItemDelete(base() as CFDictionary) }
+
+    // the lease LENGTH lives in its own Keychain item (same group), written whenever the CRM tells it
+    private func lengthBase() -> [String: Any] {
+        var q = base(); q[kSecAttrAccount as String] = "lease-seconds"; return q
+    }
+    public func leaseSeconds() -> TimeInterval {
+        var q = lengthBase(); q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data, let text = String(data: data, encoding: .utf8), let v = Double(text), v >= 3600 else { return Lease.maxAge }
+        return v
+    }
+    public func setLeaseSeconds(_ seconds: TimeInterval) {
+        guard seconds >= 3600 else { return }
+        let data = Data(String(seconds).utf8)
+        let attrs: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAttrSynchronizable as String: false]
+        if SecItemUpdate(lengthBase() as CFDictionary, attrs as CFDictionary) == errSecItemNotFound {
+            var add = lengthBase(); add.merge(attrs) { _, new in new }
+            SecItemAdd(add as CFDictionary, nil)
+        }
+    }
+}
+
+/// How often the Mac re-lists EVERYTHING (the CRM's `resyncMinutes` setting; built-in 10). This is how a company or person RENAME reaches Finder: the core CRM
+/// tables carry no change-feed trigger, so the Mac simply asks for a full refresh now and then.
+public enum ResyncClock {
+    public static let defaultMinutes: Double = 10
+    /// PURE: is a full refresh due? (No record yet → not due: the caller records "now" and starts counting.)
+    public static func due(last: Date?, now: Date = Date(), minutes: Double?) -> Bool {
+        guard let last else { return false }
+        let m = (minutes ?? defaultMinutes)
+        return m >= 1 && now.timeIntervalSince(last) >= m * 60
+    }
 }
