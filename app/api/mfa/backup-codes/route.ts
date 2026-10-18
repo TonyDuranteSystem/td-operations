@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isStaffAuthRole } from '@/lib/team/workspace'
+import { isMarketingRole } from '@/lib/auth/role-door'
 import { generateBackupCodes } from '@/lib/auth/mfa-backup-codes'
 
 export const dynamic = 'force-dynamic'
@@ -18,7 +19,7 @@ export const dynamic = 'force-dynamic'
 export async function POST() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isStaffAuthRole(user.app_metadata?.role)) {
+  if (!user || !(isStaffAuthRole(user.app_metadata?.role) || isMarketingRole(user.app_metadata?.role))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

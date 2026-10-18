@@ -200,5 +200,5 @@ const ADMIN_EMAILS = ['antonio.durante@tonydurante.us']
 
 function isAdminUser(u: { email?: string; app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> }): boolean {
   if (ADMIN_EMAILS.includes(u.email ?? '')) return true
-  return u.app_metadata?.role === 'admin' || u.user_metadata?.role === 'admin'
+  return u.app_metadata?.role === 'admin' // never user_metadata: self-writable
 }

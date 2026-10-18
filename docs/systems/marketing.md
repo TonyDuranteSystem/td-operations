@@ -16,6 +16,12 @@ A separate, confined workspace for Rocco's sales team (Rocco = boss, Ale = his e
 - Server: `lib/marketing/settings.ts` (create team, change status, get/set settings, commission terms). Admin-only by the caller; it trusts the route to have checked.
 - Payments: a Stripe checkout tagged `payment_kind` (see `docs/systems/offers.md`, job J-A) skips every client effect; the marketing ledger (P2) will read the stored webhook event. Marketing is Stripe-only because Whop carries no metadata.
 
+## P1 — who can log in, and what they can reach (sandbox, built 2026-10-18; plan page approved by Antonio)
+- Door rule: `lib/auth/role-door.ts` + `middleware.ts` (see `docs/systems/auth-oauth.md`). A `marketing` login reaches `/marketing`, the two-step pages and `/api/marketing/` only; unknown roles are turned away; marketing must pass the two-step check.
+- Database: `marketing_team_members` and `marketing_invites` (migration `20261018-0110`), helper functions `marketing_my_team_ids()` / `marketing_my_owner_team_ids()` (security definer, avoid policy recursion), team-scoped READ policies; writes are server-only. Every non-marketing public table carries a RESTRICTIVE `marketing_blocked` policy.
+- Decisions (Antonio): old security fix `f6ea4420` included and superseded; Rocco's workspace login is a tonydurante.us address Antonio creates (Ale and setters use their own email); address `marketing.tonydurante.us` (DNS is Antonio's step).
+- Still to build in P1: the shared guard (`lib/marketing/guard.ts`), the `/marketing` placeholder page, owner-only invite/remove/pause routes, protection of clean-up/merge/tier-sync tools against marketing logins.
+
 ## Gotchas
 - The shared apply script `scripts/apply-migration.js` forces SSL and fails on the private local stack ("server does not support SSL"). Apply with `docker exec -i <db container> psql -U postgres -d postgres < file.sql`.
 - A rate change is a NEW term row with a later effective date. A sale will take a snapshot of the term when its payment link is created (P2), so old sales never change.
