@@ -73,6 +73,36 @@ async function findOrCreateChildFolder(parentId: string, name: string): Promise<
   return created.id
 }
 
+function shortId(s: string): string {
+  return s.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "x"
+}
+
+/**
+ * Resolve the individual (no-company) folder under Individual Clients.
+ *
+ * The folder name is keyed to the PERSON'S IDENTITY, not just their legal name:
+ * `{name} ({shortId})` where shortId derives from the contact/lead/token. This
+ * makes it:
+ *  - collision-safe — two different people with the SAME legal name get DIFFERENT
+ *    folders (their W-7/passport can never overwrite each other), even under a
+ *    concurrent same-name submission (the names differ by construction).
+ *  - resubmit-safe / sweep-safe — deterministic, so the inline save, the durable
+ *    job, and the backstop sweep all resolve the SAME folder with no stored state.
+ *
+ * Deliberately does NOT persist onto contacts.drive_folder_id: that column is
+ * read+reused by formation's ensureContactFolder, so writing an Individual
+ * Clients link there would later hijack the client's company contact folder.
+ */
+async function resolveIndividualFolder(params: {
+  identityKey: string
+  clientName: string
+}): Promise<string> {
+  const clientName = params.clientName.trim()
+  if (!clientName) throw new Error("itin folder: cannot resolve an Individual Clients folder without a client name")
+  const key = params.identityKey || clientName
+  return findOrCreateChildFolder(INDIVIDUAL_CLIENTS_ROOT, `${clientName} (${shortId(key)})`)
+}
+
 /**
  * Resolve the person's ITIN contact folder id. Reads the account link when the
  * submission itself carries no account_id (ITIN is person-keyed).
@@ -109,26 +139,6 @@ export async function resolveItinContactFolder(params: {
     if (await personFilesInStorage(contactId, accountId)) return `person-storage:${contactId}`
   }
 
-  // Stop Drive (dev job 264bb882, S1d): the ITIN package is written in Drive only for a person of a company deliberately left
-  // on Drive (their folder, no storage, company not closed). Any other person gets their OWN storage opened here and the
-  // package is filed there; a Drive folder is never created for them. (A lead with no contact has no person to hold a storage
-  // — that is refused, loudly, instead of falling back to a Drive folder.)
-  {
-    const { legacyDriveForContact, legacyDriveForAccount, raiseDriveWriteRefused, DriveWriteRefusedError } = await import("@/lib/crm-store/legacy-drive")
-    const personLegacy = contactId ? await legacyDriveForContact(contactId) : null
-    const companyLegacy = accountId ? await legacyDriveForAccount(accountId) : null
-    if (!(personLegacy && personLegacy.allowed) && !(companyLegacy && companyLegacy.allowed)) {
-      if (contactId) {
-        const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
-        await ensurePersonOwner(contactId, params.clientName || "Member")
-        return `person-storage:${contactId}`
-      }
-      const reason = companyLegacy && !companyLegacy.allowed ? companyLegacy.reason : "no_company"
-      await raiseDriveWriteRefused({ flow: "itin-folder", accountId, contactId, reason, detail: `lead ${params.leadId ?? "?"}` })
-      throw new DriveWriteRefusedError(reason)
-    }
-  }
-
   // Company-owner → the company's "2. Contacts" subfolder.
   if (accountId) {
     const { data: acc, error } = await supabaseAdmin
@@ -146,6 +156,9 @@ export async function resolveItinContactFolder(params: {
     throw new Error(`itin folder: account ${accountId} (${acc?.company_name ?? "?"}) has NO drive_folder_id yet — ITIN belongs in its "2. Contacts"; retry once the company folder exists`)
   }
 
-  // Nothing is left that may be written to: the block above sends everyone but a legacy-Drive company's person to storage.
-  throw new Error("itin folder: no company and no person to file this ITIN package for")
+  // Individual (no company) → per-person folder under Individual Clients.
+  return resolveIndividualFolder({
+    identityKey: contactId || params.leadId || params.token || "",
+    clientName: params.clientName,
+  })
 }
