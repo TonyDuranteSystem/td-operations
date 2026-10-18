@@ -107,7 +107,7 @@ export async function runAttestHandoff(accountId: string, taxYear: number): Prom
   try {
     const detail = {
       archived: `Confirmed Excel archived in Drive 3.Tax/${taxYear}.`,
-      nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year before sending to the accountant.`,
+      nothing_to_archive: `No transactions for ${taxYear} — nothing to archive. Confirm this is genuinely a dormant/first year.`,
       no_drive_folder: `This account has no Drive folder — the confirmed Excel could not be archived. Create the client's Drive folder, then regenerate the workbook before the final pass.`,
       failed: `ARCHIVING THE EXCEL TO DRIVE FAILED — there is no confirmed workbook in 3.Tax/${taxYear} to send. Regenerate it from the tax financials page before the final pass.`,
     }[outcome]

@@ -353,15 +353,21 @@ export function registerBankStatementTools(server: McpServer) {
   // ═══════════════════════════════════════
   server.tool(
     "bank_statement_pnl",
-    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Uploads to client's Drive '3. Tax' folder and refreshes the client's portal Documents tab. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first. SILENT BY DEFAULT: re-running this while fixing categorization/ownership/data issues never pings the client — only pass notify_client=true on the run you intend the client to actually see and act on (their 'please review and confirm' message + document alert fire ONLY then, not on every regeneration).",
+    "Generate Profit & Loss statement + Balance Sheet from parsed bank transactions. Outputs Excel with dual currency (original + USD at IRS rate). Saves it in the company's CRM storage (Tax folder) and refreshes the client's portal Documents tab. IRS RULE: All US tax returns must be in USD — the tool automatically converts using the IRS yearly average exchange rate. Includes K-1 allocation per member based on ownership %. Prerequisite: run bank_statement_process first. SILENT BY DEFAULT: re-running this while fixing categorization/ownership/data issues never pings the client — only pass notify_client=true on the run you intend the client to actually see and act on (their 'please review and confirm' message + document alert fire ONLY then, not on every regeneration).",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
-      upload_to_drive: z.boolean().optional().default(true).describe("Save the Excel in the company's storage (default: true)"),
+      save_to_storage: z.boolean().optional().default(true).describe("Save the Excel in the company's storage (default: true)"),
       notify_client: z.boolean().optional().default(false).describe("Notify the client this P&L is ready to review/confirm (default: false — use ONLY on the genuinely final run; every other regeneration during staff review stays silent)"),
     },
-    async ({ account_id, tax_year, upload_to_drive, notify_client }) => {
+    async ({ account_id, tax_year, save_to_storage, notify_client }) => {
       try {
+        // Decide where the workbook will be saved BEFORE building it (never make a file that cannot be kept).
+        if (save_to_storage) {
+          const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+          const place = await companyStoragePlace(account_id)
+          if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
+        }
         const ctx = await getAccountContext(account_id)
 
         // Get transactions — PAGINATED (card 4a39e0fd): the unpaginated
@@ -449,10 +455,7 @@ export function registerBankStatementTools(server: McpServer) {
         let clientNotified = false
         // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) gets the workbook there — the same
         // file (a new version) on every re-run; a company with no storage place yet is not saved.
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const pnlInStorage = upload_to_drive && (await companyDocState(account_id)) !== "drive"
-        if (upload_to_drive && !pnlInStorage) driveLink = "NOT saved — this company has no storage place yet"
-        if (pnlInStorage) {
+        if (save_to_storage) {
           const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
           const routed = await saveDocumentForAccount({
             accountId: account_id, name: fileName, bytes: buffer,

@@ -393,12 +393,9 @@ The file is saved in the company's "5. Correspondence" folder (internal).`,
           return { content: [{ type: "text" as const, text: `Account not found: ${accErr?.message || "no data"}` }] }
         }
 
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const inStorage = (await companyDocState(params.account_id)) !== "drive"
-
-        if (!inStorage) {
-          return { content: [{ type: "text" as const, text: `Not saved: "${account.company_name}" has no storage place yet.` }] }
-        }
+        const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+        const place = await companyStoragePlace(params.account_id)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `Not saved: ${place.message}` }] }
 
         // Get delivery metadata
         const deliveryInfo = await harborCompliance.getDelivery(params.delivery_id, {

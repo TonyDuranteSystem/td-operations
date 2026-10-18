@@ -1,6 +1,11 @@
 /**
- * Stop Drive (dev job 264bb882): neither the MCP server nor the AI assistants may be able to WRITE to Drive.
+ * Stop Drive (dev job 264bb882): the MCP server and the AI assistants have NO Drive write TOOL any more.
  * Reads (search / list / info / read) and the CRM-storage tools stay.
+ *
+ * What this does NOT claim (and the test pins, so a doc can never say more than is true):
+ *  - `storage_write` / `storage_move` still mirror their own bucket into My Drive (`syncToDrive` in storage.ts);
+ *  - the review tools of formation / banking / closure / tax still call `saveFormToDrive` (guarded by guardDriveWrite).
+ *    Moving those to storage is session S1d; this list may only SHRINK.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -50,6 +55,19 @@ describe('MCP server — no Drive write tools', () => {
   })
 })
 
+describe('what still touches Drive from MCP tools — pinned exactly (may only shrink)', () => {
+  const dir = join(ROOT, 'lib/mcp/tools')
+  const files = readdirSync(dir).filter(n => n.endsWith('.ts'))
+  it('only these tool files call saveFormToDrive (S1d moves them to storage)', () => {
+    const users = files.filter(f => /\bsaveFormToDrive\b/.test(readFileSync(join(dir, f), 'utf8'))).sort()
+    expect(users).toEqual(['banking-form.ts', 'closure.ts', 'formation.ts', 'tax.ts'])
+  })
+  it('only storage.ts mirrors into My Drive (syncToDrive)', () => {
+    const users = files.filter(f => /\bsyncToDrive\b/.test(readFileSync(join(dir, f), 'utf8'))).sort()
+    expect(users).toEqual(['storage.ts'])
+  })
+})
+
 describe('AI assistants — no Drive write tools', () => {
   it('the assistant tool list has no Drive write tool and keeps the Drive read tools', async () => {
     const { AGENT_TOOLS } = await import('@/lib/ai-agent/tools')
@@ -65,6 +83,30 @@ describe('AI assistants — no Drive write tools', () => {
       expect(APPROVABLE_TOOL_NAMES.has(w), w).toBe(false)
       expect(WORKER_READ_ONLY_TOOL_NAMES.has(w), w).toBe(false)
     }
+  })
+
+  it('an old-shape gmail_get_attachments call saving to Drive returns an explicit error and saves/lists nothing', async () => {
+    const { executeTool } = await import('@/lib/ai-agent/tools')
+    for (const params of [{ message_id: 'm1', save_to_drive: true, drive_folder_id: 'f1' }, { message_id: 'm1', save_to_drive: true }, { message_id: 'm1', drive_folder_id: 'f1' }]) {
+      const out = JSON.parse(await executeTool('gmail_get_attachments', params))
+      expect(out.error).toMatch(/save_to_storage/)
+      expect(out.attachments).toBeUndefined()
+    }
+  })
+
+  it('asking the assistant to move or upload a Drive file reaches no tool', async () => {
+    const { executeTool } = await import('@/lib/ai-agent/tools')
+    for (const name of ['drive_move', 'drive_upload_file']) {
+      expect(JSON.parse(await executeTool(name, { file_id: 'f', target_folder_id: 't', file_name: 'x' })).error).toMatch(/Unknown tool/)
+    }
+  })
+
+  it('the assistant prompt and tool texts do not tell the model it can save to Drive', async () => {
+    const { SYSTEM_PROMPT } = await import('@/lib/ai-agent/system-prompt')
+    const { AGENT_TOOLS } = await import('@/lib/ai-agent/tools')
+    const texts = [SYSTEM_PROMPT, ...AGENT_TOOLS.map(t => `${t.description} ${JSON.stringify(t.parameters)}`)].join('\n')
+    expect(texts).not.toMatch(/save[^.\n]{0,40}to (their |the )?(google )?drive/i)
+    expect(texts).not.toMatch(/save_to_drive|drive_folder_id|gdrive_folder_url|drive_upload_file|drive_move/)
   })
 
   it('the assistant code calls no Drive write helper', () => {

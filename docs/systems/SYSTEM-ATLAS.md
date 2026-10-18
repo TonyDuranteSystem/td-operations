@@ -182,7 +182,7 @@ _Regenerated 2026-10-18. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-10-18)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-10-12)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-10-18)_
-- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-17)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-10-18)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-10-12)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-09-23)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-09-11)_
@@ -204,7 +204,7 @@ _Regenerated 2026-10-18. Every subsystem doc under `docs/systems/` (49 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-10-16)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-10-16)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-10-16)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-14)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-10-18)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-16)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-08-14)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_

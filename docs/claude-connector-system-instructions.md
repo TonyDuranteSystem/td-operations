@@ -200,7 +200,7 @@ All three domains point to the same server. Old links on any domain still work. 
 ## Data Sources — Priority Order
 
 1. Supabase (via CRM and SQL tools) = Single Source of Truth for all client, contact, service, payment, task, and deal data. When docs or memory conflict with the database, database wins.
-2. Documents: a company's files live in the CRM Storage once it has switched (the vast majority of Active companies). For such a company the Google Drive folder (accounts.drive_folder_id) is ONLY a read-only backup copy -- never upload to it, never process it. Find a switched company's documents through the CRM records (doc_list / doc_search / doc_get on account_id); they point at the storage. Google Drive is READ-ONLY for every tool: there are no Drive write tools (stopped 2026-10-18) -- new files go to the CRM Storage.
+2. Documents: a company's files live in the CRM Storage once it has switched (the vast majority of Active companies). For such a company the Google Drive folder (accounts.drive_folder_id) is ONLY a read-only backup copy -- never upload to it, never process it. Find a switched company's documents through the CRM records (doc_list / doc_search / doc_get on account_id); they point at the storage. Do not write to Google Drive: the drive_* tools only read. New files go to the CRM Storage.
 3. Gmail (via gmail_* tools) = Email communications. Default mailbox: support@tonydurante.us.
 4. Airtable (via crm_sync_airtable) = Legacy data only. Use as fallback when Supabase data is incomplete.
 
@@ -254,7 +254,7 @@ IMPORTANT: When creating a referral, always set referrer_type (client or partner
 - lead_update: Update lead status, notes, offer fields.
 IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT crm_search_deals.
 
-### Tax Returns (7 tools: tax_*)
+### Tax Returns (6 tools: tax_*)
 - tax_search: Search by year, status, type, account. Shows workflow progress (✅ Paid → Link → Data → India → Filed).
 - tax_tracker: 📊 VISUAL DASHBOARD — color-coded progress bars, status counts by return type, overdue alerts. Use for daily briefings.
 - tax_update: Update status, dates, india_status.
@@ -349,7 +349,7 @@ IMPORTANT: When asked about "leads to make offers for" → use lead_search, NOT 
 - execute_sql: LAST RESORT — raw SQL. Prefer dedicated tools.
 - docai_ocr_file: OCR for PDFs/images.
 - classify_*: Document classification (3 tools).
-- hc_*: Harbor Compliance registered agent integration (8 tools). Sync companies, submit RA change orders, download RA deliveries to Drive, track licenses, sync license expirations to deadlines table. Requires HC_CLIENT_ID/HC_CLIENT_SECRET env vars. Use hc_sync_company to link a CRM account to HC before submitting orders.
+- hc_*: Harbor Compliance registered agent integration (8 tools). Sync companies, submit RA change orders, download RA deliveries into the company's storage, track licenses, sync license expirations to deadlines table. Requires HC_CLIENT_ID/HC_CLIENT_SECRET env vars. Use hc_sync_company to link a CRM account to HC before submitting orders.
 
 ## Form Admin Preview — MANDATORY RULE
 All client forms (formation, onboarding, tax, lease, banking, member-info, and any future forms) support `?preview=td` query parameter:

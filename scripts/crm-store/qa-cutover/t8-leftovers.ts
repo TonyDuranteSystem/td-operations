@@ -89,13 +89,13 @@ async function main() {
   const bank = capture((s) => registerBankStatementTools(s as never))
   const { data: yrRow } = await sb.from("bank_transactions").select("tax_year").eq("account_id", UX).limit(1).maybeSingle()
   const pnlYear = Number(yrRow?.tax_year ?? 2025)
-  const pnl = await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, upload_to_drive: true, notify_client: false })
+  const pnl = await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, save_to_storage: true, notify_client: false })
   const pnlText = pnl.content.map((c) => c.text).join("\n")
   console.log(`      (info) ${pnlText.split("\n").slice(0, 3).join(" | ").slice(0, 240)}`)
   const allPnl = async () => ((await sb.from("documents").select("id, drive_file_id, portal_visible").eq("account_id", UX).eq("document_type_name", "Profit & Loss Statement").like("file_name", `%PnL ${pnlYear}%`)).data ?? []) as Array<{ id: string; drive_file_id: string; portal_visible: boolean }>
   const pnlRows = await allPnl()
   check("P1 the P&L workbook is saved in the company's storage and shown to the client", pnlRows.length === 1 && pnlRows[0].drive_file_id.startsWith("store:") && pnlRows[0].portal_visible === true, `${pnlText.slice(0, 160)} rows=${JSON.stringify(pnlRows)}`)
-  await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, upload_to_drive: true, notify_client: false })
+  await bank["bank_statement_pnl"]({ account_id: UX, tax_year: pnlYear, save_to_storage: true, notify_client: false })
   const pnlAgain = await allPnl()
   check("P2 regenerating it is a new version of the same file (one row, same pointer)", pnlAgain.length === 1 && pnlAgain[0].drive_file_id === pnlRows[0]?.drive_file_id, JSON.stringify(pnlAgain))
 

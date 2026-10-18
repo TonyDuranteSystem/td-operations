@@ -553,17 +553,11 @@ export function registerITINFormTools(server: McpServer) {
 
         const results: string[] = [`📋 ITIN Document Preparation: ${clientName}`, ""]
 
-        // Drive cutover (dev job ad09ea91): the ITIN belongs to the PERSON. A person whose storage is live — or who belongs to a
-        // switched company — keeps these documents in their own storage; nothing is written to Drive for them.
-        const { liveOwnerOfContact, companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const personInStorage = !!sub.contact_id && (
-          !!(await liveOwnerOfContact(sub.contact_id as string)) ||
-          (!!sub.account_id && (await companyDocState(sub.account_id as string)) !== "drive")
-        )
-
-        if (!personInStorage) {
-          results.push("⚠️ This person has no storage place yet - PDFs will be generated but not saved")
-        }
+        // The ITIN belongs to the PERSON: decide where it will be saved BEFORE anything is generated. A person with no
+        // storage gets one now; a form not linked to a person is refused (nothing is made, nothing is claimed).
+        const { personStoragePlace } = await import("@/lib/crm-store/storage-place")
+        const place = await personStoragePlace(sub.contact_id as string | null, clientName)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         // 3. Generate W-7
         const { fillW7 } = await import("@/lib/pdf/w7-fill")
@@ -613,7 +607,7 @@ export function registerITINFormTools(server: McpServer) {
 
         // 6. Save the documents
         const uploadedIds: { name: string; id: string }[] = []
-        if (personInStorage) {
+        {
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
           const { storeNameKey } = await import("@/lib/crm-store/rules")
           const slug = clientName.replace(/\s+/g, "_")
@@ -626,7 +620,7 @@ export function registerITINFormTools(server: McpServer) {
               callerKey: `itin-docs:${sub.id}:${storeNameKey(fileName)}`,
               row: { document_type_name: label, category: 1, status: "classified" },
             })
-            if (routed.route !== "store") throw new Error("this person's files moved back to Drive while saving — nothing more was saved")
+            if (routed.route !== "store") throw new Error("this person's storage was not available while saving — nothing more was saved")
             uploadedIds.push({ name: label, id: routed.pointer })
             results.push(`📤 ${label} saved in ${clientName}'s new storage`)
           }

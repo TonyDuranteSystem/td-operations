@@ -487,11 +487,11 @@ export async function POST(req: NextRequest) {
 <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
 
 <h3>Documents Status</h3>
-<p>${docsGenerated ? '<strong style="color:#16a34a">W-7 + 1040-NR + Schedule OI GENERATED and uploaded to Drive.</strong><br/>Please review the documents before sending to client.' : '<strong style="color:#dc2626">Document generation failed -- run itin_prepare_documents manually.</strong>'}</p>
+<p>${docsGenerated ? '<strong style="color:#16a34a">W-7 + 1040-NR + Schedule OI GENERATED and saved.</strong><br/>Please review the documents before sending to client.' : '<strong style="color:#dc2626">Document generation failed -- run itin_prepare_documents manually.</strong>'}</p>
 
 <h3>Next Steps</h3>
 <ol>
-<li>Review the generated W-7, 1040-NR, and Schedule OI in Drive</li>
+<li>Review the generated W-7, 1040-NR, and Schedule OI in the ITIN workspace</li>
 <li>If correct, send to client for signature: <code>itin_prepare_documents(token="${token}", send_email=true)</code></li>
 <li>Client prints, signs, prints passport copies, mails to Seminole FL</li>
 </ol>

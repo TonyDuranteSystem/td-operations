@@ -291,7 +291,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'gmail_search',
-    description: 'Search Gmail inbox (support@tonydurante.us). Returns email summaries with message IDs. IMPORTANT: To find emails from a client, FIRST use search_contacts to get their email address, then search with "from:their@email.com". Searching by name alone may not work. WORKFLOW: 1) search_contacts → get email, 2) gmail_search with from:email, 3) gmail_read for full content, 4) gmail_get_attachments to save to Drive, 5) update_task + update_contact.',
+    description: 'Search Gmail inbox (support@tonydurante.us). Returns email summaries with message IDs. IMPORTANT: To find emails from a client, FIRST use search_contacts to get their email address, then search with "from:their@email.com". Searching by name alone may not work. WORKFLOW: 1) search_contacts → get email, 2) gmail_search with from:email, 3) gmail_read for full content, 4) gmail_get_attachments (save_to_storage + account_id) to save into the company\'s storage, 5) update_task + update_contact.',
     parameters: {
       type: 'object',
       properties: {
@@ -438,7 +438,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'get_sop',
-    description: 'Get the full Standard Operating Procedure (SOP) for a service type. Contains step-by-step workflows, Drive folder structure, rules, and pipeline stages. Service types: Company Formation, EIN Application, Banking Fintech, Banking Physical, Client Onboarding, ITIN, Tax Return, Company Closure, CMRA, RA Renewal, State Annual Report, Shipping, Public Notary, Support, Offboarding.',
+    description: 'Get the full Standard Operating Procedure (SOP) for a service type. Contains step-by-step workflows, folder structure, rules, and pipeline stages. Service types: Company Formation, EIN Application, Banking Fintech, Banking Physical, Client Onboarding, ITIN, Tax Return, Company Closure, CMRA, RA Renewal, State Annual Report, Shipping, Public Notary, Support, Offboarding.',
     parameters: {
       type: 'object',
       properties: {
@@ -528,13 +528,12 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'update_contact',
-    description: 'Update a contact record. After saving a passport to Drive, set passport_on_file=true and gdrive_folder_url to the folder link.',
+    description: 'Update a contact record. After a passport is saved in the person\'s storage, set passport_on_file=true.',
     parameters: {
       type: 'object',
       properties: {
         contact_id: { type: 'string', description: 'UUID of the contact' },
-        passport_on_file: { type: 'boolean', description: 'Set to true after passport is saved to Drive' },
-        gdrive_folder_url: { type: 'string', description: 'Google Drive folder URL for this contact' },
+        passport_on_file: { type: 'boolean', description: 'Set to true after the passport is saved in the person\'s storage' },
         notes: { type: 'string', description: 'Notes to append (timestamped)' },
         phone: { type: 'string', description: 'Updated phone number' },
         language: { type: 'string', description: 'Preferred language' },
@@ -2066,6 +2065,9 @@ async function saveAttachmentToStorage(accountId: string, name: string, bytes: B
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function gmailGetAttachmentsTool(p: any) {
+  if (p.save_to_drive || p.drive_folder_id) {
+    return JSON.stringify({ error: 'Nothing can be saved to Drive any more. To keep the attachments, call gmail_get_attachments again with save_to_storage=true and the company account_id. Nothing was saved.' })
+  }
   const { gmailGet } = await import('@/lib/gmail')
 
   // Get full message to find attachments
@@ -2198,7 +2200,6 @@ async function updateContact(p: any) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {}
   if (p.passport_on_file !== undefined) updates.passport_on_file = p.passport_on_file
-  if (p.gdrive_folder_url) updates.gdrive_folder_url = p.gdrive_folder_url
   if (p.phone) updates.phone = p.phone
   if (p.language) updates.language = p.language
   if (p.citizenship) updates.citizenship = p.citizenship
@@ -2212,7 +2213,7 @@ async function updateContact(p: any) {
   }
 
   if (Object.keys(updates).length === 0) {
-    return JSON.stringify({ error: 'No fields to update. Provide passport_on_file, gdrive_folder_url, notes, phone, language, or citizenship.' })
+    return JSON.stringify({ error: 'No fields to update. Provide passport_on_file, notes, phone, language, or citizenship.' })
   }
 
   updates.updated_at = new Date().toISOString()

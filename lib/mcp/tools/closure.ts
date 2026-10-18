@@ -398,7 +398,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
   // ═══════════════════════════════════════
   server.tool(
     "closure_prepare_documents",
-    "Generate pre-filled dissolution documents for an LLC closure. Supports: Wyoming (Articles of Dissolution), Delaware (Certificate of Cancellation), and IRS EIN Closure Letter (all states). Downloads blank forms from Drive Templates, fills fields with CRM data, uploads to client's Drive folder, and optionally emails to Luca for printing/mailing. Prerequisites: account must exist with company_name, state_of_formation, and at least one linked contact.",
+    "Generate pre-filled dissolution documents for an LLC closure. Supports: Wyoming (Articles of Dissolution), Delaware (Certificate of Cancellation), and IRS EIN Closure Letter (all states). Takes the blank forms from the Templates folder, fills fields with CRM data, saves the result in the company's CRM storage, and optionally emails to Luca for printing/mailing. Prerequisites: account must exist with company_name, state_of_formation, and at least one linked contact.",
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       send_email: z.boolean().optional().describe("If true, emails filled documents to support@ for printing"),
@@ -415,6 +415,11 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           .eq("id", account_id)
           .single()
         if (!acc) return { content: [{ type: "text" as const, text: "Account not found" }] }
+
+        // Decide where the documents will be saved BEFORE generating anything (never make documents that cannot be kept).
+        const { companyStoragePlace } = await import("@/lib/crm-store/storage-place")
+        const place = await companyStoragePlace(account_id)
+        if (!place.ok) return { content: [{ type: "text" as const, text: `⚠️ ${place.message}` }] }
 
         const { data: links } = await supabaseAdmin
           .from("account_contacts")
@@ -549,11 +554,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           lines.push("⚠️ No EIN on file — cannot generate IRS closure letter")
         }
 
-        // ── Save the documents ── (Drive cutover, dev job ad09ea91: a company whose files live in the new storage gets them
-        // there, internal, one version per file name; a company with no storage place is not saved — the documents can still be emailed)
-        const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
-        const closureInStorage = generatedFiles.length > 0 && (await companyDocState(account_id)) !== "drive"
-        if (closureInStorage) {
+        // ── Save the documents ── (the company's storage, internal, one version per file name)
+        if (generatedFiles.length > 0) {
           try {
             const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
             const { storeNameKey } = await import("@/lib/crm-store/rules")
@@ -563,16 +565,12 @@ Use gmail_send to send the link to the client after Antonio approves.`,
                 folder: "company", documentType: null, callerKey: `closure-doc:${account_id}:${storeNameKey(file.name)}`, portalVisible: false,
                 row: { document_type_name: "Closure document", category: 1, status: "classified" },
               })
-              if (routed.route !== "store") throw new Error("this company's files moved back to Drive while saving — nothing more was saved")
+              if (routed.route !== "store") throw new Error("this company's storage was not available while saving — nothing more was saved")
               lines.push(`📁 Saved in the new storage: ${file.name}`)
             }
           } catch (e) {
-            lines.push(`⚠️ Storage save error: ${e instanceof Error ? e.message : String(e)}`)
+            lines.push(`❌ NOT saved: ${e instanceof Error ? e.message : String(e)}`)
           }
-        }
-
-        if (!closureInStorage && generatedFiles.length > 0) {
-          lines.push("⚠️ Not saved: this company has no storage place yet. The documents were generated and can be emailed (send_email).")
         }
 
         // ── Send email ──
