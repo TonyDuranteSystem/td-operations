@@ -142,4 +142,17 @@ describe("/api/ss4-signed", () => {
     expect(task.description).toContain("Documents")
     expect(task.description.toLowerCase()).not.toContain("drive")
   })
+
+  it("a company left on its old folder whose upload FAILED is told what is true — never 'no storage'", async () => {
+    state.companyState = "drive"
+    state.driveMode = "forbid" // every Drive call throws
+    state.rows.accounts = ACCOUNT_OLD_FOLDER
+    const { POST } = await import("@/app/api/ss4-signed/route")
+    const res = await POST(req())
+    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const sd = steps.find((s) => s.step === "signed_doc")
+    expect(sd?.status).toBe("error")
+    expect(sd?.detail).toBe("The signed SS-4 could not be uploaded to the company's folder — see the earlier steps.")
+    expect(sd?.detail).not.toContain("no document storage")
+  })
 })

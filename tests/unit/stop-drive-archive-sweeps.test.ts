@@ -1,35 +1,28 @@
 /**
- * Stop Drive, slice S1c (dev job 264bb882): the two archive backstop crons skip a company that has no folder instead of
- * queueing a job that can only throw, and COUNT the skip in their result. A failed lookup skips nothing.
+ * Stop Drive, slice S1c: the two archive backstop crons.
+ *  - The window of 200 is filtered IN THE QUERY (inner join on the company): a company with no folder, or a Closed/Cancelled one,
+ *    never occupies it, however many such rows exist — there is no page limit through which starvation could come back.
+ *  - A company with no folder is counted, and a submission of such a company that nobody has filed raises ONE alarm (a system
+ *    error) every run until it is filed — the skip is never silent.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
 
 const state = vi.hoisted(() => ({
-  rows: {} as Record<string, unknown>,
-  recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
+  windows: { withFolder: [] as Array<Record<string, unknown>>, noFolder: [] as Array<Record<string, unknown>>, skippedNoFolder: 0, skippedFinished: 0, readError: null as string | null },
   enqueued: [] as string[],
-  accountsError: false,
-  paged: null as null | Array<Record<string, unknown>>,
   alarms: [] as Array<Record<string, unknown>>,
+  calls: [] as Array<{ table: string; cutoff: string }>,
 }))
 
-vi.mock("@/lib/supabase-admin", async () => {
-  const h = await import("./_stop-drive-mocks")
-  const base = h.makeSupabase(state.rows, state.recorded as never)
-  const from = (table: string) => {
-    const chain = base.from(table) as Record<string, unknown>
-    if (state.paged && (table === "tax_return_submissions" || table === "banking_submissions")) {
-      const c: Record<string, unknown> = {}
-      for (const m of ["select", "is", "gte", "order"]) c[m] = () => c
-      c.range = (from: number, to: number) => Promise.resolve({ data: (state.paged as Array<Record<string, unknown>>).slice(from, to + 1), error: null })
-      return c
-    }
-    if (table === "accounts" && state.accountsError) chain.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: null, error: { message: "read failed" } }).then(r)
-    return chain
+vi.mock("@/lib/archive/skip-no-drive-folder", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/archive/skip-no-drive-folder")>("@/lib/archive/skip-no-drive-folder")
+  return {
+    ...actual,
+    readSweepWindows: vi.fn(async (table: string, _cols: string, cutoff: string) => { state.calls.push({ table, cutoff }); return state.windows }),
   }
-  return { supabaseAdmin: { from, storage: base.storage } }
 })
+vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: { from: () => { const c: Record<string, unknown> = {}; for (const m of ["select", "is", "gte", "order", "limit", "update", "eq"]) c[m] = () => c; c.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return c } } }))
 vi.mock("@/lib/cron-log", () => ({ logCron: () => undefined }))
 vi.mock("@/lib/system-errors", () => ({ reportSystemError: async (e: Record<string, unknown>) => { state.alarms.push(e); return null } }))
 vi.mock("@/lib/team/post-message", () => ({ postTeamMessage: async () => undefined }))
@@ -44,86 +37,61 @@ beforeEach(() => {
   delete process.env.CRON_SECRET
   process.env.TAX_ARCHIVE_SWEEP_DRY_RUN = "false"
   process.env.FORMS_ARCHIVE_SWEEP_DRY_RUN = "false"
+  state.windows = { withFolder: [], noFolder: [], skippedNoFolder: 0, skippedFinished: 0, readError: null }
   state.enqueued.length = 0
   state.alarms.length = 0
-  state.recorded.length = 0
-  state.accountsError = false
-  state.paged = null
-  for (const k of Object.keys(state.rows)) delete state.rows[k]
-  state.rows.accounts = [{ id: "acct-no-folder", drive_folder_id: null }, { id: "acct-folder", drive_folder_id: "F1" }]
+  state.calls.length = 0
 })
 
 describe("tax-archive-sweep", () => {
-  beforeEach(() => {
-    state.rows.tax_return_submissions = [
-      { id: "s1", account_id: "acct-no-folder" },
-      { id: "s2", account_id: "acct-folder" },
-      { id: "s3", account_id: null },
-    ]
-  })
-
-  it("skips the company with no folder, counts it, enqueues the rest", async () => {
+  it("processes only the rows of companies WITH a folder; reports the counts of the rest", async () => {
+    state.windows = { withFolder: [{ id: "s2", account_id: "a2" }], noFolder: [], skippedNoFolder: 1200, skippedFinished: 40, readError: null }
     const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
     const body = await (await GET(get())).json()
-    expect(body.skippedNoFolder).toBe(1)
-    expect(state.enqueued.sort()).toEqual(["s2", "s3"])
-    expect(body.enqueuedIds.sort()).toEqual(["s2", "s3"])
+    expect(state.enqueued).toEqual(["s2"])
+    expect(body).toMatchObject({ candidates: 1, skippedNoFolder: 1200, skippedFinished: 40, unfiledNoFolder: 0 })
+    expect(state.calls[0].table).toBe("tax_return_submissions")
   })
 
-  it("a failed folder lookup skips nothing and raises a system error", async () => {
-    state.accountsError = true
+  it("a no-folder company's un-filed submissions raise ONE staff-visible alarm per run (not just a counter) — also in dry-run", async () => {
+    process.env.TAX_ARCHIVE_SWEEP_DRY_RUN = "true"
+    state.windows = { withFolder: [], noFolder: [{ id: "n1", account_id: "x" }, { id: "n2", account_id: "y" }], skippedNoFolder: 2, skippedFinished: 0, readError: null }
     const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
     const body = await (await GET(get())).json()
-    expect(body.skippedNoFolder).toBe(0)
-    expect(state.enqueued.sort()).toEqual(["s1", "s2", "s3"])
+    expect(body.unfiledNoFolder).toBe(2)
+    expect(state.alarms).toHaveLength(1)
+    expect(state.alarms[0]).toMatchObject({ source: "server", route: "/api/cron/tax-archive-sweep" })
+    expect(state.alarms[0].context).toMatchObject({ count: 2, ids: ["n1", "n2"] })
+    expect(state.enqueued).toEqual([]) // nothing is enqueued for them: they have nowhere to be archived by this job
+  })
+
+  it("no no-folder submissions → no alarm", async () => {
+    state.windows = { withFolder: [{ id: "s2", account_id: "a2" }], noFolder: [], skippedNoFolder: 0, skippedFinished: 0, readError: null }
+    const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
+    await GET(get())
+    expect(state.alarms).toEqual([])
+  })
+
+  it("a read error is a 500 with a system error", async () => {
+    state.windows = { ...state.windows, readError: "boom" }
+    const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
+    const res = await GET(get())
+    expect(res.status).toBe(500)
     expect(state.alarms).toHaveLength(1)
   })
 })
 
-describe("tax-archive-sweep — skipped rows never use up the window of 200", () => {
-  it("201 storage-only rows (no folder) followed by 1 real row: the real row is found and enqueued (was: candidates 0)", async () => {
-    state.paged = [...Array.from({ length: 201 }, (_, i) => ({ id: `n${i}`, account_id: "acct-no-folder" })), { id: "real-1", account_id: "acct-folder" }]
-    const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
-    const body = await (await GET(get())).json()
-    expect(body.skippedNoFolder).toBe(201)
-    expect(body.candidates).toBe(1)
-    expect(state.enqueued).toEqual(["real-1"])
-  })
-  it("a Drive-state company WITH a folder is still enqueued as before", async () => {
-    state.paged = [{ id: "d1", account_id: "acct-folder" }]
-    const { GET } = await import("@/app/api/cron/tax-archive-sweep/route")
-    const body = await (await GET(get())).json()
-    expect(body.skippedNoFolder).toBe(0)
-    expect(state.enqueued).toEqual(["d1"])
-  })
-})
-
-describe("forms-archive-sweep — skipped rows never use up the window of 200", () => {
-  it("201 storage-only banking rows followed by 1 real row: the real row is enqueued", async () => {
-    state.paged = [...Array.from({ length: 201 }, (_, i) => ({ id: `n${i}`, account_id: "acct-no-folder" })), { id: "real-1", account_id: "acct-folder" }]
+describe("forms-archive-sweep (banking)", () => {
+  it("banking: only companies with a folder are enqueued; counts reported; ONE alarm for the unfiled no-folder submissions", async () => {
+    state.windows = { withFolder: [{ id: "b2", account_id: "a2" }], noFolder: [{ id: "b1", account_id: "x" }], skippedNoFolder: 1, skippedFinished: 3, readError: null }
     const { GET } = await import("@/app/api/cron/forms-archive-sweep/route")
     const body = await (await GET(get())).json()
-    expect(body.perForm.banking.skippedNoFolder).toBe(201)
-    expect(state.enqueued).toContain("real-1")
-  })
-})
-
-describe("forms-archive-sweep", () => {
-  it("banking: skips the company with no folder and counts it; other forms are untouched", async () => {
-    const { ARCHIVE_RECIPES } = await import("@/lib/forms/archive-registry")
-    const banking = ARCHIVE_RECIPES.banking
-    const itin = ARCHIVE_RECIPES.itin
-    state.rows[banking.table] = [
-      { id: "b1", account_id: "acct-no-folder" },
-      { id: "b2", account_id: "acct-folder" },
-    ]
-    if (itin && itin.table !== banking.table) state.rows[itin.table] = [{ id: "i1", account_id: "acct-no-folder" }]
-    const { GET } = await import("@/app/api/cron/forms-archive-sweep/route")
-    const body = await (await GET(get())).json()
-    expect(body.skippedNoFolder).toBe(1)
-    expect(body.perForm.banking.skippedNoFolder).toBe(1)
     expect(state.enqueued).toContain("b2")
     expect(state.enqueued).not.toContain("b1")
-    if (itin && itin.table !== banking.table) expect(state.enqueued).toContain("i1")
+    expect(body.perForm.banking).toMatchObject({ skippedNoFolder: 1, skippedFinished: 3, unfiledNoFolder: 1 })
+    expect(body.skippedNoFolder).toBe(1)
+    const noFolderAlarms = state.alarms.filter((a) => String(a.message).includes("banking submissions"))
+    expect(noFolderAlarms).toHaveLength(1)
+    expect(state.calls[0].table).toBe("banking_submissions")
   })
 })

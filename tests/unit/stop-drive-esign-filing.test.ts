@@ -153,4 +153,20 @@ describe("finalizeEsignCompletion — filing", () => {
     expect((await fileEsignSignedPdf("env-1")).filed).toBe(true)
     expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([])
   })
+
+  it("the bucket-served filing leaves a DURABLE marker on the envelope, so the reconciliation cron never picks it up again", async () => {
+    state.companyState = "drive"
+    state.rows.documents = []
+    const { fileEsignSignedPdf } = await import("@/lib/operations/esign")
+    await fileEsignSignedPdf("env-1")
+    const marker = state.recorded.find((r) => r.table === "esign_envelopes" && r.op === "update")
+    expect(marker?.payload).toEqual({ signed_pdf_drive_id: "storage:signed-documents/esign/t/signed.pdf" })
+  })
+
+  it("a storage lookup that threw leaves NO marker (so it IS retried)", async () => {
+    state.stateThrows = true
+    const { fileEsignSignedPdf } = await import("@/lib/operations/esign")
+    expect((await fileEsignSignedPdf("env-1")).filed).toBe(false)
+    expect(state.recorded.filter((r) => r.table === "esign_envelopes" && r.op === "update")).toEqual([])
+  })
 })

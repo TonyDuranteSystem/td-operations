@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
           row: { document_type_name: documentType, category: catInfo.num, category_name: category, status: 'classified', contact_id: null },
         })
       } catch (e) {
-        if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) }
+        if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
         throw e
       }
       if (routed.route === 'store') {

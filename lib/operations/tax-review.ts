@@ -36,6 +36,12 @@ export interface ApproveTaxReviewParams {
   submission_id: string
   /** Actor identifier for the reviewed_by audit column. Examples: 'claude', 'workflow:tax.approve_and_apply', a user UUID. */
   actor: string
+  /**
+   * Apply the client's corrections (job enqueued, Data Received set) but leave the submission UNREVIEWED — for a form that could
+   * not be filed anywhere. The job skips its own "Form → reviewed" step and this helper does not stamp reviewed_at, so running
+   * the review again after the form is filed still works.
+   */
+  leaveUnreviewed?: boolean
 }
 
 export interface ApproveTaxReviewResult {
@@ -62,7 +68,7 @@ export interface ApproveTaxReviewResult {
 export async function approveAndApplyTaxReview(
   params: ApproveTaxReviewParams,
 ): Promise<ApproveTaxReviewResult> {
-  const { submission_id, actor } = params
+  const { submission_id, actor, leaveUnreviewed } = params
 
   // ── 1. Load submission + early short-circuit on reviewed_at ──────────
   const { data: sub, error: subErr } = await supabaseAdmin
@@ -117,6 +123,7 @@ export async function approveAndApplyTaxReview(
         account_id: sub.account_id || null,
         tax_return_id: sub.tax_return_id || null,
         changed_fields: sub.changed_fields,
+        ...(leaveUnreviewed ? { leave_unreviewed: true } : {}),
       },
       priority: 1,
       max_attempts: 3,
@@ -134,6 +141,10 @@ export async function approveAndApplyTaxReview(
       company_name: companyName,
       tax_year: sub.tax_year,
     }
+  }
+
+  if (leaveUnreviewed) {
+    return { ok: true, job_id: jobId, account_id: sub.account_id, company_name: companyName, tax_year: sub.tax_year }
   }
 
   // ── 3. Mark submission as reviewed (idempotency anchor) ─────────────

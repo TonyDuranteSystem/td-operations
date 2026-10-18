@@ -67,6 +67,29 @@ async function main() {
   check("P1 the file lands in the person's own storage (no signed link, a storage pointer)", sv.route === "store" && sv.pointer.startsWith("store:"), JSON.stringify(sv))
   if (sv.route === "store") await sb.from("documents").delete().eq("id", sv.documentRowId)
 
+  // ── round 2: the sweep window is filtered in the query; the closure filing rule ──
+  const { readSweepWindows } = await import("../../../lib/archive/skip-no-drive-folder")
+  for (const [table, cols] of [["tax_return_submissions", "id, account_id"], ["banking_submissions", "id, account_id"]] as const) {
+    const w = await readSweepWindows<{ id: string; account_id: string }>(table, cols, "2020-01-01T00:00:00Z")
+    const ids = Array.from(new Set(w.withFolder.map((r) => r.account_id)))
+    const { data: accs } = ids.length ? await sb.from("accounts").select("id, drive_folder_id, status").in("id", ids) : { data: [] }
+    const bad = (accs ?? []).filter((a: { drive_folder_id: string | null; status: string }) => !a.drive_folder_id || a.status === "Closed" || a.status === "Cancelled")
+    check(`W-${table} the sweep window holds only companies WITH a folder that are not finished (read from the real database)`, !w.readError && bad.length === 0, JSON.stringify({ err: w.readError, rows: w.withFolder.length, noFolderRows: w.noFolder.length, skippedNoFolder: w.skippedNoFolder, skippedFinished: w.skippedFinished, bad: bad.length }))
+  }
+  const { fileClosureSubmission } = await import("../../../lib/crm-store/save-account-form")
+  const sub = (account_id: string | null) => ({ token: `qa-t38-${tag}`, account_id, upload_paths: [] as string[], completed_at: new Date().toISOString() })
+  const cUx = await fileClosureSubmission(sub(UX), { client_name: `QA Test ${tag}` }, "Uxio Test LLC", "qa/t38")
+  check("C1 closure: a storage company's form is filed → may be marked reviewed", cUx.ok === true, JSON.stringify(cUx))
+  const cTc = await fileClosureSubmission(sub(TC), { client_name: `QA Test ${tag}` }, "QA Test Co LLC", "qa/t38")
+  check("C2 closure: an Active company with nothing to file it in → NOT reviewable", cTc.ok === false && cTc.lines.join(" ").includes("no document storage"), JSON.stringify(cTc))
+  const { data: closedAcc } = await sb.from("accounts").select("id").eq("company_name", "PR2 QA Test LLC").limit(1).maybeSingle()
+  if (closedAcc) {
+    const cCl = await fileClosureSubmission(sub(closedAcc.id), { client_name: `QA Test ${tag}` }, "PR2 QA Test LLC", "qa/t38")
+    check("C3 closure: a Cancelled company with nothing to file → reviewable, and it says so", cCl.ok === true && cCl.lines.join(" ").includes("closed"), JSON.stringify(cCl))
+  }
+  const cNo = await fileClosureSubmission(sub(null), {}, "x", "qa/t38")
+  check("C4 closure: a form not linked to a company → NOT reviewable", cNo.ok === false)
+
   // cleanup of fixtures that are not storage objects
   await sb.from("documents").delete().eq("account_id", TC).like("drive_file_id", `storage:signed-documents/esign/qa-t38-${tag}-%`)
   await sb.from("esign_envelopes").delete().in("id", [envUx, envTc])

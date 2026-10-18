@@ -40,7 +40,7 @@ vi.mock("@/lib/crm-store/save-form", () => ({
 vi.mock("@/lib/tax/financials-orchestration", () => ({ buildFinancialsWorkbookForAccount: async () => ({ buffer: new Uint8Array([1, 2, 3]) }) }))
 
 import { NO_STORAGE_SENTENCE, NO_PERSON_STORAGE_SENTENCE, NO_STORAGE_STATUS, notStored, decideNoStorage, folderIdOf, noStorageDecisionFor, accountCanReceiveFiles } from "@/lib/crm-store/no-storage"
-import { splitByFolder, accountsWithoutFolder, collectSweepCandidates } from "@/lib/archive/skip-no-drive-folder"
+import { unfiledOf } from "@/lib/archive/skip-no-drive-folder"
 import { saveFormForAccount, describeFiling, type SaveAccountFormDeps } from "@/lib/crm-store/save-account-form"
 
 beforeEach(() => {
@@ -68,26 +68,6 @@ describe("no-storage", () => {
   })
 })
 
-describe("splitByFolder / accountsWithoutFolder", () => {
-  it("keeps a row with no company, skips a company with no folder", () => {
-    const r = splitByFolder([{ account_id: "a" }, { account_id: "b" }, { account_id: null }, {}], new Set(["a"]))
-    expect(r.skipped).toEqual([{ account_id: "a" }])
-    expect(r.keep).toHaveLength(3)
-  })
-  it("returns only accounts that exist and have no folder; an unknown account is not skipped", async () => {
-    state.rows.accounts = [{ id: "a", drive_folder_id: null }, { id: "b", drive_folder_id: "F" }]
-    const missing = await accountsWithoutFolder(["a", "b", "ghost", "a", ""])
-    expect(Array.from(missing)).toEqual(["a"])
-  })
-  it("empty input reads nothing", async () => {
-    expect((await accountsWithoutFolder([])).size).toBe(0)
-    expect(state.recorded).toEqual([])
-  })
-  it("a read error throws (never mistaken for 'no folder')", async () => {
-    state.accountsError = true
-    await expect(accountsWithoutFolder(["a"])).rejects.toThrow(/could not read/)
-  })
-})
 
 describe("saveFormForAccount", () => {
   const mk = (over: Partial<SaveAccountFormDeps> = {}) => {
@@ -236,40 +216,11 @@ describe("decideNoStorage / folderIdOf", () => {
   })
 })
 
-describe("collectSweepCandidates — skipped rows never use up the window", () => {
-  const mkRows = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, account_id: prefix === "x" ? "no-folder" : "real" }))
-  const pager = (all: Array<{ id: string; account_id: string }>) => async (from: number, to: number) => ({ data: all.slice(from, to + 1), error: null })
-  const lookup = async (ids: string[]) => new Set(ids.filter((i) => i === "no-folder"))
 
-  it("201 rows with no folder followed by 1 real row: the real row is found (the repro)", async () => {
-    const out = await collectSweepCandidates(pager([...mkRows(201, "x"), ...mkRows(1, "r")]), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
-    expect(out.keep.map((r) => r.id)).toEqual(["r0"])
-    expect(out.skipped).toBe(201)
-    expect(out.lookupError).toBeNull()
-  })
-  it("stops once the limit of real rows is reached and counts only what it looked at", async () => {
-    const out = await collectSweepCandidates(pager([...mkRows(5, "r"), ...mkRows(1000, "x")]), { limit: 3, pageSize: 4, maxPages: 25 }, lookup)
-    expect(out.keep).toHaveLength(3)
-  })
-  it("a Drive-state company with a folder is kept", async () => {
-    const out = await collectSweepCandidates(pager(mkRows(3, "r")), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
-    expect(out.keep).toHaveLength(3)
-    expect(out.skipped).toBe(0)
-  })
-  it("maxPages bounds the work", async () => {
-    let pages = 0
-    const fetchPage = async (from: number, to: number) => { pages++; return { data: mkRows(to - from + 1, "x"), error: null } }
-    const out = await collectSweepCandidates(fetchPage, { limit: 200, pageSize: 10, maxPages: 4 }, lookup)
-    expect(pages).toBe(4)
-    expect(out.keep).toEqual([])
-    expect(out.skipped).toBe(40)
-  })
-  it("a failed folder lookup skips nothing and is reported; a page read error is reported", async () => {
-    const out = await collectSweepCandidates(pager(mkRows(3, "x")), { limit: 200, pageSize: 200, maxPages: 25 }, async () => { throw new Error("lookup down") })
-    expect(out.keep).toHaveLength(3)
-    expect(out.skipped).toBe(0)
-    expect(out.lookupError).toBe("lookup down")
-    const bad = await collectSweepCandidates(async () => ({ data: null, error: { message: "read down" } }), { limit: 200, pageSize: 200, maxPages: 25 }, lookup)
-    expect(bad.readError).toBe("read down")
+describe("sweep helpers", () => {
+  it("unfiledOf keeps what the sweep would act on (enqueue or alert), drops 'skip'", () => {
+    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }]
+    const decide = (r: { id: string }) => (r.id === "a" ? "skip" : r.id === "b" ? "enqueue" : "alert") as "skip" | "enqueue" | "alert"
+    expect(unfiledOf(rows, decide).map((r) => r.id)).toEqual(["b", "c"])
   })
 })

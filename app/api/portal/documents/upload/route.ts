@@ -5,7 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
-import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
+import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS, noStorageDecisionFor } from '@/lib/crm-store/no-storage'
 import { uploadBinaryToDrive } from '@/lib/google-drive'
 
 /**
@@ -126,7 +126,7 @@ export async function POST(request: NextRequest) {
       })
       if (routed.route === 'store') stored = { documentRowId: routed.documentRowId }
     } catch (e) {
-      if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ error: e.message }, { status: 409 }) }
+      if (e instanceof CompanyMovingError) return NextResponse.json({ error: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
       throw e
     }
   } catch (err) {
@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
     }
     if (decision.route === 'refuse') {
       discardStaged()
-      return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+      return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
     }
     driveFolderId = decision.folderId
   }

@@ -350,27 +350,15 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         if (mark_reviewed) {
           // File the form data + uploads FIRST. The form is marked "reviewed" only when it was filed: a company that can receive
           // nothing, a company being moved, or a failed save leaves the form exactly as it was (still waiting for review).
-          let filed = true
-          if (sub.account_id) {
-            try {
-              const { saveFormForAccount, describeFiling } = await import("@/lib/crm-store/save-account-form")
-              const saved = await saveFormForAccount({
-                accountId: sub.account_id,
-                formType: "closure",
-                submittedData: submitted,
-                uploadPaths: (sub.upload_paths as string[]) || [],
-                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token },
-              })
-              const d = describeFiling(saved)
-              filed = d.ok
-              lines.push(...d.lines)
-            } catch (saveErr) {
-              filed = false
-              lines.push(`⚠️ Saving the form data failed: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`)
-            }
-          } else {
-            lines.push("⚠️ This form is not linked to a company, so its data was not filed.")
-          }
+          const { fileClosureSubmission } = await import("@/lib/crm-store/save-account-form")
+          const outcome = await fileClosureSubmission(
+            { token, account_id: sub.account_id, upload_paths: (sub.upload_paths as string[] | null) ?? [], completed_at: sub.completed_at },
+            submitted,
+            clientName || token,
+            "mcp/closure_form_review",
+          )
+          const filed = outcome.ok
+          lines.push(...outcome.lines)
 
           if (!filed) {
             lines.push("")

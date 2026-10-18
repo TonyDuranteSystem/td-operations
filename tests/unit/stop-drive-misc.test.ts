@@ -43,7 +43,7 @@ vi.mock("@/lib/portal/rate-limit", () => ({ checkRateLimit: () => ({ allowed: tr
 vi.mock("@/lib/portal/save-generated-document", () => ({ saveSignedGeneratedDocument: vi.fn(async () => state.saveResult) }))
 vi.mock("@/lib/auth/staff-preview", () => ({ isStaffPreview: async () => true }))
 
-import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 beforeEach(() => {
@@ -92,12 +92,12 @@ describe("save-signed route", () => {
     f.set("account_id", "acct-1")
     return new NextRequest("http://localhost/x", { method: "POST", body: f })
   }
-  it("a plain refusal → 409 with the sentence and NO system error", async () => {
+  it("a plain refusal → 409 with the CLIENT sentence (no staff wording) and NO system error", async () => {
     state.saveResult = { success: false, error: NO_STORAGE_SENTENCE, refused: true }
     const { POST } = await import("@/app/api/portal/generated-documents/save-signed/route")
     const res = await POST(req())
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(await res.json()).toEqual({ error: CLIENT_NO_STORAGE_SENTENCE })
     expect(state.alarms).toEqual([])
   })
   it("a real failure → 500 and a system error, as before", async () => {

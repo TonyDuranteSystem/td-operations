@@ -63,3 +63,19 @@ export async function accountCanReceiveFiles(accountId: string): Promise<boolean
   if ((await companyDocState(accountId)) !== "drive") return true
   return (await noStorageDecisionFor(accountId)).route === "drive"
 }
+
+/** Pure: is this a finished (Closed / Cancelled) company status? */
+export function isFinishedStatus(status: string | null | undefined): boolean {
+  return FINISHED_STATUSES.has(String(status ?? "").trim().toLowerCase())
+}
+
+/** Strict read: is this company Closed / Cancelled? (a read error throws) */
+export async function accountIsFinished(accountId: string): Promise<boolean> {
+  const { supabaseAdmin } = await import("@/lib/supabase-admin")
+  const { data, error } = await supabaseAdmin.from("accounts").select("status").eq("id", accountId).maybeSingle()
+  if (error) throw new Error("Could not check this company — please try again.")
+  return isFinishedStatus((data as { status?: string | null } | null)?.status)
+}
+
+/** What a CLIENT is told when a file cannot be saved for their company (no staff wording, no internals). */
+export const CLIENT_NO_STORAGE_SENTENCE = "We could not save this file. Please contact us."

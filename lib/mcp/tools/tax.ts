@@ -643,6 +643,7 @@ export function registerTaxTools(server: McpServer) {
           // The review is applied (job enqueued, submission marked reviewed) only when the form was filed: a company that can
           // receive nothing, a company being moved, or a failed save leaves the submission exactly as it was. An already
           // reviewed submission was filed by its first review, so it is not filed again.
+          let filedNote: string | null = null
           if (sub.account_id && !sub.reviewed_at) {
             let filed = true
             try {
@@ -670,11 +671,7 @@ export function registerTaxTools(server: McpServer) {
               filed = false
               lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
             }
-            if (!filed) {
-              lines.push("")
-              lines.push("❌ The changes were NOT applied and the form was not marked as reviewed — nothing was changed. Fix the problem above and run the review again.")
-              return { content: [{ type: "text" as const, text: lines.join("\n") }] }
-            }
+            if (!filed) filedNote = "The form data was NOT filed anywhere, so the form is NOT marked as reviewed."
             lines.push("")
           }
 
@@ -687,6 +684,8 @@ export function registerTaxTools(server: McpServer) {
           const apply = await approveAndApplyTaxReview({
             submission_id: sub.id,
             actor: "claude",
+            // The client's corrections are ALWAYS applied. A form that could not be filed is left unreviewed (and says so).
+            leaveUnreviewed: filedNote !== null,
           })
 
           if (!apply.ok) {
@@ -703,6 +702,10 @@ export function registerTaxTools(server: McpServer) {
           lines.push(`   Steps: Contact update → Account update → Tax return → Data Received → Form → reviewed`)
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
+          if (filedNote) {
+            lines.push("")
+            lines.push(`⚠️ The client's corrections were applied. ${filedNote} Once the problem above is fixed, run this review again to file it and mark it reviewed.`)
+          }
         }
 
         return { content: [{ type: "text" as const, text: lines.join("\n") }] }

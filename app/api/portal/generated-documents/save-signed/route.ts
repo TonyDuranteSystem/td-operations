@@ -3,7 +3,7 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { saveSignedGeneratedDocument } from '@/lib/portal/save-generated-document'
 import { reportSystemError } from '@/lib/system-errors'
-import { NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
+import { CLIENT_NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 import { NextRequest, NextResponse } from 'next/server'
 
 const ROUTE = '/api/portal/generated-documents/save-signed'
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
 
   if (!result.success && result.refused) {
     // a plain refusal (this company can receive no file): the client is told, ops is not alarmed
-    return NextResponse.json({ error: result.error }, { status: NO_STORAGE_STATUS })
+    return NextResponse.json({ error: CLIENT_NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
   }
 
   if (!result.success) {

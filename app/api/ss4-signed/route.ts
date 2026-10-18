@@ -54,6 +54,8 @@ export async function POST(req: NextRequest) {
     let signedDocLinked = false
     // Set in step 3: does the company have storage? (null = not asked / not known)
     let companyHasStorage: boolean | null = null
+    // Set in step 3: the company is one left on its old folder, so an upload to that folder was attempted
+    let triedOldFolder = false
 
     // Track the merged PDF bytes for email attachment
     let mergedPdfBytes: Uint8Array | null = null
@@ -170,6 +172,7 @@ export async function POST(req: NextRequest) {
         // a company left on its old folder (no storage, a folder, not finished) carries on there, as before
         const decision = inStorage ? null : await noStorageDecisionFor(ss4.account_id)
         const oldFolderId = decision && decision.route === "drive" ? decision.folderId : null
+        triedOldFolder = !!oldFolderId
 
         if (inStorage || oldFolderId) {
           // Find the signed PDF in Storage
@@ -357,7 +360,9 @@ export async function POST(req: NextRequest) {
       results.push({
         step: "signed_doc",
         status: "error",
-        detail: companyHasStorage === false ? NO_STORAGE_SENTENCE : "The signed SS-4 could not be filed in the company's storage — see the earlier steps.",
+        detail: companyHasStorage === false
+          ? (triedOldFolder ? "The signed SS-4 could not be uploaded to the company's folder — see the earlier steps." : NO_STORAGE_SENTENCE)
+          : "The signed SS-4 could not be filed in the company's storage — see the earlier steps.",
       })
     }
 

@@ -8,7 +8,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { NextRequest } from "next/server"
 
+const { MovingError } = vi.hoisted(() => ({ MovingError: class MovingError extends Error {} }))
 const state = vi.hoisted(() => ({
+  moving: false,
   rows: {} as Record<string, unknown>,
   recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
   driveCalls: [] as string[],
@@ -43,9 +45,10 @@ vi.mock("@/lib/lease-pdf", () => ({ generateLeasePDF: async () => new Uint8Array
 vi.mock("@/lib/dba-ocr", () => ({ extractDbaFieldsFromOcr: () => ({}) }))
 vi.mock("@/lib/crm-store/ocr", () => ({ ocrByPointer: async () => ({ fullText: "" }) }))
 vi.mock("@/lib/crm-store/save-for-account", () => ({
-  CompanyMovingError: class extends Error {},
+  CompanyMovingError: MovingError,
   saveDocumentForAccount: vi.fn(async (input: Record<string, unknown>) => {
     state.saves.push(input)
+    if (state.moving) throw new MovingError("This company's files are being moved to the new storage right now — please try again in a few minutes.")
     return state.route === "store"
       ? { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
       : { route: "drive" }
@@ -64,7 +67,7 @@ vi.mock("@/lib/crm-store/save-form", () => ({
   }),
 }))
 
-import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+import { NO_STORAGE_SENTENCE, CLIENT_NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_REFUSED, ACCOUNT_CLOSED_WITH_FOLDER, ACCOUNT_OLD_FOLDER } from "./_stop-drive-mocks"
 
 const json = (body: unknown) => new NextRequest("http://localhost/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
@@ -75,6 +78,7 @@ beforeEach(() => {
   state.driveCalls.length = 0
   state.saves.length = 0
   state.removed.length = 0
+  state.moving = false
   state.driveMode = "forbid"
   for (const k of Object.keys(state.rows)) delete state.rows[k]
 })
@@ -98,7 +102,9 @@ describe("portal documents upload", () => {
     const { POST } = await import("@/app/api/portal/documents/upload/route")
     const res = await POST(json(body))
     expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    // a CLIENT never sees the staff wording
+    expect(await res.json()).toEqual({ error: CLIENT_NO_STORAGE_SENTENCE })
+    expect(CLIENT_NO_STORAGE_SENTENCE).toBe("We could not save this file. Please contact us.")
     expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
     expect(state.driveCalls).toEqual([])
     // the refused upload leaves nothing behind in the upload bucket
@@ -319,5 +325,32 @@ describe("DBA document upload", () => {
     const res = await call()
     expect(res.status).toBe(200)
     expect(state.driveCalls).toContain("uploadBinaryToDrive")
+  })
+})
+
+describe("a company being moved is a TRANSIENT refusal: the staged file is kept so 'try again' works", () => {
+  it("portal upload", async () => {
+    state.moving = true
+    const { POST } = await import("@/app/api/portal/documents/upload/route")
+    const res = await POST(json({ account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", category: "4" }))
+    expect(res.status).toBe(409)
+    expect(state.removed).toEqual([])
+  })
+  it("staff account document", async () => {
+    state.moving = true
+    state.rows.accounts = { company_name: "Acme LLC" }
+    const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
+    const res = await POST(json({ account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", category: "Tax" }))
+    expect(res.status).toBe(409)
+    expect(state.removed).toEqual([])
+  })
+  it("DBA document", async () => {
+    state.moving = true
+    state.rows.dba_details = { id: "dba-1", delivery_id: "sd-1", filed_date: null, registration_number: null }
+    state.rows.service_deliveries = { id: "sd-1", account_id: "acct-1" }
+    const { POST } = await import("@/app/api/accounts/[id]/dba/[dbaId]/upload-document/route")
+    const res = await POST(json({ storage_path: "p/dba.pdf", file_name: "dba.pdf", mime_type: "application/pdf" }), { params: { id: "acct-1", dbaId: "dba-1" } })
+    expect(res.status).toBe(409)
+    expect(state.removed).toEqual([])
   })
 })

@@ -478,6 +478,8 @@ export async function fileEsignSignedPdf(envelopeId: string): Promise<EsignFilin
       })
       if (insErr) throw new Error(insErr.message)
     }
+    // Durable marker: this envelope is filed (served from the bucket) — the reconciliation cron must never pick it up again.
+    await db.from("esign_envelopes").update({ signed_pdf_drive_id: driveRef }).eq("id", env.id)
     return { filed: true, reason: null, hasStorage }
   } catch (e) {
     reason = `filing failed: ${e instanceof Error ? e.message : String(e)}`

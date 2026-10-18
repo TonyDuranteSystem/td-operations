@@ -149,7 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    const { deriveEffectiveFileName, resolveSubfolderId } = await import('@/lib/flows/flow-drive-folder')
+    const { deriveEffectiveFileName, resolveSubfolderId, resolveContactLinkedDriveFolder } = await import('@/lib/flows/flow-drive-folder')
 
     // A refused upload must not leave the staged object behind in the upload bucket.
     const discardStaged = () => { supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {}) }
@@ -222,16 +222,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           })
           if (r.route === 'store') routed = { pointer: r.pointer }
         } catch (e) {
-          if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) }
+          if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
           return NextResponse.json({ success: false, detail: `Could not save the file in the company's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
         }
       }
     }
 
-    // 3-cutover-person. A flow with no company yet (a contact-scoped ITIN, an in-flight formation): the file is saved through
-    //    the PERSON's own storage — opened for them now when they have none, the same as the new-client flow does — never
-    //    kept only in the upload bucket behind an expiring link.
-    if (!routed && pilot.status !== 'saved' && !accountId && contactId) {
+    // 3-cutover-person. A contact-scoped ITIN flow (no company yet): the file is saved through the PERSON's own storage — their
+    //    live storage, a switched company of theirs, or, when they have neither, a storage opened for them now (the same as the
+    //    new-client flow does), never kept only in the upload bucket behind an expiring link. EXCEPT a member of a company that is
+    //    deliberately left on its old folder (no storage, a live folder): that person is NOT given a storage (it would lock their
+    //    folder) — the legacy path below carries on exactly as before. Other contact-scoped flows (a formation that started on its
+    //    old folder) stay on the legacy path too.
+    if (!routed && pilot.status !== 'saved' && !accountId && contactId && sd.service_type === 'ITIN') {
       const { companyDocState, liveOwnerOfContact } = await import('@/lib/crm-store/switched-drive-guard')
       const { ensurePersonOwner } = await import('@/lib/crm-store/formation-pilot')
       const { data: links } = await supabaseAdmin
@@ -241,52 +244,63 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .order('is_primary', { ascending: false })
         .order('account_id', { ascending: true })
       let viaAccountId: string | null = null
+      let memberOfOldFolderCompany = false
       for (const l of links ?? []) {
         const accId = (l as { account_id: string }).account_id
         if ((await companyDocState(accId)) !== 'drive') { viaAccountId = accId; break }
+        if (!memberOfOldFolderCompany && (await noStorageDecisionFor(accId)).route === 'drive') memberOfOldFolderCompany = true
       }
-      const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
-      const { storeNameKey } = await import('@/lib/crm-store/rules')
-      const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
-      const contactName = (contactRow as { full_name?: string | null } | null)?.full_name ?? null
-      try {
-        // no storage of their own and no switched company to open it through: open it now
-        if (!viaAccountId && !(await liveOwnerOfContact(contactId))) await ensurePersonOwner(contactId, contactName || 'Member')
-        const r = await saveDocumentForContact({
-          contactId,
-          name: effectiveName,
-          bytes: buffer,
-          mimeType: fileMime,
-          documentType: null,
-          callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
-          viaAccountId,
-          contactName,
-          portalVisible: isItinApprovalUpload,
-          row: { service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
-        })
-        if (r.route === 'store') routed = { pointer: r.pointer }
-      } catch (e) {
-        if (e instanceof CompanyMovingError) { discardStaged(); return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) }
-        return NextResponse.json({ success: false, detail: `Could not save the file in the person's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
+      const hasOwner = !!(await liveOwnerOfContact(contactId))
+      if (viaAccountId || hasOwner || !memberOfOldFolderCompany) {
+        const { saveDocumentForContact, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
+        const { storeNameKey } = await import('@/lib/crm-store/rules')
+        const { data: contactRow } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
+        const contactName = (contactRow as { full_name?: string | null } | null)?.full_name ?? null
+        try {
+          // no storage of their own and no switched company to open it through: open it now
+          if (!viaAccountId && !hasOwner) await ensurePersonOwner(contactId, contactName || 'Member')
+          const r = await saveDocumentForContact({
+            contactId,
+            name: effectiveName,
+            bytes: buffer,
+            mimeType: fileMime,
+            documentType: null,
+            callerKey: `flow-upload:${serviceDeliveryId}:${flowStage ?? ''}:${storeNameKey(effectiveName)}`,
+            viaAccountId,
+            contactName,
+            portalVisible: isItinApprovalUpload,
+            row: { service_delivery_id: serviceDeliveryId, flow_stage: flowStage, status: 'classified' },
+          })
+          if (r.route === 'store') routed = { pointer: r.pointer }
+        } catch (e) {
+          if (e instanceof CompanyMovingError) return NextResponse.json({ success: false, detail: e.message }, { status: 409 }) // transient: the staged file is kept so "try again" works
+          return NextResponse.json({ success: false, detail: `Could not save the file in the person's storage: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
+        }
       }
     }
 
-    // 3b. A flow that did not land in any storage: a company left on its old folder carries on there (as before); a
-    //     company with nothing (no storage, finished or no folder) and a flow with neither company nor person get one plain
-    //     sentence — nothing saved, the stage not advanced.
+    // 3b. A flow that did not land in any storage.
+    //     - a company: one left on its old folder carries on there (as before); a company with nothing (no storage, finished or
+    //       no folder) gets one plain sentence — nothing saved, the stage not advanced;
+    //     - no company yet (contact-scoped, not the ITIN person-storage case above): the legacy path, exactly as before — the
+    //       contact's linked company folder when there is one, else the upload bucket (sandbox: always the bucket);
+    //     - neither company nor person: the same plain sentence.
     let driveFolderId: string | null = null
     if (!routed && pilot.status !== 'saved') {
-      if (!accountId) {
+      if (accountId) {
+        const decision = await noStorageDecisionFor(accountId)
+        if (decision.route === 'refuse') {
+          discardStaged()
+          return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
+        }
+        // the sandbox has no live Drive: the file stays in the upload bucket there (row and stage advance work the same)
+        if (process.env.SANDBOX_MODE !== '1') driveFolderId = decision.folderId
+      } else if (contactId) {
+        if (process.env.SANDBOX_MODE !== '1') driveFolderId = await resolveContactLinkedDriveFolder(contactId)
+      } else {
         discardStaged()
         return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
       }
-      const decision = await noStorageDecisionFor(accountId)
-      if (decision.route === 'refuse') {
-        discardStaged()
-        return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
-      }
-      // the sandbox has no live Drive: the file stays in the upload bucket there (row and stage advance work the same)
-      if (process.env.SANDBOX_MODE !== '1') driveFolderId = decision.folderId
     }
     const useBucketCopy = !routed && pilot.status !== 'saved' && !driveFolderId
 

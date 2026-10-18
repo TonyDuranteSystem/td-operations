@@ -117,3 +117,79 @@ export function describeFiling(saved: SaveAccountFormResult | null): { ok: boole
   if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
   return { ok: r.errors.length === 0 && r.failed.length === 0, lines }
 }
+
+// ─── The closure form: one filing rule for the MCP review tool and the workflow review ───────────────────────────────
+
+export interface ClosureFilingOutcome {
+  /** the form may be marked reviewed */
+  ok: boolean
+  /** plain lines for the staff reply */
+  lines: string[]
+  /** uploaded files that could not be read (the review is still allowed once the summary is saved): ONE alarm is raised for them */
+  missingUploads: string[]
+}
+
+export interface ClosureFilingDeps {
+  save: (i: SaveAccountFormInput) => Promise<SaveAccountFormResult>
+  finished: (accountId: string) => Promise<boolean>
+  alarm: (route: string, token: string, missing: string[]) => Promise<void>
+}
+
+async function closureDefaultDeps(): Promise<ClosureFilingDeps> {
+  const noStorage = await import("./no-storage")
+  return {
+    save: (i) => saveFormForAccount(i),
+    finished: noStorage.accountIsFinished,
+    alarm: async (route, token, missing) => {
+      try {
+        const { reportSystemError } = await import("@/lib/system-errors")
+        await reportSystemError({ source: "server", route, message: "A closure form upload could not be filed (the file is missing or unreadable) — the form was reviewed without it", context: { token, missing: missing.slice(0, 20) } })
+      } catch { /* an alarm never breaks a review */ }
+    },
+  }
+}
+
+/**
+ * File a closure submission, deciding whether it may be marked reviewed — the SAME rule for the MCP `closure_form_review` and the
+ * workflow review (`lib/operations/closure-review.ts`):
+ *   - not linked to a company → NOT filed, not reviewable;
+ *   - nothing can receive it but the company is Closed / Cancelled → nothing to file: reviewable, and it says so;
+ *   - nothing can receive it (any other company), the company is being moved, or the summary could not be saved → not reviewable;
+ *   - the summary is saved but some uploaded file is missing/unreadable → file what exists, ONE alarm, reviewable.
+ */
+export async function fileClosureSubmission(
+  sub: { token: string; account_id: string | null; upload_paths: string[] | null; completed_at: string | null },
+  submitted: Record<string, unknown>,
+  companyName: string,
+  route: string,
+  deps?: ClosureFilingDeps,
+): Promise<ClosureFilingOutcome> {
+  const d = deps ?? (await closureDefaultDeps())
+  if (!sub.account_id) {
+    return { ok: false, lines: ["⚠️ This form is not linked to a company, so its data could not be filed."], missingUploads: [] }
+  }
+  let saved: SaveAccountFormResult
+  try {
+    saved = await d.save({
+      accountId: sub.account_id,
+      formType: "closure",
+      submittedData: submitted,
+      uploadPaths: sub.upload_paths ?? [],
+      meta: { token: sub.token, submittedAt: sub.completed_at || new Date().toISOString(), companyName },
+    })
+  } catch (e) {
+    return { ok: false, lines: [`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`], missingUploads: [] }
+  }
+  if (saved.route === "none") {
+    let finished = false
+    try { finished = await d.finished(sub.account_id) } catch { /* unknown → treated as not finished */ }
+    if (finished) return { ok: true, lines: ["ℹ️ This company is closed, so there is nothing to file; the form is marked reviewed."], missingUploads: [] }
+    return { ok: false, lines: describeFiling(saved).lines, missingUploads: [] }
+  }
+  const r = saved.result
+  const summarySaved = !!r.summaryFileId && r.errors.length === 0
+  const missing = r.failed
+  if (summarySaved && missing.length > 0) await d.alarm(route, sub.token, missing)
+  const lines = describeFiling(saved).lines
+  return { ok: summarySaved, lines, missingUploads: summarySaved ? missing : [] }
+}

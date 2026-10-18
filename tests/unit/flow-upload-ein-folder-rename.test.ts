@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // ── Mutable per-test state ──────────────────────────────────────────────────
+const { MovingError } = vi.hoisted(() => ({ MovingError: class MovingError extends Error {} }))
 let sdRow: Record<string, unknown> | null
 let accountRow: Record<string, unknown> | null
 let companyState: "drive" | "store"
@@ -17,13 +18,15 @@ let driveMode: "forbid" | "record"
 let removedPaths: string[]
 let ensuredPersons: string[]
 let contactSaves: Array<Record<string, unknown>>
+let contactLinks: Array<Record<string, unknown>>
+let movingPerson: boolean
 let saveCalls: Array<Record<string, unknown>>
 let existingDocs: Array<{ id: string }>
 let docInsertError: { message: string } | null
 
 let documentsInsertPayload: Record<string, unknown> | null
 let actionLogPayload: Record<string, unknown> | null
-let driveCalls: string[]
+const driveCalls: string[] = []
 let advanceCalled: boolean
 
 // ── Mock the I/O boundaries ─────────────────────────────────────────────────
@@ -46,7 +49,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
       }
       if (table === "account_contacts") {
-        return { select: () => ({ eq: () => ({ order: () => ({ order: () => Promise.resolve({ data: [] }) }) }) }) }
+        return { select: () => ({ eq: () => ({ order: () => ({ order: () => Promise.resolve({ data: contactLinks }) }) }) }) }
       }
       if (table === "contacts") {
         return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { full_name: "Mario Rossi" } }) }) }) }
@@ -99,13 +102,14 @@ vi.mock("@/lib/crm-store/formation-pilot", () => ({
 }))
 
 vi.mock("@/lib/crm-store/save-for-account", () => ({
-  CompanyMovingError: class extends Error {},
+  CompanyMovingError: MovingError,
   saveDocumentForAccount: vi.fn(async (input: Record<string, unknown>) => {
     saveCalls.push(input)
     return { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
   }),
   saveDocumentForContact: vi.fn(async (input: Record<string, unknown>) => {
     contactSaves.push(input)
+    if (movingPerson) throw new MovingError("moving")
     return ensuredPersons.length > 0 ? { route: "store", fileId: "pf-1", pointer: "store:pf-1", documentRowId: "pdoc-1", status: "created" } : { route: "drive" }
   }),
 }))
@@ -156,6 +160,8 @@ beforeEach(() => {
   removedPaths = []
   ensuredPersons = []
   contactSaves = []
+  contactLinks = []
+  movingPerson = false
   saveCalls = []
   sdRow = {
     id: "sd-1",
@@ -169,7 +175,7 @@ beforeEach(() => {
   docInsertError = null
   documentsInsertPayload = null
   actionLogPayload = null
-  driveCalls = []
+  driveCalls.length = 0
   advanceCalled = false
 })
 
@@ -285,5 +291,47 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(body.detail).toContain("EIN Official – Acme Holdings LLC.pdf")
     expect(actionLogPayload?.summary).toContain("EIN Official – Acme Holdings LLC.pdf")
     expect((actionLogPayload?.details as Record<string, unknown>)?.original_file_name).toBe("cp575_scan.pdf")
+  })
+
+  it("Scenario 10 — an ITIN for a member of a company LEFT ON ITS OLD FOLDER: no new person storage (it would lock their folder); the legacy path carries on in that folder", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
+    companyState = "drive"
+    driveMode = "record"
+    accountRow = { company_name: "Old Co LLC", entity_type: null, status: "Active", drive_folder_id: "OLDFOLDER", gdrive_folder_url: null }
+    contactLinks = [{ account_id: "acct-old", is_primary: true, accounts: { drive_folder_id: "OLDFOLDER", gdrive_folder_url: null } }]
+    const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
+    expect(res.status).toBe(200)
+    expect(ensuredPersons).toEqual([])
+    expect(contactSaves).toEqual([])
+    expect(driveCalls).toContain("uploadBinaryToDrive")
+  })
+
+  it("Scenario 11 — a Company Formation that started on its old folder (no account yet, not ITIN) is NOT moved into a person's Personal documents: legacy path (the upload bucket here)", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation", stage: "Articles Received" }
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(200)
+    expect(ensuredPersons).toEqual([])
+    expect(contactSaves).toEqual([])
+    expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
+    expect(removedPaths).toEqual([]) // the bucket object IS the document here
+  })
+
+  it("Scenario 12 — an ITIN for a member of a SWITCHED company: filed through the person's storage opened via that company, nothing created up front", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
+    companyState = "store"
+    contactLinks = [{ account_id: "acct-store", is_primary: true }]
+    const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
+    expect(res.status).toBe(200)
+    expect(ensuredPersons).toEqual([])
+    expect(contactSaves[0]).toMatchObject({ contactId: "cont-1", viaAccountId: "acct-store" })
+  })
+
+  it("Scenario 13 — a company being moved is TRANSIENT: 409 and the staged file is KEPT so 'try again' works", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "ITIN", stage: "ITIN Approved" }
+    movingPerson = true
+    const res = await call({ ...EIN_BODY, flow_stage: "ITIN Approved", folder: undefined, rename: undefined })
+    expect(res.status).toBe(409)
+    expect(removedPaths).toEqual([])
+    expect(advanceCalled).toBe(false)
   })
 })

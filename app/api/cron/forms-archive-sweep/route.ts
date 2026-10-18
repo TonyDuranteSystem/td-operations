@@ -30,7 +30,7 @@ import {
   FORM_ARCHIVE_SWEEP_ALERTED_KEY,
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
-import { collectSweepCandidates } from "@/lib/archive/skip-no-drive-folder"
+import { readSweepWindows, unfiledOf, raiseUnfiledAlarm } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -51,44 +51,49 @@ export async function GET(req: NextRequest) {
   let enqueued = 0
   const enqueuedIds: string[] = []
   const stuck: string[] = []
-  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedNoFolder: number }> = {}
+  const perForm: Record<string, { candidates: number; enqueued: number; stuck: number; skippedNoFolder: number; skippedFinished: number; unfiledNoFolder: number }> = {}
   let skippedNoFolder = 0
+  let skippedFinished = 0
 
   for (const recipe of Object.values(ARCHIVE_RECIPES)) {
-    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedNoFolder: 0 }
+    const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedNoFolder: 0, skippedFinished: 0, unfiledNoFolder: 0 }
     perForm[recipe.formType] = stats
 
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    // Only the banking archive resolves the company's own folder (itin / closure resolve others). A company with no folder
-    // cannot be archived by it (it would throw on every run): such rows are left alone and counted, and they never take a
-    // place in the window of 200 — pages are read until 200 real rows are found (or the data runs out).
-    const skipNoFolder = recipe.formType === "banking"
-    const pages = await collectSweepCandidates<Record<string, unknown> & { account_id?: string | null }>(
-      (from, to) =>
-        supabaseAdmin
-          .from(tbl)
-          .select(recipe.selectColumns)
-          .is("drive_archived_at", null)
-          .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
-          .order("created_at", { ascending: true })
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{ data: Array<Record<string, unknown> & { account_id?: string | null }> | null; error: { message: string } | null }>,
-      { limit: 200, pageSize: 200, maxPages: skipNoFolder ? 25 : 1 },
-      skipNoFolder ? undefined : async () => new Set<string>(),
-    )
-
-    if (pages.readError) {
-      await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${pages.readError}` }).catch(() => {})
-      continue
+    // Only the banking archive resolves the company's own folder (itin / closure resolve others). For it the window holds only
+    // companies that HAVE a folder and are not Closed / Cancelled (filtered in the query — skipped rows can never fill it); a
+    // company with no folder is counted and raises ONE alarm until its submissions are filed.
+    let formRows: Record<string, unknown>[]
+    if (recipe.formType === "banking") {
+      const win = await readSweepWindows<Record<string, unknown> & { id: string }>(recipe.table, recipe.selectColumns, FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+      if (win.readError) {
+        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${win.readError}` }).catch(() => {})
+        continue
+      }
+      formRows = win.withFolder
+      stats.skippedNoFolder = win.skippedNoFolder
+      stats.skippedFinished = win.skippedFinished
+      skippedNoFolder += win.skippedNoFolder
+      skippedFinished += win.skippedFinished
+      const unfiled = unfiledOf(win.noFolder, (r) => decideFormArchiveSweep(r, recipe, now))
+      stats.unfiledNoFolder = unfiled.length
+      await raiseUnfiledAlarm(ENDPOINT, "banking submissions", unfiled.map((r) => String(r.id)))
+    } else {
+      const { data: rows, error } = await supabaseAdmin
+        .from(tbl)
+        .select(recipe.selectColumns)
+        .is("drive_archived_at", null)
+        .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+        .order("created_at", { ascending: true })
+        .limit(200)
+      if (error) {
+        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
+        continue
+      }
+      formRows = (rows ?? []) as unknown as Record<string, unknown>[]
     }
-    if (pages.lookupError) {
-      await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${pages.lookupError}` }).catch(() => {})
-    }
-    const formRows = pages.keep as Record<string, unknown>[]
-    stats.skippedNoFolder = pages.skipped
-    skippedNoFolder += pages.skipped
 
     for (const raw of formRows) {
       stats.candidates++
@@ -136,7 +141,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, skippedNoFolder, enqueued, enqueuedIds, stuck, perForm }
+  const summary = { dryRun, skippedNoFolder, skippedFinished, enqueued, enqueuedIds, stuck, perForm }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }
