@@ -5,40 +5,6 @@ import { revalidatePath } from 'next/cache'
 import { safeAction, type ActionResult } from '@/lib/server-action'
 
 /**
- * Link an existing Google Drive folder to the contact.
- */
-export async function linkContactFolder(contactId: string, driveFolderId: string): Promise<ActionResult> {
-  return safeAction(async () => {
-    const { supabaseAdmin } = await import('@/lib/supabase-admin')
-    const { listFolderAnyDrive } = await import('@/lib/google-drive')
-    // …nor an existing Drive folder linked to them (it would re-open the Drive path for a person who is in the storage)
-    const { assertPersonFilesStillOnDrive } = await import('@/lib/crm-store/person-drive-guard')
-    await assertPersonFilesStillOnDrive(contactId)
-
-    const folderContents = await listFolderAnyDrive(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-    if (!folderContents?.files) throw new Error('Could not access Drive folder — check the folder ID')
-
-    const { error } = await supabaseAdmin
-      .from('contacts')
-      .update({
-        drive_folder_id: driveFolderId,
-        gdrive_folder_url: `https://drive.google.com/drive/folders/${driveFolderId}`,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', contactId)
-
-    if (error) throw new Error(`Failed to update contact: ${error.message}`)
-
-    revalidatePath(`/contacts/${contactId}`)
-  }, {
-    action_type: 'update',
-    table_name: 'contacts',
-    record_id: contactId,
-    summary: `Linked contact Drive folder ${driveFolderId}`,
-  })
-}
-
-/**
  * Validate that the contact's Drive folder is accessible and has standard subfolders.
  */
 export async function validateContactFolder(contactId: string): Promise<ActionResult<{

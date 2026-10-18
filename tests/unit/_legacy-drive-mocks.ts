@@ -6,13 +6,14 @@ import { vi } from "vitest"
 
 export interface Recorded { table: string; op: "insert" | "update" | "upsert" | "delete"; payload: unknown }
 
-export function makeSupabase(rows: Record<string, unknown>, recorded: Recorded[]) {
+export function makeSupabase(rows: Record<string, unknown>, recorded: Recorded[], insertResults: Record<string, unknown> = {}) {
   const from = (table: string) => {
-    const result = () => (rows[table] === undefined ? null : rows[table])
+    let inserted = false
+    const result = () => (inserted && insertResults[table] !== undefined ? insertResults[table] : rows[table] === undefined ? null : rows[table])
     const chain: Record<string, unknown> = {}
     const ret = () => chain
     for (const m of ["select", "eq", "neq", "in", "is", "not", "or", "order", "limit", "gte", "lte", "ilike", "like", "range", "match", "filter", "contains"]) chain[m] = ret
-    for (const m of ["insert", "update", "upsert", "delete"] as const) chain[m] = (p?: unknown) => { recorded.push({ table, op: m, payload: p }); return chain }
+    for (const m of ["insert", "update", "upsert", "delete"] as const) chain[m] = (p?: unknown) => { if (m === "insert") inserted = true; recorded.push({ table, op: m, payload: p }); return chain }
     const one = () => Promise.resolve({ data: Array.isArray(result()) ? (result() as unknown[])[0] ?? null : result(), error: null })
     chain.single = one
     chain.maybeSingle = one

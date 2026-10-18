@@ -989,6 +989,10 @@ export async function materializeFormationCompany(
       const acc = l.accounts as unknown as { status: string } | null
       return acc && acc.status !== "Cancelled" && acc.status !== "Closed"
     })
+    // Stop Drive (dev job 264bb882, S1d): a company that is NOT a pilot case but has no Drive folder gets its own storage opened by
+    // ensureCompanyFolder (which then refuses with StoreOwnedAccountError) — the member passports then go to the members' storage
+    // exactly like a pilot case, and nothing is skipped silently.
+    let companyOpenedInStorage = false
     const ensureDriveFolder = async () => {
       const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
       companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
@@ -1105,7 +1109,20 @@ export async function materializeFormationCompany(
         }
       }
     } catch (driveErr) {
-      steps.push({ step: "drive_folder", status: "error", detail: driveErr instanceof Error ? driveErr.message : String(driveErr) })
+      if (driveErr instanceof Error && driveErr.name === "StoreOwnedAccountError") {
+        companyOpenedInStorage = true
+        steps.push({ step: "drive_folder", status: "skipped", detail: "The company's files live in the new CRM storage (opened now) — no Drive folder" })
+        // the owner's staging passport record belongs to this company too (the file itself stays in the owner's own storage)
+        await supabaseAdmin
+          .from("documents")
+          .update({ account_id: accountId, updated_at: new Date().toISOString() })
+          .eq("contact_id", params.contact_id)
+          .eq("document_type_name", "Passport")
+          .eq("category", 2)
+          .is("account_id", null)
+      } else {
+        steps.push({ step: "drive_folder", status: "error", detail: driveErr instanceof Error ? driveErr.message : String(driveErr) })
+      }
     }
 
     // 9b. Member passports (after company folder exists).
@@ -1113,7 +1130,7 @@ export async function materializeFormationCompany(
     // the ones the store could not take continue to today's Drive copy (the Drive company folder is then
     // created for them — a file never ends up nowhere).
     let drivePassports = pendingMemberPassports
-    if (pilotCase && pendingMemberPassports.length > 0) {
+    if ((pilotCase || companyOpenedInStorage) && pendingMemberPassports.length > 0) {
       const failed: typeof pendingMemberPassports = []
       for (const mp of pendingMemberPassports) {
         try {
@@ -1123,7 +1140,7 @@ export async function materializeFormationCompany(
             // nothing to save anywhere (today's Drive copy reports the same) — never list a missing file
             const reason = dlErr?.message || "Passport file not found in its upload location"
             steps.push({ step: `member_${mp.index}_passport`, status: "error", detail: reason })
-            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase.owner.id, what: "member passport", member: mp.contact_id, error: reason })
+            await raisePilotAlarm("store_save_failed", { ownerId: pilotCase?.owner.id ?? null, what: "member passport", member: mp.contact_id, error: reason })
             continue
           }
           const saved = await pilotSavePassport({

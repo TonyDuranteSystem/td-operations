@@ -581,6 +581,24 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
         })
         result.steps.push(step("store_uploads", r.failed.length === 0 ? "ok" : "error",
           `CRM Store company — ${r.saved} upload(s) saved to the new store${r.failed.length ? `, ${r.failed.length} not saved (${r.failed.map((f) => f.error).join("; ")})` : ""}`))
+        // The data-summary PDF the Drive path would have written beside the uploads: filed in the company's storage (hidden),
+        // one file per submission (a re-run is a new version). A failure is an error step, never silent.
+        if (submitted && Object.keys(submitted).length > 0) {
+          try {
+            const { generateFormSummaryPDF, FORM_CONFIGS } = await import("@/lib/form-to-drive")
+            const summaryPdf = await generateFormSummaryPDF(FORM_CONFIGS["onboarding"], submitted, {
+              token, submittedAt: now, companyName: company_name, uploadCount: (p.upload_paths || []).length,
+            })
+            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+            const routed = await saveDocumentForAccount({
+              accountId: account_id, name: `Onboarding_Data_${(company_name || "company").replace(/\s+/g, "_")}.pdf`, bytes: Buffer.from(summaryPdf), mimeType: "application/pdf",
+              folder: "company", documentType: null, callerKey: `onboarding-summary:${account_id}:${token}`, portalVisible: false,
+            })
+            result.steps.push(step("data_summary_pdf", routed.route === "store" ? "ok" : "error", routed.route === "store" ? `Saved to the new storage: ${routed.pointer}` : "The company's storage could not be found — the summary was not saved"))
+          } catch (sumErr) {
+            result.steps.push(step("data_summary_pdf", "error", sumErr instanceof Error ? sumErr.message : String(sumErr)))
+          }
+        }
         // the same passport-data read as the Drive path, from the stored bytes
         if (r.passport && contact_id) {
           const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
@@ -804,6 +822,37 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                     document_type_name: 'Passport', category: 2, category_name: 'Contacts',
                     status: 'classified', contact_id: membContactId, account_id, portal_visible: true,
                   })
+                }
+              } catch (passErr) {
+                result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))
+              }
+            }
+
+            // Stop Drive (dev job 264bb882, S1d): a company with no Drive folder (its files live in the CRM storage) — the member's
+            // passport goes to THEIR OWN storage and the passport data is read from the saved bytes. Never skipped silently.
+            if (memberPassportPath && !driveFolderId) {
+              try {
+                const cleanPath = memberPassportPath.replace(/^\/+/, '')
+                const { data: blob, error: dlErr } = await supabaseAdmin.storage.from('onboarding-uploads').download(cleanPath)
+                if (dlErr || !blob) {
+                  result.steps.push(step(`member_${i + 1}_passport`, 'error', dlErr?.message || 'Download failed'))
+                } else {
+                  const fileName = cleanPath.split('/').pop() || `passport_member_${i + 1}.pdf`
+                  const bytes = Buffer.from(await blob.arrayBuffer())
+                  const mimeType = blob.type || 'application/octet-stream'
+                  const { saveDocumentForContact } = await import('@/lib/crm-store/save-for-account')
+                  const routed = await saveDocumentForContact({
+                    contactId: membContactId, name: fileName, bytes, mimeType, documentType: 'passport',
+                    callerKey: `onboarding-member-passport:${account_id}:${cleanPath}`, accountId: account_id, viaAccountId: account_id, contactName: memberName, portalVisible: false,
+                  })
+                  if (routed.route !== 'store') throw new Error("This person's storage could not be found — the passport was not saved")
+                  result.steps.push(step(`member_${i + 1}_passport`, 'ok', `Saved to the new storage: ${routed.pointer}`))
+                  const { extractAndStorePassportData } = await import('@/lib/jobs/passport-writeback')
+                  const passRes = await extractAndStorePassportData({
+                    contact_id: membContactId, content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, file_name: fileName, mime_type: mimeType,
+                    skip_dob: !!m.member_dob, contact_name: memberName, account_id,
+                  })
+                  result.steps.push(step(`member_${i + 1}_passport_ocr`, passRes.status, passRes.detail))
                 }
               } catch (passErr) {
                 result.steps.push(step(`member_${i + 1}_passport`, 'error', passErr instanceof Error ? passErr.message : String(passErr)))

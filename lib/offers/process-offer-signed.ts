@@ -584,7 +584,8 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         } else {
           driveUploadResult = "error: could not download PDF from Storage"
         }
-      } else {
+      } else if (!driveUploadResult.startsWith("error")) {
+        // (a refusal above already set an "error: …" result — it must not be overwritten by this "skipped")
         driveUploadResult = `skipped: pdf_path=${!!contract?.pdf_path}, drive=${!!driveFolderId}`
       }
     } catch (e) {

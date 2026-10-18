@@ -507,7 +507,50 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
         result.steps.push(step("passport_copy", "skipped", "No passport uploaded"))
       }
     } catch (driveErr) {
-      result.steps.push(step("drive_folder", "error", driveErr instanceof Error ? driveErr.message : String(driveErr)))
+      if (driveErr instanceof Error && driveErr.name === "PersonFilesInStorageError") {
+        // Stop Drive (dev job 264bb882, S1d): a returning client (company in storage, no storage of their own yet — their storage was
+        // just opened): there is no Drive folder, so the passport goes to THEIR OWN storage and its data is read from the saved bytes.
+        // Never lost, never silent.
+        try {
+          const passportPath = firstUploadPath(submitted.passport_owner)
+          if (!passportPath) {
+            result.steps.push(step("store_passport", "skipped", "No passport uploaded"))
+          } else {
+            const cleanPath = passportPath.replace(/^\/+/, "")
+            const { data: blob, error: dlErr } = await supabaseAdmin.storage.from("onboarding-uploads").download(cleanPath)
+            if (dlErr || !blob) {
+              result.steps.push(step("store_passport", "error", dlErr?.message || "Download failed"))
+            } else {
+              const content = await blob.arrayBuffer()
+              const mimeType = blob.type || "application/octet-stream"
+              const personName = [submitted.owner_first_name, submitted.owner_last_name].filter(Boolean).join(" ") || p.token
+              const fileName = cleanPath.split("/").pop() || "passport.pdf"
+              const pilot = await import("@/lib/crm-store/formation-pilot")
+              const saved = await pilot.pilotSavePassport({
+                contactId: p.contact_id, personName, fileName, bytes: Buffer.from(content), mimeType, buyerCaseId: decision.deliveryId ?? null,
+                row: { document_type_name: "Passport", category: 2, category_name: "Contacts", contact_id: p.contact_id, account_id: accountId, portal_visible: true },
+              })
+              if (saved.status === "saved") {
+                result.steps.push(step("store_passport", "ok", `CRM Store: ${saved.write}`))
+                if (saved.write !== "unchanged") {
+                  const { extractAndStorePassportData } = await import("@/lib/jobs/passport-writeback")
+                  const passportResult = await extractAndStorePassportData({
+                    contact_id: p.contact_id, content, file_name: fileName, mime_type: mimeType,
+                    skip_dob: !!submitted.owner_dob, contact_name: personName, account_id: accountId,
+                  })
+                  result.steps.push(step("passport_ocr", passportResult.status, passportResult.detail))
+                }
+              } else {
+                result.steps.push(step("store_passport", "error", "The passport could not be saved in the person's storage (a staff alarm was raised)"))
+              }
+            }
+          }
+        } catch (stErr) {
+          result.steps.push(step("store_passport", "error", stErr instanceof Error ? stErr.message : String(stErr)))
+        }
+      } else {
+        result.steps.push(step("drive_folder", "error", driveErr instanceof Error ? driveErr.message : String(driveErr)))
+      }
     }
     await updateJobProgress(job.id, result)
   }

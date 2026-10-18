@@ -13,7 +13,20 @@
  * ERROR for the caller plus a staff-visible alarm (`raiseDriveWriteRefused`), never an "ok" and never a silent skip.
  */
 
-export const ARCHIVE_ACCOUNT_STATUSES = ["Closed", "Cancelled"] as const
+export const ARCHIVE_ACCOUNT_STATUSES = ["closed", "cancelled"] as const
+
+/** Closed / Cancelled, whatever the letter case or surrounding spaces. THE one definition (the central folder lock uses it too). */
+export function isArchivedStatus(status: string | null | undefined): boolean {
+  return (ARCHIVE_ACCOUNT_STATUSES as readonly string[]).includes((status ?? "").trim().toLowerCase())
+}
+
+/** The Drive folder id on a company / person record: `drive_folder_id`, else the id inside the older `gdrive_folder_url` link. */
+export function folderIdOfRecord(r: { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null | undefined): string | null {
+  if (!r) return null
+  if (r.drive_folder_id) return r.drive_folder_id
+  const m = /\/folders\/([A-Za-z0-9_-]+)/.exec(r.gdrive_folder_url ?? "")
+  return m ? m[1] : null
+}
 
 export type LegacyRefusalReason = "has_storage" | "moving" | "archived" | "no_folder" | "no_company"
 
@@ -47,7 +60,7 @@ export function decideLegacyAccount(f: AccountFacts | null): LegacyDriveVerdict 
   if (!f || f.status === null) return refuse("no_company")
   if (f.state === "store") return refuse("has_storage")
   if (f.state === "moving") return refuse("moving")
-  if ((ARCHIVE_ACCOUNT_STATUSES as readonly string[]).includes(f.status)) return refuse("archived")
+  if (isArchivedStatus(f.status)) return refuse("archived")
   if (!f.driveFolderId) return refuse("no_folder")
   return { allowed: true, folderId: f.driveFolderId }
 }
@@ -60,11 +73,11 @@ async function defaultAccountDeps(): Promise<LegacyAccountDeps> {
   return {
     load: async (accountId) => {
       const { supabaseAdmin } = await import("@/lib/supabase-admin")
-      const { data, error } = await supabaseAdmin.from("accounts").select("status, drive_folder_id").eq("id", accountId).maybeSingle()
+      const { data, error } = await supabaseAdmin.from("accounts").select("status, drive_folder_id, gdrive_folder_url").eq("id", accountId).maybeSingle()
       if (error) throw new Error("Could not check where this company's files live — please try again.")
       if (!data) return null
       const { companyDocState } = await import("./switched-drive-guard")
-      return { status: (data.status as string | null) ?? "", driveFolderId: (data.drive_folder_id as string | null) ?? null, state: await companyDocState(accountId) }
+      return { status: (data.status as string | null) ?? "", driveFolderId: folderIdOfRecord(data as { drive_folder_id?: string | null; gdrive_folder_url?: string | null }), state: await companyDocState(accountId) }
     },
   }
 }
@@ -90,22 +103,24 @@ export interface LegacyContactDeps {
 }
 
 /**
- * A person may still be written to in Drive only when they have no storage of their own, already have a Drive folder, and
- * belong to a company that is itself in the left-on-Drive state. Anyone else (a lead, a person of a company in storage or
- * closed, a person with no folder) gets their own storage (`saveDocumentForContact` opens it) — never a Drive folder.
+ * A person may still be written to in Drive only when they have no storage of their own and belong to a company deliberately
+ * left on Drive (folder, no storage, not closed). Their folder is their own, or — if they never had one — that company's folder
+ * (the same place the old staff upload used), so one person's papers are never split between Drive and a new storage while the
+ * rest of their company stays in Drive. Anyone else (a lead, a person of a company in storage or closed) gets their own
+ * storage (`saveDocumentForContact` opens it) — never a Drive folder. The refusal names the TRUE reason.
  */
 export async function legacyDriveForContact(contactId: string, deps?: LegacyContactDeps): Promise<LegacyDriveVerdict> {
   const d: LegacyContactDeps = deps ?? {
     load: async (id) => {
       const { supabaseAdmin } = await import("@/lib/supabase-admin")
       const { liveOwnerOfContact } = await import("./switched-drive-guard")
-      const { data: c, error } = await supabaseAdmin.from("contacts").select("drive_folder_id").eq("id", id).maybeSingle()
+      const { data: c, error } = await supabaseAdmin.from("contacts").select("drive_folder_id, gdrive_folder_url").eq("id", id).maybeSingle()
       if (error) throw new Error("Could not check where this person's files live — please try again.")
       const { data: links, error: lErr } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", id)
       if (lErr) throw new Error("Could not check where this person's files live — please try again.")
       return {
         liveOwner: !!(await liveOwnerOfContact(id)),
-        driveFolderId: (c?.drive_folder_id as string | null | undefined) ?? null,
+        driveFolderId: folderIdOfRecord(c as { drive_folder_id?: string | null; gdrive_folder_url?: string | null } | null),
         accountIds: ((links ?? []) as Array<{ account_id: string | null }>).map((l) => l.account_id).filter((x): x is string => !!x),
       }
     },
@@ -113,30 +128,55 @@ export async function legacyDriveForContact(contactId: string, deps?: LegacyCont
   }
   const f = await d.load(contactId)
   if (f.liveOwner) return refuse("has_storage")
-  if (!f.driveFolderId) return refuse("no_folder")
+  if (f.accountIds.length === 0) return refuse(f.driveFolderId ? "no_company" : "no_folder")
+  const verdicts: LegacyDriveVerdict[] = []
   for (const accountId of f.accountIds) {
     const v = await d.account(accountId)
-    if (v.allowed) return { allowed: true, folderId: f.driveFolderId }
+    if (v.allowed) return { allowed: true, folderId: f.driveFolderId ?? (v.folderId as string) }
+    verdicts.push(v)
   }
-  return refuse(f.accountIds.length === 0 ? "no_company" : "archived")
+  // none of their companies is a left-on-Drive one: say why (storage first, then a move in progress, then closed)
+  for (const reason of ["has_storage", "moving", "archived"] as const) {
+    if (verdicts.some((v) => v.reason === reason)) return refuse(reason)
+  }
+  return refuse("no_folder")
 }
 
 /** The refusal as an error a caller can throw (message = the plain sentence). */
-export class DriveWriteRefusedError extends Error {
+export class LegacyDriveRefusedError extends Error {
   constructor(public reason: LegacyRefusalReason, sentence?: string) {
     super(sentence ?? LEGACY_REFUSAL_SENTENCE[reason])
-    this.name = "DriveWriteRefusedError"
+    this.name = "LegacyDriveRefusedError"
   }
 }
 
+/** The same refusal (same flow, company / person and reason) alarms staff once per window — a retrying job cannot spam them. */
+export const ALARM_THROTTLE_MS = 60 * 60 * 1000
+const recentAlarms = new Map<string, number>()
+export function forgetRecentAlarms(): void { recentAlarms.clear() }
+
 /**
  * A write that was needed but is not allowed: tell staff (the system error log + the store's event history), return the plain
- * sentence for the caller to report. Never throws — the alarm must not hide the caller's own error.
+ * sentence for the caller to report. Never throws — the alarm must not hide the caller's own error. Throttled per
+ * flow + company + person + reason (this server instance, and the store's own event history for other instances).
  */
-export async function raiseDriveWriteRefused(p: { flow: string; accountId?: string | null; contactId?: string | null; reason: LegacyRefusalReason; detail?: string }): Promise<string> {
+export async function raiseDriveWriteRefused(p: { flow: string; accountId?: string | null; contactId?: string | null; reason: LegacyRefusalReason; detail?: string }, now: number = Date.now()): Promise<string> {
+  const sentence = LEGACY_REFUSAL_SENTENCE[p.reason]
+  const key = [p.flow, p.accountId ?? "", p.contactId ?? "", p.reason].join("|")
+  const last = recentAlarms.get(key)
+  if (last !== undefined && now - last < ALARM_THROTTLE_MS) return sentence
+  recentAlarms.set(key, now)
+  try {
+    const { supabaseAdmin } = await import("@/lib/supabase-admin")
+    const since = new Date(now - ALARM_THROTTLE_MS).toISOString()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- store_events is not in the generated types
+    const { data } = await (supabaseAdmin as any).from("store_events").select("id").eq("event", "pilot_alarm").eq("reason", "drive_write_refused").gte("occurred_at", since)
+      .contains("details", { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason }).limit(1)
+    if (Array.isArray(data) && data.length > 0) return sentence
+  } catch { /* cannot tell: alarm anyway */ }
   try {
     const { raisePilotAlarm } = await import("./formation-pilot")
     await raisePilotAlarm("drive_write_refused", { flow: p.flow, accountId: p.accountId ?? null, contactId: p.contactId ?? null, reason: p.reason, detail: p.detail ?? null })
   } catch { /* an alarm never breaks the caller */ }
-  return LEGACY_REFUSAL_SENTENCE[p.reason]
+  return sentence
 }
