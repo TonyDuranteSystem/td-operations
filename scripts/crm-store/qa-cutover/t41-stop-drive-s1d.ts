@@ -20,7 +20,7 @@ const UX = "30c2cd96-03e4-43cf-9536-81d961b18b1d"
 async function main() {
   if ((process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").includes("ydzipybqeebtpcvsbtvs")) throw new Error("refusing to run against production")
   const { supabaseAdmin } = await import("../../../lib/supabase-admin")
-  const sb = supabaseAdmin as unknown as { from: (t: string) => any } // eslint-disable-line @typescript-eslint/no-explicit-any
+  const sb = supabaseAdmin as unknown as { from: (t: string) => any; rpc: (f: string, a: unknown) => Promise<{ data: any; error: { message: string } | null }> } // eslint-disable-line @typescript-eslint/no-explicit-any
   const drive = await import("../../../lib/google-drive")
   const { ensureCompanyFolder } = await import("../../../lib/drive-folder-utils")
   const { runAsStoreBackup } = await import("../../../lib/crm-store/switched-drive-guard")
