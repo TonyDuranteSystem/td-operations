@@ -97,6 +97,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/account-status-events",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/hermes-bridge",
       "schedule": "*/5 * * * *"
     },

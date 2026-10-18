@@ -52,6 +52,7 @@ export type ChatEventKind =
   | "formation_wizard_submitted" // client submitted the Company Formation wizard via the portal
   | "onboarding_wizard_submitted" // client submitted the Client Onboarding data form (existing-LLC clients)
   | "closure_wizard_submitted" // client submitted the Company Closure form (portal wizard or legacy link)
+  | "account_status_changed" // a company's status changed (Active/Suspended/Offboarding/Closed/Cancelled) — staff-only note (Antonio 2026-10-17)
   | "person_left" // STAFF removed a person from a company (Antonio 2026-10-17: every notification goes in the Calendar) — exception to "client actions only"
 
 export interface ChatEventSource {
@@ -943,5 +944,26 @@ export async function emitPersonLeftEvent(p: {
     message: lines.join("\n"),
     source: { table: "storage_check_notes", id: p.noteId },
     event_kind: "person_left",
+  })
+}
+
+/**
+ * A company's status changed (Storage check Phase 3). Staff-only like every note; idempotent on the status event row id.
+ * Another deliberate exception to "client actions only" (Antonio 2026-10-17: every notification goes in the Calendar).
+ */
+export async function emitAccountStatusEvent(p: {
+  eventId: string
+  accountId: string
+  companyName: string | null
+  headline: string
+  lines: string[]
+}): Promise<EmitResult> {
+  const company = p.companyName?.trim() || "This company"
+  return emitClientChatEvent({
+    account_id: p.accountId,
+    topic: "Company status",
+    message: [`${company} ${p.headline}.`, ...p.lines].join("\n"),
+    source: { table: "account_status_events", id: p.eventId },
+    event_kind: "account_status_changed",
   })
 }
