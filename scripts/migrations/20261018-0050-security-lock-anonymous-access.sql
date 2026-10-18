@@ -12,7 +12,7 @@
 -- needs exactly: form_8832_applications SELECT+UPDATE, signature_requests SELECT+UPDATE, member_info_requests SELECT):
 --   1. takes every privilege on every public table away from `anon`, except those three grants;
 --   2. stops future tables from being handed to `anon` automatically;
---   3. takes EXECUTE on every owner-rights function away from PUBLIC and `anon` (authenticated and service_role keep it for now);
+--   3. takes EXECUTE on every owner-rights function away from PUBLIC and `anon` (it changes nothing for authenticated or service_role);
 --      every caller found in the code uses the SERVICE key, which is unaffected.
 -- Undo: 20261018-0050-security-lock-anonymous-access.UNDO.sql (gives the old grants back). Idempotent.
 DO $$
@@ -30,8 +30,10 @@ BEGIN
   -- (On production these are the 25 listed above; the sandbox also had exec_sql(text), which runs any SQL it is given.)
   FOR fn IN SELECT p.oid::regprocedure::text AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.prosecdef LOOP
+    -- ONLY take it away from PUBLIC and anon. Do NOT grant anything: a first version of this file also granted EXECUTE to
+    -- `authenticated`, which re-opened exec_sql(text) and ~58 other owner-rights functions that earlier migrations had
+    -- deliberately locked to the service key (found by the independent review 2026-10-18; fixed by 20261018-0200).
     EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC, anon', fn.sig);
-    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated, service_role', fn.sig);
   END LOOP;
 END $$;
 -- new tables and functions created later must not be handed to anonymous automatically
