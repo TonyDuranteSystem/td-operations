@@ -220,22 +220,30 @@ export async function POST(req: NextRequest) {
   let uploadFiledInStorage: { accountId: string; inferred: boolean } | null = null
   if (!documentId && fileBase64) {
     // Stop Drive (dev job 264bb882, S1d): when the company is known the copy goes into ITS storage (Tax › year, type IRS Fax,
-    // hidden from the client) instead of a company-less bucket copy. See lib/fax/save-sent-upload.ts.
+    // hidden from the client) instead of a company-less bucket copy. See lib/fax/save-sent-upload.ts. A failure is never silent:
+    // ONE alarm, the fax has already gone out, and the old bucket copy below still runs.
     try {
       const { createHash } = await import('crypto')
       const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const { fileSentUpload } = await import('@/lib/fax/save-sent-upload')
       const filed = await fileSentUpload({
-        accountId, serviceDeliveryId, fileName, bytes: bytes0, mimeType: mimeFromName(fileName), actor: user?.email || 'dashboard',
-        callerKey: `fax-upload:${createHash('sha256').update(bytes0).digest('hex')}`,
+        accountId, serviceDeliveryId, fileName, bytes: bytes0, mimeType: mimeFromName(fileName), actor: user?.id ?? null,
+        contentHash: createHash('sha256').update(bytes0).digest('hex'),
       })
       if (filed.route === 'store') {
         uploadedDocId = filed.documentRowId
         uploadFiledInStorage = { accountId: filed.accountId, inferred: filed.inferred }
-        if (!accountId) accountId = filed.accountId
+        // only a CERTAIN company goes into the activity log: a company guessed from the file name must not land a wrong entry on a client's feed
+        if (!accountId && !filed.inferred) accountId = filed.accountId
+      } else if (filed.reason === 'company_moving' || filed.reason === 'company_has_no_storage') {
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be kept in the company's storage (${filed.reason}) — the old copy was kept`, context: { fileName, accountId, serviceDeliveryId } })
       }
-    } catch {
-      /* the old bucket copy below still runs — persistence is best-effort, never fail a sent fax */
+    } catch (e) {
+      try {
+        const { reportSystemError } = await import('@/lib/system-errors')
+        await reportSystemError({ source: 'server', route: '/api/tools/fax/send', method: 'POST', message: `A faxed file could not be kept in the company's storage — ${e instanceof Error ? e.message : String(e)}`, context: { fileName, accountId, serviceDeliveryId } })
+      } catch { /* an alarm never fails a sent fax */ }
     }
   }
   if (!uploadFiledInStorage && !documentId && fileBase64) {
