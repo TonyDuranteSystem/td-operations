@@ -49,10 +49,17 @@ export const MARKETING_SETTING_DEFS = {
     schema: z.record(z.string().trim().min(1).max(60), z.string().max(4000)),
     fallback: {} as Record<string, string>,
   },
-  /** Named bundles of permissions a team owner can hand to a member. Starts empty. */
+  /** Named bundles of permissions a team owner can hand to a member. Starting values from plan v1.4 (A.3); all editable. */
   permission_bundles: {
     schema: z.record(z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).max(60)),
-    fallback: {} as Record<string, string[]>,
+    fallback: {
+      // calls and filters leads: no payment links, no Money, no export, no team management
+      setter: ["leads.read", "leads.call", "leads.mark", "whatsapp", "chat", "inbox"],
+      // ads, video, posts: chat, content, reports; reads leads
+      content: ["chat", "inbox", "content.manage", "reports.read", "leads.read"],
+      // contacts the leads the setters pass: works them, sends the free-call link, no money screens
+      seller: ["leads.read", "leads.pick", "leads.call", "leads.mark", "whatsapp", "chat", "inbox", "calls.host"],
+    } as Record<string, string[]>,
   },
   /** Which kinds of sale carry commission terms. A catalog value, so a new kind is a settings change. */
   sale_kinds: {
@@ -75,7 +82,7 @@ export const MARKETING_SETTING_DEFS = {
   owner_may_export_leads: { schema: z.boolean(), fallback: true },
   /** Whether adding a member needs Antonio's approval first. */
   member_invites_need_approval: { schema: z.boolean(), fallback: false },
-  /** The most a team owner can give a member: a ceiling Antonio sets. Empty list = nothing beyond the defaults. */
+  /** The most a team owner can give a member: a ceiling Antonio can set. EMPTY LIST = NO CEILING (Rocco, as boss, may give anything he has himself; Antonio's ruling 2026-10-17). */
   member_permission_ceiling: { schema: z.array(z.string().trim().min(1).max(60)).max(60), fallback: [] as string[] },
 } as const
 

@@ -110,6 +110,10 @@ const PUBLIC_PREFIXES = [
   // /api/bofa-intake-admin and stay behind the session gate.
   '/bank-application/',
   '/api/bank-application/',
+  // TD Marketing invitation (P1): the person has no login yet. The token is single-use, hashed in the database and expires;
+  // the accept route answers every failure with one generic message.
+  '/marketing/accept',
+  '/api/marketing/accept',
   // Client-facing forms (email-gated, no Supabase auth)
   '/offer',
   '/tax-form',
