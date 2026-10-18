@@ -204,3 +204,14 @@ export async function contactForSubmissionRow(row: { contact_id?: unknown; lead_
   const found = await lookupLeadContact({ email: lead.email, leadName: lead.full_name, route, leadId: row.lead_id, token: typeof row.token === "string" ? row.token : null, quiet: true })
   return found.state === "one" ? found.contactId : null
 }
+
+/**
+ * Record the decided contact on a form submission (idempotent: only fills an empty contact_id, never overwrites). Callers pass a contact
+ * only when it is CERTAIN (exact email + matching name, or created from this very lead). Later tools and the retry recipes then agree on
+ * who the person is. Returns true when it wrote, false when the row already had a contact (or nothing matched).
+ */
+export async function recordSubmissionContact(table: "formation_submissions" | "onboarding_submissions" | "itin_submissions", submissionId: string, contactId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.from(table).update({ contact_id: contactId }).eq("id", submissionId).is("contact_id", null).select("id")
+  if (error) throw new Error(`Could not record the contact on the submission: ${error.message}`)
+  return (data ?? []).length > 0
+}

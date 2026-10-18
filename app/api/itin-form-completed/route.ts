@@ -131,6 +131,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Record the decided contact on the submission (only a certain one: exact email + matching name, or created from this lead), so
+    // later tools — itin_prepare_documents, the retry recipe — see the same person instead of an empty contact_id.
+    if (contactId && !sub.contact_id) {
+      try {
+        const { recordSubmissionContact } = await import("@/lib/crm-store/lead-form-store")
+        await recordSubmissionContact("itin_submissions", submission_id, contactId)
+      } catch (e) {
+        results.push({ step: "contact_record", status: "error", detail: e instanceof Error ? e.message : String(e) })
+      }
+    }
+
     if (contactId) {
       try {
         const { data: contact } = await supabaseAdmin.from("contacts").select("date_of_birth, citizenship, residency, phone").eq("id", contactId).single()

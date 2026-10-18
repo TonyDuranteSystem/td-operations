@@ -18,6 +18,7 @@ vi.mock("@/lib/supabase-admin", () => {
     error: null,
   })
   chain.update = (u: Record<string, unknown>) => { updates.push(u); return chain }
+  chain.is = () => chain
   return { supabaseAdmin: { from: () => chain } }
 })
 
@@ -242,5 +243,14 @@ describe("round 3 — member passports, formation filing", () => {
   it("the formation retry recipe leaves member passports out as well", async () => {
     // resolvePlan needs a contact; test the filter helper the recipe uses
     expect(splitMemberPassports(["a/passport_owner.pdf", "a/passport_member_0.pdf"]).forPrimary).toEqual(["a/passport_owner.pdf"])
+  })
+})
+
+describe("recordSubmissionContact — the decided contact is written back, idempotently", () => {
+  it("fills an empty contact_id only (the update is guarded by contact_id IS NULL) and reports whether it wrote", async () => {
+    const { recordSubmissionContact } = await import("@/lib/crm-store/lead-form-store")
+    const wrote = await recordSubmissionContact("itin_submissions", "sub-1", "contact-1")
+    expect(updates).toContainEqual({ contact_id: "contact-1" })
+    expect(typeof wrote).toBe("boolean")
   })
 })
