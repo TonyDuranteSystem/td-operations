@@ -79,7 +79,7 @@ describe("banking recipe registration", () => {
   })
 
   it("returns null recipe for an unregistered form type", () => {
-    expect(getArchiveRecipe("formation")).toBeNull()
+    expect(getArchiveRecipe("bogus")).toBeNull()
     expect(getArchiveRecipe("nonsense")).toBeNull()
   })
 })

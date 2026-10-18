@@ -71,7 +71,8 @@ export async function POST(req: NextRequest) {
     let leadName = ""
     let leadEmail = ""
     let referrerName = ""
-    let contactId: string | null = null
+    let contactId: string | null = (sub.contact_id as string | null) ?? null
+    let contactAmbiguous = false
 
     if (leadId) {
       const { data: lead } = await supabaseAdmin
@@ -90,14 +91,17 @@ export async function POST(req: NextRequest) {
       // only. Deliberately NEVER auto-creates or updates a contact here —
       // that write belongs to staff review/confirm (onboarding_form_review),
       // not to this pre-review notification step (Antonio, 2026-09-20).
-      // EXACT email, case-insensitive, no wildcards. Several matches = nobody is guessed (one staff alarm, nothing linked or filed).
-      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
-      const match = await findContactByExactEmail(leadEmail)
-      if (match.status === "one") {
-        contactId = match.id
-      } else if (match.status === "many") {
-        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
-        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "onboarding-form-completed", leadId, token, contactIds: match.ids })
+      // EXACT email AND matching name. Several matches, a different name on the same email, or a failed lookup = nobody is guessed:
+      // ONE staff alarm, nothing linked or filed, and the rest of the chain still runs.
+      const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
+      const found = contactId ? ({ state: "one", contactId } as const) : await lookupLeadContact({ email: leadEmail, leadName, route: "onboarding-form-completed", leadId, token })
+      if (found.state === "one") {
+        contactId = found.contactId
+        // record it on the submission: the retry job and this route then agree on who the person is
+        if (!sub.contact_id) await supabaseAdmin.from("onboarding_submissions").update({ contact_id: contactId }).eq("id", submission_id).is("contact_id", null)
+      } else if (found.state === "ambiguous" || found.state === "error") {
+        contactAmbiguous = true
+        results.push({ step: "contact_lookup", status: "error", detail: found.detail })
       }
     }
 
@@ -109,14 +113,25 @@ export async function POST(req: NextRequest) {
 
     // ---- STEP 3: File the data PDF + uploads in the client's storage ----
     // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive.) Onboarding deliberately creates no contact before staff
-    // review, so a lead with no contact record yet keeps its uploads with the submission; review files them under the company.
-    {
+    // review, so a lead with no contact record yet keeps its uploads with the submission; once review links a company or a contact,
+    // the retry job (archive recipe "onboarding") files the package under it.
+    if (contactAmbiguous) {
+      results.push({ step: "storage_save", status: "error", detail: "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" })
+    } else {
       const { fileFormPackage } = await import("@/lib/forms/file-form-package")
       results.push(await fileFormPackage({
         route: "onboarding-form-completed", formType: "onboarding", submittedData, uploadPaths, contactId, personName: leadName,
         noContactIsExpected: true,
         meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
       }))
+      if (contactId) {
+        try {
+          const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
+          await enqueueFormArchiveJob({ formType: "onboarding", submissionId: submission_id, createdBy: "onboarding_form_completed" })
+        } catch (e) {
+          results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
+        }
+      }
     }
 
     // ---- STEP 4: Check passport ----

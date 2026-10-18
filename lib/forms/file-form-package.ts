@@ -10,11 +10,23 @@ import { saveFormToDrive } from "@/lib/form-to-drive"
 import { storageDestinationForForm, type FormStorageInput } from "@/lib/crm-store/lead-form-store"
 import { raisePilotAlarm } from "@/lib/crm-store/formation-pilot"
 
-export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped"; detail: string }
+export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped" | "pending"; detail: string }
+
+/** A member's own passport (legacy form key passport_member_<N>, wizard key member_<N>_member_passport). */
+const MEMBER_PASSPORT = /passport_member_\d+|member_\d+_member_passport/
+
+/**
+ * A person's passport never lands in ANOTHER person's storage (Antonio's rule). The lead-stage formation form is filed under the
+ * PRIMARY contact, so the other members' passports are NOT filed there: they stay on the submission (the upload bucket) and
+ * formation-materialize files each one in THAT member's own storage when it creates / links the member's contact.
+ */
+export function splitMemberPassports(paths: string[]): { forPrimary: string[]; forMembers: string[] } {
+  return { forPrimary: paths.filter((p) => !MEMBER_PASSPORT.test(p)), forMembers: paths.filter((p) => MEMBER_PASSPORT.test(p)) }
+}
 
 export interface FileFormPackageInput extends FormStorageInput {
   route: string
-  formType: "formation" | "onboarding" | "closure"
+  formType: "formation" | "onboarding" | "closure" | "itin"
   submittedData: Record<string, unknown>
   uploadPaths: string[]
   meta: { token: string; submittedAt: string; companyName?: string }
@@ -24,9 +36,38 @@ export interface FileFormPackageInput extends FormStorageInput {
   driveFolderId?: string | null
   /** onboarding creates no contact before staff review: "no contact" is then expected, not an alarm */
   noContactIsExpected?: boolean
+  /** the name each stored upload gets (see memberAwareFileName) */
+  fileNameOf?: (path: string) => string
+  /** stop waiting after this long (default 20 s): the route's own steps (email, task, delivery) must never be starved — the retry job finishes the filing */
+  deadlineMs?: number
 }
 
-export async function fileFormPackage(i: FileFormPackageInput): Promise<FilingStep> {
+/**
+ * MMLLC: a member's passport is stored as passport_member_<N>_<First_Last>.<ext> (the owner's as passport_owner_<name>…) so staff can
+ * tell whose is whose in the primary contact's Personal documents. Every other upload keeps its own name.
+ */
+export function memberAwareFileName(submittedData: Record<string, unknown>): (path: string) => string {
+  const clean = (v: unknown) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+  const members = Array.isArray(submittedData.additional_members) ? (submittedData.additional_members as Array<Record<string, unknown>>) : []
+  return (path: string) => {
+    const base = path.split("/").pop() || "document.pdf"
+    const dot = base.lastIndexOf(".")
+    const stem = dot > 0 ? base.slice(0, dot) : base, ext = dot > 0 ? base.slice(dot) : ""
+    const m = /passport_member_(\d+)/.exec(stem)
+    if (m) {
+      const mem = members[Number(m[1])]
+      const who = mem ? clean(mem.member_type === "company" ? mem.member_company_name : `${mem.member_first_name ?? ""} ${mem.member_last_name ?? ""}`) : ""
+      return who ? `passport_member_${m[1]}_${who}${ext}` : base
+    }
+    if (/passport_owner/.test(stem)) {
+      const who = clean(`${submittedData.owner_first_name ?? ""} ${submittedData.owner_last_name ?? ""}`)
+      return who ? `passport_owner_${who}${ext}` : base
+    }
+    return base
+  }
+}
+
+async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> {
   const context = { route: i.route, formType: i.formType, token: i.meta.token, contactId: i.contactId ?? null, accountId: i.accountId ?? null }
   try {
     let folder = i.driveFolderId ?? null
@@ -47,7 +88,8 @@ export async function fileFormPackage(i: FileFormPackageInput): Promise<FilingSt
       }
       folder = dest.marker
     }
-    const res = await saveFormToDrive(i.formType, i.submittedData, i.uploadPaths, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket })
+    const split = i.formType === "formation" ? splitMemberPassports(i.uploadPaths) : { forPrimary: i.uploadPaths, forMembers: [] as string[] }
+    const res = await saveFormToDrive(i.formType, i.submittedData, split.forPrimary, folder, i.meta, { bucket: i.bucket, resolveBucket: i.resolveBucket, fileNameOf: i.fileNameOf })
     const problems = [
       res.summaryFileId ? null : "the summary PDF was not saved",
       res.failed.length ? `${res.failed.length} file(s) failed: ${res.failed.join("; ")}` : null,
@@ -57,10 +99,27 @@ export async function fileFormPackage(i: FileFormPackageInput): Promise<FilingSt
       await raisePilotAlarm("lead_form_filing_failed", { ...context, problems })
       return { step: "storage_save", status: "error", detail: problems.join(" | ") }
     }
-    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.` }
+    const waiting = split.forMembers.length ? ` ${split.forMembers.length} member passport(s) stay on the submission — each is filed in that member's own storage when the company is created.` : ""
+    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.${waiting}` }
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
     await raisePilotAlarm("lead_form_filing_failed", { ...context, problems: [detail] })
     return { step: "storage_save", status: "error", detail }
   }
+}
+
+export async function fileFormPackage(i: FileFormPackageInput): Promise<FilingStep> {
+  const ms = i.deadlineMs ?? 20_000
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), ms) })
+  try {
+    const first = await Promise.race([fileFormPackageNow(i), timedOut])
+    if (first !== "timeout") return first
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+  // Still running: NOT a failure. The filing carries on (every save is idempotent) and the retry job re-checks it; a real failure
+  // raises its own alarm from inside the filing, and the sweep alerts if the retry never completes. No alarm here, so a slow-but-fine
+  // filing never produces a false alert and a failing one produces exactly one.
+  return { step: "storage_save", status: "pending", detail: `Filing was still running after ${Math.round(ms / 1000)} s — the rest of the steps carried on; the retry job confirms it` }
 }

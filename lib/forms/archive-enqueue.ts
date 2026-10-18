@@ -43,7 +43,7 @@ export async function enqueueFormArchiveJob(params: {
   const tbl = recipe.table as "banking_submissions"
   const { data: sub } = await supabaseAdmin
     .from(tbl)
-    .select("id, account_id, drive_archived_at, drive_archive_meta")
+    .select("*")
     .eq("id", submissionId)
     .maybeSingle()
   if (!sub) return { status: "no_submission" }

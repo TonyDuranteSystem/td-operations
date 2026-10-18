@@ -1593,10 +1593,24 @@ export async function materializeFormationCompany(
       }
     }
 
-    // 10a-bis. (Stop-Drive S1a) There used to be a step here that copied flow-uploaded Articles still parked in Supabase
-    // Storage into the company's Drive "1. Company" folder. It only existed to put the file where a person could find it in
-    // Drive, and the signed-SS-4 IRS merge no longer needs it: resolveArticlesForSs4 reads the documents row and fetches the
-    // binary from wherever it lives (storage pointer included). The Articles now simply stay where they were uploaded.
+    // 10a-bis. (Stop-Drive S1a) Flow uploads made BEFORE the company existed (the Articles at "Filed with State") are kept in the
+    // older bucket under a `storage:` pointer. There used to be a step here that copied them into a Drive "1. Company" folder; it
+    // is gone. Now, once the company has its own storage, those files are filed into it (1. Company, right type, same record
+    // re-pointed — adoptStoragePointerRow). A company with no storage yet leaves them as they are; they are adopted when its
+    // storage opens (or by the backfill script). Best-effort: a failure raises a staff alarm and never fails the materialization.
+    if (linkedSdIds.length > 0) {
+      try {
+        const { adoptStoragePointersForAccount } = await import("@/lib/crm-store/adopt-storage-pointer")
+        const adopted = await adoptStoragePointersForAccount(accountId)
+        steps.push({
+          step: "flow_docs_to_storage",
+          status: adopted.failed.length > 0 ? "error" : "ok",
+          detail: `${adopted.adopted} filed in the company storage, ${adopted.already} already there, ${adopted.skipped.length} left (no storage yet)${adopted.failed.length > 0 ? ` — FAILED: ${adopted.failed.map(f => f.reason).join("; ")}` : ""}`,
+        })
+      } catch (adoptErr) {
+        steps.push({ step: "flow_docs_to_storage", status: "error", detail: adoptErr instanceof Error ? adoptErr.message : String(adoptErr) })
+      }
+    }
 
     // 10b. Self-heal: if we got here via wizard_progress fallback (no
     // formation_submissions row existed), write the canonical row now so

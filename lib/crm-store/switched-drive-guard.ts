@@ -131,6 +131,23 @@ async function archivedFolderIds(
   return ids
 }
 
+import { contactsSharingDriveCompany } from "./switched-drive-guard-pure"
+export { contactsSharingDriveCompany }
+
+/** Live: does this person share a still-Drive company? (strict: a read error throws) */
+export async function contactSharesDriveCompany(contactId: string): Promise<boolean> {
+  const d = await db()
+  const { data: links, error } = await d.from("account_contacts").select("account_id").eq("contact_id", contactId)
+  if (error) throw new Error("Could not check which companies this person belongs to — please try again.")
+  const ids = ((links ?? []) as Array<{ account_id: string }>).map((l) => l.account_id)
+  if (ids.length === 0) return false
+  const { data: accs, error: aErr } = await d.from("accounts").select("id, status").in("id", ids)
+  if (aErr) throw new Error("Could not check which companies this person belongs to — please try again.")
+  const status = new Map<string, string | null>(((accs ?? []) as Array<{ id: string; status: string | null }>).map((a) => [a.id, a.status]))
+  const switched = new Set<string>()
+  for (const id of ids) if ((await companyDocState(id)) !== "drive") switched.add(id)
+  return contactsSharingDriveCompany(ids.map((a) => ({ contact_id: contactId, account_id: a })), status, switched).has(contactId)}
+
 /** One read of the live state for every company/person; strict (throws on any read error). */
 export async function readLockedFolderIds(): Promise<Set<string>> {
   const d = await db()
@@ -176,11 +193,30 @@ export async function readLockedFolderIds(): Promise<Set<string>> {
   // closed also uses is left open (production has 3 active companies sharing a folder with a closed one). The answer changes only
   // when a company is closed / reopened, so it is read at most once a minute per server instance.
   ;(await archivedFolderIds(d, folderIdsOf)).forEach((f) => folders.add(f))
+  // A person who belongs to a company that is still on Drive keeps that company's "2. Contacts" as their folder: never locked (see
+  // contactsSharingDriveCompany) — otherwise a storage opened for one member would stop the Drive company's own saves.
+  const sharingDrive = new Set<string>()
+  for (const part of chunks(Array.from(contactIds))) {
+    const { data: links, error: lErr } = await d.from("account_contacts").select("contact_id, account_id").in("contact_id", part)
+    if (lErr) throw new Error(`store guard: could not read the people's companies — ${lErr.message}`)
+    const linkRows = (links ?? []) as Array<{ contact_id: string; account_id: string }>
+    const otherAccounts = Array.from(new Set(linkRows.map((l) => l.account_id))).filter((a) => !accountIds.has(a))
+    const status = new Map<string, string | null>()
+    for (const acctPart of chunks(otherAccounts)) {
+      const { data: accs, error: sErr } = await d.from("accounts").select("id, status").in("id", acctPart)
+      if (sErr) throw new Error(`store guard: could not read the companies' status — ${sErr.message}`)
+      for (const a of (accs ?? []) as Array<{ id: string; status: string | null }>) status.set(a.id, a.status)
+    }
+    contactsSharingDriveCompany(linkRows, status, accountIds).forEach((c) => sharingDrive.add(c))
+  }
   const personFolders = new Set<string>()
   for (const part of chunks(Array.from(contactIds))) {
-    const { data, error: cErr } = await d.from("contacts").select("drive_folder_id, gdrive_folder_url").in("id", part)
+    const { data, error: cErr } = await d.from("contacts").select("id, drive_folder_id, gdrive_folder_url").in("id", part)
     if (cErr) throw new Error(`store guard: could not read the person folders — ${cErr.message}`)
-    for (const c of (data ?? []) as Array<{ drive_folder_id: string | null; gdrive_folder_url: string | null }>) for (const f of folderIdsOf(c)) personFolders.add(f)
+    for (const c of (data ?? []) as Array<{ id: string; drive_folder_id: string | null; gdrive_folder_url: string | null }>) {
+      if (sharingDrive.has(c.id)) continue
+      for (const f of folderIdsOf(c)) personFolders.add(f)
+    }
   }
   // A person's folder can be one folder shared with other people (a company's "2. Contacts"): locking it would also stop
   // people who are still on Drive. Only a folder that belongs to that person alone is locked (the move itself refuses a shared one).

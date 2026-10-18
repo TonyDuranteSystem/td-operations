@@ -6,7 +6,7 @@
  *
  * 1. Update CRM contact (DOB, nationality, address, visa — changed fields only)
  * 2. Create Leads/{name}/ folder if standalone client (no account)
- * 3. Save data summary PDF to Drive
+ * 3. Save data summary PDF to the person's storage
  * 4. Advance SD: Data Collection -> Document Preparation
  * 5. Auto-generate W-7 + 1040-NR + Schedule OI via itin_prepare_documents
  * 6. Email team (internal, support@) with all data + "Documents generated, please review"
@@ -20,14 +20,13 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 8-step auto-chain from mid-execution
-// Vercel timeout (Drive folder + PDF gen + docs + email + task + history + log).
+// Vercel timeout (storage filing + PDF gen + docs + email + task + history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD, advanceStageIfAt } from "@/lib/operations/service-delivery"
-import { autoSaveDocument } from "@/lib/portal/auto-save-document"
 import { APP_BASE_URL } from "@/lib/config"
 import { generateW7Pdf, generate1040NRPdf, generateScheduleOIPdf } from "@/lib/itin-pdf-generator"
 import { dispatchWorkflowForFormCompletion } from "@/lib/tasks/dispatch-workflow-for-event"
@@ -104,19 +103,20 @@ export async function POST(req: NextRequest) {
 
     // --- STEP 1: Update CRM contact (changed fields only) ---
     let contactId = sub.contact_id
+    let contactAmbiguous = false
     if (!contactId && sub.lead_id) {
       // Find or create contact from lead
       const { data: lead } = await supabaseAdmin.from("leads").select("full_name, email, phone, language").eq("id", sub.lead_id).single()
       if (lead) {
-        // EXACT email, case-insensitive, no wildcards; several matches = nobody is guessed (one staff alarm, no contact used)
-        const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
-        const match = await findContactByExactEmail(lead.email)
-        if (match.status === "one") {
-          contactId = match.id
-        } else if (match.status === "many") {
-          results.push({ step: "contact_lookup", status: "error", detail: `${match.ids.length} contacts share this email — none was used` })
-          const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
-          await raisePilotAlarm("lead_form_contact_ambiguous", { route: "itin-form-completed", leadId: sub.lead_id, contactIds: match.ids })
+        // EXACT email AND matching name; several matches / a different name on the same email / a failed lookup = nobody is guessed
+        // (one staff alarm, no contact used, none created) and the rest of the chain still runs.
+        const { lookupLeadContact } = await import("@/lib/crm-store/lead-form-store")
+        const found = await lookupLeadContact({ email: lead.email, leadName: lead.full_name, route: "itin-form-completed", leadId: sub.lead_id, token })
+        if (found.state === "one") {
+          contactId = found.contactId
+        } else if (found.state === "ambiguous" || found.state === "error") {
+          contactAmbiguous = true
+          results.push({ step: "contact_lookup", status: "error", detail: found.detail })
         } else {
           const newC = await dbWrite(
             // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw contacts.insert; extract to lib/operations/ per dev_task fda76fd3
@@ -128,6 +128,17 @@ export async function POST(req: NextRequest) {
           )
           if (newC) { contactId = newC.id; results.push({ step: "contact_created", status: "ok", detail: contactId }) }
         }
+      }
+    }
+
+    // Record the decided contact on the submission (only a certain one: exact email + matching name, or created from this lead), so
+    // later tools — itin_prepare_documents, the retry recipe — see the same person instead of an empty contact_id.
+    if (contactId && !sub.contact_id) {
+      try {
+        const { recordSubmissionContact } = await import("@/lib/crm-store/lead-form-store")
+        await recordSubmissionContact("itin_submissions", submission_id, contactId)
+      } catch (e) {
+        results.push({ step: "contact_record", status: "error", detail: e instanceof Error ? e.message : String(e) })
       }
     }
 
@@ -170,63 +181,47 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // --- STEP 2: Create Drive folder + save data PDF ---
-    let driveFolderId = ""
-    try {
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-      const { resolveItinContactFolder } = await import("@/lib/forms/itin-contact-folder")
-
-      // ITIN files under the PERSON's CONTACT folder, never the company's main
-      // area (Antonio, 2026-07-25): a company-owner's ITIN → the company's
-      // "2. Contacts" subfolder; an individual's → a per-person folder under
-      // "Individual Clients". Same resolver the durable archive recipe uses, so
-      // the inline save + the reliable job land in the SAME place. This whole
-      // folder (data summary here + the W-7/1040-NR generated in step 5, which
-      // reuse driveFolderId) now lives under the contact.
-      driveFolderId = await resolveItinContactFolder({
-        accountId: driveAccountId,
-        contactId: sub.contact_id,
-        leadId: sub.lead_id,
-        token,
-        clientName: clientName || token,
-      })
-
-      if (driveFolderId) {
-        const driveResult = await saveFormToDrive(
-          "itin", sd, uploadPaths, driveFolderId,
-          { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName },
-          { person: contactId ? { contactId, viaAccountId: driveAccountId || null, name: clientName || displayName } : undefined },
-        )
-        results.push({ step: "drive_save", status: "ok", detail: `Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.` })
-
-        // Durable backstop (2026-07-25): the inline save above is best-effort.
-        // Enqueue the reliable archive job with the plan PINNED (folder + bucket
-        // + config + paths) so a slow/failed copy self-heals via retry, and the
-        // sweep can alert if it never lands.
+    // --- STEP 2: File the data PDF + uploads in the person's storage ---
+    // Stop-Drive S1a: the "Individual Clients/<name> (<id>)" and "2. Contacts" Drive folders are gone. An ITIN belongs to the PERSON:
+    // the package goes to their own storage (opened on first use). No contact = nothing filed + one alarm; the retry job finishes it.
+    let itinFolder = ""
+    if (contactAmbiguous || !contactId) {
+      results.push({ step: "storage_save", status: "error", detail: contactAmbiguous ? "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" : "No contact record to file this ITIN package under — nothing was filed; the uploads stay with the submission" })
+      if (!contactAmbiguous) {
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_filing_failed", { route: "itin-form-completed", formType: "itin", token, contactId: null, problems: ["no contact record to file under"] })
+      }
+    } else {
+      try {
+        const { resolveItinContactFolder } = await import("@/lib/forms/itin-contact-folder")
+        itinFolder = await resolveItinContactFolder({ accountId: driveAccountId, contactId, leadId: sub.lead_id, token, clientName: clientName || token })
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e)
+        results.push({ step: "storage_save", status: "error", detail })
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_filing_failed", { route: "itin-form-completed", formType: "itin", token, contactId, problems: [detail] })
+      }
+      if (itinFolder) {
+        const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+        results.push(await fileFormPackage({
+          route: "itin-form-completed", formType: "itin", submittedData: sd, uploadPaths, contactId, personName: clientName || displayName, driveFolderId: itinFolder,
+          bucket: "onboarding-uploads",
+          meta: { token, submittedAt: fullSub?.completed_at || new Date().toISOString(), companyName: displayName },
+        }))
+        // Durable backstop: retry + sweep alert if the inline filing did not fully land.
         try {
           const { enqueueFormArchiveJob } = await import("@/lib/forms/archive-enqueue")
           const { deriveUploadPaths } = await import("@/lib/forms/archive-registry")
           await enqueueFormArchiveJob({
             formType: "itin",
             submissionId: submission_id,
-            pin: {
-              folderId: driveFolderId,
-              bucket: "onboarding-uploads",
-              configKey: "itin",
-              // Union the column with paths inside submitted_data (matches the
-              // recipe fallback) — the portal wizard keeps upload paths in the
-              // data, so pinning the column alone could archive an empty package.
-              uploadPaths: deriveUploadPaths(uploadPaths, sd),
-              companyName: displayName,
-            },
+            pin: { folderId: itinFolder, bucket: "onboarding-uploads", configKey: "itin", uploadPaths: deriveUploadPaths(uploadPaths, sd), companyName: displayName },
             createdBy: "itin_form_completed",
           })
         } catch (e) {
           results.push({ step: "archive_enqueue", status: "error", detail: e instanceof Error ? e.message : String(e) })
         }
       }
-    } catch (e) {
-      results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
     }
 
     // --- STEP 3: Ensure SD exists + advance to Document Preparation ---
@@ -333,6 +328,10 @@ export async function POST(req: NextRequest) {
     try {
       if (!sd.first_name || !sd.last_name) {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
+      } else if (!contactId) {
+        // No person to file the documents under (undecided contact — already alarmed once above). Nothing is generated and thrown
+        // away: the data and uploads stay on the submission, and itin_prepare_documents builds them once the contact is linked.
+        results.push({ step: "docs_generated", status: "skipped", detail: "No contact yet — the documents are not generated now; the data stays on the submission and they are prepared once the contact is linked" })
       } else {
         const w7Buffer = await generateW7Pdf(sd)
         const nrBuffer = await generate1040NRPdf(sd)
@@ -340,7 +339,7 @@ export async function POST(req: NextRequest) {
 
         // Where do this person's files live? (Drive cutover, dev job ad09ea91.) An ITIN belongs to the PERSON: when their
         // own storage is live the three PDFs are saved there (listed in the CRM exactly as below, same visibility) and
-        // Drive is never touched; anyone else carries on with Drive exactly as before.
+        // Drive is never touched.
         let itinSavedInStorage = false
         if (contactId) {
           const { saveDocumentForContact } = await import("@/lib/crm-store/save-for-account")
@@ -367,94 +366,14 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Upload all 3 to Drive
-        if (!itinSavedInStorage && driveFolderId) {
-          const { uploadBinaryToDriveUpsert, folderFileNameMap, listFolder: lf, createFolder: cf } = await import("@/lib/google-drive")
-
-          // Find or create ITIN subfolder
-          const contents = await lf(driveFolderId) as { files?: { id: string; name: string; mimeType: string }[] }
-          let itinFolder = contents?.files?.find(
-            (f: { name: string; mimeType: string }) => f.name === "ITIN" && f.mimeType === "application/vnd.google-apps.folder"
-          )
-          if (!itinFolder) {
-            const nf = await cf(driveFolderId, "ITIN")
-            itinFolder = { id: nf.id, name: "ITIN", mimeType: "application/vnd.google-apps.folder" }
-          }
-
-          const slug = `${sd.first_name}_${sd.last_name}`.replace(/\s+/g, "_")
-          const w7Name = `W-7_${slug}.pdf`
-          const nrName = `1040-NR_${slug}.pdf`
-          const oiName = `Schedule_OI_${slug}.pdf`
-          // Stable file names → UPSERT: a re-run/regenerate refreshes the one
-          // existing PDF in place instead of piling up copies (LT Program
-          // Drive-duplicate incident class). One folder listing feeds all 3.
-          const itinNames = await folderFileNameMap(itinFolder.id)
-          const w7Upload = await uploadBinaryToDriveUpsert(w7Name, w7Buffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
-          const nrUpload = await uploadBinaryToDriveUpsert(nrName, nrBuffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
-          const oiUpload = await uploadBinaryToDriveUpsert(oiName, oiBuffer, "application/pdf", itinFolder.id, itinNames) as { id?: string }
-
-          docsGenerated = true
-
-          results.push({ step: "docs_generated", status: "ok", detail: `W-7 + 1040-NR + Schedule OI generated and uploaded to Drive/ITIN/` })
-
-          // Register PDFs in the portal documents table so the client sees
-          // them under Documents (category=3 Tax, portal_visible=true) and so
-          // they surface on the flow workspace / portal flow page (queried by
-          // service_delivery_id). ITIN SDs are contact-only by Phase 1 rule;
-          // autoSaveDocument accepts contact_id for pure contact-only ITINs. If
-          // the contact also owns an LLC (sub.account_id set), file under that
-          // account so other account members can see the docs.
-          //
-          // 2026-06-25 (Issue 2 fix — Daniel Pasztor): the previous version
-          // ignored autoSaveDocument's return value and ALWAYS pushed a
-          // docs_generated "ok", masking insert failures (the documents row
-          // never appeared yet the action_log said "ok"). autoSaveDocument never
-          // throws — it returns { error } — so the bug was invisible. We now (a)
-          // skip + report any PDF whose Drive upload returned no id (a null
-          // drive_file_id violates the documents NOT NULL constraint — verified),
-          // and (b) check each return value and surface the actual error in a
-          // dedicated docs_registered result.
-          const registrationTarget: { accountId?: string; contactId?: string } | null =
-            sub.account_id ? { accountId: sub.account_id } : contactId ? { contactId } : null
-
-          if (!registrationTarget) {
-            results.push({ step: "docs_registered", status: "skipped", detail: "No account or contact — portal documents not registered" })
-          } else {
-            const toRegister: { fileName: string; documentType: string; driveId?: string }[] = [
-              { fileName: w7Name, documentType: "ITIN W-7", driveId: w7Upload?.id },
-              { fileName: nrName, documentType: "ITIN 1040-NR", driveId: nrUpload?.id },
-              { fileName: oiName, documentType: "ITIN Schedule OI", driveId: oiUpload?.id },
-            ]
-            const regErrors: string[] = []
-            let regOk = 0
-            for (const doc of toRegister) {
-              if (!doc.driveId) {
-                regErrors.push(`${doc.documentType}: Drive upload returned no file id`)
-                continue
-              }
-              const saved = await autoSaveDocument({
-                ...registrationTarget,
-                fileName: doc.fileName,
-                documentType: doc.documentType,
-                category: 3,
-                driveFileId: doc.driveId,
-                portalVisible: true,
-                serviceDeliveryId: deliveryId,
-              })
-              if (saved.error) {
-                regErrors.push(`${doc.documentType}: ${saved.error}`)
-              } else {
-                regOk++
-              }
-            }
-            const scope = sub.account_id ? "account-scoped" : "contact-scoped"
-            if (regErrors.length === 0) {
-              results.push({ step: "docs_registered", status: "ok", detail: `${regOk}/3 registered in portal documents (${scope})` })
-            } else {
-              console.error(`[itin-form-completed] document registration failed: ${regErrors.join(" | ")}`)
-              results.push({ step: "docs_registered", status: "error", detail: `${regOk}/3 registered (${scope}). Failures: ${regErrors.join("; ")}` })
-            }
-          }
+        // Stop-Drive S1a: there is no Drive upload any more. The three PDFs are saved in the person's storage above (their storage was
+        // opened when the package was filed). Anything else — no contact, or a hidden study-copy storage — is an error AND an alarm,
+        // never a silent skip.
+        if (!itinSavedInStorage) {
+          const detail = "The ITIN documents could not be saved in the person's storage — nothing was written anywhere else"
+          results.push({ step: "docs_generated", status: "error", detail })
+          const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+          await raisePilotAlarm("lead_form_filing_failed", { route: "itin-form-completed", formType: "itin", token, contactId: contactId ?? null, problems: [detail] })
         }
       }
     } catch (e) {
@@ -493,11 +412,11 @@ export async function POST(req: NextRequest) {
 <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
 
 <h3>Documents Status</h3>
-<p>${docsGenerated ? '<strong style="color:#16a34a">W-7 + 1040-NR + Schedule OI GENERATED and uploaded to Drive.</strong><br/>Please review the documents before sending to client.' : '<strong style="color:#dc2626">Document generation failed -- run itin_prepare_documents manually.</strong>'}</p>
+<p>${docsGenerated ? '<strong style="color:#16a34a">W-7 + 1040-NR + Schedule OI GENERATED and saved in the client storage.</strong><br/>Please review the documents before sending to client.' : '<strong style="color:#dc2626">Document generation failed -- run itin_prepare_documents manually.</strong>'}</p>
 
 <h3>Next Steps</h3>
 <ol>
-<li>Review the generated W-7, 1040-NR, and Schedule OI in Drive</li>
+<li>Review the generated W-7, 1040-NR, and Schedule OI in the client storage</li>
 <li>If correct, send to client for signature: <code>itin_prepare_documents(token="${token}", send_email=true)</code></li>
 <li>Client prints, signs, prints passport copies, mails to Seminole FL</li>
 </ol>

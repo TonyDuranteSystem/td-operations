@@ -1132,7 +1132,7 @@ export async function saveFormToDrive(
    * turn left step 7's bank-statement parse with nothing to read and produced
    * no P&L/Balance Sheet. Pass the bucket the files were actually uploaded to.
    */
-  opts?: { bucket?: string; resolveBucket?: (path: string) => string; person?: { contactId: string; viaAccountId?: string | null; name?: string | null } },
+  opts?: { bucket?: string; resolveBucket?: (path: string) => string; fileNameOf?: (path: string) => string; person?: { contactId: string; viaAccountId?: string | null; name?: string | null } },
 ): Promise<{ summaryFileId: string | null; copied: string[]; failed: string[]; skipped: string[]; errors: string[] }> {
   // Tax wizard payloads arrive with flattened repeater keys and alias
   // duplicates — normalize them for the accountant PDF (fold member/RPT
@@ -1155,7 +1155,7 @@ export async function saveFormToDrive(
     try {
       // A person-keyed form (ITIN): the person's own storage when their files live there — no Drive folder is involved at all.
       const { personFilesInStorage, liveOwnerOfContact, liveOwnerOfAccount } = await import("@/lib/crm-store/switched-drive-guard")
-      if (opts?.person && (await personFilesInStorage(opts.person.contactId, opts.person.viaAccountId))) {
+      if (!parseStorageMarker(driveFolderId) && opts?.person && (await personFilesInStorage(opts.person.contactId, opts.person.viaAccountId))) {
         const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
         const ownerId = (await liveOwnerOfContact(opts.person.contactId)) ?? (await ensurePersonOwner(opts.person.contactId, opts.person.name || "Member"))
         switched = { kind: "contact" as const, id: opts.person.contactId, ownerId }
@@ -1163,6 +1163,11 @@ export async function saveFormToDrive(
         // The destination IS a storage (no Drive folder): "person-storage:<id>" / "account-storage:<id>". The caller opened it; if it
         // cannot be found now, nothing is saved and nothing falls through to Drive.
         const m = parseStorageMarker(driveFolderId)!
+        if (m.kind === "account") {
+          // same rule as every company save: a company in the middle of its move takes nothing — the caller retries
+          const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
+          if ((await companyDocState(m.id)) === "moving") throw new (await import("@/lib/crm-store/save-for-account")).CompanyMovingError()
+        }
         const ownerId = m.kind === "contact" ? await liveOwnerOfContact(m.id) : await liveOwnerOfAccount(m.id)
         if (!ownerId) throw new Error(m.kind === "contact"
           ? "This person's files live in the new storage but their storage could not be found — nothing was saved."
@@ -1192,6 +1197,7 @@ export async function saveFormToDrive(
         uploadPaths,
         bucketOf: (path) => (opts?.resolveBucket ? opts.resolveBucket(path) : bucket),
         submissionKey: `${switched.id}:${formType}:${meta.token}`,
+        fileNameOf: opts?.fileNameOf,
       })
       return { ...res, errors: [...storeErrors, ...res.errors] }
     }
