@@ -16,7 +16,7 @@
  * What this route still does:
  * 1. Validate submission
  * 2. Look up (read-only) an existing contact by email, for linking tasks only
- * 3. Archive the raw submission to a Leads/{name}/ staging folder in Drive
+ * 3. File the raw submission in the client's storage
  * 4. Check passport uploaded, flag if missing
  * 5. Check referral on lead -> create QB credit note task for Antonio
  * 6. Send Luca detailed email with all data + specific next steps
@@ -28,7 +28,7 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 9-step auto-chain from mid-execution
-// Vercel timeout (CRM update + Drive folder + PDF + email + task + SD history + log).
+// Vercel timeout (CRM update + storage filing + PDF + email + task + SD history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
@@ -90,14 +90,14 @@ export async function POST(req: NextRequest) {
       // only. Deliberately NEVER auto-creates or updates a contact here —
       // that write belongs to staff review/confirm (onboarding_form_review),
       // not to this pre-review notification step (Antonio, 2026-09-20).
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .eq("email", leadEmail || "noemail")
-        .limit(1)
-
-      if (contacts?.length) {
-        contactId = contacts[0].id
+      // EXACT email, case-insensitive, no wildcards. Several matches = nobody is guessed (one staff alarm, nothing linked or filed).
+      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
+      const match = await findContactByExactEmail(leadEmail)
+      if (match.status === "one") {
+        contactId = match.id
+      } else if (match.status === "many") {
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "onboarding-form-completed", leadId, token, contactIds: match.ids })
       }
     }
 
@@ -107,48 +107,16 @@ export async function POST(req: NextRequest) {
     // until then; every use of it below already tolerates null.
     const deliveryId: string | null = null
 
-    // ---- STEP 3: Create Leads/{name}/ folder in Drive + save data PDF ----
-    try {
-      const { listFolder, createFolder } = await import("@/lib/google-drive")
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-
-      const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno"
-      const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
-      let leadsParent = clientsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!leadsParent) {
-        const newFolder = await createFolder(TD_CLIENTS_FOLDER, "Leads")
-        leadsParent = { id: newFolder.id, name: "Leads", mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      const clientFolderName = leadName || String(submittedData.company_name) || token
-      const leadsContents = await listFolder(leadsParent.id) as { files?: { id: string; name: string; mimeType: string }[] }
-      let clientFolder = leadsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === clientFolderName && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!clientFolder) {
-        const newFolder = await createFolder(leadsParent.id, clientFolderName)
-        clientFolder = { id: newFolder.id, name: clientFolderName, mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      const driveResult = await saveFormToDrive(
-        "onboarding",
-        submittedData,
-        uploadPaths,
-        clientFolder.id,
-        { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName }
-      )
-
-      results.push({
-        step: "drive_save",
-        status: "ok",
-        detail: `Folder: Leads/${clientFolderName}/. Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
-      })
-    } catch (e) {
-      results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    // ---- STEP 3: File the data PDF + uploads in the client's storage ----
+    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive.) Onboarding deliberately creates no contact before staff
+    // review, so a lead with no contact record yet keeps its uploads with the submission; review files them under the company.
+    {
+      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+      results.push(await fileFormPackage({
+        route: "onboarding-form-completed", formType: "onboarding", submittedData, uploadPaths, contactId, personName: leadName,
+        noContactIsExpected: true,
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+      }))
     }
 
     // ---- STEP 4: Check passport ----

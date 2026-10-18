@@ -977,10 +977,6 @@ export async function materializeFormationCompany(
     const ownerName = ownerContact ? [ownerContact.first_name, ownerContact.last_name].filter(Boolean).join(" ") : ""
 
     let companyContactsSubfolderId: string | null = null
-    // "1. Company" subfolder — where the Articles of Organization + EIN letter
-    // belong. Captured so step 10a-bis can relocate flow-uploaded Articles that
-    // are still parked in Supabase Storage into Drive.
-    let companyDocsSubfolderId: string | null = null
 
     // CRM Store pilot (sandbox only, job 685467b5 — lib/crm-store/formation-pilot.ts): a formation
     // whose files already live in the new store gets NO Drive company folder, NO Drive migration and
@@ -996,7 +992,6 @@ export async function materializeFormationCompany(
     const ensureDriveFolder = async () => {
       const folderResult = await ensureCompanyFolder(accountId, chosenName, stateName, ownerName)
       companyContactsSubfolderId = folderResult.subfolders["2. Contacts"] ?? null
-      companyDocsSubfolderId = folderResult.subfolders["1. Company"] ?? null
       return folderResult
     }
 
@@ -1581,35 +1576,10 @@ export async function materializeFormationCompany(
       }
     }
 
-    // 10a-bis. Relocate flow-uploaded Articles that are still parked in Supabase
-    // Storage into the company's Drive "1. Company" folder. The workspace
-    // "Filed with State" upload happens BEFORE the company exists, so the binary
-    // can't reach Drive at upload time — only a `storage:` documents pointer is
-    // written (step 10a above just backfilled its account_id). Without this the
-    // Articles never land in Drive AND the signed-SS-4 IRS merge (which scans
-    // the Drive "1. Company" folder) can't find them, producing an SS-4-only fax
-    // package (Art of Profit Academy / Numero Uno Social / Automatiko,
-    // 2026-07-08). Best-effort + idempotent — never fails materialization.
-    if (companyDocsSubfolderId && linkedSdIds.length > 0) {
-      try {
-        const { relocateFormationFlowDocs } = await import("@/lib/flows/relocate-flow-storage-docs")
-        const rel = await relocateFormationFlowDocs({
-          companySubfolderId: companyDocsSubfolderId,
-          serviceDeliveryIds: linkedSdIds,
-        })
-        steps.push({
-          step: "flow_docs_to_drive",
-          status: rel.errors.length > 0 ? "error" : "ok",
-          detail: `${rel.relocated} relocated, ${rel.skipped} skipped${rel.errors.length > 0 ? ` — errors: ${rel.errors.join("; ")}` : ""}`,
-        })
-      } catch (relErr) {
-        steps.push({
-          step: "flow_docs_to_drive",
-          status: "error",
-          detail: relErr instanceof Error ? relErr.message : String(relErr),
-        })
-      }
-    }
+    // 10a-bis. (Stop-Drive S1a) There used to be a step here that copied flow-uploaded Articles still parked in Supabase
+    // Storage into the company's Drive "1. Company" folder. It only existed to put the file where a person could find it in
+    // Drive, and the signed-SS-4 IRS merge no longer needs it: resolveArticlesForSs4 reads the documents row and fetches the
+    // binary from wherever it lives (storage pointer included). The Articles now simply stay where they were uploaded.
 
     // 10b. Self-heal: if we got here via wizard_progress fallback (no
     // formation_submissions row existed), write the canonical row now so

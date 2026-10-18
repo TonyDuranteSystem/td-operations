@@ -86,6 +86,18 @@ export async function switchedTargetForFolder(driveFolderId: string): Promise<Sw
   return switched[0]
 }
 
+
+/**
+ * A form destination that is not a Drive folder at all: "person-storage:<contactId>" or "account-storage:<accountId>".
+ * Anyone whose files live in (or are being opened in) the new storage is addressed this way, so the form flows never need
+ * a Drive folder for them. Anything else is a Drive folder id and returns null.
+ */
+export function parseStorageMarker(folderId: string): { kind: "contact" | "account"; id: string } | null {
+  const m = /^(person|account)-storage:([0-9a-fA-F-]{36})$/.exec(folderId)
+  if (!m) return null
+  return { kind: m[1] === "person" ? "contact" : "account", id: m[2] }
+}
+
 /** The top folder of the storage that matches the Drive sub-folder a form type used. */
 export function folderKindForDriveSubfolder(subfolder: string, target: Pick<SwitchedFolderTarget, "kind">): string {
   // a PERSON's ITIN papers live in the person's own ITIN folder (Antonio 2026-10-15); every other person form stays in Personal documents

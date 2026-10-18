@@ -1150,17 +1150,24 @@ export async function saveFormToDrive(
   // summary and uploads. The Drive folder tells us whose they are: a switched company/person gets them in the new
   // storage (same top folder) and Drive is never touched; anyone else carries on with Drive exactly as before, below.
   {
-    const { switchedTargetForFolder, saveFormToStore } = await import("@/lib/crm-store/save-form")
+    const { switchedTargetForFolder, saveFormToStore, parseStorageMarker } = await import("@/lib/crm-store/save-form")
     let switched
     try {
       // A person-keyed form (ITIN): the person's own storage when their files live there — no Drive folder is involved at all.
-      const { personFilesInStorage, liveOwnerOfContact } = await import("@/lib/crm-store/switched-drive-guard")
+      const { personFilesInStorage, liveOwnerOfContact, liveOwnerOfAccount } = await import("@/lib/crm-store/switched-drive-guard")
       if (opts?.person && (await personFilesInStorage(opts.person.contactId, opts.person.viaAccountId))) {
         const { ensurePersonOwner } = await import("@/lib/crm-store/formation-pilot")
         const ownerId = (await liveOwnerOfContact(opts.person.contactId)) ?? (await ensurePersonOwner(opts.person.contactId, opts.person.name || "Member"))
         switched = { kind: "contact" as const, id: opts.person.contactId, ownerId }
-      } else if (driveFolderId.startsWith("person-storage:")) {
-        throw new Error("This person's files live in the new storage but their storage could not be found — nothing was saved.")
+      } else if (parseStorageMarker(driveFolderId)) {
+        // The destination IS a storage (no Drive folder): "person-storage:<id>" / "account-storage:<id>". The caller opened it; if it
+        // cannot be found now, nothing is saved and nothing falls through to Drive.
+        const m = parseStorageMarker(driveFolderId)!
+        const ownerId = m.kind === "contact" ? await liveOwnerOfContact(m.id) : await liveOwnerOfAccount(m.id)
+        if (!ownerId) throw new Error(m.kind === "contact"
+          ? "This person's files live in the new storage but their storage could not be found — nothing was saved."
+          : "This company's files live in the new storage but its storage could not be found — nothing was saved.")
+        switched = { kind: m.kind, id: m.id, ownerId }
       } else {
         switched = await switchedTargetForFolder(driveFolderId)
       }

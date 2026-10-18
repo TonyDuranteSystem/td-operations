@@ -4,9 +4,9 @@
  *
  * WHY (Slack bug report 2026-07-08): the signed-SS-4 IRS merge in
  * app/api/ss4-signed scans the Drive "1. Company" folder for an Articles PDF.
- * When the Articles are still parked in Supabase Storage (see
- * lib/flows/relocate-flow-storage-docs.ts for the root cause), that scan finds
- * nothing and the merge SILENTLY produces an SS-4-only package. This resolver is
+ * When the Articles are still parked in Supabase Storage (the
+ * workspace upload happens before the company exists; the old copy-to-Drive step was removed in Stop-Drive S1a),
+ * that scan finds nothing and the merge SILENTLY produces an SS-4-only package. This resolver is
  * the fallback: it looks up the formation's Articles documents row and fetches
  * the binary from wherever it actually lives — Drive (real `drive_file_id`) or
  * Supabase Storage (`storage:flow-uploads/...` pointer). The merge uses it when

@@ -6,7 +6,7 @@
  *
  * 1. Validate submission
  * 2. Apply form data to CRM (update contact: DOB, nationality, address)
- * 3. Create Leads/{name}/ folder in Drive, upload data PDF + passport
+ * 3. File the data PDF + uploads in the client's storage
  * 4. Check passport uploaded, flag if missing
  * 5. Check referral on lead -> create QB credit note task for Antonio
  * 6. Send Luca detailed email with all data + specific next steps
@@ -19,7 +19,7 @@
  */
 
 // Added 2026-04-14 P0.7: protect the 9-step auto-chain from mid-execution
-// Vercel timeout (CRM update + Drive folder + PDF + email + task + SD history + log).
+// Vercel timeout (CRM update + storage filing + PDF + email + task + SD history + log).
 export const maxDuration = 60
 
 import { NextRequest, NextResponse } from "next/server"
@@ -80,15 +80,16 @@ export async function POST(req: NextRequest) {
         referrerName = lead.referrer_name || ""
       }
 
-      // Find contact linked to this lead
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
-        .ilike("email", leadEmail || "noemail")
-        .limit(1)
-
-      if (contacts?.length) {
-        contactId = contacts[0].id
+      // Find the contact for this lead by EXACT email (case-insensitive, no wildcards). Several matches = nobody is guessed:
+      // nothing is updated or filed under any of them and staff get ONE alarm.
+      const { findContactByExactEmail } = await import("@/lib/crm-store/lead-form-store")
+      const match = await findContactByExactEmail(leadEmail)
+      if (match.status === "many") {
+        results.push({ step: "contact_lookup", status: "error", detail: `${match.ids.length} contacts share this email — none was used` })
+        const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
+        await raisePilotAlarm("lead_form_contact_ambiguous", { route: "formation-form-completed", leadId, token, contactIds: match.ids })
+      } else if (match.status === "one") {
+        contactId = match.id
       } else if (lead) {
         // AUTO-CREATE contact from lead data
         try {
@@ -192,54 +193,14 @@ export async function POST(req: NextRequest) {
       results.push({ step: "crm_update", status: "skipped", detail: "No contact found for lead" })
     }
 
-    // ─── STEP 3: Create Leads/{name}/ folder in Drive + save data PDF ───
-    let leadsFolderId = ""
-    try {
-      const { listFolder, createFolder } = await import("@/lib/google-drive")
-      const { saveFormToDrive } = await import("@/lib/form-to-drive")
-
-      // Find or create Leads/ folder in Shared Drive root
-      const TD_CLIENTS_FOLDER = "1mbz_bUDwC4K259RcC-tDKihjlvdAVXno" // TD Clients folder on Shared Drive
-      const clientsContents = await listFolder(TD_CLIENTS_FOLDER) as { files?: { id: string; name: string; mimeType: string }[] }
-      let leadsParent = clientsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === "Leads" && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!leadsParent) {
-        const newFolder = await createFolder(TD_CLIENTS_FOLDER, "Leads")
-        leadsParent = { id: newFolder.id, name: "Leads", mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      // Create client folder: Leads/{Client Name}/
-      const clientFolderName = leadName || token
-      const leadsContents = await listFolder(leadsParent.id) as { files?: { id: string; name: string; mimeType: string }[] }
-      let clientFolder = leadsContents?.files?.find(
-        (f: { name: string; mimeType: string }) => f.name === clientFolderName && f.mimeType === "application/vnd.google-apps.folder"
-      )
-
-      if (!clientFolder) {
-        const newFolder = await createFolder(leadsParent.id, clientFolderName)
-        clientFolder = { id: newFolder.id, name: clientFolderName, mimeType: "application/vnd.google-apps.folder" }
-      }
-
-      leadsFolderId = clientFolder.id
-
-      // Save data summary PDF + copy uploads to Leads folder
-      const driveResult = await saveFormToDrive(
-        "formation",
-        submittedData,
-        uploadPaths,
-        leadsFolderId,
-        { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName }
-      )
-
-      results.push({
-        step: "drive_save",
-        status: "ok",
-        detail: `Folder: Leads/${clientFolderName}/. Summary: ${driveResult.summaryFileId ? "saved" : "failed"}. Files: ${driveResult.copied.length} copied.`,
-      })
-    } catch (e) {
-      results.push({ step: "drive_save", status: "error", detail: e instanceof Error ? e.message : String(e) })
+    // ─── STEP 3: File the data PDF + uploads in the client's storage ───
+    // (Stop-Drive S1a: this used to build a Leads/{name} folder in Drive. The person's own storage is opened exactly as for any new client.)
+    {
+      const { fileFormPackage } = await import("@/lib/forms/file-form-package")
+      results.push(await fileFormPackage({
+        route: "formation-form-completed", formType: "formation", submittedData, uploadPaths, contactId, personName: leadName,
+        meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: leadName },
+      }))
     }
 
     // ─── STEP 4: Check passport uploaded ───
@@ -502,7 +463,7 @@ ${!hasPassport ? `<li style="color:#dc2626"><strong>REQUEST PASSPORT from client
           action_type: "formation_form_completed",
           table_name: "formation_submissions",
           record_id: submission_id,
-          summary: `Formation form completed: ${leadName}. CRM updated, Drive saved, Luca notified.`,
+          summary: `Formation form completed: ${leadName}. CRM updated, files saved, Luca notified.`,
           details: { token, lead_id: leadId, contact_id: contactId, results } as unknown as Json,
         }),
         "action_log.insert"
