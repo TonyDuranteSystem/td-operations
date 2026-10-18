@@ -217,7 +217,28 @@ export async function POST(req: NextRequest) {
   // attachment. Best-effort + AFTER a successful send (so a rejected fax never
   // leaves an orphan file/row — Fax History only lists sent faxes anyway).
   let uploadedDocId: string | null = null
+  let uploadFiledInStorage: { accountId: string; inferred: boolean } | null = null
   if (!documentId && fileBase64) {
+    // Stop Drive (dev job 264bb882, S1d): when the company is known the copy goes into ITS storage (Tax › year, type IRS Fax,
+    // hidden from the client) instead of a company-less bucket copy. See lib/fax/save-sent-upload.ts.
+    try {
+      const { createHash } = await import('crypto')
+      const bytes0 = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
+      const { fileSentUpload } = await import('@/lib/fax/save-sent-upload')
+      const filed = await fileSentUpload({
+        accountId, serviceDeliveryId, fileName, bytes: bytes0, mimeType: mimeFromName(fileName), actor: user?.email || 'dashboard',
+        callerKey: `fax-upload:${createHash('sha256').update(bytes0).digest('hex')}`,
+      })
+      if (filed.route === 'store') {
+        uploadedDocId = filed.documentRowId
+        uploadFiledInStorage = { accountId: filed.accountId, inferred: filed.inferred }
+        if (!accountId) accountId = filed.accountId
+      }
+    } catch {
+      /* the old bucket copy below still runs — persistence is best-effort, never fail a sent fax */
+    }
+  }
+  if (!uploadFiledInStorage && !documentId && fileBase64) {
     try {
       const bytes = Buffer.from(stripBase64Prefix(fileBase64), 'base64')
       const safeName = (fileName.replace(/[^\w.\-]+/g, '_').slice(0, 120)) || 'document.pdf'
@@ -273,6 +294,8 @@ export async function POST(req: NextRequest) {
         job_id: result.jobId,
         cover_message: coverMessage || null,
         source: documentId ? 'document' : 'upload',
+        filed_in_storage_of: uploadFiledInStorage?.accountId ?? null,
+        company_inferred_from_file_name: uploadFiledInStorage?.inferred ?? false,
         document_id: documentId ?? uploadedDocId,
         faxage_response: result.raw.slice(0, 500),
       },
