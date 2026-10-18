@@ -50,7 +50,7 @@ const req = () => new NextRequest("http://localhost/api/ss4-signed", { method: "
 beforeEach(async () => {
   const d = await PDFDocument.create()
   d.addPage()
-  state.pdf = await d.save()
+  state.pdf = new Uint8Array(await d.save())
   state.companyState = "store"
   state.recorded.length = 0
   state.driveCalls.length = 0
