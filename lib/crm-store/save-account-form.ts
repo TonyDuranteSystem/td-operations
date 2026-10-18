@@ -14,6 +14,7 @@
 
 import type { FormStoreResult } from "./save-form"
 import { NO_STORAGE_SENTENCE } from "./no-storage"
+import { isWizardUploadPath } from "@/lib/portal/wizard-uploads"
 
 /** store = filed in the company's storage; folder = filed in the old folder of a company left as it was; none = filed nowhere. */
 export type SaveAccountFormResult = { route: "store" | "folder"; result: FormStoreResult } | { route: "none" }
@@ -161,6 +162,27 @@ export function describeFiling(saved: SaveAccountFormResult | null): { ok: boole
   return { ok: r.errors.length === 0 && r.failed.length === 0, lines }
 }
 
+/**
+ * `describeFiling` for a form that belongs to a company, with the finished-company rule: a Closed / Cancelled company has no place
+ * a NEW file may go, so there is nothing to file — that is not a failure. The form still counts as handled (the caller applies the
+ * client's corrections and marks it reviewed) and the reply says so plainly. A read error is treated as "not finished" (the form
+ * is then reported as not filed, never silently passed).
+ */
+export async function describeFilingForAccount(
+  saved: SaveAccountFormResult,
+  accountId: string,
+  finished?: (accountId: string) => Promise<boolean>,
+): Promise<{ ok: boolean; lines: string[] }> {
+  if (saved.route !== "none") return describeFiling(saved)
+  let isFinished = false
+  try {
+    const fn = finished ?? (await import("./no-storage")).accountIsFinished
+    isFinished = await fn(accountId)
+  } catch { /* unknown → not finished */ }
+  if (isFinished) return { ok: true, lines: ["ℹ️ This company is closed, so there is nothing to file; the form is handled without filing (its uploaded files stay in the upload area, kept for the record)."] }
+  return describeFiling(saved)
+}
+
 // ─── The closure form: one filing rule for the MCP review tool and the workflow review ───────────────────────────────
 
 export interface ClosureFilingOutcome {
@@ -172,10 +194,17 @@ export interface ClosureFilingOutcome {
   missingUploads: string[]
 }
 
+/** The closure form has TWO upload origins: the external form (closure-uploads) and the portal wizard (onboarding-uploads) — the same rule as the archive job's closure recipe. */
+export function closureBucketFor(path: string): string {
+  return isWizardUploadPath(path) ? "onboarding-uploads" : "closure-uploads"
+}
+
 export interface ClosureFilingDeps {
   save: (i: SaveAccountFormInput) => Promise<SaveAccountFormResult>
   saveForContact: (i: SaveContactFormInput) => Promise<SaveAccountFormResult>
   finished: (accountId: string) => Promise<boolean>
+  /** record the durable "filed" marker (drive_archived_at) on the closure submission, so the archive sweep never files it again */
+  markFiled: (submissionId: string, filedIn: "storage" | "folder") => Promise<void>
   alarm: (route: string, token: string, missing: string[]) => Promise<void>
 }
 
@@ -193,6 +222,13 @@ async function closureDefaultDeps(): Promise<ClosureFilingDeps> {
       return saveFormForContact({ ...i, contactName: name })
     },
     finished: noStorage.accountIsFinished,
+    markFiled: async (submissionId, filedIn) => {
+      const { supabaseAdmin } = await import("@/lib/supabase-admin")
+      const { mergeArchiveMeta } = await import("@/lib/archive/meta-merge")
+      const { error } = await supabaseAdmin.from("closure_submissions").update({ drive_archived_at: new Date().toISOString() } as never).eq("id", submissionId).is("drive_archived_at" as never, null)
+      if (error) throw new Error(error.message)
+      await mergeArchiveMeta("closure_submissions", submissionId, { filed_in: filedIn, via: "closure_review" })
+    },
     alarm: async (route, token, missing) => {
       try {
         const { reportSystemError } = await import("@/lib/system-errors")
@@ -211,7 +247,7 @@ async function closureDefaultDeps(): Promise<ClosureFilingDeps> {
  *   - the summary is saved but some uploaded file is missing/unreadable → file what exists, ONE alarm, reviewable.
  */
 export async function fileClosureSubmission(
-  sub: { token: string; account_id: string | null; contact_id?: string | null; contact_name?: string | null; upload_paths: string[] | null; completed_at: string | null },
+  sub: { id?: string; token: string; account_id: string | null; contact_id?: string | null; contact_name?: string | null; upload_paths: string[] | null; completed_at: string | null },
   submitted: Record<string, unknown>,
   companyName: string,
   route: string,
@@ -234,6 +270,7 @@ export async function fileClosureSubmission(
         submittedData: submitted,
         uploadPaths: sub.upload_paths ?? [],
         meta: { token: sub.token, submittedAt: sub.completed_at || new Date().toISOString(), companyName },
+        resolveBucket: closureBucketFor,
       })
     } catch (e) {
       return { ok: false, lines: [`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`], missingUploads: [] }
@@ -247,6 +284,7 @@ export async function fileClosureSubmission(
       submittedData: submitted,
       uploadPaths: sub.upload_paths ?? [],
       meta: { token: sub.token, submittedAt: sub.completed_at || new Date().toISOString(), companyName },
+      resolveBucket: closureBucketFor,
     })
   } catch (e) {
     return { ok: false, lines: [`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`], missingUploads: [] }
@@ -256,20 +294,22 @@ export async function fileClosureSubmission(
 
 async function closureOutcome(
   saved: SaveAccountFormResult,
-  sub: { token: string; account_id: string | null },
+  sub: { id?: string; token: string; account_id: string | null },
   route: string,
   d: ClosureFilingDeps,
 ): Promise<ClosureFilingOutcome> {
   if (saved.route === "none") {
     let finished = false
     try { finished = await d.finished(sub.account_id as string) } catch { /* unknown → treated as not finished */ }
-    if (finished) return { ok: true, lines: ["ℹ️ This company is closed, so there is nothing to file; the form is marked reviewed."], missingUploads: [] }
+    if (finished) return { ok: true, lines: ["ℹ️ This company is closed, so there is nothing to file; the form is marked reviewed (its uploaded files stay in the upload area, kept for the record)."], missingUploads: [] }
     return { ok: false, lines: describeFiling(saved).lines, missingUploads: [] }
   }
   const r = saved.result
   const summarySaved = !!r.summaryFileId && r.errors.length === 0
   const missing = r.failed
   if (summarySaved && missing.length > 0) await d.alarm(route, sub.token, missing)
+  // filed → the durable marker, so the archive sweep never files (or alarms about) this form again
+  if (summarySaved && sub.id) await d.markFiled(sub.id, saved.route === "store" ? "storage" : "folder").catch((e) => console.error("[closure] filed, but the filed marker could not be written (non-fatal):", e))
   const lines = describeFiling(saved).lines
   return { ok: summarySaved, lines, missingUploads: summarySaved ? missing : [] }
 }

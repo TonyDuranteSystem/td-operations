@@ -52,7 +52,8 @@ vi.mock("@/lib/supabase-admin", () => ({
         }
       }
       if (table === "account_contacts") {
-        return { select: () => ({ eq: () => ({ order: () => ({ order: () => Promise.resolve({ data: contactLinks }) }) }) }) }
+        // `.eq()` is awaited directly by the person rule and chained `.order().order()` by the route
+        return { select: () => ({ eq: () => Object.assign(Promise.resolve({ data: contactLinks, error: null }), { order: () => ({ order: () => Promise.resolve({ data: contactLinks }) }) }) }) }
       }
       if (table === "contacts") {
         return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { full_name: "Mario Rossi" } }) }) }) }
@@ -331,6 +332,16 @@ describe("EIN letter upload — storage filing + auto-rename (route E2E)", () =>
     expect(res.status).toBe(200)
     expect(ensuredPersons).toEqual([])
     expect(contactSaves[0]).toMatchObject({ contactId: "cont-1", viaAccountId: "acct-store" })
+  })
+
+  it("Scenario 12b — a NON-ITIN contact flow whose linked company is SWITCHED is filed in the person's storage too (no refused Drive write, no bucket copy with a long link)", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation", stage: "Articles Received" }
+    companyState = "store"
+    contactLinks = [{ account_id: "acct-store", is_primary: true }]
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(200)
+    expect(contactSaves[0]).toMatchObject({ contactId: "cont-1", viaAccountId: "acct-store" })
+    expect(driveCalls).toEqual([])
   })
 
   it("Scenario 13 — a company being moved is TRANSIENT: 409 and the staged file is KEPT so 'try again' works", async () => {

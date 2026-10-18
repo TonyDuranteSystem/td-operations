@@ -5,14 +5,14 @@
  * take a place in that window, however many there are, so the filter is IN THE QUERY (never "read 200, then skip"):
  *   - unfilled shells (a form that was created and sent but never completed);
  *   - rows whose attempts are used up AND already alerted (their one alert has fired — a human owns them now);
- *   - rows of a Closed / Cancelled company (its old folder is a read-only archive; nothing new is written there).
+ *   - rows of a Closed / Cancelled company (its old folder is a read-only archive; nothing new is written there). ONE rule for
+ *     "finished": the list in no-storage.ts (`FINISHED_DB_LABELS` — `accounts.status` is a database enum, so exact labels).
  * A company with no folder is NOT skipped: the archive job files it in the company's storage (see saveFormForAccount), and
  * sets the same marker (drive_archived_at) that takes the row out of the window for good. A company that can receive nothing
  * makes the job fail, its attempts climb, and the sweep's existing ONE alert fires and is remembered — loud once, not forever.
  */
 
-const FINISHED = ["Closed", "Cancelled"] as const
-const FINISHED_NOT_IN = `(${FINISHED.join(",")})`
+import { FINISHED_DB_LABELS } from "@/lib/crm-store/no-storage"
 
 export interface SweepWindow<T> {
   /** at most `limit` actionable rows, oldest first (rows with a company first; completed rows with NO company are added so they stay loud) */
@@ -22,31 +22,46 @@ export interface SweepWindow<T> {
   readError: string | null
 }
 
-/**
- * @param realFilter a PostgREST `or` expression that keeps only REAL submissions (completed, not an unfilled shell)
- */
-export async function readSweepWindow<T>(
-  table: string,
-  columns: string,
-  cutoffIso: string,
-  realFilter: string,
-  limit = 200,
-): Promise<SweepWindow<T>> {
+export interface SweepWindowOptions {
+  /** a PostgREST `or` expression that keeps only REAL submissions (completed, not an unfilled shell) */
+  realFilter: string
+  /** forms are older than this are not swept (forward-only); ISO */
+  cutoffIso: string
+  /** false for a table with no account_id (a lead-stage form): no company join and no finished-company filter */
+  hasAccount?: boolean
+  limit?: number
+}
+
+/** `status` is not one of the finished statuses, or is missing. */
+const NOT_FINISHED = `status.is.null,status.not.in.(${FINISHED_DB_LABELS.join(",")})`
+/** `status` is one of the finished statuses. */
+const IS_FINISHED = `status.in.(${FINISHED_DB_LABELS.join(",")})`
+
+export async function readSweepWindow<T>(table: string, columns: string, opts: SweepWindowOptions): Promise<SweepWindow<T>> {
   const { supabaseAdmin } = await import("@/lib/supabase-admin")
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the table is a runtime string; the join column is not in the generated types
   const sb = supabaseAdmin as any
-  const base = (cols: string, opts?: { count: "exact"; head: true }) =>
-    sb.from(table).select(cols, opts)
+  const limit = opts.limit ?? 200
+  const hasAccount = opts.hasAccount !== false
+  const base = (cols: string, o?: { count: "exact"; head: true }) =>
+    sb.from(table).select(cols, o)
       .is("drive_archived_at", null)
-      .gte("created_at", cutoffIso)
-      .or(realFilter)
+      .gte("created_at", opts.cutoffIso)
+      .or(opts.realFilter)
       .is("drive_archive_meta->>sweep_alerted", null)
 
   const out: SweepWindow<T> = { candidates: [], skippedFinished: 0, readError: null }
 
+  if (!hasAccount) {
+    const r = await base(columns).order("created_at", { ascending: true }).order("id", { ascending: true }).limit(limit)
+    if (r.error) { out.readError = r.error.message; return out }
+    out.candidates = (r.data ?? []) as T[]
+    return out
+  }
+
   // (1) rows of companies that are not finished (a missing status counts as not finished)
   const a = await base(`${columns}, accounts!inner(status)`)
-    .or(`status.is.null,status.not.in.${FINISHED_NOT_IN}`, { referencedTable: "accounts" })
+    .or(NOT_FINISHED, { referencedTable: "accounts" })
     .order("created_at", { ascending: true })
     .order("id", { ascending: true })
     .limit(limit)
@@ -64,7 +79,7 @@ export async function readSweepWindow<T>(
   for (const r of (b.data ?? []) as Array<T & { id?: string }>) if (!seen.has(r.id)) out.candidates.push(r)
 
   // (3) how many were left alone because the company is finished
-  const c = await base("id, accounts!inner(status)", { count: "exact", head: true }).in("accounts.status", [...FINISHED])
+  const c = await base("id, accounts!inner(status)", { count: "exact", head: true }).or(IS_FINISHED, { referencedTable: "accounts" })
   if (c.error) { out.readError = c.error.message; return out }
   out.skippedFinished = c.count ?? 0
 

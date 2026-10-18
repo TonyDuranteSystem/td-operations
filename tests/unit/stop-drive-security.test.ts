@@ -78,3 +78,32 @@ describe("the other staff routes this change touched refuse a client too", () =>
     expect(state.saves).toBe(0)
   })
 })
+
+// Every route under app/api/crm/admin-actions that had NO staff check of its own, or only "is logged in" (a portal client is
+// logged in): found by the round-5 audit of the whole folder. Each must refuse a client before touching anything.
+describe("round-5 audit: admin-action routes that had no staff gate now refuse a portal client", () => {
+  const routes: Array<[string, () => Promise<Response>]> = [
+    ["audit-chain GET", async () => (await import("@/app/api/crm/admin-actions/audit-chain/route")).GET(new NextRequest("http://localhost/x?contact_id=c") as never)],
+    ["audit-chain POST", async () => (await import("@/app/api/crm/admin-actions/audit-chain/route")).POST(post({}) as never)],
+    ["contact-actions POST", async () => (await import("@/app/api/crm/admin-actions/contact-actions/route")).POST(post({ action: "x" }) as never)],
+    ["document-types GET", async () => (await import("@/app/api/crm/admin-actions/document-types/route")).GET()],
+    ["ocr-articles POST", async () => (await import("@/app/api/crm/admin-actions/ocr-articles/route")).POST(post({}) as never)],
+    ["upload-document POST", async () => (await import("@/app/api/crm/admin-actions/upload-document/route")).POST(post({ contact_id: "c", storage_path: "p", file_name: "f" }) as never)],
+    ["bank-feed-confirm-match POST", async () => (await import("@/app/api/crm/admin-actions/bank-feed-confirm-match/route")).POST(post({}) as never)],
+    ["bank-feed-reject-match POST", async () => (await import("@/app/api/crm/admin-actions/bank-feed-reject-match/route")).POST(post({}) as never)],
+    ["bank-feed-retry-activation POST", async () => (await import("@/app/api/crm/admin-actions/bank-feed-retry-activation/route")).POST(post({}) as never)],
+    ["retry-activation POST", async () => (await import("@/app/api/crm/admin-actions/retry-activation/route")).POST(post({}) as never)],
+  ]
+  it.each(routes)("%s → a signed-in client is refused (403) and nothing is read or saved", async (_n, call) => {
+    state.user = client
+    const res = await call()
+    expect(res.status).toBe(403)
+    expect(state.reads).toBe(0)
+    expect(state.saves).toBe(0)
+  })
+  it.each(routes)("%s → nobody signed in is refused", async (_n, call) => {
+    state.user = null
+    expect((await call()).status).toBe(403)
+    expect(state.reads).toBe(0)
+  })
+})

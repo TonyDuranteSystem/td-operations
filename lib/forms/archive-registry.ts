@@ -54,6 +54,15 @@ export interface ArchiveRecipe {
    * plan at submission and the engine skips this.
    */
   resolvePlan(row: Record<string, unknown>): Promise<ArchivePlan>
+  /** OPTIONAL: the sweep never touches rows created before this (a form that joined the sweep later: older rows were filed the old way). */
+  sweepNotBefore?: string
+  /**
+   * OPTIONAL: the PostgREST `or` expression that keeps only REAL submissions IN the sweep's query (so unfilled shells never fill its
+   * window). Must agree with `isReal`. Default: completed or reviewed.
+   */
+  sweepRealFilter?: string
+  /** OPTIONAL: false for a table with no account_id (a lead-stage form): the sweep then does no company join. Default true. */
+  sweepHasAccount?: boolean
   /**
    * OPTIONAL per-file bucket resolver, for a form whose files can live in MORE
    * THAN ONE storage bucket (e.g. closure: external form → closure-uploads, portal
@@ -157,6 +166,7 @@ const bankingRecipe: ArchiveRecipe = {
  */
 const itinRecipe: ArchiveRecipe = {
   formType: "itin",
+  sweepRealFilter: "status.eq.completed",
   table: "itin_submissions",
   selectColumns:
     "id, token, lead_id, account_id, contact_id, status, submitted_data, upload_paths, completed_at, created_at, drive_archived_at, drive_archive_meta",

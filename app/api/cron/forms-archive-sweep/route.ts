@@ -17,7 +17,6 @@
  * - Enqueue is idempotent (skips an already-queued / already-archived row).
  */
 import { NextRequest, NextResponse } from "next/server"
-import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { reportSystemError } from "@/lib/system-errors"
 import { postTeamMessage } from "@/lib/team/post-message"
@@ -31,6 +30,7 @@ import {
   FORM_ARCHIVE_SWEEP_CHANNEL,
 } from "@/lib/forms/archive-sweep"
 import { readSweepWindow } from "@/lib/archive/skip-no-drive-folder"
+import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -58,36 +58,23 @@ export async function GET(req: NextRequest) {
     const stats = { candidates: 0, enqueued: 0, stuck: 0, skippedFinished: 0 }
     perForm[recipe.formType] = stats
 
-    // Cast: recipe.table is a runtime string; the typed client needs a table
-    // literal (every recipe.table IS a real submission table).
-    const tbl = recipe.table as "banking_submissions"
-    // Banking: the window holds only REAL (completed / reviewed) submissions whose one stuck-row alert has not fired yet, of
-    // companies that are not Closed / Cancelled — filtered IN the query, so shells and used-up rows never fill it. A company with
-    // no folder is archived into its storage by the job itself; a completed row with no company stays in (and fails loudly).
-    let formRows: Record<string, unknown>[]
-    if (recipe.formType === "banking") {
-      const win = await readSweepWindow<Record<string, unknown>>(recipe.table, recipe.selectColumns, FORM_ARCHIVE_SWEEP_CUTOFF_ISO, "status.in.(completed,reviewed)")
-      if (win.readError) {
-        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${win.readError}` }).catch(() => {})
-        continue
-      }
-      formRows = win.candidates
-      stats.skippedFinished = win.skippedFinished
-      skippedFinished += win.skippedFinished
-    } else {
-      const { data: rows, error } = await supabaseAdmin
-        .from(tbl)
-        .select(recipe.selectColumns)
-        .is("drive_archived_at", null)
-        .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
-        .order("created_at", { ascending: true })
-        .limit(200)
-      if (error) {
-        await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})
-        continue
-      }
-      formRows = (rows ?? []) as unknown as Record<string, unknown>[]
+    // Every form: the window holds only REAL submissions (the recipe's own filter) whose one stuck-row alert has not fired yet, of
+    // companies that are not Closed / Cancelled — filtered IN the query, so shells, used-up rows and finished companies never fill
+    // it. A company with no folder is archived into its storage by the job itself; a completed row with no company stays in (and
+    // fails loudly). A form that joined the sweep later is not swept before its own start date (`sweepNotBefore`).
+    const cutoffIso = recipe.sweepNotBefore && recipe.sweepNotBefore > FORM_ARCHIVE_SWEEP_CUTOFF_ISO ? recipe.sweepNotBefore : FORM_ARCHIVE_SWEEP_CUTOFF_ISO
+    const win = await readSweepWindow<Record<string, unknown>>(recipe.table, recipe.selectColumns, {
+      cutoffIso,
+      realFilter: recipe.sweepRealFilter ?? "status.in.(completed,reviewed)",
+      hasAccount: recipe.sweepHasAccount,
+    })
+    if (win.readError) {
+      await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${win.readError}` }).catch(() => {})
+      continue
     }
+    const formRows = win.candidates
+    stats.skippedFinished = win.skippedFinished
+    skippedFinished += win.skippedFinished
 
     for (const raw of formRows) {
       stats.candidates++
@@ -109,11 +96,9 @@ export async function GET(req: NextRequest) {
       } else if (action === "alert") {
         stuck.push(`${recipe.formType}:${String(raw.id)}`); stats.stuck++
         if (!dryRun) {
+          // MERGED atomically (never a copy of a stale meta): an archive attempt recorded meanwhile cannot drop the flag
           try {
-            await supabaseAdmin
-              .from(tbl)
-              .update({ drive_archive_meta: { ...((raw.drive_archive_meta as Record<string, unknown> | null) ?? {}), [FORM_ARCHIVE_SWEEP_ALERTED_KEY]: true } } as never)
-              .eq("id", String(raw.id))
+            await mergeArchiveMeta(recipe.table, String(raw.id), { [FORM_ARCHIVE_SWEEP_ALERTED_KEY]: true })
           } catch { /* best-effort */ }
         }
       }
@@ -123,7 +108,7 @@ export async function GET(req: NextRequest) {
   // One digest alert per run for stuck rows — loud, and durable via system_errors
   // so a failed chat post can't re-hide the failure.
   if (stuck.length > 0) {
-    const msg = `⚠️ @Luca ${stuck.length} form submission(s) could NOT be archived to Google Drive after repeated attempts — their package is missing from the client folder and needs a manual check: ${stuck.join(", ")}`
+    const msg = `⚠️ @Luca ${stuck.length} form submission(s) could NOT be filed in the client's storage after repeated attempts — their package is missing there and needs a manual check: ${stuck.join(", ")}`
     if (!dryRun) {
       await postTeamMessage({ channel: FORM_ARCHIVE_SWEEP_CHANNEL, message: msg }).catch(e =>
         console.error("[forms-archive-sweep] team alert post failed:", e))

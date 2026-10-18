@@ -52,9 +52,22 @@ vi.mock("@/lib/crm-store/save-for-account", () => ({
 import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
 import { ACCOUNT_OLD_FOLDER, ACCOUNT_CLOSED_WITH_FOLDER, setDriveMocked } from "./_stop-drive-mocks"
 
+type Step = { step: string; status: string; detail?: string }
+const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+/** The public response hides error detail ("Not completed — staff have been notified."); the full detail is logged for staff. */
+async function stepsOf(res: Response): Promise<{ steps: Step[]; publicSteps: Step[] }> {
+  const publicSteps = (await res.json()).results as Step[]
+  const logged = errorSpy.mock.calls.find((c) => String(c[0]).includes("[ss4-signed] steps with errors"))
+  const full = logged ? (JSON.parse(String(c1(logged))) as Step[]) : []
+  const steps = publicSteps.map((p) => full.find((f) => f.step === p.step) ?? p)
+  return { steps, publicSteps }
+}
+const c1 = (c: unknown[]) => c[1]
+
 const req = () => new NextRequest("http://localhost/api/ss4-signed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ss4_id: "ss4-1", token: "tok" }) })
 
 beforeEach(async () => {
+  errorSpy.mockClear()
   const d = await PDFDocument.create()
   d.addPage()
   state.pdf = new Uint8Array(await d.save())
@@ -92,10 +105,12 @@ describe("/api/ss4-signed", () => {
     state.companyState = "drive"
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const { steps, publicSteps } = await stepsOf(res)
     expect(state.saves).toEqual([])
     expect(state.driveCalls).toEqual([])
     expect(steps.find((s) => s.step === "signed_doc")).toMatchObject({ status: "error", detail: NO_STORAGE_SENTENCE })
+    // the public response never carries the internal detail
+    expect(publicSteps.filter((p) => p.status === "error").every((p) => p.detail === "Not completed — staff have been notified.")).toBe(true)
     const irs = steps.find((s) => s.step === "irs_package")!
     expect(irs.status).toBe("error")
     expect(irs.detail).toContain(NO_STORAGE_SENTENCE)
@@ -110,7 +125,7 @@ describe("/api/ss4-signed", () => {
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    const { steps } = await stepsOf(res)
     expect(state.saves).toEqual([])
     expect(state.driveCalls.filter((c) => c === "uploadBinaryToDriveUpsert")).toHaveLength(2)
     expect(steps.find((s) => s.step === "drive_upload")?.status).toBe("ok")
@@ -125,7 +140,7 @@ describe("/api/ss4-signed", () => {
     state.rows.documents = { id: "existing-row" }
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const { steps } = await stepsOf(res)
     expect(steps.find((s) => s.step === "signed_doc_storage")?.detail).toBe("Signed doc already linked")
     expect(steps.find((s) => s.step === "signed_doc")).toBeUndefined()
   })
@@ -134,7 +149,7 @@ describe("/api/ss4-signed", () => {
     state.listEmpty = true
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const { steps } = await stepsOf(res)
     const sd = steps.find((s) => s.step === "signed_doc")
     expect(sd?.status).toBe("error")
     expect(sd?.detail).not.toBe(NO_STORAGE_SENTENCE)
@@ -145,7 +160,9 @@ describe("/api/ss4-signed", () => {
     const { POST } = await import("@/app/api/ss4-signed/route")
     await POST(req())
     const task = state.recorded.find((r) => r.table === "tasks" && r.op === "insert")?.payload as { description: string }
-    expect(task.description).toContain("attached to the notification email")
+    expect(task.description).toContain("Fax the signed SS-4 (with the Articles) to the IRS at (855) 641-6935")
+    expect(task.description).toContain("SS-4 Signed — Ready to Fax")
+    expect(task.description).not.toContain("attached")
     expect(task.description.toLowerCase()).not.toContain("drive")
   })
 
@@ -162,7 +179,7 @@ describe("/api/ss4-signed", () => {
     state.rows.documents = null
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    const { steps } = await stepsOf(res)
     expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([]) // no holding-area row
     expect(steps.find((x) => x.step === "signed_doc_storage")).toBeUndefined()
     expect(steps.find((x) => x.step === "signed_doc")?.status).toBe("error")
@@ -177,7 +194,7 @@ describe("/api/ss4-signed", () => {
     state.rows.documents = null
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string }>
+    const { steps } = await stepsOf(res)
     expect(state.recorded.filter((r) => r.table === "documents" && r.op === "insert")).toEqual([])
     expect(steps.find((x) => x.step === "signed_doc")?.status).toBe("error")
     expect(stateMail()).toContain("NOT FILED")
@@ -205,7 +222,7 @@ describe("/api/ss4-signed", () => {
     state.rows.accounts = ACCOUNT_OLD_FOLDER
     const { POST } = await import("@/app/api/ss4-signed/route")
     const res = await POST(req())
-    const steps = (await res.json()).results as Array<{ step: string; status: string; detail?: string }>
+    const { steps } = await stepsOf(res)
     const sd = steps.find((s) => s.step === "signed_doc")
     expect(sd?.status).toBe("error")
     expect(sd?.detail).toBe("The signed SS-4 could not be uploaded to the company's folder — see the earlier steps.")

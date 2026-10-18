@@ -12,6 +12,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { interpolateStringStrict } from "@/lib/template-interpolation"
+import { isFinishedStatus } from "@/lib/crm-store/no-storage"
 
 const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 
@@ -127,7 +128,7 @@ export async function resolveContactLinkedDriveFolder(contactId: string): Promis
       | null
       | undefined
     // A finished (Closed / Cancelled) company keeps its folder as a read-only archive: it never receives a member's new file.
-    if (account && /^(closed|cancell?ed)$/i.test(String(account.status ?? "").trim())) continue
+    if (account && isFinishedStatus(account.status)) continue
     const folderId = extractDriveFolderId(account)
     if (folderId) return folderId
   }

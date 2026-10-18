@@ -23,6 +23,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { saveFormToDrive } from "@/lib/form-to-drive"
 import { saveFormForAccount } from "@/lib/crm-store/save-account-form"
+import { mergeArchiveMeta } from "@/lib/archive/meta-merge"
 import { getArchiveRecipe, type ArchivePlan } from "@/lib/forms/archive-registry"
 
 export interface FormArchiveResult {
@@ -151,28 +152,24 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
     throw new Error(`archive: ${formType} ${submissionId} not fully archived (retryable) — ${detail}`)
   }
 
-  // FULL success — set the marker (what the sweep keys on), MERGING meta so a
-  // pinned plan / prior detail is preserved for inspection.
+  // FULL success — set the marker (what the sweep keys on); the record of where it filed is MERGED into the meta (atomically), so a
+  // pinned plan / the sweep's alerted flag written by someone else meanwhile is preserved for inspection.
   const { error: markErr } = await supabaseAdmin
     .from(tbl)
-    // as never: drive_archived_at / drive_archive_meta are new columns not yet in
-    // the generated types (per-form marker migrations). Remove after gen:types.
-    .update({
-      drive_archived_at: nowIso,
-      drive_archive_meta: {
-        ...priorMeta,
-        attempts: priorAttempts + 1,
-        last_attempt_at: nowIso,
-        last_error: null,
-        summary_file_id: result.summaryFileId,
-        copied: result.copied,
-        skipped: result.skipped,
-        drive_folder_id: plan.folderId,
-        filed_in: filedIn,
-      },
-    } as never)
+    // as never: drive_archived_at is a new column not yet in the generated types (per-form marker migrations).
+    .update({ drive_archived_at: nowIso } as never)
     .eq("id", submissionId)
   if (markErr) throw new Error(`archive: succeeded but failed to set marker (retryable): ${markErr.message}`)
+  await mergeArchiveMeta(recipe.table, submissionId, {
+    attempts: priorAttempts + 1,
+    last_attempt_at: nowIso,
+    last_error: null,
+    summary_file_id: result.summaryFileId,
+    copied: result.copied,
+    skipped: result.skipped,
+    drive_folder_id: plan.folderId,
+    filed_in: filedIn,
+  }).catch((e) => console.error("[forms/archive-submission] filed, but the meta record could not be merged (non-fatal):", e))
 
   return { status: "archived", formType, submissionId, copied: result.copied.length, skipped: result.skipped.length }
 }
@@ -180,26 +177,21 @@ export async function archiveFormSubmission(formType: string, submissionId: stri
 async function recordAttempt(
   table: string,
   submissionId: string,
-  priorMeta: Record<string, unknown>,
+  _priorMeta: Record<string, unknown>,
   attempts: number,
   lastError: string,
   result: Awaited<ReturnType<typeof saveFormToDrive>> | null,
 ): Promise<void> {
   try {
-    await supabaseAdmin
-      .from(table as "banking_submissions")
-      .update({
-        drive_archive_meta: {
-          ...priorMeta, // MERGE — never drop the pinned plan or the alerted flag
-          attempts,
-          last_attempt_at: new Date().toISOString(),
-          last_error: lastError,
-          copied: result?.copied ?? [],
-          failed: result?.failed ?? [],
-          errors: result?.errors ?? [],
-        },
-      } as never)
-      .eq("id", submissionId)
+    // MERGED atomically — never drop the pinned plan or the sweep's alerted flag
+    await mergeArchiveMeta(table, submissionId, {
+      attempts,
+      last_attempt_at: new Date().toISOString(),
+      last_error: lastError,
+      copied: result?.copied ?? [],
+      failed: result?.failed ?? [],
+      errors: result?.errors ?? [],
+    })
   } catch (e) {
     console.error("[forms/archive-submission] failed to record attempt meta (non-fatal):", e)
   }

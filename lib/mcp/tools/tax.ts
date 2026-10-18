@@ -655,7 +655,7 @@ export function registerTaxTools(server: McpServer) {
               // scheme. Pick by path prefix so staff review copies from the
               // right bucket for either source.
               const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
-              const { saveFormForAccount, describeFiling } = await import("@/lib/crm-store/save-account-form")
+              const { saveFormForAccount, describeFilingForAccount } = await import("@/lib/crm-store/save-account-form")
               const saved = await saveFormForAccount({
                 accountId: sub.account_id,
                 formType: "tax_return",
@@ -664,7 +664,8 @@ export function registerTaxTools(server: McpServer) {
                 meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
                 bucket: portalUpload ? "onboarding-uploads" : undefined,
               })
-              const d = describeFiling(saved)
+              // a Closed / Cancelled company has nowhere new to file to: nothing to file, the form is still handled
+              const d = await describeFilingForAccount(saved, sub.account_id as string)
               filed = d.ok
               lines.push(...d.lines)
               if (filed && saved.route !== "none") {

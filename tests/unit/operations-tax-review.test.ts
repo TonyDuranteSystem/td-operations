@@ -32,6 +32,8 @@ let markReviewedError: { message: string } | null = null
 let enqueueShouldThrow = false
 let enqueueReturnsId: string = "job-xyz"
 let existingJobs: Array<{ id: string }> = []
+/** set: the enqueue loses the race — the database refuses the duplicate and this job (the other click's) is already there */
+let duplicateWinner: string | null = null
 let jobLookupError: { message: string } | null = null
 
 const updateCalls: Array<{ table: string; payload: Record<string, unknown>; filters: Record<string, string | null> }> = []
@@ -92,6 +94,7 @@ vi.mock("@/lib/supabase-admin", () => ({
 vi.mock("@/lib/jobs/queue", () => ({
   enqueueJob: vi.fn(async (params: Record<string, unknown>) => {
     enqueueCalls.push(params)
+    if (duplicateWinner) { existingJobs = [{ id: duplicateWinner }]; throw new Error('duplicate key value violates unique constraint "uq_job_queue_tax_review_apply"') }
     if (enqueueShouldThrow) throw new Error("enqueue failed: connection refused")
     return { id: enqueueReturnsId }
   }),
@@ -106,6 +109,7 @@ beforeEach(() => {
   enqueueShouldThrow = false
   enqueueReturnsId = "job-xyz"
   existingJobs = []
+  duplicateWinner = null
   jobLookupError = null
   updateCalls.length = 0
   enqueueCalls.length = 0
@@ -252,6 +256,16 @@ describe("approveAndApplyTaxReview", () => {
     expect(second.correctionsAlreadyApplied).toBe(true)
     expect(enqueueCalls).toEqual([])
     expect(updateCalls.find((u) => u.table === "tax_return_submissions")).toBeUndefined()
+  })
+
+  it("two near-simultaneous reviews: the loser's insert is refused by the database → it is 'already applied' with the winner's job, never an error and never a second job", async () => {
+    submissionRow = pending()
+    accountRow = { company_name: "ACME" }
+    duplicateWinner = "job-winner"
+    const result = await approveAndApplyTaxReview({ submission_id: "s1", actor: "test" })
+    expect(result.ok).toBe(true)
+    expect(result.correctionsAlreadyApplied).toBe(true)
+    expect(result.job_id).toBe("job-winner")
   })
 
   it("an unreadable queue is never read as 'nothing queued' (a duplicate apply is the dangerous direction)", async () => {
