@@ -30,12 +30,12 @@ export async function listOlderHistoryItems(accountId: string, kind: OpenableKin
     const cutoff = dates.length ? dates[dates.length - 1] : null
     if (!cutoff) return { items: [], cutoff: null }
 
+    const db = supabaseAdmin as unknown as { from: (t: string) => any } // eslint-disable-line @typescript-eslint/no-explicit-any
     const openedIds = new Set<string>()
     if (kind !== 'document') {
-      const { data: ov } = await supabaseAdmin.from('history_item_overrides').select('item_id').eq('account_id', accountId).eq('item_kind', kind)
+      const { data: ov } = await db.from('history_item_overrides').select('item_id').eq('account_id', accountId).eq('item_kind', kind)
       for (const r of (ov ?? []) as Array<{ item_id: string }>) openedIds.add(r.item_id)
     }
-    const db = supabaseAdmin as unknown as { from: (t: string) => any } // eslint-disable-line @typescript-eslint/no-explicit-any
     const day = (iso: string) => iso.slice(0, 10)
     let items: OlderItem[] = []
 
