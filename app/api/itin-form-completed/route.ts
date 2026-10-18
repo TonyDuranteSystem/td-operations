@@ -492,7 +492,7 @@ export async function POST(req: NextRequest) {
 <h3>Next Steps</h3>
 <ol>
 <li>Review the generated W-7, 1040-NR, and Schedule OI in the ITIN workspace</li>
-<li>If correct, send to client for signature: <code>itin_prepare_documents(token="${token}", send_email=true)</code></li>
+<li>If correct, open the ITIN workspace and click "Documents Reviewed — Send to Client" (Document Preparation → Client Signing); the client is notified in the portal</li>
 <li>Client prints, signs, prints passport copies, mails to Seminole FL</li>
 </ol>
 
