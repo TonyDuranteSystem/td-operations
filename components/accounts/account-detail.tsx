@@ -275,6 +275,8 @@ function ContactsSection({
   const [searching, setSearching] = useState(false)
   const [linking, setLinking] = useState(false)
   const [selectedRole, setSelectedRole] = useState('owner')
+  // false = the person sees the company's history only from today (Antonio 2026-10-17); true = they also see the earlier documents
+  const [showEarlierDocs, setShowEarlierDocs] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newEmail, setNewEmail] = useState('')
   const [creating, setCreating] = useState(false)
@@ -331,7 +333,7 @@ function ContactsSection({
     setCreating(true)
     try {
       const { createAndLinkContact } = await import('@/app/(dashboard)/accounts/actions')
-      const result = await createAndLinkContact(account.id, searchQuery.trim(), newEmail.trim() || null, selectedRole)
+      const result = await createAndLinkContact(account.id, searchQuery.trim(), newEmail.trim() || null, selectedRole, showEarlierDocs ? 'all' : 'today')
       if (result.success) {
         notifyStorageCheck()
         if (result.warning) {
@@ -405,7 +407,7 @@ function ContactsSection({
     setLinking(true)
     try {
       const { linkContactToAccount } = await import('@/app/(dashboard)/accounts/actions')
-      const result = await linkContactToAccount(account.id, contactId, selectedRole)
+      const result = await linkContactToAccount(account.id, contactId, selectedRole, false, showEarlierDocs ? 'all' : 'today')
       if (result.success) {
         notifyStorageCheck()
         toast.success(`${contactName} linked as ${selectedRole}`)
@@ -483,6 +485,10 @@ function ContactsSection({
               Cancel
             </button>
           </div>
+          <label className="flex items-center gap-2 text-xs text-zinc-600">
+            <input type="checkbox" checked={showEarlierDocs} onChange={e => setShowEarlierDocs(e.target.checked)} />
+            Also show this person the company&apos;s earlier documents in the portal (otherwise they see only what comes from today)
+          </label>
           {searching && (
             <div className="flex items-center gap-2 text-xs text-zinc-400 py-1">
               <Loader2 className="h-3 w-3 animate-spin" /> Searching...
@@ -585,6 +591,22 @@ function ContactsSection({
                 </FastTooltip>
               </div>
               <div className="pl-9 grid gap-1.5">
+                {c.history_visible_from ? (
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
+                    <span>In the portal this person sees documents only from {new Date(c.history_visible_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.</span>
+                    <button
+                      onClick={async () => {
+                        const { showEarlierHistoryToPerson } = await import('@/app/(dashboard)/accounts/actions')
+                        const r = await showEarlierHistoryToPerson(account.id, c.id)
+                        if (r.success) { toast.success('They now see the earlier documents too'); window.location.reload() }
+                        else toast.error(r.error ?? 'Failed')
+                      }}
+                      className="underline font-medium hover:text-amber-900"
+                    >
+                      Show them the earlier documents
+                    </button>
+                  </div>
+                ) : null}
                 <EditableField icon={Users} label="Role" type="select" options={CONTACT_ROLE_OPTIONS} value={c.role ?? ''} onSave={makeRoleSaver(c.id)} />
                 <EditableField icon={Mail} label="Email" value={c.email ?? ''} onSave={makeContactSaver(c.id, 'email', c.updated_at)} />
                 <EditableField icon={Phone} label="Phone" value={c.phone ?? ''} onSave={makeContactSaver(c.id, 'phone', c.updated_at)} />
@@ -1893,6 +1915,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
   const [saving, setSaving] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
   const [addType, setAddType] = useState<'individual' | 'company'>('individual')
+  const [addShowEarlierDocs, setAddShowEarlierDocs] = useState(false)
   const [addDraft, setAddDraft] = useState<Record<string, string | number | null>>({})
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
@@ -1985,7 +2008,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
     try {
       const body = addType === 'company'
         ? { member_type: 'company', member_company_name: addDraft.company_name, ...addDraft }
-        : { member_type: 'individual', ...addDraft }
+        : { member_type: 'individual', ...addDraft, history_from: addShowEarlierDocs ? 'all' : 'today' }
       const res = await fetch(`/api/accounts/${accountId}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2025,6 +2048,10 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
       // (link revoked, staff must pick) — that must reach the person deleting.
       const delSs4Note = (data.ss4_refresh as { message?: string } | null | undefined)?.message
       if (delSs4Note) toast.warning(delSs4Note, { duration: 12000 })
+      // Removing a member also ends their portal access to this company (unless kept on purpose — the server says why)
+      const delAccess = data.warning as string | null | undefined
+      if (delAccess) toast.warning(delAccess, { duration: 12000 })
+      else if (data.access_ended) toast.message('Their portal access to this company ended.')
       notifyStorageCheck()
       return { success: true, message: `${displayName(deleteTarget)} removed` }
     } catch (err) {
@@ -2181,6 +2208,12 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
                     </option>
                   ))}
                 </select>
+                {addDraft.contact_id ? (
+                  <label className="flex items-center gap-2 text-xs text-zinc-600 mt-1">
+                    <input type="checkbox" checked={addShowEarlierDocs} onChange={e => setAddShowEarlierDocs(e.target.checked)} />
+                    Also show this person the company&apos;s earlier documents in the portal (otherwise only what comes from today)
+                  </label>
+                ) : null}
               </div>
               <input placeholder="Full name *" className={inputCls} value={String(addDraft.full_name ?? '')} onChange={e => setAddDraft(d => ({ ...d, full_name: e.target.value }))} />
               <input placeholder="Email" className={inputCls} value={String(addDraft.email ?? '')} onChange={e => setAddDraft(d => ({ ...d, email: e.target.value }))} />

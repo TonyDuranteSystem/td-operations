@@ -446,6 +446,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'account_id required for revoke_access' }, { status: 400 })
     }
 
+    // Storage check / Calendar: remember who is leaving BEFORE the link goes (never blocks the revoke).
+    try {
+      const { recordPersonLeaving } = await import('@/lib/crm-store/storage-check')
+      await recordPersonLeaving({ accountId: account_id, contactId: contact_id, personName: contact.full_name ?? null, actorId: user.id, via: 'revoke-access' })
+    } catch { /* the revoke goes on */ }
+
     await supabaseAdmin
       .from('account_contacts')
       .delete()

@@ -81,6 +81,8 @@ export interface SaveMeta {
   facts?: StoreFact[]
   /** staff / client uploads: an iPhone HEIC photo is stored as a JPEG (name .heic → .jpg). Off for copies of Drive files (their sha is checked against Drive). */
   convertHeic?: boolean
+  /** never queue File Understanding (the AI reader) for this save — used for content of untrusted origin in a private area (My files drop). */
+  skipAnalysis?: boolean
 }
 
 export function sha256Hex(bytes: Buffer): string {
@@ -115,13 +117,13 @@ function writePayload(m: SaveMeta, path: string, sha256: string, size: number) {
   }
 }
 
-async function callWrite(payload: ReturnType<typeof writePayload>): Promise<WriteResult> {
+async function callWrite(payload: ReturnType<typeof writePayload>, opts: { skipAnalysis?: boolean } = {}): Promise<WriteResult> {
   const { data, error } = await db().rpc("store_write", { p: payload })
   if (error) throw new Error(`store: could not register the file — ${error.message}`)
   const r = data as { status: WriteStatus; file_id: string; version_id: string | null; name: string }
   // File Understanding (default OFF — STORE_ANALYSIS_ENABLED=1 switches it on): every NEW version is read in the
   // background. A failure to queue never fails the save.
-  if (r.version_id && process.env.STORE_ANALYSIS_ENABLED === "1") {
+  if (r.version_id && !opts.skipAnalysis && process.env.STORE_ANALYSIS_ENABLED === "1") {
     try { await (await import("./understand/analyze")).enqueueAnalysis(r.version_id, (payload as { actor?: string | null }).actor ?? null) } catch (e) { console.error("[crm-store] analysis not queued:", e instanceof Error ? e.message : e) }
   }
   return { status: r.status, fileId: r.file_id, versionId: r.version_id, name: r.name }
@@ -217,7 +219,7 @@ export async function saveBytesToStore(input0: SaveMeta & { bytes: Buffer }): Pr
   try {
     const size = await storedSize(STORE_BUCKET, path)
     if (size !== input.bytes.length) throw new Error(`store: stored size ${size} ≠ ${input.bytes.length} bytes sent`)
-    result = await callWrite(writePayload(input, path, sha, size))
+    result = await callWrite(writePayload(input, path, sha, size), { skipAnalysis: input.skipAnalysis })
   } catch (e) {
     await removeIfUnreferenced(path)
     throw e

@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalTaxReturns } from '@/lib/portal/queries'
+import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
+import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { FileText, CheckCircle2, Clock, AlertCircle, CalendarClock, Shield } from 'lucide-react'
@@ -33,13 +35,16 @@ export default async function TaxDocumentsPage() {
   if (!taxYears.includes(currentYear)) taxYears.unshift(currentYear)
 
   // Fetch previously uploaded tax documents
-  const { data: uploadedDocs } = await supabaseAdmin
+  const { data: uploadedDocsAll } = await supabaseAdmin
     .from('documents')
-    .select('id, file_name, document_type_name, created_at')
+    .select('id, file_name, document_type_name, created_at, visible_to_new_owners')
     .eq('account_id', selectedAccountId)
     .eq('category', 3) // Tax
     .order('created_at', { ascending: false })
     .limit(50)
+  // a person added later sees only what came after they were added (unless staff opened the file) — dev job d14e823f
+  const historyCutoff = await getHistoryCutoff(selectedAccountId, contactId)
+  const uploadedDocs = (uploadedDocsAll ?? []).filter(d => !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
 
   const locale = getLocale(user)
 
