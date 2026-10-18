@@ -10,7 +10,7 @@ import { saveFormToDrive } from "@/lib/form-to-drive"
 import { storageDestinationForForm, type FormStorageInput } from "@/lib/crm-store/lead-form-store"
 import { raisePilotAlarm } from "@/lib/crm-store/formation-pilot"
 
-export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped" | "pending"; detail: string }
+export interface FilingStep { step: "storage_save"; status: "ok" | "error" | "skipped" | "pending"; detail: string; /** where the package was filed (a storage marker) — used to pin the retry job */ folder?: string }
 
 /** A member's own passport (legacy form key passport_member_<N>, wizard key member_<N>_member_passport). */
 const MEMBER_PASSPORT = /passport_member_\d+|member_\d+_member_passport/
@@ -26,7 +26,7 @@ export function splitMemberPassports(paths: string[]): { forPrimary: string[]; f
 
 export interface FileFormPackageInput extends FormStorageInput {
   route: string
-  formType: "formation" | "onboarding" | "closure" | "itin"
+  formType: "formation" | "closure" | "itin"
   submittedData: Record<string, unknown>
   uploadPaths: string[]
   meta: { token: string; submittedAt: string; companyName?: string }
@@ -34,8 +34,6 @@ export interface FileFormPackageInput extends FormStorageInput {
   resolveBucket?: (path: string) => string
   /** closure only: a company that still has its own Drive folder keeps filing there (the storage gate inside saveFormToDrive redirects a switched one) */
   driveFolderId?: string | null
-  /** onboarding creates no contact before staff review: "no contact" is then expected, not an alarm */
-  noContactIsExpected?: boolean
   /** the name each stored upload gets (see memberAwareFileName) */
   fileNameOf?: (path: string) => string
   /** stop waiting after this long (default 20 s): the route's own steps (email, task, delivery) must never be starved — the retry job finishes the filing */
@@ -75,7 +73,6 @@ async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> 
       const dest = await storageDestinationForForm(i)
       if (!dest.marker) {
         if (dest.reason === "no_contact") {
-          if (i.noContactIsExpected) return { step: "storage_save", status: "skipped", detail: "No contact record yet — the uploads stay with the submission until staff review" }
           const detail = "No company storage and no contact record to file this under — the uploads stay with the submission"
           await raisePilotAlarm("lead_form_filing_failed", { ...context, problems: [detail] })
           return { step: "storage_save", status: "error", detail }
@@ -99,8 +96,17 @@ async function fileFormPackageNow(i: FileFormPackageInput): Promise<FilingStep> 
       await raisePilotAlarm("lead_form_filing_failed", { ...context, problems })
       return { step: "storage_save", status: "error", detail: problems.join(" | ") }
     }
+    // Members with NO email can never be matched to a contact automatically: ONE alarm so staff create the contact (the hand-off then files the
+    // held passport in that member's own storage). Members WITH an email are handled when the company is created — no alarm.
+    if (split.forMembers.length > 0) {
+      const { heldMembersOf, heldMembersWithoutEmail } = await import("@/lib/crm-store/held-member-passports")
+      const noEmail = heldMembersWithoutEmail(heldMembersOf(i.submittedData, split.forMembers))
+      if (noEmail.length > 0) {
+        await raisePilotAlarm("lead_form_member_passport_held", { ...context, members: noEmail.map((h) => ({ index: h.index, name: h.name })), why: "member has no email, so no contact can be created automatically; the passport stays on the submission until a contact exists" })
+      }
+    }
     const waiting = split.forMembers.length ? ` ${split.forMembers.length} member passport(s) stay on the submission — each is filed in that member's own storage when the company is created.` : ""
-    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.${waiting}` }
+    return { step: "storage_save", status: "ok", detail: `Summary saved. ${res.copied.length} file(s) filed${res.skipped.length ? `, ${res.skipped.length} already there` : ""}.${waiting}`, folder }
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
     await raisePilotAlarm("lead_form_filing_failed", { ...context, problems: [detail] })

@@ -28,6 +28,8 @@ export interface FallbackResult {
   ownerId: string | null
   /** the passport that went to the person's own storage — its bytes, for the passport-data read */
   passport?: { content: ArrayBuffer; mimeType: string; fileName: string } | null
+  /** member passports held for the member's own storage (not filed here) */
+  held?: number
 }
 
 export async function saveUploadsToStoreForAccount(p: {
@@ -56,6 +58,10 @@ export async function saveUploadsToStoreForAccount(p: {
       if (error || !blob) throw new Error(error?.message ?? "no data")
       const bytes = Buffer.from(await blob.arrayBuffer())
       const name = path.split("/").pop() || "upload"
+      // A MEMBER's passport is never filed in the company's folders nor in the owner's storage: it is held for that member's own
+      // storage (filed when their contact exists — see held-member-passports.ts).
+      const { memberIndexOfUpload } = await import("./held-member-passports")
+      if (memberIndexOfUpload(path) !== null) { out.held = (out.held ?? 0) + 1; continue }
       const isPassport = !!p.passportContact && /passport/i.test(name)
       const target = isPassport ? await ensurePersonOwner(p.passportContact!.contactId, p.passportContact!.name) : ownerId
       if (isPassport) {

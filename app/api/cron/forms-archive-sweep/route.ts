@@ -59,13 +59,15 @@ export async function GET(req: NextRequest) {
     // Cast: recipe.table is a runtime string; the typed client needs a table
     // literal (every recipe.table IS a real submission table).
     const tbl = recipe.table as "banking_submissions"
-    const { data: rows, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from(tbl)
       .select(recipe.selectColumns)
       .is("drive_archived_at", null)
-      .gte("created_at", recipe.sweepNotBefore && recipe.sweepNotBefore > FORM_ARCHIVE_SWEEP_CUTOFF_ISO ? recipe.sweepNotBefore : FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
-      .order("created_at", { ascending: true })
-      .limit(200)
+      .gte("created_at", FORM_ARCHIVE_SWEEP_CUTOFF_ISO)
+    // a form that only counts real / pinned rows: filtered IN the query, so shells and never-filed history cannot fill the 200-row window
+    if (recipe.sweepStatuses) query = query.in("status", recipe.sweepStatuses)
+    if (recipe.sweepOnlyPinned) query = query.not("drive_archive_meta->pinned_plan", "is", null)
+    const { data: rows, error } = await query.order("created_at", { ascending: true }).limit(200)
 
     if (error) {
       await reportSystemError({ source: "server", route: ENDPOINT, message: `${recipe.formType} candidate query failed: ${error.message}` }).catch(() => {})

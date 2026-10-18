@@ -169,6 +169,7 @@ export async function saveDocumentForContact(input: SaveForContactInput, deps?: 
   const saveIn = (folderKind: string) => d.save({
     ownerId, folderKind, name: input.name, bytes: input.bytes, mimeType: input.mimeType,
     documentType: typeFor(input.documentType, input.portalVisible), callerKey: input.callerKey, published: input.portalVisible ?? false, actor: input.actor ?? null,
+    skipAnalysis: true, // a person's own documents are never queued for the AI file reader
   })
   let w
   try {

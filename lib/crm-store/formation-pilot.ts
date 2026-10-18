@@ -510,6 +510,7 @@ export type PilotAlarmKind =
   | "lead_form_person_on_drive"    // the person still lives on Drive (or in a hidden study copy): no storage was opened, nothing was filed
   | "storage_pointer_adopt_failed" // a client file parked in the older bucket (storage: pointer) could not be filed into the CRM storage
   | "lead_form_contact_lookup_failed" // the CRM contact lookup for a lead-stage form failed: nothing was filed, the rest of the chain ran
+  | "lead_form_member_passport_held" // an LLC member with no email has a passport on a form: no contact can be made automatically, the file waits on the submission
   | "store_move_stale"             // a company's move to the new storage has shown no sign of life for 30+ minutes: its saves are refused
 
 /**

@@ -185,7 +185,9 @@ export async function POST(req: NextRequest) {
     // Stop-Drive S1a: the "Individual Clients/<name> (<id>)" and "2. Contacts" Drive folders are gone. An ITIN belongs to the PERSON:
     // the package goes to their own storage (opened on first use). No contact = nothing filed + one alarm; the retry job finishes it.
     let itinFolder = ""
+    let itinBlocked = false // filing was blocked and already alarmed (one alarm per problem)
     if (contactAmbiguous || !contactId) {
+      itinBlocked = true
       results.push({ step: "storage_save", status: "error", detail: contactAmbiguous ? "The contact could not be decided safely (see contact_lookup) — nothing was filed; the uploads stay with the submission" : "No contact record to file this ITIN package under — nothing was filed; the uploads stay with the submission" })
       if (!contactAmbiguous) {
         const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
@@ -197,6 +199,7 @@ export async function POST(req: NextRequest) {
         itinFolder = await resolveItinContactFolder({ accountId: driveAccountId, contactId, leadId: sub.lead_id, token, clientName: clientName || token })
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e)
+        itinBlocked = true
         results.push({ step: "storage_save", status: "error", detail })
         const { raisePilotAlarm } = await import("@/lib/crm-store/formation-pilot")
         await raisePilotAlarm("lead_form_filing_failed", { route: "itin-form-completed", formType: "itin", token, contactId, problems: [detail] })
@@ -328,10 +331,10 @@ export async function POST(req: NextRequest) {
     try {
       if (!sd.first_name || !sd.last_name) {
         results.push({ step: "docs_generated", status: "skipped", detail: "Missing first_name or last_name in submission data" })
-      } else if (!contactId) {
-        // No person to file the documents under (undecided contact — already alarmed once above). Nothing is generated and thrown
+      } else if (!contactId || itinBlocked) {
+        // No person to file the documents under (or filing was blocked — already alarmed once) (undecided contact — already alarmed once above). Nothing is generated and thrown
         // away: the data and uploads stay on the submission, and itin_prepare_documents builds them once the contact is linked.
-        results.push({ step: "docs_generated", status: "skipped", detail: "No contact yet — the documents are not generated now; the data stays on the submission and they are prepared once the contact is linked" })
+        results.push({ step: "docs_generated", status: "skipped", detail: "No contact (or no storage to file under) yet — the documents are not generated now; the data stays on the submission and they are prepared once the contact is linked" })
       } else {
         const w7Buffer = await generateW7Pdf(sd)
         const nrBuffer = await generate1040NRPdf(sd)
