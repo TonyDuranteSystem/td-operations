@@ -66,7 +66,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Contacts via junction table
     supabase
       .from('account_contacts')
-      .select('role, contact:contacts(*)')
+      .select('role, history_visible_from, contact:contacts(*)')
       .eq('account_id', params.id)
       // Deterministic order: without it, Postgres row order decided who the
       // fallback "primary contact" was, and it could change between loads.
@@ -145,7 +145,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
     const contact = c.contact as unknown as Contact
-    return { ...contact, role: c.role }
+    return { ...contact, role: c.role, history_visible_from: c.history_visible_from }
   })
 
   // The resolved signer's contact id, when the resolver found exactly one

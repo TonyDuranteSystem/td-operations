@@ -75,6 +75,7 @@ export type Database = {
         Row: {
           account_id: string
           contact_id: string
+          history_visible_from: string | null
           is_primary: boolean
           ownership_pct: number | null
           role: string | null
@@ -82,6 +83,7 @@ export type Database = {
         Insert: {
           account_id: string
           contact_id: string
+          history_visible_from?: string | null
           is_primary?: boolean
           ownership_pct?: number | null
           role?: string | null
@@ -89,6 +91,7 @@ export type Database = {
         Update: {
           account_id?: string
           contact_id?: string
+          history_visible_from?: string | null
           is_primary?: boolean
           ownership_pct?: number | null
           role?: string | null
@@ -5426,6 +5429,7 @@ export type Database = {
           status: string | null
           tax_year: number | null
           updated_at: string | null
+          visible_to_new_owners: boolean
         }
         Insert: {
           account_id?: string | null
@@ -5457,6 +5461,7 @@ export type Database = {
           status?: string | null
           tax_year?: number | null
           updated_at?: string | null
+          visible_to_new_owners?: boolean
         }
         Update: {
           account_id?: string | null
@@ -5488,6 +5493,7 @@ export type Database = {
           status?: string | null
           tax_year?: number | null
           updated_at?: string | null
+          visible_to_new_owners?: boolean
         }
         Relationships: [
           {

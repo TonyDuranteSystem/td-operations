@@ -597,6 +597,7 @@ export async function linkContactToAccount(
   contactId: string,
   role: string = 'owner',
   isPrimary: boolean = false,
+  historyChoice: 'today' | 'all' = 'today',
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
@@ -611,15 +612,35 @@ export async function linkContactToAccount(
 
     if (existing) throw new Error('Contact is already linked to this account')
 
+    // Antonio 2026-10-17: a person added to a company that already has history sees it only from today unless staff choose
+    // "everything" (dev job d14e823f). The person is not linked yet (checked above), so this is always a fresh view.
+    const { historyFromForNewLink } = await import('@/lib/portal/history-cutoff')
+    const historyFrom = await historyFromForNewLink({ accountId, contactId, choice: historyChoice })
     const { error } = await supabase
       .from('account_contacts')
-      .insert({ account_id: accountId, contact_id: contactId, role, is_primary: isPrimary })
+      .insert({ account_id: accountId, contact_id: contactId, role, is_primary: isPrimary, ...(historyFrom ? { history_visible_from: historyFrom } : {}) })
 
     if (error) throw new Error(error.message)
     revalidatePath(`/accounts/${accountId}`)
   }, {
     action_type: 'create', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`,
     summary: `Linked contact ${contactId} to account ${accountId} as ${role}`,
+  })
+}
+
+/** Staff: let a person who joined later also see the company's earlier documents in the portal (clears their start date). */
+export async function showEarlierHistoryToPerson(accountId: string, contactId: string): Promise<ActionResult> {
+  return safeAction(async () => {
+    const { error } = await supabaseAdmin
+      .from('account_contacts')
+      .update({ history_visible_from: null })
+      .eq('account_id', accountId)
+      .eq('contact_id', contactId)
+    if (error) throw new Error(error.message)
+    revalidatePath(`/accounts/${accountId}`)
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`,
+    summary: `Showed the earlier documents to contact ${contactId} on account ${accountId}`,
   })
 }
 
@@ -667,6 +688,7 @@ export async function createAndLinkContact(
   fullName: string,
   email: string | null,
   role: string = 'owner',
+  historyChoice: 'today' | 'all' = 'today',
 ): Promise<ActionResult & { contactId?: string; warning?: string }> {
   const trimmed = fullName.trim()
   if (!trimmed) {
@@ -692,6 +714,12 @@ export async function createAndLinkContact(
 
   if (!result.success) {
     return { success: false, error: result.error || 'Failed to add contact' }
+  }
+
+  // Antonio 2026-10-17: a new person on a company that already has history sees it only from today unless staff choose "everything".
+  if (historyChoice !== 'all' && result.contact_id) {
+    const { startHistoryFromNow } = await import('@/lib/portal/history-cutoff')
+    await startHistoryFromNow({ accountId, contactId: result.contact_id })
   }
 
   revalidatePath(`/accounts/${accountId}`)
