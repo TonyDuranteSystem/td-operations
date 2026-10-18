@@ -1,18 +1,19 @@
 /**
  * Unit tests for saveSignedGeneratedDocument() in lib/portal/save-generated-document.ts
  *
- * Covers: no-Drive-folder error / happy path (Drive + canonical record + maker
- * pre-marked seen + co-owners alerted, maker NOT alerted) / single-owner (no
- * alerts) / kill-switch off / record-save failure returns the orphan drive id.
+ * Covers: a company with no storage gets the one plain sentence / happy path (storage
+ * file + record, maker pre-marked seen, co-owners alerted, maker NOT alerted) /
+ * single-owner (no alerts) / kill-switch off / a storage failure is an error.
+ * Google Drive is spied throughout and must never be called.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }))
 
-// The company is still on Drive here (the storage route has its own tests: crm-store-save-for-account.test.ts).
+// The company lives in the storage by default here (the storage route has its own tests: crm-store-save-for-account.test.ts).
 vi.mock('@/lib/crm-store/save-for-account', () => ({
-  saveDocumentForAccount: vi.fn(async () => ({ route: 'drive' })),
+  saveDocumentForAccount: vi.fn(async () => ({ route: 'store', fileId: 'f-1', pointer: 'store:f-1', documentRowId: 'doc-1', status: 'created' })),
 }))
 
 // ─── Mock state ──────────────────────────────────────────
@@ -106,22 +107,28 @@ const baseParams = () => ({
 })
 
 describe('saveSignedGeneratedDocument', () => {
-  it('errors when the account has no Drive folder', async () => {
-    accountRow = { drive_folder_id: null, company_name: 'Example LLC' }
+  it('a company with no storage: one plain sentence, nothing saved, Drive never called', async () => {
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
+    vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'drive' })
     const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const { NO_STORAGE_SENTENCE } = await import('@/lib/crm-store/no-storage')
     const r = await saveSignedGeneratedDocument(baseParams())
     expect(r.success).toBe(false)
-    expect(r.error).toContain('Drive folder')
+    expect(r.error).toBe(NO_STORAGE_SENTENCE)
     expect(driveUploads.length).toBe(0)
+    expect(autoSaveCalls.length).toBe(0)
   })
 
-  it('saves via the canonical path (portal-visible), stamps it new, and pre-marks the maker as seen', async () => {
+  it('saves in the storage (portal-visible record), stamps it new, and pre-marks the maker as seen', async () => {
     const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
+    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
     const r = await saveSignedGeneratedDocument({ ...baseParams(), category: 1 })
     expect(r.success).toBe(true)
     expect(r.documentId).toBe('doc-1')
-    expect(driveUploads[0]).toEqual({ fileName: 'Distribution_SIGNED.pdf', folder: 'folder-1' })
-    expect(autoSaveCalls[0]).toMatchObject({ accountId: 'acct-1', contactId: 'maker', portalVisible: true, category: 1, driveFileId: 'drive-file-1' })
+    expect(r.driveFileId).toBe('store:f-1')
+    expect(driveUploads.length).toBe(0)
+    expect(autoSaveCalls.length).toBe(0)
+    expect(vi.mocked(saveDocumentForAccount)).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acct-1', portalVisible: true, folder: 'company', mimeType: 'application/pdf' }))
     // stamped "new"
     expect(typeof docUpdates[0].client_notified_at).toBe('string')
     // maker pre-marked as viewed → no pulse / alert for them
@@ -159,20 +166,7 @@ describe('saveSignedGeneratedDocument', () => {
     expect(notifyCalls.length).toBe(0)
   })
 
-  it('a company that lives in the new storage: saved there (file + record), Drive and the Drive-record path are never touched', async () => {
-    const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
-    vi.mocked(saveDocumentForAccount).mockResolvedValueOnce({ route: 'store', fileId: 'f-1', pointer: 'store:f-1', documentRowId: 'doc-store-1', status: 'created' })
-    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
-    const r = await saveSignedGeneratedDocument({ ...baseParams(), category: 1 })
-    expect(r.success).toBe(true)
-    expect(r.documentId).toBe('doc-store-1')
-    expect(r.driveFileId).toBe('store:f-1')
-    expect(driveUploads.length).toBe(0)
-    expect(autoSaveCalls.length).toBe(0)
-    expect(vi.mocked(saveDocumentForAccount)).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acct-1', portalVisible: true, folder: 'company' }))
-  })
-
-  it('a storage save that fails is an error — it never falls back to Drive', async () => {
+  it('a storage save that fails is an error — nothing else is tried', async () => {
     const { saveDocumentForAccount } = await import('@/lib/crm-store/save-for-account')
     vi.mocked(saveDocumentForAccount).mockRejectedValueOnce(new Error('store down'))
     const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
@@ -180,14 +174,5 @@ describe('saveSignedGeneratedDocument', () => {
     expect(r.success).toBe(false)
     expect(r.error).toContain('store down')
     expect(driveUploads.length).toBe(0)
-  })
-
-  it('returns an error + the orphan drive id when the record save fails', async () => {
-    autoSaveResult = { error: 'insert boom' }
-    const { saveSignedGeneratedDocument } = await import('@/lib/portal/save-generated-document')
-    const r = await saveSignedGeneratedDocument(baseParams())
-    expect(r.success).toBe(false)
-    expect(r.error).toContain('Document record failed')
-    expect(r.driveFileId).toBe('drive-file-1')
   })
 })

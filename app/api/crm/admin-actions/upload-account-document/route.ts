@@ -2,9 +2,9 @@
  * Upload a document for an account (company-level).
  *
  * Parallel to upload-document/route.ts (which is contact-centric). Uploads
- * land in the account's Drive folder (resolved from accounts.drive_folder_id
- * / gdrive_folder_url) under the category subfolder, and a documents row is
- * inserted with account_id set and contact_id=null.
+ * land in the company's CRM storage under the category folder, and a documents
+ * row is listed with account_id set and contact_id=null. A company with no
+ * storage gets one plain sentence back (409).
  *
  * Accepts JSON body (file already in Supabase Storage):
  *   { account_id, storage_path, file_name, mime_type, document_type, category, display_name? }
@@ -15,6 +15,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Company: { num: 1, subfolder: '1. Company' },
@@ -54,10 +55,10 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await blob.arrayBuffer())
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    // Get account info + Drive folder
+    // Get account info
     const { data: account } = await supabaseAdmin
       .from('accounts')
-      .select('company_name, drive_folder_id, gdrive_folder_url')
+      .select('company_name')
       .eq('id', accountId)
       .single()
 
@@ -75,8 +76,7 @@ export async function POST(req: NextRequest) {
         : `${sanitizedDisplay}${ext}`
       : fileName
 
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
-    // saves HERE (file + CRM record) and never touches Drive; a company still on Drive carries on as before, below.
+    // The file (and its CRM record) is saved in the company's storage.
     {
       const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
       const { createHash } = await import('crypto')
@@ -117,81 +117,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    let driveFolderId: string | null = account.drive_folder_id
-    if (!driveFolderId && account.gdrive_folder_url) {
-      const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-      if (match) driveFolderId = match[1]
-    }
-
-    if (!driveFolderId) {
-      return NextResponse.json({ success: false, detail: 'Account has no Drive folder. Create or link one first.' }, { status: 400 })
-    }
-
-    // Find target subfolder
-    const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-    const foldersRes = await listFolderAnyDrive(driveFolderId)
-    const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
-    const targetFolder = folders.find(
-      (f: { name: string; mimeType: string }) => f.name === catInfo.subfolder && f.mimeType === 'application/vnd.google-apps.folder',
-    )
-    const uploadFolderId = targetFolder?.id || driveFolderId
-
-    // Upload to Drive
-    const driveFile = await uploadBinaryToDrive(finalFileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
-
-    const sideEffects: string[] = [`Uploaded to Drive: ${finalFileName}`]
-
-    // Create document record (idempotent on drive_file_id)
-    const { data: existingDoc } = await supabaseAdmin
-      .from('documents')
-      .select('id')
-      .eq('drive_file_id', driveFile.id)
-      .limit(1)
-
-    if (!existingDoc?.length) {
-      const { data: newDoc } = await supabaseAdmin.from('documents').insert({
-        file_name: finalFileName,
-        drive_file_id: driveFile.id,
-        drive_link: `https://drive.google.com/file/d/${driveFile.id}/view`,
-        document_type_name: documentType,
-        category: catInfo.num,
-        category_name: category,
-        status: 'classified',
-        account_id: accountId,
-        contact_id: null,
-        portal_visible: true,
-      }).select('id').single()
-      sideEffects.push('Document record created')
-
-      // Alert the client of the new document (in-portal + push; digest email for
-      // non-push users). Fire-and-forget — never block the upload response.
-      if (newDoc?.id) {
-        const { notifyClientsOfNewDocument } = await import('@/lib/portal/document-alerts')
-        notifyClientsOfNewDocument(newDoc.id as string).catch((e) =>
-          console.warn('[upload-account-document] new-document alert failed:', e instanceof Error ? e.message : String(e)))
-      }
-    }
-
-    // Log action
-    await supabaseAdmin.from('action_log').insert({
-      actor: 'crm-admin',
-      action_type: 'upload_account_document',
-      table_name: 'documents',
-      record_id: driveFile.id,
-      account_id: accountId,
-      summary: `Account document uploaded: ${finalFileName} (${documentType})`,
-      details: { file_name: finalFileName, document_type: documentType, category, account_id: accountId },
-    })
-
-    // Clean up storage file (best-effort)
-    supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
-
-    return NextResponse.json({
-      success: true,
-      detail: `${finalFileName} uploaded to ${catInfo.subfolder}`,
-      driveFileId: driveFile.id,
-      side_effects: sideEffects,
-    })
+    return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
   } catch (e) {
     console.error('[upload-account-document] Error:', e)
     return NextResponse.json({ success: false, detail: e instanceof Error ? e.message : String(e) }, { status: 500 })

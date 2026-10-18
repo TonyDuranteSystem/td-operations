@@ -1,29 +1,25 @@
 /**
- * app/api/flows/[id]/upload-document — END-TO-END route test for the EIN-letter
- * "file into 1. Company + auto-rename" feature (Luca, 2026-07-17).
+ * app/api/flows/[id]/upload-document — END-TO-END route test: the EIN-letter "file into 1. Company + auto-rename"
+ * feature (Luca, 2026-07-17), now that every company upload goes to the CRM STORAGE (Stop Drive, dev job 264bb882, S1c).
  *
- * Drives the REAL route handler with only the I/O boundaries mocked (Supabase +
- * Google Drive + advanceServiceDelivery). lib/flows/flow-drive-folder and
- * lib/template-interpolation run for real, so every decision branch actually
- * executes — including the Drive folder-targeting and upsert paths that a
- * sandbox deploy can NEVER reach (SANDBOX_MODE short-circuits Drive to the
- * storage fallback). Each `it` = one scenario from the Council review.
+ * Drives the REAL route handler with only the I/O boundaries mocked (Supabase + the storage save + advanceServiceDelivery).
+ * Google Drive is SPIED: any call to it fails the test — a storage company must produce zero Drive calls, and a company with
+ * no storage must get one plain sentence (409) with nothing saved and the stage not advanced.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const FOLDER_MIME = "application/vnd.google-apps.folder"
-
 // ── Mutable per-test state ──────────────────────────────────────────────────
 let sdRow: Record<string, unknown> | null
 let accountRow: Record<string, unknown> | null
-let driveListing: { files: Array<{ id: string; name: string; mimeType: string }> }
+let companyState: "drive" | "store"
+let saveCalls: Array<Record<string, unknown>>
 let existingDocs: Array<{ id: string }>
 let docInsertError: { message: string } | null
 
 let documentsInsertPayload: Record<string, unknown> | null
 let actionLogPayload: Record<string, unknown> | null
-let driveCalls: Array<{ fn: "create" | "upsert"; name: string; folderId: string }>
+let driveCalls: string[]
 let advanceCalled: boolean
 
 // ── Mock the I/O boundaries ─────────────────────────────────────────────────
@@ -78,20 +74,27 @@ vi.mock("@/lib/supabase-admin", () => ({
   },
 }))
 
-vi.mock("@/lib/google-drive", () => ({
-  listFolderAnyDrive: vi.fn(async () => driveListing),
-  uploadBinaryToDrive: vi.fn(async (name: string, _b: Buffer, _m: string, folderId: string) => {
-    driveCalls.push({ fn: "create", name, folderId })
-    return { id: "drive-created", name }
-  }),
-  uploadBinaryToDriveUpsert: vi.fn(async (name: string, _b: Buffer, _m: string, folderId: string) => {
-    driveCalls.push({ fn: "upsert", name, folderId })
-    return { id: "drive-upsert", name, action: "overwritten" }
-  }),
+// Google Drive is a SPY: nothing here may ever call it.
+vi.mock("@/lib/google-drive", () => {
+  const spy = (name: string) => vi.fn(async () => { driveCalls.push(name); throw new Error(`Drive must not be called: ${name}`) })
+  return { listFolderAnyDrive: spy("listFolderAnyDrive"), listFolder: spy("listFolder"), createFolder: spy("createFolder"), uploadBinaryToDrive: spy("uploadBinaryToDrive"), uploadBinaryToDriveUpsert: spy("uploadBinaryToDriveUpsert") }
+})
+
+vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => companyState), liveOwnerOfContact: vi.fn(async () => null) }))
+
+vi.mock("@/lib/crm-store/formation-pilot", () => ({
+  pilotSaveFormationUpload: vi.fn(async () => ({ status: "not_pilot" })),
+  FORMATION_UPLOAD_TYPES: {},
 }))
 
-// The route asks where the company's files live (Drive cutover); these scenarios are about a company still on Drive.
-vi.mock("@/lib/crm-store/switched-drive-guard", () => ({ companyDocState: vi.fn(async () => "drive") }))
+vi.mock("@/lib/crm-store/save-for-account", () => ({
+  CompanyMovingError: class extends Error {},
+  saveDocumentForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    saveCalls.push(input)
+    return { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
+  }),
+  saveDocumentForContact: vi.fn(async () => ({ route: "drive" })),
+}))
 
 vi.mock("@/lib/service-delivery", () => ({
   advanceServiceDelivery: vi.fn(async () => {
@@ -133,7 +136,9 @@ const EIN_BODY = {
 }
 
 beforeEach(() => {
-  delete process.env.SANDBOX_MODE // default: production-like (Drive path runs)
+  delete process.env.SANDBOX_MODE
+  companyState = "store"
+  saveCalls = []
   sdRow = {
     id: "sd-1",
     account_id: "acct-1",
@@ -141,8 +146,7 @@ beforeEach(() => {
     stage: "EIN Received",
     service_type: "Company Formation",
   }
-  accountRow = { drive_folder_id: "ROOTFOLDER", gdrive_folder_url: null, company_name: "Acme Holdings LLC", entity_type: "Single Member LLC" }
-  driveListing = { files: [{ id: "sub-company", name: "1. Company", mimeType: FOLDER_MIME }] }
+  accountRow = { company_name: "Acme Holdings LLC", entity_type: "Single Member LLC" }
   existingDocs = []
   docInsertError = null
   documentsInsertPayload = null
@@ -151,52 +155,35 @@ beforeEach(() => {
   advanceCalled = false
 })
 
-describe("EIN letter upload — folder targeting + auto-rename (route E2E)", () => {
-  it("Scenario 1 — files into '1. Company' and renames using the company name", async () => {
+describe("EIN letter upload — storage filing + auto-rename (route E2E)", () => {
+  it("Scenario 1 — a storage company: saved in its '1. Company' storage under the renamed name, internal, zero Drive calls", async () => {
     const res = await call(EIN_BODY)
     expect(res.status).toBe(200)
-    expect(driveCalls).toEqual([
-      { fn: "upsert", name: "EIN Official – Acme Holdings LLC.pdf", folderId: "sub-company" },
-    ])
-    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC.pdf")
+    expect(saveCalls).toHaveLength(1)
+    expect(saveCalls[0]).toMatchObject({ accountId: "acct-1", name: "EIN Official – Acme Holdings LLC.pdf", folder: "company", portalVisible: false, mimeType: "application/pdf" })
+    expect(saveCalls[0].row).toMatchObject({ service_delivery_id: "sd-1", flow_stage: "EIN Received", status: "classified" })
+    expect(driveCalls).toEqual([])
     expect(advanceCalled).toBe(true)
   })
 
-  it("Scenario 2 — subfolder absent → falls back to the account root, still renamed", async () => {
-    driveListing = { files: [{ id: "sub-tax", name: "3. Tax", mimeType: FOLDER_MIME }] }
-    await call(EIN_BODY)
-    expect(driveCalls).toEqual([
-      { fn: "upsert", name: "EIN Official – Acme Holdings LLC.pdf", folderId: "ROOTFOLDER" },
-    ])
-    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC.pdf")
+  it("Scenario 2 — a '3. Tax' target lands in the tax storage folder", async () => {
+    await call({ ...EIN_BODY, folder: "3. Tax" })
+    expect(saveCalls[0].folder).toBe("tax")
+    expect(driveCalls).toEqual([])
   })
 
-  it("Scenario 3 — matches a legacy folder name case/space-insensitively", async () => {
-    driveListing = { files: [{ id: "sub-legacy", name: "  1. COMPANY ", mimeType: FOLDER_MIME }] }
-    await call(EIN_BODY)
-    expect(driveCalls[0].folderId).toBe("sub-legacy")
-  })
-
-  it("Scenario 4 — a same-named folder ENTRY that is a file (not a folder) is ignored → root fallback", async () => {
-    driveListing = { files: [{ id: "not-a-folder", name: "1. Company", mimeType: "application/pdf" }] }
-    await call(EIN_BODY)
-    expect(driveCalls[0].folderId).toBe("ROOTFOLDER")
-  })
-
-  it("Scenario 5 — a dotless upload name produces no garbage extension", async () => {
+  it("Scenario 3 — a dotless upload name produces no garbage extension", async () => {
     await call({ ...EIN_BODY, file_name: "IMG_2043" })
-    expect(driveCalls[0].name).toBe("EIN Official – Acme Holdings LLC")
-    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC")
+    expect(saveCalls[0].name).toBe("EIN Official – Acme Holdings LLC")
   })
 
-  it("Scenario 6 — missing company name → keeps the original filename (no 'null')", async () => {
-    accountRow = { drive_folder_id: "ROOTFOLDER", gdrive_folder_url: null, company_name: null, entity_type: null }
+  it("Scenario 4 — missing company name → keeps the original filename (no 'null')", async () => {
+    accountRow = { company_name: null, entity_type: null }
     await call(EIN_BODY)
-    expect(driveCalls[0].name).toBe("cp575_scan.pdf")
-    expect(documentsInsertPayload?.file_name).toBe("cp575_scan.pdf")
+    expect(saveCalls[0].name).toBe("cp575_scan.pdf")
   })
 
-  it("Scenario 7 — OTHER upload stage (no folder/rename) is untouched: root folder, original name, plain create", async () => {
+  it("Scenario 5 — OTHER upload stage (no folder/rename) keeps the original name and goes to '1. Company'", async () => {
     const res = await call({
       storage_path: "flow-uploads/sd-1/9_receipt.pdf",
       file_name: "fax_receipt.pdf",
@@ -204,31 +191,41 @@ describe("EIN letter upload — folder targeting + auto-rename (route E2E)", () 
       flow_stage: "SS-4 Signed",
     })
     expect(res.status).toBe(200)
-    expect(driveCalls).toEqual([{ fn: "create", name: "fax_receipt.pdf", folderId: "ROOTFOLDER" }])
-    expect(documentsInsertPayload?.file_name).toBe("fax_receipt.pdf")
+    expect(saveCalls[0]).toMatchObject({ name: "fax_receipt.pdf", folder: "company" })
+    expect(driveCalls).toEqual([])
   })
 
-  it("Scenario 8 — sandbox (Drive mocked) storage fallback still renames the documents row", async () => {
-    process.env.SANDBOX_MODE = "1"
+  it("Scenario 6 — a company with NO storage: one plain sentence (409), nothing saved, no document row, stage not advanced, zero Drive calls", async () => {
+    companyState = "drive"
+    const res = await call(EIN_BODY)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    const { NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
+    expect(body).toEqual({ success: false, detail: NO_STORAGE_SENTENCE })
+    expect(saveCalls).toEqual([])
+    expect(documentsInsertPayload).toBeNull()
+    expect(advanceCalled).toBe(false)
+    expect(driveCalls).toEqual([])
+  })
+
+  it("Scenario 7 — a flow with no company yet keeps the file in the upload bucket (renamed row), zero Drive calls", async () => {
+    sdRow = { ...(sdRow as object), account_id: null, service_type: "Company Formation" }
     const res = await call(EIN_BODY)
     expect(res.status).toBe(200)
-    // No Drive upload at all in sandbox …
     expect(driveCalls).toEqual([])
-    // … but the renamed name lands on the documents row (the only thing sandbox QA can see).
-    expect(documentsInsertPayload?.file_name).toBe("EIN Official – Acme Holdings LLC.pdf")
+    expect(saveCalls).toEqual([])
+    expect(documentsInsertPayload?.file_name).toBe("cp575_scan.pdf")
     expect(documentsInsertPayload?.drive_file_id).toContain("storage:")
   })
 
-  it("Scenario 9 — idempotency: an already-registered file is not re-inserted", async () => {
+  it("Scenario 8 — idempotency: an already-registered storage file is not re-inserted", async () => {
     existingDocs = [{ id: "doc-existing" }]
     const res = await call(EIN_BODY)
     expect(res.status).toBe(200)
-    expect(documentsInsertPayload).toBeNull() // insert skipped
-    // Drive upload still happens (upsert overwrites in place), no duplicate row.
-    expect(driveCalls[0].fn).toBe("upsert")
+    expect(documentsInsertPayload).toBeNull()
   })
 
-  it("Scenario 10 — the audit log + response report the renamed name, keeping the original for trace", async () => {
+  it("Scenario 9 — the audit log + response report the renamed name, keeping the original for trace", async () => {
     const res = await call(EIN_BODY)
     const body = await res.json()
     expect(body.detail).toContain("EIN Official – Acme Holdings LLC.pdf")

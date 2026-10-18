@@ -1,0 +1,220 @@
+/**
+ * Stop Drive, slice S1c (dev job 264bb882): the upload / regenerate routes no longer need a Drive folder.
+ *
+ * For each route: (a) a company with storage → the file lands in the CRM storage with the right type / visibility and Google
+ * Drive is never called; (b) a company with NO storage → ONE plain sentence (409), nothing saved, Drive never called.
+ * Google Drive is a spy that fails the test when touched.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest"
+import { NextRequest } from "next/server"
+
+const state = vi.hoisted(() => ({
+  rows: {} as Record<string, unknown>,
+  recorded: [] as Array<{ table: string; op: string; payload: unknown }>,
+  driveCalls: [] as string[],
+  route: "store" as "store" | "drive",
+  saves: [] as Array<Record<string, unknown>>,
+}))
+
+vi.mock("@/lib/supabase-admin", async () => {
+  const h = await import("./_stop-drive-mocks")
+  return { supabaseAdmin: h.makeSupabase(state.rows, state.recorded as never) }
+})
+vi.mock("@/lib/google-drive", async () => {
+  const h = await import("./_stop-drive-mocks")
+  return h.driveSpy(state.driveCalls)
+})
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: "u1", app_metadata: { role: "admin" }, user_metadata: {}, email: "staff@tonydurante.us" } } }) } }),
+}))
+vi.mock("@/lib/auth", () => ({ isDashboardUser: () => true }))
+vi.mock("@/lib/auth/require-staff-route", () => ({ requireStaffRoute: async () => null }))
+vi.mock("@/lib/portal/team/gate", () => ({ canAccessAccount: async () => true }))
+vi.mock("@/lib/portal/rate-limit", () => ({ checkRateLimit: () => ({ allowed: true }), getRateLimitKey: () => "k" }))
+vi.mock("@/lib/portal-auth", () => ({ getClientContactId: () => "contact-1" }))
+vi.mock("@/lib/portal/chat-events", () => ({ emitDocumentUploadedEvent: async () => undefined }))
+vi.mock("@/lib/portal/audit", () => ({ logPortalAction: () => undefined }))
+vi.mock("@/lib/portal/document-alerts", () => ({ notifyClientsOfNewDocument: async () => undefined }))
+vi.mock("@/lib/lease-pdf", () => ({ generateLeasePDF: async () => new Uint8Array([37, 80, 68, 70]) }))
+vi.mock("@/lib/dba-ocr", () => ({ extractDbaFieldsFromOcr: () => ({}) }))
+vi.mock("@/lib/crm-store/ocr", () => ({ ocrByPointer: async () => ({ fullText: "" }) }))
+vi.mock("@/lib/crm-store/save-for-account", () => ({
+  CompanyMovingError: class extends Error {},
+  saveDocumentForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    state.saves.push(input)
+    return state.route === "store"
+      ? { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
+      : { route: "drive" }
+  }),
+  saveSignedPdfForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    state.saves.push(input)
+    return state.route === "store"
+      ? { route: "store", fileId: "f-1", pointer: "store:f-1", documentRowId: "doc-1", status: "created" }
+      : { route: "drive" }
+  }),
+}))
+vi.mock("@/lib/crm-store/save-form", () => ({
+  saveTaskFileForAccount: vi.fn(async (input: Record<string, unknown>) => {
+    state.saves.push(input)
+    return state.route === "store" ? { route: "store", fileId: "f-1", pointer: "store:f-1", status: "created" } : { route: "drive" }
+  }),
+}))
+
+import { NO_STORAGE_SENTENCE } from "@/lib/crm-store/no-storage"
+
+const json = (body: unknown) => new NextRequest("http://localhost/x", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+
+beforeEach(() => {
+  state.route = "store"
+  state.recorded.length = 0
+  state.driveCalls.length = 0
+  state.saves.length = 0
+  for (const k of Object.keys(state.rows)) delete state.rows[k]
+})
+
+describe("portal documents upload", () => {
+  const body = { account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", doc_type: "Bank statement", category: "4" }
+
+  it("storage company: saved in the storage, hidden from the client, typed other_document, zero Drive calls", async () => {
+    const { POST } = await import("@/app/api/portal/documents/upload/route")
+    const res = await POST(json(body))
+    expect(res.status).toBe(200)
+    expect(state.saves[0]).toMatchObject({ accountId: "acct-1", folder: "banking", documentType: "other_document", name: "x.pdf" })
+    expect(state.saves[0].portalVisible).toBeUndefined() // default false: hidden until staff review
+    expect((await res.json()).document_id).toBe("doc-1")
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("no-storage company: one plain sentence, nothing saved, zero Drive calls", async () => {
+    state.route = "drive"
+    const { POST } = await import("@/app/api/portal/documents/upload/route")
+    const res = await POST(json(body))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(state.recorded.filter((r) => r.table === "documents")).toEqual([])
+    expect(state.driveCalls).toEqual([])
+  })
+})
+
+describe("workflow task file upload", () => {
+  const form = () => {
+    const f = new FormData()
+    f.set("file", new File(["hello"], "letter.pdf", { type: "application/pdf" }))
+    f.set("task_id", "task-1")
+    f.set("subfolder", "ITIN/IRS Letters")
+    return new NextRequest("http://localhost/x", { method: "POST", body: f })
+  }
+  beforeEach(() => {
+    state.rows.tasks = { id: "task-1", account_id: "acct-1", contact_id: null }
+    state.rows.accounts = { id: "acct-1", company_name: "Acme LLC" }
+  })
+
+  it("storage company: pointer returned, saved under the named sub-folder, zero Drive calls", async () => {
+    const { POST } = await import("@/app/api/workflows/upload-task-file/route")
+    const res = await POST(form())
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ file_id: "store:f-1", file_name: "letter.pdf", drive_url: null })
+    expect(state.saves[0]).toMatchObject({ accountId: "acct-1", subfolder: "ITIN/IRS Letters" })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
+    state.route = "drive"
+    const { POST } = await import("@/app/api/workflows/upload-task-file/route")
+    const res = await POST(form())
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+  })
+})
+
+describe("lease regeneration routes", () => {
+  beforeEach(() => {
+    state.rows.lease_agreements = { id: "lease-1", token: "tok", tenant_company: "Acme LLC", suite_number: "12", account_id: "acct-1", status: "signed", signed_at: "2026-01-02T00:00:00Z", pdf_storage_path: "tok/signed.pdf", template_version: 1, effective_date: "2026-01-02", term_start_date: "2026-01-02", term_end_date: "2027-01-01", tenant_contact_name: "A B" }
+  })
+
+  it("regen-lease-pdf, storage company: saved as the office lease (new version), zero Drive calls", async () => {
+    const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
+    const res = await POST(json({ lease_id: "lease-1" }))
+    expect(res.status).toBe(200)
+    expect(state.saves[0]).toMatchObject({ accountId: "acct-1", documentType: "office_lease", callerKey: "lease-signed:lease-1" })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("regen-lease-pdf, no-storage company: one plain sentence (409), zero Drive calls", async () => {
+    state.route = "drive"
+    const { POST } = await import("@/app/api/crm/admin-actions/regen-lease-pdf/route")
+    const res = await POST(json({ lease_id: "lease-1" }))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("lease-regen-drive, storage company: filed, zero Drive calls", async () => {
+    const { POST } = await import("@/app/api/lease-regen-drive/route")
+    const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, driveFileId: "store:f-1" })
+    expect(state.saves[0]).toMatchObject({ documentType: "office_lease", callerKey: "lease-signed:lease-1" })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("lease-regen-drive, no-storage company: one plain sentence (409), zero Drive calls", async () => {
+    state.route = "drive"
+    const { POST } = await import("@/app/api/lease-regen-drive/route")
+    const res = await POST(json({ lease_id: "lease-1", token: "tok" }))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ error: NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+  })
+})
+
+describe("staff account document upload", () => {
+  const body = { account_id: "acct-1", storage_path: "p/x.pdf", file_name: "x.pdf", mime_type: "application/pdf", document_type: "Other", category: "Tax" }
+  beforeEach(() => { state.rows.accounts = { company_name: "Acme LLC" } })
+
+  it("storage company: saved in the tax folder, hidden unless chosen, zero Drive calls", async () => {
+    const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
+    const res = await POST(json(body))
+    expect((await res.json()).success).toBe(true)
+    expect(state.saves[0]).toMatchObject({ accountId: "acct-1", folder: "tax", portalVisible: false })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
+    state.route = "drive"
+    const { POST } = await import("@/app/api/crm/admin-actions/upload-account-document/route")
+    const res = await POST(json(body))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+  })
+})
+
+describe("DBA document upload", () => {
+  const call = async () => {
+    const { POST } = await import("@/app/api/accounts/[id]/dba/[dbaId]/upload-document/route")
+    return POST(json({ storage_path: "p/dba.pdf", file_name: "dba.pdf", mime_type: "application/pdf" }), { params: { id: "acct-1", dbaId: "dba-1" } })
+  }
+  beforeEach(() => {
+    state.rows.dba_details = { id: "dba-1", delivery_id: "sd-1", filed_date: null, registration_number: null }
+    state.rows.service_deliveries = { id: "sd-1", account_id: "acct-1" }
+    state.rows.documents = []
+  })
+
+  it("storage company: saved as a portal-visible DBA Application in the company folder, zero Drive calls", async () => {
+    const res = await call()
+    expect(res.status).toBe(200)
+    expect(state.saves[0]).toMatchObject({ accountId: "acct-1", folder: "company", portalVisible: true })
+    expect(state.saves[0].row).toMatchObject({ document_type_name: "DBA Application" })
+    expect(state.driveCalls).toEqual([])
+  })
+
+  it("no-storage company: one plain sentence (409), zero Drive calls", async () => {
+    state.route = "drive"
+    const res = await call()
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({ success: false, detail: NO_STORAGE_SENTENCE })
+    expect(state.driveCalls).toEqual([])
+  })
+})

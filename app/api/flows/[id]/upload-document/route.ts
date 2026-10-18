@@ -8,7 +8,9 @@
  *
  * Flow:
  *  1. Download the file from Supabase Storage (onboarding-uploads bucket).
- *  2. Upload to the account's Drive folder.
+ *  2. Save it in the company's CRM storage (a company with no storage gets one
+ *     plain sentence back, 409; a flow with no company yet keeps the file in the
+ *     onboarding-uploads bucket).
  *  3. Insert a documents row stamped with service_delivery_id + flow_stage.
  *  4. Audit to action_log (scoped with service_delivery_id).
  *  5. Auto-advance the SD to the next stage via advanceServiceDelivery.
@@ -30,6 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { advanceServiceDelivery } from '@/lib/service-delivery'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 import { parsePrincipalOfficeDecision, applyPrincipalOfficeDecision, type PrincipalOfficeDecision } from '@/lib/operations/principal-office'
 
 // Untyped insert surface: service_delivery_id / flow_stage were added by the S0
@@ -146,13 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const buffer = Buffer.from(rawContent)
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    const {
-      extractDriveFolderId,
-      resolveContactLinkedDriveFolder,
-      deriveEffectiveFileName,
-      resolveSubfolderId,
-      needsDriveFolder,
-    } = await import('@/lib/flows/flow-drive-folder')
+    const { deriveEffectiveFileName } = await import('@/lib/flows/flow-drive-folder')
 
     // 3a. Fetch the account's naming fields UNCONDITIONALLY (not gated on
     //     SANDBOX_MODE), so the rename applies to documents.file_name on EVERY
@@ -161,12 +158,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     //     the only thing QA can verify). We also reuse this row for the Drive
     //     folder below.
     let accountRow:
-      | { drive_folder_id?: string | null; gdrive_folder_url?: string | null; company_name?: string | null; entity_type?: string | null }
+      | { company_name?: string | null; entity_type?: string | null }
       | null = null
     if (accountId) {
       const { data } = await supabaseAdmin
         .from('accounts')
-        .select('drive_folder_id, gdrive_folder_url, company_name, entity_type')
+        .select('company_name, entity_type')
         .eq('id', accountId)
         .single()
       accountRow = data
@@ -198,9 +195,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       mimeType: fileMime,
     })
 
-    // 3-cutover. A company whose files live in the new storage (Drive cutover, dev job ad09ea91): every flow upload is saved
-    //    there, internal unless it is the ITIN approval letter. Drive is read-only for it, so the Drive branch below would be
-    //    refused. A company on Drive, or a flow with no company yet, carries on exactly as before.
+    // 3-cutover. Every flow upload for a company is saved in its storage, internal unless it is the ITIN approval letter.
+    //    A company with no storage gets one plain sentence (3b below); a flow with no company yet keeps the file in the bucket.
     let routed: { pointer: string } | null = null
     if (pilot.status !== 'saved' && accountId) {
       const { companyDocState } = await import('@/lib/crm-store/switched-drive-guard')
@@ -270,48 +266,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 3b. Decide where the canonical copy lives.
-    //    Production, account-scoped SD: the account's Drive folder (400 if the
-    //    account has none — staff must link one first).
-    //    Production, contact-scoped SD (ITIN, in-flight formation): borrow the
-    //    contact's primary linked account's Drive folder when one exists
-    //    (Martin Csordas 2026-07-07: his ITIN letter never reached Drive). The
-    //    documents row stays contact-scoped — only the binary's home borrows
-    //    the company folder. No linked folder → Supabase Storage fallback.
-    //    Sandbox (SANDBOX_MODE=1): Drive writes are mocked AND many seeded
-    //    accounts have no Drive folder, so the file always stays in Supabase
-    //    Storage (onboarding-uploads). The documents row + stage advance happen
-    //    identically, so the flow works end-to-end in sandbox.
-    let driveFolderId: string | null = null
-    if (needsDriveFolder({ sandbox: process.env.SANDBOX_MODE === '1', routed: !!routed, storeSaved: pilot.status === 'saved' })) {
-      if (accountId) {
-        driveFolderId = extractDriveFolderId(accountRow)
-        if (!driveFolderId) {
-          return NextResponse.json(
-            { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
-            { status: 400 },
-          )
-        }
-      } else if (contactId) {
-        driveFolderId = await resolveContactLinkedDriveFolder(contactId)
-      }
-    }
-    const useStorageFallback = !driveFolderId
-
-    // 3c. When the stage requests a named subfolder (e.g. "1. Company"), resolve
-    //     it within the account's Drive folder. Not found / listing failure →
-    //     file into the account root (never block the upload) but LOG it so a
-    //     misfiled document is visible to us.
-    let uploadTargetFolderId = driveFolderId
-    if (driveFolderId && targetSubfolder) {
-      const { id: subId, matched } = await resolveSubfolderId(driveFolderId, targetSubfolder)
-      if (matched && subId) {
-        uploadTargetFolderId = subId
-      } else {
-        console.warn(
-          `[flow-upload-document] subfolder "${targetSubfolder}" not found under ${driveFolderId} — filing into the account root instead (SD ${serviceDeliveryId})`,
-        )
-      }
+    // 3b. A company's flow upload that did not land in its storage (the company has none): one plain sentence, nothing
+    //     saved, the stage not advanced. Only a flow with no company yet (a contact-scoped ITIN, an in-flight formation) is
+    //     kept in the onboarding-uploads bucket, below.
+    if (accountId && !routed && pilot.status !== 'saved') {
+      return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
     }
 
     let docFileId: string
@@ -326,8 +285,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // so the insert below finds it and adds nothing.
       docFileId = pilot.pointer
       docLink = pilot.link
-    } else if (!driveFolderId) {
-      // The file already lives in onboarding-uploads from the signed-URL PUT —
+    } else {
+      // A flow with no company yet: the file already lives in onboarding-uploads from the signed-URL PUT —
       // keep it (do NOT delete it in step 8). Synthetic, per-upload-unique
       // drive_file_id (the column is NOT NULL) that doubles as the idempotency
       // key, so repeat uploads create distinct rows instead of colliding on a
@@ -337,27 +296,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         .from('onboarding-uploads')
         .createSignedUrl(storagePath, 60 * 60 * 24 * 365) // 1 year
       docLink = signed?.signedUrl ?? `onboarding-uploads/${storagePath}`
-    } else {
-      // Production: copy the file into the resolved Drive folder/subfolder.
-      // When we've renamed to a canonical, deterministic name, OVERWRITE any
-      // existing same-named file (upsert) so a re-upload/correction replaces it
-      // instead of dropping a second identical "EIN Official – X.pdf" into the
-      // folder. Un-renamed uploads keep the historical blind-create behavior
-      // (varied filenames, no accidental overwrite).
-      const targetFolderId = uploadTargetFolderId as string
-      let driveFile: { id: string; name: string }
-      if (renameTemplate) {
-        const { uploadBinaryToDriveUpsert } = await import('@/lib/google-drive')
-        driveFile = await uploadBinaryToDriveUpsert(effectiveName, buffer, fileMime, targetFolderId)
-      } else {
-        const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-        driveFile = (await uploadBinaryToDrive(effectiveName, buffer, fileMime, targetFolderId)) as {
-          id: string
-          name: string
-        }
-      }
-      docFileId = driveFile.id
-      docLink = `https://drive.google.com/file/d/${driveFile.id}/view`
     }
 
     // 5. Insert documents row (idempotent on drive_file_id), stamped with the flow.
@@ -526,12 +464,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    // 8. Best-effort storage cleanup — only when the canonical copy now lives in
-    //    Drive. In the storage-fallback path the Storage object IS the document,
-    //    so it must be kept.
-    //    Also once the CRM Store holds it (pilot) — only here, at the very end of the request (after
-    //    the advance / company creation), never before the store copy is the one that counts.
-    if (!useStorageFallback || pilot.status === 'saved' || routed) {
+    // 8. Best-effort storage cleanup — only once the CRM storage holds the file (pilot or company storage), here at the
+    //    very end of the request (after the advance / company creation), never before the store copy is the one that
+    //    counts. In the no-company path the bucket object IS the document, so it must be kept.
+    if (pilot.status === 'saved' || routed) {
       supabaseAdmin.storage.from('onboarding-uploads').remove([storagePath]).catch(() => {})
     }
 

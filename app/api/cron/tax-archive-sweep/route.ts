@@ -29,6 +29,7 @@ import {
   ARCHIVE_SWEEP_CHANNEL,
   type ArchiveSweepRow,
 } from "@/lib/tax/archive-sweep"
+import { accountsWithoutFolder, splitByFolder } from "@/lib/archive/skip-no-drive-folder"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -65,7 +66,20 @@ export async function GET(req: NextRequest) {
   const stuck: string[] = []
   const enqueuedIds: string[] = []
 
-  for (const r of (rows ?? []) as unknown as ArchiveSweepRow[]) {
+  // A company with no folder cannot be archived by this job (it would throw on every run): leave it and count it.
+  // A failed lookup skips nothing — the sweep proceeds as before.
+  let candidates = (rows ?? []) as unknown as ArchiveSweepRow[]
+  let skippedNoFolder = 0
+  try {
+    const missing = await accountsWithoutFolder(candidates.map(r => r.account_id).filter((x): x is string => !!x))
+    const split = splitByFolder(candidates, missing)
+    candidates = split.keep
+    skippedNoFolder = split.skipped.length
+  } catch (e) {
+    await reportSystemError({ source: "server", route: ENDPOINT, message: `could not check which accounts have a folder: ${e instanceof Error ? e.message : String(e)}` }).catch(() => {})
+  }
+
+  for (const r of candidates) {
     const action = decideArchiveSweep(r, now)
     if (action === "skip") continue
 
@@ -110,7 +124,7 @@ export async function GET(req: NextRequest) {
     }).catch(() => {})
   }
 
-  const summary = { dryRun, candidates: (rows ?? []).length, enqueued, enqueuedIds, stuck }
+  const summary = { dryRun, candidates: (rows ?? []).length, skippedNoFolder, enqueued, enqueuedIds, stuck }
   logCron({ endpoint: ENDPOINT, status: "success", duration_ms: Date.now() - startTime, details: summary })
   return NextResponse.json({ ok: true, ...summary })
 }

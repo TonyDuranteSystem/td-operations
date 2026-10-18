@@ -3,7 +3,8 @@
  *
  * Flow (mirrors upload-account-document):
  *  1. Download file from Supabase Storage (onboarding-uploads bucket).
- *  2. Upload to the account's Drive folder under "1. Company".
+ *  2. Save it in the company's CRM storage (1. Company). A company with no
+ *     storage gets one plain sentence back (409).
  *  3. Insert a documents row with document_type_name='DBA Application' and
  *     account_id set (no contact_id).
  *  4. Best-effort OCR via lib/docai.ts::ocrDriveFile. If text is returned,
@@ -22,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { extractDbaFieldsFromOcr } from '@/lib/dba-ocr'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 type DbaDetailRow = {
   id: string
@@ -113,9 +115,7 @@ export async function POST(
     const buffer = Buffer.from(await blob.arrayBuffer())
     const fileMime = mimeType || blob.type || 'application/pdf'
 
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its DBA document
-    // saved in the new storage (and listed in its documents) and needs no Drive folder; a company still on Drive
-    // carries on exactly as before.
+    // The DBA document is saved in the company's storage (and listed in its documents).
     const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
     let routed
     try {
@@ -129,42 +129,11 @@ export async function POST(
       throw e
     }
 
-    let driveFile: { id: string; name: string }
-    if (routed.route === 'store') {
-      driveFile = { id: routed.pointer, name: fileName }
-    } else {
-      // 3. Resolve Drive folder for the account.
-      const { data: account } = await supabaseAdmin
-        .from('accounts')
-        .select('drive_folder_id, gdrive_folder_url')
-        .eq('id', accountId)
-        .single()
-
-      let driveFolderId: string | null = account?.drive_folder_id ?? null
-      if (!driveFolderId && account?.gdrive_folder_url) {
-        const match = (account.gdrive_folder_url as string).match(/folders\/([a-zA-Z0-9_-]+)/)
-        if (match) driveFolderId = match[1]
-      }
-      if (!driveFolderId) {
-        return NextResponse.json(
-          { success: false, detail: 'Account has no Drive folder. Create or link one first.' },
-          { status: 400 },
-        )
-      }
-
-      // 4. Find "1. Company" subfolder (DBA registrations live with company docs).
-      const { listFolderAnyDrive, uploadBinaryToDrive } = await import('@/lib/google-drive')
-      const foldersRes = await listFolderAnyDrive(driveFolderId)
-      const folders = (foldersRes as { files?: Array<{ id: string; name: string; mimeType: string }> }).files ?? []
-      const targetFolder = folders.find(
-        f => f.name === '1. Company' && f.mimeType === 'application/vnd.google-apps.folder',
-      )
-      const uploadFolderId = targetFolder?.id || driveFolderId
-
-      // 5. Upload to Drive.
-      driveFile = await uploadBinaryToDrive(fileName, buffer, fileMime, uploadFolderId) as { id: string; name: string }
+    if (routed.route !== 'store') {
+      return NextResponse.json({ success: false, detail: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
     }
-    const sideEffects: string[] = [routed.route === 'store' ? `Saved to the new storage: ${fileName}` : `Uploaded to Drive: ${fileName}`]
+    const driveFile: { id: string; name: string } = { id: routed.pointer, name: fileName }
+    const sideEffects: string[] = [`Saved to the new storage: ${fileName}`]
 
     // 6. Insert documents row (idempotent on drive_file_id).
     const { data: existingDoc } = await supabaseAdmin

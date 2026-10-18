@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { generateLeasePDF } from '@/lib/lease-pdf'
-import { listFolder, uploadBinaryToDriveUpsert } from '@/lib/google-drive'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 export async function POST(req: NextRequest) {
   const supabase = createClient()
@@ -81,8 +81,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Storage upload failed: ${uploadErr.message}` }, { status: 500 })
     }
 
-    // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company gets the regenerated
-    // lease in the new storage — the same file key as the original signing, so it is a new VERSION of that file.
+    // The regenerated lease goes to the company's storage — the same file key as the original signing, so it is a new
+    // VERSION of that file. A company with no storage gets one plain sentence back.
     {
       const { saveSignedPdfForAccount } = await import('@/lib/crm-store/save-for-account')
       const routed = await saveSignedPdfForAccount({
@@ -99,84 +99,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get account Drive folder
-    const { data: acct } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, company_name')
-      .eq('id', lease.account_id)
-      .single()
-
-    if (!acct?.drive_folder_id) {
-      return NextResponse.json({ error: 'Account has no Drive folder' }, { status: 400 })
-    }
-
-    // Find Company subfolder
-    const folderResult = await listFolder(acct.drive_folder_id) as {
-      files?: { id: string; name: string; mimeType: string }[]
-    }
-    const companyFolder = folderResult.files?.find(
-      f => f.name.includes('Company') && f.mimeType === 'application/vnd.google-apps.folder'
-    )
-    const targetFolderId = companyFolder?.id || acct.drive_folder_id
-
-    // Upload to Drive
-    const fileName = `Lease Agreement - ${lease.tenant_company} (Suite ${lease.suite_number}, Signed).pdf`
-    // Stable name -> UPSERT: regeneration refreshes the one existing file in place (LT Program incident class).
-    const driveResult = await uploadBinaryToDriveUpsert(
-      fileName, Buffer.from(pdfBytes), 'application/pdf', targetFolderId
-    ) as { id: string }
-
-    // Update or insert documents record
-    const { data: existingDoc } = await supabaseAdmin
-      .from('documents')
-      .select('id')
-      .eq('account_id', lease.account_id)
-      .in('document_type_name', ['Office Lease', 'Lease Agreement'])
-      .eq('portal_visible', true)
-      .limit(1)
-      .maybeSingle()
-
-    const driveLink = `https://drive.google.com/file/d/${driveResult.id}/view`
-
-    if (existingDoc) {
-      await supabaseAdmin
-        .from('documents')
-        .update({
-          drive_file_id: driveResult.id,
-          drive_link: driveLink,
-          file_name: fileName,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existingDoc.id)
-    } else {
-      await supabaseAdmin
-        .from('documents')
-        .insert({
-          account_id: lease.account_id,
-          file_name: fileName,
-          document_type_name: 'Office Lease',
-          category: 1,
-          category_name: 'Company',
-          drive_file_id: driveResult.id,
-          drive_link: driveLink,
-          status: 'classified',
-          confidence: '1.0',
-          processed_at: new Date().toISOString(),
-          portal_visible: true,
-        })
-    }
-
-    // Update lease record
-    await supabaseAdmin
-      .from('lease_agreements')
-      .update({
-        pdf_storage_path: storagePath,
-        pdf_drive_file_id: driveResult.id,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', lease_id)
-
-    return NextResponse.json({ ok: true, driveFileId: driveResult.id, storagePath })
+    return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
   } catch (err) {
     console.error('[regen-lease-pdf]', err)
     return NextResponse.json(

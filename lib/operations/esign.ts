@@ -19,6 +19,7 @@ import { isValidNormalizedRect } from "@/lib/esign/coordinates"
 import { flattenEsignPdf, type FlattenField, type EsignFieldType } from "@/lib/esign/flatten"
 import { appendCertificatePage, type CertificateSigner } from "@/lib/esign/certificate"
 import { DEFAULT_EXPIRY_DAYS } from "@/lib/esign/expiry"
+import { reportSystemError } from "@/lib/system-errors"
 
 const SOURCE_BUCKET = "signature-requests"
 const SIGNED_BUCKET = "signed-documents"
@@ -362,27 +363,22 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
       .maybeSingle()
     if (!env) return
 
-    // 1. File the signed PDF into the client's records — their Google Drive folder
-    // AND the documents table (portal-visible). Account-linked only. Mirrors the
-    // legacy signature-request-signed flow. A Drive failure (no drive_folder_id,
-    // API hiccup, or Drive-less env) falls back to a storage-served documents row,
-    // so the signed PDF ALWAYS reaches the client's portal either way.
+    // 1. File the signed PDF into the client's records (account-linked only), portal-visible.
+    //   - a company with storage: the signed document is saved in its CRM storage (listed in its documents);
+    //   - a company without: a documents row served from the signed-documents bucket (a real, durable file the portal opens).
+    // If the PDF could not be filed either way, a system error is raised (staff see it) and the support email says so.
+    let signedPdfFiled = true
     if (env.signed_pdf_path && env.owner_account_id) {
       const fileName = `${env.document_name} - Signed.pdf`
-      let filedToDrive = false
+      let filed = false
+      let filingError: string | null = null
 
-      // 1a. Upload to the client's Google Drive "5. Correspondence" folder.
-      // Idempotent: if signed_pdf_drive_id is already set, the upload already
-      // happened (a re-run via the reconciliation cron) — don't upload again.
-      // Skipped in sandbox (Drive is mocked there): the storage fallback (1b)
-      // gives a real, portal-visible documents row instead.
-      if (env.signed_pdf_drive_id) filedToDrive = true
+      // Idempotent: if signed_pdf_drive_id is already set, the filing already happened (a re-run via the reconciliation cron).
+      if (env.signed_pdf_drive_id) filed = true
 
-      // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A switched company has its signed document
-      // saved in the new storage (listed in its documents) — never Drive, and never the storage-served fallback below.
       let switched = false
       let stateKnown = false
-      if (!filedToDrive) {
+      if (!filed) {
         try {
           const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
           switched = (await companyDocState(env.owner_account_id)) !== "drive"
@@ -397,64 +393,26 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
               })
               if (routed.route === "store") {
                 await db.from("esign_envelopes").update({ signed_pdf_drive_id: routed.pointer }).eq("id", env.id)
-                filedToDrive = true
-                // the client is told about the new document exactly as when the Drive path flips it visible
+                filed = true
+                // the client is told about the new document exactly as when a document is made visible
                 const { notifyClientsOfNewDocument } = await import("@/lib/portal/document-alerts")
                 notifyClientsOfNewDocument(routed.documentRowId).catch((e) =>
                   console.warn("[esign] new-document alert failed:", e instanceof Error ? e.message : String(e)))
               }
+            } else {
+              filingError = "the signed PDF could not be read back from its bucket"
             }
           }
         } catch (e) {
-          console.error("[esign] saving the signed document to the new storage failed:", e instanceof Error ? e.message : String(e))
-          // could not even tell where the files live: file NOTHING (never guess Drive) — the re-run retries
+          filingError = `storage save failed: ${e instanceof Error ? e.message : String(e)}`
+          console.error("[esign] saving the signed document to the storage failed:", e instanceof Error ? e.message : String(e))
+          // could not even tell where the files live: file NOTHING more — the re-run retries
           if (!stateKnown) switched = true
         }
       }
-      const inSandbox = process.env.SANDBOX_MODE === "1"
-      try {
-        const { data: account } = (filedToDrive || inSandbox || switched) ? { data: null } : await db.from("accounts").select("drive_folder_id").eq("id", env.owner_account_id).maybeSingle()
-        if (account?.drive_folder_id) {
-          const { data: pdfData } = await supabaseAdmin.storage.from(SIGNED_BUCKET).download(env.signed_pdf_path)
-          if (pdfData) {
-            const buffer = Buffer.from(await pdfData.arrayBuffer())
-            const { uploadBinaryToDriveUpsert, listFolder } = await import("@/lib/google-drive")
-            let targetFolderId: string = account.drive_folder_id
-            try {
-              const contents = await listFolder(account.drive_folder_id)
-              const corr = (contents as Array<{ name: string; id: string }>).find(f => f.name.startsWith("5"))
-              if (corr) targetFolderId = corr.id
-            } catch {
-              /* fall back to the account root folder */
-            }
-            // Stable name -> UPSERT: a retry/re-run refreshes the signed PDF in place, no duplicate copies (LT Program incident class).
-            const driveResult = await uploadBinaryToDriveUpsert(fileName, buffer, "application/pdf", targetFolderId)
-            const driveFileId = (driveResult as { id?: string })?.id
-            if (driveFileId) {
-              const { autoSaveDocument } = await import("@/lib/portal/auto-save-document")
-              await autoSaveDocument({ accountId: env.owner_account_id, fileName, documentType: env.document_name, category: 5, driveFileId })
-              await db.from("esign_envelopes").update({ signed_pdf_drive_id: driveFileId }).eq("id", env.id)
-              const { updateDocument } = await import("@/lib/operations/document")
-              await updateDocument({
-                drive_file_id: driveFileId,
-                account_id: env.owner_account_id,
-                // autoSaveDocument sets drive_file_id but not drive_link, leaving
-                // the doc non-clickable in the account Documents tab — populate a
-                // Drive view URL built from the file id so it opens everywhere.
-                patch: { portal_visible: true, drive_link: `https://drive.google.com/file/d/${driveFileId}/view` },
-                actor: "system:esign",
-                summary: `Signed e-sign document filed to Drive + portal: ${env.document_name}`,
-              })
-              filedToDrive = true
-            }
-          }
-        }
-      } catch {
-        /* fall through to the storage-served fallback */
-      }
 
-      // 1b. Fallback: storage-served documents row (no Drive folder / Drive down). Never for a switched company.
-      if (!filedToDrive && !switched) {
+      // 1b. A company with no storage: a documents row served from the signed-documents bucket. Never for a company that has storage.
+      if (!filed && !switched) {
         try {
           const driveRef = `storage:${SIGNED_BUCKET}/${env.signed_pdf_path}`
           const { data: existing } = await db
@@ -467,7 +425,7 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
             const { data: signed } = await supabaseAdmin.storage
               .from(SIGNED_BUCKET)
               .createSignedUrl(env.signed_pdf_path, 60 * 60 * 24 * 365 * 10) // 10 years
-            await db.from("documents").insert({
+            const { error: insErr } = await db.from("documents").insert({
               account_id: env.owner_account_id,
               contact_id: env.contact_id,
               file_name: fileName,
@@ -480,10 +438,26 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
               portal_visible: true,
               notify_client: false,
             })
+            if (insErr) throw new Error(insErr.message)
           }
-        } catch {
-          /* best-effort filing */
+          filed = true
+        } catch (e) {
+          filingError = `filing failed: ${e instanceof Error ? e.message : String(e)}`
         }
+      }
+
+      // Not filed anywhere: raise a system error so staff see it (never only a console line); the support email says so truthfully.
+      if (!filed) {
+        signedPdfFiled = false
+        try {
+          await reportSystemError({
+            source: "server",
+            route: "lib/operations/esign",
+            method: "INTERNAL",
+            message: `E-sign signed PDF could not be filed: ${env.document_name}`,
+            context: { envelopeId: env.id, accountId: env.owner_account_id, hasStorage: switched, reason: filingError ?? "no filing route succeeded" },
+          })
+        } catch { /* an alarm never breaks completion */ }
       }
     }
 
@@ -505,7 +479,9 @@ export async function finalizeEsignCompletion(envelopeId: string): Promise<void>
         ``,
         `The e-sign envelope "${env.document_name}" is fully signed.`,
         company ? `Client: ${company}` : ``,
-        `The signed PDF (with Certificate of Completion) is filed${env.owner_account_id ? " in the client's documents" : ""}.`,
+        env.owner_account_id && !signedPdfFiled
+          ? `FILING FAILED: the signed PDF (with Certificate of Completion) could NOT be filed in the client's documents — it is safe in the signed-documents bucket; file it by hand.`
+          : `The signed PDF (with Certificate of Completion) is filed${env.owner_account_id ? " in the client's documents" : ""}.`,
       ].join("\r\n")
       await gmailPost("/messages/send", { raw: Buffer.from(raw).toString("base64url") })
     } catch {

@@ -5,7 +5,7 @@ import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
 import { NextRequest, NextResponse } from 'next/server'
 import { PERSONAL_CATEGORY } from '@/lib/documents/visibility-guard'
 import { getClientContactId } from '@/lib/portal-auth'
-import { uploadBinaryToDrive } from '@/lib/google-drive'
+import { NO_STORAGE_SENTENCE, NO_STORAGE_STATUS } from '@/lib/crm-store/no-storage'
 
 /**
  * POST /api/portal/documents/upload
@@ -28,7 +28,6 @@ export async function POST(request: NextRequest) {
   let accountId: string
   let fileName: string
   let mimeType: string
-  let fileSize: number
   let fileBuffer: Buffer
   let docType: string | null = null
   let category: string | null = null
@@ -42,7 +41,6 @@ export async function POST(request: NextRequest) {
     storagePath = body.storage_path
     fileName = body.file_name
     mimeType = body.mime_type || 'application/pdf'
-    fileSize = body.file_size || 0
     docType = body.doc_type
     category = body.category
     taxYear = body.tax_year
@@ -82,7 +80,6 @@ export async function POST(request: NextRequest) {
 
     fileName = file.name
     mimeType = file.type
-    fileSize = file.size
     fileBuffer = Buffer.from(await file.arrayBuffer())
   }
 
@@ -97,8 +94,8 @@ export async function POST(request: NextRequest) {
     ? `${docType || 'Tax Document'} - ${taxYear}`
     : docType || 'Client Upload'
 
-  // Where do this company's files live? (Drive cutover, dev job ad09ea91.) A company switched to the new storage
-  // saves HERE and never touches Drive; a company still on Drive carries on exactly as before, below.
+  // Every upload is saved in the company's CRM storage (Stop Drive, dev job 264bb882). A company with no storage
+  // gets one plain sentence back — nothing else is tried.
   let stored: { documentRowId: string } | null = null
   try {
     const { saveDocumentForAccount, CompanyMovingError } = await import('@/lib/crm-store/save-for-account')
@@ -131,60 +128,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Upload failed. Please try again.' }, { status: 500 })
   }
 
-  // A company still on Drive: get its Drive folder
-  let driveFolderId: string | null = null
-  if (!stored) {
-    const { data: account } = await supabaseAdmin
-      .from('accounts')
-      .select('drive_folder_id, company_name')
-      .eq('id', accountId)
-      .single()
-
-    if (!account?.drive_folder_id) {
-      return NextResponse.json({ error: 'No Drive folder configured for this account. Please contact support.' }, { status: 400 })
-    }
-    driveFolderId = account.drive_folder_id as string
-  }
+  if (!stored) return NextResponse.json({ error: NO_STORAGE_SENTENCE }, { status: NO_STORAGE_STATUS })
 
   try {
-    let docId: string
-    if (stored) {
-      docId = stored.documentRowId
-    } else {
-      // Upload to Google Drive
-      const driveFile = await uploadBinaryToDrive(
-        fileName,
-        fileBuffer,
-        mimeType,
-        driveFolderId as string
-      )
-
-      const { data: doc, error: insertError } = await supabaseAdmin
-        .from('documents')
-        .insert({
-          file_name: fileName,
-          drive_file_id: driveFile.id,
-          account_id: accountId,
-          // A personal document (category 2 — passport/ID…) belongs to the member who
-          // uploaded it; without an owner nobody (not even the uploader) can see it.
-          // Teammates have no contact id, so theirs stays unowned (hidden) until staff assign it.
-          ...(categoryNum === PERSONAL_CATEGORY ? { contact_id: getClientContactId(user) } : {}),
-          category: categoryNum,
-          document_type_name: typeName,
-          status: 'classified',
-          confidence: 'high',
-          mime_type: mimeType,
-          file_size: fileSize,
-        })
-        .select('id')
-        .single()
-
-      if (insertError) {
-        console.error('Document insert error:', insertError)
-        return NextResponse.json({ error: 'File uploaded to Drive but failed to save record. Please contact support.' }, { status: 500 })
-      }
-      docId = doc.id as string
-    }
+    const docId = stored.documentRowId
 
     // Clean up Supabase Storage (async, don't block response)
     if (storagePath) {

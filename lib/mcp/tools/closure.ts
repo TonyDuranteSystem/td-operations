@@ -348,29 +348,32 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         lines.push(`Submitted: ${sub.completed_at}`)
 
         if (mark_reviewed) {
-          // Save form data + uploads to Drive
+          // File the form data + uploads in the company's storage
           try {
-            const { saveFormToDrive } = await import("@/lib/form-to-drive")
-            const driveFolderId = sub.account_id
-              ? (await supabaseAdmin.from("accounts").select("drive_folder_id").eq("id", sub.account_id).single()).data?.drive_folder_id
-              : null
-            if (driveFolderId) {
-              const driveResult = await saveFormToDrive(
-                "closure",
-                submitted,
-                (sub.upload_paths as string[]) || [],
-                driveFolderId,
-                { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token }
-              )
-              if (driveResult.summaryFileId) lines.push(`✅ Data summary saved to Drive (${driveResult.summaryFileId})`)
-              if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-              if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-              if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+            if (sub.account_id) {
+              const { saveFormForAccount } = await import("@/lib/crm-store/save-account-form")
+              const { NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
+              const saved = await saveFormForAccount({
+                accountId: sub.account_id,
+                formType: "closure",
+                submittedData: submitted,
+                uploadPaths: (sub.upload_paths as string[]) || [],
+                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName: clientName || token },
+              })
+              if (saved.route === "none") {
+                lines.push(`⚠️ ${NO_STORAGE_SENTENCE}`)
+              } else {
+                const r = saved.result
+                if (r.summaryFileId) lines.push(`✅ Data summary saved (${r.summaryFileId})`)
+                if (r.copied.length > 0) lines.push(`✅ ${r.copied.length} file(s) saved`)
+                if (r.failed.length > 0) lines.push(`⚠️ ${r.failed.length} file(s) failed to save`)
+                if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
+              }
             } else {
-              lines.push("⚠️ No Drive folder found — data not saved to Drive")
+              lines.push("⚠️ This form is not linked to a company, so its data was not saved to a company storage.")
             }
-          } catch (driveErr) {
-            lines.push(`⚠️ Drive save failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}`)
+          } catch (saveErr) {
+            lines.push(`⚠️ Saving the form data failed: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`)
           }
 
           await supabaseAdmin

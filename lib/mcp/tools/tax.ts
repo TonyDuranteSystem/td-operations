@@ -665,42 +665,39 @@ export function registerTaxTools(server: McpServer) {
           lines.push("")
           lines.push(`➡️ Check progress: job_status('${apply.job_id}')`)
 
-          // Save form data + uploads to Drive
+          // File the form data + uploads in the company's storage
           if (sub.account_id) {
             try {
-              const { data: acc } = await supabaseAdmin
-                .from("accounts")
-                .select("drive_folder_id")
-                .eq("id", sub.account_id)
-                .single()
-              if (acc?.drive_folder_id) {
-                const { saveFormToDrive } = await import("@/lib/form-to-drive")
-                const submitted = sub.submitted_data as Record<string, unknown> || {}
-                const taxUploadPaths = (sub.upload_paths as string[]) || []
-                // The submission's files live in whichever bucket they were
-                // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
-                // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
-                // the "tax-form-uploads" config default with a "{slug}-{year}/..."
-                // scheme. Pick by path prefix so staff review copies from the
-                // right bucket for either source.
-                const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
-                const driveResult = await saveFormToDrive(
-                  "tax_return",
-                  submitted,
-                  taxUploadPaths,
-                  acc.drive_folder_id,
-                  { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
-                  portalUpload ? { bucket: "onboarding-uploads" } : undefined,
-                )
-                if (driveResult.summaryFileId) lines.push(`✅ Tax data summary saved to Drive (${driveResult.summaryFileId})`)
-                if (driveResult.copied.length > 0) lines.push(`✅ ${driveResult.copied.length} file(s) copied to Drive`)
-                if (driveResult.failed.length > 0) lines.push(`⚠️ ${driveResult.failed.length} file(s) failed to copy`)
-                if (driveResult.errors.length > 0) lines.push(`⚠️ Drive errors: ${driveResult.errors.join(", ")}`)
+              const submitted = sub.submitted_data as Record<string, unknown> || {}
+              const taxUploadPaths = (sub.upload_paths as string[]) || []
+              // The submission's files live in whichever bucket they were
+              // uploaded to: the PORTAL wizard uses "onboarding-uploads" with a
+              // "tax/{id}/..." path scheme; the EXTERNAL public tax form uses
+              // the "tax-form-uploads" config default with a "{slug}-{year}/..."
+              // scheme. Pick by path prefix so staff review copies from the
+              // right bucket for either source.
+              const portalUpload = taxUploadPaths.some(p => p.startsWith("tax/"))
+              const { saveFormForAccount } = await import("@/lib/crm-store/save-account-form")
+              const { NO_STORAGE_SENTENCE } = await import("@/lib/crm-store/no-storage")
+              const saved = await saveFormForAccount({
+                accountId: sub.account_id,
+                formType: "tax_return",
+                submittedData: submitted,
+                uploadPaths: taxUploadPaths,
+                meta: { token, submittedAt: sub.completed_at || new Date().toISOString(), companyName, year: sub.tax_year },
+                bucket: portalUpload ? "onboarding-uploads" : undefined,
+              })
+              if (saved.route === "none") {
+                lines.push(`⚠️ ${NO_STORAGE_SENTENCE}`)
               } else {
-                lines.push("⚠️ No Drive folder — data not saved to Drive")
+                const r = saved.result
+                if (r.summaryFileId) lines.push(`✅ Tax data summary saved (${r.summaryFileId})`)
+                if (r.copied.length > 0) lines.push(`✅ ${r.copied.length} file(s) saved`)
+                if (r.failed.length > 0) lines.push(`⚠️ ${r.failed.length} file(s) failed to save`)
+                if (r.errors.length > 0) lines.push(`⚠️ Errors: ${r.errors.join(", ")}`)
               }
             } catch (e) {
-              lines.push(`⚠️ Drive save failed: ${e instanceof Error ? e.message : String(e)}`)
+              lines.push(`⚠️ Saving the form data failed: ${e instanceof Error ? e.message : String(e)}`)
             }
           }
         }
@@ -995,7 +992,7 @@ export function registerTaxTools(server: McpServer) {
           .single()
 
         if (!account) return { content: [{ type: "text" as const, text: "❌ Account not found" }] }
-        if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ Account has no Drive folder" }] }
+        if (!account.drive_folder_id) return { content: [{ type: "text" as const, text: "❌ This company has no tax folder to gather the accountant's files from, so nothing was sent." }] }
 
         // Get primary contact. is_primary-first, then contact_id for a
         // deterministic pick when none/several rows are marked primary — this
