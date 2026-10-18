@@ -796,15 +796,14 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
   // ═══════════════════════════════════════
   server.tool(
     "gmail_read_attachment",
-    "Download attachments from a Gmail message. Can list attachments, read text files, or save binary files directly to Google Drive. When save_to_drive_folder_id is provided, downloads the attachment and uploads it to the specified Drive folder automatically — no extra steps needed. Workflow: gmail_search → gmail_read (shows attachments with IDs) → gmail_read_attachment (download/save). To find the client's Drive folder: use crm_get_client_summary to get drive_folder_id, then optionally drive_list_folder to pick a subfolder (e.g. '1. Company', '5. Correspondence').",
+    "Download attachments from a Gmail message. Can list attachments, read text files, or save an attachment into a company's CRM storage (save_to_account_id). Workflow: gmail_search → gmail_read (shows attachments with IDs) → gmail_read_attachment (download/save).",
     {
       message_id: z.string().describe("Gmail message ID (from gmail_search or gmail_read)"),
       attachment_id: z.string().optional().describe("Specific attachment ID to download (from gmail_read). If omitted, lists all attachments with metadata."),
-      save_to_account_id: z.string().uuid().optional().describe("CRM account UUID: save the attachment in this company's NEW STORAGE (5. Correspondence, internal) — use this for a company whose files live in the new storage (its Drive folder is read-only). A company still on Drive is refused here: use save_to_drive_folder_id."),
-      save_to_drive_folder_id: z.string().optional().describe("Google Drive folder ID to save the attachment to. If provided, the file is downloaded from Gmail and uploaded to Drive automatically. Use crm_get_client_summary → drive_folder_id to find the client's folder, then drive_list_folder to pick a subfolder."),
+      save_to_account_id: z.string().uuid().optional().describe("CRM account UUID: save the attachment in this company's storage (5. Correspondence, internal)."),
       as_user: z.string().optional().describe("Mailbox to access (default: support@tonydurante.us)"),
     },
-    async ({ message_id, attachment_id, save_to_drive_folder_id, save_to_account_id, as_user }) => {
+    async ({ message_id, attachment_id, save_to_account_id, as_user }) => {
       try {
         // First, get the message to find attachments
         const msg = await gmailGet(`/messages/${message_id}`, {
@@ -908,7 +907,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
               row: { document_type_name: "Email attachment", category: 5, status: "classified" },
             })
             if (routed.route !== "store") {
-              return { content: [{ type: "text" as const, text: `❌ This company's files are still on Google Drive — call again with save_to_drive_folder_id. Nothing was saved.\n\nFile: ${filename} (${sizeKb} KB).` }] }
+              return { content: [{ type: "text" as const, text: `❌ This company has no CRM storage place yet. Nothing was saved.\n\nFile: ${filename} (${sizeKb} KB).` }] }
             }
             logAction({
               action_type: "upload", table_name: "documents", record_id: routed.documentRowId, account_id: save_to_account_id,
@@ -918,46 +917,6 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
             return { content: [{ type: "text" as const, text: [`✅ Attachment saved in the company's new storage`, "", `📄 ${filename} (${mimeType}, ${sizeKb} KB)`, `📂 5. Correspondence (internal)`, "", `Source: Gmail message ${message_id}`].join("\n") }] }
           } catch (storeErr) {
             return { content: [{ type: "text" as const, text: `❌ Downloaded attachment but the storage save failed: ${storeErr instanceof Error ? storeErr.message : String(storeErr)}\n\nFile: ${filename} (${sizeKb} KB).` }] }
-          }
-        }
-
-        // If save_to_drive_folder_id provided, upload to Drive automatically
-        if (save_to_drive_folder_id) {
-          try {
-            const { uploadBinaryToDriveUpsert } = await import("@/lib/google-drive")
-            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-            const driveFile = await uploadBinaryToDriveUpsert(filename, buffer, mimeType, save_to_drive_folder_id)
-            const driveId = (driveFile as { id: string }).id
-
-            logAction({
-              action_type: "upload",
-              table_name: "google_drive",
-              record_id: driveId,
-              summary: `Gmail attachment → Drive: ${filename} (${sizeKb} KB)`,
-              details: { gmail_message_id: message_id, filename, mimeType, drive_folder_id: save_to_drive_folder_id },
-            })
-
-            return {
-              content: [{
-                type: "text" as const,
-                text: [
-                  `✅ Attachment saved to Google Drive`,
-                  "",
-                  `📄 ${filename} (${mimeType}, ${sizeKb} KB)`,
-                  `📁 Drive File ID: ${driveId}`,
-                  `📂 Folder: ${save_to_drive_folder_id}`,
-                  "",
-                  `Source: Gmail message ${message_id}`,
-                ].join("\n"),
-              }],
-            }
-          } catch (driveErr) {
-            return {
-              content: [{
-                type: "text" as const,
-                text: `❌ Downloaded attachment but Drive upload failed: ${driveErr instanceof Error ? driveErr.message : String(driveErr)}\n\nFile: ${filename} (${sizeKb} KB). Try again with drive_upload_file manually.`,
-              }],
-            }
           }
         }
 
@@ -992,8 +951,7 @@ Attachments: pass an array of Google Drive file IDs. The files will be downloade
             text: [
               `📄 ${filename} (${mimeType}, ${sizeKb} KB)`,
               "",
-              "Binary file downloaded. To save to Drive, call again with save_to_drive_folder_id.",
-              "To find the right folder: crm_get_client_summary → drive_folder_id → drive_list_folder for subfolders.",
+              "Binary file downloaded. To keep it, call again with save_to_account_id.",
               "",
               `Attachment ID: ${attachment_id}`,
               `Filename: ${filename}`,

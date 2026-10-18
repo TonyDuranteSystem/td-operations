@@ -406,7 +406,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
     async ({ account_id, send_email }) => {
       try {
         const { PDFDocument } = await import("pdf-lib")
-        const { downloadFileBinary, uploadBinaryToDriveUpsert, folderFileNameMap, listFolder, createFolder: _createFolder } = await import("@/lib/google-drive")
+        const { downloadFileBinary } = await import("@/lib/google-drive")
 
         // Get account + contact data
         const { data: acc } = await supabaseAdmin
@@ -550,7 +550,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
         }
 
         // ── Save the documents ── (Drive cutover, dev job ad09ea91: a company whose files live in the new storage gets them
-        // there, internal, one version per file name; a company on Drive carries on exactly as before)
+        // there, internal, one version per file name; a company with no storage place is not saved — the documents can still be emailed)
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const closureInStorage = generatedFiles.length > 0 && (await companyDocState(account_id)) !== "drive"
         if (closureInStorage) {
@@ -571,25 +571,8 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           }
         }
 
-        // ── Upload to Drive ──
-        if (!closureInStorage && acc.drive_folder_id && generatedFiles.length > 0) {
-          try {
-            const contents = await listFolder(acc.drive_folder_id)
-            const companyFolder = contents?.files?.find(
-              (f: { name: string; mimeType: string }) =>
-                f.name === "1. Company" && f.mimeType === "application/vnd.google-apps.folder"
-            )
-            const targetFolder = companyFolder?.id || acc.drive_folder_id
-
-            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-            const closureNames = await folderFileNameMap(targetFolder)
-            for (const file of generatedFiles) {
-              const result = await uploadBinaryToDriveUpsert(file.name, Buffer.from(file.bytes), "application/pdf", targetFolder, closureNames)
-              lines.push(`📁 Uploaded: ${file.name} (${result.id})`)
-            }
-          } catch (e) {
-            lines.push(`⚠️ Drive upload error: ${e instanceof Error ? e.message : String(e)}`)
-          }
+        if (!closureInStorage && generatedFiles.length > 0) {
+          lines.push("⚠️ Not saved: this company has no storage place yet. The documents were generated and can be emailed (send_email).")
         }
 
         // ── Send email ──
@@ -605,7 +588,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
               "Please print, prepare shipping labels, and mail:",
               ...lines.filter(l => l.includes("Mail to:")),
               "",
-              "Documents are attached to this email and saved to Drive.",
+              "Documents are attached to this email.",
             ].join("\n")
 
             const parts = [

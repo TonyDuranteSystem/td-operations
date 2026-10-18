@@ -31,8 +31,6 @@ describe('legacy sidebar engine — blocked tool set', () => {
       'update_service',
       'update_deadline',
       'advance_service_stage',
-      'drive_move',
-      'drive_upload_file',
     ]) {
       expect(LEGACY_AGENT_BLOCKED_TOOLS.has(name), name).toBe(true)
     }

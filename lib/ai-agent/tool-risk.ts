@@ -135,7 +135,7 @@ export const EXTERNAL_TOOLS: ReadonlySet<string> = new Set([
   "portal_chat_send", "portal_team_send",
   "sd_advance_stage", "service_deactivate", "service_reactivate",
   "referral_payout", "tax_send_to_accountant", "formation_confirm",
-  "drive_delete", "storage_delete", "agent_msg_send",
+  "storage_delete", "agent_msg_send",
   "calendar_create_event", "calendar_update_event", "calendar_delete_event",
   "hc_submit_ra_change",
   "whop_create_product", "whop_update_product", "whop_delete_product",
@@ -237,7 +237,7 @@ export const READ_TOOLS: ReadonlySet<string> = new Set([
  * or "…_status" that mutates on a flag is caught by default rather than by luck.
  */
 const ESCALATING_FLAGS = [
-  "apply_changes", "send_email", "save_to_drive", "send", "email_client", "notify_client",
+  "apply_changes", "send_email", "save_to_drive", "save_to_storage", "send", "email_client", "notify_client",
   "mark_reviewed", "mark_complete", "mark_sent", "mark_paid",
   "confirm", "confirm_resend", "approve", "execute", "apply", "publish", "finalize",
 ]

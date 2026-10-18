@@ -99,14 +99,6 @@ async function main() {
   const pnlAgain = await allPnl()
   check("P2 regenerating it is a new version of the same file (one row, same pointer)", pnlAgain.length === 1 && pnlAgain[0].drive_file_id === pnlRows[0]?.drive_file_id, JSON.stringify(pnlAgain))
 
-  // ── the AI assistant's file tool ──────────────────────────────────────────────────────────────────────────
-  const { executeTool } = await import("../../../lib/ai-agent/tools")
-  const ai = JSON.parse(await executeTool("drive_upload_file", { file_name: `QA Test ai file ${Date.now()}.txt`, account_id: UX, source_url: "http://localhost:3100/robots.txt", mime_type: "text/plain" }))
-  check("A1 the assistant saves a file into a storage company's correspondence", ai.success === true && String(ai.file_id).startsWith("store:"), JSON.stringify(ai).slice(0, 200))
-  const { data: tc } = await sb.from("accounts").select("id").eq("company_name", "Test Company LLC").limit(1).maybeSingle()
-  let aiErr = ""
-  try { aiErr = JSON.stringify(JSON.parse(await executeTool("drive_upload_file", { file_name: "QA Test ai drive co.txt", account_id: tc.id, source_url: "http://localhost:3100/robots.txt", mime_type: "text/plain" }))) } catch (e) { aiErr = e instanceof Error ? e.message : String(e) }
-  check("A2 …and refuses a company still on Drive (asks for a Drive folder)", /still on Google Drive/i.test(aiErr), aiErr.slice(0, 200))
   summary()
 }
 main().catch((e) => { console.error(e); process.exit(1) })

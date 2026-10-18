@@ -432,7 +432,7 @@ The ONLY source of truth for active tools is `app/api/[transport]/route.ts`.
 - Service Account + Domain-Wide Delegation for Gmail and Drive
 - Impersonate `support@tonydurante.us` by default
 - `lib/gmail.ts` and `lib/google-drive.ts` handle auth
-- `drive_upload` = text files, `drive_upload_file` = binary (PDF, images)
+- Drive is read-only for tools (no Drive write tools since 2026-10-18); new files go to the CRM Storage
 
 **Forms (Client Data Collection):**
 - All forms follow the same pattern: email gate → multi-step form → submit

@@ -140,9 +140,6 @@ export const LEGACY_AGENT_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
   'update_service',
   'update_deadline',
   'advance_service_stage',
-  // writes into the shared document store
-  'drive_move',
-  'drive_upload_file',
 ])
 
 async function getTools() {

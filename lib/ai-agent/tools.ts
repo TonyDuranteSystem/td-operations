@@ -304,7 +304,7 @@ export const AGENT_TOOLS: ToolDef[] = [
   },
   {
     name: 'gmail_read',
-    description: 'Read a specific email by message ID. Returns from, to, subject, date, body text, and attachment list (with IDs). Use the attachment IDs with gmail_get_attachments or drive_upload_file to save to Drive.',
+    description: 'Read a specific email by message ID. Returns from, to, subject, date, body text, and attachment list (with IDs). Use gmail_get_attachments to list or save them.',
     parameters: {
       type: 'object',
       properties: {
@@ -484,53 +484,23 @@ export const AGENT_TOOLS: ToolDef[] = [
       required: ['folder_id'],
     },
   },
-  {
-    name: 'drive_move',
-    description: 'Move a Google Drive file to a different folder.',
-    parameters: {
-      type: 'object',
-      properties: {
-        file_id: { type: 'string', description: 'File ID to move' },
-        target_folder_id: { type: 'string', description: 'Destination folder ID' },
-      },
-      required: ['file_id', 'target_folder_id'],
-    },
-  },
-  {
-    name: 'drive_upload_file',
-    description: 'Upload a file to Google Drive from a URL or Gmail attachment. WORKFLOW for Gmail attachments: 1) gmail_search to find email, 2) gmail_get_attachments to list attachments and get attachment_id, 3) Use this tool with gmail_message_id + attachment_id + folder_id to save to Drive. To find the client Drive folder: use drive_search with client name + mime_type "application/vnd.google-apps.folder", or check contact.gdrive_folder_url via get_account_detail.',
-    parameters: {
-      type: 'object',
-      properties: {
-        file_name: { type: 'string', description: 'Name for the uploaded file (include extension, e.g. "Passport - John Smith.png")' },
-        folder_id: { type: 'string', description: 'Target Drive folder ID (not needed when account_id is given for a company whose files live in the new storage)' },
-        account_id: { type: 'string', description: 'CRM account UUID. For a company whose files live in the NEW STORAGE (its Drive folder is read-only) the file is saved there (5. Correspondence, internal). A company still on Drive is refused here: use folder_id.' },
-        source_url: { type: 'string', description: 'URL to download the file from (optional)' },
-        gmail_message_id: { type: 'string', description: 'Gmail message ID containing the attachment' },
-        attachment_id: { type: 'string', description: 'Gmail attachment ID (from gmail_get_attachments results)' },
-        mime_type: { type: 'string', description: 'MIME type of the file (e.g. image/png, application/pdf)' },
-      },
-      required: ['file_name'],
-    },
-  },
   // ── Gmail Attachment Tool ──
   {
     name: 'gmail_get_attachments',
-    description: 'List or save attachments from a Gmail message. Without save_to_drive: returns attachment list with IDs, filenames, sizes. With save_to_drive=true + drive_folder_id: downloads and uploads all attachments to Drive. IMPORTANT: To find the right Drive folder, first use drive_search with client name + mime_type "application/vnd.google-apps.folder".',
+    description: 'List or save attachments from a Gmail message. Without save_to_storage: returns attachment list with IDs, filenames, sizes. With save_to_storage=true + account_id: saves all attachments in the company\'s CRM storage (5. Correspondence, internal).',
     parameters: {
       type: 'object',
       properties: {
         message_id: { type: 'string', description: 'Gmail message ID (from gmail_search results)' },
-        save_to_drive: { type: 'boolean', description: 'If true, download all attachments and upload to drive_folder_id' },
-        drive_folder_id: { type: 'string', description: 'Target Drive folder ID. Find via drive_search with client name. Required if save_to_drive=true (unless account_id is given).' },
-        account_id: { type: 'string', description: 'CRM account UUID of a company whose files live in the NEW STORAGE: with save_to_drive=true the attachments are saved there (5. Correspondence, internal) instead of Drive.' },
+        save_to_storage: { type: 'boolean', description: 'If true, download all attachments and save them in the company\'s storage (needs account_id)' },
+        account_id: { type: 'string', description: 'CRM account UUID: with save_to_storage=true the attachments are saved in that company\'s storage (5. Correspondence, internal).' },
       },
       required: ['message_id'],
     },
   },
   {
     name: 'preview_attachment',
-    description: 'Preview an image attachment from a Gmail email. Returns an inline image that will be displayed in the chat. Use this when Antonio asks to see/show/preview an attachment before saving it. Only works for images (PNG, JPG, GIF). For PDFs or other files, save to Drive first and provide the link.',
+    description: 'Preview an image attachment from a Gmail email. Returns an inline image that will be displayed in the chat. Use this when Antonio asks to see/show/preview an attachment before saving it. Only works for images (PNG, JPG, GIF). For PDFs or other files, save to storage first.',
     parameters: {
       type: 'object',
       properties: {
@@ -771,8 +741,6 @@ export async function executeTool(name: string, params: Record<string, any>): Pr
       case 'search_templates': return await searchTemplatesTool(params)
       case 'drive_search': return await driveSearchTool(params)
       case 'drive_list_folder': return await driveListFolderTool(params)
-      case 'drive_move': return await driveMoveTool(params)
-      case 'drive_upload_file': return await driveUploadFileTool(params)
       case 'gmail_get_attachments': return await gmailGetAttachmentsTool(params)
       case 'preview_attachment': return await previewAttachmentTool(params)
       case 'update_service': return await updateService(params)
@@ -2088,50 +2056,8 @@ async function saveAttachmentToStorage(accountId: string, name: string, bytes: B
     callerKey: `ai-agent-file:${accountId}:${keyHint}:${storeNameKey(name)}`, portalVisible: false,
     row: { document_type_name: 'Saved by the assistant', category: 5, status: 'classified' },
   })
-  if (r.route !== 'store') throw new Error("This company's files are still on Google Drive - give folder_id instead of account_id.")
+  if (r.route !== 'store') throw new Error("This company has no storage place yet - nothing was saved.")
   return r
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function driveMoveTool(p: any) {
-  const { moveFile } = await import('@/lib/google-drive')
-  const result = await moveFile(p.file_id, p.target_folder_id)
-  return JSON.stringify({ success: true, file: result })
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function driveUploadFileTool(p: any) {
-  const { uploadBinaryToDrive } = await import('@/lib/google-drive')
-
-  let fileBuffer: Buffer
-  let mimeType = p.mime_type || 'application/octet-stream'
-
-  if (p.gmail_message_id && p.attachment_id) {
-    // Download from Gmail attachment
-    const { getGmailAttachment } = await import('@/lib/gmail')
-    const attachment = await getGmailAttachment(p.gmail_message_id, p.attachment_id)
-    fileBuffer = attachment.data
-  } else if (p.source_url) {
-    // Download from URL
-    const res = await fetch(p.source_url)
-    if (!res.ok) throw new Error(`Failed to download from URL: ${res.status} ${res.statusText}`)
-    const contentType = res.headers.get('content-type')
-    if (contentType && mimeType === 'application/octet-stream') mimeType = contentType
-    const arrayBuffer = await res.arrayBuffer()
-    fileBuffer = Buffer.from(arrayBuffer)
-  } else {
-    return JSON.stringify({ error: 'Provide either source_url or gmail_message_id + attachment_id' })
-  }
-
-  if (p.account_id) {
-    const r = await saveAttachmentToStorage(p.account_id, p.file_name, fileBuffer, mimeType, p.gmail_message_id ? `${p.gmail_message_id}:${p.attachment_id}` : 'url')
-    return JSON.stringify({ success: true, saved_in: "the company's new storage (5. Correspondence, internal)", file_id: r.pointer, name: p.file_name })
-  }
-  if (!p.folder_id) return JSON.stringify({ error: 'Provide folder_id (Drive) or account_id (a company whose files live in the new storage).' })
-  const result = await uploadBinaryToDrive(p.file_name, fileBuffer, mimeType, p.folder_id)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const file = result as any
-  return JSON.stringify({ success: true, file_id: file.id, name: file.name, web_link: file.webViewLink || null })
 }
 
 // ============================================================
@@ -2171,7 +2097,7 @@ async function gmailGetAttachmentsTool(p: any) {
   }
 
   // Drive cutover: a company whose files live in the new storage gets the attachments there
-  if (p.save_to_drive && p.account_id) {
+  if (p.save_to_storage && p.account_id) {
     const { getGmailAttachment } = await import('@/lib/gmail')
     const uploaded: Array<{ filename: string; saved_as: string }> = []
     const failed: Array<{ filename: string; error: string }> = []
@@ -2192,36 +2118,6 @@ async function gmailGetAttachmentsTool(p: any) {
     })
   }
 
-  // If save_to_drive requested, download each and upload
-  if (p.save_to_drive && p.drive_folder_id) {
-    const { getGmailAttachment } = await import('@/lib/gmail')
-    const { uploadBinaryToDriveUpsert, folderFileNameMap } = await import('@/lib/google-drive')
-
-    // Duplicate-upload guard (LT Program incident class): attachment names are
-    // stable per email -> upsert refreshes in place on an agent retry.
-    const attNames = await folderFileNameMap(p.drive_folder_id)
-    const uploaded: Array<{ filename: string; drive_file_id: string }> = []
-    const failed: Array<{ filename: string; error: string }> = []
-
-    for (const att of attachments) {
-      try {
-        const attData = await getGmailAttachment(p.message_id, att.attachmentId)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const driveFile = await uploadBinaryToDriveUpsert(att.filename, attData.data, att.mimeType, p.drive_folder_id, attNames) as any
-        uploaded.push({ filename: att.filename, drive_file_id: driveFile.id })
-      } catch (err) {
-        failed.push({ filename: att.filename, error: err instanceof Error ? err.message : 'Unknown error' })
-      }
-    }
-
-    return JSON.stringify({
-      attachments: attachments.map(a => ({ filename: a.filename, mimeType: a.mimeType, size: a.size })),
-      total: attachments.length,
-      uploaded,
-      failed: failed.length > 0 ? failed : undefined,
-    })
-  }
-
   return JSON.stringify({
     attachments: attachments.map(a => ({
       filename: a.filename,
@@ -2230,7 +2126,7 @@ async function gmailGetAttachmentsTool(p: any) {
       attachmentId: a.attachmentId,
     })),
     total: attachments.length,
-    hint: 'To save to Drive: call gmail_get_attachments again with save_to_drive=true and drive_folder_id. Or use drive_upload_file with gmail_message_id + attachment_id for a specific file. Find the client folder with drive_search(client_name, mime_type="application/vnd.google-apps.folder").',
+    hint: 'To keep them: call gmail_get_attachments again with save_to_storage=true and the company account_id.',
   })
 }
 
@@ -2245,7 +2141,7 @@ async function previewAttachmentTool(p: any) {
   // Only images can be previewed inline
   if (!mimeType.startsWith('image/')) {
     return JSON.stringify({
-      error: 'Only image attachments can be previewed. For PDFs and other files, save to Drive first and share the link.',
+      error: 'Only image attachments can be previewed. For PDFs and other files, save them to storage first.',
     })
   }
 

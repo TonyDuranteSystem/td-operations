@@ -16,7 +16,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { listFolder, uploadBinaryToDriveUpsert, findTaxFolder } from "@/lib/google-drive"
+import { listFolder, findTaxFolder } from "@/lib/google-drive"
 import { parseBankStatement, categorizeTransaction, type CategorizedTransaction } from "@/lib/bank-statement-parser"
 import { logAction } from "@/lib/mcp/action-log"
 import { autoSaveDocument } from "@/lib/portal/auto-save-document"
@@ -357,7 +357,7 @@ export function registerBankStatementTools(server: McpServer) {
     {
       account_id: z.string().uuid().describe("CRM account UUID"),
       tax_year: z.number().describe("Tax year (e.g., 2025)"),
-      upload_to_drive: z.boolean().optional().default(true).describe("Upload Excel to Drive (default: true)"),
+      upload_to_drive: z.boolean().optional().default(true).describe("Save the Excel in the company's storage (default: true)"),
       notify_client: z.boolean().optional().default(false).describe("Notify the client this P&L is ready to review/confirm (default: false — use ONLY on the genuinely final run; every other regeneration during staff review stays silent)"),
     },
     async ({ account_id, tax_year, upload_to_drive, notify_client }) => {
@@ -443,47 +443,33 @@ export function registerBankStatementTools(server: McpServer) {
         if (!built) throw new Error("No transactions available to build the P&L for this account and year")
         const { buffer, fileName } = built
 
-        // Upload to Drive
+        // Save the workbook in the company's storage
         let driveLink = ""
         let documentVisibleToClient = false
         let clientNotified = false
         // A company whose files live in the new storage (Drive cutover, dev job ad09ea91) gets the workbook there — the same
-        // file (a new version) on every re-run; a company on Drive carries on exactly as before.
+        // file (a new version) on every re-run; a company with no storage place yet is not saved.
         const { companyDocState } = await import("@/lib/crm-store/switched-drive-guard")
         const pnlInStorage = upload_to_drive && (await companyDocState(account_id)) !== "drive"
-        if (upload_to_drive && (ctx.driveFolderId || pnlInStorage)) {
-          let uploaded: { id: string; name: string }
-          let storeRowId: string | null = null
-          if (pnlInStorage) {
-            const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
-            const routed = await saveDocumentForAccount({
-              accountId: account_id, name: fileName, bytes: buffer,
-              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-              folder: "tax", documentType: "profit_loss_statement", callerKey: `pnl:${account_id}:${tax_year}`, portalVisible: true, periodYear: tax_year,
-              row: { document_type_name: "Profit & Loss Statement", category: 3, status: "classified" },
-            })
-            if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the P&L was being saved — nothing was saved.")
-            uploaded = { id: routed.pointer, name: fileName }
-            storeRowId = routed.documentRowId
-            driveLink = "saved in the company's new storage"
-          } else {
-            const taxFolderId = await findTaxFolder(ctx.driveFolderId)
-            const targetFolder = taxFolderId || ctx.driveFolderId
-
-            // Stable name -> UPSERT: re-run refreshes the one existing file in place (LT Program incident class).
-            uploaded = (await uploadBinaryToDriveUpsert(
-              fileName, buffer,
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-              targetFolder,
-            )) as { id: string; name: string }
-            driveLink = `https://drive.google.com/file/d/${uploaded.id}/view`
-          }
+        if (upload_to_drive && !pnlInStorage) driveLink = "NOT saved — this company has no storage place yet"
+        if (pnlInStorage) {
+          const { saveDocumentForAccount } = await import("@/lib/crm-store/save-for-account")
+          const routed = await saveDocumentForAccount({
+            accountId: account_id, name: fileName, bytes: buffer,
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            folder: "tax", documentType: "profit_loss_statement", callerKey: `pnl:${account_id}:${tax_year}`, portalVisible: true, periodYear: tax_year,
+            row: { document_type_name: "Profit & Loss Statement", category: 3, status: "classified" },
+          })
+          if (routed.route !== "store") throw new Error("This company's files moved back to Drive while the P&L was being saved — nothing was saved.")
+          const uploaded = { id: routed.pointer, name: fileName }
+          const storeRowId: string | null = routed.documentRowId
+          driveLink = "saved in the company's new storage"
 
           logAction({
             action_type: "bank_statement_pnl",
             table_name: "bank_transactions",
             record_id: account_id,
-            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), uploaded to ${pnlInStorage ? "the new storage" : "Drive"}`,
+            summary: `Generated P&L for ${ctx.companyName} (${tax_year}), saved in the new storage`,
             details: { drive_file_id: uploaded.id, net_income: netIncome },
           })
 

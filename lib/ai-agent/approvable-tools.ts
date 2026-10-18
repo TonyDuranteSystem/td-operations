@@ -41,8 +41,6 @@ export const APPROVABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "update_service",
   "advance_service_stage",
   "send_email",
-  "drive_move",
-  "drive_upload_file",
   "gmail_get_attachments",
   "log_conversation",
   "save_memory",
@@ -108,19 +106,10 @@ export const APPROVABLE_TOOL_CONSTRAINTS: Readonly<Record<string, ApprovableTool
     external: true,
     irreversible: true,
   },
-  drive_move: {
-    label: "Move Drive file",
-    surface: ["file_id", "target_folder_id"],
-  },
-  drive_upload_file: {
-    // Writes a file into Drive (client-visible storage).
-    label: "Upload file to Drive",
-    surface: ["file_name", "folder_id", "source_url"],
-  },
   gmail_get_attachments: {
-    // Read-only UNLESS save_to_drive=true, which writes attachments into Drive.
-    label: "Save Gmail attachments to Drive",
-    surface: ["message_id", "save_to_drive", "drive_folder_id"],
+    // Read-only UNLESS save_to_storage=true, which saves attachments into a company's storage.
+    label: "Save Gmail attachments to storage",
+    surface: ["message_id", "save_to_storage", "account_id"],
   },
   log_conversation: {
     label: "Log conversation",
